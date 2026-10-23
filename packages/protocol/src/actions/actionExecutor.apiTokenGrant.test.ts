@@ -74,6 +74,7 @@ describe('ActionExecutor API token grant admission', () => {
     const sessionBoardAction: NonNullable<ActionExecutorDeps['sessionBoardAction']> = async ({ actionId, input }) => {
       if (actionId === 'session.board.get') {
         const request = SessionBoardGetInputV1Schema.parse(input);
+        if ('projection' in request) throw new Error('This boundary fixture serves item reads');
         sourceReads.push(request.sessionId!);
         return projectSessionBoardGetResultV1({ serverId: 'home', sessionId: request.sessionId!, layout: null,
           entries: [{ status: 'ready', itemId: 'original', revision, item: sourceItem }], incomplete: false,

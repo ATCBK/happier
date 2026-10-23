@@ -17,7 +17,7 @@ import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/
 import { resolveCliFeatureDecision, resolveCliFeatureDecisionForServer } from '@/features/featureDecisionService';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
-import { readSessionSystemRecordV1, listSessionSystemRecordsV1 } from '@/session/transport/http/sessionSystemRecordsHttp';
+import { readSessionSystemRecordV1, listSessionSystemRecordsV1, countSessionBoardItemsV1 } from '@/session/transport/http/sessionSystemRecordsHttp';
 import { openSessionSystemRecord, sealSessionSystemRecordContent, validateSessionSystemRecordOpenedContent } from '@/session/systemRecords/sessionSystemRecordCodec';
 import {
   resolveExactSessionOrCredentialCryptoContext,
@@ -209,6 +209,11 @@ export function createSessionBoardActionDeps(options: Readonly<{
     if (!rawSession || rawSession.id !== sessionId) return createSessionBoardFailureV1('session_board_forbidden');
     const capabilities = rawSession.effectiveAccess?.capabilities;
     if (!capabilities?.readTranscript || (actionId !== 'session.board.get' && !capabilities.editSessionRecords)) return createSessionBoardFailureV1('session_board_forbidden');
+    const transport = { token: options.credentials.token, serverUrl, sessionId, signal, resolveAuthorizationHeaders };
+    if (actionId === 'session.board.get' && 'projection' in common) {
+      const counted = await countSessionBoardItemsV1(transport);
+      return { v: 1 as const, serverId, sessionId, count: counted.count };
+    }
     const crypto = resolveExactSessionOrCredentialCryptoContext({
       credentials: options.credentials,
       ...(options.resolveExactSessionEncryptionMaterial
@@ -216,7 +221,6 @@ export function createSessionBoardActionDeps(options: Readonly<{
         : {}),
     }, sessionId, rawSession);
     if (!crypto) return createSessionBoardFailureV1('encryption_material_unavailable');
-    const transport = { token: options.credentials.token, serverUrl, sessionId, signal, resolveAuthorizationHeaders };
     const layoutAddress = { owner: 'host' as const, namespace: 'surface' as const, kind: 'layout.v1' as const, localId: 'layout' };
     const readLayout = async () => {
       const stored = await readSessionSystemRecordV1({ ...transport, address: layoutAddress });
@@ -224,6 +228,7 @@ export function createSessionBoardActionDeps(options: Readonly<{
     };
     if (actionId === 'session.board.get') {
       const args = SessionBoardGetInputV1Schema.parse(common);
+      if ('projection' in args) return createSessionBoardFailureV1('session_board_invalid');
       const layout = args.itemIds !== undefined && decision.state !== 'enabled' ? null : await readLayout();
       const page = args.itemIds === undefined ? await listSessionSystemRecordsV1({ ...transport,
         query: SessionSystemRecordListQuerySchema.parse({ owner: 'host', namespace: 'surface', kind: 'item.v1', limit: args.limit, cursor: args.cursor }),

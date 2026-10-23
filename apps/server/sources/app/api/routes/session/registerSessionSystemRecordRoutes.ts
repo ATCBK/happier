@@ -10,6 +10,7 @@ import {
     prunePermissionMediationRecord,
     listSessionSystemRecords,
     listSessionSystemRecordsV1,
+    countSessionBoardItemsV1,
     readSessionSystemRecordV1,
     readPermissionMediationRecord,
     upsertSessionSystemRecord,
@@ -21,6 +22,7 @@ import { toPublicSessionSystemRecord } from "@/app/session/systemRecords/session
 import { LegacyHostSessionSystemRecordLatestQuerySchema, LegacyHostSessionSystemRecordLatestResponseSchema, LegacyHostSessionSystemRecordListQuerySchema, LegacyHostSessionSystemRecordLookupQuerySchema, LegacyHostSessionSystemRecordLookupResponseSchema, LegacyHostSessionSystemRecordPageResponseSchema, LegacyHostSessionSystemRecordUpsertRequestSchema, LegacyHostSessionSystemRecordUpsertResponseSchema, SESSION_SYSTEM_RECORDS_PLUGIN_ID_HEADER, SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER, SESSION_SYSTEM_RECORDS_PROTOCOL_V1_HTTP_HEADER_VALUE, SessionSystemRecordErrorResponseSchema, SessionSystemRecordDeleteRequestSchema, SessionSystemRecordDeleteResponseSchema, SessionSystemRecordListQuerySchema, SessionSystemRecordStoredPageResponseSchema, SessionSystemRecordStoredReadResponseSchema, SessionSystemRecordStoredUpsertRequestSchema, SessionSystemRecordStoredUpsertResponseSchema, SessionPermissionMediationRecordListQuerySchema, SessionPermissionMediationRecordListResponseSchema, SessionPermissionMediationRecordReadResponseSchema, SessionPermissionMediationRecordPruneRequestSchema, SessionPermissionMediationRecordPruneResponseSchema, SessionPermissionMediationRecordWriteRequestSchema, SessionPermissionMediationRecordWriteResponseSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { SessionSystemRecordAddressSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordAddress';
+import { SessionSystemRecordCountQuerySchema, SessionSystemRecordCountResponseSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { SessionPermissionMediationRecordIdentityV1Schema } from '@happier-dev/protocol/sessions/permissions/mediationRecordsV1';
 import { type Fastify } from "../../types";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
@@ -269,11 +271,12 @@ export function registerSessionSystemRecordRoutes(app: Fastify) {
         schema: {
             params: z.object({ sessionId: z.string() }),
             querystring: z.optional(z.union([
+                SessionSystemRecordCountQuerySchema,
                 SessionSystemRecordListQuerySchema,
                 LegacyHostSessionSystemRecordListQuerySchema,
             ])),
             response: {
-                200: z.union([SessionSystemRecordStoredPageResponseSchema, LegacyHostSessionSystemRecordPageResponseSchema]),
+                200: z.union([SessionSystemRecordCountResponseSchema, SessionSystemRecordStoredPageResponseSchema, LegacyHostSessionSystemRecordPageResponseSchema]),
                 400: withPluginRecordError(z.object({ error: z.literal("Invalid parameters") })),
                 403: withPluginRecordError(z.object({ error: z.literal("Forbidden") })),
                 404: withPluginRecordError(z.object({ error: z.enum(["Session not found", "not_found"]) })),
@@ -286,6 +289,15 @@ export function registerSessionSystemRecordRoutes(app: Fastify) {
         if (isSystemRecordV1Request(request)) {
             if (!isSessionSystemRecordsProtocolV1Active()) {
                 return sendPluginRecordError(reply, { code: "plugin_session_records_unavailable" });
+            }
+            const countQuery = SessionSystemRecordCountQuerySchema.safeParse(request.query);
+            if (countQuery.success) {
+                const result = await countSessionBoardItemsV1({
+                    actorUserId: request.userId, sessionId: request.params.sessionId,
+                    authentication: readSessionAccessAuthenticationFromRequest(request),
+                });
+                if (!result.ok) return sendPluginRecordError(reply, result);
+                return reply.send({ count: result.count });
             }
             const parsedQuery = SessionSystemRecordListQuerySchema.safeParse(request.query ?? {});
             if (!parsedQuery.success) return sendPluginRecordError(reply, { code: "plugin_session_record_invalid_query" });

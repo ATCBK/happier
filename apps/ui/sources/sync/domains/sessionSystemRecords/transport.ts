@@ -1,5 +1,6 @@
 import { SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER, SESSION_SYSTEM_RECORDS_PROTOCOL_V1_HTTP_HEADER_VALUE, readSessionSystemRecordErrorCodeV1, SessionSystemRecordStoredPageResponseSchema, SessionSystemRecordStoredReadResponseSchema, type SessionSystemRecordListQuery, type SessionSystemRecordStored, type SessionSystemRecordStoredPageResponse } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import type { SessionSystemRecordAddress } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordAddress';
+import { SessionSystemRecordCountResponseSchema, type SessionSystemRecordCountResponse } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -32,20 +33,26 @@ export async function readSessionSystemRecordResponse(response: Response): Promi
 }
 
 export function createSessionSystemRecordTransport(options: SessionSystemRecordTransportOptions) {
-    async function request(session: SessionAddress, suffix: string, values: Readonly<Record<string, string | number | null | undefined>>) {
+    async function request(session: SessionAddress, suffix: string, values: Readonly<Record<string, string | number | null | undefined>>, signal?: AbortSignal) {
         if (!areServerProfileIdentifiersEquivalent(session.serverId, options.scope.serverId)) return { status: 'forbidden' } as const;
         const query = new URLSearchParams();
         for (const [key, value] of Object.entries(values)) if (value !== null && value !== undefined) query.set(key, String(value));
         try {
             return await readSessionSystemRecordResponse(await options.request(
                 `/v2/sessions/${encodeURIComponent(session.sessionId)}/system-records${suffix}?${query}`,
-                { method: 'GET', headers: { [SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER]: SESSION_SYSTEM_RECORDS_PROTOCOL_V1_HTTP_HEADER_VALUE } },
+                { method: 'GET', signal, headers: { [SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER]: SESSION_SYSTEM_RECORDS_PROTOCOL_V1_HTTP_HEADER_VALUE } },
             ));
         // A thrown request is a read that did not complete, not evidence the Home is unreachable;
         // the repository decides what it means for retained records.
         } catch { return { status: 'offline' } as const; }
     }
     return {
+        async countBoardItems(session: SessionAddress, signal?: AbortSignal): Promise<SessionSystemRecordFetchResult<SessionSystemRecordCountResponse>> {
+            const result = await request(session, '', { owner: 'host', namespace: 'surface', kind: 'item.v1', projection: 'count' }, signal);
+            if (result.status !== 'ok') return result;
+            const parsed = SessionSystemRecordCountResponseSchema.safeParse(result.value);
+            return parsed.success ? { status: 'ok', value: parsed.data } : { status: 'invalid_response' };
+        },
         async read(session: SessionAddress, address: HostSessionSystemRecordAddress): Promise<SessionSystemRecordFetchResult<SessionSystemRecordStored>> {
             const result = await request(session, '/record', address);
             if (result.status !== 'ok') return result;

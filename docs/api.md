@@ -2219,6 +2219,24 @@ list, lookup and upsert schemas exclude the namespace entirely. Every Board muta
 rechecks the actor's current `editSessionRecords` capability in the committing
 transaction.
 
+In 0.3 development, the same list route accepts the exclusive query
+`owner=host&namespace=surface&kind=item.v1&projection=count` and returns strict
+`{count}` after the ordinary current-Session read authorization. One aggregate
+counts stored item records, including retained or unavailable items; layout rows
+and dangling placements do not contribute. It reads no item bodies and runs no
+widget producers. Ordinary queries without `projection` keep their paged result.
+
+`session.board.get` exposes that scalar as the exclusive input
+`{sessionId?,projection:'count'}` and strict result
+`{v:1,serverId,sessionId,count}`; `itemIds`, cursor and limit are excluded. The
+Session rail first reuses a complete authorized held record inventory, otherwise
+its existing System Record repository makes at most one scalar read per mounted
+Session address. Existing invalidations may make that fact unknown; they do not
+trigger another count read, polling or a detail subscription. Unsupported,
+malformed or denied count replies stay unknown rather than becoming zero or
+falling back to a full inventory. An independently opened Board can establish the
+count again from its complete inventory.
+
 Current development System Record CRUD diagnostics report unexpected exceptions
 and internal stored-record failures after their owning transaction settles. The
 default server error log includes the operation, a fixed failure category, an

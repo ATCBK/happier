@@ -20,6 +20,109 @@ const record = {
 const page = () => new Response(JSON.stringify({ records: [record], nextCursor: null, hasNext: false }));
 
 describe('Account-scoped Session System Record repository', () => {
+    it('keeps a shared explicit count read alive when the mounted rail releases its demand', async () => {
+        let resolveReply: ((response: Response) => void) | undefined;
+        let requests = 0;
+        const repository = createSessionSystemRecordRepository({ scope, request: async () => {
+            requests++; return await new Promise<Response>(resolve => { resolveReply = resolve; });
+        } });
+        const release = repository.acquireBoardItemCount(session, { isCurrent: () => true, readCapabilities: () => ({ readTranscript: true, editSessionRecords: false }) });
+        const explicit = repository.fetchBoardItemCount(session);
+        release();
+        resolveReply!(new Response(JSON.stringify({ count: 7 })));
+        await expect(explicit).resolves.toEqual({ status: 'ok', value: { count: 7 } });
+        expect(repository.readBoardItemCount(session)).toBe(7);
+        expect(requests).toBe(1);
+        repository.retire();
+    });
+    it('retires obsolete count replies and settles an unsupported count without retries or body fallback', async () => {
+        let resolveReply: ((response: Response) => void) | undefined;
+        let requests = 0;
+        const repository = createSessionSystemRecordRepository({ scope, retryBackoff: { minDelayMs: 1, maxDelayMs: 1 }, request: async () => {
+            requests++; return await new Promise<Response>(resolve => { resolveReply = resolve; });
+        } });
+        const published: (number | null)[] = [];
+        const stop = repository.subscribeBoardItemCount(session, () => published.push(repository.readBoardItemCount(session)));
+        const authority = { isCurrent: () => true, readCapabilities: () => ({ readTranscript: true, editSessionRecords: false }) };
+        const release = repository.acquireBoardItemCount(session, authority);
+        release();
+        resolveReply!(new Response(JSON.stringify({ count: 9 })));
+        await Promise.resolve(); await Promise.resolve();
+        expect(repository.readBoardItemCount(session)).toBeNull();
+        const releaseNext = repository.acquireBoardItemCount(session, authority);
+        const unsupported = repository.fetchBoardItemCount(session);
+        resolveReply!(new Response(JSON.stringify({ records: [], nextCursor: null, hasNext: false })));
+        await expect(unsupported).resolves.toEqual({ status: 'invalid_response' });
+        expect(requests).toBe(2);
+        expect(published).not.toContain(9);
+        expect(repository.readBoardItemCount(session)).toBeNull();
+        repository.invalidate(session); repository.refreshObserved({ force: true });
+        await Promise.resolve();
+        expect(requests).toBe(2);
+        releaseNext(); stop(); repository.retire();
+    });
+    it('shares one count acquisition per mounted address, without detail reads, retry or refetch', async () => {
+        const requests: string[] = [];
+        const repository = createSessionSystemRecordRepository({ scope, retryBackoff: { minDelayMs: 1, maxDelayMs: 1 },
+            request: async path => { requests.push(path); return new Response(JSON.stringify({ count: 4 })); } });
+        const authority = { isCurrent: () => true, readCapabilities: () => ({ readTranscript: true, editSessionRecords: false }) };
+        const listener = vi.fn();
+        const stopListening = repository.subscribeBoardItemCount(session, listener);
+        expect(requests).toEqual([]);
+        const release = repository.acquireBoardItemCount(session, authority);
+        const releasePeer = repository.acquireBoardItemCount(session, authority);
+        await vi.waitFor(() => expect(repository.readBoardItemCount(session)).toBe(4));
+        expect(requests).toHaveLength(1);
+        repository.invalidate(session);
+        expect(repository.readBoardItemCount(session)).toBeNull();
+        repository.refreshObserved({ force: true });
+        const releaseLater = repository.acquireBoardItemCount(session, authority);
+        await Promise.resolve();
+        expect(requests).toHaveLength(1);
+        releaseLater(); releasePeer(); release(); stopListening(); repository.retire();
+    });
+    it('reuses complete held record inventories, counting records rather than layout placeholders', async () => {
+        let requests = 0;
+        const itemRecord = { ...record, content: { t: 'encrypted', c: 'unopened-item' }, address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'note' } };
+        const layoutRecord = { ...record, id: 'layout-row', content: { t: 'encrypted', c: 'unopened-layout' }, address: { owner: 'host', namespace: 'surface', kind: 'layout.v1', localId: 'layout' } };
+        const repository = createSessionSystemRecordRepository({ scope, request: async path => {
+            requests++;
+            return new Response(JSON.stringify(path.includes('kind=layout.v1')
+                ? { record: layoutRecord }
+                : { records: [itemRecord, layoutRecord], nextCursor: null, hasNext: false }));
+        } });
+        await repository.refresh(session, { type: 'read', address: { owner: 'host', namespace: 'surface', kind: 'layout.v1', localId: 'layout' } });
+        expect(repository.readBoardItemCount(session)).toBeNull();
+        // The mounted Board owner observes the complete namespace, including layout.
+        await repository.refresh(session, { type: 'list', namespace: 'surface' });
+        expect(repository.readBoardItemCount(session)).toBe(1);
+        const release = repository.acquireBoardItemCount(session, { isCurrent: () => true, readCapabilities: () => ({ readTranscript: true, editSessionRecords: false }) });
+        await Promise.resolve();
+        expect(requests).toBe(2);
+        repository.invalidate(session);
+        const releaseLater = repository.acquireBoardItemCount(session, { isCurrent: () => true, readCapabilities: () => ({ readTranscript: true, editSessionRecords: false }) });
+        await Promise.resolve();
+        expect(requests).toBe(2);
+        releaseLater(); release(); repository.retire();
+    });
+    it('reuses a complete paged item inventory and counts overlapping record identities once', async () => {
+        let requests = 0;
+        const itemRecord = { ...record, content: { t: 'encrypted', c: 'unopened-item' }, address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'note' } };
+        const repository = createSessionSystemRecordRepository({ scope, request: async path => {
+            requests++;
+            const last = path.includes('cursor=next');
+            return new Response(JSON.stringify({ records: last ? [itemRecord, { ...itemRecord, id: 'record-two',
+                address: { ...itemRecord.address, localId: 'second' } }] : [itemRecord], nextCursor: last ? null : 'next', hasNext: !last }));
+        } });
+        await repository.refresh(session, { type: 'list', namespace: 'surface', kind: 'item.v1' });
+        expect(repository.readBoardItemCount(session)).toBeNull();
+        await repository.refresh(session, { type: 'list', namespace: 'surface', kind: 'item.v1', cursor: 'next' });
+        expect(repository.readBoardItemCount(session)).toBe(2);
+        const release = repository.acquireBoardItemCount(session, { isCurrent: () => true, readCapabilities: () => ({ readTranscript: true, editSessionRecords: false }) });
+        await Promise.resolve();
+        expect(requests).toBe(2);
+        release(); repository.retire();
+    });
     it('keeps an already stale hidden query stable and still refreshes it when observed again', async () => {
         let requests = 0;
         const repository = createSessionSystemRecordRepository({ scope, request: async () => { requests++; return page(); } });

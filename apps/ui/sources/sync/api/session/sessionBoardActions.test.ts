@@ -26,6 +26,17 @@ function createSessionBoardActionAdapter(options: Omit<Parameters<typeof createA
 }
 
 describe('Session Board Action adapter', () => {
+    it('returns a scalar count through the existing record route without layout or body reads', async () => {
+        const requests: string[] = [];
+        const execute = createSessionBoardActionAdapter({ scope, session, contentContext: null, boardEnabled: true,
+            capabilities: { readTranscript: true, editSessionRecords: false }, request: async path => {
+                requests.push(path);
+                return new Response(JSON.stringify({ count: 321 }));
+            } });
+        await expect(execute({ actionId: 'session.board.get', context: {}, input: { projection: 'count', sessionId: session.sessionId } }))
+            .resolves.toEqual({ v: 1, serverId: session.serverId, sessionId: session.sessionId, count: 321 });
+        expect(requests).toEqual([`/v2/sessions/${session.sessionId}/system-records?owner=host&namespace=surface&kind=item.v1&projection=count`]);
+    });
     it('refuses workspace publication at preapproval preparation, before any mutation adapter runs', async () => {
         await expect(prepareSessionBoardItemForUi({ context: {}, input: {
             sessionId: session.sessionId, itemId: 'html', expectedItemRevision: null, destination: 'transcript',

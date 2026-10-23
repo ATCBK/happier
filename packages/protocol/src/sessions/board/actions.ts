@@ -10,7 +10,7 @@ import {
 import { OperationUpdateRequiredV1Schema } from '../../compat/operationUpdateRequiredV1.js';
 import { FeatureDecisionSchema } from '../../features/decision.js';
 import { SessionSystemRecordRevisionSchema } from '../system/records/sessionSystemRecordRevision.js';
-import { SESSION_SYSTEM_RECORD_LIST_LIMIT_MAX } from '../system/records/sessionSystemRecordRoutes.js';
+import { SESSION_SYSTEM_RECORD_LIST_LIMIT_MAX, SessionSystemRecordCountResponseSchema } from '../system/records/sessionSystemRecordRoutes.js';
 import {
   SESSION_BOARD_ACTION_IDS_V1,
   SessionBoardActionIdV1Schema,
@@ -67,13 +67,16 @@ const SessionBoardActionSessionIdSchema = lazyZodSchema(() => z.optional(z.strin
 const SessionSurfaceItemSourceKindV1Schema: z.ZodMiniType<SessionSurfaceItemV1['source']['kind']> =
   lazyZodSchema(() => z.enum(['declarative', 'hostedHtml', 'widget', 'walkthrough']));
 
-export const SessionBoardGetInputV1Schema = lazyZodSchema(() => z.strictObject({
+export const SessionBoardGetInputV1Schema = lazyZodSchema(() => z.union([z.strictObject({
   sessionId: SessionBoardActionSessionIdSchema,
   /** Exact ids opt into full item bodies; the default response stays an inventory. */
   itemIds: z.optional(z.array(SessionSurfaceItemIdSchema).check(z.maxLength(SESSION_BOARD_GET_MAX_LIMIT_V1))),
   cursor: z.optional(z.string().check(z.trim(), z.minLength(1))),
   limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(SESSION_BOARD_GET_MAX_LIMIT_V1))),
-}));
+}), z.strictObject({
+  sessionId: SessionBoardActionSessionIdSchema,
+  projection: z.literal('count'),
+})]));
 export type SessionBoardGetInputV1 = z.infer<typeof SessionBoardGetInputV1Schema>;
 
 export const SessionBoardGetResultV1Schema = lazyZodSchema(() => z.strictObject({
@@ -108,6 +111,15 @@ export const SessionBoardGetResultV1Schema = lazyZodSchema(() => z.strictObject(
   }),
 }));
 export type SessionBoardGetResultV1 = z.infer<typeof SessionBoardGetResultV1Schema>;
+
+export const SessionBoardGetCountResultV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  serverId: z.string().check(z.trim(), z.minLength(1)),
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  count: SessionSystemRecordCountResponseSchema.shape.count,
+}));
+export type SessionBoardGetCountResultV1 = z.infer<typeof SessionBoardGetCountResultV1Schema>;
+const SessionBoardGetOutputV1Schema = lazyZodSchema(() => z.union([SessionBoardGetResultV1Schema, SessionBoardGetCountResultV1Schema]));
 
 export type SessionBoardReadProjectionEntryV1 =
   | Readonly<{ status: 'ready'; itemId: unknown; revision: unknown; item: unknown; creator?: unknown }>
@@ -334,12 +346,12 @@ export const SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1: Readonly<{
 } as const satisfies Readonly<Record<SessionBoardActionIdV1, z.ZodMiniType>>);
 
 export const SESSION_BOARD_ACTION_OUTPUT_SCHEMAS_V1: Readonly<{
-  'session.board.get': SessionBoardSchemaCarrierV1<typeof SessionBoardGetResultV1Schema>;
+  'session.board.get': SessionBoardSchemaCarrierV1<typeof SessionBoardGetOutputV1Schema>;
   'session.board.item.upsert': SessionBoardSchemaCarrierV1<typeof SessionBoardMutationActionResultV1Schema>;
   'session.board.item.remove': SessionBoardSchemaCarrierV1<typeof SessionBoardMutationActionResultV1Schema>;
   'session.board.layout.update': SessionBoardSchemaCarrierV1<typeof SessionBoardMutationActionResultV1Schema>;
 }> = Object.freeze({
-  'session.board.get': SessionBoardGetResultV1Schema,
+  'session.board.get': SessionBoardGetOutputV1Schema,
   'session.board.item.upsert': SessionBoardMutationActionResultV1Schema,
   'session.board.item.remove': SessionBoardMutationActionResultV1Schema,
   'session.board.layout.update': SessionBoardMutationActionResultV1Schema,
@@ -799,13 +811,14 @@ export function classifySessionBoardMutationTransportResultV1(input: Readonly<{
 export type SessionBoardActionPortResultV1 =
   | SessionBoardActionFailureV1
   | SessionBoardGetResultV1
+  | SessionBoardGetCountResultV1
   | SessionBoardMutationActionResultV1;
 
 export type SessionBoardActionPortResultParseV1 =
   | Readonly<{
       success: true;
       kind: 'success';
-      data: SessionBoardGetResultV1 | SessionBoardMutationActionResultV1;
+      data: SessionBoardGetResultV1 | SessionBoardGetCountResultV1 | SessionBoardMutationActionResultV1;
     }>
   | Readonly<{ success: true; kind: 'failure'; data: SessionBoardActionFailureV1 }>
   | Readonly<{ success: false }>;
@@ -998,7 +1011,12 @@ export function parseSessionBoardActionPortResultV1(
   if (!areServerProfileIdentifiersEquivalent(output.serverId, options.expectedServerId, options.resolveServerScopeId)) return { success: false };
 
   if (actionId === 'session.board.get') {
-    const requested = new Set((parsedInput.data as SessionBoardGetInputV1).itemIds ?? []);
+    const getInput = parsedInput.data as SessionBoardGetInputV1;
+    if ('projection' in getInput) return 'count' in output
+      ? { success: true, kind: 'success', data: output }
+      : { success: false };
+    if (!('items' in output)) return { success: false };
+    const requested = new Set(getInput.itemIds ?? []);
     const getOutput = output as SessionBoardGetResultV1;
     if (getOutput.items.some((entry) => entry.item !== undefined && (
       !requested.has(entry.itemId)
@@ -1051,7 +1069,7 @@ export type SessionBoardActionExecuteOutcomeParseV1 =
   | Readonly<{
       success: true;
       kind: 'applied';
-      data: SessionBoardGetResultV1 | SessionBoardMutationActionResultV1;
+      data: SessionBoardGetResultV1 | SessionBoardGetCountResultV1 | SessionBoardMutationActionResultV1;
     }>
   | Readonly<{
       success: true;

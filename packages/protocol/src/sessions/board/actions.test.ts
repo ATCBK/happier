@@ -49,6 +49,22 @@ const item = {
 } as const;
 
 describe('Session Board Action contracts', () => {
+  it('admits an exclusive scalar count projection and validates its strict output', () => {
+    expect(SessionBoardGetInputV1Schema.safeParse({ projection: 'count' }).success).toBe(true);
+    for (const extra of [{ itemIds: ['note'] }, { cursor: 'next' }, { limit: 1 }]) {
+      expect(SessionBoardGetInputV1Schema.safeParse({ projection: 'count', ...extra }).success).toBe(false);
+    }
+    const output = SESSION_BOARD_ACTION_OUTPUT_SCHEMAS_V1['session.board.get'];
+    expect(output.safeParse({ v: 1, serverId: 'home', sessionId: 'session', count: 0 }).success).toBe(true);
+    const count = { v: 1, serverId: 'home', sessionId: 'session', count: 4 };
+    expect(parseSessionBoardActionPortResultV1('session.board.get', { projection: 'count' }, count,
+      { expectedServerId: 'home', expectedSessionId: 'session' })).toEqual({ success: true, kind: 'success', data: count });
+    expect(parseSessionBoardActionPortResultV1('session.board.get', {}, count,
+      { expectedServerId: 'home', expectedSessionId: 'session' })).toEqual({ success: false });
+    for (const count of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(output.safeParse({ v: 1, serverId: 'home', sessionId: 'session', count }).success).toBe(false);
+    }
+  });
   it('advertises declarative document grammar without bypassing native preflight and audience admission', () => {
     const definition = actionSpecToActionDefinitionV1(getActionSpec('session.board.item.upsert'), { includeOutputSchema: false });
     // The document already carries the complete Action id vocabulary for

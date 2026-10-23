@@ -176,6 +176,13 @@ export function createSessionBoardActionAdapter(options: SessionSystemRecordTran
             if (!sessionId) return createSessionBoardFailureV1('session_board_invalid');
             if (sessionId !== options.session.sessionId) return createSessionBoardFailureV1('session_board_forbidden');
             const session = { serverId: options.scope.serverId, sessionId };
+            if ('projection' in args) {
+                const result = await options.repository.fetchBoardItemCount(session, signal);
+                if (signal?.aborted) return createSessionBoardFailureV1('cancelled');
+                return result.status === 'ok'
+                    ? { v: 1 as const, serverId: options.session.serverId, sessionId, count: result.value.count }
+                    : projectRecordOwnerFailure(actionId, result.status);
+            }
             const layout = args.itemIds !== undefined && options.boardEnabled !== true
                 ? { ok: true as const, layout: null }
                 : await readLayout(session, actionId);

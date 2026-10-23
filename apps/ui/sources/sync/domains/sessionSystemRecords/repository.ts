@@ -14,6 +14,16 @@ import type { SessionSystemRecordCompatibilityOpenInput } from './codec';
 import { openSessionSurfaceItemRecord } from './codec';
 import type { SessionStoredContentContext } from '@happier-dev/sync-client';
 import type { SessionSystemRecordObservationBase } from './observation';
+import type { SessionSystemRecordCountResponse } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
+
+type BoardCountAuthority = Pick<SessionSystemRecordObservationBase, 'isCurrent' | 'readCapabilities'>;
+type BoardCount = {
+    value: number | null;
+    listeners: Set<() => void>;
+    holders: Set<BoardCountAuthority>;
+    attempted: boolean;
+    request?: { controller: AbortController; readers: number; promise: Promise<SessionSystemRecordFetchResult<SessionSystemRecordCountResponse>> };
+};
 
 export type SessionSystemRecordQuery =
     | Readonly<{ type: 'read'; address: HostSessionSystemRecordAddress }>
@@ -43,6 +53,7 @@ type Entry = {
 };
 type SessionEntries = {
     queries: Map<string, Entry>;
+    boardCount?: BoardCount;
     authority?: Pick<SessionSystemRecordObservationBase, 'readCapabilities' | 'readContentContext' | 'isCurrent'>;
 };
 
@@ -104,14 +115,101 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
     const isScopeHome = (session: SessionAddress) => areServerProfileIdentifiersEquivalent(session.serverId, options.scope.serverId);
     const empty: SessionSystemRecordRepositoryEntry<never> = { data: null, freshness: 'stale', reachability: 'unknown', loading: 'idle', lastError: null };
     const forbidden: SessionSystemRecordRepositoryEntry<never> = { ...empty, lastError: { status: 'forbidden' } };
-    function lookup(session: SessionAddress, query: SessionSystemRecordQuery, create: boolean): Entry | null {
+    function sessionEntries(session: SessionAddress, create: boolean): SessionEntries | null {
         if (retired || !isScopeHome(session)) return null;
         let retained = sessions.get(session.sessionId);
-        if (!retained) {
-            if (!create) return null;
-            retained = { queries: new Map() };
-            sessions.set(session.sessionId, retained);
+        if (!retained && create) { retained = { queries: new Map() }; sessions.set(session.sessionId, retained); }
+        return retained ?? null;
+    }
+    function boardCount(session: SessionAddress, create: boolean): BoardCount | null {
+        const retained = sessionEntries(session, create);
+        if (!retained) return null;
+        if (!retained.boardCount && create) retained.boardCount = { value: null, listeners: new Set(), holders: new Set(), attempted: false };
+        return retained.boardCount ?? null;
+    }
+    function publishBoardCount(count: BoardCount, value: number | null) {
+        if (count.value === value) return;
+        count.value = value;
+        for (const listener of count.listeners) {
+            try { listener(); } catch { /* An optional projection observer cannot stop sibling delivery. */ }
         }
+    }
+    function invalidateBoardCount(session: SessionAddress) {
+        const count = boardCount(session, false);
+        if (!count) return;
+        if (count.request?.readers === 0) count.request.controller.abort();
+        count.request = undefined;
+        publishBoardCount(count, null);
+    }
+    function retainCompleteBoardInventory(session: SessionAddress) {
+        const retained = sessionEntries(session, false);
+        if (!retained) return;
+        const pages = [...retained.queries.values()].filter(entry => entry.query.type === 'list'
+            && entry.query.namespace === 'surface' && entry.query.kind === 'item.v1' && entry.query.localId === undefined
+            && entry.snapshot.freshness === 'fresh' && entry.snapshot.lastError === null);
+        for (const first of pages) {
+            if (first.query.type !== 'list' || first.query.cursor) continue;
+            let entry: Entry | undefined = first;
+            const seen = new Set<Entry>();
+            const ids = new Set<string>();
+            while (entry && !seen.has(entry)) {
+                seen.add(entry);
+                const data = entry.snapshot.data;
+                if (!data || !('records' in data)) break;
+                for (const record of data.records) ids.add(record.id);
+                if (!data.hasNext) {
+                    const count = boardCount(session, true)!;
+                    if (count.request?.readers === 0) count.request.controller.abort();
+                    count.request = undefined;
+                    publishBoardCount(count, ids.size);
+                    return;
+                }
+                const cursor = data.nextCursor;
+                entry = cursor ? pages.find(page => page.query.type === 'list' && page.query.cursor === cursor) : undefined;
+            }
+        }
+    }
+    function requestBoardItemCount(session: SessionAddress, signal?: AbortSignal, acquisition = false): Promise<SessionSystemRecordFetchResult<SessionSystemRecordCountResponse>> {
+        const count = boardCount(session, true);
+        if (!count) return Promise.resolve({ status: 'forbidden' });
+        if (signal?.aborted) return Promise.resolve({ status: 'offline' });
+        if (!count.request) {
+            const controller = new AbortController();
+            const request = { controller, readers: 0, promise: Promise.resolve<SessionSystemRecordFetchResult<SessionSystemRecordCountResponse>>({ status: 'offline' }) };
+            request.promise = transport.countBoardItems(session, controller.signal).then(result => {
+                if (retired || controller.signal.aborted) return { status: 'forbidden' } as const;
+                if (count.request === request && (request.readers > 0
+                    || [...count.holders].some(holder => holder.isCurrent() && holder.readCapabilities()?.readTranscript === true))) {
+                    publishBoardCount(count, result.status === 'ok' ? result.value.count : null);
+                }
+                return result;
+            }).finally(() => {
+                if (count.request === request) count.request = undefined;
+            });
+            count.request = request;
+        }
+        const request = count.request;
+        if (acquisition) return request.promise;
+        request.readers++;
+        let released = false;
+        const release = () => {
+            if (released) return;
+            released = true;
+            request.readers--;
+            if (request.readers === 0 && count.holders.size === 0 && count.request === request) {
+                request.controller.abort();
+                count.request = undefined;
+            }
+        };
+        if (signal?.aborted) release(); else signal?.addEventListener('abort', release, { once: true });
+        return request.promise.then(result => signal?.aborted ? { status: 'offline' } as const : result).finally(() => {
+            signal?.removeEventListener('abort', release);
+            release();
+        });
+    }
+    function lookup(session: SessionAddress, query: SessionSystemRecordQuery, create: boolean): Entry | null {
+        const retained = sessionEntries(session, create);
+        if (!retained) return null;
         const queries = retained.queries;
         const key = queryKey(query);
         let entry = queries.get(key);
@@ -178,6 +276,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
             if (result.status === 'ok') {
                 entry.transientFailures = 0;
                 publish(entry, { data: retainObservedValue(entry, result.value), loading: 'idle', freshness: entry.invalidatedWhileLoading ? 'stale' : 'fresh', reachability: 'reachable', lastError: null });
+                if (query.type === 'list' && query.namespace === 'surface' && query.kind === 'item.v1') retainCompleteBoardInventory(session);
             } else if (isTransientFailure(result)) {
                 // A failed read never proves absence. The last record stays, its freshness is
                 // whatever invalidation made it (a failure does not stale it), and reachability
@@ -195,6 +294,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
             } else {
                 entry.transientFailures = 0;
                 publish(entry, { ...entry.snapshot, data: result.status === 'forbidden' || result.status === 'not_found' ? null : entry.snapshot.data, loading: 'idle', freshness: 'stale', reachability: 'reachable', lastError: result });
+                if (result.status === 'forbidden' || result.status === 'not_found') invalidateBoardCount(session);
             }
         }).finally(() => {
             entry.pending = undefined;
@@ -206,6 +306,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
     }
     function invalidate(session: SessionAddress) {
         if (retired || !isScopeHome(session)) return;
+        invalidateBoardCount(session);
         for (const entry of sessions.get(session.sessionId)?.queries.values() ?? []) {
             entry.invalidatedWhileLoading = Boolean(entry.pending);
             if (entry.snapshot.freshness !== 'stale') publish(entry, { ...entry.snapshot, freshness: 'stale' });
@@ -214,6 +315,38 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
     }
     return {
         scope: options.scope,
+        readBoardItemCount(session: SessionAddress): number | null {
+            return boardCount(session, false)?.value ?? null;
+        },
+        /** Passive in-process publication only: no transport demand, retries or watches. */
+        subscribeBoardItemCount(session: SessionAddress, listener: () => void) {
+            const count = boardCount(session, true);
+            if (!count) return () => undefined;
+            count.listeners.add(listener);
+            return () => { count.listeners.delete(listener); };
+        },
+        /** One allowance shared by consumers of the currently mounted Session address. */
+        acquireBoardItemCount(session: SessionAddress, authority: BoardCountAuthority) {
+            const count = boardCount(session, true);
+            if (!count || !authority.isCurrent() || authority.readCapabilities()?.readTranscript !== true) return () => undefined;
+            const holder = { ...authority };
+            count.holders.add(holder);
+            if (!count.attempted) {
+                count.attempted = true;
+                if (count.value === null) void requestBoardItemCount(session, undefined, true);
+            }
+            return () => {
+                count.holders.delete(holder);
+                if (count.holders.size === 0) {
+                    if (count.request?.readers === 0) {
+                        count.request.controller.abort();
+                        count.request = undefined;
+                    }
+                    count.attempted = false;
+                }
+            };
+        },
+        fetchBoardItemCount: (session: SessionAddress, signal?: AbortSignal) => requestBoardItemCount(session, signal),
         openSurfaceItem(record: SessionSystemRecordStored, context: SessionStoredContentContext | null) {
             const opening = surfaceItemOpenings.get(record);
             if (opening && sameContext(opening.context, context)) return opening.result;
@@ -230,10 +363,8 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         },
         /** Readers survive request release, but never credential/repository retirement. */
         retainObservationAuthority(session: SessionAddress, authority: NonNullable<SessionEntries['authority']>) {
-            if (retired || !isScopeHome(session)) return;
-            let retained = sessions.get(session.sessionId);
-            if (!retained) { retained = { queries: new Map() }; sessions.set(session.sessionId, retained); }
-            retained.authority = authority;
+            const retained = sessionEntries(session, true);
+            if (retained) retained.authority = authority;
         },
         readObservationAuthority(session: SessionAddress) {
             const authority = !retired && isScopeHome(session) ? sessions.get(session.sessionId)?.authority : undefined;
@@ -292,6 +423,12 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         },
         retire() {
             retired = true;
+            for (const retained of sessions.values()) if (retained.boardCount) {
+                retained.boardCount.request?.controller.abort();
+                publishBoardCount(retained.boardCount, null);
+                retained.boardCount.listeners.clear();
+                retained.boardCount.holders.clear();
+            }
             for (const retained of sessions.values()) for (const entry of retained.queries.values()) {
                 clearRetry(entry);
                 publish(entry, forbidden);

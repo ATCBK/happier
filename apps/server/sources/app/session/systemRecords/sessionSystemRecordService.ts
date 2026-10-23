@@ -1148,6 +1148,37 @@ export async function readSessionSystemRecordV1(
     }
 }
 
+/** Count the stored item population without opening content or materializing rows. */
+export async function countSessionBoardItemsV1(
+    params: SessionSystemRecordV1BaseParams,
+): Promise<SessionSystemRecordV1Result<{ count: number }>> {
+    const keys = deriveSessionSystemRecordAddressKeys(hostAddress('surface', ''));
+    try {
+        return reportSystemRecordResult('v1-count', await readV1Snapshot<{ count: number }>(params, {
+            owner: 'host', namespace: 'surface', kind: 'item.v1', operation: 'read',
+        }, async (tx, access) => {
+            const count = await tx.sessionSystemRecord.count({ where: {
+                accountId: access.accountId,
+                sessionId: params.sessionId,
+                ownerKind: 'host', pluginId: null, namespace: 'surface', kind: 'item.v1',
+                namespaceAddressKey: keys.namespaceAddressKey,
+                ...await currentSessionRecordWhere(tx, {
+                    actorUserId: params.actorUserId, sessionId: params.sessionId,
+                    requiredAccess: 'visible', authentication: params.authentication,
+                }),
+            } });
+            if (count === 0 && !await hasCurrentSessionRecordAccessInTx(tx, {
+                actorUserId: params.actorUserId, sessionId: params.sessionId,
+                requiredAccess: 'visible', authentication: params.authentication,
+            })) return { ok: false as const, code: 'plugin_session_record_forbidden' as const };
+            return { ok: true as const, count };
+        }));
+    } catch (error) {
+        reportSystemRecordFailure('v1-count', error);
+        return { ok: false, code: 'plugin_session_record_internal' };
+    }
+}
+
 export async function listSessionSystemRecordsV1(
     params: SessionSystemRecordV1BaseParams & Readonly<{ query: SessionSystemRecordListQuery }>,
 ): Promise<SessionSystemRecordV1Result<{ page: Readonly<{

@@ -85,6 +85,35 @@ describe("SessionSystemRecord CONTRACT on SQLite", () => {
             await app.close();
         }
     });
+    it('serves the strict Board count on the existing authorized record list route', async () => {
+        const { account, session } = await createAccountAndSession(`board-count-${randomUUID()}`);
+        const outsider = await db.account.create({ data: { publicKey: `board-count-outsider-${randomUUID()}`, encryptionMode: 'plain' } });
+        const item = { v: 1, title: 'Stored note', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
+            source: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'Note' } } } } as const;
+        const app = Fastify().withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+        let actor = account.id;
+        app.decorate('authenticate', async (request: FastifyRequest) => { request.userId = actor; request.authAuthority = 'present_user'; });
+        sessionRoutes(app);
+        try {
+            const itemWrite = await app.inject({ method: 'PUT', url: `/v2/sessions/${session.id}/board`, payload: {
+                operation: 'upsert_item', itemId: 'note', expectedItemRevision: null, itemContent: { t: 'plain', v: item },
+            } });
+            expect(itemWrite.statusCode, itemWrite.body).toBe(200);
+            const layoutWrite = await app.inject({ method: 'PUT', url: `/v2/sessions/${session.id}/board`, payload: {
+                operation: 'update_layout', expectedLayoutRevision: null, layoutContent: { t: 'plain', v: { v: 1, tabs: [] } },
+            } });
+            expect(layoutWrite.statusCode, layoutWrite.body).toBe(200);
+            const url = `/v2/sessions/${session.id}/system-records?owner=host&namespace=surface&kind=item.v1&projection=count`;
+            const headers = { 'x-happier-session-system-records-protocol': '1' };
+            const response = await app.inject({ method: 'GET', url, headers });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(response.json()).toEqual({ count: 1 });
+            expect((await app.inject({ method: 'GET', url: `${url}&limit=1`, headers })).statusCode).toBe(400);
+            actor = outsider.id;
+            expect((await app.inject({ method: 'GET', url, headers })).statusCode).toBe(404);
+        } finally { await app.close(); }
+    });
 
     it("reads, publicly projects and updates additive stored visual rows while keeping new inputs strict", async () => {
         const { account, session } = await createAccountAndSession(`stored-visual-${randomUUID()}`);

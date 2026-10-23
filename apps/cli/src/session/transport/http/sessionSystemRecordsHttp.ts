@@ -3,6 +3,7 @@ import axios from 'axios';
 
 import { LegacyHostSessionSystemRecordLatestResponseSchema, LegacyHostSessionSystemRecordLookupResponseSchema, LegacyHostSessionSystemRecordPageResponseSchema as SessionSystemRecordPageResponseSchema, LegacyHostSessionSystemRecordUpsertResponseSchema as SessionSystemRecordUpsertResponseSchema, SESSION_SYSTEM_RECORDS_PLUGIN_ID_HEADER, SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER, SESSION_SYSTEM_RECORDS_PROTOCOL_V1_HTTP_HEADER_VALUE, readSessionSystemRecordErrorCodeV1, SessionSystemRecordDeleteResponseSchema, SessionSystemRecordStoredPageResponseSchema, SessionSystemRecordStoredReadResponseSchema, SessionSystemRecordStoredUpsertResponseSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
+import { SessionSystemRecordCountResponseSchema, type SessionSystemRecordCountResponse } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import type { LegacyHostSessionSystemRecord, LegacyHostSessionSystemRecordLatestQuery, LegacyHostSessionSystemRecordListQuery, LegacyHostSessionSystemRecordLookupQuery, LegacyHostSessionSystemRecordUpsertRequest, SessionSystemRecordAddress, SessionSystemRecordContent, SessionSystemRecordDeleteRequest, SessionSystemRecordKind, SessionSystemRecordListQuery, SessionSystemRecordNamespace, SessionSystemRecordStored, SessionSystemRecordStoredUpsertRequest, LegacyHostSessionSystemRecordPageResponse } from '@happier-dev/protocol';
 
 import { createHttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
@@ -199,6 +200,27 @@ export async function listSessionSystemRecordsV1(params: Readonly<{
     throw createHttpStatusError(502, 'Session system record pagination response was inconsistent', 'plugin_session_record_invalid_response');
   }
   return page;
+}
+
+export async function countSessionBoardItemsV1(params: Readonly<{
+  token: string;
+  sessionId: string;
+  serverUrl?: string;
+  signal?: AbortSignal;
+  resolveAuthorizationHeaders?: ResolveSystemRecordAuthorizationHeaders;
+}>): Promise<SessionSystemRecordCountResponse> {
+  const route = v1SystemRecordRoute(params.sessionId);
+  const requestPath = appendQuery(route, { owner: 'host', namespace: 'surface', kind: 'item.v1', projection: 'count' });
+  const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'GET', path: requestPath });
+  if (params.resolveAuthorizationHeaders && !authorizationHeaders) throw new Error('External Action authorization unavailable');
+  const response = await axios.get(`${params.serverUrl ?? resolveServerHttpBaseUrl()}${requestPath}`, {
+    headers: buildV1RecordHeaders(params.token, 'host', undefined, authorizationHeaders ?? undefined),
+    timeout: configuration.sessionControlHttpTimeoutMs,
+    validateStatus: () => true,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  if (response.status !== 200) throwV1PluginRecordStatus(response.status, response.data);
+  return parseOrThrow(SessionSystemRecordCountResponseSchema, response.data, `Unexpected ${route} count response shape`);
 }
 
 export async function readSessionSystemRecordV1(params: Readonly<{

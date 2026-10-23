@@ -4,6 +4,57 @@ import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import type { SessionSystemRecordObservationBase, SessionSystemRecordUnavailableReason } from './observation';
 
+type BoardCountInput = Readonly<{ serverId: string | null; sessionId: string; enabled: boolean }>;
+type BoardCountRuntime = Pick<SessionSystemRecordObservationBase, 'repository' | 'isCurrent' | 'readCapabilities'>;
+const selectBoardItemCount = (count: number | null) => count;
+const selectBoardHasItems = (count: number | null) => count === null ? null : count > 0;
+
+/** Scalar demand belongs to the mounted Session model, independently of pane presentation. */
+function useSessionBoardCountProjection<T extends number | boolean | null>(input: BoardCountInput, select: (count: number | null) => T): T {
+    const address = React.useMemo(() => normalizeSessionAddress(input.serverId, input.sessionId), [input.serverId, input.sessionId]);
+    const resolution = useServerCredentialAccountScopeResolution(address?.serverId);
+    const sync = getSyncSingleton();
+    const lifetime = React.useMemo(() => ({ address, resolution }), [address, resolution]);
+    const [observed, setObserved] = React.useState<Readonly<{ lifetime: typeof lifetime; runtime: BoardCountRuntime }> | null>(null);
+    const retained = input.enabled && address ? sync.readSessionSystemRecordObservation(address) : null;
+    const retainedAllowed = retained && (resolution.kind === 'resolving'
+        || (resolution.kind === 'bound' && resolution.scope.accountId === retained.repository.scope.accountId));
+    const runtime = observed?.lifetime === lifetime ? observed.runtime : retainedAllowed ? retained : null;
+    React.useEffect(() => {
+        if (!input.enabled || !address || resolution.kind !== 'bound') return;
+        let stopped = false;
+        let release: (() => void) | undefined;
+        const start = (current: BoardCountRuntime) => {
+            if (stopped || !current.isCurrent() || current.readCapabilities()?.readTranscript !== true
+                || (resolution.kind === 'bound' && current.repository.scope.accountId !== resolution.scope.accountId)) return;
+            release = current.repository.acquireBoardItemCount(address, current);
+            setObserved({ lifetime, runtime: current });
+        };
+        if (retainedAllowed && retained) start(retained);
+        else void sync.withSessionSystemRecordRuntime(address, async current => start({
+            repository: current.repository, isCurrent: current.isCurrent,
+            readCapabilities: () => current.readSession()?.access?.capabilities ?? null,
+        })).catch(() => undefined);
+        return () => { stopped = true; release?.(); };
+    // Retained wrappers do not own demand; the exact Session/credential lifetime does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [address, input.enabled, lifetime, resolution]);
+    const subscribe = React.useCallback((listener: () => void) => input.enabled && address && runtime
+        ? runtime.repository.subscribeBoardItemCount(address, listener) : () => undefined, [address, input.enabled, runtime]);
+    const getSnapshot = React.useCallback(() => select(input.enabled && address && runtime?.isCurrent()
+        && runtime.readCapabilities()?.readTranscript === true ? runtime.repository.readBoardItemCount(address) : null), [address, input.enabled, runtime, select]);
+    return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+export function useSessionBoardItemCount(input: BoardCountInput): number | null {
+    return useSessionBoardCountProjection(input, selectBoardItemCount);
+}
+
+/** Positive-to-positive updates leave rail placement consumers untouched. */
+export function useSessionBoardHasItems(input: BoardCountInput): boolean | null {
+    return useSessionBoardCountProjection(input, selectBoardHasItems);
+}
+
 export type SessionSystemRecordUnavailable = Readonly<{ status: 'unavailable'; reason: SessionSystemRecordUnavailableReason }>;
 type Unavailable<Reason extends string> = Readonly<{ status: 'unavailable'; reason: SessionSystemRecordUnavailableReason | Reason }>;
 export type SessionSystemRecordObservationOptions<Binding, Reason extends string = never> = SessionSystemRecordObservationBase & Readonly<{ onChange: (binding: Binding | Unavailable<Reason>) => void }>;

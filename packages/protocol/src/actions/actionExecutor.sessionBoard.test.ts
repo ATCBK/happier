@@ -91,6 +91,7 @@ describe('createActionExecutor (Session Board family)', () => {
       sessionBoardAction: async ({ actionId, input }) => {
         if (actionId === 'session.board.get') {
           const request = SessionBoardGetInputV1Schema.parse(input);
+          if ('projection' in request) throw new Error('This boundary fixture serves item reads');
           return projectSessionBoardGetResultV1({ serverId: 'home-1', sessionId: request.sessionId!,
             capabilities: { readTranscript: true, editSessionRecords: true }, layout: null,
             requestedItemIds: request.itemIds,

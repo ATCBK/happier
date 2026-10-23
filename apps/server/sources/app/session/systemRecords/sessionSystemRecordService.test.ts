@@ -15,6 +15,7 @@ import {
     getLatestSessionSystemRecord,
     getSessionSystemRecord,
     listSessionSystemRecordsV1,
+    countSessionBoardItemsV1,
     listSessionSystemRecords,
     listPermissionMediationRecords,
     prunePermissionMediationRecord,
@@ -49,6 +50,7 @@ type TxMock = {
         findFirst: ReturnType<typeof vi.fn>;
     };
     sessionSystemRecord: {
+        count: ReturnType<typeof vi.fn>;
         findUnique: ReturnType<typeof vi.fn>;
         findMany: ReturnType<typeof vi.fn>;
         findFirst: ReturnType<typeof vi.fn>;
@@ -250,6 +252,7 @@ describe("sessionSystemRecordService account scoping", () => {
             },
             sessionSystemRecord: {
                 findUnique: vi.fn(),
+                count: vi.fn(),
                 findMany: vi.fn(),
                 findFirst: vi.fn(),
                 create: vi.fn(),
@@ -265,6 +268,19 @@ describe("sessionSystemRecordService account scoping", () => {
         namespace: "activity", kind: "workflow_run.v1", localId: "activity:workflow_run:v1:wf_demo",
         content: { t: "encrypted", c: "private-ciphertext" },
     } as const;
+    it('counts only stored Board item identities with one aggregate and no record body reads', async () => {
+        const tx = testState.currentTx!;
+        tx.session.findUnique.mockResolvedValue({ accountId: 'owner-account', encryptionMode: 'plain' });
+        tx.sessionSystemRecord.count.mockResolvedValue(1200);
+        await expect(countSessionBoardItemsV1({ actorUserId: 'shared-editor', sessionId: 's1', authentication }))
+            .resolves.toEqual({ ok: true, count: 1200 });
+        expect(tx.sessionSystemRecord.count).toHaveBeenCalledExactlyOnceWith({ where: expect.objectContaining({
+            accountId: 'owner-account', sessionId: 's1', ownerKind: 'host', pluginId: null,
+            namespace: 'surface', kind: 'item.v1', session: expect.anything(),
+        }) });
+        expect(tx.sessionSystemRecord.findMany).not.toHaveBeenCalled();
+        expect(tx.sessionSystemRecord.findFirst).not.toHaveBeenCalled();
+    });
     const diagnosticV1Params = {
         actorUserId: "owner-account", sessionId: "s1", authentication, pluginId: "acme.notes",
         address: { owner: "plugin", namespace: "notes", kind: "entry.v1", localId: "private-local-id" },

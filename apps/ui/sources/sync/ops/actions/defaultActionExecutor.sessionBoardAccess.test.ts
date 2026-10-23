@@ -5,7 +5,8 @@ import {
     SessionOwnerMetadataV1Schema,
     tryWriteServerEnabledBitInPlace,
 } from '@happier-dev/protocol';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook } from '@/dev/testkit';
 import { SessionReadBatchResponseV1Schema } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel:
@@ -174,6 +175,41 @@ describe('Session Board Action access gate', () => {
         standardCleanup();
         restoreSessionState?.();
         restoreSessionState = undefined;
+    });
+
+    it('shares unopened Board scalar demand through the real Session runtime and keeps positive layout facts stable', async () => {
+        const serverId = await addBoardHome();
+        const address = { serverId, sessionId: SESSION_ID };
+        let count = 2;
+        const countPath = `/v2/sessions/${SESSION_ID}/system-records?owner=host&namespace=surface&kind=item.v1&projection=count`;
+        harness.answer(serverId, countPath, { select: () => ({ body: { count } }) });
+        const { useSessionBoardHasItems } = await import('@/sync/domains/sessionSystemRecords/useSessionSystemRecordBinding');
+        const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
+        const options = { ...address, enabled: true };
+        const first = await renderHook(() => useSessionBoardHasItems(options));
+        const second = await renderHook(() => useSessionBoardHasItems(options));
+        await vi.waitFor(() => expect([first.getCurrent(), second.getCurrent()]).toEqual([true, true]));
+        const requests = () => harness.requests.filter(request => request.path.includes('projection=count'));
+        expect(requests()).toHaveLength(1);
+        let commits = 0;
+        const stop = first.subscribe(() => { commits++; });
+        count = 9;
+        await act(async () => {
+            await getSyncSingleton().withSessionSystemRecordRuntime(address, runtime => runtime.repository.fetchBoardItemCount(address));
+        });
+        expect(first.getCurrent()).toBe(true);
+        expect(commits).toBe(0);
+        count = 0;
+        await act(async () => {
+            await getSyncSingleton().withSessionSystemRecordRuntime(address, runtime => runtime.repository.fetchBoardItemCount(address));
+        });
+        expect(first.getCurrent()).toBe(false);
+        expect(commits).toBe(1);
+        stop(); await first.unmount(); await second.unmount();
+        const remounted = await renderHook(() => useSessionBoardHasItems(options));
+        expect(remounted.getCurrent()).toBe(false);
+        expect(requests()).toHaveLength(3); // Initial acquisition plus the two explicit owner reads above.
+        await remounted.unmount();
     });
 
     it('honors the owner Account approval policy and rejects without writing shared layout', async () => {

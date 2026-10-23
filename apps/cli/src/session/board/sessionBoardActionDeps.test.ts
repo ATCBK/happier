@@ -109,6 +109,22 @@ describe('CLI Board Action family', () => {
     });
   });
   afterEach(async () => { restore(); vi.restoreAllMocks(); await app.close(); });
+  it('reads the strict scalar projection without crypto, item bodies or layout', async () => {
+    rawSession.encryptionMode = 'e2ee';
+    let reads = 0;
+    app.get('/v2/sessions/session-one/system-records', async request => {
+      reads++;
+      expect(request.query).toEqual({ owner: 'host', namespace: 'surface', kind: 'item.v1', projection: 'count' });
+      return { count: 1200 };
+    });
+    const deps = createSessionBoardActionDeps({ credentials: { token: 'daemon-token', encryption: null },
+      serverId: 'home-a', serverHttpBaseUrl: 'http://board.test' });
+    await expect(deps.sessionBoardAction!({ actionId: 'session.board.get', context: {
+      surface: 'cli', authority: 'present_user', serverId: 'home-a',
+    }, input: { sessionId: 'session-one', projection: 'count' } }))
+      .resolves.toEqual({ v: 1, serverId: 'home-a', sessionId: 'session-one', count: 1200 });
+    expect(reads).toBe(1);
+  });
   it.each(['counter', 'snapshot-counter'].flatMap(localId => [false, true].map(native => ({ localId, native }))))('admits the recorded installed $localId Board inputs (native Account: $native) through real type and options owners', async ({ localId, native }) => {
     const serverIdentityId = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
     const accountId = '5e3a0581-6f3d-4e73-bf40-383db0be6c3e';
