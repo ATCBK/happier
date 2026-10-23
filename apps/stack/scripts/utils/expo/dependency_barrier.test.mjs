@@ -25,7 +25,7 @@ for (const invocation of ['spawn', 'exec']) test(`development Metro automaticall
   const callsPath = fixture.path('installs');
   await writeFile(fixture.env.npm_execpath, [
     "const fs = require('node:fs');",
-    "if (process.argv[2] === '--version') console.log('1.22.22');",
+    "if (process.argv[2] === '--version') console.log('12.14.0');",
     `else fs.appendFileSync(${JSON.stringify(callsPath)}, process.argv.slice(2).join(' ') + '\\n');`,
   ].join('\n'));
   await writeFile(fixture.path('pnpm-lock.yaml'), '# new dependencies\n');
@@ -69,15 +69,15 @@ async function fixtureFor(t, { baseEnv = process.env } = {}) {
   await writeFile(patchOutput, 'export {};');
   // PM availability is an OS boundary. Keep the real readiness owner while
   // making any unexpected install/build/postinstall invocation fail loudly.
-  const yarnEntrypoint = fixture.path('yarn.cjs');
-  await writeFile(yarnEntrypoint,
-    "if (process.argv[2] === '--version') console.log('1.22.22'); else process.exit(43);\n");
+  const pnpmEntrypoint = fixture.path('pnpm.cjs');
+  await writeFile(pnpmEntrypoint,
+    "if (process.argv[2] === '--version') console.log('12.14.0'); else process.exit(43);\n");
   const stackName = 'scratch-metro';
   const baseDir = fixture.path('stacks', stackName);
   const envPath = join(baseDir, 'env');
   const env = {
     ...sanitizeStackTestRunnerEnv(baseEnv, { isolatedStackRoot: fixture.root }),
-    npm_execpath: yarnEntrypoint,
+    npm_execpath: pnpmEntrypoint,
     HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'),
     HAPPIER_STACK_HOME_DIR: fixture.path('stack-home'),
     HAPPIER_STACK_STACK: stackName,
@@ -388,7 +388,7 @@ for (const gracefulExit of [false, true]) test(`managed Metro stops during depen
   // Exercise automatic PM admission with the real supervisor and ownership
   // barrier too; only the package-manager process is a fixture boundary.
   await writeFile(fixture.env.npm_execpath,
-    "if (process.argv[2] === '--version') console.log('1.22.22');\n");
+    "if (process.argv[2] === '--version') console.log('12.14.0');\n");
   await writeFile(fixture.path('pnpm-lock.yaml'), '# automatic owning refresh\n');
   await writeFile(fixture.path('pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n');
   await ensureDepsInstalled(fixture.uiDir, 'development stack', { quiet: true,

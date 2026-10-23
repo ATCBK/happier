@@ -45,6 +45,7 @@ test('tauri_dev --json prints the resolved launch plan without running build hoo
   assert.equal(String(stderr ?? '').trim(), '');
   assert.equal(String(stdout ?? '').trim().startsWith('{'), true);
   assert.equal(stdout.includes('yarn run'), false);
+  assert.doesNotMatch(stdout, /pnpm\b[^\n]*\brun\b/);
   assert.equal(stdout.includes('prepareTauriSidecar'), false);
 
   const payload = JSON.parse(stdout);

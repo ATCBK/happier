@@ -166,11 +166,11 @@ async function writeHappyMonorepoMarkers(rootDir) {
 async function prepareCurrentSourceCliFixture(rootDir, cliDir) {
   await writeFile(join(rootDir, 'package.json'), '{ "private": true }\n', 'utf-8');
   await writeFile(join(rootDir, 'pnpm-lock.yaml'), '# test lock\n', 'utf-8');
-  await writeFile(join(rootDir, 'pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(join(rootDir, 'pnpm-workspace.yaml'), 'packages:\n');
   await mkdir(join(rootDir, 'node_modules'), { recursive: true });
-  await writeFile(join(rootDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(rootDir, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n', 'utf-8');
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n', 'utf-8');
   writeStubCliDistBuildManifest(cliDir);
 }
 
@@ -1825,11 +1825,11 @@ async function assertRunnablePriorSourceDaemonAdmission(t, sourceProvenanceEnv) 
   await writeHappyMonorepoMarkers(tmp);
   await writeFile(join(tmp, 'package.json'), '{ "private": true }\n', 'utf-8');
   await writeFile(join(tmp, 'pnpm-lock.yaml'), '# root yarn\n', 'utf-8');
-  await writeFile(join(tmp, 'pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(join(tmp, 'pnpm-workspace.yaml'), 'packages:\n');
   await mkdir(join(tmp, 'node_modules'), { recursive: true });
-  await writeFile(join(tmp, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(tmp, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n', 'utf-8');
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n', 'utf-8');
 
   const cliHomeDir = join(tmp, 'stack', 'cli');
   const statePath = join(cliHomeDir, 'daemon.state.json');
@@ -1899,7 +1899,7 @@ test('source daemon cold start uses an unchanged runnable prior dist when the cu
   await writeHappyMonorepoMarkers(tmp);
   await writeFile(join(tmp, 'package.json'), '{ "private": true }\n', 'utf-8');
   await writeFile(join(tmp, 'pnpm-lock.yaml'), '# root yarn\n', 'utf-8');
-  await writeFile(join(tmp, 'pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(join(tmp, 'pnpm-workspace.yaml'), 'packages:\n');
   await mkdir(join(tmp, 'node_modules'), { recursive: true });
   await mkdir(join(cliDir, 'node_modules'), { recursive: true });
   await writeFile(
@@ -1908,18 +1908,18 @@ test('source daemon cold start uses an unchanged runnable prior dist when the cu
     'utf-8',
   );
   const fakeBinDir = join(tmp, 'fake-bin');
-  const yarnPath = join(fakeBinDir, 'yarn');
+  const pnpmPath = join(fakeBinDir, 'pnpm');
   const buildFailurePath = join(tmp, 'build-failure-code');
   await mkdir(fakeBinDir, { recursive: true });
   await writeFile(
-    yarnPath,
+    pnpmPath,
     `#!${process.execPath}\n` +
-      `if (process.argv.includes('--version')) { console.log('1.22.22'); process.exit(0); }\n` +
+      `if (process.argv.includes('--version')) { console.log('12.14.0'); process.exit(0); }\n` +
       `if (process.argv.includes('build:prepared')) { require('node:fs').writeFileSync(${JSON.stringify(buildFailurePath)}, '47\\n'); process.exit(47); }\n` +
       `process.exit(0);\n`,
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 
   const cliHomeDir = join(tmp, 'stack', 'cli');
   await mkdir(cliHomeDir, { recursive: true });
@@ -2204,9 +2204,9 @@ test('startLocalDaemonWithAuth waits for a concurrent cli dist build to finish b
     await writeFile(join(tmp, 'apps', 'ui', 'package.json'), '{}\n', 'utf-8');
     await writeFile(join(tmp, 'apps', 'server', 'package.json'), '{}\n', 'utf-8');
     await mkdir(join(cliDir, 'node_modules'), { recursive: true });
-    await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+    await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n', 'utf-8');
     await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# yarn\n', 'utf-8');
-    await writeFile(join(cliDir, 'pnpm-workspace.yaml'), 'packages: []\n');
+    await writeFile(join(cliDir, 'pnpm-workspace.yaml'), 'packages:\n');
     await writeFile(join(tmp, 'package.json'), '{}\n', 'utf-8');
 
     const cliHomeDir = join(tmp, 'stack', 'cli');

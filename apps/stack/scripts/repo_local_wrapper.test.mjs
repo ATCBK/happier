@@ -566,15 +566,15 @@ test('repo-local wrapper auto-installs deps when node_modules are missing', asyn
 
     const binDir = join(preflightRoot, 'bin');
     mkdirSync(binDir, { recursive: true });
-    const logPath = join(preflightRoot, 'yarn.log');
-    const yarnBin = join(binDir, 'yarn');
+    const logPath = join(preflightRoot, 'pnpm.log');
+    const pnpmBin = join(binDir, 'pnpm');
     writeFileSync(
-      yarnBin,
+      pnpmBin,
       [
         '#!/usr/bin/env node',
         "import { appendFileSync, mkdirSync } from 'node:fs';",
         "import { dirname, join } from 'node:path';",
-        'const logPath = process.env.YARN_LOG;',
+        'const logPath = process.env.PNPM_LOG;',
         "appendFileSync(logPath, process.argv.slice(2).join(' ') + '\\n');",
         "if (process.argv.includes('install')) {",
         "  const nodeModules = join(process.cwd(), 'node_modules');",
@@ -583,7 +583,7 @@ test('repo-local wrapper auto-installs deps when node_modules are missing', asyn
         'process.exit(0);',
       ].join('\n') + '\n',
     );
-    chmodSync(yarnBin, 0o755);
+    chmodSync(pnpmBin, 0o755);
 
     const res = await runNode(
       [join(packageRoot, 'scripts', 'repo_local.mjs'), 'dev'],
@@ -592,7 +592,7 @@ test('repo-local wrapper auto-installs deps when node_modules are missing', asyn
         env: {
           ...process.env,
           PATH: `${binDir}:${process.env.PATH ?? ''}`,
-          YARN_LOG: logPath,
+          PNPM_LOG: logPath,
           HAPPIER_STACK_REPO_LOCAL_PREFLIGHT_ROOT: preflightRoot,
           HAPPIER_STACK_REPO_LOCAL_PREFLIGHT_ONLY: '1',
         },
@@ -676,23 +676,23 @@ test('repo-local wrapper leaves existing dependency freshness admission to the s
     mkdirSync(join(preflightRoot, 'node_modules'), { recursive: true });
     const binDir = join(preflightRoot, 'bin');
     mkdirSync(binDir, { recursive: true });
-    const logPath = join(preflightRoot, 'yarn.log');
+    const logPath = join(preflightRoot, 'pnpm.log');
     writeFileSync(logPath, '');
-    const yarnBin = join(binDir, 'yarn');
+    const pnpmBin = join(binDir, 'pnpm');
     writeFileSync(
-      yarnBin,
+      pnpmBin,
       '#!/usr/bin/env node\n' +
         "import { appendFileSync } from 'node:fs';\n" +
-        "appendFileSync(process.env.YARN_LOG, process.argv.slice(2).join(' ') + '\\n');\n",
+        "appendFileSync(process.env.PNPM_LOG, process.argv.slice(2).join(' ') + '\\n');\n",
     );
-    chmodSync(yarnBin, 0o755);
+    chmodSync(pnpmBin, 0o755);
 
     const res = await runNode([join(packageRoot, 'scripts', 'repo_local.mjs'), 'dev'], {
       cwd: repoRoot,
       env: {
         ...process.env,
         PATH: `${binDir}:${process.env.PATH ?? ''}`,
-        YARN_LOG: logPath,
+        PNPM_LOG: logPath,
         HAPPIER_STACK_REPO_LOCAL_PREFLIGHT_ROOT: preflightRoot,
         HAPPIER_STACK_REPO_LOCAL_PREFLIGHT_ONLY: '1',
       },
@@ -716,15 +716,15 @@ test('repo-local wrapper skips Skia all-platform package postinstall during mobi
 
     const binDir = join(preflightRoot, 'bin');
     mkdirSync(binDir, { recursive: true });
-    const logPath = join(preflightRoot, 'yarn.log');
-    const yarnBin = join(binDir, 'yarn');
+    const logPath = join(preflightRoot, 'pnpm.log');
+    const pnpmBin = join(binDir, 'pnpm');
     writeFileSync(
-      yarnBin,
+      pnpmBin,
       [
         '#!/usr/bin/env node',
         "import { appendFileSync, mkdirSync } from 'node:fs';",
         "import { join } from 'node:path';",
-        'const logPath = process.env.YARN_LOG;',
+        'const logPath = process.env.PNPM_LOG;',
         "appendFileSync(logPath, `${process.argv.slice(2).join(' ')} :: SKIP_SKIA_DOWNLOAD=${process.env.SKIP_SKIA_DOWNLOAD || ''} :: HAPPIER_INSTALL_SCOPE=${process.env.HAPPIER_INSTALL_SCOPE || ''}\\n`);",
         "if (process.argv.includes('install')) {",
         "  const nodeModules = join(process.cwd(), 'node_modules');",
@@ -733,7 +733,7 @@ test('repo-local wrapper skips Skia all-platform package postinstall during mobi
         'process.exit(0);',
       ].join('\n') + '\n',
     );
-    chmodSync(yarnBin, 0o755);
+    chmodSync(pnpmBin, 0o755);
 
     const res = await runNode(
       [join(packageRoot, 'scripts', 'repo_local.mjs'), 'mobile-dev-client'],
@@ -742,7 +742,7 @@ test('repo-local wrapper skips Skia all-platform package postinstall during mobi
         env: {
           ...process.env,
           PATH: `${binDir}:${process.env.PATH ?? ''}`,
-          YARN_LOG: logPath,
+          PNPM_LOG: logPath,
           HAPPIER_STACK_REPO_LOCAL_PREFLIGHT_ROOT: preflightRoot,
           HAPPIER_STACK_REPO_LOCAL_PREFLIGHT_ONLY: '1',
         },

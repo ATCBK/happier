@@ -61,11 +61,11 @@ async function startProfileAuthServer({ port, allowToken }) {
   };
 }
 
-async function writeStubYarn({ binDir }) {
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
-  return yarnPath;
+async function writeStubPnpm({ binDir }) {
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
+  return pnpmPath;
 }
 
 async function writeStackEnv({ storageDir, stackName, env }) {
@@ -168,7 +168,7 @@ test('invalid-auth auto-reseed uses resolved stack name instead of null placehol
     const cliBin = await writeStubHappyCli({ cliDir });
     const binDir = join(tmp, 'bin');
     await mkdir(binDir, { recursive: true });
-    await writeStubYarn({ binDir });
+    await writeStubPnpm({ binDir });
 
     const targetCliHome = join(storageDir, 'dev', 'cli');
     const sourceCliHome = join(storageDir, 'dev-auth', 'cli');
@@ -263,7 +263,7 @@ test('invalid-auth auto-reseed overwrites stale target credentials', async () =>
     const cliBin = await writeStubHappyCli({ cliDir });
     const binDir = join(tmp, 'bin');
     await mkdir(binDir, { recursive: true });
-    await writeStubYarn({ binDir });
+    await writeStubPnpm({ binDir });
 
     const targetCliHome = join(storageDir, 'dev', 'cli');
     const sourceCliHome = join(storageDir, 'dev-auth', 'cli');
@@ -362,7 +362,7 @@ test('invalid-auth auto-reseed falls back to the next usable seed when the confi
     const cliBin = await writeStubHappyCli({ cliDir });
     const binDir = join(tmp, 'bin');
     await mkdir(binDir, { recursive: true });
-    await writeStubYarn({ binDir });
+    await writeStubPnpm({ binDir });
 
     const targetCliHome = join(storageDir, 'dev', 'cli');
     const emptySeedCliHome = join(storageDir, 'dev-auth', 'cli');
@@ -471,7 +471,7 @@ test('invalid-auth auto-reseed falls through to a later usable local seed when t
     const cliBin = await writeStubHappyCli({ cliDir });
     const binDir = join(tmp, 'bin');
     await mkdir(binDir, { recursive: true });
-    await writeStubYarn({ binDir });
+    await writeStubPnpm({ binDir });
 
     const targetCliHome = join(storageDir, 'dev', 'cli');
     const devAuthCliHome = join(storageDir, 'dev-auth', 'cli');

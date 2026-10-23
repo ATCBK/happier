@@ -46,8 +46,8 @@ async function writeMinimalMonorepoFixture(t) {
     },
   });
   await writeFile(join(cliDir, 'pnpm-lock.yaml'), '# yarn\n', 'utf-8');
-  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), 'packages: []\n');
-  await writeFile(join(cliDir, 'node_modules', '.yarn-integrity'), 'ok\n', 'utf-8');
+  await writeFile(join(cliDir, 'pnpm-workspace.yaml'), 'packages:\n');
+  await writeFile(join(cliDir, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n', 'utf-8');
 
   return { ...fixture, repoDir };
 }

@@ -168,9 +168,9 @@ case "$*" in
   *) exec /bin/ps "$@" ;;
 esac
 `);
-  await writeFile(join(binDir, 'yarn'), '#!/bin/sh\nprintf "yarn:%s\\n" "$*" >> "$SIDE_EFFECT_MARKER"\ncase "$*" in *install*) exit 0 ;; *) exit 1 ;; esac\n');
+  await writeFile(join(binDir, 'pnpm'), '#!/bin/sh\nprintf "pnpm:%s\\n" "$*" >> "$SIDE_EFFECT_MARKER"\ncase "$*" in *install*) exit 0 ;; *) exit 1 ;; esac\n');
   await writeFile(join(binDir, 'docker'), '#!/bin/sh\nprintf "docker:%s\\n" "$*" >> "$SIDE_EFFECT_MARKER"\nexit 0\n');
-  await Promise.all(['lsof', 'ps', 'yarn', 'docker'].map((name) => chmod(join(binDir, name), 0o755)));
+  await Promise.all(['lsof', 'ps', 'pnpm', 'docker'].map((name) => chmod(join(binDir, name), 0o755)));
   await writeFile(runtimeStatePath, JSON.stringify({
     version: 1,
     stackName,

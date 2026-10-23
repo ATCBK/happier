@@ -10,8 +10,8 @@ test('createStackTauriDevConfig points Tauri dev at the existing Expo server and
       identifier: 'dev.happier.app',
       build: {
         devUrl: 'http://localhost:8081',
-        beforeDevCommand: 'yarn -s tauri:prepare:dev',
-        beforeBuildCommand: 'yarn -s tauri:prepare:build',
+        beforeDevCommand: 'pnpm --silent run tauri:prepare:dev',
+        beforeBuildCommand: 'pnpm --silent run tauri:prepare:build',
       },
       app: {
         windows: [{ title: 'Happier' }],

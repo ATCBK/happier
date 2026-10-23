@@ -266,8 +266,8 @@ test(
     // The daemon suite is unix-only (signals/ps); fail closed on unsupported.
     if (process.platform === 'linux' || process.platform === 'darwin') {
       const daemonRun = run(
-        'yarn',
-        ['--cwd', 'apps/cli', '-s', 'vitest', 'run', '--config', 'vitest.integration.config.ts', 'src/daemon/daemon.integration.test.ts'],
+        'pnpm',
+        ['--dir', 'apps/cli', '-s', 'run', 'vitest', 'run', '--config', 'vitest.integration.config.ts', 'src/daemon/daemon.integration.test.ts'],
         {
           label: 'self-host-daemon',
           cwd: repoRoot,

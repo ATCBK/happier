@@ -14,7 +14,7 @@ import {
   resolveStackRootFromMeta,
 } from './testkit/core/stack_root.mjs';
 
-// Yarn is the OS/process boundary; target selection and command orchestration stay real.
+// pnpm is the OS/process boundary; target selection and command orchestration stay real.
 test('hstack lint uses the root lint owner for all sources and propagates failure in JSON mode', async (t) => {
   const fixture = await createMinimalMonorepoFixture(t, {
     prefix: 'hstack-lint-',
@@ -29,7 +29,7 @@ test('hstack lint uses the root lint owner for all sources and propagates failur
   const log = join(fixture.root, 'calls.jsonl');
   const fake = writeLoggedJsonBin({
     root: fixture.root,
-    name: 'yarn',
+    name: 'pnpm',
     logEnvVar: 'LINT_TEST_LOG',
     body: 'process.exit(process.argv.includes("lint") ? 1 : 0);',
   });
@@ -62,7 +62,7 @@ test('hstack lint uses the root lint owner for all sources and propagates failur
     .map((line) => JSON.parse(line));
   assert.deepEqual(
     calls.filter((call) => call.argv.includes('lint')).map((call) => call.argv),
-    [['-s', 'lint']],
+    [['run', '--silent', 'lint']],
   );
 });
 
@@ -85,7 +85,7 @@ test('hstack lint inferred UI scope runs root policy against that app and plugin
   const log = join(fixture.root, 'calls.jsonl');
   const fake = writeLoggedJsonBin({
     root: fixture.root,
-    name: 'yarn',
+    name: 'pnpm',
     logEnvVar: 'LINT_TEST_LOG',
   });
   const env = buildStackHarnessEnv({
@@ -116,6 +116,6 @@ test('hstack lint inferred UI scope runs root policy against that app and plugin
     .map((line) => JSON.parse(line));
   assert.deepEqual(
     calls.filter((call) => call.argv.includes('lint')).map((call) => call.argv),
-    [['-s', 'lint', 'apps/ui', 'packages/plugins/example/src/ui']],
+    [['run', '--silent', 'lint', 'apps/ui', 'packages/plugins/example/src/ui']],
   );
 });

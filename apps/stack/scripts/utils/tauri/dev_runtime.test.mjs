@@ -75,7 +75,7 @@ test('buildStackTauriDevConfig disables beforeDevCommand and points Tauri at the
       identifier: 'dev.happier.app',
       build: {
         devUrl: 'http://localhost:8081',
-        beforeDevCommand: 'yarn -s tauri:prepare:dev',
+        beforeDevCommand: 'pnpm --silent run tauri:prepare:dev',
       },
       bundle: {
         externalBin: ['binaries/hsetup'],

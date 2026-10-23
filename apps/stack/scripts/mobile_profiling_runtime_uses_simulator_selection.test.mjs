@@ -78,13 +78,13 @@ exit 0
       'utf-8'
     );
 
-    const yarnStub = join(binDir, 'yarn');
-    await writeFile(yarnStub, '#!/bin/bash\nexit 0\n', 'utf-8');
+    const pnpmStub = join(binDir, 'pnpm');
+    await writeFile(pnpmStub, '#!/bin/bash\nexit 0\n', 'utf-8');
 
     if (process.platform !== 'win32') {
       await chmod(xcrunStub, 0o755);
       await chmod(xcodebuildStub, 0o755);
-      await chmod(yarnStub, 0o755);
+      await chmod(pnpmStub, 0o755);
     }
 
     await mkdir(join(repoDir, 'apps', 'ui', 'node_modules'), { recursive: true });

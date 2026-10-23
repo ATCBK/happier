@@ -19,12 +19,12 @@ test('hstack stack auth copy-from fails before copying target auth when the sour
   await mkdir(storageDir, { recursive: true });
   await mkdir(workspaceDir, { recursive: true });
 
-  // Stub yarn to keep this test fast/deterministic. This is an external boundary.
+  // Stub pnpm to keep this test fast/deterministic. This is an external boundary.
   const binDir = join(tmp, 'bin');
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-  await chmod(yarnPath, 0o755);
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+  await chmod(pnpmPath, 0o755);
 
   const repoRoot = dirname(dirname(rootDir)); // .../apps/stack -> repo root
 

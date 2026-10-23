@@ -60,9 +60,9 @@ test('prepareDaemonAuthSeedIfNeeded copies credentials from a non-running source
 
     const binDir = join(tmp, 'bin');
     await mkdir(binDir, { recursive: true });
-    const yarnPath = join(binDir, 'yarn');
-    await writeFile(yarnPath, '#!/bin/bash\nexit 0\n', 'utf-8');
-    await chmod(yarnPath, 0o755);
+    const pnpmPath = join(binDir, 'pnpm');
+    await writeFile(pnpmPath, '#!/bin/bash\nexit 0\n', 'utf-8');
+    await chmod(pnpmPath, 0o755);
 
     const writeStackEnv = async ({ stackName, cliHomeDir, serverPort }) => {
         const baseDir = join(storageDir, stackName);

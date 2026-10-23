@@ -12,17 +12,17 @@ async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
 
-async function writeYarnStub({ binDir }) {
+async function writePnpmStub({ binDir }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       '',
       'if [[ "${1:-}" == "--version" ]]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
       '',
@@ -31,7 +31,7 @@ async function writeYarnStub({ binDir }) {
     ].join('\n') + '\n',
     'utf-8'
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 }
 
 async function writeExpoStubCaptureNodeOptions({ expoPath }) {
@@ -82,7 +82,7 @@ async function writeMinimalRepo({ root }) {
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
   await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
   await writeFile(join(root, 'pnpm-lock.yaml'), '# lock\n', 'utf-8');
-  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app', private: true });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), { name: '@happier-dev/cli', private: true });
   await writeJson(join(root, 'apps', 'server', 'package.json'), { name: '@happier-dev/server', private: true });
@@ -97,7 +97,7 @@ test('expoExec defaults Expo heap limit to 8192MB (unless overridden)', async (t
   await writeMinimalRepo({ root });
 
   const binDir = join(root, 'bin');
-  await writeYarnStub({ binDir });
+  await writePnpmStub({ binDir });
 
   const outputPath = join(root, 'node-options.txt');
   await writeFile(outputPath, '', 'utf-8');
@@ -136,7 +136,7 @@ test('expoExec honors HAPPIER_STACK_EXPO_MAX_OLD_SPACE_SIZE_MB override', async 
   await writeMinimalRepo({ root });
 
   const binDir = join(root, 'bin');
-  await writeYarnStub({ binDir });
+  await writePnpmStub({ binDir });
 
   const outputPath = join(root, 'node-options.txt');
   await writeFile(outputPath, '', 'utf-8');
@@ -174,7 +174,7 @@ test('expoExec overrides NODE_OPTIONS --max-old-space-size unless explicitly ove
   await writeMinimalRepo({ root });
 
   const binDir = join(root, 'bin');
-  await writeYarnStub({ binDir });
+  await writePnpmStub({ binDir });
 
   const outputPath = join(root, 'node-options.txt');
   await writeFile(outputPath, '', 'utf-8');
@@ -213,7 +213,7 @@ test('expoSpawn applies the same heap limit behavior', async (t) => {
   await writeMinimalRepo({ root });
 
   const binDir = join(root, 'bin');
-  await writeYarnStub({ binDir });
+  await writePnpmStub({ binDir });
 
   const outputPath = join(root, 'node-options.txt');
   await writeFile(outputPath, '', 'utf-8');
@@ -249,7 +249,7 @@ test('expoSpawn applies the same heap limit behavior', async (t) => {
   assert.match(logged, /^EXPO_UNSTABLE_WEB_MODAL=1$/m);
 });
 
-test('resolveExpoBin publishes and prefers an isolated Windows cmd shim without replacing Yarn entries', async (t) => {
+test('resolveExpoBin publishes and prefers an isolated Windows cmd shim without replacing installed package entries', async (t) => {
   assert.equal(typeof expoCommand.resolveExpoBin, 'function');
 
   const root = await mkdtemp(join(tmpdir(), 'hs-expo-resolve-cmd-shim-'));

@@ -52,6 +52,7 @@ test('collectEnvironmentManifest records reproducibility facts without environme
   assert.equal(manifest.capturedAt, '2026-08-25T12:00:00.000Z');
   assert.deepEqual(manifest.git, { head: 'abc123', dirtyEntryCount: 7, branch: 'dev' });
   assert.equal(manifest.tools.node, 'node version');
+  assert.equal(manifest.tools.pnpm, 'pnpm version');
   assert.equal(manifest.environment.present.GITHUB_TOKEN, true);
   assert.equal(manifest.environment.present.HAPPIER_STACK_HOME_DIR, true);
   assert.equal(manifest.host.repositoryPlacement, 'possibly-managed-home-folder');

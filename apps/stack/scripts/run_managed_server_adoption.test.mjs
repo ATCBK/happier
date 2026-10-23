@@ -281,15 +281,15 @@ case "$*" in
 esac
 `);
   await writeFile(join(binDir, 'docker'), '#!/bin/sh\ncase "$*" in *"redis-cli ping"*) printf "PONG\\n" ;; *) printf "ok\\n" ;; esac\n');
-  await writeFile(join(binDir, 'yarn'), `#!/bin/sh
-if [ "$1" = "--version" ]; then printf "4.0.0\\n"; exit 0; fi
+  await writeFile(join(binDir, 'pnpm'), `#!/bin/sh
+if [ "$1" = "--version" ]; then printf "12.14.0\\n"; exit 0; fi
 if [ "$1" = "run" ] && [ "$2" = "start" ]; then
   printf "spawned\\n" >> "$SPAWN_MARKER_PATH"
   exec "$REAL_NODE" -e 'setInterval(() => {}, 1000000)'
 fi
 exit 0
 `);
-  await Promise.all(['lsof', 'ps', 'docker', 'yarn'].map((name) => chmod(join(binDir, name), 0o755)));
+  await Promise.all(['lsof', 'ps', 'docker', 'pnpm'].map((name) => chmod(join(binDir, name), 0o755)));
   await writeFile(runtimeStatePath, JSON.stringify({
     version: 1,
     stackName,
@@ -369,12 +369,12 @@ test('managed backend activation waits for child-bound readiness before publicat
   portFixture = null;
   await writeFile(join(fakeRepo, 'apps', 'server', 'server.mjs'), 'setTimeout(() => process.exit(9), 50);\n');
   await writeFile(join(binDir, 'docker'), '#!/bin/sh\ncase "$*" in *"redis-cli ping"*) printf "PONG\\n" ;; *) printf "ok\\n" ;; esac\n');
-  await writeFile(join(binDir, 'yarn'), `#!/bin/sh
-if [ "$1" = "--version" ]; then printf "4.0.0\\n"; exit 0; fi
+  await writeFile(join(binDir, 'pnpm'), `#!/bin/sh
+if [ "$1" = "--version" ]; then printf "12.14.0\\n"; exit 0; fi
 if [ "$1" = "run" ] && [ "$2" = "start" ]; then exec "$REAL_NODE" server.mjs; fi
 exit 0
 `);
-  await Promise.all(['docker', 'yarn'].map((name) => chmod(join(binDir, name), 0o755)));
+  await Promise.all(['docker', 'pnpm'].map((name) => chmod(join(binDir, name), 0o755)));
   await writeFile(envPath, [
     `HAPPIER_STACK_STACK=${stackName}`,
     'HAPPIER_STACK_SERVER_COMPONENT=happier-server',

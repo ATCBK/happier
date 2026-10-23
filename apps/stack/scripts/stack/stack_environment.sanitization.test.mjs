@@ -566,14 +566,16 @@ test('withStackEnv preserves an explicit package cache root while scrubbing unre
   await withTempStackEnvFixture(async ({ stackName, storageDir }) => {
     const keys = [
       'HAPPIER_STACK_PM_CACHE_BASE_DIR',
-      'YARN_CACHE_FOLDER',
+      'pnpm_config_store_dir',
+      'pnpm_config_cache_dir',
       'HAPPIER_STACK_UNRELATED_CALLER_VALUE',
     ];
     const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     const cacheBaseDir = join(storageDir, 'remote-package-cache');
 
     process.env.HAPPIER_STACK_PM_CACHE_BASE_DIR = cacheBaseDir;
-    delete process.env.YARN_CACHE_FOLDER;
+    delete process.env.pnpm_config_store_dir;
+    delete process.env.pnpm_config_cache_dir;
     process.env.HAPPIER_STACK_UNRELATED_CALLER_VALUE = 'must-not-leak';
 
     try {
@@ -585,7 +587,8 @@ test('withStackEnv preserves an explicit package cache root while scrubbing unre
           assert.equal(env.HAPPIER_STACK_UNRELATED_CALLER_VALUE, undefined);
 
           const packageManagerEnv = await applyStackCacheEnv(env);
-          assert.equal(packageManagerEnv.YARN_CACHE_FOLDER, join(cacheBaseDir, 'yarn'));
+          assert.equal(packageManagerEnv.pnpm_config_store_dir, join(cacheBaseDir, 'pnpm', 'store'));
+          assert.equal(packageManagerEnv.pnpm_config_cache_dir, join(cacheBaseDir, 'pnpm', 'cache'));
         },
       });
     } finally {

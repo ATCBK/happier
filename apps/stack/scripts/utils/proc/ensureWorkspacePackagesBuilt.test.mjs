@@ -96,14 +96,20 @@ async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
 
-async function writeYarnWorkspaceBuildStub({ binDir, outputPath, lockOutputPath = null, delaySecondsByPackage = {} }) {
+async function writePnpmWorkspace(root, { workspaces = ['apps/*', 'packages/*'], ...manifest } = {}) {
+  await writeJson(join(root, 'package.json'), { private: true, ...manifest,
+    packageManager: JSON.parse(await readFile(new URL('../../../../../package.json', import.meta.url), 'utf8')).packageManager });
+  await writeFile(join(root, 'pnpm-workspace.yaml'), `packages:\n${workspaces.map(pattern => `  - ${JSON.stringify(pattern)}`).join('\n')}\n`);
+}
+
+async function writePnpmWorkspaceBuildStub({ binDir, outputPath, lockOutputPath = null, delaySecondsByPackage = {} }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   const delayCliCommon = Number(delaySecondsByPackage?.cliCommon ?? 0);
   const delayProtocol = Number(delaySecondsByPackage?.protocol ?? 0);
   const delayAgents = Number(delaySecondsByPackage?.agents ?? 0);
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
@@ -111,12 +117,12 @@ async function writeYarnWorkspaceBuildStub({ binDir, outputPath, lockOutputPath 
       lockOutputPath ? `echo "$(pwd) :: \${HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD:-}" >> ${JSON.stringify(lockOutputPath)}` : '',
       '',
       'if [[ "${1:-}" == "--version" ]]; then',
-      '  echo "1.22.22"',
+      '  echo "12.14.0"',
       '  exit 0',
       'fi',
       '',
-      '# Simulate `yarn -s build` creating dist outputs for workspace packages.',
-      'if [[ "${1:-}" == "-s" && "${2:-}" == "build" ]]; then',
+      '# Simulate `pnpm run --silent build` creating dist outputs for workspace packages.',
+      'if [[ "${1:-}" == "run" && "${2:-}" == "--silent" && "${3:-}" == "build" ]]; then',
       '  out="${HAPPIER_WORKSPACE_DIST_OUTPUT_DIR:-dist}"',
       '  if [[ "$(pwd)" == */packages/protocol ]]; then',
       delayProtocol > 0 ? `    sleep ${delayProtocol}` : '    true',
@@ -157,15 +163,15 @@ async function writeYarnWorkspaceBuildStub({ binDir, outputPath, lockOutputPath 
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
-async function writeYarnWorkspaceBuildViaTscStub({ binDir, outputPath }) {
+async function writePnpmWorkspaceBuildViaTscStub({ binDir, outputPath }) {
   await mkdir(binDir, { recursive: true });
-  const yarnPath = join(binDir, 'yarn');
+  const pnpmPath = join(binDir, 'pnpm');
   await writeFile(
-    yarnPath,
+    pnpmPath,
     [
       '#!/usr/bin/env node',
       "const { appendFileSync, existsSync, mkdirSync, writeFileSync } = require('node:fs');",
@@ -174,10 +180,10 @@ async function writeYarnWorkspaceBuildViaTscStub({ binDir, outputPath }) {
       'const args = process.argv.slice(2);',
       'appendFileSync(process.env.OUTPUT_PATH, `${process.cwd()} :: ${args.join(" ")}\\n`, "utf-8");',
       'if (args.includes("--version")) {',
-      '  console.log("1.22.22");',
+      '  console.log("12.14.0");',
       '  process.exit(0);',
       '}',
-      'if (args[0] === "-s" && args[1] === "build") {',
+      'if (args[0] === "run" && args[1] === "--silent" && args[2] === "build") {',
       '  const result = spawnSync("tsc", ["-p", "tsconfig.json"], { cwd: process.cwd(), env: process.env, stdio: "inherit" });',
       '  if (result.error) throw result.error;',
       '  process.exit(result.status ?? 0);',
@@ -186,11 +192,17 @@ async function writeYarnWorkspaceBuildViaTscStub({ binDir, outputPath }) {
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
   await writeFile(outputPath, '', 'utf-8');
 }
 
 async function applyEnvOverrides(t, root, vars) {
+  try {
+    await readFile(join(root, 'pnpm-workspace.yaml'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    await writePnpmWorkspace(root);
+  }
   const native = await installWorkspaceAdmissionProcessFixture(t, root);
   const removed = Object.fromEntries(Object.keys(process.env).filter(key => !(key in native.env)).map(key => [key, null]));
   vars = { ...removed, ...native.env, npm_execpath: '', npm_node_execpath: '', ...vars,
@@ -268,7 +280,7 @@ async function createQuietWorkspaceBuildFailureFixture(t, { packageManager }) {
       } : {}),
     });
   }
-  await writeJson(join(root, 'package.json'), {
+  await writePnpmWorkspace(root, {
     private: true,
     workspaces: ['apps/*', 'packages/*'],
   });
@@ -287,7 +299,7 @@ async function createQuietWorkspaceBuildFailureFixture(t, { packageManager }) {
   await writeQuietWorkspaceBuildFailurePackageManager({
     binDir,
     name: packageManager,
-    buildArgs: packageManager === 'yarn' ? ['-s', 'build'] : ['run', '-s', 'build'],
+    buildArgs: ['run', '--silent', 'build'],
   });
 
   const native = await installWorkspaceAdmissionProcessFixture(t, root);
@@ -341,8 +353,8 @@ async function assertQuietStackWorkspaceBuildFailureDiagnostics(t, packageManage
   assert.ok((failure?.message.length ?? 0) < 17_000, 'expected a bounded failure diagnostic');
 }
 
-test('Stack Yarn workspace build failures retain bounded child diagnostics', async (t) => {
-  await assertQuietStackWorkspaceBuildFailureDiagnostics(t, 'yarn');
+test('Stack Pnpm workspace build failures retain bounded child diagnostics', async (t) => {
+  await assertQuietStackWorkspaceBuildFailureDiagnostics(t, 'pnpm');
 });
 
 test('Stack binary npm workspace build failures retain bounded child diagnostics', async (t) => {
@@ -389,7 +401,7 @@ test('ensureWorkspacePackagesBuiltForComponent builds internal dist-based worksp
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnWorkspaceBuildStub({ binDir, outputPath });
+  await writePnpmWorkspaceBuildStub({ binDir, outputPath });
 
   await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -403,7 +415,7 @@ test('ensureWorkspacePackagesBuiltForComponent builds internal dist-based worksp
   });
 
   const out = await readFile(outputPath, 'utf-8');
-  assert.match(out, /packages\/protocol :: -s build/);
+  assert.match(out, /packages\/protocol :: run --silent build/);
   assert.equal(Boolean(await readFile(join(protocolDir, 'dist', 'rpcErrors.js'), 'utf-8')), true);
   const preservedOutputTime = new Date(Date.now() - 60_000);
   await utimes(join(protocolDir, 'dist', 'index.d.ts'), preservedOutputTime, preservedOutputTime);
@@ -411,7 +423,7 @@ test('ensureWorkspacePackagesBuiltForComponent builds internal dist-based worksp
   // Currentness is content-based: aging unchanged bytes does not rebuild them.
   await ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'ui'), { quiet: true, env: process.env });
   const out2 = await readFile(outputPath, 'utf-8');
-  const occurrences = out2.split('\n').filter((l) => l.includes('/packages/protocol :: -s build')).length;
+  const occurrences = out2.split('\n').filter((l) => l.includes('/packages/protocol :: run --silent build')).length;
   assert.equal(occurrences, 1);
 
   // Source freshness is part of output validity, not an adapter concern.
@@ -420,7 +432,7 @@ test('ensureWorkspacePackagesBuiltForComponent builds internal dist-based worksp
   await writeFile(join(protocolDir, 'src', 'index.ts'), 'export const changed = true;\n', 'utf-8');
   await ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'ui'), { quiet: true, env: process.env });
   const out3 = await readFile(outputPath, 'utf-8');
-  const occurrencesAfterSourceChange = out3.split('\n').filter((l) => l.includes('/packages/protocol :: -s build')).length;
+  const occurrencesAfterSourceChange = out3.split('\n').filter((l) => l.includes('/packages/protocol :: run --silent build')).length;
   assert.equal(occurrencesAfterSourceChange, 2);
 
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -436,7 +448,7 @@ test('ensureWorkspacePackagesBuiltForComponent builds internal dist-based worksp
   await writeFile(join(protocolDir, 'src', 'rpc.test.ts'), 'export const testOnly = true;\n', 'utf-8');
   await ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'ui'), { quiet: true, env: process.env });
   const finalOut = await readFile(outputPath, 'utf-8');
-  const finalOccurrences = finalOut.split('\n').filter((l) => l.includes('/packages/protocol :: -s build')).length;
+  const finalOccurrences = finalOut.split('\n').filter((l) => l.includes('/packages/protocol :: run --silent build')).length;
   assert.equal(finalOccurrences, 4, 'source/config/package changes rebuild, while unchanged output timestamps and test-only source do not');
 });
 
@@ -446,7 +458,7 @@ test('ensureWorkspacePackagesBuiltForComponent builds unscoped internal workspac
     await rm(root, { recursive: true, force: true });
   });
 
-  await writeJson(join(root, 'package.json'), {
+  await writePnpmWorkspace(root, {
     private: true,
     workspaces: ['apps/*', 'packages/*'],
   });
@@ -503,8 +515,8 @@ test('ensureWorkspacePackagesBuiltForComponent builds unscoped internal workspac
   assert.equal(await readFile(join(privacyKitDir, 'dist', 'index.js'), 'utf-8'), 'export const privacy = true;\n');
 });
 
-test('ensureWorkspacePackagesBuiltForComponent uses inherited Yarn JS entrypoint when PATH has no Yarn shim', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hs-inherited-yarn-entrypoint-'));
+test('ensureWorkspacePackagesBuiltForComponent uses inherited Pnpm JS entrypoint when PATH has no Pnpm shim', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-inherited-pnpm-entrypoint-'));
   t.after(async () => {
     await rm(root, { recursive: true, force: true });
   });
@@ -515,7 +527,7 @@ test('ensureWorkspacePackagesBuiltForComponent uses inherited Yarn JS entrypoint
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
   await mkdir(protocolDir, { recursive: true });
-  await writeJson(join(root, 'package.json'), {
+  await writePnpmWorkspace(root, {
     private: true,
     workspaces: ['apps/*', 'packages/*'],
   });
@@ -541,11 +553,11 @@ test('ensureWorkspacePackagesBuiltForComponent uses inherited Yarn JS entrypoint
     main: './dist/index.js',
     types: './dist/index.d.ts',
     scripts: {
-      build: 'unused-by-fake-yarn',
+      build: 'unused-by-fake-pnpm',
     },
   });
 
-  const binDir = join(root, 'path-without-yarn');
+  const binDir = join(root, 'path-without-pnpm');
   const corepackMarkerPath = join(root, 'corepack-was-invoked');
   await mkdir(binDir, { recursive: true });
   const corepackTrapPath = join(binDir, process.platform === 'win32' ? 'corepack.cmd' : 'corepack');
@@ -558,26 +570,26 @@ test('ensureWorkspacePackagesBuiltForComponent uses inherited Yarn JS entrypoint
   );
   await chmod(corepackTrapPath, 0o755);
 
-  const yarnEntrypointDir = join(root, 'inherited package manager');
-  const yarnEntrypointPath = join(yarnEntrypointDir, 'yarn entrypoint.cjs');
-  const invocationLogPath = join(root, 'yarn-invocations.jsonl');
-  await mkdir(yarnEntrypointDir, { recursive: true });
+  const pnpmEntrypointDir = join(root, 'inherited package manager');
+  const pnpmEntrypointPath = join(pnpmEntrypointDir, 'pnpm entrypoint.cjs');
+  const invocationLogPath = join(root, 'pnpm-invocations.jsonl');
+  await mkdir(pnpmEntrypointDir, { recursive: true });
   await writeFile(
-    yarnEntrypointPath,
+    pnpmEntrypointPath,
     [
       "const { appendFileSync, mkdirSync, writeFileSync } = require('node:fs');",
       "const { join } = require('node:path');",
       'const args = process.argv.slice(2);',
-      'appendFileSync(process.env.YARN_INVOCATION_LOG, `${JSON.stringify(args)}\\n`, "utf-8");',
+      'appendFileSync(process.env.PNPM_INVOCATION_LOG, `${JSON.stringify(args)}\\n`, "utf-8");',
       'if (args.length === 1 && args[0] === "--version") {',
-      '  process.stdout.write("1.22.22\\n");',
+      '  process.stdout.write("12.14.0\\n");',
       '  process.exit(0);',
       '}',
-      'if (args.length === 2 && args[0] === "-s" && args[1] === "build") {',
+      'if (args.length === 3 && args[0] === "run" && args[1] === "--silent" && args[2] === "build") {',
       '  const outDir = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR || join(process.cwd(), "dist");',
       '  mkdirSync(outDir, { recursive: true });',
-      '  writeFileSync(join(outDir, "index.js"), "export const inheritedYarnBuild = true;\\n", "utf-8");',
-      '  writeFileSync(join(outDir, "index.d.ts"), "export declare const inheritedYarnBuild: boolean;\\n", "utf-8");',
+      '  writeFileSync(join(outDir, "index.js"), "export const inheritedPnpmBuild = true;\\n", "utf-8");',
+      '  writeFileSync(join(outDir, "index.d.ts"), "export declare const inheritedPnpmBuild: boolean;\\n", "utf-8");',
       '  process.exit(0);',
       '}',
       'process.exit(92);',
@@ -590,8 +602,8 @@ test('ensureWorkspacePackagesBuiltForComponent uses inherited Yarn JS entrypoint
   const env = {
     ...native.env,
     PATH: native.launcher ? `${native.binDir}${delimiter}${binDir}` : binDir,
-    npm_execpath: yarnEntrypointPath,
-    YARN_INVOCATION_LOG: invocationLogPath,
+    npm_execpath: pnpmEntrypointPath,
+    PNPM_INVOCATION_LOG: invocationLogPath,
   };
   delete env.HAPPIER_STACK_ENV_FILE;
 
@@ -630,12 +642,12 @@ test('ensureWorkspacePackagesBuiltForComponent uses inherited Yarn JS entrypoint
       .map((line) => JSON.parse(line)),
     [
       ['--version'],
-      ['-s', 'build'],
+      ['run', '--silent', 'build'],
     ],
   );
   assert.equal(
     await readFile(join(protocolDir, 'dist', 'index.js'), 'utf-8'),
-    'export const inheritedYarnBuild = true;\n',
+    'export const inheritedPnpmBuild = true;\n',
   );
   await assert.rejects(readFile(corepackMarkerPath, 'utf-8'), { code: 'ENOENT' });
 });
@@ -649,7 +661,7 @@ test('ensureWorkspacePackagesBuiltForComponent treats source-exporting workspace
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
-  await writeJson(join(root, 'package.json'), {
+  await writePnpmWorkspace(root, {
     private: true,
     workspaces: ['apps/*', 'packages/*'],
   });
@@ -675,7 +687,7 @@ test('ensureWorkspacePackagesBuiltForComponent treats source-exporting workspace
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnWorkspaceBuildStub({ binDir, outputPath });
+  await writePnpmWorkspaceBuildStub({ binDir, outputPath });
   await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
@@ -685,7 +697,7 @@ test('ensureWorkspacePackagesBuiltForComponent treats source-exporting workspace
   await assert.doesNotReject(
     ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'ui'), { quiet: true, env: process.env }),
   );
-  assert.doesNotMatch(await readFile(outputPath, 'utf-8'), /packages\/audio-stream-native :: -s build/);
+  assert.doesNotMatch(await readFile(outputPath, 'utf-8'), /packages\/audio-stream-native :: run --silent build/);
 });
 
 test('ensureWorkspacePackagesBuiltForComponent walks the full internal workspace dependency closure before building', async (t) => {
@@ -750,7 +762,7 @@ test('ensureWorkspacePackagesBuiltForComponent walks the full internal workspace
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnWorkspaceBuildStub({ binDir, outputPath });
+  await writePnpmWorkspaceBuildStub({ binDir, outputPath });
 
   await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -764,13 +776,13 @@ test('ensureWorkspacePackagesBuiltForComponent walks the full internal workspace
   const orderedPackages = out
     .split('\n')
     .filter(Boolean)
-    .filter((line) => line.includes(' :: -s build'))
+    .filter((line) => line.includes(' :: run --silent build'))
     .map((line) => line.slice(line.indexOf('packages/')));
 
   assert.deepEqual(orderedPackages, [
-    'packages/protocol :: -s build',
-    'packages/agents :: -s build',
-    'packages/cli-common :: -s build',
+    'packages/protocol :: run --silent build',
+    'packages/agents :: run --silent build',
+    'packages/cli-common :: run --silent build',
   ]);
   assert.equal(Boolean(await readFile(join(protocolDir, 'dist', 'index.js'), 'utf-8')), true);
   assert.equal(Boolean(await readFile(join(agentsDir, 'dist', 'index.js'), 'utf-8')), true);
@@ -786,18 +798,16 @@ test('ensureWorkspacePackagesBuiltForComponent resolves plugin workspaces from t
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
-  await writeJson(join(root, 'package.json'), {
+  await writePnpmWorkspace(root, {
     name: 'repo',
     private: true,
-    workspaces: {
-      packages: [
+    workspaces: [
         'apps/ui',
         'apps/cli',
         'apps/server',
         'packages/protocol',
         'packages/plugins/[a-z]*',
-      ],
-    },
+    ],
   });
   await writeJson(join(root, 'apps', 'ui', 'package.json'), { name: '@happier-dev/app', private: true });
   await writeJson(join(root, 'apps', 'cli', 'package.json'), {
@@ -838,7 +848,7 @@ test('ensureWorkspacePackagesBuiltForComponent resolves plugin workspaces from t
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnWorkspaceBuildStub({ binDir, outputPath });
+  await writePnpmWorkspaceBuildStub({ binDir, outputPath });
 
   await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -852,12 +862,12 @@ test('ensureWorkspacePackagesBuiltForComponent resolves plugin workspaces from t
   const orderedPackages = out
     .split('\n')
     .filter(Boolean)
-    .filter((line) => line.includes(' :: -s build'))
+    .filter((line) => line.includes(' :: run --silent build'))
     .map((line) => line.slice(line.indexOf('packages/')));
 
   assert.deepEqual(orderedPackages, [
-    'packages/protocol :: -s build',
-    'packages/plugins/claude :: -s build',
+    'packages/protocol :: run --silent build',
+    'packages/plugins/claude :: run --silent build',
   ]);
 });
 
@@ -870,8 +880,8 @@ test('ensureWorkspacePackagesBuiltForComponent resolves TypeScript bin shims whe
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
-  await writeJson(join(root, 'package.json'), { name: 'repo', private: true });
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writePnpmWorkspace(root, { name: 'repo', private: true });
+  await writeFile(join(root, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf-8');
   await writeJson(join(root, 'apps', 'ui', 'package.json'), {
     name: '@happier-dev/app',
     private: true,
@@ -923,7 +933,7 @@ test('ensureWorkspacePackagesBuiltForComponent resolves TypeScript bin shims whe
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnWorkspaceBuildViaTscStub({ binDir, outputPath });
+  await writePnpmWorkspaceBuildViaTscStub({ binDir, outputPath });
 
   await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -937,7 +947,7 @@ test('ensureWorkspacePackagesBuiltForComponent resolves TypeScript bin shims whe
   });
 
   const out = await readFile(outputPath, 'utf-8');
-  assert.match(out, /packages\/protocol :: -s build/);
+  assert.match(out, /packages\/protocol :: run --silent build/);
   assert.equal(Boolean(await readFile(join(protocolDir, 'dist', 'index.js'), 'utf-8')), true);
 });
 
@@ -976,7 +986,7 @@ test('ensureWorkspacePackagesBuiltForComponent does not run concurrent builds fo
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   const lockOutputPath = join(root, 'lock-env.txt');
-  await writeYarnWorkspaceBuildStub({
+  await writePnpmWorkspaceBuildStub({
     binDir,
     outputPath,
     lockOutputPath,
@@ -1006,7 +1016,7 @@ test('ensureWorkspacePackagesBuiltForComponent does not run concurrent builds fo
   }
 
   const out = await readFile(outputPath, 'utf-8');
-  const occurrences = out.split('\n').filter((l) => l.includes('/packages/cli-common :: -s build')).length;
+  const occurrences = out.split('\n').filter((l) => l.includes('/packages/cli-common :: run --silent build')).length;
   assert.equal(occurrences, 1);
   assert.ok(publicationResults.some(result => result.packageName === '@happier-dev/cli-common'
     && result.reason === 'concurrent_build_already_completed'),
@@ -1025,11 +1035,11 @@ test('CLI shared dependency preparation waits for the canonical workspace packag
   await mkdir(join(root, 'apps', 'cli'), { recursive: true });
   await mkdir(join(root, 'apps', 'ui'), { recursive: true });
   await mkdir(join(root, 'apps', 'server'), { recursive: true });
-  await writeJson(join(root, 'package.json'), {
+  await writePnpmWorkspace(root, {
     private: true,
     workspaces: ['apps/*', 'packages/*'],
   });
-  await writeFile(join(root, 'yarn.lock'), '# yarn\n', 'utf-8');
+  await writeFile(join(root, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf-8');
   await writeJson(join(root, 'apps', 'cli', 'package.json'), {
     name: '@happier-dev/cli',
     private: true,
@@ -1058,13 +1068,13 @@ test('CLI shared dependency preparation waits for the canonical workspace packag
   const buildReleasePath = join(root, 'build-release');
   await mkdir(binDir, { recursive: true });
   await writeFile(
-    join(binDir, 'yarn'),
+    join(binDir, 'pnpm'),
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$(pwd) :: $*" >> "${OUTPUT_PATH:?}"',
-      'if [[ "${1:-}" == "--version" ]]; then echo "1.22.22"; exit 0; fi',
-      'if [[ "${1:-}" == "-s" && "${2:-}" == "build" && "$(pwd)" == */packages/protocol ]]; then',
+      'if [[ "${1:-}" == "--version" ]]; then echo "12.14.0"; exit 0; fi',
+      'if [[ "${1:-}" == "run" && "${2:-}" == "--silent" && "${3:-}" == "build" && "$(pwd)" == */packages/protocol ]]; then',
       '  touch "${BUILD_STARTED_PATH:?}"',
       '  while [[ ! -f "${BUILD_RELEASE_PATH:?}" ]]; do sleep 0.02; done',
       '  out="${HAPPIER_WORKSPACE_DIST_OUTPUT_DIR:-dist}"',
@@ -1076,7 +1086,7 @@ test('CLI shared dependency preparation waits for the canonical workspace packag
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(join(binDir, 'yarn'), 0o755);
+  await chmod(join(binDir, 'pnpm'), 0o755);
   await writeFile(outputPath, '', 'utf-8');
 
   await applyEnvOverrides(t, root, {
@@ -1129,7 +1139,7 @@ test('CLI shared dependency preparation waits for the canonical workspace packag
 
   const output = await readFile(outputPath, 'utf-8');
   assert.equal(
-    output.split('\n').filter((line) => line.includes('/packages/protocol :: -s build')).length,
+    output.split('\n').filter((line) => line.includes('/packages/protocol :: run --silent build')).length,
     1,
   );
 });
@@ -1183,7 +1193,7 @@ test('ensureWorkspacePackagesBuiltForComponent rebuilds internal workspaces when
 
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
-  await writeYarnWorkspaceBuildStub({ binDir, outputPath });
+  await writePnpmWorkspaceBuildStub({ binDir, outputPath });
 
   await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -1197,7 +1207,7 @@ test('ensureWorkspacePackagesBuiltForComponent rebuilds internal workspaces when
   });
 
   const out = await readFile(outputPath, 'utf-8');
-  assert.match(out, /packages\/protocol :: -s build/);
+  assert.match(out, /packages\/protocol :: run --silent build/);
   assert.equal(Boolean(await readFile(join(protocolDir, 'dist', 'machineTransfer', 'transferStream.js'), 'utf-8')), true);
 });
 
@@ -1298,13 +1308,13 @@ test('ensureWorkspacePackagesBuiltForComponent keeps previous dist readable whil
   const releasePath = join(root, 'release-build');
   await mkdir(binDir, { recursive: true });
   await writeFile(
-    join(binDir, 'yarn'),
+    join(binDir, 'pnpm'),
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
       'echo "$(pwd) :: $* :: out=${HAPPIER_WORKSPACE_DIST_OUTPUT_DIR:-dist}" >> "${OUTPUT_PATH:?}"',
-      'if [[ "${1:-}" == "--version" ]]; then echo "1.22.22"; exit 0; fi',
-      'if [[ "${1:-}" == "-s" && "${2:-}" == "build" && "$(pwd)" == */packages/protocol ]]; then',
+      'if [[ "${1:-}" == "--version" ]]; then echo "12.14.0"; exit 0; fi',
+      'if [[ "${1:-}" == "run" && "${2:-}" == "--silent" && "${3:-}" == "build" && "$(pwd)" == */packages/protocol ]]; then',
       '  out="${HAPPIER_WORKSPACE_DIST_OUTPUT_DIR:-dist}"',
       '  rm -rf "$out"',
       `  printf started > ${JSON.stringify(markerPath)}`,
@@ -1318,7 +1328,7 @@ test('ensureWorkspacePackagesBuiltForComponent keeps previous dist readable whil
     ].join('\n') + '\n',
     'utf-8',
   );
-  await chmod(join(binDir, 'yarn'), 0o755);
+  await chmod(join(binDir, 'pnpm'), 0o755);
   await writeFile(outputPath, '', 'utf-8');
 
   await applyEnvOverrides(t, root, {
@@ -1351,7 +1361,7 @@ test('ensureWorkspacePackagesBuiltForComponent keeps previous dist readable whil
   assert.equal(await readFile(join(protocolDir, 'dist', 'index.js'), 'utf-8'), 'export const built = true;\n');
   const buildLine = (await readFile(outputPath, 'utf-8'))
     .split('\n')
-    .find((line) => line.includes('/packages/protocol :: -s build'));
+    .find((line) => line.includes('/packages/protocol :: run --silent build'));
   assert.ok(buildLine, 'expected the protocol package build to run');
   assert.match(buildLine, /out=.*\/packages\/protocol\/\.tmp\./);
   assert.doesNotMatch(buildLine, /out=dist(?:\s|$)/);

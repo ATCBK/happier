@@ -160,11 +160,11 @@ async function createCliBuildFixture(t, { existingCliDist = false } = {}) {
   await mkdir(binDir, { recursive: true });
   await writeFile(join(root, 'package.json'), JSON.stringify({
     private: true,
-    workspaces: ['apps/*', 'packages/*'],
+    packageManager: JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).packageManager,
   }));
-  await writeFile(join(root, 'pnpm-lock.yaml'), '# yarn\n');
-  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages: []\n');
-  await writeFile(join(root, 'node_modules', '.yarn-integrity'), 'ok\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n");
+  await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
+  await writeFile(join(root, 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\nlayoutVersion: 5\nnodeLinker: hoisted\n');
   await writeFile(join(root, 'node_modules', 'tweetnacl', 'package.json'), JSON.stringify({
     name: 'tweetnacl',
     version: '1.0.3',
@@ -207,11 +207,13 @@ async function createCliBuildFixture(t, { existingCliDist = false } = {}) {
   await writeFile(eventsPath, '');
   if (existingCliDist) await writeUsableCliDist(cliDir);
 
-  const yarnPath = join(binDir, 'yarn');
-  await writeFile(yarnPath, [
+  const pnpmPath = join(binDir, 'pnpm');
+  await writeFile(pnpmPath, [
     '#!/usr/bin/env bash',
     'set -euo pipefail',
-    'if [ "${1:-}" = "--version" ]; then echo "1.22.22"; exit 0; fi',
+    'if [ "${1:-}" = "--version" ]; then echo "12.14.0"; exit 0; fi',
+    'if [ "${1:-}" = "run" ]; then shift; fi',
+    'if [ "${1:-}" = "--silent" ] || [ "${1:-}" = "-s" ]; then shift; fi',
     'repo="${FIXTURE_ROOT:?}"',
     'case "$PWD" in',
     '*/packages/protocol|*/packages/agents|*/packages/cli-common)',
@@ -228,7 +230,7 @@ async function createCliBuildFixture(t, { existingCliDist = false } = {}) {
     'case "$PWD" in',
     '*/apps/cli)',
     'if [ "${1:-}" = "build" ]; then',
-    '  # Model Yarn automatic prebuild -> build:shared: this is the full-build owner.',
+    '  # Model pnpm automatic prebuild -> build:shared: this is the full-build owner.',
     '  for workspace in protocol agents cli-common; do',
     '    echo "shared:$workspace" >> "${EVENTS_PATH:?}"',
     '    echo "shared-lock:$workspace:present" >> "${EVENTS_PATH:?}"',
@@ -250,7 +252,7 @@ async function createCliBuildFixture(t, { existingCliDist = false } = {}) {
     'esac',
     'exit 0',
   ].join('\n') + '\n');
-  await chmod(yarnPath, 0o755);
+  await chmod(pnpmPath, 0o755);
 
   applyEnv(t, {
     PATH: `${binDir}:/usr/bin:/bin`,
@@ -449,13 +451,13 @@ test('one full CLI admission owns every shared workspace build exactly once', as
   );
   assert.equal(
     cliPackageJson.scripts?.prebuild,
-    'yarn -s build:shared',
+    'pnpm --silent run build:shared',
     'the actual CLI build lifecycle must delegate shared dependency admission to build:shared',
   );
   assert.equal(
     cliPackageJson.scripts?.['build:prepared'],
     cliPackageJson.scripts?.build,
-    'Stack-owned preparation needs a lifecycle entrypoint that does not rerun Yarn prebuild',
+    'Stack-owned preparation needs a lifecycle entrypoint that does not rerun pnpm prebuild',
   );
   const { cliDir, eventsPath, env } = await createCliBuildFixture(t);
 
