@@ -4728,6 +4728,9 @@ with `computer_access_read_only`, including approved or bypassed agent Actions. 
 not disable the person's own native stream controls. The selected-target response and
 owner-resolved approval display report access and the native app display name when available.
 Changing access replaces the selected source and requires fresh observation consent.
+Selection admission excludes overlapping desktop/window controllers, including a
+Wayland desktop and its inherited XWayland connection. Explicit unrelated X11
+desktops remain independent; wire target identities are unchanged.
 
 Window listing reports the pinned driver's app display name. Present-user listing may
 also include a Session-free PNG thumbnail; agent listing never captures or returns preview
@@ -4783,7 +4786,13 @@ a dangerous physical mutation. Hand back is safe too, and never relaxes fresh ob
 launches the relevant Screen Recording or Accessibility Privacy pane, returning `dispatched`
 only after the OS launch succeeds. This neither grants permission nor proves the pane is
 visible. The development executor uses the same installed pinned native driver for
-Linux/X11 windows and the logical primary desktop, with macOS codecs beneath that owner.
+Linux/X11, native Windows primary/window targets, macOS, and enumerable native
+Wayland targets beneath that owner. Windows/macOS default to `primary`; Linux
+prefers its inherited Wayland socket to XWayland when present, while explicit
+X11 connections remain exact. Wayland desktop selection requires native size
+metadata (Hyprland in pinned Cua 0.37.0); other compositor windows remain subject
+to the driver's identity/capture/input limitations. An empty unsupported
+compositor returns explained `wayland_target_unavailable`.
 macOS Screen Recording and Accessibility are checked independently; capture-only window
 capture omits the Accessibility tree, does not grant input, and denied/unknown grants
 refuse the affected operation. Window input retains native background delivery; desktop
@@ -4803,7 +4812,12 @@ reason and allow a fresh observation without retiring the source. The pinned
 `browser_field_needs_keystrokes` refusal likewise remains known; it does not
 authorize foreground escalation. Generic tool failures do not prove nondelivery.
 Physical macOS permission/input certification and loaded picker/disclosure UI validation
-remain separate evidence. Windows and Wayland executors remain unsupported.
+remain separate evidence. Windows and native compositor capture/input journeys
+likewise require native release certification. Windows pixels stay physical at
+high DPI. Its ordinary input does not require elevation, and native UIPI or
+background-delivery refusals do not authorize foreground escalation. See the
+[native computer driver contract](binary-runtime.md#native-computer-driver-03-development-source)
+for platform permission semantics and compositor prerequisites.
 The native contract does not establish exact confidential focus/field delivery:
 `computer.secret.fill` remains refused as `field_verification_unsupported` by its existing
 trusted executor; ordinary typing is not confidential-fill support.
