@@ -14,6 +14,13 @@ const { resolveVoiceCompactLine, resolveVoicePresenceCaption } =
 const base = { live: true, muted: false, captionLabel: '' } as const;
 
 describe('Voice presence captions for a bound Session target', () => {
+  it.each(['error', 'permission_required'] as const)('keeps %s recovery ahead of the saved mute preference', (surfaceState) => {
+    const voice = { ...base, muted: true, surfaceState, captionLabel: 'Playback failed. Try again.' };
+    expect(resolveVoicePresenceCaption(voice)).toBe(voice.captionLabel);
+    expect(resolveVoiceCompactLine(voice, 'Earlier reply', 'Release captain'))
+      .toEqual({ kind: 'caption', text: voice.captionLabel });
+  });
+
   it('captions connecting to a Session as reading its instructions, and global connecting unchanged', () => {
     expect(
       resolveVoicePresenceCaption(

@@ -13,14 +13,14 @@ const CALL_FIRST: ReadonlySet<string> = new Set(['connecting', 'reconnecting', '
 type CaptionFacts = Pick<VoiceAttemptControlProjection, 'live' | 'muted' | 'surfaceState' | 'captionLabel'>;
 
 /**
- * The call state's one helpful line (lab `voice-presence` captions): muted wins, then a failure's
- * reason from the projection (`captionLabel`), otherwise the conversing/connection state's caption.
+ * The call state's one helpful line (lab `voice-presence` captions): a failure's reason from the
+ * projection (`captionLabel`) wins, then muted, otherwise the conversing/connection state's caption.
  * Connecting to a bound Session reads its instructions (lab `b-voice C`, D38): one caption inside the
  * existing connecting state, not a new lifecycle step. `targetName` is null in global mode.
  */
 export function resolveVoicePresenceCaption(voice: CaptionFacts, targetName: string | null = null): string | null {
-    if (voice.live && voice.muted) return t('voicePresence.captions.muted');
     if (FAILED.has(voice.surfaceState)) return voice.captionLabel.trim() || null;
+    if (voice.live && voice.muted) return t('voicePresence.captions.muted');
     if (voice.surfaceState === 'connecting' && targetName) return t('sessionVoice.preparing', { name: targetName });
     if (CAPTIONED.has(voice.surfaceState)) return t(`voicePresence.captions.${voice.surfaceState as CaptionedState}`);
     return null;

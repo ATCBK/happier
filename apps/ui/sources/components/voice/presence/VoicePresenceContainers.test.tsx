@@ -53,7 +53,7 @@ function projection(phase: Phase, overrides: Partial<{ muted: boolean }> = {}): 
     const control = resolveVoiceAttemptControl({
         surfaceState,
         tone: resolveVoiceSurfaceStatusPresentation(surfaceState).tone,
-        status: phase === 'idle' ? 'disconnected' : phase === 'connecting' ? 'connecting' : phase === 'failed' ? 'error' : 'connected',
+        status: phase === 'idle' || phase === 'failed' ? 'disconnected' : phase === 'connecting' ? 'connecting' : 'connected',
         sessionId: phase === 'idle' ? null : 'voice-1',
         canStop: phase !== 'idle' && phase !== 'failed',
         muted: overrides.muted === true,
@@ -352,6 +352,19 @@ describe('VoiceIsland', () => {
 });
 
 describe('VoiceTopBarPresence', () => {
+    it('keeps the disconnected failure in its pill with recovery and dismissal', async () => {
+        const voice = projection('failed');
+        screen = await renderScreen(<VoiceTopBarPresence voice={voice} />);
+
+        expect(screen.findByTestId('voice-top-bar-rest')).toBeNull();
+        expect(screen.findByTestId('voice-top-bar-transport-mute')).toBeNull();
+        expect(screen.findByTestId('voice-top-bar-transport-end')).toBeNull();
+        screen.pressByTestId('voice-top-bar-transport-recover');
+        expect(voice.onRecover).toHaveBeenCalledOnce();
+        screen.pressByTestId('voice-top-bar-transport-dismiss');
+        expect(voice.onDismissFailedAttempt).toHaveBeenCalledOnce();
+    });
+
     it('is a quiet microphone at rest that starts Voice', async () => {
         const voice = projection('idle');
         screen = await renderScreen(<VoiceTopBarPresence voice={voice} />);
