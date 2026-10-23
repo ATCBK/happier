@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { PluginLocalizedStringV2Schema } from '../plugins/contributions/publicTypes.js';
 import { z } from 'zod/mini';
 
 import { ActionUiPlacementSchema } from './actionUiPlacements.js';
@@ -92,6 +93,8 @@ export type ActionExecutionDescriptorV1 = z.infer<typeof ActionExecutionDescript
 export const ActionDefinitionSummaryV1Schema = lazyZodSchema(() => z.looseObject({
     id: ActionDefinitionIdV1Schema,
     title: z.string().check(z.minLength(1)),
+    confirmVerb: z.optional(PluginLocalizedStringV2Schema),
+    irreversible: z.optional(z.literal(true)),
     description: z.nullable(z.string().check(z.minLength(1))),
     safety: ActionSafetySchema,
     approval: z.optional(ActionApprovalSchema),

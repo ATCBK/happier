@@ -194,6 +194,8 @@ function serializeActionSpecMetadata(
   return {
     id: spec.id,
     title: spec.title,
+    ...(spec.confirmVerb === undefined ? {} : { confirmVerb: spec.confirmVerb }),
+    ...(spec.irreversible === undefined ? {} : { irreversible: spec.irreversible }),
     description: spec.description ?? null,
     safety: spec.safety,
     approval: spec.approval,
@@ -302,6 +304,8 @@ export function projectActionDefinitionSummaryForExternalDiscovery(
   return ActionDiscoveryDefinitionSummaryV1Schema.parse({
     id: definition.id,
     title: definition.title,
+    ...(definition.confirmVerb === undefined ? {} : { confirmVerb: definition.confirmVerb }),
+    ...(definition.irreversible === undefined ? {} : { irreversible: definition.irreversible }),
     description: definition.description,
     safety: definition.safety,
     ...(definition.approval === undefined ? {} : { approval: definition.approval }),

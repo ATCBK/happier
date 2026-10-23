@@ -1281,6 +1281,8 @@ export const PluginProjectedActionV2Schema = lazyZodSchema(() => (<T extends z.Z
   /** Exact process-local occurrence of the plugin slot that supplied this Action. */
   occurrenceId: PluginUiRuntimeOccurrenceIdV1Schema,
   title: PluginLocalizedStringV2Schema,
+  confirmVerb: zMini.optional(PluginLocalizedStringV2Schema),
+  irreversible: zMini.optional(z.literal(true)),
   // Older projection writers emitted `null` for an omitted description.
   description: zMini.optional(zMini.nullable(PluginLocalizedStringV2Schema)),
   icon: zMini.optional(PluginActionIconV2Schema),

@@ -206,6 +206,8 @@ export type ActionConfirmationWhen = InputPredicate | Readonly<{ presentUserUi: 
 type ActionContribution = Readonly<{
     id: string;
     title: PluginLocalizedStringV2;
+    confirmVerb?: PluginLocalizedStringV2;
+    irreversible?: true;
     description?: PluginLocalizedStringV2;
     icon?: string;
     scopes: readonly (
@@ -271,6 +273,8 @@ export type PluginActionAuthorDefaults = Readonly<{
  */
 export type PluginActionDeclaration = Readonly<{
     title: PluginLocalizedStringV2;
+    confirmVerb?: PluginLocalizedStringV2;
+    irreversible?: true;
     description?: PluginLocalizedStringV2;
     icon?: string;
     slash?: Readonly<{ tokens: readonly string[] }>;

@@ -56,6 +56,9 @@ function mergeRuntimeActionTextMaps(
 
 const RUNTIME_ACTION_TITLES = mergeRuntimeActionTextMaps((family) => family.titles);
 const RUNTIME_ACTION_DESCRIPTIONS = mergeRuntimeActionTextMaps((family) => family.descriptions);
+const RUNTIME_ACTION_CONFIRMATION_FACTS: NonNullable<RuntimeActionSpecFamily['confirmationFacts']> = Object.freeze(
+  Object.assign({}, ...RUNTIME_ACTION_SPEC_FAMILIES.map((family: RuntimeActionSpecFamily) => family.confirmationFacts ?? {})),
+);
 const RUNTIME_ACTION_APPROVAL_POLICIES: NonNullable<RuntimeActionSpecFamily['approvalPolicies']> = Object.freeze(
   Object.assign({}, ...RUNTIME_ACTION_SPEC_FAMILIES.map((family: RuntimeActionSpecFamily) => family.approvalPolicies ?? {})),
 );
@@ -146,6 +149,7 @@ function createRuntimeActionSpecFor<
   return {
     id: actionId, approvalPolicy: { ...RUNTIME_ACTION_APPROVAL_POLICIES[actionId] }, approval: actionId === 'computer.secret.fill' || actionId === 'browser.automation.secret.fill' ? { result: 'required', flow: 'deferred' } : { result: 'required' },
     title,
+    ...RUNTIME_ACTION_CONFIRMATION_FACTS[actionId],
     description: executorReal ? humanDescription : RUNTIME_ACTION_PROJECTION_CONTRACT_DESCRIPTION,
     safety: RUNTIME_DANGER_ACTION_IDS.has(actionId) ? 'danger' : 'safe',
     placements: [],

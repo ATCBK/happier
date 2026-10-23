@@ -23,6 +23,17 @@ const localized = { key: 'plugin.title', fallback: 'Title' };
 const daemonExecution = { target: 'daemon' } as const;
 
 describe('plugin executable contribution target grammar', () => {
+  it('carries explicit confirmation facts through the closed plugin declaration', () => {
+    const action = {
+      id: 'delete', title: localized, scopes: ['session'], surfaces: ['agent'],
+      execution: daemonExecution, dangerLevel: 'safe',
+      confirmVerb: { key: 'actions.delete', fallback: 'Delete' }, irreversible: true,
+    };
+    expect(PluginActionContributionV2Schema.parse(action)).toMatchObject({
+      confirmVerb: action.confirmVerb, irreversible: true,
+    });
+    expect(PluginActionContributionV2Schema.safeParse({ ...action, irreversible: false }).success).toBe(false);
+  });
   it('admits portable Account execution with a closed exact artifact reference', () => {
     const execution = { target: 'account', account: { artifactId: 'account-runtime', exportName: 'activateAccount' } };
     expect(PluginActionExecutionV2Schema.parse(execution)).toEqual(execution);

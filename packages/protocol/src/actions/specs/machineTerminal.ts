@@ -71,6 +71,8 @@ function describeMachineTerminalApprovalSummary(actionId: MachineTerminalActionI
 function row<TId extends MachineTerminalActionId>(actionId: TId, title: string, rpcMethod: string, read = false): MachineTerminalSpec<TId> {
   return {
     id: actionId, approval: actionId === 'machines.terminal.open' || actionId === 'machines.terminal.restart' ? { result: 'required', flow: 'deferred' } : { result: 'required' },
+    ...(actionId === 'machines.terminal.close' ? { confirmVerb: { key: 'common.close', fallback: 'Close' } }
+      : actionId === 'machines.terminal.restart' ? { confirmVerb: { key: 'localServices.effectReview.restart', fallback: 'Restart' } } : {}),
     // Opening is reversible, and interactive input uses admitted PTY custody.
     // Automation's danger floor and explicit per-surface Ask settings still apply.
     approvalPolicy: { uiConfirmation: actionId === 'machines.terminal.open' || actionId === 'machines.terminal.write' ? 'direct' : 'policy' }, title,

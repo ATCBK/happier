@@ -246,6 +246,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.accounts.delete', approval: {result: 'required'},
+    confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true,
     title: 'Delete Home Account',
     description: 'Erase one Account through the Home\'s single erasure owner. Incomplete cleanup is reported explicitly.',
     safety: 'danger',
@@ -356,6 +357,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'home.mailDelivery.test', approval: {result: 'required'},
+    confirmVerb: { key: 'common.send', fallback: 'Send' },
     approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Send a test email',
     description: 'Send a fixed test message through this Home\'s mail settings. A failure reports its class only.',

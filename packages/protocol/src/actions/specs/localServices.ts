@@ -334,6 +334,10 @@ function describeLocalServiceControlApprovalSummary(verb: 'Stop' | 'Restart') {
 }
 
 export const LOCAL_SERVICES_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
+  confirmationFacts: {
+    'localServices.actions.stopManaged': { confirmVerb: { key: 'localServices.effectReview.stop', fallback: 'Stop' } },
+    'localServices.actions.restartManaged': { confirmVerb: { key: 'localServices.effectReview.restart', fallback: 'Restart' } },
+  },
   approvalSummaries: {
     'localServices.launcher.start': describeLocalServiceStartApprovalSummary,
     'localServices.actions.stopManaged': describeLocalServiceControlApprovalSummary('Stop'),

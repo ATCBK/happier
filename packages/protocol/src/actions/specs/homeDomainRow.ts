@@ -34,6 +34,8 @@ type HomeDomainActionRowInput<
   approval: PreNormalizedActionSpec['approval'];
   approvalPolicy?: PreNormalizedActionSpec['approvalPolicy'];
   title: string;
+  confirmVerb?: PreNormalizedActionSpec['confirmVerb'];
+  irreversible?: PreNormalizedActionSpec['irreversible'];
   description: string;
   safety: 'safe' | 'danger';
   sideEffectClass: 'read' | 'write' | 'external' | 'danger';
@@ -97,6 +99,8 @@ export function homeDomainActionRow<
     id: spec.id, approval: spec.approval,
     ...(spec.approvalPolicy ? { approvalPolicy: spec.approvalPolicy } : {}),
     title: spec.title,
+    ...(spec.confirmVerb === undefined ? {} : { confirmVerb: spec.confirmVerb }),
+    ...(spec.irreversible === undefined ? {} : { irreversible: spec.irreversible }),
     description: spec.description,
     safety: spec.safety,
     // The Home transaction rechecks the actual principal's capabilities; this

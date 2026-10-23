@@ -105,6 +105,7 @@ export const MACHINE_ACCESS_ACTION_SPECS = [
   },
   {
     id: 'machines.access.prepareKeys', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Prepare secure machine access',
+    confirmVerb: { key: 'common.retry', fallback: 'Retry' },
     description: `Retry current recipient-key delivery using an authorized key holder. No raw keys are accepted or returned. ${disclosure}`,
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'machine', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_access_prepare_keys', voiceClientToolName: 'prepareMachineAccessKeys' },

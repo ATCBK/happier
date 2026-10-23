@@ -9,6 +9,7 @@ export type RuntimeActionSpecTextMap = Readonly<Partial<Record<RuntimeActionIdV1
 export type RuntimeActionSchemaMap = Readonly<Partial<Record<RuntimeActionIdV1, z.ZodMiniType>>>;
 
 export type RuntimeActionSpecFamily = Readonly<{
+  confirmationFacts?: Readonly<Partial<Record<RuntimeActionIdV1, Pick<PreNormalizedActionSpec, 'confirmVerb' | 'irreversible'>>>>;
   approvalPolicies?: Readonly<Partial<Record<RuntimeActionIdV1, PreNormalizedActionSpec['approvalPolicy']>>>;
   /** Input paths the approval page reads under Technical details (see ActionSpec `approvalPresentation`). */
   approvalTechnicalInputPaths?: Readonly<Partial<Record<RuntimeActionIdV1, readonly string[]>>>;

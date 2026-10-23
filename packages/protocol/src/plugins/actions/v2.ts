@@ -497,6 +497,8 @@ export function normalizePluginActionSlashV2(
 export const PluginActionContributionV2Schema = lazyZodSchema(() => z.strictObject({
   id: asProtocolZod(PluginContributionLocalIdSchema),
   title: PluginLocalizedStringV2Schema,
+  confirmVerb: z.optional(PluginLocalizedStringV2Schema),
+  irreversible: z.optional(z.literal(true)),
   description: z.optional(PluginLocalizedStringV2Schema),
   icon: z.optional(PluginActionIconV2Schema),
   scopes: z.array(PluginActionScopeV2Schema).check(z.minLength(1)),

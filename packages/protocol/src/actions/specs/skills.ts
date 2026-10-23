@@ -83,6 +83,7 @@ function skillSpec<TId extends SkillLibraryActionIdV1>(id: TId, title: string, r
     ...(typeof input.ok === 'boolean' ? { ok: input.ok } : {}), ...(typeof input.incomplete === 'string' ? { incomplete: input.incomplete } : {}),
   }; };
   return { id, title, approval: { result: read ? 'none' : 'required' },
+    ...(id === 'skills.delete' ? { confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true as const } : {}),
     approvalPolicy: id === 'skills.delete' ? { uiConfirmation: 'policy' } : read ? {} : { uiConfirmation: 'direct' },
     safety: read ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'write', requiredAuthority: 'account_automation', executionPlacement: 'account', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, rpc: true, voice: false },

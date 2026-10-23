@@ -21,6 +21,12 @@ import { prepareExternalActionResponseEnvelopeV1 } from './externalActionApi.js'
 import { compileProtocolJsonSchema } from '../plugins/actions/jsonSchemaCompiler.js';
 
 describe('actionCatalog action-definition adapter', () => {
+  it('preserves declared confirmation facts through serialization and strict discovery', () => {
+    const spec = { ...getActionSpec('session.delete'), confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true as const };
+    const definition = actionSpecToActionDefinitionV1(spec);
+    expect(SerializedActionDefinitionV1Schema.parse(definition)).toMatchObject({ confirmVerb: spec.confirmVerb, irreversible: true });
+    expect(projectActionDefinitionForExternalDiscovery(definition)).toMatchObject({ confirmVerb: spec.confirmVerb, irreversible: true });
+  });
   it('offers the existing handoff operation through CLI and Voice with its normal policy', () => {
     for (const surface of ['cli', 'voice'] as const) {
       expect(listActionSpecsForCatalogSurface({ surface }).some(spec => spec.id === 'session.handoff')).toBe(true);

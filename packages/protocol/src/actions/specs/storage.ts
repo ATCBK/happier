@@ -100,6 +100,8 @@ function cleanupSpec<const Id extends MachineStorageActionId>([id, title, descri
   readonly [Id, string, string, string, 'read' | 'write' | 'danger', 'safe' | 'danger', z.input<(typeof MACHINE_STORAGE_ACTION_INPUT_SCHEMAS)[Id]>?]): MachineStorageActionSpec<Id> {
   return {
     ...base, id, approval: { result: 'required' }, title, description, safety, sideEffectClass,
+    ...(id === 'machines.storage.deleteNow' || id === 'machines.storage.trash.empty'
+      ? { confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true as const } : {}),
     ...(id === 'machines.storage.trash.move' ? { approvalPolicy: {
       uiConfirmation: 'direct' as const,
       uiConfirmationForInput: (input: unknown) => {

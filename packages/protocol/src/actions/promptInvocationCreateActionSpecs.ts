@@ -74,6 +74,7 @@ export const PROMPT_INVOCATION_CREATE_ACTION_SPECS = [{
   ] },
 }, {
   id: 'prompts.invocation.delete', approval: { result: 'required' }, title: 'Delete a prompt shortcut',
+  confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true,
   description: 'Remove an existing slash shortcut at its observed catalog revision. The prompt document remains in the library. Conflicts are not retried.',
   safety: 'danger', sideEffectClass: 'write', executionPlacement: 'account', placements: [],
   surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },

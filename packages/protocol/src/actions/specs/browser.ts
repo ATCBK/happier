@@ -482,6 +482,7 @@ const BROWSER_APPROVAL_TECHNICAL_INPUT_PATHS = {
 } as const satisfies Readonly<Partial<Record<BrowserRuntimeActionId, readonly string[]>>>;
 
 export const BROWSER_RUNTIME_ACTION_SPEC_FAMILY: Readonly<{
+  confirmationFacts: NonNullable<RuntimeActionSpecFamily['confirmationFacts']>;
   approvalPolicies: NonNullable<RuntimeActionSpecFamily['approvalPolicies']>;
   approvalTechnicalInputPaths: typeof BROWSER_APPROVAL_TECHNICAL_INPUT_PATHS;
   titles: typeof BROWSER_RUNTIME_ACTION_TITLES;
@@ -489,6 +490,9 @@ export const BROWSER_RUNTIME_ACTION_SPEC_FAMILY: Readonly<{
   inputSchemas: typeof BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS;
   outputSchemas: typeof BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS;
 }> = Object.freeze({
+  confirmationFacts: {
+    'browser.recording.discard': { confirmVerb: { key: 'common.discard', fallback: 'Discard' }, irreversible: true },
+  },
   approvalPolicies: {
     'browser.workspace.open': { uiConfirmation: 'direct' },
     'browser.view.open': { uiConfirmation: 'direct' },

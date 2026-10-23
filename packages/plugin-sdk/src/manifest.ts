@@ -615,6 +615,8 @@ export interface PluginManifest {
       inputSchema?: PluginJsonSchema | null;
       resultSchema?: PluginJsonSchema | null;
       surfaces: readonly string[];
+      confirmVerb?: PluginLocalizedStringV2;
+      irreversible?: true;
     }>)[];
     /** Read-only definitions available through the host's workflow library. */
     workflows?: readonly PluginWorkflowContributionV1[];
@@ -730,6 +732,8 @@ export type PluginContributes = Readonly<{
     resultSchema?: PluginJsonSchema;
     surfaces: readonly string[];
     dangerLevel: string;
+    confirmVerb?: PluginLocalizedStringV2;
+    irreversible?: true;
   }>)[];
   commands: NonNullable<NonNullable<PluginManifest['contributes']>['commands']>;
   tools: NonNullable<NonNullable<PluginManifest['contributes']>['tools']>;

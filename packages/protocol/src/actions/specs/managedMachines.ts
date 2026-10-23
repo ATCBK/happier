@@ -45,6 +45,14 @@ export const MANAGED_MACHINE_ACTION_SPECS = MANAGED_MACHINE_ACTION_IDS_V1.map((a
       ? { approvalPolicy: { uiConfirmation: 'direct' as const } }
       : effect ? { approvalPolicy: { uiConfirmation: 'policy' as const } } : {}),
     title: titles[actionId],
+    ...({
+      'machines.managed.bootstrap.retry': { confirmVerb: { key: 'common.retry', fallback: 'Retry' } },
+      'machines.managed.cancel': { confirmVerb: { key: 'common.cancel', fallback: 'Cancel' } },
+      'machines.environment.apply': { confirmVerb: { key: 'common.run', fallback: 'Run' } },
+      'machines.managed.rebuild': { confirmVerb: { key: 'common.update', fallback: 'Update' } },
+      'machines.managed.delete': { confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true },
+      'machines.managed.retire': { confirmVerb: { key: 'common.remove', fallback: 'Remove' } },
+    } as Partial<Record<typeof actionId, Pick<PreNormalizedActionSpec, 'confirmVerb' | 'irreversible'>>>)[actionId],
     description: actionId === 'machines.managed.acquire'
       ? 'Create compute and install Happier using the reviewed selection on the exact Home and controller.'
       : actionId === 'machines.managed.bootstrap.retry'

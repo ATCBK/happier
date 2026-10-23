@@ -73,6 +73,15 @@ export const NotificationConfigurationActionOutputSchemas = {
 } as const;
 
 export const NOTIFICATION_CONFIGURATION_ACTION_SPECS = NOTIFICATION_CONFIGURATION_ACTION_IDS.map((id): PreNormalizedActionSpec => ({
+  ...({
+    'notifications.webhooks.add': { confirmVerb: { key: 'common.add', fallback: 'Add' } },
+    'notifications.webhooks.update': { confirmVerb: { key: 'common.update', fallback: 'Update' } },
+    'notifications.webhooks.remove': { confirmVerb: { key: 'common.remove', fallback: 'Remove' }, irreversible: true },
+    'notifications.webhooks.signingSecret.set': { confirmVerb: { key: 'common.save', fallback: 'Save' } },
+    'notifications.webhooks.signingSecret.clear': { confirmVerb: { key: 'common.remove', fallback: 'Remove' }, irreversible: true },
+    'notifications.expoPush.update': { confirmVerb: { key: 'common.update', fallback: 'Update' } },
+    'notifications.push.tokens.remove': { confirmVerb: { key: 'common.remove', fallback: 'Remove' } },
+  } as Partial<Record<typeof id, Pick<PreNormalizedActionSpec, 'confirmVerb' | 'irreversible'>>>)[id],
   id, approvalPolicy: { uiConfirmation: 'policy',
     ...(id === 'notifications.desktop.permission.request' || id === 'notifications.push.permission.request'
       ? { agentDefault: 'authority' as const, requiredSurfaces: ['agent', 'mcp', 'plugin', 'api'] as const } : {}),

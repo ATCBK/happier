@@ -55,6 +55,8 @@ export const UpdatesActionOutputSchemas = {
   'updates.batch.start': OperationResultSchema, 'updates.batch.stop': OperationResultSchema,
 } as const;
 export const UPDATES_ACTION_SPECS = UPDATES_ACTION_IDS.map((actionId): PreNormalizedActionSpec => ({
+  ...(actionId === 'machines.cli.update' || actionId === 'updates.batch.start'
+    ? { confirmVerb: { key: 'common.update', fallback: 'Update' } } : {}),
   id: actionId, approval: { result: 'required' }, approvalPolicy: { uiConfirmation: 'policy' }, title: {
     'updates.get': 'Get current update targets',
     'machines.cli.update': 'Update managed Happier CLI', 'updates.check': 'Check for updates',

@@ -205,6 +205,9 @@ function teamCredentialActionRow<TActionId extends TeamCredentialHomeActionIdV1>
 }>) {
   const row = homeDomainActionRow({
     ...input,
+    ...(input.id === 'teams.credentials.externalKeys.revoke' || input.id === 'teams.credentials.externalKeys.revokeAll'
+      ? { confirmVerb: { key: 'files.reviewComments.durable.directWriteGrant.revoke', fallback: 'Revoke' }, irreversible: true as const }
+      : input.id === 'teams.credentials.delete' ? { confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true as const } : {}),
     ...(['teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.test',
       'teams.credentials.externalKeys.authorize'].includes(input.id)
       ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
@@ -804,6 +807,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }), requiredAuthority: 'present_user' as const },
   homeDomainActionRow({
     id: 'teams.invitations.revoke', approval: {result: 'required',flow: 'deferred'},
+    confirmVerb: { key: 'files.reviewComments.durable.directWriteGrant.revoke', fallback: 'Revoke' }, irreversible: true,
     title: 'Revoke Team invitation',
     description: 'Stop an outstanding invitation from admitting anyone. A repeated revocation reports the current row.',
     safety: 'danger',

@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { PluginLocalizedStringV2Schema } from '../plugins/contributions/publicTypes.js';
 import { SessionAccessEncryptionPrepareInputV1Schema, SessionAccessEncryptionReprepareInputV1Schema, SessionAccessEncryptionPrepareResultV1Schema, SessionAccessLayoutUpdateResultV1Schema } from '../sessions/access/sessionAccessActionsV1.js';
 import { resolveMachineRpcGovernance } from '../machines/peer/mediation/rpc/governanceV1.js';
 import { EXECUTION_RUN_INTENT_OPTIONS } from '../execution/runs/intentPolicyMatrix.js';
@@ -1026,6 +1027,10 @@ export type ActionServerTransport = z.infer<typeof ActionServerTransportSchema>;
 export const ActionSpecSchema = lazyZodSchema(() => z.looseObject({
   id: ActionIdSchema,
   title: z.string().check(z.minLength(1)),
+  /** Presentation only: a localized verb; omission uses the host's generic approval label. */
+  confirmVerb: z.optional(PluginLocalizedStringV2Schema),
+  /** The effect cannot be undone; independent of safety and approval policy. */
+  irreversible: z.optional(z.literal(true)),
   description: z.optional(z.string().check(z.minLength(1))),
   safety: ActionSafetySchema,
   safetyForInput: z.optional(z.custom<(input: unknown) => z.infer<typeof ActionSafetySchema> | undefined>((value) => typeof value === 'function')),
@@ -1377,6 +1382,8 @@ export type ActionSpecWithoutApproval = Readonly<{
   approval: ParsedActionSpec['approval'];
   approvalPolicy?: ParsedActionSpec['approvalPolicy'];
   title: ParsedActionSpec['title'];
+  confirmVerb?: ParsedActionSpec['confirmVerb'];
+  irreversible?: ParsedActionSpec['irreversible'];
   description?: ParsedActionSpec['description'];
   safety: ParsedActionSpec['safety'];
   safetyForInput?: ParsedActionSpec['safetyForInput'];
@@ -3889,7 +3896,6 @@ function createPluginDevLoopActionSpec(actionId: PluginDevLoopActionIdV1): PreNo
   const isRead = actionId === 'plugins.list' || actionId === 'plugins.change.status';
   const isLifecycle = actionId === 'plugins.enable' || actionId === 'plugins.disable' || actionId === 'plugins.rollback'
     || actionId === 'plugins.trust.forget' || actionId === 'plugins.update_policy.set';
-  const irreversible = actionId === 'plugins.uninstall' || actionId === 'plugins.trust.forget';
   const isInspectorUiAction = actionId === 'plugins.list'
     || actionId === 'plugins.scaffold'
     || actionId === 'plugins.uninstall'
@@ -3908,6 +3914,9 @@ function createPluginDevLoopActionSpec(actionId: PluginDevLoopActionIdV1): PreNo
       ? { result: 'required' }
       : { result: 'optional', flow: 'deferred' },
     title: PLUGIN_DEV_LOOP_ACTION_TITLES[actionId],
+    ...(actionId === 'plugins.uninstall' ? { confirmVerb: { key: 'settingsPlugins.uninstall', fallback: 'Uninstall' }, irreversible: true as const }
+      : actionId === 'plugins.trust.forget' ? { confirmVerb: { key: 'settingsPlugins.forgetTrust', fallback: 'Forget trust' }, irreversible: true as const }
+        : actionId === 'plugins.install' ? { confirmVerb: { key: 'common.install', fallback: 'Install' } } : {}),
     description: PLUGIN_DEV_LOOP_ACTION_DESCRIPTIONS[actionId],
     ...(describeApproval ? { approvalPresentation: { summary: (input: unknown) => {
       const subject = readPluginDevLoopApprovalSubject(input);
@@ -3927,10 +3936,10 @@ function createPluginDevLoopActionSpec(actionId: PluginDevLoopActionIdV1): PreNo
       cli: true,
       rpc: false,
     },
-    sideEffectClass: irreversible ? 'danger' : isRead ? 'read' : 'write',
-    ...(actionId === 'plugins.reload' || actionId === 'plugins.scaffold' || isLifecycle && !irreversible
+    sideEffectClass: actionId === 'plugins.uninstall' || actionId === 'plugins.trust.forget' ? 'danger' : isRead ? 'read' : 'write',
+    ...(actionId === 'plugins.reload' || actionId === 'plugins.scaffold' || isLifecycle && actionId !== 'plugins.trust.forget'
       ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
-    ...(irreversible ? { approvalPolicy: { uiConfirmation: 'policy' as const } } : {}),
+    ...(actionId === 'plugins.uninstall' || actionId === 'plugins.trust.forget' ? { approvalPolicy: { uiConfirmation: 'policy' as const } } : {}),
     ...(actionId === 'plugins.install' ? {
       // Install & Trust defaults to one ordinary approval Artifact on every
       // caller surface; users can change that policy through Action settings.
@@ -4060,6 +4069,8 @@ function createPluginSettingsAdministrationActionSpec(
   return {
     id: actionId, approvalPolicy: { uiConfirmation: isReversibleUiMutation ? 'direct' : 'policy', retainUiFieldIntent: true }, approval: isRead ? { result: 'required' } : { result: 'none' },
     title: PLUGIN_SETTINGS_ADMINISTRATION_ACTION_TITLES[actionId],
+    ...(actionId === 'plugins.settings.secret.delete'
+      ? { confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true as const } : {}),
     description: PLUGIN_SETTINGS_ADMINISTRATION_ACTION_DESCRIPTIONS[actionId],
     safety: isRead ? 'safe' : 'danger',
     executionPlacementForInput: (input: unknown) => resolvePluginSettingsAdministrationTargetV1(actionId, input).kind === 'account'
@@ -4405,6 +4416,7 @@ const PLUGIN_SESSION_HOOK_MANAGEMENT_ACTION_SPECS_V1 = [
   },
   {
     id: 'plugins.sessionHooks.install', approval: {result: 'optional',flow: 'deferred'},
+    confirmVerb: { key: 'common.install', fallback: 'Install' },
     approvalPolicy: { uiConfirmation: 'policy' },
     title: 'Install Agent session hooks',
     description: 'Explicitly install External Session hooks for one qualified Agent integration.',
@@ -4504,6 +4516,7 @@ const PLUGIN_SESSION_HOOK_MANAGEMENT_ACTION_SPECS_V1 = [
   },
   {
     id: 'plugins.sessionHooks.uninstall', approval: {result: 'optional',flow: 'deferred'},
+    confirmVerb: { key: 'settingsPlugins.uninstall', fallback: 'Uninstall' },
     approvalPolicy: { uiConfirmation: 'policy' },
     title: 'Uninstall Agent session hooks',
     description: 'Explicitly remove only the owned entries for one exact External Session hook installation.',
@@ -5596,6 +5609,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
     return {
       id: actionId, approval: isRead ? { result: 'required' } : { result: 'optional', flow: 'deferred' },
       ...(isDelete ? { approvalPolicy: { uiConfirmation: 'policy' as const } } : {}),
+      ...(isDelete ? { confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true as const } : {}),
       title: titles[actionId],
       description: `${titles[actionId]} on the authenticated Home.`,
       safety: isDelete ? 'danger' : 'safe',
@@ -5713,6 +5727,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
   },
   {
     id: 'account.encryption.historicalKey.forget', approval: {result: 'required'},
+    confirmVerb: { key: 'common.remove', fallback: 'Remove' }, irreversible: true,
     placements: [],
     bindings: { mcpToolName: 'account_encryption_historical_key_forget' },
     title: 'Forget the old encryption key',
@@ -5927,6 +5942,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
   },
   {
     id: 'account.apiTokens.revoke', approval: {result: 'required'},
+    confirmVerb: { key: 'files.reviewComments.durable.directWriteGrant.revoke', fallback: 'Revoke' }, irreversible: true,
     bindings: { mcpToolName: 'account_api_tokens_revoke' },
     title: 'Revoke API token',
     description: 'Revoke one API token for the current Account.',
@@ -5954,6 +5970,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
   },
   {
     id: 'account.apiTokens.revokeAll', approval: {result: 'required'},
+    confirmVerb: { key: 'files.reviewComments.durable.directWriteGrant.revoke', fallback: 'Revoke' }, irreversible: true,
     bindings: { mcpToolName: 'account_api_tokens_revoke_all' },
     title: 'Revoke all API tokens',
     description: 'Revoke every API token for the current Account. Signed sessions are unaffected.',
@@ -8478,6 +8495,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   },
   {
     id: 'machines.agents.install', approval: {result: 'required'}, approvalPolicy: { uiConfirmation: 'policy' },
+    confirmVerb: { key: 'common.install', fallback: 'Install' },
     title: 'Install or update an agent',
     sideEffectClass: 'danger',
     description: 'Start a daemon-owned agent install or update job.',
@@ -8517,6 +8535,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
   },
   {
     id: 'machines.agents.uninstall', approval: { result: 'required' }, approvalPolicy: { uiConfirmation: 'policy' },
+    confirmVerb: { key: 'settingsPlugins.uninstall', fallback: 'Uninstall' },
     title: 'Remove an agent from a machine',
     sideEffectClass: 'danger', description: 'Remove a Happier-managed agent installation through the daemon job owner.',
     safety: 'danger', executionPlacement: 'machine', placements: [],
@@ -10071,6 +10090,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
   },
   {
     id: 'session.delete', approval: {result: 'none'},
+    confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true,
     title: 'Delete session',
     description: 'Permanently delete a session. Its daemon removes managed folders through the durable deletion lifecycle.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [],
@@ -10377,6 +10397,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
   },
   {
     id: 'session.access.layout.update', approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'optional', flow: 'deferred' },
+    confirmVerb: { key: 'common.update', fallback: 'Update' },
     title: 'Update historical Session sharing layout',
     safety: 'danger', sideEffectClass: 'danger', requiredAuthority: 'account_automation', executionPlacement: 'client',
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'access', 'layout', 'update'], visibility: 'canonical' }] },
@@ -12020,6 +12041,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   },
   {
     id: 'memory.clear_index', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'none'}, title: 'Clear memory index',
+    confirmVerb: { key: 'common.reset', fallback: 'Reset' },
     description: 'Clear the machine-local derived memory index. Agent calls require approval by default.',
     sideEffectClass: 'danger', safety: 'danger', executionPlacement: 'machine', placements: [],
     bindings: { voiceClientToolName: 'memory_clear_index', mcpToolName: 'memory_clear_index' },
@@ -12520,6 +12542,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   },
   {
     id: 'daemon.filesystem.delete', approvalPolicy: { rpcConfirmation: true }, approval: {result: 'optional',flow: 'deferred'},
+    confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true,
     title: 'Delete path',
     description: 'Delete a path under the explicitly admitted workspace root.',
     safety: 'danger',
@@ -12675,6 +12698,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   },
   {
     id: 'bugreport.submit', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'},
+    confirmVerb: { key: 'common.send', fallback: 'Send' }, irreversible: true,
     title: 'Submit bug report',
     description: 'Submit the report and selected diagnostics to the configured report service and Happier issue destination under your approval policy. Crash reporting and replay follow the existing crash-report preference separately.',
     safety: 'danger',
@@ -13125,6 +13149,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
   },
   {
     id: 'sessions.external.candidate.delete', approval: {result: 'optional',flow: 'deferred'},
+    confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true,
     title: 'Delete external session candidate',
     description: "Delete one Agent-owned session a resume-only external-session listing surfaced. The Agent's own record is removed; no Happier Session is deleted.",
     safety: 'danger',
@@ -14584,6 +14609,8 @@ export type PluginInvocableActionSpecDefinition = Extract<
 export type PluginInvocableActionSpec = Readonly<{
   id: PluginInvocableActionId;
   title: ParsedActionSpec['title'];
+  confirmVerb?: ParsedActionSpec['confirmVerb'];
+  irreversible?: ParsedActionSpec['irreversible'];
   description?: ParsedActionSpec['description'];
   safety: ParsedActionSpec['safety'];
   approval: ParsedActionSpec['approval'];

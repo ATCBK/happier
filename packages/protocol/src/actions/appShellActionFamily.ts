@@ -208,6 +208,7 @@ export const APP_SHELL_ACTION_SPECS = [
   },
   {
     id: 'session.draft.delete', approval: {result: 'required'}, approvalPolicy: { uiConfirmation: 'policy' }, title: 'Delete a New Session draft',
+    confirmVerb: { key: 'common.delete', fallback: 'Delete' }, irreversible: true,
     description: 'Delete an exact New Session draft on the answering client through draft tombstone and attachment cleanup. Refuses launches already in custody.',
     safety: 'danger', sideEffectClass: 'danger', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'session_draft_delete' },

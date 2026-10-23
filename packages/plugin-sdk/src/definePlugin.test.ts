@@ -239,6 +239,16 @@ void undefined; /* @sdk-negative-type-case-end */
 void undefined; /* @sdk-negative-type-case-end */
 
 describe('definePlugin', () => {
+    it('publishes authored confirmation facts through the canonical manifest parser', () => {
+        const declaration = {
+            title: 'Delete', confirmVerb: { key: 'actions.delete', fallback: 'Delete' }, irreversible: true,
+        } as const satisfies PluginActionDeclaration;
+        const plugin = definePlugin({ id: 'acme.confirmation', version: '1.0.0', displayName: 'Confirmation',
+            actions: { remove: { ...declaration, run: () => ({ removed: true }) } },
+        });
+        const manifest = PluginManifestV2Schema.parse(plugin.manifest);
+        expect(manifest.contributes.actions[0]).toMatchObject(declaration);
+    });
     it('makes tracked operation authoring impossible for client-targeted Actions', () => {
         type ClientActionDeclaration = Extract<
             PluginActionDeclaration,
