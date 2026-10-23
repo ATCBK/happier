@@ -1795,6 +1795,8 @@ describe('ExternalSessionsBrowseScreen', () => {
             await publishMachinesState();
             screen.tree.update(<ExternalSessionsBrowseScreen />);
         });
+        await flushHookEffects();
+        expect(screen.findByTestId('direct-session-candidate:codex-session-1')).not.toBeNull();
         await waitForHomeGovernance(async () => {
             await flushHookEffects();
             expect(screen.findByTestId('direct-session-candidate:codex-session-1')?.props.disabled).toBe(true);
@@ -1817,6 +1819,36 @@ describe('ExternalSessionsBrowseScreen', () => {
             .findAllByProps({ testID: 'direct-session-candidates' })
             .find((node) => node.props?.pagination !== undefined);
         expect(paginated?.props.pagination.error).toBe('externalSessions.browseMachineOfflineBody');
+
+        await act(async () => {
+            machinesState = [
+                { id: 'machine-1', active: true, activeAt: Date.now(), metadata: { displayName: 'MacBook Pro', host: 'mbp.local' } },
+                { id: 'machine-2', active: false, activeAt: 0, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
+            ];
+            await publishMachinesState();
+            screen.tree.update(<ExternalSessionsBrowseScreen />);
+        });
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(screen.findByTestId('direct-session-candidate:codex-session-1')?.props.disabled).toBe(false);
+        });
+        await screen.pressByTestIdAsync('direct-session-candidate:codex-session-1');
+        expect(linkEnsureSpy).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1', remoteSessionId: 'codex-session-1' }), { serverId: serverA });
+
+        const staleLinkedPress = screen.findByTestId('direct-session-candidate:codex-session-linked')?.props.onPress;
+        expect(typeof staleLinkedPress).toBe('function');
+        routerPushSpy.mockClear();
+        linkEnsureSpy.mockClear();
+        const scope = fixtureStorage.getState().profileScope;
+        if (!scope) throw new Error('Expected the Browse Account scope');
+        await act(async () => {
+            fixtureStorage.setState({ profileScope: { ...scope, accountId: 'successor-account' } });
+            // A captured linked-row press cannot borrow the successor Account, even
+            // before React commits the scope change and removes the retained rows.
+            await staleLinkedPress?.();
+        });
+        expect(routerPushSpy).not.toHaveBeenCalled();
+        expect(linkEnsureSpy).not.toHaveBeenCalled();
     });
 
     it('links the selected provider session and navigates to the Happier session', async () => {

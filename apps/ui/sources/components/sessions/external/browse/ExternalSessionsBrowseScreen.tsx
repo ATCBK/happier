@@ -32,13 +32,12 @@ import {
     machineAdministrationTargetsEqual,
     readMachineAdministrationCandidateName,
 } from '@/sync/domains/machines/administration/targetSelection';
-import { isMachineAdministrationExecutionTargetCurrent } from '@/sync/domains/machines/administration/operationCurrentness';
 import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
 import {
     machineExternalSessionCandidateDelete,
 } from '@/sync/ops/machineExternalSessions';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileForPortableIdentity } from '@/sync/domains/server/serverProfiles';
 import { useProfile, useSettingsVersion, useActiveServerAccountScope } from '@/sync/store/hooks';
 import { requireOneShotAccountSettingsMutationApplied } from '@/sync/engine/settings/syncSettings';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -159,22 +158,19 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.externalSessions,
         { allowSoleCandidate: !lockScope },
     );
-    const administrationExecutionTarget = React.useMemo(() => {
-        if (lockScope) return null;
-        const selectedTarget = administrationTargetSelection.selectedTarget;
-        const resolvedTarget = administrationTargetSelection.resolveExecutionTarget();
-        return selectedTarget !== null
-            && resolvedTarget !== null
-            && machineAdministrationTargetsEqual(selectedTarget, resolvedTarget.target)
-            ? resolvedTarget
-            : null;
-    }, [administrationTargetSelection, lockScope]);
+    // The portable selection keeps the retained listing's identity while its Machine is away.
+    // Execution admission is resolved separately when an operation actually needs the Machine.
+    const targetState = administrationTargetSelection.state;
+    const selectedAdministrationTarget = !lockScope && (targetState.kind === 'online' || targetState.kind === 'offline')
+        ? administrationTargetSelection.selectedTarget
+        : null;
+    const selectedAdministrationHome = selectedAdministrationTarget
+        ? resolveServerProfileForPortableIdentity(selectedAdministrationTarget.serverIdentityId)
+        : null;
     const effectiveSelectedMachineId = lockScope?.machineId
-        ?? administrationExecutionTarget?.machine.id
-        ?? null;
+        ?? (selectedAdministrationHome?.kind === 'resolved' ? selectedAdministrationTarget?.machineId ?? null : null);
     const effectiveSelectedServerId = lockScope?.serverId
-        ?? administrationExecutionTarget?.serverId
-        ?? null;
+        ?? (selectedAdministrationHome?.kind === 'resolved' ? selectedAdministrationHome.profile.id : null);
     const machines = useMachineListForServer(effectiveSelectedServerId ?? activeServerId);
     const lockedSettingsScopeMatches = props.accountLifetime
         ? areServerAccountScopesEqual(expectedSettingsScope, props.accountLifetime.scope)
@@ -193,19 +189,11 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         if (lockScope) {
             return { machineId: lockScope.machineId, serverId: lockScope.serverId ?? null };
         }
-        if (!administrationExecutionTarget) return null;
-        // The callback below is invoked by the currency check, so the resolved
-        // target is held in a box the compiler cannot narrow to its initial null.
-        const resolved: { target: ReturnType<typeof administrationTargetSelection.resolveExecutionTarget> } = { target: null };
-        if (!isMachineAdministrationExecutionTargetCurrent({
-            expectedTarget: administrationExecutionTarget,
-            resolveCurrentTarget: () => {
-                resolved.target = administrationTargetSelection.resolveExecutionTarget();
-                return resolved.target;
-            },
-        }) || !resolved.target) return null;
-        return { machineId: resolved.target.machine.id, serverId: resolved.target.serverId };
-    }, [administrationExecutionTarget, administrationTargetSelection, lockScope, props.accountLifetime]);
+        const resolved = administrationTargetSelection.resolveExecutionTarget();
+        if (!selectedAdministrationTarget || !resolved
+            || !machineAdministrationTargetsEqual(selectedAdministrationTarget, resolved.target)) return null;
+        return { machineId: resolved.machine.id, serverId: resolved.serverId };
+    }, [administrationTargetSelection, lockScope, props.accountLifetime, selectedAdministrationTarget]);
     const daemonMergedProjection = useDaemonMergedProjectionInputs({
         machineId: effectiveSelectedMachineId,
         serverId: effectiveSelectedServerId,
@@ -659,11 +647,9 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         machines: contentResults.result.machines, machineName: () => selectedMachineLabel ?? effectiveSelectedMachineId ?? '',
     }) : '';
     const selectedMachineHomeDir = React.useMemo(() => {
-        const machine = lockScope
-            ? machines?.find((candidate) => candidate.id === effectiveSelectedMachineId)
-            : administrationExecutionTarget?.machine;
+        const machine = machines?.find((candidate) => candidate.id === effectiveSelectedMachineId);
         return machine?.metadata?.homeDir ?? null;
-    }, [administrationExecutionTarget?.machine, effectiveSelectedMachineId, lockScope, machines]);
+    }, [effectiveSelectedMachineId, machines]);
 
     /**
      * Pending candidate work belongs to the scope that started it. When the
@@ -685,6 +671,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         };
     }, [candidateActionAuthorityGeneration, presentationActive]);
 
+    const candidateAccountCurrentness = props.accountLifetime ?? captureActiveServerAccountScopeCurrentness();
     const handleOpenCandidate = React.useCallback(async (
         candidate: ExternalSessionBrowseCandidate,
         selectionAuthorityGeneration: number,
@@ -695,8 +682,16 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                 && (searchTarget !== 'content' || candidate.match !== undefined),
             offline: selectedMachineIsOffline,
             isSelectionCurrent: () => candidateActionAuthorityRef.current.generation === selectionAuthorityGeneration,
-            accountCurrentness: props.accountLifetime,
-            resolveCurrentTarget: resolveCurrentOperationTarget,
+            accountCurrentness: candidateAccountCurrentness,
+            resolveCurrentTarget: () => {
+                if (candidate.linkedSessionId && interaction === 'openSession') {
+                    // An existing Happier session needs only its retained navigation scope.
+                    return effectiveSelectedMachineId
+                        ? { machineId: effectiveSelectedMachineId, serverId: effectiveSelectedServerId }
+                        : null;
+                }
+                return resolveCurrentOperationTarget();
+            },
             state: candidateOpenStateRef.current,
             onLinkingChange: setLinkingSessionId,
             onPickRemoteSessionId: props.onPickRemoteSessionId,
@@ -713,7 +708,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                 });
             },
         });
-    }, [presentationActive, candidateActionsAllowed, searchQuery, effectiveSelectedMachineId, interaction, paneContext, props, resolveCurrentOperationTarget, router, searchTarget, selectedMachineIsOffline, selectedProviderId, selectedSource]);
+    }, [presentationActive, candidateActionsAllowed, candidateAccountCurrentness, searchQuery, effectiveSelectedMachineId, effectiveSelectedServerId, interaction, paneContext, props, resolveCurrentOperationTarget, router, searchTarget, selectedMachineIsOffline, selectedProviderId, selectedSource]);
 
     /**
      * Delete one Agent-owned session behind the canonical destructive
@@ -826,7 +821,6 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
     ]);
 
     const openMachinePicker = React.useCallback(() => setMachinePickerOpen(true), []);
-    const targetState = administrationTargetSelection.state;
     /**
      * Which machine problem the list states first. The target owner already knows the saved machine
      * is gone, away or locked; the list must say that rather than what its (unreachable) agents
