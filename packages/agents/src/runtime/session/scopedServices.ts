@@ -347,6 +347,19 @@ export type SessionPermissionDecisionResultV1 = Readonly<{
 }>;
 
 export interface SessionPermissionsServiceV1 {
+  /**
+   * Record an already-observed native answer for the exact runtime-owned occurrence question
+   * or native tool approval. Observing approval never creates reusable authority.
+   * Returns false when no matching live occurrence remains. This does not apply a new decision
+   * or grant tool/session authority. Capability presence is required before publishing a native
+   * request whose local completion must retire its host request.
+   */
+  settleObservedDecision?(request: Readonly<{
+    requestId: string;
+    source: string;
+    decision: 'approved' | 'denied' | 'abort';
+    answers?: StructuredQuestionAnswersV1;
+  }>): Promise<boolean>;
   requestDecision(
     request: SessionPermissionDecisionRequestV1,
     options?: Readonly<{

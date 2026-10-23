@@ -48,6 +48,7 @@ export type { SessionPermissionMode } from '../services/sessions.js';
 export type { SessionModeCatalog } from '../services/sessions.js';
 export { readSessionModesMetadata } from '../services/sessions.js';
 export type { SessionPermissionsService } from '../services/sessions.js';
+export { NATIVE_TOOL_APPROVAL_REQUEST_SOURCE, NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '../services/sessions.js';
 export type { SessionRuntimeAuthRefreshRequest } from '../services/sessions.js';
 export type { SessionRuntimeAuthRefreshResult } from '../services/sessions.js';
 export type { SessionRuntimeAuthServices } from '../services/sessions.js';
@@ -103,3 +104,6 @@ export { readStructuredInputMentionSourcesV1 } from '../services/sessions.js';
 export { resolveSessionMutationRetryDelayMs } from './sessionMutationBackoff.js';
 export { resolveTranscriptBodySessionMessageRole } from '../services/sessions.js';
 export { sanitizeHappierStructuredInputV1 } from '../services/sessions.js';
+
+export type { AgentRequestQuestionSummary, StructuredQuestionAnswersV1 } from '../services/sessions.js';
+export { summarizeAgentRequestQuestions, StructuredQuestionAnswersV1Schema } from '../services/sessions.js';

@@ -149,3 +149,40 @@ describe('Session input canonical SDK projections', () => {
         expect(emitted.outputText).toContain('SessionIdSchema: ProtocolComposableSchema<SessionId>;');
     });
 });
+
+
+describe('Session structured-question SDK projections', () => {
+    it('preserves live answer keys, choice values and custom-input semantics through the public question projection', () => {
+        expect(publicSessions.summarizeAgentRequestQuestions([
+            {
+                id: ' scope ', header: ' Scope ', question: ' Choose scope ', multiple: true, required: false,
+                options: [{ id: 'session', label: ' This session ', description: ' Reuse during this session ' }],
+                freeform: { description: ' Explain another scope ', placeholder: ' Your scope ' },
+            },
+            { header: ' Note ', selection: 'text' },
+            { question: '   ' },
+        ])).toEqual([
+            {
+                answerKey: 'scope', header: 'Scope', question: 'Choose scope', selection: 'multiple',
+                required: false, allowCustom: true,
+                choices: [{ value: 'session', label: 'This session', description: 'Reuse during this session' }],
+                freeformDescription: 'Explain another scope', freeformPlaceholder: 'Your scope',
+            },
+            {
+                answerKey: 'Note', header: 'Note', question: 'Note', selection: 'text',
+                required: true, allowCustom: true, choices: [],
+            },
+        ]);
+    });
+
+    it('validates lossless answer arrays and rejects ambiguous or duplicate answers through the public schema', () => {
+        const parsed = publicSessions.StructuredQuestionAnswersV1Schema.parse({
+            scope: ['value, with comma', 'freeform\nanswer'],
+        });
+        expect(parsed.scope).toEqual(['value, with comma', 'freeform\nanswer']);
+        expect(Object.getPrototypeOf(parsed)).toBeNull();
+        expect(Object.isFrozen(parsed.scope)).toBe(true);
+        expect(publicSessions.StructuredQuestionAnswersV1Schema.safeParse({ scope: 'legacy, joined' }).success).toBe(false);
+        expect(publicSessions.StructuredQuestionAnswersV1Schema.safeParse({ scope: ['same', 'same'] }).success).toBe(false);
+    });
+});

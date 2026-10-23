@@ -9,6 +9,9 @@ import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.
 
 const UTF8_ENCODER = new TextEncoder();
 
+/** Host-admitted native tool approval whose presentation permits Session persistence. */
+export const NATIVE_TOOL_APPROVAL_REQUEST_SOURCE = 'native_tool_approval';
+
 /** Host-admitted native tool approval that cannot create reusable authority. */
 export const NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE = 'native_tool_approval_once';
 

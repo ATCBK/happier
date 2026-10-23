@@ -47,6 +47,9 @@ import { MENTION_KIND_V1 as protocolMentionKindV1, MentionRefV1Schema as protoco
 import { CHANGE_TITLE_TOOL_NAME_ALIASES as protocolChangeTitleToolNameAliases, isChangeTitleToolNameAlias as protocolIsChangeTitleToolNameAlias } from '@happier-dev/protocol/tools/v2/aliases';
 import { ProjectKeyV1Schema as protocolProjectKeyV1Schema } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { readSessionModesMetadata as protocolReadSessionModesMetadata } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { NATIVE_TOOL_APPROVAL_REQUEST_SOURCE as protocolNativeToolApprovalRequestSource, NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE as protocolNativeToolApprovalOnceRequestSource } from '@happier-dev/protocol/sessions/permissions/v1';
+import { buildAgentRequestSemanticSummary as protocolBuildAgentRequestSemanticSummary } from '@happier-dev/protocol/activity/agentRequestSummary';
+import { StructuredQuestionAnswersV1Schema as protocolStructuredQuestionAnswersV1Schema } from '@happier-dev/protocol/tools/structuredQuestionAnswersV1';
 
 /** Accepted native mode facts; parsing and retained V1 normalization stay Protocol-owned. */
 export type SessionModeCatalog = Readonly<{
@@ -71,6 +74,34 @@ export interface SessionSchema<T> {
     safeParse(value: unknown):
         | Readonly<{ success: true; data: T }>
         | Readonly<{ success: false; error: unknown }>;
+}
+
+/** Lossless answers keyed by the live requester's canonical question identity. */
+export type StructuredQuestionAnswersV1 = Readonly<Record<string, readonly string[]>>;
+
+/** The canonical validator retains answer arrays and their immutable, null-prototype carrier. */
+export const StructuredQuestionAnswersV1Schema: SessionSchema<StructuredQuestionAnswersV1> = protocolStructuredQuestionAnswersV1Schema;
+
+/** Semantic question facts shared by Session request renderers and native mediators. */
+export type AgentRequestQuestionSummary = Readonly<{
+    answerKey: string;
+    header?: string | null;
+    question: string;
+    selection: 'text' | 'single' | 'multiple';
+    required: boolean;
+    allowCustom: boolean;
+    choices: readonly Readonly<{ label: string; value: string; description?: string | null }>[];
+    freeformDescription?: string;
+    freeformPlaceholder?: string;
+}>;
+
+/** Protocol alone owns normalization; the SDK projects the question portion consumed by mediators. */
+export function summarizeAgentRequestQuestions(questions: readonly unknown[]): readonly AgentRequestQuestionSummary[] {
+    return protocolBuildAgentRequestSemanticSummary({
+        kind: 'user_action',
+        toolName: 'AskUserQuestion',
+        toolInput: { questions },
+    }).questions;
 }
 
 export const ProjectKeyV1Schema: SessionSchema<ProjectKeyV1> = protocolProjectKeyV1Schema;
@@ -284,7 +315,7 @@ export type SessionCapabilityNoticeV1 = {
     }[];
 };
 /** @realm any */
-export const SESSION_CAPABILITY_NOTICE_SIDECAR_KEY = protocolSessionCapabilityNoticeSidecarKey;
+export const SESSION_CAPABILITY_NOTICE_SIDECAR_KEY: 'capabilityNoticeV1' = protocolSessionCapabilityNoticeSidecarKey;
 /** @realm any */
 export const SessionCapabilityNoticeV1Schema: SessionSchema<SessionCapabilityNoticeV1> = protocolSessionCapabilityNoticeV1Schema;
 /** @realm any */
@@ -348,6 +379,8 @@ export type SessionPermissionFollowUpPromptDelivery = SessionPermissionFollowUpP
 export type SessionPermissionFollowUpPromptIntent = SessionPermissionFollowUpPromptIntentV1;
 export type SessionPermissionMode = SessionPermissionModeV1;
 export type SessionPermissionsService = SessionPermissionsServiceV1;
+export const NATIVE_TOOL_APPROVAL_REQUEST_SOURCE: 'native_tool_approval' = protocolNativeToolApprovalRequestSource;
+export const NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE: 'native_tool_approval_once' = protocolNativeToolApprovalOnceRequestSource;
 export type SessionRuntimeAuthRefreshResult = SessionRuntimeAuthRefreshResultV1;
 export type SessionRuntimeAuthServices = SessionRuntimeAuthServicesV1;
 export type SessionSystemRecordRevision = string;
