@@ -107,13 +107,18 @@ describe('SessionScmReviewDetailsView (exact Home)', () => {
             });
         });
         await screen.pressByTestIdAsync('scm-change-row-src_workspace.ts');
+        const { DiffFilesListView } = await import('@/components/ui/code/diff/DiffFilesListView');
+        expect(screen.findByType(DiffFilesListView).props.expandedKeys.has('src/workspace.ts')).toBe(false);
         await screen.pressByTestIdAsync('scm-comparison-view:walkthrough');
         expect(screen.findByTestId('workspace-walkthrough')).not.toBeNull();
         expect(readActiveReviewFile(activeKey)).toMatchObject({ presented: true, activePath: 'src/workspace.ts' });
+        const focusBeforeSwitch = readActiveReviewFile(activeKey).focusRequest;
         await screen.pressByTestIdAsync('scm-comparison-view:files');
+        expect(readActiveReviewFile(activeKey).focusRequest).toBe(focusBeforeSwitch);
         const restored = screen.findByType(ChangedFilesReview).props as React.ComponentProps<typeof ChangedFilesReview>;
         expect(restored.initialScrollTop).toBe(137);
         expect(restored.initialCollapsedPaths).toEqual(['src/workspace.ts']);
+        expect(screen.findByType(DiffFilesListView).props.expandedKeys.has('src/workspace.ts')).toBe(false);
         expect(restored.workspaceScope).toEqual({
             serverId: fixture.home.id, machineId: 'm1', rootPath: '/tmp/repo',
         });

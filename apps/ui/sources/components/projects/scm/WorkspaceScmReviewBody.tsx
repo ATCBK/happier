@@ -120,6 +120,7 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
     const rail = width !== null && width >= COMPARISON_RAIL_MIN_WIDTH_PX;
     const views = props.views ?? REVIEW_VIEWS;
     const reading = props.reading;
+    // Explicit code navigation reveals the active file; a view switch retains Files' own scroll and folding.
     const showFiles = React.useCallback(() => {
         if (activeKey) {
             const path = readActiveReviewFile(activeKey).activePath;
@@ -128,16 +129,12 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
         props.onSelectView('files');
     }, [activeKey, props.onSelectView]);
     const readInWalkthrough = React.useCallback(() => props.onSelectView('walkthrough'), [props.onSelectView]);
-    const selectView = React.useCallback((view: SessionScmReviewView) => {
-        if (view === 'files') showFiles();
-        else props.onSelectView(view);
-    }, [showFiles, props.onSelectView]);
     // An empty comparison says so once, in the review's own empty state: the bar and the stacked header
     // keep the scope's name but don't add "0 files" beside it.
     const countShown = (fileCount: number | null) => (fileCount === 0 ? null : fileCount);
     const renderLeading = (fileCount: number | null) => <>
         {props.hostSwitch ? <View style={HOST_SWITCH_STYLE}>{props.hostSwitch}</View> : null}
-        <ScmComparisonViewSwitch view={props.view} views={views} onSelect={selectView} commitsCount={props.commitsCount} />
+        <ScmComparisonViewSwitch view={props.view} views={views} onSelect={props.onSelectView} commitsCount={props.commitsCount} />
         <ScmComparisonScopePicker options={props.scopeOptions} current={props.comparison} currentLabel={props.scopeLabel}
             currentEvidenceSessionId={props.evidenceSessionId}
             fileCount={countShown(fileCount)} onSelect={props.onSelectComparison} />
@@ -165,7 +162,7 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
         view={props.view} views={views} scope={{ options: props.scopeOptions, current: props.comparison,
             currentEvidenceSessionId: props.evidenceSessionId,
             currentLabel: props.scopeLabel, fileCount: countShown(fileCount), onSelect: props.onSelectComparison }}
-        onSelectView={selectView} onBack={props.onClose}
+        onSelectView={props.onSelectView} onBack={props.onClose}
         onStartReview={noChanges ? null : onStartReview ?? (() => {})} reviewDisabled={props.reviewDisabled || !onStartReview || !fileActions}
         reviewDisabledReason={props.reviewDisabledReason} onProposeCommits={fileActions ? onProposeCommits : null} extraActions={actions} sections={sections} />;
     // The host's actions belong to the files they act on (the review comments panel opens over Files).

@@ -25,11 +25,12 @@ export function useScmReviewActiveFileSelection(params: Readonly<{
     const setDetailsTabState = params.pane.setDetailsTabState;
     React.useEffect(() => {
         if (!initial.current) return;
-        if (!params.presented || params.view !== 'files') {
+        if (!params.presented) {
             initial.current = { ...initial.current, restored: false };
             return;
         }
-        if (!params.comparison || initial.current.restored) return;
+        // Walkthrough keeps this comparison's mounted selection; only a retired presentation needs restoration.
+        if (params.view !== 'files' || !params.comparison || initial.current.restored) return;
         const path = initial.current.path;
         if (path && !requestActiveReviewFileForComparison(params.activeFileKey, path, params.comparison, params.isCurrent)) return;
         initial.current = { ...initial.current, restored: true };
