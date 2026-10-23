@@ -57,18 +57,22 @@ export const SessionExternalShareableMessagesPageV1Schema = lazyZodSchema(() => 
 export type SessionMessagesPageScope = 'main' | 'sidechain' | 'all';
 export type BuildSessionMessagesPathParams = Readonly<{
   sessionId: string; scope: SessionMessagesPageScope; sidechainId?: string | null;
-  limit?: number; beforeSeq?: number; afterSeq?: number;
+  limit?: number; beforeSeq?: number; afterSeq?: number; messageId?: string;
   role?: SessionMessageRole; roles?: readonly SessionMessageRole[]; projection?: 'turns' | 'externalShareableV1';
 }>;
 function appendFiniteInteger(query: URLSearchParams, key: string, value: number | undefined) {
   if (typeof value === 'number' && Number.isFinite(value)) query.set(key, String(Math.trunc(value)));
 }
 export function buildSessionMessagesPath(params: BuildSessionMessagesPathParams): string {
+  if (params.messageId !== undefined && (params.beforeSeq !== undefined || params.afterSeq !== undefined || params.projection !== undefined)) {
+    throw new Error('Exact message selection cannot be combined with paging or projection');
+  }
   const query = new URLSearchParams({ scope: params.scope });
   if (params.role) query.set('role', params.role);
   if (params.roles?.length) query.set('roles', params.roles.join(','));
   if (params.projection) query.set('projection', params.projection);
-  appendFiniteInteger(query, 'limit', params.limit);
+  if (params.messageId !== undefined) query.set('messageId', params.messageId);
+  else appendFiniteInteger(query, 'limit', params.limit);
   appendFiniteInteger(query, 'beforeSeq', params.beforeSeq);
   appendFiniteInteger(query, 'afterSeq', params.afterSeq);
   const sidechainId = params.sidechainId?.trim();

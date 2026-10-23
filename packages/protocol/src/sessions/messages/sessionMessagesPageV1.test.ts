@@ -1,5 +1,16 @@
 import { expect, it } from 'vitest';
-import { SessionMessagesPageV1Schema } from './sessionMessagesPageV1.js';
+import { buildSessionMessagesPath, SessionMessagesPageV1Schema } from './sessionMessagesPageV1.js';
+
+it('encodes an exact message selector on the existing scoped path without paging operands', () => {
+  const input = { sessionId: 'session/1', scope: 'sidechain' as const, sidechainId: 'child',
+    roles: ['agent'] as const, messageId: 'message/3', limit: 20 };
+  const url = new URL(buildSessionMessagesPath(input), 'https://home.test');
+  expect(url.pathname).toBe('/v1/sessions/session%2F1/messages');
+  expect(Object.fromEntries(url.searchParams)).toEqual({ scope: 'sidechain', sidechainId: 'child',
+    roles: 'agent', messageId: 'message/3' });
+  const external = { ...input, projection: 'externalShareableV1' as const };
+  expect(() => buildSessionMessagesPath(external)).toThrow();
+});
 
 it('rejects invalid row identities and cursors at the shared wire owner', () => {
   const row = { id: 'm1', seq: 1, content: { t: 'plain', v: {} }, createdAt: 1 };
