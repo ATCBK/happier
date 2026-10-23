@@ -45,9 +45,10 @@ const desktopStateSchema = z.object({ display: z.literal('primary'), capture_id:
 
 /** The pinned native driver exposes one logical primary desktop, not a physical-monitor catalog. */
 export function resolveComputerDisplayId(displayId?: string, defaultDisplayId?: string): string | undefined {
-  // Explicit source identities remain exact. macOS's native primary desktop
-  // is independent of the daemon's inherited X11 DISPLAY.
-  return displayId?.trim() || (process.platform === 'darwin' ? 'primary' : defaultDisplayId?.trim() || undefined);
+  // Explicit connections remain exact; native primary on macOS/Windows is
+  // independent of X11 variables. Prefer the native compositor to XWayland.
+  return displayId?.trim() || (process.platform === 'darwin' || process.platform === 'win32' ? 'primary'
+    : process.platform === 'linux' ? process.env.WAYLAND_DISPLAY?.trim() || defaultDisplayId?.trim() || undefined : undefined);
 }
 
 function capturePng(result: NativeToolResult, width: number, height: number): Buffer {
@@ -59,10 +60,12 @@ function capturePng(result: NativeToolResult, width: number, height: number): Bu
   return png;
 }
 
-/** One installed-native executor for macOS and explicit Linux X11 sources. */
+/** One installed-native executor for the selected native desktop connection. */
 export async function createManagedComputerDriver(params: Readonly<{ displayId: string; executablePath?: string }>): Promise<ManagedComputerDriver> {
+  const wayland = process.platform === 'linux' && Boolean(process.env.WAYLAND_DISPLAY?.trim())
+    && params.displayId === process.env.WAYLAND_DISPLAY?.trim();
   if (!(process.platform === 'linux' && /^:\d+(?:\.\d+)?$/.test(params.displayId))
-    && !(process.platform === 'darwin' && params.displayId === 'primary')) throw new ComputerDriverError('target_unsupported');
+    && !wayland && !((process.platform === 'darwin' || process.platform === 'win32') && params.displayId === 'primary')) throw new ComputerDriverError('target_unsupported');
   let executablePath = params.executablePath;
   if (!executablePath) {
     const adapter = getArchiveDownloadInstallableAdapter(COMPUTER_CUA_DRIVER_INSTALLABLE_KEY);
@@ -91,6 +94,20 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
     const result = await native.call('check_permissions', {});
     const grant = (value: unknown) => value === true ? 'granted' as const : value === false ? 'denied' as const : 'unknown' as const;
     if (result.isError) return { capture: 'unknown', input: 'unknown' };
+    if (process.platform === 'win32') {
+      const permissions = z.object({ uia: z.boolean(), post_message: z.boolean() }).safeParse(result.structuredContent);
+      // Windows has no separate capture permission prompt. Elevation is not
+      // required for ordinary desktop use; UIPI/native failures still refuse.
+      return permissions.success ? { capture: 'granted', input: grant(permissions.data.post_message) }
+        : { capture: 'unknown', input: 'unknown' };
+    }
+    if (wayland) {
+      // This means the native backend is available, not that every compositor
+      // supports capture/input. Actual native operations enforce their grants
+      // and target identity; the X11 bits do not describe Wayland permission.
+      const available = result.structuredContent?.wayland === true && result.structuredContent?.wayland_enabled === true;
+      return { capture: available ? 'granted' : 'unknown', input: available ? 'granted' : 'unknown' };
+    }
     return process.platform === 'darwin'
       ? { capture: grant(result.structuredContent?.screen_recording), input: grant(result.structuredContent?.accessibility) }
       : { capture: grant(result.structuredContent?.x11), input: grant(result.structuredContent?.xsend_event) };
@@ -142,7 +159,7 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
         full_output: true });
     const observation = target.kind === 'display' ? decodeDesktopCapture(result) : decodeCapture(result, target);
     captureBinding = { captureId: observation.captureId, target, geometry: observation.geometry,
-      ...(target.kind === 'display' ? { nativeScale: process.platform === 'darwin' ? desktopStateSchema.parse(result.structuredContent).scale_factor : 1 } : {}) };
+      ...(target.kind === 'display' ? { nativeScale: desktopStateSchema.parse(result.structuredContent).scale_factor ?? 1 } : {}) };
     return observation;
   };
   const performInput = async (target: ComputerTargetV1, captureId: string | null, operation: ComputerInputOperationV1,
@@ -198,12 +215,18 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
           : await native.call('press_key', { ...nativeTarget, key: operation.key, delivery_mode: deliveryMode });
       if (result.isError || result.structuredContent?.effect === 'refused') {
         const code = nativeRefusalCode(result);
+        // Cua 0.37.0's Windows class detector refuses before injection. The
+        // same code after a UIA timeout or actuator attempt does NOT prove that.
+        const refusedBackgroundClass = process.platform === 'win32' && target.kind === 'window' && code === 'background_unavailable'
+          && typeof result.structuredContent?.target_class === 'string'
+          && result.structuredContent?.event_kind === (operation.kind === 'click' ? 'mouse_click' : operation.kind === 'type' ? 'text_input' : 'keystroke')
+          && result.structuredContent?.effect === undefined && result.structuredContent?.cause === undefined;
         // These pinned codes arise before native input. A generic tool error
         // may instead follow a press, so it cannot establish no effect.
         if ((operation.kind === 'click' && (code === 'capture_action_refused' || code === 'capture_id_invalid' || code === 'capture_not_found'
           || code === 'capture_target_mismatch' || code === 'point_outside_window' || code === 'capture_expired'
           || code === 'capture_generation_mismatch' || code === 'capture_frame_mismatch' || code === 'capture_coordinate_invalid'))
-          || (operation.kind === 'type' && code === 'browser_field_needs_keystrokes')) return { status: 'failed', code };
+          || (operation.kind === 'type' && code === 'browser_field_needs_keystrokes') || refusedBackgroundClass) return { status: 'failed', code };
         native.quarantine();
         return { status: 'interrupted', completion: 'unknown' };
       }
@@ -252,6 +275,8 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
         targets.push({ target: { kind: 'display', displayId: params.displayId },
           label, title: label, width: size.data.width, height: size.data.height });
       }
+      if (wayland && targets.length === 0) throw new ComputerDriverError('wayland_target_unavailable',
+        'The compositor did not expose identifiable windows or native desktop geometry to Cua. Use a supported compositor/helper or an explicit X11 desktop.');
       if (!options?.includeThumbnails) return targets;
       return await Promise.all(targets.map(async entry => {
         try {

@@ -3,7 +3,7 @@ import { SURFACE_AUTHORITY_AGENT_FLOOR } from '@happier-dev/protocol/actions/act
 import type { ActionExecutorContext, ComputerTargetV1, RuntimeActionExecute, RuntimeActionIdV1 } from '@happier-dev/protocol';
 import type { MachineLiveStreamCaptureRegistry } from '../peer/mediation/stream/captureRegistry';
 import { computerTargetKey, createComputerCaptureSource } from './source';
-import { createManagedComputerDriver, resolveComputerDisplayId } from './driver/managedComputerDriver';
+import { ComputerDriverError, createManagedComputerDriver, resolveComputerDisplayId } from './driver/managedComputerDriver';
 import { createSessionImageMediaWriter } from '@/session/media/createSessionImageMediaWriter';
 import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
 import { configuration } from '@/configuration';
@@ -16,18 +16,24 @@ export type ComputerRoutes = Readonly<{
 }>;
 
 export function createComputerRoutes(input: Readonly<{machineId: string; machineDisplayName?: string; registry: MachineLiveStreamCaptureRegistry; executablePath?: string;
-  /** This machine's own desktop display (the daemon's `DISPLAY`), listed when the person names none. */
+  /** Default X11 connection; the driver owner resolves native Windows/macOS/Wayland defaults. */
   defaultDisplayId?: string}>): ComputerRoutes {
   const writer = createSessionImageMediaWriter({ workingDirectory: configuration.happyHomeDir, storage: 'daemon',
     pathAllowanceRegistry: createTransferPathAllowanceRegistry() });
-  const failure = (code: string) => ({ ok: false, errorCode: code, error: code } as const);
-  const nativeFailure = (error: unknown) => failure(error && typeof error === 'object' && 'code' in error
-    && typeof error.code === 'string' ? error.code : 'native_capture_failed');
+  const failure = (code: string, message = code) => ({ ok: false, errorCode: code, error: message } as const);
+  const nativeFailure = (error: unknown) => error instanceof ComputerDriverError ? failure(error.code, error.message)
+    : failure(error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'native_capture_failed');
   const selected = (sessionId: string) => input.registry.list().find(entry => entry.computer?.sessionId === sessionId)?.computer;
   const inputDisplayKey = (displayId: string) => {
     // X11 :N and :N.0 address the same screen. Wire source identities stay exact,
     // but aliases cannot admit a second controller for the same physical input.
     const x11 = process.platform === 'linux' ? /^:(\d+)(?:\.(\d+))?$/.exec(displayId) : null;
+    const wayland = process.platform === 'linux' ? process.env.WAYLAND_DISPLAY?.trim() : undefined;
+    const inheritedX11 = wayland ? /^:(\d+)(?:\.(\d+))?$/.exec(process.env.DISPLAY ?? '') : null;
+    // The inherited XWayland connection belongs to this same compositor.
+    // Explicit unrelated X11 desktops (for example Xvfb) stay independent.
+    if (x11 && inheritedX11 && Number(x11[1]) === Number(inheritedX11[1])
+      && Number(x11[2] ?? 0) === Number(inheritedX11[2] ?? 0)) return wayland;
     return x11 ? JSON.stringify([Number(x11[1]), Number(x11[2] ?? 0)]) : displayId;
   };
   const conflictingSelection = (sessionId: string, target: ComputerTargetV1) => input.registry.list()

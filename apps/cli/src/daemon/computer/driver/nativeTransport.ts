@@ -2,7 +2,7 @@ import { COMPUTER_CUA_DRIVER_VERSION } from '@happier-dev/protocol/installables'
 import { z } from 'zod/mini';
 
 export class ComputerDriverError extends Error {
-  constructor(readonly code: string) { super(code); this.name = 'ComputerDriverError'; }
+  constructor(readonly code: string, message = code) { super(message); this.name = 'ComputerDriverError'; }
 }
 
 const resultSchema = z.object({
@@ -25,8 +25,16 @@ export async function openNativeComputerTransport(executablePath: string, displa
   if (context?.signal?.aborted) throw new ComputerDriverError('driver_unavailable');
   const desktopEnvironment: Record<string, string> = {};
   if (process.platform === 'linux') {
-    desktopEnvironment.DISPLAY = displayId;
-    for (const key of ['XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR']) {
+    if (displayId.startsWith(':')) desktopEnvironment.DISPLAY = displayId;
+    else {
+      // The selected connection is Wayland, even on a desktop with XWayland.
+      // Do not leak DISPLAY into the native driver's geometry fallback.
+      desktopEnvironment.WAYLAND_DISPLAY = displayId;
+      desktopEnvironment.CUA_DRIVER_RS_ENABLE_WAYLAND = '1';
+      const signature = process.env.HYPRLAND_INSTANCE_SIGNATURE;
+      if (signature !== undefined) desktopEnvironment.HYPRLAND_INSTANCE_SIGNATURE = signature;
+    }
+    for (const key of ['XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR', ...(displayId.startsWith(':') ? [] : ['SWAYSOCK'])]) {
       const value = process.env[key];
       if (value !== undefined) desktopEnvironment[key] = value;
     }

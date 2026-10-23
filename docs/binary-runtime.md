@@ -342,7 +342,12 @@ The Computer picker and viewer re-read native grants and source/control facts
 after repair; successful installation alone never grants permission or input.
 `daemon/computer/driver/nativeTransport.ts` launches that installed absolute executable
 directly in embedded MCP mode; no system Node, package manager or second launcher is involved.
-X11 display/authentication/session variables are forwarded only on Linux, not macOS.
+Desktop connection/authentication/session variables are forwarded only on Linux.
+An explicit X11 connection receives `DISPLAY`; a selected Wayland connection
+receives its inherited `WAYLAND_DISPLAY`, runtime/session-bus environment and
+compositor identity (`HYPRLAND_INSTANCE_SIGNATURE` or `SWAYSOCK`). The transport
+enables Cua's native Wayland backend and omits XWayland's `DISPLAY` from that
+process, so X11 metadata cannot masquerade as native desktop geometry.
 The macOS bare `-binary` executable serves the embedded MCP line (observed on macOS 26 with 0.37.0:
 `initialize`, `tools/list` and tool calls work; the 0.36.0 "run `CuaDriver.app`" notice is not
 raised by that line, and embedded status reflects the host process's Screen Recording and
@@ -365,8 +370,32 @@ Unknown input completion quarantines the source without replay. Explicit target
 reselection waits for actual exit of the old native process before replacing
 the source; the replacement needs a fresh capture before input. Requesting
 process termination alone is not retirement proof.
-Archive availability is not source or permission readiness; Windows/Wayland remain
-unsupported, and the portable primary desktop is not a per-monitor identity catalog.
+Windows uses the driver's native `primary` desktop without requiring a display
+environment variable. Its screen dimensions, screenshot pixels and desktop input
+coordinates are physical pixels even at high DPI; the reported DPI scale does
+not rescale those coordinates. Windows has no separate capture permission prompt;
+the native `post_message` capability reports ordinary input availability without
+requiring elevation. Native capture, UIPI and delivery failures still refuse.
+Window input stays in background mode. Only the pinned pre-dispatch class refusal
+is known nondelivery; an unresolved UIA call carrying the same
+`background_unavailable` code retains unknown completion. No automatic foreground
+escalation is performed.
+
+On a Wayland desktop, the default connection is the daemon's inherited socket,
+ahead of its XWayland connection. Explicit X11 targets remain exact. The driver
+lists only native pid/window identities it can enumerate; it offers a desktop
+only when its native `get_screen_size` supplies valid geometry. In Cua 0.37.0
+that content-free Wayland desktop metadata is Hyprland-specific. Other compositor
+window paths may be available, but a working screenshot alone does not establish
+desktop selection or safe input coordinates. When no target can be enumerated,
+`wayland_target_unavailable` explains the compositor limitation. Cua's enabled
+Wayland-session flags establish backend availability; they do not certify a
+particular compositor's capture/input protocols or bypass native portal grants.
+No compositor, plugin or portal helper is installed automatically.
+Archive availability is not source readiness. Native Windows and compositor
+capture/input certification remain release checks requiring interactive native
+Machines; process-boundary tests do not supply that evidence. The portable
+primary desktop is not a per-monitor identity catalog.
 See [Computer target consent](actions.md#computer-target-consent-03-development-source)
 for the current source, approval, independent native grants and confidential-entry limits.
 
