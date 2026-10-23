@@ -26,6 +26,80 @@ afterEach(async () => {
 });
 
 describe('MultiTextInput native composer boundary', () => {
+    it.each([0, 24])('does not publish or resend unchanged chip bindings for twenty text edits after %i chips', async (chipCount) => {
+        const { MultiTextInput } = await import('./MultiTextInput');
+        const references = Array.from({ length: chipCount }, (_, index) => {
+            const identity = index % 12;
+            const token = formatInlineReferenceTokenV1({ ref: `session:auth-${identity}`, label: `Auth ${identity}` });
+            return { ref: `session:auth-${identity}`, token, start: 0, end: 0, kind: 'session', label: `Auth ${identity}`,
+                binding: { occurrence: index } };
+        });
+        let text = '';
+        for (const reference of references) {
+            reference.start = text.length;
+            text += reference.token + ' ';
+            reference.end = text.length - 1;
+        }
+        const onReferencesChange = vi.fn();
+        const onChangeText = vi.fn();
+        const screen = await renderScreen(<MultiTextInput value={text} references={chipCount > 0 ? references : undefined}
+            onChangeText={onChangeText} onReferencesChange={onReferencesChange} />);
+        const nativeReferences = screen.tree.findByType('HappierComposerInput').props.references;
+        let referencePropChanges = 0;
+        for (let eventCount = 1; eventCount <= 20; eventCount++) {
+            text += 'x';
+            act(() => screen.tree.findByType('HappierComposerInput').props.onChange({ nativeEvent: {
+                text, selection: { start: text.length, end: text.length }, eventCount,
+                references: references.map(({ ref, token, start, end }) => ({ ref, token, start, end })),
+            } }));
+            await screen.update(<MultiTextInput value={text} references={chipCount > 0 ? references : undefined}
+                onChangeText={onChangeText} onReferencesChange={onReferencesChange} />);
+            if (screen.tree.findByType('HappierComposerInput').props.references !== nativeReferences) referencePropChanges++;
+        }
+        expect(onChangeText).toHaveBeenCalledTimes(20);
+        expect({ publications: onReferencesChange.mock.calls.length, referencePropChanges }).toEqual({ publications: 0, referencePropChanges: 0 });
+
+        const shifted = references.map(reference => ({ ...reference, start: reference.start + 1, end: reference.end + 1 }));
+        act(() => screen.tree.findByType('HappierComposerInput').props.onChange({ nativeEvent: {
+            text: `x${text}`, selection: { start: 1, end: 1 }, eventCount: 21,
+            references: shifted.map(({ ref, token, start, end }) => ({ ref, token, start, end })),
+        } }));
+        if (chipCount > 0) {
+            expect(onReferencesChange).toHaveBeenCalledOnce();
+            expect(onReferencesChange).toHaveBeenLastCalledWith(shifted);
+            for (let index = 0; index < shifted.length; index++) {
+                expect(onReferencesChange.mock.calls[0][0][index].binding).toBe(references[index].binding);
+            }
+        } else expect(onReferencesChange).not.toHaveBeenCalled();
+    });
+
+    it('keeps imperative editing available with a generic native view ref in composed renders', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput');
+        const ref = React.createRef<MultiTextInputHandle>();
+        const onStateChange = vi.fn();
+        const onChangeText = vi.fn();
+        const focus = vi.fn();
+        await renderScreen(<MultiTextInput ref={ref} value="hello"
+            onChangeText={onChangeText} onStateChange={onStateChange} />, {
+            // Composed screens supply generic OS view methods, not the Expo module's commands.
+            createNodeMock: () => ({ focus }),
+        });
+
+        act(() => ref.current!.setSelection({ start: 1, end: 4 }));
+        expect(onStateChange).toHaveBeenLastCalledWith({ text: 'hello', selection: { start: 1, end: 4 } });
+        act(() => {
+            ref.current!.setDropCaret(2);
+            ref.current!.setDropCaret(null);
+            ref.current!.setTextAndSelection('hello world', { start: 11, end: 11 });
+            ref.current!.focus();
+        });
+        expect(ref.current!.getText()).toBe('hello world');
+        expect(onChangeText).toHaveBeenLastCalledWith('hello world');
+        expect(onStateChange).toHaveBeenLastCalledWith({ text: 'hello world', selection: { start: 11, end: 11 } });
+        expect(focus).toHaveBeenCalledOnce();
+        expect(await ref.current!.offsetAtPoint({ x: 10, y: 20 })).toBeNull();
+    });
+
     it('delivers native folder sources and their source-text drop offset without changing text', async () => {
         const { MultiTextInput } = await import('./MultiTextInput');
         const dropped = vi.fn();

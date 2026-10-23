@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getSchema } from '@tiptap/core';
-import { composerTextToDoc, mapComposerDoc } from './composerTextDocMapping';
+import { boundComposerEditorReferences, composerTextToDoc, mapComposerDoc } from './composerTextDocMapping';
 import { createComposerEditorExtensions } from './composerEditorSchema.web';
 import type { ComposerEditorReference } from './composerEditorTypes';
 
@@ -10,6 +10,17 @@ function reference(start: number): ComposerEditorReference {
 }
 
 describe('composer text/document mapping', () => {
+    it('retains admitted reference identity across ordinary text edits and revalidates changed tokens', () => {
+        const references = Array.from({ length: 24 }, (_, index) => reference(index * (token.length + 1)));
+        const text = references.map(() => token).join(' ');
+        for (let edit = 1; edit <= 20; edit++) {
+            expect(boundComposerEditorReferences(text + 'x'.repeat(edit), references)).toBe(references);
+        }
+        expect(boundComposerEditorReferences(`x${text}`, references)).toEqual([]);
+        expect(boundComposerEditorReferences(text.slice(0, references[23].start), references)).toEqual(references.slice(0, 23));
+        expect(boundComposerEditorReferences(text, [...references].reverse())).toEqual(references);
+    });
+
     it('renders only exact bound occurrences as atoms at the start, middle, end and beside each other', () => {
         const text = `${token} 😀 ${token}${token}`;
         const references = [reference(0), reference(token.length + 4), reference(token.length * 2 + 4)];

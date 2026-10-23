@@ -2,14 +2,17 @@ import type { JSONContent } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { ComposerEditorReference } from './composerEditorTypes';
 
-export function boundComposerEditorReferences(text: string, references: readonly ComposerEditorReference[]): ComposerEditorReference[] {
+export function boundComposerEditorReferences(text: string, references: readonly ComposerEditorReference[]): readonly ComposerEditorReference[] {
     let end = 0;
-    return [...references].sort((a, b) => a.start - b.start).filter(reference => {
+    const admit = (reference: ComposerEditorReference) => {
         if (reference.start < end || reference.start < 0 || reference.end <= reference.start
             || reference.end > text.length || text.slice(reference.start, reference.end) !== reference.token) return false;
         end = reference.end;
         return true;
-    });
+    };
+    if (references.every(admit)) return references;
+    end = 0;
+    return [...references].sort((a, b) => a.start - b.start).filter(admit);
 }
 
 /** Exactly one paragraph; hard breaks preserve the source's UTF-16 offset space. */

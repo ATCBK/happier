@@ -203,12 +203,20 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             textLength: text.length, selection, valueLength: controlledValueRef.current.length,
         });
         publishSelection(selection);
-        const restored = references.flatMap(reference => {
-            const binding = bindingsRef.current.get(bindingKey(reference.ref, reference.token));
-            return binding ? [{ ...binding, start: reference.start, end: reference.end }] : [];
+        const restored = references.flatMap((reference, index) => {
+            const occurrence = liveReferencesRef.current[index];
+            const binding = occurrence?.ref === reference.ref && occurrence.token === reference.token
+                ? occurrence : bindingsRef.current.get(bindingKey(reference.ref, reference.token));
+            if (!binding) return [];
+            return [binding.start === reference.start && binding.end === reference.end
+                ? binding : { ...binding, start: reference.start, end: reference.end }];
         });
-        liveReferencesRef.current = boundComposerEditorReferences(text, restored);
-        props.onReferencesChange?.(liveReferencesRef.current);
+        const nextReferences = boundComposerEditorReferences(text, restored);
+        if (nextReferences.length !== liveReferencesRef.current.length
+            || nextReferences.some((reference, index) => reference !== liveReferencesRef.current[index])) {
+            liveReferencesRef.current = nextReferences;
+            props.onReferencesChange?.(nextReferences);
+        }
         props.onChangeText(text);
     }, [recordGeometry, props.onChangeText, props.onReferencesChange, publishSelection]);
     const onSelection = React.useCallback<NativeComposerInputProps['onSelection']>((event) => {
