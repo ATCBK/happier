@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, rename, rm, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, realpath, rename, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setFlagsFromString } from 'node:v8';
@@ -32,6 +32,7 @@ vi.mock('node:fs/promises', async () => {
 
 import { createCodexExternalSessionObservationContribution, codexExternalSessionObservationContribution } from './observation.js';
 import { pageCodexExternalSessionTranscript, readAfterCodexExternalSessionTranscript } from './transcriptSource.js';
+import { createCodexExternalSessionsContribution } from './contribution.js';
 import { codexRolloutObservationInventories, inventoryCodexRootSessionRolloutFiles } from '../../../rollout/discovery/sessionsForHome.js';
 
 type CodexObservationContribution = ReturnType<
@@ -690,6 +691,149 @@ describe('Codex External Session observation', () => {
     }
   });
 
+  it('uses observed dirty-file hints for transcript paging without re-statting unrelated rollouts', async () => {
+    const fixture = await createRolloutSetFixture();
+    const unrelated = join(dirname(fixture.rootFile), 'rollout-unrelated.jsonl');
+    await writeFile(unrelated, JSON.stringify({ type: 'session_meta', payload: { id: 'unrelated-session' } }));
+    const lifetime = new AbortController();
+    const params = { source: { kind: 'codexHome', home: 'user', homePath: fixture.codexHome } as const,
+      env: { CODEX_HOME: fixture.codexHome }, remoteSessionId: fixture.identity.remoteSessionId,
+      direction: 'older' as const, maxBytes: 256 * 1024, maxItems: 100,
+      observation: { lifetime: lifetime.signal, changedFiles: [] as string[] } };
+    try {
+      await appendFile(fixture.rootFile, '\n' + JSON.stringify({ type: 'response_item', timestamp: new Date().toISOString(),
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'owned transcript body' }] } }) + '\n');
+      const initial = await pageCodexExternalSessionTranscript(params);
+      expect(initial.items.length).toBeGreaterThan(0);
+      fsBoundary.stat.mockClear();
+      const again = await pageCodexExternalSessionTranscript(params);
+      expect(again.items).toEqual(initial.items);
+      expect(fsBoundary.stat.mock.calls.filter(([file]) => String(file) === unrelated)).toHaveLength(0);
+      await writeFile(unrelated, JSON.stringify({ type: 'session_meta', payload: { id: 'new-child', session_id: 'session-a' } }) + '\n');
+      const changed = await pageCodexExternalSessionTranscript({ ...params,
+        observation: { lifetime: lifetime.signal, changedFiles: [unrelated] } });
+      expect(changed.tailCursor).not.toBe(again.tailCursor);
+    } finally { lifetime.abort(); await rm(fixture.codexHome, { recursive: true, force: true }); }
+  });
+
+  it('invalidates linked rollout facts from the physical dirty path delivered by the watcher', async () => {
+    const fixture = await createRolloutSetFixture();
+    const alias = join(fixture.codexHome, 'linked-home');
+    const lifetime = new AbortController();
+    await mkdir(alias);
+    await symlink(join(fixture.codexHome, 'sessions'), join(alias, 'sessions'), process.platform === 'win32' ? 'junction' : 'dir');
+    const unrelated = join(dirname(fixture.rootFile), 'rollout-unrelated.jsonl');
+    await writeFile(unrelated, JSON.stringify({ type: 'session_meta', payload: { id: 'unrelated-session' } }) + '\n');
+    const params = { source: { kind: 'codexHome', home: 'user', homePath: alias } as const,
+      env: { CODEX_HOME: alias }, remoteSessionId: fixture.identity.remoteSessionId,
+      direction: 'older' as const, maxBytes: 256 * 1024, maxItems: 100,
+      observation: { lifetime: lifetime.signal, changedFiles: [] as string[] } };
+    try {
+      const initial = await pageCodexExternalSessionTranscript(params);
+      await writeFile(unrelated, JSON.stringify({ type: 'session_meta', payload: { id: fixture.identity.remoteSessionId } }) + '\n'
+        + JSON.stringify({ type: 'response_item', payload: {
+        type: 'message', role: 'user', content: [{ type: 'input_text', text: 'garnet through physical invalidation' }],
+      } }) + '\n');
+      const changed = await pageCodexExternalSessionTranscript({ ...params,
+        observation: { lifetime: lifetime.signal, changedFiles: [await realpath(unrelated)] } });
+      expect(JSON.stringify(changed.items)).toContain('garnet through physical invalidation');
+      expect(changed.tailCursor).not.toBe(initial.tailCursor);
+    } finally { lifetime.abort(); await rm(fixture.codexHome, { recursive: true, force: true }); }
+  });
+
+  it('holds one native descriptor per bounded transcript scan rather than per chunk', async () => {
+    const fixture = await createRolloutSetFixture();
+    try {
+      const timestamp = new Date().toISOString();
+      await writeFile(fixture.rootFile,
+        JSON.stringify({ type: 'session_meta', timestamp, payload: { id: 'session-a', cwd: '/fixture' } }) + '\n'
+        + Array.from({ length: 200 }, (_, ordinal) => JSON.stringify({ type: 'response_item', timestamp, payload: {
+          type: 'message', role: ordinal % 2 ? 'assistant' : 'user', content: [{
+            type: ordinal % 2 ? 'output_text' : 'input_text', text: `r268ordinal${ordinal} café 東京 ${'coastal walk '.repeat(600)}`,
+          }],
+        } }) + '\n').join(''));
+      fsBoundary.open.mockClear();
+      const result = await pageCodexExternalSessionTranscript({ source: { kind: 'codexHome', home: 'user', homePath: fixture.codexHome },
+        env: { CODEX_HOME: fixture.codexHome }, remoteSessionId: 'session-a', direction: 'older', maxBytes: 512 * 1024, maxItems: 500 });
+      expect(result.items.length).toBeGreaterThan(0);
+      expect(result.hasMore).toBe(true);
+      // Membership head, native-history discriminator, tail anchor, one scanner
+      // descriptor and continuation anchor; body chunk count adds no handles.
+      expect(fsBoundary.open.mock.calls.filter(([file]) => String(file) === fixture.rootFile)).toHaveLength(5);
+    } finally { await rm(fixture.codexHome, { recursive: true, force: true }); }
+  });
+
+  it('stops native chunk reads at an explicit invocation deadline', async () => {
+    const fixture = await createRolloutSetFixture();
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    let clock = Date.now();
+    const deadlineAtMs = clock + 1000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    let readsAfterDeadline = 0;
+    try {
+      const timestamp = new Date(clock).toISOString();
+      await writeFile(fixture.rootFile, JSON.stringify({ type: 'session_meta', payload: { id: 'session-a' } }) + '\n'
+        + Array.from({ length: 200 }, () => JSON.stringify({ type: 'response_item', timestamp, payload: {
+          type: 'message', role: 'user', content: [{ type: 'input_text', text: 'owned native text '.repeat(500) }],
+        } }) + '\n').join(''));
+      fsBoundary.open.mockImplementation(async (...args: Parameters<typeof actual.open>) => {
+        const handle = await actual.open(...args);
+        const read = handle.read.bind(handle);
+        handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
+          if (clock >= deadlineAtMs) readsAfterDeadline++;
+          const result = await read(...readArgs);
+          if (result.bytesRead >= 64 * 1024) clock = deadlineAtMs;
+          return result;
+        }) as typeof handle.read;
+        return handle;
+      });
+      await expect(pageCodexExternalSessionTranscript({ source: { kind: 'codexHome', home: 'user', homePath: fixture.codexHome },
+        env: { CODEX_HOME: fixture.codexHome }, remoteSessionId: 'session-a', direction: 'older', maxBytes: 512 * 1024,
+        maxItems: 500, deadlineAtMs })).rejects.toMatchObject({ name: 'TimeoutError' });
+      expect(readsAfterDeadline).toBe(0);
+    } finally { now.mockRestore(); fsBoundary.open.mockImplementation(actual.open); await rm(fixture.codexHome, { recursive: true, force: true }); }
+  });
+
+  it.skipIf(process.env.HAPPIER_R268_PROFILE !== '1')('measures Codex native paging allocations with and without demanded dirty hints', async () => {
+    const fixture = await createRolloutSetFixture();
+    const lifetime = new AbortController();
+    const timestamp = new Date().toISOString();
+    const params = { source: { kind: 'codexHome', home: 'user', homePath: fixture.codexHome } as const,
+      env: { CODEX_HOME: fixture.codexHome }, remoteSessionId: 'session-a', direction: 'older' as const,
+      maxBytes: 512 * 1024, maxItems: 500 };
+    try {
+      await writeFile(fixture.rootFile, JSON.stringify({ type: 'session_meta', timestamp, payload: { id: 'session-a' } }) + '\n'
+        + Array.from({ length: 200 }, (_, ordinal) => JSON.stringify({ type: 'response_item', timestamp, payload: {
+          type: 'message', role: ordinal % 2 ? 'assistant' : 'user', content: [{ type: ordinal % 2 ? 'output_text' : 'input_text',
+            text: `r268ordinal${ordinal} café 東京 ${'coastal walk '.repeat(600)}` }],
+        } }) + '\n').join(''));
+      await Promise.all(Array.from({ length: 2000 }, (_, index) => writeFile(join(dirname(fixture.rootFile), `rollout-unrelated-${index}.jsonl`),
+        JSON.stringify({ type: 'session_meta', payload: { id: `unrelated-${index}`,
+          base_instructions: { text: 'native instructions not retained '.repeat(800) } } }) + '\n')));
+      const baselineMemory = process.memoryUsage();
+      const coldStarted = performance.now();
+      await pageCodexExternalSessionTranscript({ ...params, observation: { lifetime: lifetime.signal } });
+      const cold = { elapsedMs: performance.now() - coldStarted, memory: process.memoryUsage() };
+      const measure = async (hinted: boolean) => {
+        fsBoundary.stat.mockClear(); fsBoundary.open.mockClear();
+        const start = performance.now(), cpuBefore = process.cpuUsage(), memoryBefore = process.memoryUsage();
+        for (let index = 0; index < 5; index++) {
+          const page = await pageCodexExternalSessionTranscript({ ...params,
+            observation: { lifetime: lifetime.signal, ...(hinted ? { changedFiles: [] } : {}) } });
+          expect(page.hasMore).toBe(true);
+          expect(page.items.length).toBeGreaterThan(0);
+        }
+        const cpu = process.cpuUsage(cpuBefore);
+        return { elapsedMs: performance.now() - start, cpuMs: (cpu.user + cpu.system) / 1000,
+          stats: fsBoundary.stat.mock.calls.length, opens: fsBoundary.open.mock.calls.length,
+          memoryBefore, memoryAfter: process.memoryUsage() };
+      };
+      const unhinted = await measure(false), hinted = await measure(true);
+      lifetime.abort();
+      expect(hinted.stats).toBeLessThan(unhinted.stats / 100);
+    } finally { lifetime.abort(); await rm(fixture.codexHome, { recursive: true, force: true }); }
+  }, 120_000);
+
   it('reconciles an unchanged rollout tree without reopening unrelated heads or relisting directories', async () => {
     const fixture = await createRolloutSetFixture();
     const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: fixture.codexHome,
@@ -818,6 +962,67 @@ describe('Codex External Session observation', () => {
       console.info('CODEX_SYNTHETIC_NATIVE_INVENTORY_CURSOR_BYTES', JSON.stringify(cursorBytes));
     } finally { await rm(codexHome, { recursive: true, force: true }); }
   }, 60_000);
+
+  it('reads long metadata heads in one bounded probe without pruning a non-time-based root family', async () => {
+    const fixture = await createRolloutSetFixture();
+    const lifetime = new AbortController();
+    try {
+      const timestamp = new Date().toISOString();
+      const remoteSessionId = 'd4b84a10-0e52-44fa-8147-276000000000';
+      const rootFile = join(dirname(fixture.rootFile), `rollout-${timestamp.slice(0, 19).replaceAll(':', '-')}-${remoteSessionId}.jsonl`);
+      await rename(fixture.rootFile, rootFile);
+      await writeFile(rootFile, JSON.stringify({ type: 'session_meta', timestamp, payload: { id: remoteSessionId, timestamp } }) + '\n'
+        + Array.from({ length: 200 }, (_, ordinal) => JSON.stringify({ type: 'response_item', timestamp, payload: {
+          type: 'message', role: ordinal % 2 ? 'assistant' : 'user', content: [{ type: ordinal % 2 ? 'output_text' : 'input_text',
+            text: `r278ordinal${ordinal} café 東京 ${'coastal walk '.repeat(600)}` }],
+        } }) + '\n').join(''));
+      const priorTimestamp = new Date(Date.parse(timestamp) - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replaceAll(':', '-');
+      await Promise.all(Array.from({ length: 8400 }, (_, index) => writeFile(join(dirname(fixture.rootFile), `rollout-${priorTimestamp}-other-${index}.jsonl`),
+        JSON.stringify({ type: 'session_meta', payload: { id: `other-${index}`,
+          base_instructions: { text: 'native instructions '.repeat(800) } } }) + '\n')));
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      let unrelatedReads = 0;
+      fsBoundary.open.mockImplementation(async (...args: Parameters<typeof actual.open>) => {
+        const handle = await actual.open(...args);
+        if (String(args[0]).includes('-other-')) {
+          const read = handle.read.bind(handle);
+          handle.read = ((...readArgs: Parameters<typeof read>) => {
+            unrelatedReads += 1;
+            return read(...readArgs);
+          }) as typeof handle.read;
+        }
+        return handle;
+      });
+      fsBoundary.open.mockClear();
+      const started = performance.now();
+      const result = await createCodexExternalSessionsContribution({ env: { CODEX_HOME: fixture.codexHome } }).pageTranscript({
+        source: { kind: 'codexHome', home: 'user', homePath: fixture.codexHome }, remoteSessionId, direction: 'older',
+        maxSerializedBytes: 512 * 1024, maxItems: 200, signal: lifetime.signal, exec: {} as ExecService,
+      });
+      const unrelatedOpens = fsBoundary.open.mock.calls.filter(([file]) => String(file).includes('-other-')).length;
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      if (!result.ok) throw new Error(result.message);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(512 * 1024);
+      expect(result.value.items.length).toBeGreaterThan(0);
+      expect(result.value.nextCursor).toBeTruthy();
+      expect(unrelatedOpens).toBe(8400);
+      expect(unrelatedReads).toBe(8400);
+      const items = [...result.value.items];
+      let cursor = result.value.nextCursor;
+      while (cursor) {
+        const page = await createCodexExternalSessionsContribution({ env: { CODEX_HOME: fixture.codexHome } }).pageTranscript({
+          source: { kind: 'codexHome', home: 'user', homePath: fixture.codexHome }, remoteSessionId, direction: 'older',
+          cursor, maxSerializedBytes: 512 * 1024, maxItems: 200, signal: lifetime.signal, exec: {} as ExecService,
+        });
+        if (!page.ok) throw new Error(page.message);
+        expect(page.value.nextCursor).not.toBe(cursor);
+        items.unshift(...page.value.items);
+        cursor = page.value.nextCursor;
+      }
+      expect(items.map(item => Number(/r278ordinal(\d+)/.exec(JSON.stringify(item.raw))?.[1])))
+        .toEqual(Array.from({ length: 200 }, (_, index) => index));
+    } finally { lifetime.abort(); await rm(fixture.codexHome, { recursive: true, force: true }); }
+  }, 120_000);
 
   it('retries an incomplete immutable head and admits a newly requested root from the retained inventory', async () => {
     const fixture = await createRolloutSetFixture();
