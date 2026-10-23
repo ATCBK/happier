@@ -18,11 +18,20 @@ name: happier
 description: Use Happier from this session
 ---
 
-Use the installed Happier CLI to find the current commands and their arguments.
-Start with \`happier --help\`. For skills, MCP servers, and sessions, read
-\`happier skills --help\`, \`happier mcp --help\`, or \`happier session --help\`.
-Follow that command's help for the operation you need. Actions honor the caller's
-approval settings; a successful read does not authorize a write.
+Use the Happier tools delivered in this session, through MCP or a native extension.
+Find \`action_spec_search\`, \`action_spec_get\`, and \`action_execute\` among your
+available tools; their server prefix may vary. Search for the operation, read its
+current schema, then execute its returned Action id with \`{ actionId, input }\`.
+A missing direct tool for an Action does not mean the Action is unavailable.
+Follow the returned availability, permission, and approval requirements.
+
+For standalone CLI operations, first check that \`happier\` is on PATH and
+authenticated to the intended Happier Home. Read \`happier --help\`, then
+\`happier skills --help\`, \`happier mcp --help\`, or \`happier session --help\` as needed.
+The CLI uses its own authenticated identity; it does not inherit this turn's
+requester. Do not switch channels to bypass a refusal or approval requirement.
+If a requester cannot be identified, ask the person to send a fresh request from
+their signed-in Happier app. If no usable channel is available, say so.
 `;
 
 /** Bundled content uses the same digest and materializer as Account skill bundles. */

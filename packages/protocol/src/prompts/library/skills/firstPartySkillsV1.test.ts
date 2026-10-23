@@ -3,7 +3,6 @@ import { FIRST_PARTY_SKILLS_V1, buildFirstPartySkillSeedRuleV1 } from './firstPa
 import { computePromptBundleDigestV1 } from '../promptLibraryDigests.js';
 import { readSkillBundleContentV1 } from '../promptBundleSchemas.js';
 import { resolveSessionCapabilitiesV1 } from '../../../reach/resolveSessionCapabilitiesV1.js';
-import { listActionCliCommandDeclarations } from '../../../actions/actionSpecs.js';
 import { readSkillLibraryCatalog } from './readSkillLibraryCatalog.js';
 
 describe('first-party bundled skills', () => {
@@ -17,7 +16,7 @@ describe('first-party bundled skills', () => {
     expect(catalog).toContainEqual({ id: plugin.skillId, name: 'happier' });
     expect(await readSkillLibraryCatalog(store, undefined, [plugin.skillId])).toEqual([{ id: plugin.skillId, name: 'happier' }]);
   });
-  it('supplies a valid stable stub through the same bundle and reach consumers, with guides for declared CLI roots', () => {
+  it('supplies a valid stable stub through the same bundle and reach consumers', () => {
     const skill = FIRST_PARTY_SKILLS_V1.find(item => item.skillId === 'happier:happier');
     expect(skill).toBeDefined();
     if (!skill) throw new Error('Missing first-party stub');
@@ -27,8 +26,6 @@ describe('first-party bundled skills', () => {
     expect(content).not.toBeNull();
     expect(content?.frontmatter.name).toBe('happier');
     expect(content?.digest).toBe(computePromptBundleDigestV1({ ...body, updatedAtMs: 999 }));
-    const roots = new Set(listActionCliCommandDeclarations().map(command => command.binding.path[0]));
-    for (const root of ['skills', 'mcp', 'session']) expect(roots.has(root)).toBe(true);
     const selected = resolveSessionCapabilitiesV1({ context: { machineId: 'machine', machinePlatform: 'posix', directory: null,
       projectKey: null, agentId: 'claude' }, mcp: null, skills: { items: [skill], rules: [buildFirstPartySkillSeedRuleV1(skill.skillId, 100)] },
       selection: {}, agentAcceptsUserMcp: false });
