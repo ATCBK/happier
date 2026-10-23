@@ -68,11 +68,17 @@ function refreshConnectedAccountCatalog(
       try {
         // Read-only Action roots consume admitted rows without source transfer
         // or history cleanup, retaining this owner's currentness/publication.
-        catalog = input.readMode === 'admitted' ? await store.readAdmittedCatalog(input.key) : await store.readCatalog(input.key, async ready => {
+        const readTransferCatalog = () => store.readCatalog(input.key, async ready => {
           if (context || !reloadAfterPending.has(workKey)) {
             if (await publish(ready)) onReady?.(ready);
           }
         });
+        catalog = input.readMode === 'admitted' ? await store.readAdmittedCatalog(input.key) : await readTransferCatalog();
+        // Only the exact durable destination's absence requires activation.
+        // A transient loading facet from a concurrent read is not that proof.
+        if (input.readMode === 'admitted' && catalog.status === 'unavailable' && catalog.reason === 'authority-not-confirmed') {
+          catalog = await readTransferCatalog();
+        }
       } catch (error) {
         const code = error instanceof Error && 'code' in error ? error.code : undefined;
         const reason: ConnectedAccountCatalogUnavailableReasonV1 = input.signal?.aborted ? 'cancelled'
@@ -136,9 +142,8 @@ export async function readActiveConnectedAccountCatalog(input: Parameters<typeof
   // Explicit Actions can follow another client's write before its Account
   // change hint reaches this daemon (or a captured invocation snapshot).
   // Reobserve an active destination without repeating source/history maintenance;
-  // initial or unavailable destinations still use the same activation owner.
-  return refreshActiveConnectedAccountCatalog({ ...input,
-    ...(readConnectedAccountCatalogFromSnapshot(current, input.key)?.status === 'ready' ? { readMode: 'admitted' } : {}) }, true);
+  // only a durably absent destination needs the same activation owner.
+  return refreshActiveConnectedAccountCatalog({ ...input, readMode: 'admitted' }, true);
 }
 
 /** Existing Account observer only refreshes domains already demanded by a live consumer. */
@@ -151,6 +156,5 @@ export async function refreshDemandedActiveConnectedAccountCatalogs(input: Reado
   if (!snapshot || keys.length === 0) return;
   const credentials = await readStoredCredentials();
   if (!credentials || credentials.token !== input.token) return;
-  await Promise.all(keys.map(key => refreshActiveConnectedAccountCatalog({ ...input, credentials, key,
-    ...(readConnectedAccountCatalogFromSnapshot(snapshot, key)?.status === 'ready' ? { readMode: 'admitted' } : {}) }, true)));
+  await Promise.all(keys.map(key => refreshActiveConnectedAccountCatalog({ ...input, credentials, key, readMode: 'admitted' }, true)));
 }

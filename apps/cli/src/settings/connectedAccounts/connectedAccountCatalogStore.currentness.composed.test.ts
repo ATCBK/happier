@@ -80,7 +80,11 @@ it.each([
       setActiveAccountSettingsSnapshot(operationContext ? { ...snapshot, scopeKey: 'foreign-daemon',
         connectedPurposeCatalog: state === 'absent' ? { status: 'ready', revision: 1, record } : undefined } : snapshot);
       const daemonSnapshot = getActiveAccountSettingsSnapshot();
-      const catalog = await readActiveConnectedAccountCatalog({ credentials, key: 'purposes', operationContext });
+      // Concurrent readers can observe the owner's temporary loading facet;
+      // that withdrawal is not evidence that the durable destination vanished.
+      const catalogs = await Promise.all(Array.from({ length: state === 'active' ? 5 : 1 }, () =>
+        readActiveConnectedAccountCatalog({ credentials, key: 'purposes', operationContext })));
+      const catalog = catalogs[0];
       expect(catalog, JSON.stringify({ catalog, requests, mutations, boundaryError })).toMatchObject({ status: 'ready', revision: 2 });
       expect(boundaryError).toBeUndefined();
       expect((operationContext ? operationContext.readSnapshot() : getActiveAccountSettingsSnapshot())?.connectedPurposeCatalog)
