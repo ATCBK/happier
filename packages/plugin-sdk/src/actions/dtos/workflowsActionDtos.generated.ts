@@ -300,7 +300,7 @@ export type WorkflowsActionInputById = {
         runId: string;
         cursor?: string | undefined;
         limit?: number | undefined;
-        parentRecordId?: string | undefined;
+        parentRecordId?: string | null | undefined;
         parentRecordIds?: string[] | undefined;
         invocationId?: string | undefined;
         memberOrdinal?: string | undefined;

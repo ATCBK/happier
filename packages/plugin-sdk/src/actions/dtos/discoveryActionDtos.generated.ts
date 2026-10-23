@@ -270,6 +270,11 @@ export type DiscoveryActionResultById = {
                     codeExample?: string | undefined;
                 } | null | undefined;
             } | null;
+            confirmVerb?: string | {
+                key: string;
+                fallback: string;
+            } | undefined;
+            irreversible?: true | undefined;
             approval?: {
                 result: 'optional' | 'required' | 'none';
                 flow?: 'blocking' | 'deferred' | undefined;
@@ -288,6 +293,7 @@ export type DiscoveryActionResultById = {
             contextualDefaults?: {
                 sessionId?: 'current_session' | undefined;
                 machineId?: 'current_session_machine' | undefined;
+                rootPath?: 'current_session_root' | undefined;
             } | undefined;
             sessionTarget?: {
                 field: string;
@@ -399,6 +405,11 @@ export type DiscoveryActionResultById = {
             } | null;
             kindVersion: 1;
             inputSchema: Record<string, unknown>;
+            confirmVerb?: string | {
+                key: string;
+                fallback: string;
+            } | undefined;
+            irreversible?: true | undefined;
             approval?: {
                 result: 'optional' | 'required' | 'none';
                 flow?: 'blocking' | 'deferred' | undefined;
@@ -417,6 +428,7 @@ export type DiscoveryActionResultById = {
             contextualDefaults?: {
                 sessionId?: 'current_session' | undefined;
                 machineId?: 'current_session_machine' | undefined;
+                rootPath?: 'current_session_root' | undefined;
             } | undefined;
             sessionTarget?: {
                 field: string;

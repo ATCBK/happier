@@ -5690,6 +5690,11 @@ export type PluginActionContributionV2 = {
         platforms: ('web' | 'ios' | 'android')[];
     };
     dangerLevel: 'safe' | 'writesLocal' | 'writesRemote' | 'externalSideEffect' | 'destructive';
+    confirmVerb?: string | {
+        key: string;
+        fallback: string;
+    } | undefined;
+    irreversible?: true | undefined;
     description?: string | {
         key: string;
         fallback: string;
@@ -5715,6 +5720,7 @@ export type PluginActionContributionV2 = {
     contextualDefaults?: {
         sessionId?: 'current_session' | undefined;
         machineId?: 'current_session_machine' | undefined;
+        rootPath?: 'current_session_root' | undefined;
     } | undefined;
     inputHints?: {
         fields: readonly {
@@ -8078,6 +8084,11 @@ export type PluginActionWorkflowIngressBlockV1 = string | {
 export type ActionSpec = {
     readonly id: PluginInvocableActionId;
     readonly title: string;
+    readonly confirmVerb?: string | {
+        key: string;
+        fallback: string;
+    } | undefined;
+    readonly irreversible?: true | undefined;
     readonly description?: string | undefined;
     readonly safety: 'danger' | 'safe';
     readonly approval: {
@@ -8126,6 +8137,7 @@ export type ActionSpec = {
     readonly contextualDefaults?: {
         sessionId?: 'current_session' | undefined;
         machineId?: 'current_session_machine' | undefined;
+        rootPath?: 'current_session_root' | undefined;
     } | undefined;
     readonly sessionTarget?: {
         field: string;
