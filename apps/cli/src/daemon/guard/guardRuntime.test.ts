@@ -96,7 +96,7 @@ describe('memory guard episode on the incumbent minute sampler', () => {
     let notifications = 0;
     const notices: SessionGuardNoticeStateV1[] = [];
     const stoppedIds: string[] = [];
-    let onNotice: ((state: SessionGuardNoticeStateV1) => Promise<void>) | undefined;
+    let onNotice: ((state: SessionGuardNoticeStateV1, sessionId: string | undefined) => Promise<void>) | undefined;
     let onNativeStop: (() => Promise<void>) | undefined;
     let onStopRecorded: (() => Promise<void>) | undefined;
     let policy = MachineGuardPolicyV1Schema.parse({ memoryGuard: { enabled: initiallyEnabled, sustainMs: 60000 } });
@@ -132,7 +132,9 @@ describe('memory guard episode on the incumbent minute sampler', () => {
         await onNativeStop?.();
         return failed ? { status: 'failed', reason: 'native_stop_failed' } : { status: 'stopped' }; },
       onSessionStopRecorded: async () => { await onStopRecorded?.(); },
-      notice: async (_candidate, state) => { notices.push(state); await onNotice?.(state); return noticeAvailable; },
+      notice: async (candidate, state) => { notices.push(state);
+        await onNotice?.(state, candidate.target.kind === 'session' ? candidate.target.tracked.happySessionId : undefined);
+        return noticeAvailable; },
       activity, notifyEpisode: async () => { notifications++; }, onError: error => { errors.push(error); },
     });
     await sampler.start();
@@ -287,19 +289,41 @@ describe('memory guard episode on the incumbent minute sampler', () => {
         await fixture.drain();
       }
       let startedOtherSession = false;
-      fixture.onNotice(async state => {
+      const targetNotices: SessionGuardNoticeStateV1[] = [];
+      fixture.onNotice(async (state, sessionId) => {
+        if (sessionId !== 's') return;
+        targetNotices.push(state);
         if (state.kind === 'stopped' && !startedOtherSession) {
           startedOtherSession = true;
           fixture.setOtherSessionWorking(true);
         }
       });
-      await vi.advanceTimersByTimeAsync(rule === 'idle' ? 600000 : 360000);
-      await fixture.drain();
+      for (let minute = 0; minute < (rule === 'idle' ? 10 : 6); minute += 1) {
+        await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      }
       expect(fixture.stoppedIds).toEqual(['s']);
       // Each stopped notice creates a durable requested record. An unrelated
       // inventory edge must not cancel it and create another for the same stop.
+      expect(targetNotices.filter(state => state.kind === 'stopped')).toHaveLength(1);
+      expect(targetNotices.some(state => state.kind === 'clear')).toBe(false);
+    } finally { await fixture.close(); }
+  });
+  it.each(['idle', 'memory'] as const)('cancels the %s intent when Keep running wins during its publication', async rule => {
+    const fixture = await setup('session', rule === 'memory');
+    try {
+      if (rule === 'idle') {
+        fixture.setIdlePolicy({ enabled: true, afterMs: 600000 });
+        await fixture.drain();
+      }
+      fixture.onNotice(async state => {
+        if (state.kind === 'stopped') expect(await fixture.runtime.keepRunning('s')).toBe('kept');
+      });
+      for (let minute = 0; minute < (rule === 'idle' ? 10 : 6); minute += 1) {
+        await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      }
+      expect(fixture.stops).toBe(0);
       expect(fixture.notices.filter(state => state.kind === 'stopped')).toHaveLength(1);
-      expect(fixture.notices.some(state => state.kind === 'clear')).toBe(false);
+      expect(fixture.notices).toContainEqual({ kind: 'clear' });
     } finally { await fixture.close(); }
   });
   it('observes an unannounced stop on the next live sample and verifies after its existing cooldown', async () => {

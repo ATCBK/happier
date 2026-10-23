@@ -186,7 +186,8 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
       const firePolicy = input.readPolicy();
       const fire = planIdleSessions({ ...fireFacts, policy: firePolicy.idleSessions, now: now(), keepRunningAnchors,
         blocked: idleBlocked }).items.find(item => sessionId(item.candidate) === id);
-      if (signal.aborted || observed !== revision || !fire || fire.signature !== decision.signature
+      // Fresh target admission, not an unrelated inventory edge, owns this intent.
+      if (signal.aborted || sessionWarnings.get(id) !== current || !fire || fire.signature !== decision.signature
         || JSON.stringify(firePolicy.idleSessions) !== JSON.stringify(policy.idleSessions)) {
         await clearSessionWarning(id); return { acted: true };
       }
@@ -382,25 +383,31 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
                 } else if (warning) await clearWarning();
                 publish({ state: 'acting', since: episode.since, step: candidate.step, expectedReturnBytes: candidate.footprintBytes });
                 if (mayStop && !signal.aborted && observed === revision) {
+                  const stoppingWarning = warning;
                   if (candidate.kind === 'session' && !await input.notice(candidate, { kind: 'stopped', at: now(), rule: 'memory_guard', idleMs: now() - candidate.settledAt }, signal)) {
                     await clearWarning(); await fail(candidate, 'stop_marker_unavailable'); changed(); continue;
                   }
                   // Reads may await Session transport while a browser gains control
                   // or a service gains a visitor. Re-admit every rung at the owner.
                   const fireFacts = observeFacts(await input.readFacts(signal));
-                  const firePolicy = input.readPolicy().memoryGuard;
+                  const fireGuardPolicy = input.readPolicy();
+                  const firePolicy = fireGuardPolicy.memoryGuard;
                   const fireCandidate = planMemory(fireFacts, firePolicy, now()).candidate;
                   const fireSample = input.vitals.latest();
                   const fireMemory = input.vitals.state().state === 'reporting' && fireSample
                     && fireSample.sampledAt >= Math.floor(now() / 60000) * 60000 && fireSample.memory.reported ? fireSample.memory : null;
                   if (!firePolicy.enabled || firePolicy.pausedUntil !== null && firePolicy.pausedUntil > now()
                     || JSON.stringify(firePolicy) !== JSON.stringify(memoryPolicy)
+                    || candidate.kind === 'session' && (sessionWarnings.get(sessionId(candidate)!) !== stoppingWarning
+                      || fireGuardPolicy.idleSessions.warnBeforeMs !== policy.idleSessions.warnBeforeMs
+                      || stoppingWarning?.rule === 'idle_sessions'
+                        && JSON.stringify(fireGuardPolicy.idleSessions) !== JSON.stringify(policy.idleSessions))
                     || !fireMemory || !holds(effectiveMachineMemoryPressureV1(fireMemory))
                     || !isSustainedV1({ records: input.vitals.minutes(now() - firePolicy.sustainMs - 60000), now: now(),
                       sustainMs: firePolicy.sustainMs, holds: record => holds(record.lvl) }).sustained
                     || !fireCandidate || guardTargetRef(fireCandidate) !== guardTargetRef(candidate)
                     || fireCandidate.settledAt !== candidate.settledAt) { await clearWarning(); changed(); continue; }
-                  if (signal.aborted || observed !== revision) { await clearWarning(); continue; }
+                  if (signal.aborted || candidate.kind !== 'session' && observed !== revision) { await clearWarning(); continue; }
                   if (candidate.kind === 'session') sessionWarnings.delete(sessionId(candidate)!);
                   warning = undefined;
                   emit();
