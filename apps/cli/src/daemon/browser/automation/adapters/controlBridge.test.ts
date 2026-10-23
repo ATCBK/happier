@@ -1,6 +1,7 @@
 import { access, readFile } from 'node:fs/promises';
 import type { BrowserAutomationActionRequestV1, BrowserCommandV1 } from '@happier-dev/protocol';
 import type { BrowserAutomationSecretFillRequestV1 } from '@happier-dev/protocol/browser/automation/v1';
+import { BrowserAutomationActionResultV1Schema, BrowserAutomationJavaScriptDialogSummaryV1Schema } from '@happier-dev/protocol/browser/automation/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BrowserDaemonControlAdapter } from '../../control/types';
@@ -23,6 +24,9 @@ import { createCdpBrowserContextSource } from '../../context/cdp/source';
 import { SNAPSHOT_MAX_INTERACTIVE_ELEMENTS, SNAPSHOT_MAX_NAME_CHARS } from '../../context/cdp/snapshotEvaluators';
 import { BrowserContextSnapshotV1Schema } from '@happier-dev/protocol/browser/context/v1';
 import { createSurfaceInputControl } from '../../../surfaces/inputControl';
+import { dispatchRuntimeAction } from '@happier-dev/protocol';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { createBrowserDaemonRuntimeActionExecutor } from '../../actions/runtimeActionExecutor';
 
 function controlAdapter(overrides: Partial<BrowserDaemonControlAdapter> = {}): BrowserDaemonControlAdapter {
   return {
@@ -48,23 +52,33 @@ const HANDLE: BrowserSidecarCdpPageHandle = { targetId: 'target_1', sessionId: '
 async function inputSettlementBoundary(
   evaluatePage?: (expression: string) => unknown,
   applyInput?: (method: string, params?: Record<string, unknown>) => void,
+  dialogs: readonly Readonly<{ type: string; message: string }>[] = [],
 ) {
   const listeners = new Set<(message: unknown) => void | Promise<void>>();
   let closePeer: () => void = () => undefined;
-  const state = { loseAck: false, disposedBeforeInput: false, failedRead: false, dialogOnRead: false, dialogRaised: false };
+  const state = { loseAck: false, loseDialogAck: false, holdDialogAck: false, disposedBeforeInput: false, failedRead: false, dialogOnRead: false, dialogRaised: false };
   const effects: string[] = [];
+  const dialogResponses: Record<string, unknown>[] = [];
   const client: LoopbackWebSocketJsonClientV1 = {
     closed: new Promise<void>(resolve => { closePeer = resolve; }),
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     async sendJson(message) {
       const command = message as { id: number; method: string; params?: Record<string, unknown> };
       const mutatingExpression = command.method === 'Runtime.evaluate' && String(command.params?.expression).includes('el.value');
+      if (command.method === 'Page.handleJavaScriptDialog') dialogResponses.push(command.params ?? {});
       if (command.method.startsWith('Input.') || command.method === 'Page.navigate'
         || command.method === 'Page.handleJavaScriptDialog' || mutatingExpression) {
         effects.push(command.method);
-        if (state.loseAck) { closePeer(); return; }
+        if (state.loseAck || command.method === 'Page.handleJavaScriptDialog' && state.loseDialogAck) { closePeer(); return; }
         if (command.method.startsWith('Input.')) applyInput?.(command.method, command.params);
       }
+      if (command.method === 'Input.insertText') {
+        for (const dialog of dialogs) {
+          for (const listener of [...listeners]) await listener({ method: 'Page.javascriptDialogOpening',
+            sessionId: HANDLE.sessionId, params: { ...dialog, defaultPrompt: 'unshared default' } });
+        }
+      }
+      if (command.method === 'Page.handleJavaScriptDialog' && state.holdDialogAck) return;
       const result = command.method === 'Target.createTarget' ? { targetId: HANDLE.targetId }
         : command.method === 'Target.attachToTarget' ? { sessionId: HANDLE.sessionId }
         : command.method === 'Runtime.evaluate' ? cdpEvaluateValue(evaluatePage ? evaluatePage(String(command.params?.expression)) : 'safe page') : {};
@@ -105,7 +119,7 @@ async function inputSettlementBoundary(
     requestedBy: 'agent', requesterRef: { kind: 'agent', id: 'agent' },
     navigationGeneration: adapter.getNavigationState(view)?.navigationGeneration ?? 0, actionKind, payload, timeoutMs: 10_000,
   });
-  return { state, effects, service, routes, execute, dispose() { service.dispose(); adapter.dispose(); transport.dispose(); } };
+  return { state, effects, dialogResponses, service, routes, execute, dispose() { service.dispose(); adapter.dispose(); transport.dispose(); } };
 }
 
 const confidentialRequest: BrowserAutomationSecretFillRequestV1 = {
@@ -912,19 +926,101 @@ describe('control adapter automation transport bridge', () => {
     expect(listeners.size).toBe(listenerCount);
     control.dispose();
   });
-  it('dismisses page dialogs and reports only successful handling metadata', async () => {
-    let listener: BrowserSidecarCdpEventSubscriber | undefined;
-    const { surface, calls } = fakeContextCapture((method) => {
-      if (method === 'Input.insertText') listener?.({ method: 'Page.javascriptDialogOpening', sessionId: HANDLE.sessionId, params: { type: 'prompt', message: 'private dialog content', defaultPrompt: 'secret' } });
-      return {};
-    });
-    const unsubscribe = vi.fn();
-    const transport = createControlAdapterAutomationTransport({ adapter: controlAdapter(), contextCapture: { ...surface, subscribeCdpEvents: callback => { listener = callback; return unsubscribe; } } });
-    const result = await createBrowserAutomationCdpAdapter({ transport }).execute({ v: 1, ...view, automationRequestId: 'input_dialog', requestedBy: 'agent', requesterRef: { kind: 'agent', id: 'agent_1' }, timeoutMs: 5000, actionKind: 'type', navigationGeneration: 1, payload: { text: 'hello' } });
-    expect(result).toMatchObject({ status: 'succeeded', resultSummary: { javascriptDialogs: { count: 1, kinds: ['prompt'], handling: 'dismissed' } } });
-    expect(calls).toContainEqual({ method: 'Page.handleJavaScriptDialog', params: { accept: false } });
-    expect(JSON.stringify(result)).not.toContain('private dialog content');
-    expect(unsubscribe).toHaveBeenCalled();
+  it.each(['alert', 'confirm', 'prompt'] as const)('responds to an approved %s through the real Browser Action and CDP path', async kind => {
+    const boundary = await inputSettlementBoundary(undefined, undefined, [{ type: kind, message: 'Continue?' }]);
+    try {
+      const request = { v: 1, ...view, automationRequestId: `dialog:${kind}`, requestedBy: 'agent',
+        requesterRef: { kind: 'agent', id: 'agent' }, timeoutMs: 10_000, actionKind: 'type', navigationGeneration: 0,
+        payload: { text: 'hello' }, dialogResponse: { kind, message: 'Continue?', accept: true,
+          ...(kind === 'prompt' ? { promptText: 'my answer' } : {}) } };
+      const actionId = 'browser.automation.type';
+      const runtimeActionExecute = createBrowserDaemonRuntimeActionExecutor({
+        automation: createBrowserAutomationRoutes({ service: boundary.service }),
+        featureGate: { isEnabled: () => true, refresh: async () => {} },
+      });
+      const result = await dispatchRuntimeAction({ actionId, input: getActionSpec(actionId).inputSchema.parse(request),
+        context: { surface: 'agent', authority: 'account_automation' }, runtimeActionExecute });
+      expect(getActionSpec(actionId).outputSchema?.parse(result)).toMatchObject({ status: 'succeeded',
+        resultSummary: { javascriptDialogs: { count: 1, kinds: [kind], handling: 'accepted',
+          dialogs: [{ kind, message: 'Continue?', handling: 'accepted' }] } } });
+      expect(BrowserAutomationJavaScriptDialogSummaryV1Schema.parse(
+        BrowserAutomationActionResultV1Schema.parse(result).resultSummary.javascriptDialogs,
+      ).dialogs).toEqual([{ kind, message: 'Continue?', handling: 'accepted' }]);
+      expect(boundary.dialogResponses).toEqual([{ accept: true, ...(kind === 'prompt' ? { promptText: 'my answer' } : {}) }]);
+      expect(JSON.stringify(result)).not.toContain('my answer');
+      expect(JSON.stringify(result)).not.toContain('unshared default');
+    } finally { boundary.dispose(); }
+  });
+
+  it('dismisses mismatched dialogs and consumes the approved response only once', async () => {
+    const boundary = await inputSettlementBoundary(undefined, undefined, [
+      { type: 'confirm', message: 'Other question' }, { type: 'prompt', message: 'Continue?' },
+      { type: 'confirm', message: 'Continue?' },
+      { type: 'confirm', message: 'Continue?' },
+    ]);
+    try {
+      const request = { v: 1, ...view, automationRequestId: 'one-response', requestedBy: 'agent',
+        requesterRef: { kind: 'agent', id: 'agent' }, timeoutMs: 10_000, actionKind: 'type', navigationGeneration: 0,
+        payload: { text: 'hello' }, dialogResponse: { kind: 'confirm', message: 'Continue?', accept: true } };
+      const routes = createBrowserAutomationRoutes({ service: boundary.service });
+      expect(await routes.dispatch('browser.automation.type', request, { authority: 'account_automation' }))
+        .toMatchObject({ status: 'succeeded', resultSummary: { javascriptDialogs: { count: 4, handling: 'mixed',
+          dialogs: [{ kind: 'confirm', message: 'Other question', handling: 'dismissed' },
+            { kind: 'prompt', message: 'Continue?', handling: 'dismissed' },
+            { kind: 'confirm', message: 'Continue?', handling: 'accepted' },
+            { kind: 'confirm', message: 'Continue?', handling: 'dismissed' }] } } });
+      expect(boundary.dialogResponses).toEqual([{ accept: false }, { accept: false }, { accept: true }, { accept: false }]);
+    } finally { boundary.dispose(); }
+  });
+
+  it('keeps a lost response acknowledgement uncertain without claiming the dialog was accepted', async () => {
+    const boundary = await inputSettlementBoundary(undefined, undefined, [{ type: 'prompt', message: 'Continue?' }]);
+    try {
+      boundary.state.loseDialogAck = true;
+      const routes = createBrowserAutomationRoutes({ service: boundary.service });
+      const result = await routes.dispatch('browser.automation.type', { v: 1, ...view, automationRequestId: 'dialog-ack-lost',
+        requestedBy: 'agent', requesterRef: { kind: 'agent', id: 'agent' }, timeoutMs: 10_000, actionKind: 'type',
+        navigationGeneration: 0, payload: { text: 'hello' },
+        dialogResponse: { kind: 'prompt', message: 'Continue?', accept: true, promptText: 'my answer' },
+      }, { authority: 'account_automation' });
+      expect(result).toMatchObject({ status: 'failed' });
+      expect(boundary.service.getStatus(view).uncertain).toBe(true);
+      expect(boundary.dialogResponses).toEqual([{ accept: true, promptText: 'my answer' }]);
+      expect('resultSummary' in result && result.resultSummary?.javascriptDialogs).toBeUndefined();
+    } finally { boundary.dispose(); }
+  });
+
+  it('settles an unacknowledged dialog response at the containing action deadline', async () => {
+    const boundary = await inputSettlementBoundary(undefined, undefined, [{ type: 'confirm', message: 'Continue?' }]);
+    vi.useFakeTimers();
+    try {
+      boundary.state.holdDialogAck = true;
+      const pending = createBrowserAutomationRoutes({ service: boundary.service }).dispatch('browser.automation.type', {
+        v: 1, ...view, automationRequestId: 'dialog-deadline', requestedBy: 'agent',
+        requesterRef: { kind: 'agent', id: 'agent' }, timeoutMs: 1000, actionKind: 'type',
+        navigationGeneration: 0, payload: { text: 'hello' },
+        dialogResponse: { kind: 'confirm', message: 'Continue?', accept: true },
+      }, { authority: 'account_automation' });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(boundary.service.getStatus(view).activeAutomationRequestId).toBe('dialog-deadline');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({ status: 'timed_out', errorCode: 'timed_out' });
+      expect(boundary.service.getStatus(view).activeAutomationRequestId).toBeUndefined();
+      expect(boundary.dialogResponses).toEqual([{ accept: true }]);
+    } finally { boundary.dispose(); vi.useRealTimers(); }
+  });
+
+  it('dismisses page dialogs by default and reports the question without its prompt default', async () => {
+    const boundary = await inputSettlementBoundary(undefined, undefined, [{ type: 'prompt', message: 'private dialog content' }]);
+    try {
+      const result = await boundary.execute('type', { text: 'hello' });
+      expect(result).toMatchObject({ status: 'succeeded', resultSummary: { javascriptDialogs: { count: 1,
+        kinds: ['prompt'], handling: 'dismissed', dialogs: [
+          { kind: 'prompt', message: 'private dialog content', handling: 'dismissed' },
+        ] } } });
+      expect(boundary.dialogResponses).toEqual([{ accept: false }]);
+      expect(JSON.stringify(result)).not.toContain('unshared default');
+    } finally { boundary.dispose(); }
   });
   it('waits for a later matching element within the containing deadline', async () => {
     vi.useFakeTimers();
