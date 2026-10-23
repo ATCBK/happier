@@ -131,6 +131,40 @@ it('classifies a disconnected Goal caller and allows a fresh call after reconnec
     content: { mode: 'plain' }, timeoutMs: null })).resolves.toEqual({ workState: null });
   expect(requests).toEqual([`m:${RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2}`, `m:${RPC_METHODS.DAEMON_SESSION_GOAL_GET}`]);
 });
+it.each([
+  { method: RPC_METHODS.MACHINES_VITALS_GET, errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE },
+  { method: RPC_METHODS.MACHINES_VITALS_HISTORY_GET, errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE },
+  { method: 'capabilities.describe', errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE },
+  { method: 'capabilities.detect', errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE },
+  { method: RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE },
+  { method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE },
+  { method: RPC_METHODS.STOP_SESSION, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN },
+  { method: RPC_METHODS.SESSION_SPAWN_NEW, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN },
+  { method: 'plugin.unclassified.read', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN },
+])('settles issued $method on disconnect before its deadline without replay', async ({ method, errorCode }) => {
+  const socket = await setup();
+  const requests: string[] = [];
+  let observeIssued!: () => void;
+  const issued = new Promise<void>(resolve => { observeIssued = resolve; });
+  server.sockets.sockets.forEach(remote => remote.on('rpc-call', packet => {
+    requests.push(packet.requestId);
+    observeIssued();
+  }));
+  let failure: unknown;
+  const pending = callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method,
+    params: {}, content: { mode: 'plain' }, timeoutMs: 180_000, requestId: 'original-issued-call' })
+    .catch((error: unknown) => { failure = error; });
+  await issued;
+  socket.disconnect();
+  // An event-loop turn is the disconnect settlement barrier, not a shorter RPC timer.
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(readRpcErrorCode(failure)).toBe(errorCode);
+  // The transport must not rewrite an issued request into a pre-effect refusal.
+  expect(readRpcRequestDisposition(failure)).toBe('outcomeUnknown');
+  await pending;
+  expect(requests).toEqual(['original-issued-call']);
+  expect(socket).toHaveProperty('acks', {});
+});
 it('classifies a disconnect during request preparation before issuance and permits a fresh plugin read after reconnect', async () => {
   const socket = await setup();
   const content = cipher();
@@ -319,13 +353,15 @@ it('fails a mismatched Session Action origin before issue and never retries a re
   expect(readRpcRequestDisposition(rejected)).toBe('notSent');
   expect(requests).toEqual([{ ...authorization, sessionId: 's' }]);
 });
-it('preserves an explicitly uncertain relay acknowledgement as outcomeUnknown', async () => {
+it.each(['spawn', RPC_METHODS.MACHINES_VITALS_GET])('preserves an explicitly uncertain relay acknowledgement for %s as outcomeUnknown', async method => {
   const socket = await setup();
   server.sockets.sockets.forEach(remote => remote.once('rpc-call', (_payload, ack) => {
-    ack({ ok: false, error: 'Target changed after submission', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+    // A relay's error prose is not a local native disconnect observation.
+    ack({ ok: false, error: 'socket has been disconnected', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
   }));
-  const error = await callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'spawn',
+  const error = await callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method,
     params: {}, content: { mode: 'plain' } }).catch((error: unknown) => error);
+  expect(readRpcErrorCode(error)).toBe(RPC_ERROR_CODES.OUTCOME_UNKNOWN);
   expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
 });
 it('distinguishes an unsealed pre-execution refusal from response decryption failure', async () => {

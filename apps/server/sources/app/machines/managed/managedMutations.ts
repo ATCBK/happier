@@ -13,7 +13,7 @@ import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContex
 import { createSavedSecretResourceInTx } from "@/app/account/savedSecrets/savedSecretResourceService";
 import type { Prisma } from "@prisma/client";
 import * as privacyKit from "privacy-kit";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, type Tx } from "@/storage/inTx";
 import { getActivePrismaRuntime } from "@/storage/db";
 import { jsonPathEquals } from "@/storage/jsonPathFilter";
 import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity";
@@ -161,7 +161,7 @@ async function readOrAdmitManagedPolicy(params: Readonly<{ custodianAccountId: s
         await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current), requestId: readManagedCurrentRequestId(current), replayed: false };
     };
-    return admit ? inManagedMachinePublicationTx(input, execute) : inTx(execute, { isolationLevel: 'Serializable' });
+    return admit ? inManagedMachinePublicationTx(input, execute) : inReadSnapshot(execute);
 }
 
 /** Same-row admission owns immediate CAS, fire-time idle intent, policy and future controller custody. */

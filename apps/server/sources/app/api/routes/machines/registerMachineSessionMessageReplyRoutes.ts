@@ -2,7 +2,7 @@ import { z } from 'zod/mini';
 import { SessionMessageReplyMachinePendingPageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { isSessionMessageReplyMachineCurrentInTx, listSessionMessageRepliesPendingForMachineInTx, readSessionMessageReplyInTx } from '@/app/session/messages/sessionMessageReply';
 import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot } from '@/storage/inTx';
 import type { Fastify } from '../../types';
 
 /** A finite page over existing original custody, not transcript or a second delivery queue. */
@@ -19,19 +19,19 @@ export function registerMachineSessionMessageReplyRoutes(app: Fastify): void {
             authentication: readSessionAccessAuthenticationFromRequest(request),
             ...(request.query.afterSessionId && request.query.afterLocalId ? {
                 after: { sessionId: request.query.afterSessionId, localId: request.query.afterLocalId } } : {}) };
-        const result = await inTx(async tx => !await isSessionMessageReplyMachineCurrentInTx(tx, params) ? null
-            : listSessionMessageRepliesPendingForMachineInTx(tx, params), { isolationLevel: 'Serializable', readOnly: true });
-        if (!result || !await inTx(tx => isSessionMessageReplyMachineCurrentInTx(tx, params), { isolationLevel: 'Serializable', readOnly: true })) {
+        const result = await inReadSnapshot(async tx => !await isSessionMessageReplyMachineCurrentInTx(tx, params) ? null
+            : listSessionMessageRepliesPendingForMachineInTx(tx, params));
+        if (!result || !await inReadSnapshot(tx => isSessionMessageReplyMachineCurrentInTx(tx, params))) {
             return reply.code(404).send({ error: 'Machine not found' });
         }
-        const entries = await inTx(async tx => {
+        const entries = await inReadSnapshot(async tx => {
             const current = [];
             for (const entry of result.entries) {
                 const visible = await readSessionMessageReplyInTx(tx, { ...params, sessionId: entry.requestSessionId, localId: entry.requestLocalId });
                 if (visible.status === 'available' && visible.progress.disposition === 'return_pending') current.push(entry);
             }
             return current;
-        }, { isolationLevel: 'Serializable', readOnly: true });
+        });
         return reply.send({ ...result, entries });
     });
 }

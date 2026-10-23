@@ -115,6 +115,7 @@ import { HappierStorageSummaryV1Schema, MachineStorageCategoryListResultV1Schema
 import { MemoryStatusV1Schema } from '@happier-dev/protocol/memory/memoryStatus';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { ScmPullRequestOpenComposeResponseSchema } from '@happier-dev/protocol/scm/pullRequests';
 import { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
 import { logger } from '@/ui/logger';
 
@@ -1638,6 +1639,53 @@ describe('callMachineRpc', () => {
     })).resolves.toEqual(receipt);
     expect(socket.emit.mock.calls.filter(([event]) => event === SOCKET_RPC_EVENTS.CALL)).toHaveLength(1);
     expect(socket.emit.mock.calls.some(([event]) => event === SOCKET_RPC_EVENTS.CANCEL)).toBe(false);
+  });
+
+  it.each(['acknowledged', 'cancelled'] as const)('keeps SCM compose evidence within its Action lifetime (%s)', async outcome => {
+    const credentials = { token: 'compose-lifetime', encryption: null };
+    axiosGet.mockResolvedValue({ data: { machine: {
+      id: 'compose-machine', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+    } } });
+    const controller = new AbortController();
+    const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+      sessionId: 'cli-global', serverId: 'home', serverHttpBaseUrl: 'https://api.example.test', mode: 'plain', ctx: null }));
+    const compose = ScmPullRequestOpenComposeResponseSchema.parse({
+      success: true, composeUrl: 'https://forge.example.test/group/repo/compare/base...head',
+      template: { kind: 'ready' },
+      nextAction: { kind: 'openUrl', purpose: 'compose',
+        url: 'https://forge.example.test/group/repo/compare/base...head',
+        allowedBaseUrl: 'https://forge.example.test/group/repo', urlSafety: { allowedSchemes: ['https:'] } },
+    });
+    let acknowledge: ((value: unknown) => void) | undefined;
+    socket.emit.mockImplementation((event, _payload, ack) => {
+      if (event === SOCKET_RPC_EVENTS.CALL) acknowledge = ack;
+    });
+    vi.useFakeTimers();
+    let result: Awaited<ReturnType<typeof executor.execute>> | undefined;
+    const pending = executor.execute('scm.pullRequest.openCompose', {
+      cwd: '/repo', base: 'base', head: 'head', includeTemplate: true,
+    }, { surface: 'cli', authority: 'present_user', serverId: 'home', signal: controller.signal,
+      externalActionTarget: { kind: 'machine', machineId: 'compose-machine' },
+    }).then(value => { result = value; });
+    try {
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect(acknowledge).toBeTypeOf('function');
+      expect(result).toBeUndefined();
+      if (outcome === 'cancelled') controller.abort();
+      else acknowledge!({ ok: true, result: compose });
+      await pending;
+      if (outcome === 'acknowledged') expect(result).toEqual({ ok: true, result: compose });
+      else {
+        expect(result).toMatchObject({ ok: false, errorCode: 'SOCKET_RPC_ABORTED' });
+        const call = socket.emit.mock.calls.find(([event]) => event === SOCKET_RPC_EVENTS.CALL)![1];
+        expect(socket.emit.mock.calls.find(([event]) => event === SOCKET_RPC_EVENTS.CANCEL)?.[1])
+          .toEqual({ requestId: call.requestId });
+      }
+    } finally {
+      controller.abort();
+      await pending;
+      vi.useRealTimers();
+    }
   });
 
   it.each(['acknowledged', 'cancelled'] as const)('delegates delayed worker status to its Action lifetime (%s)', async outcome => {

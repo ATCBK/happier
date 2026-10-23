@@ -24,7 +24,7 @@ export const RPC_ERROR_CODES = {
   UPDATE_REQUIRED: 'RPC_UPDATE_REQUIRED',
   METHOD_NOT_AVAILABLE: 'RPC_METHOD_NOT_AVAILABLE',
   METHOD_NOT_FOUND: 'RPC_METHOD_NOT_FOUND',
-  /** Target discovery failed before dispatch; absence or unsupported capability is not established. */
+  /** Transport unavailable: discovery may have failed before dispatch, or a local issued read lost its socket. Consult request disposition. */
   TRANSPORT_UNAVAILABLE: 'RPC_TRANSPORT_UNAVAILABLE',
   /** Dispatch occurred, but currentness was lost before a result could be admitted. */
   OUTCOME_UNKNOWN: 'RPC_OUTCOME_UNKNOWN',

@@ -2,7 +2,7 @@ import { MachineEnvironmentApplyInputV1Schema, MachineEnvironmentReportInputV1Sc
 import { ManagedMachineEnvironmentSetupV1Schema, type ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, type Tx } from '@/storage/inTx';
 import { readCurrentServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { resolveEffectiveMachineRoleInTx } from '@/app/machines/machineAccess';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
@@ -49,7 +49,7 @@ export async function resolveMachineEnvironment(params: Readonly<{
     input: MachineEnvironmentApplyInputV1; creationManagedId?: string;
 }>): Promise<ReturnType<typeof MachineEnvironmentResolveResultV1Schema.parse>> {
     const input = MachineEnvironmentApplyInputV1Schema.parse(params.input);
-    return inTx(async tx => {
+    return inReadSnapshot(async tx => {
         const target = await requireTargetInTx(tx, { ...params, input });
         const row = await tx.managedMachine.findUnique({ where: { enrolledMachineId: input.machineId } });
         if (params.creationManagedId && row?.id !== params.creationManagedId) throw new ManagedMachineError('resource_mismatch');
@@ -76,9 +76,6 @@ export async function resolveMachineEnvironment(params: Readonly<{
         if (source?.accountId !== target.accountId && Object.values(preset.environment.secretRefs?.bindings ?? {})
             .some(binding => parseSavedSecretRefV1(binding.ref).kind === 'personal')) throw new ManagedMachineError('credential_unavailable');
         return { environment: preset.environment };
-    }, {
-        // Capture target access, current preset revision and environment from one snapshot.
-        isolationLevel: "Serializable",
     });
 }
 

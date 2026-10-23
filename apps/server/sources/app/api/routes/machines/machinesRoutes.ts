@@ -29,6 +29,7 @@ import {
     resolveMachineContentPublicKeyFingerprintForStorage,
     MachineStorageModeMismatchError,
     revokeMachineInTx,
+    recheckMachineStoredContentMutationAdmissionInTx,
 } from "@/app/machines/machineMutations";
 import {
     serializeExternalActionMachineBootstrapRow,
@@ -232,9 +233,9 @@ export function machinesRoutes(app: Fastify) {
                 404: z.strictObject({ error: z.literal("machine_unavailable") }) },
         },
     }, async (request, reply) => {
-        const machine = await inTx(tx => readMachineContentKeySnapshotInTx({
+        const machine = await inReadSnapshot(tx => readMachineContentKeySnapshotInTx({
             tx, accountId: request.userId, machineId: request.params.id,
-        }), { readOnly: true, isolationLevel: "Serializable" /* Recovery captures one exact owned content basis. */ });
+        }));
         return machine ? reply.send({ machine }) : reply.code(404).send({ error: "machine_unavailable" });
     });
 
@@ -252,10 +253,7 @@ export function machinesRoutes(app: Fastify) {
         }
         return reply.send(await inTx((tx) => transitionMachineContentKeyInTx({
             tx, accountId: request.userId, input: parsed.data,
-        }), {
-            // Machine key transition participates in mode, grant and recipient-envelope admission.
-            isolationLevel: "Serializable",
-        }));
+        })));
     });
 
     app.post('/v1/machines', {
@@ -887,6 +885,9 @@ export function machinesRoutes(app: Fastify) {
                 return { kind: 'upgrade_required' as const };
             }
 
+            recheckMachineStoredContentMutationAdmissionInTx(tx, {
+                accountId: userId, machineId: id, supportsCurrentStoredContentProtocol,
+            });
             const revoked = await revokeMachineInTx(tx, {
                 accountId: userId,
                 machineId: id,
@@ -894,9 +895,6 @@ export function machinesRoutes(app: Fastify) {
             return revoked.ok
                 ? { kind: 'ok' as const, machine: revoked.machine }
                 : { kind: 'not_found' as const };
-        }, {
-            // Revocation participates in Machine grant, replacement and managed-controller admission.
-            isolationLevel: "Serializable",
         });
 
         if (result.kind === 'not_found') {

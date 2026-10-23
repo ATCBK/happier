@@ -8,7 +8,7 @@ import {
     removeMachineAccessGrantInTx,
     setMachineAccessGrantInTx,
 } from '@/app/machines/machineAccess';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot, inTx } from '@/storage/inTx';
 import type { Fastify } from '../../types';
 
 const params = z.strictObject({ id: z.string().check(z.minLength(1)) });
@@ -52,12 +52,9 @@ export function registerMachineAccessRoutes(app: Fastify) {
             querystring: MachineRecipientKeyEnvelopePageQueryV1Schema,
             response: { 200: z.union([MachineAccessRecipientCensusResponseV1Schema, MachineAccessRefusalV1Schema]) },
         },
-    }, async (request) => inTx((tx) => readMachineRecipientCensusInTx(tx, {
+    }, async (request) => inReadSnapshot((tx) => readMachineRecipientCensusInTx(tx, {
         actorAccountId: request.userId, machineId: request.params.id, query: request.query,
-    }), {
-        // Capture holder access, content and recipient key bindings coherently.
-        isolationLevel: "Serializable",
-    }));
+    })));
 
     app.patch('/v1/machines/:id/data-key-envelopes', {
         preHandler: app.authenticate,

@@ -4,7 +4,7 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { createManagedMachineV1Schema, ManagedMachineV1Schema, RetainedManagedLaunchSnapshotV1Schema, type ManagedMachineV1, type ValidatedLaunchSnapshotV1, type RetainedManagedLaunchSnapshotV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { ManagedAdmissionComputeInputV1Schema, ManagedControllerCurrentnessV1Schema, ManagedControlAdmissionInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
-import { ManagedPolicyAdmissionInputV1Schema } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
+import { ManagedPolicyAdmissionInputV1Schema, type ManagedMachinePolicyChangeHintV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import { SupportedNativeIntentSchema, ManagedResourceV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import { deriveManagedDevcontainerChildProjectionV1, type DevcontainerChildProjectionV1, managedDevcontainerChildProjectionsEqualV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { resolvePluginActionConnectedAccountUseRequestsV2, type PluginActionConnectedAccountUseRequestV2 } from "@happier-dev/protocol/plugins/manifest/v2";
@@ -350,7 +350,7 @@ export function sameManagedInput(left: unknown, right: unknown): boolean {
 }
 
 export async function invalidateManagedMachineInTx(tx: Tx, row: StoredManagedMachine): Promise<void> {
-    const { controllerAccountIds, children } = await fenceManagedMachinePublicationInTx(tx, async () => {
+    const { controllerAccountIds, controllerReplaced, children } = await fenceManagedMachinePublicationInTx(tx, async () => {
         const controllerAccountIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, row.controllerMachineId);
         const fresh = await tx.managedMachine.findUnique({ where: { id: row.id } });
         const previous = readStoredManagedDevcontainerChild(row);
@@ -362,9 +362,16 @@ export async function invalidateManagedMachineInTx(tx: Tx, row: StoredManagedMac
             if (managedDevcontainerChildProjectionsEqualV1(before ?? undefined, child ?? undefined)) continue;
             children.push({ machineId, child, accountIds: await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId) });
         }
-        return { accountIds: [...controllerAccountIds, ...children.flatMap(child => child.accountIds)], controllerAccountIds, children };
+        return { accountIds: [...controllerAccountIds, ...children.flatMap(child => child.accountIds)], controllerAccountIds,
+            controllerReplaced: fresh !== null && fresh.controllerMachineId !== row.controllerMachineId, children };
     });
-    await markAccountsChanged(tx, { accountIds: controllerAccountIds, kind: "account", entityId: row.id });
+    await markAccountsChanged(tx, { accountIds: controllerAccountIds, kind: "account", entityId: row.id,
+        hint: { managedMachinePolicy: true, machineId: row.controllerMachineId } satisfies ManagedMachinePolicyChangeHintV1 });
+    // Old/new controller publications coalesce at the same Account-row key.
+    // Retain the former controller's retirement wake under its own Machine key.
+    if (controllerReplaced) await markAccountsChanged(tx, {
+        accountIds: controllerAccountIds, kind: 'machine', entityId: row.controllerMachineId,
+    });
     for (const { machineId, child, accountIds: childAccountIds } of children) {
         const cursors = await markAccountsChanged(tx, { accountIds: childAccountIds, kind: 'machine', entityId: machineId });
         for (const publication of cursors) {

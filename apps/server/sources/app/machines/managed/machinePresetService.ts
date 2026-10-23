@@ -98,6 +98,17 @@ async function acquirePresetMutationAccountsInTx(tx: Tx, input: Readonly<{
     beforeAccountChangePublication(tx, accountIds, async () => assertAccountChangePublicationAudienceInTx(tx, await read()));
 }
 
+/** Account publication orders collective authority and controller/credential withdrawal. */
+function recheckPresetMutationAdmissionBeforePublication(tx: Tx, context: PresetContext,
+    owner: ManagedMachinePresetV1['owner'], recipe?: Pick<ManagedMachinePresetV1, 'homeId' | 'controller' | 'recipe'>): void {
+    beforeAccountChangePublication(tx, [context.accountId], async client => {
+        if (!await mayAccessInTx(client, context, owner, true)) {
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
+        if (recipe) await validateManagedRecipeInTx(client, context, recipe);
+    });
+}
+
 /** Save and acquire consume the same current declaration and credential-source readers. No material is read. */
 export async function validateManagedRecipeInTx(tx: Tx, context: PresetContext, preset: Pick<ManagedMachinePresetV1, "homeId" | "controller" | "recipe">): Promise<Readonly<{ declaration: ManagedDeclaration; custodianAccountId: string }>> {
     if ((await tx.account.findUnique({ where: { id: context.accountId }, select: { status: true } }))?.status !== AccountStatus.active) throw new ManagedMachineError("permission_denied");
@@ -156,6 +167,7 @@ export async function createMachinePreset(params: PresetContext & Readonly<{ inp
                 : { kind: "conflict", currentRevision: current.revision } as const;
         }
         await validateManagedRecipeInTx(tx, params, input);
+        recheckPresetMutationAdmissionBeforePublication(tx, params, input.owner, input);
         const row = await tx.managedMachinePreset.create({ data: {
             id: input.id, homeId: input.homeId, name: input.name,
             custodianAccountId: input.owner.kind === "account" ? input.owner.accountId : null,
@@ -168,9 +180,6 @@ export async function createMachinePreset(params: PresetContext & Readonly<{ inp
         } });
         await invalidatePresetInTx(tx, row);
         return { kind: "saved", preset: await projectPresetInTx(tx, row) } as const;
-    }, {
-        // Current controller and credential validation precede persisted recipe insertion.
-        isolationLevel: "Serializable",
     });
     try { return await execute(); }
     catch (error) { if (isPrismaUniqueConstraintError(error)) return await execute(); return refusal(error); }
@@ -215,9 +224,13 @@ export async function listMachinePresets(params: PresetContext & Readonly<{ inpu
 export async function updateMachinePreset(params: PresetContext & Readonly<{ input: ManagedMachinePresetUpdateInputV1 }>): Promise<PresetMutationResultV1> {
     const input = ManagedMachinePresetUpdateInputV1Schema.parse(params.input);
     try { return await inTx(async tx => {
-        const row = await tx.managedMachinePreset.findFirst({ where: { id: input.id, homeId: input.homeId } });
-        if (row) await acquirePresetMutationAccountsInTx(tx, { actorAccountId: params.accountId, owner: ownerOf(row),
-            controllerMachineIds: [row.controllerMachineId, ...(input.patch.controller ? [input.patch.controller.machineId] : [])] });
+        const discovered = await tx.managedMachinePreset.findFirst({ where: { id: input.id, homeId: input.homeId } });
+        if (discovered) await acquirePresetMutationAccountsInTx(tx, { actorAccountId: params.accountId, owner: ownerOf(discovered),
+            controllerMachineIds: [discovered.controllerMachineId, ...(input.patch.controller ? [input.patch.controller.machineId] : [])] });
+        const row = discovered ? await tx.managedMachinePreset.findFirst({ where: { id: input.id, homeId: input.homeId } }) : null;
+        if (row && row.controllerMachineId !== discovered?.controllerMachineId) {
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
         await requireHomeInTx(tx, input.homeId);
         if (!row || !await mayAccessInTx(tx, params, ownerOf(row), true)) return { kind: "refused", code: "preset_not_found" } as const;
         const current = await projectPresetInTx(tx, row);
@@ -235,6 +248,8 @@ export async function updateMachinePreset(params: PresetContext & Readonly<{ inp
         const next = ManagedMachinePresetV1Schema.parse(nextDefinition);
         if (input.patch.recipe !== undefined || input.patch.controller !== undefined) await validateManagedRecipeInTx(tx, params, next);
         if (sameManagedInput(next, current)) return { kind: "saved", preset: current } as const;
+        recheckPresetMutationAdmissionBeforePublication(tx, params, ownerOf(row),
+            input.patch.recipe !== undefined || input.patch.controller !== undefined ? next : undefined);
         const result = await tx.managedMachinePreset.updateMany({ where: { id: row.id, revision: input.expectedRevision }, data: {
             name: next.name, launch: next.recipe, controllerMachineId: next.controller.machineId, controllerInstallationId: next.controller.installationId,
             environment: next.environment ?? getActivePrismaRuntime().DbNull,
@@ -246,30 +261,29 @@ export async function updateMachinePreset(params: PresetContext & Readonly<{ inp
         if (!result.count) return { kind: "conflict", currentRevision: stored.revision } as const;
         await invalidatePresetInTx(tx, stored);
         return { kind: "saved", preset: await projectPresetInTx(tx, stored) } as const;
-    }, {
-        // Recipe and capacity changes participate in concurrent preset acquisition admission.
-        isolationLevel: "Serializable",
     }); } catch (error) { return refusal(error); }
 }
 
 /** Archive changes recipe offers only; acquired rows and capacity are untouched. */
 async function setArchived(params: PresetContext & Readonly<{ input: ManagedMachinePresetRevisionInputV1 }>, archived: boolean): Promise<PresetMutationResultV1> {
     try { return await inTx(async tx => {
-        const row = await tx.managedMachinePreset.findFirst({ where: { id: params.input.id, homeId: params.input.homeId } });
-        if (row) await acquirePresetMutationAccountsInTx(tx, { actorAccountId: params.accountId, owner: ownerOf(row),
-            controllerMachineIds: [row.controllerMachineId] });
+        const discovered = await tx.managedMachinePreset.findFirst({ where: { id: params.input.id, homeId: params.input.homeId } });
+        if (discovered) await acquirePresetMutationAccountsInTx(tx, { actorAccountId: params.accountId, owner: ownerOf(discovered),
+            controllerMachineIds: [discovered.controllerMachineId] });
+        const row = discovered ? await tx.managedMachinePreset.findFirst({ where: { id: params.input.id, homeId: params.input.homeId } }) : null;
+        if (row && row.controllerMachineId !== discovered?.controllerMachineId) {
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
         await requireHomeInTx(tx, params.input.homeId);
         if (!row || !await mayAccessInTx(tx, params, ownerOf(row), true)) return { kind: "refused", code: "preset_not_found" } as const;
         if (row.revision !== params.input.expectedRevision) return { kind: "conflict", currentRevision: row.revision } as const;
         if ((row.archivedAt !== null) === archived) return { kind: "saved", preset: await projectPresetInTx(tx, row) } as const;
+        recheckPresetMutationAdmissionBeforePublication(tx, params, ownerOf(row));
         const result = await tx.managedMachinePreset.updateMany({ where: { id: row.id, revision: row.revision }, data: { archivedAt: archived ? new Date() : null, revision: { increment: 1 } } });
         const current = await tx.managedMachinePreset.findUniqueOrThrow({ where: { id: row.id } });
         if (!result.count) return { kind: "conflict", currentRevision: current.revision } as const;
         await invalidatePresetInTx(tx, current);
         return { kind: "saved", preset: await projectPresetInTx(tx, current) } as const;
-    }, {
-        // Preset availability must serialize with acquisition reading archivedAt before allocation insertion.
-        isolationLevel: "Serializable",
     }); } catch (error) { return refusal(error); }
 }
 

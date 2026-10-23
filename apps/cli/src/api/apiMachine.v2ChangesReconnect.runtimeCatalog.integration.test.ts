@@ -48,6 +48,11 @@ import { bootstrapMachineSyncRuntime } from '@/daemon/machine/bootstrapMachineSy
 import { startDaemonSessionControlRuntime } from '@/daemon/startup/startDaemonSessionControlRuntime';
 import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { ApiMachineClient } from './apiMachine';
+import { attachPluginWebhookDaemonWakeV1 } from '@/plugins/runtime/webhooks/pluginWebhookDaemonWake';
+import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { UpdateBodySchema } from '@happier-dev/protocol/updates';
+import { buildProviderAccountUsageRecordId } from '@happier-dev/protocol/connect/accountUsage';
+import type { ChangeEntry } from '@happier-dev/protocol/changes';
 import {
     publishPluginAccountCollectionWatchInvalidation as publishCollectionChange,
     readPluginAccountAvailabilityChangeKey,
@@ -215,6 +220,258 @@ function createMachineSocket(options: {
 }
 
 describe('ApiMachineClient /v2/changes reconnect', () => {
+    it('wakes managed policy for exact Pending and Run controller targets, ignoring raw domain traffic', async () => {
+        const machine: Machine = { id: 'accepted-policy-controller', encryptionMode: 'plain', metadata: null,
+            metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
+        mockAccountGet(async url => {
+            if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'accepted-policy-account' } };
+            if (url.includes('/v2/changes')) return { status: 200, data: { changes: [], nextCursor: 1 } };
+            if (url.includes('/v1/machines/')) return { status: 200, data: { machine } };
+            throw new Error(`Unexpected accepted policy boundary: ${new URL(url).pathname}`);
+        });
+        const socket = createMachineSocket();
+        bindApiSessionSocketMock(mockIo, socket);
+        const client = new ApiMachineClient('token', machine);
+        client.onConnectedServicesProjection(async () => {});
+        const notified = vi.fn();
+        client.onManagedMachinePolicyInvalidated(notified);
+        const target = ManagedWakeTargetV1Schema.parse({ homeId: 'home', managedId: 'managed', enrolledMachineId: 'guest',
+            expectedIntentRevision: 1, controller: { machineId: machine.id, installationId: 'installation' }, reason: 'admitted-work',
+            origin: { kind: 'session-input', session: { homeId: 'home', sessionId: 'session' }, pendingRequestId: 'pending', requestedAt: 1 } });
+        const update = async (body: unknown) => {
+            socket.trigger('update', { id: 'accepted-work', seq: 1, createdAt: 1, body: UpdateBodySchema.parse(body) });
+            await new Promise<void>(resolve => setImmediate(resolve));
+        };
+        try {
+            client.connect();
+            await vi.waitFor(() => expect(writeAccountChangesCursor).toHaveBeenCalledWith('accepted-policy-account', 1));
+            notified.mockClear();
+            for (const body of [
+                { t: 'pending-changed', sid: 'session', pendingVersion: 1, pendingCount: 1 },
+                { t: 'automation-run-updated', runId: 'run', automationId: null, state: 'queued', scheduledAt: 1, updatedAt: 1 },
+            ]) {
+                await update(body);
+                expect(notified).not.toHaveBeenCalled();
+                await update({ ...body, managedWakeTargetV1: { ...target, controller: { ...target.controller, machineId: 'another-controller' } } });
+                expect(notified).not.toHaveBeenCalled();
+                await update({ ...body, managedWakeTargetV1: target });
+                expect(notified).toHaveBeenCalledTimes(1);
+                notified.mockClear();
+            }
+        } finally { await client.shutdown(); }
+    });
+    it('invalidates managed policy only for this controller or lost change-feed completeness', async () => {
+        const machine: Machine = { id: 'policy-controller', encryptionMode: 'plain', metadata: null,
+            metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
+        let changes: ChangeEntry[] = [];
+        let cursorGone = false;
+        let paged = false;
+        let policyTail = false;
+        mockAccountGet(async (url, options) => {
+            if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'policy-account' } };
+            if (url.includes('/v2/changes')) {
+                if (cursorGone) return { status: 410, data: { error: 'cursor-gone', currentCursor: 2 } };
+                const after = options?.params && typeof options.params === 'object' && 'after' in options.params
+                    ? Number(options.params.after) : 0;
+                const page = !paged ? changes : after === 0
+                    ? Array.from({ length: 200 }, (_, index) => ({ cursor: index + 1, kind: 'account',
+                        entityId: `unrelated-${index}`, changedAt: 1, hint: null }))
+                    : policyTail ? [{ ...entry, cursor: 201 }] : [];
+                return { status: 200, data: { changes: page, nextCursor: paged ? page.at(-1)?.cursor ?? after : 1 } };
+            }
+            if (url.includes('/v1/machines/')) return { status: 200, data: { machine } };
+            throw new Error(`Unexpected policy boundary: ${new URL(url).pathname}`);
+        });
+        const client = new ApiMachineClient('token', machine);
+        client.onConnectedServicesProjection(async () => {});
+        const notifications: string[] = [];
+        const detach = client.onManagedMachinePolicyInvalidated(() => { notifications.push('policy'); });
+        const sync = (reason: 'live' | 'reconnect' = 'live') => (
+            client as unknown as { syncChangesOnConnect(options: { reason: 'live' | 'reconnect' }): Promise<void> }
+        ).syncChangesOnConnect({ reason });
+        const entry: ChangeEntry = { cursor: 1, kind: 'account', entityId: 'managed-row', changedAt: 1,
+            hint: { managedMachinePolicy: true, machineId: machine.id } };
+        try {
+            changes = [{ ...entry, hint: null }, { ...entry, kind: 'machine', entityId: 'another-controller' },
+                { ...entry, hint: { managedMachinePolicy: true, machineId: 'another-controller' } },
+                { ...entry, hint: { managedMachinePolicy: true, machineId: machine.id, unexpected: true } }];
+            await sync();
+            expect(notifications).toEqual([]);
+            changes = [entry];
+            await sync();
+            expect(notifications).toHaveLength(1);
+            changes = [{ ...entry, kind: 'machine', entityId: machine.id, hint: null }];
+            await sync();
+            expect(notifications).toHaveLength(2);
+            changes = [];
+            await sync('reconnect');
+            expect(notifications).toHaveLength(3);
+            cursorGone = true;
+            await sync();
+            expect(notifications).toHaveLength(4);
+            cursorGone = false;
+            paged = true;
+            await sync();
+            expect(notifications).toHaveLength(4);
+            policyTail = true;
+            await sync();
+            expect(notifications).toHaveLength(5);
+            detach();
+            await sync();
+            expect(notifications).toHaveLength(5);
+        } finally {
+            detach();
+            await client.shutdown();
+        }
+    });
+    it('wakes the webhook worker only for its durable domains or completeness recovery', async () => {
+        const machine: Machine = { id: 'webhook-observer-machine', encryptionMode: 'plain', metadata: null,
+            metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
+        let changes: ChangeEntry[] = [];
+        let cursorGone = false;
+        let cursor = 1;
+        mockAccountGet(async (url: string) => {
+            if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'webhook-observer-account' } };
+            if (url.includes('/v2/changes')) return cursorGone
+                ? { status: 410, data: { error: 'cursor-gone', currentCursor: cursor } }
+                : { status: 200, data: { changes, nextCursor: cursor } };
+            if (url.includes('/v1/machines/')) return { status: 200, data: { machine } };
+            throw new Error(`Unexpected webhook observer boundary: ${new URL(url).pathname}`);
+        });
+        const socket = createMachineSocket();
+        bindApiSessionSocketMock(mockIo, socket);
+        const client = new ApiMachineClient('token', machine);
+        client.onConnectedServicesProjection(async () => {});
+        // Observe the wake output; HTTP parsing, Account catch-up and attachment stay real.
+        const events: string[] = [];
+        const detach = attachPluginWebhookDaemonWakeV1({ apiMachine: client,
+            getWorker: () => ({ trigger: () => { events.push('wake'); } }) });
+        writeAccountChangesCursor.mockImplementation(async () => { events.push('cursor'); });
+        const sync = (reason: 'live' | 'reconnect' = 'live') => (
+            client as unknown as { syncChangesOnConnect(options: { reason: 'live' | 'reconnect' }): Promise<void> }
+        ).syncChangesOnConnect({ reason });
+        try {
+            client.connect();
+            await vi.waitFor(() => expect(writeAccountChangesCursor).toHaveBeenCalledWith('webhook-observer-account', cursor));
+            await new Promise<void>(resolve => setImmediate(resolve));
+            events.length = 0;
+            cursor++;
+            changes = [{ cursor, kind: 'machine', entityId: 'another-machine', changedAt: 1 }];
+            socket.trigger('update', { id: 'unrelated-account-wake', seq: cursor, createdAt: 1,
+                body: { t: 'account-change' } });
+            await vi.waitFor(() => expect(events).toContain('cursor'));
+            expect(events).toEqual(['cursor']);
+            events.length = 0;
+            cursor++;
+            changes = [{ cursor, kind: 'pluginDomain', entityId: 'pluginDomain/example.tasks/webhook', changedAt: 1,
+                hint: { pluginDomain: 'webhook', pluginId: 'example.tasks' } }];
+            await sync();
+            expect(events).toEqual(['wake', 'cursor']);
+            events.length = 0;
+            cursor++;
+            changes = [{ cursor, kind: 'pluginDomain', entityId: 'pluginDomain/example.tasks/availability', changedAt: 1,
+                hint: { pluginDomain: 'availability', pluginId: 'example.tasks' } }];
+            await sync();
+            expect(events).toEqual(['wake', 'cursor']);
+            events.length = 0;
+            changes = [];
+            await sync('reconnect');
+            expect(events).toEqual(['wake', 'cursor']);
+            events.length = 0;
+            cursorGone = true;
+            await sync();
+            expect(events).toEqual(['wake', 'cursor']);
+            events.length = 0;
+            detach();
+            await sync();
+            expect(events).toEqual(['cursor']);
+        } finally {
+            detach();
+            await client.shutdown();
+        }
+    });
+
+    it.each(['single', 'paged', 'failed-tail'] as const)('delivers exact quota Refresh before acknowledging the Account cursor (%s)', async mode => {
+        const machine: Machine = { id: 'quota-observer-machine', encryptionMode: 'plain', metadata: null,
+            metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
+        const recordId = buildProviderAccountUsageRecordId({ providerId: 'quota-provider', accountSubjectId: 'work',
+            subjectKind: 'account', quotaScope: 'account' });
+        const { buildProviderAccountUsageRefreshChangeV1 } = await import('@happier-dev/protocol/changes');
+        const changes: ChangeEntry[] = [{ cursor: mode === 'single' ? 1 : 201, changedAt: 1,
+            ...buildProviderAccountUsageRefreshChangeV1(recordId) }];
+        let savedCursor = 0;
+        let refuseTail = mode === 'failed-tail';
+        readAccountChangesCursor.mockImplementation(async () => savedCursor);
+        mockAccountGet(async (url: string, options) => {
+            if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'quota-observer-account' } };
+            if (url.includes('/v1/machines/')) return { status: 200, data: { machine } };
+            if (url.includes('/v2/changes')) {
+                const after = options?.params && typeof options.params === 'object' && 'after' in options.params
+                    ? Number(options.params.after) : 0;
+                const page = mode !== 'single' && after === 0
+                    ? Array.from({ length: 200 }, (_, index) => ({ cursor: index + 1, kind: 'machine',
+                        entityId: `unrelated-${index}`, changedAt: 1 })) : changes;
+                return { status: 200, data: { changes: page, nextCursor: page.at(-1)!.cursor } };
+            }
+            throw new Error(`Unexpected quota observer boundary: ${new URL(url).pathname}`);
+        });
+        const socket = createMachineSocket();
+        bindApiSessionSocketMock(mockIo, socket);
+        const client = new ApiMachineClient('token', machine);
+        const events: unknown[] = [];
+        const detach = client.onConnectedServicesProjection(async notification => {
+            if (!notification.quotaRefreshRecordIds) return;
+            if (refuseTail) throw new Error('quota-refresh-consumer-unavailable');
+            events.push(notification.quotaRefreshRecordIds);
+        });
+        writeAccountChangesCursor.mockImplementation(async (_accountId, cursor) => { savedCursor = cursor; events.push('cursor'); });
+        try {
+            const sync = () => (client as unknown as { syncChangesOnConnect(options: { reason: 'live' }): Promise<void> })
+                .syncChangesOnConnect({ reason: 'live' });
+            if (refuseTail) {
+                await expect(sync()).rejects.toThrow('quota-refresh-consumer-unavailable');
+                expect(savedCursor).toBe(200);
+                refuseTail = false;
+                events.length = 0;
+            }
+            await sync();
+            expect(events).toEqual(mode === 'paged' ? ['cursor', [recordId], 'cursor'] : [[recordId], 'cursor']);
+            expect(savedCursor).toBe(mode === 'single' ? 1 : 201);
+        } finally { detach(); await client.shutdown(); }
+    });
+
+    it.each(['stalled', 'cancelled'] as const)('does not fetch beyond a %s full Account page', async mode => {
+        const machine: Machine = { id: 'page-observer-machine', encryptionMode: 'plain', metadata: null,
+            metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
+        const controller = new AbortController();
+        const requestedCursors: number[] = [];
+        readAccountChangesCursor.mockResolvedValue(200);
+        mockAccountGet(async (url, options) => {
+            if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'page-observer-account' } };
+            if (url.includes('/v2/changes')) {
+                const after = options?.params && typeof options.params === 'object' && 'after' in options.params
+                    ? Number(options.params.after) : 0;
+                requestedCursors.push(after);
+                return { status: 200, data: { changes: Array.from({ length: 200 }, (_, index) => ({
+                    cursor: index + 201, kind: 'machine', entityId: `unrelated-${index}`, changedAt: 1,
+                })), nextCursor: mode === 'stalled' ? 200 : 400 } };
+            }
+            throw new Error(`Unexpected page observer boundary: ${new URL(url).pathname}`);
+        });
+        writeAccountChangesCursor.mockImplementation(async () => { controller.abort(); });
+        const client = new ApiMachineClient('token', machine);
+        try {
+            await expect((client as unknown as {
+                syncChangesOnConnect(options: { reason: 'live' }, signal: AbortSignal): Promise<void>;
+            }).syncChangesOnConnect({ reason: 'live' }, controller.signal)).rejects.toThrow(
+                mode === 'stalled' ? 'account_changes_cursor_not_advanced' : undefined,
+            );
+            expect(requestedCursors).toEqual([200]);
+            if (mode === 'stalled') expect(writeAccountChangesCursor).not.toHaveBeenCalled();
+            else expect(writeAccountChangesCursor).toHaveBeenCalledExactlyOnceWith('page-observer-account', 400);
+        } finally { await client.shutdown(); }
+    });
+
     it('invalidates Automation source observers from durable changes and completeness recovery', async () => {
         const machine: Machine = { id: 'source-observer-machine', encryptionMode: 'plain', metadata: null,
             metadataVersion: 0, daemonState: null, daemonStateVersion: 0 };
@@ -285,7 +542,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         }
     });
 
-    it('reopens a demanded Provider catalog on its content-free Account hint without advancing Settings', async () => {
+    it('drains unrelated full pages without catalog or Settings resets and consumes the exact relevant tail hint', async () => {
         const previous = getActiveAccountSettingsSnapshot();
         const credentials = { token: 'provider-row-change-token', encryption: null };
         const stored = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
@@ -293,18 +550,31 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7,
             loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token),
             providerConnectionsCatalog: { status: 'ready', revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } });
-        mockAccountGet(async (url: string) => {
+        let relevantTail = false;
+        let catalogReads = 0;
+        mockAccountGet(async (url: string, options) => {
             const path = new URL(url).pathname;
             if (path === '/v1/account/profile') return { status: 200, data: { id: 'provider-row-account' } };
             if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
                 mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
-            if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: { status: 'deleted', revision: 2 } };
+            if (path === '/v1/account/entity-rows/provider-connections') {
+                catalogReads++;
+                return { status: 200, data: { status: 'deleted', revision: 2 } };
+            }
             if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
             if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
             const historyResponse = emptyAccountSettingsHistoryCaptureResponse(path);
             if (historyResponse) return historyResponse;
-            if (path === '/v2/changes') return { status: 200, data: { changes: [{ cursor: 4, kind: 'account',
-                entityId: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1, changedAt: 1, hint: { providerConnections: true, revision: 2 } }], nextCursor: 4 } };
+            if (path.startsWith('/v1/machines/')) return { status: 200, data: { machine } };
+            if (path === '/v2/changes') {
+                const after = options?.params && typeof options.params === 'object' && 'after' in options.params
+                    ? Number(options.params.after) : 0;
+                const changes = after === 0 ? Array.from({ length: 200 }, (_, index) => ({ cursor: index + 1,
+                    kind: 'machine', entityId: `unrelated-${index}`, changedAt: 1, hint: null }))
+                    : relevantTail ? [{ cursor: 201, kind: 'account', entityId: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1,
+                        changedAt: 1, hint: { providerConnections: true, revision: 2 } }] : [];
+                return { status: 200, data: { changes, nextCursor: changes.at(-1)?.cursor ?? after } };
+            }
             throw new Error(`Unexpected Provider observer boundary: ${path}`);
         });
         const machine: Machine = { id: 'provider-row-machine', encryptionMode: 'plain', metadata: null,
@@ -312,12 +582,25 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const client = new ApiMachineClient(credentials.token, machine);
         const settingsHint = vi.fn();
         client.onAccountSettingsVersionHint(settingsHint);
+        const projections = vi.fn();
+        client.onConnectedServicesProjection(projections);
+        const projectRows = vi.fn();
+        client.onAccountProjectRowsChanged(projectRows);
         const retainedCatalogRevisions: (number | 'absent' | undefined)[] = [];
         client.onManagedProviderRetainedCurrentnessInvalidation(async () => {
             const catalog = getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog;
             retainedCatalogRevisions.push(catalog?.status === 'ready' ? catalog.revision : undefined);
         });
         try {
+            await (client as unknown as { syncChangesOnConnect(options: { reason: 'live' }): Promise<void> }).syncChangesOnConnect({ reason: 'live' });
+            expect(catalogReads).toBe(0);
+            expect(settingsHint).not.toHaveBeenCalled();
+            expect(projectRows).not.toHaveBeenCalled();
+            expect(projections).not.toHaveBeenCalled();
+            expect(retainedCatalogRevisions).toEqual([]);
+            expect(publishPluginAccountSettingsWatchInvalidation).not.toHaveBeenCalled();
+            expect(publishPluginAccountCollectionWatchInvalidation).not.toHaveBeenCalled();
+            relevantTail = true;
             await (client as unknown as { syncChangesOnConnect(options: { reason: 'live' }): Promise<void> }).syncChangesOnConnect({ reason: 'live' });
             expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
             expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(7);
@@ -571,7 +854,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         expect(writeAccountChangesCursor).toHaveBeenCalledWith('project-row-account', 4);
     });
 
-    it.each(['reconnect', 'cursor-gone', 'page-limit'] as const)('refreshes Project rows when changes completeness is lost: %s', async (recovery) => {
+    it.each(['reconnect', 'cursor-gone'] as const)('refreshes Project rows when changes completeness is lost: %s', async (recovery) => {
         admitAccountSnapshot('project-row-token');
         const machine: Machine = {
             id: 'machine-1', encryptionKey: new Uint8Array(32).fill(7), encryptionVariant: 'legacy',
@@ -581,9 +864,7 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
             if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'project-row-account' } };
             if (url.includes('/v2/changes')) {
                 if (recovery === 'cursor-gone') return { status: 410, data: { error: 'cursor-gone', currentCursor: 9 } };
-                return { status: 200, data: { changes: recovery === 'page-limit'
-                    ? Array.from({ length: 200 }, (_, cursor) => ({ cursor: cursor + 1, kind: 'account', entityId: 'other', changedAt: 1, hint: null }))
-                    : [], nextCursor: 9 } };
+                return { status: 200, data: { changes: [], nextCursor: 9 } };
             }
             if (url.includes('/v1/machines/')) return { status: 200, data: { machine: {
                 id: machine.id, metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
@@ -2399,19 +2680,21 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         const applyResourceSessionAccessWitness = vi.fn(() => {
             order.push('witness');
         });
-        mockAccountGet(async (url: string) => {
+        mockAccountGet(async (url: string, options) => {
             if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
             if (url.includes('/v2/changes')) {
+                const after = options?.params && typeof options.params === 'object' && 'after' in options.params
+                    ? Number(options.params.after) : 0;
                 return {
                     status: 200,
                     data: {
-                        changes: Array.from({ length: 200 }, (_unused, index) => ({
+                        changes: after === 0 ? Array.from({ length: 200 }, (_unused, index) => ({
                             cursor: index + 1,
                             kind: 'account',
                             entityId: 'self',
                             changedAt: index + 1,
                             hint: null,
-                        })),
+                        })) : [],
                         nextCursor: 200,
                         sessionAccessWitness: { v: 1, throughCursor: 200, entries: [] },
                     },
@@ -2432,11 +2715,13 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
 
         await (client as any).syncChangesOnConnect({ reason: 'reconnect' });
 
-        expect(applyResourceSessionAccessWitness).toHaveBeenCalledExactlyOnceWith({
+        expect(applyResourceSessionAccessWitness).toHaveBeenCalledTimes(2);
+        expect(applyResourceSessionAccessWitness).toHaveBeenNthCalledWith(1, {
             accountId: 'acc-1',
             witness: { v: 1, throughCursor: 200, entries: [] },
         });
-        expect(order).toEqual(['witness', 'cursor']);
+        expect(order).toEqual(['witness', 'cursor', 'witness', 'cursor']);
+        await client.shutdown();
     });
 
     it('marks Session Resources unavailable before acknowledging a cursor-gone reset', async () => {

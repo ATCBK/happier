@@ -19,7 +19,9 @@ import { createReleaseLessDeclarationV1 } from '@/app/plugins/availability/curre
 import { admitManagedAcquire } from './managedAcquire';
 import { cancelManagedCreation } from './managedRead';
 import { invalidateManagedMachineInTx, projectManagedMachineInTx, readManagedMachineInTx } from './managedRows';
-import { createMachinePreset } from './machinePresetService';
+import { archiveMachinePreset, createMachinePreset, updateMachinePreset } from './machinePresetService';
+import { observeLazyPrismaQuery } from '@/app/changes/accountPublicationContention.testkit';
+import { removeTeamMemberForActorInTx } from '@/app/teams/memberships/memberAdministration';
 import { admitManagedControl, reportManagedAcquire, reportManagedIntent, submitManagedAcquire, submitManagedIntent } from './managedMutations';
 
 async function characterizeManagedTransientContention(request: Parameters<typeof admitManagedAcquire>[0]) {
@@ -200,6 +202,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
     it.each([
         { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'admit' },
         { selectionKind: 'preset', publicationAccount: 'custodian', phase: 'admit' },
+        { selectionKind: 'preset', publicationAccount: 'custodian', phase: 'admit', presetMutation: 'create' },
+        { selectionKind: 'preset', publicationAccount: 'custodian', phase: 'admit', presetMutation: 'update' },
+        { selectionKind: 'preset', publicationAccount: 'custodian', phase: 'admit', presetMutation: 'archive' },
+        { selectionKind: 'preset', publicationAccount: 'custodian', phase: 'admit', presetWithdrawal: 'create' },
+        { selectionKind: 'preset', publicationAccount: 'custodian', phase: 'admit', presetWithdrawal: 'update' },
+        { selectionKind: 'preset', publicationAccount: 'custodian', phase: 'admit', presetWithdrawal: 'archive' },
         { selectionKind: 'one-off', publicationAccount: 'viewer', phase: 'admit' },
         { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report' },
         { selectionKind: 'one-off', publicationAccount: 'viewer', phase: 'report' },
@@ -224,7 +232,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
         { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report', publicationRegistration: true },
         { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report', staleRegistration: 'creation' },
         { selectionKind: 'one-off', publicationAccount: 'custodian', phase: 'report', staleRegistration: 'controller' },
-    ] as const)('$phase $selectionKind survives an unrelated $publicationAccount publication ($beforeFence, transient=$transientContention, zero=$zeroRetries, hot=$hotRecipient, replay=$admittedReplay, registration=$foreignRegistration, publicationRegistration=$publicationRegistration, retired=$staleRegistration)', async (scenario) => {
+    ] as const)('$phase $selectionKind survives an unrelated $publicationAccount publication ($beforeFence, transient=$transientContention, zero=$zeroRetries, hot=$hotRecipient, replay=$admittedReplay, registration=$foreignRegistration, publicationRegistration=$publicationRegistration, retired=$staleRegistration, presetMutation=$presetMutation, presetWithdrawal=$presetWithdrawal)', async (scenario) => {
         const { selectionKind, publicationAccount, phase } = scenario;
         const beforeFence = 'beforeFence' in scenario && scenario.beforeFence;
         const growAudience = 'growAudience' in scenario && scenario.growAudience;
@@ -287,10 +295,113 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('m
             name: 'Guest', choices: { image: 'linux' } };
         const retention = { kind: 'unused' as const, afterMs: 3_600_000, effect: 'stop' as const };
         const presetId = randomUUID();
+        const teamOwner = 'presetWithdrawal' in scenario
+            ? await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } }) : null;
+        const team = teamOwner ? await db.team.create({ data: { name: 'Preset authority' } }) : null;
+        if (team && teamOwner) await db.teamMembership.create({ data: { teamId: team.id, accountId: teamOwner.id, role: 'owner' } });
+        const membership = team ? await db.teamMembership.create({ data: { teamId: team.id, accountId: account.id, role: 'admin' } }) : null;
+        const presetOwner = team ? { kind: 'team' as const, teamId: team.id } : { kind: 'account' as const, accountId: account.id };
         if (selectionKind === 'preset') {
             expect(await createMachinePreset({ accountId: account.id, input: { id: presetId, homeId, name: 'Contended preset',
-                owner: { kind: 'account', accountId: account.id }, controller, recipe: launchSnapshot,
+                owner: presetOwner, controller, recipe: launchSnapshot,
                 simultaneousLimit: { maximum: 1 } } })).toMatchObject({ kind: 'saved' });
+        }
+        if ('presetWithdrawal' in scenario && team && teamOwner && membership) {
+            vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '1');
+            const transaction = db.$transaction;
+            const createId = randomUUID();
+            let withdrawnCursor: number | undefined;
+            db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+                const callback = args[0];
+                if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+                return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, {
+                    get(inner, property, innerReceiver) {
+                        if (property !== 'managedMachinePreset') return Reflect.get(inner, property, innerReceiver);
+                        return new Proxy(inner.managedMachinePreset, { get(model, method, modelReceiver) {
+                            const member: unknown = Reflect.get(model, method, modelReceiver);
+                            if (method !== 'create' && method !== 'updateMany' || typeof member !== 'function') return member;
+                            return (...values: unknown[]) => observeLazyPrismaQuery(Reflect.apply(member, model, values),
+                                () => ({ started() {}, settled() {} }), async () => {
+                                    if (withdrawnCursor !== undefined) return;
+                                    expect(await inTx(peer => removeTeamMemberForActorInTx(peer, { teamId: team.id,
+                                        actorAccountId: teamOwner.id, membershipId: membership.id }))).toMatchObject({ ok: true });
+                                    withdrawnCursor = (await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq;
+                                });
+                        } });
+                    },
+                })), ...args.slice(1)]);
+            } });
+            try {
+                const result = scenario.presetWithdrawal === 'create'
+                    ? await createMachinePreset({ accountId: account.id, input: { id: createId, homeId, name: 'Withdrawn create',
+                        owner: presetOwner, controller, recipe: launchSnapshot } })
+                    : scenario.presetWithdrawal === 'update'
+                        ? await updateMachinePreset({ accountId: account.id, input: { id: presetId, homeId, expectedRevision: 0,
+                            patch: { name: 'Withdrawn update' } } })
+                        : await archiveMachinePreset({ accountId: account.id, input: { id: presetId, homeId, expectedRevision: 0 } });
+                expect(withdrawnCursor).toBeDefined();
+                expect(result).toMatchObject({ kind: 'refused' });
+                expect(await db.managedMachinePreset.findUnique({ where: { id: createId } })).toBeNull();
+                expect(await db.managedMachinePreset.findUniqueOrThrow({ where: { id: presetId } }))
+                    .toMatchObject({ revision: 0, archivedAt: null, name: 'Contended preset' });
+                expect(await db.account.findUniqueOrThrow({ where: { id: account.id } })).toMatchObject({ seq: withdrawnCursor });
+            } finally {
+                db.$transaction = transaction; vi.unstubAllEnvs();
+                await db.managedMachinePreset.deleteMany({ where: { id: { in: [presetId, createId] } } });
+                await db.team.delete({ where: { id: team.id } });
+                await db.machine.deleteMany({ where: { accountId: account.id } });
+                await db.account.delete({ where: { id: account.id } }); await db.account.delete({ where: { id: teamOwner.id } });
+            }
+            return;
+        }
+        if ('presetMutation' in scenario) {
+            const transaction = db.$transaction;
+            const initial = (await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq;
+            let peerWrites = 0;
+            db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+                const callback = args[0];
+                if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+                let advanced = false;
+                return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, {
+                    get(inner, property, innerReceiver) {
+                        if (property !== '$queryRawUnsafe') return Reflect.get(inner, property, innerReceiver);
+                        return (query: string, ...values: unknown[]) => {
+                            const pending = inner.$queryRawUnsafe(query, ...values);
+                            if (!query.includes('FROM "Account"') || !query.includes('FOR NO KEY UPDATE')) return pending;
+                            return observeLazyPrismaQuery(pending, () => ({ started() {}, settled() {} }), async () => {
+                                if (advanced) return;
+                                advanced = true;
+                                await db.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+                                peerWrites++;
+                            });
+                        };
+                    },
+                })), ...args.slice(1)]);
+            } });
+            try {
+                const result = scenario.presetMutation === 'create'
+                    ? await createMachinePreset({ accountId: account.id, input: { id: randomUUID(), homeId, name: 'Hot preset',
+                        owner: { kind: 'account', accountId: account.id }, controller, recipe: launchSnapshot } })
+                    : scenario.presetMutation === 'update'
+                        ? await updateMachinePreset({ accountId: account.id, input: { id: presetId, homeId, expectedRevision: 0,
+                            patch: { name: 'Hot renamed preset' } } })
+                        : await archiveMachinePreset({ accountId: account.id, input: { id: presetId, homeId, expectedRevision: 0 } });
+                expect(peerWrites).toBe(1);
+                expect(result).toMatchObject({ kind: 'saved', preset: { revision: scenario.presetMutation === 'create' ? 0 : 1 } });
+                expect(await db.account.findUniqueOrThrow({ where: { id: account.id } })).toMatchObject({ seq: initial + 2 });
+                if (scenario.presetMutation !== 'create') {
+                    const stale = await updateMachinePreset({ accountId: account.id, input: { id: presetId, homeId,
+                        expectedRevision: 0, patch: { name: 'Stale overwrite' } } });
+                    expect(stale).toMatchObject({ kind: 'conflict', currentRevision: 1 });
+                }
+            } finally {
+                db.$transaction = transaction;
+                vi.unstubAllEnvs();
+                await db.managedMachinePreset.deleteMany({ where: { custodianAccountId: account.id } });
+                await db.machine.deleteMany({ where: { accountId: account.id } });
+                await db.account.delete({ where: { id: account.id } });
+            }
+            return;
         }
         const request: Parameters<typeof admitManagedAcquire>[0] = {
             custodianAccountId: account.id, requesterAccountId: account.id, requestEnvelopeDigest: 'contention-test',

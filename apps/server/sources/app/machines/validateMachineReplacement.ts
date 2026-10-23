@@ -56,6 +56,21 @@ export function validateMachineReplacement(input: MachineReplacementValidationIn
             return { ok: false, statusCode: 409, reason: "old_machine_replacement_conflict" };
         }
     }
+    const target = validateMachineReplacementTarget({ oldMachine, replacementMachine, source });
+    if (!target.ok) return target;
+
+    if (source === "manual" && oldMachine.active && input.confirmActiveOldMachine !== true) {
+        return { ok: false, statusCode: 409, reason: "old_machine_active_confirmation_required" };
+    }
+
+    return { ok: true };
+}
+
+/** Initial admission and terminal publication enforce the same destination rule. */
+export function validateMachineReplacementTarget(input: Readonly<{
+    oldMachine: MachineReplacementRow; replacementMachine: MachineReplacementRow; source: MachineReplacementSource;
+}>): MachineReplacementValidationResult {
+    const { oldMachine, replacementMachine, source } = input;
     if (replacementMachine.revokedAt) {
         return { ok: false, statusCode: 400, reason: "replacement_machine_revoked" };
     }
@@ -77,10 +92,6 @@ export function validateMachineReplacement(input: MachineReplacementValidationIn
         ) {
             return { ok: false, statusCode: 400, reason: "installation_public_key_mismatch" };
         }
-    }
-
-    if (source === "manual" && oldMachine.active && input.confirmActiveOldMachine !== true) {
-        return { ok: false, statusCode: 409, reason: "old_machine_active_confirmation_required" };
     }
 
     return { ok: true };

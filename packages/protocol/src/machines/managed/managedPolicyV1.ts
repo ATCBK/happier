@@ -11,6 +11,12 @@ import { ManagedControllerV1Schema, ManagedMachineV1Schema, type ManagedControll
 import { ExternalActionExecutionAuthorizationV1Schema, type ExternalActionExecutionAuthorizationV1 } from '../../actions/externalActionApi.js';
 
 export const MANAGED_POLICY_PROOF_HEADER = 'x-happier-managed-policy-proof';
+/** Advisory controller wake only; the signed census and native driver retain policy authority. */
+export const ManagedMachinePolicyChangeHintV1Schema = lazyZodSchema(() => z.strictObject({
+  managedMachinePolicy: z.literal(true),
+  machineId: z.string().check(z.minLength(1)),
+}));
+export type ManagedMachinePolicyChangeHintV1 = z.infer<typeof ManagedMachinePolicyChangeHintV1Schema>;
 /** Reserved Home-to-installed-controller preparation; it never carries Project input. */
 export const MANAGED_FINITE_WAKE_RPC_METHOD = 'managed.wake.finite.v1';
 export const ManagedFiniteWakeRequestV1Schema = lazyZodSchema(() => z.strictObject({

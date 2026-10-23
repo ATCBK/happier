@@ -1,10 +1,9 @@
 import { observeServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 
 /**
- * The daemon's fresh server/machine identity source for a machine-scoped
- * execution origin. This intentionally reads the live capability response;
- * feature-snapshot caches retain last-known-good values and cannot stamp
- * execution authority.
+ * Pair the bound Home identity with the current local Machine. A daemon
+ * consumes its authenticated connection binding; callers without one must
+ * discover it freshly. This stamp does not replace effect admission.
  */
 export type CurrentMachineExecutionOriginContext = Readonly<{
   serverIdentityId: string;
@@ -14,18 +13,24 @@ export type CurrentMachineExecutionOriginContext = Readonly<{
 export function createCurrentMachineExecutionOriginContextResolver(params: Readonly<{
   serverUrl: string;
   resolveCurrentMachineId(): string | null;
+  resolveCurrentServerIdentityId?(): string | null;
   timeoutMs?: number;
 }>): (signal?: AbortSignal) => Promise<CurrentMachineExecutionOriginContext | null> {
   return async (signal?: AbortSignal): Promise<CurrentMachineExecutionOriginContext | null> => {
     signal?.throwIfAborted();
-    const snapshot = await observeServerFeaturesSnapshot({
-      serverUrl: params.serverUrl,
-      ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
-    });
+    let serverIdentityId: string | null | undefined;
+    if (params.resolveCurrentServerIdentityId) {
+      serverIdentityId = params.resolveCurrentServerIdentityId();
+    } else {
+      const snapshot = await observeServerFeaturesSnapshot({
+        serverUrl: params.serverUrl,
+        ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+      });
+      serverIdentityId = snapshot.status === 'ready'
+        ? snapshot.features.capabilities.serverIdentity.serverIdentityId
+        : null;
+    }
     signal?.throwIfAborted();
-    const serverIdentityId = snapshot.status === 'ready'
-      ? snapshot.features.capabilities.serverIdentity.serverIdentityId
-      : null;
     let machineId: string | null;
     try {
       machineId = params.resolveCurrentMachineId();

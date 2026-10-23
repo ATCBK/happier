@@ -6,6 +6,7 @@ import {
 import { serializeMachineRow } from "@/app/machines/machineSerialization";
 import { hasExactMachineReadiness } from "@/app/machines/machineSocketReadiness";
 import { validateMachineReplacement } from "@/app/machines/validateMachineReplacement";
+import { recheckMachineStoredContentMutationAdmissionInTx } from '@/app/machines/machineMutations';
 import { inTx } from "@/storage/inTx";
 import { isPlainMachineDataKeyMarker } from '@happier-dev/protocol/machines/machineStoredContent';
 import { z } from "zod/mini";
@@ -60,6 +61,9 @@ export function registerMachineReplacementRoutes(app: Fastify): void {
             if (!validation.ok) {
                 return { kind: "error" as const, validation };
             }
+            recheckMachineStoredContentMutationAdmissionInTx(tx, {
+                accountId: userId, machineId: oldMachineId, supportsCurrentStoredContentProtocol,
+            });
 
             await applyMachineReplacement({
                 tx,
@@ -69,6 +73,7 @@ export function registerMachineReplacementRoutes(app: Fastify): void {
                 reason: "manual_repair",
                 source: "manual",
                 actorUserId: userId,
+                confirmActiveOldMachine,
             });
 
             const updatedOldMachine = await tx.machine.findFirst({
@@ -76,9 +81,6 @@ export function registerMachineReplacementRoutes(app: Fastify): void {
             });
 
             return { kind: "ok" as const, machine: updatedOldMachine };
-        }, {
-            // Reciprocal replacement reads both Machines but writes only the old Machine.
-            isolationLevel: "Serializable",
         });
 
         if (result.kind === "error") {
@@ -136,9 +138,6 @@ export function registerMachineReplacementRoutes(app: Fastify): void {
             });
 
             return { kind: "ok" as const, machine: updatedMachine };
-        }, {
-            // Replacement clearing participates in target availability and reciprocal replacement admission.
-            isolationLevel: "Serializable",
         });
 
         if (result.kind === "upgrade_required") {

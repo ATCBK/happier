@@ -4,12 +4,16 @@
  */
 
 import axios from 'axios';
+import { readProviderAccountUsageRefreshRecordIdV1 } from '@happier-dev/protocol/changes';
+import { PluginDomainChangeEntrySchema } from '@happier-dev/protocol/changes/pluginDomain';
+import { ManagedMachinePolicyChangeHintV1Schema } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
+import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 import { SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
 import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentApprovedReplayPublicationV1Schema,
     DiscussionAgentApprovedReplayResponseV1Schema, type DiscussionAgentPostPublicationV1,
-    type DiscussionAgentPostResponseV1 } from '@happier-dev/protocol/discussions/api';
+    type DiscussionAgentPostResponseV1, type DiscussionWorkflowPostPublicationV1 } from '@happier-dev/protocol/discussions/api';
 import { SESSION_PENDING_RESET_START_RELEASE_EVENT_V1, PendingResetStartReleaseRequestV1Schema, PendingResetStartReleaseResponseV1Schema, type PendingResetStartBindingV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { MachineUpdateStateResponseSchema } from '@happier-dev/protocol/machines/metadataUpdate';
@@ -446,6 +450,7 @@ export type ConnectedServicesProjectionNotification = Readonly<{
     signal: AbortSignal;
     connectedServicesV2: unknown;
     connectedServiceCredentialRevisionsV1: unknown;
+    quotaRefreshRecordIds?: readonly string[];
 }>;
 
 export type ApiMachineClientLifecycleDependencies = Readonly<{
@@ -591,6 +596,8 @@ export class ApiMachineClient {
     private readonly sessionFollowRulesChangedListeners = new Set<(change?: SessionFollowSourceInvalidation) => void | Promise<void>>();
     private accountProjectRowsChangeListeners = new Set<(change: AccountProjectRowsChangeNotification) => void | Promise<void>>();
     private automationEventSourcesInvalidationListeners = new Set<() => void | Promise<void>>();
+    private pluginWebhookInvalidationListeners = new Set<() => void | Promise<void>>();
+    private managedMachinePolicyInvalidationListeners = new Set<() => void | Promise<void>>();
     private pendingSessionActivationHintListeners = new Set<(
         hint: PendingSessionActivationHintNotification,
     ) => void | Promise<void>>();
@@ -1950,7 +1957,11 @@ export class ApiMachineClient {
             accessPolicy: this.filesystemAccessPolicy,
             acquirePluginRuntime: acquireAuthoritativePluginRuntimeRegistryLease,
             ...(ingress ? { inspectSetup: async ({ workspace, context, reviewSetupConsent }) => {
+                const startedAt = performance.now();
                 const runtime = await this.resolveProjectFiniteRuntime(ingress);
+                logger.debug('[ProjectSetup] inspection phase', { phase: 'runtime',
+                    requestId: context.actionRequestId ?? ingress.transportRequestId,
+                    durationMs: Math.round(performance.now() - startedAt), status: runtime ? 'completed' : 'refused' });
                 return runtime ? inspectProjectSetupFromRuntime({ runtime, ingress, workspace, context, reviewSetupConsent })
                     : { setupReadiness: { kind: 'unknown' as const, code: 'project_setup_requester_review_unavailable' } };
             } } : {}),
@@ -2385,6 +2396,32 @@ export class ApiMachineClient {
     private async notifyAutomationEventSourcesInvalidated(signal: AbortSignal): Promise<void> {
         for (const listener of this.automationEventSourcesInvalidationListeners) {
             signal.throwIfAborted();
+            await listener();
+        }
+    }
+
+    /** Queue/endpoint and Availability wakes from the one consumed Account feed. */
+    onPluginWebhookInvalidated(listener: () => void | Promise<void>): () => void {
+        this.pluginWebhookInvalidationListeners.add(listener);
+        return () => { this.pluginWebhookInvalidationListeners.delete(listener); };
+    }
+
+    private async notifyPluginWebhookInvalidated(signal: AbortSignal): Promise<void> {
+        for (const listener of this.pluginWebhookInvalidationListeners) {
+            signal.throwIfAborted();
+            await listener();
+        }
+    }
+
+    /** Controller-specific managed rows and accepted-work hints from the existing transport. */
+    onManagedMachinePolicyInvalidated(listener: () => void | Promise<void>): () => void {
+        this.managedMachinePolicyInvalidationListeners.add(listener);
+        return () => { this.managedMachinePolicyInvalidationListeners.delete(listener); };
+    }
+
+    private async notifyManagedMachinePolicyInvalidated(signal?: AbortSignal): Promise<void> {
+        for (const listener of this.managedMachinePolicyInvalidationListeners) {
+            signal?.throwIfAborted();
             await listener();
         }
     }
@@ -3436,7 +3473,7 @@ export class ApiMachineClient {
 
     /** The same trusted publisher, for an already-reviewed body whose runner may have exited. */
     async postAgentDiscussionMessage(
-        publication: DiscussionAgentPostPublicationV1,
+        publication: DiscussionAgentPostPublicationV1 | DiscussionWorkflowPostPublicationV1,
         options?: Readonly<{ signal?: AbortSignal }>,
     ): Promise<DiscussionAgentPostResponseV1> {
         options?.signal?.throwIfAborted();
@@ -3445,7 +3482,7 @@ export class ApiMachineClient {
             return { v: 1 as const, ok: false as const, error: 'discussions_unavailable' as const };
         }
         const request = DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({
-            v: 1, operation: 'approved_replay', machineId: this.machine.id, publication,
+            v: 1, operation: 'producer' in publication ? 'workflow_result' : 'approved_replay', machineId: this.machine.id, publication,
         });
         if (!request.success) return { v: 1 as const, ok: false as const, error: 'discussion_post_denied' as const };
         const raw = await emitSocketWithAck({ socket, event: DISCUSSION_AGENT_POST_EVENT_V1,
@@ -4579,6 +4616,15 @@ export class ApiMachineClient {
             }
 
             const handled = this.dispatchUpdate(data);
+            if ((data.body.t === 'pending-changed' || data.body.t === 'automation-run-updated')
+                && data.body.managedWakeTargetV1 !== undefined) {
+                const target = ManagedWakeTargetV1Schema.safeParse(data.body.managedWakeTargetV1);
+                if (target.success && target.data.controller.machineId === this.machine.id) {
+                    void this.notifyManagedMachinePolicyInvalidated().catch(() => {
+                        logger.warn('[API MACHINE] Managed policy wake listener failed');
+                    });
+                }
+            }
             if (data.body.t === 'pending-changed') {
                 const requestId = typeof data.body.pendingActivationRequestId === 'string'
                     ? data.body.pendingActivationRequestId.trim()
@@ -5021,6 +5067,8 @@ export class ApiMachineClient {
             if (opts.reason !== 'live') {
                 await this.notifyAccountProjectRowsChanged({ source: opts.reason, signal });
                 await this.refreshAllDemandedAccountCatalogs({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
+                await this.notifyPluginWebhookInvalidated(signal);
+                await this.notifyManagedMachinePolicyInvalidated(signal);
             }
             return;
         }
@@ -5032,269 +5080,283 @@ export class ApiMachineClient {
         const accountScopeKey = resolveAccountSettingsScopeKeyForToken(this.token);
 
         const CHANGES_PAGE_LIMIT = 200;
-        const after = await readAccountChangesCursor(accountId);
-        const result = await fetchChanges({ token: this.token, after, limit: CHANGES_PAGE_LIMIT, signal });
-        signal.throwIfAborted();
-        if (result.status !== 'ok' && result.status !== 'cursor-gone'
-            && this.isActiveTransportGeneration(transportGeneration)) {
-            this.accountChangesObserverTransportGeneration = null;
-        }
-
-        if (result.status === 'cursor-gone') {
-            void this.notifySessionFollowRulesChanged({ full: true, workflowRunIds: [] });
-            publishSessionFollowWakeInvalidation();
-            this.applyResourceSessionAccessWitness({ accountId });
+        let after = await readAccountChangesCursor(accountId);
+        let reason = opts.reason;
+        while (!this.projectionSchedulingClosed && this.isActiveTransportGeneration(transportGeneration)) {
             signal.throwIfAborted();
-            await this.notifySessionAccessReset({ cursor: result.currentCursor });
+            const result = await fetchChanges({ token: this.token, after, limit: CHANGES_PAGE_LIMIT, signal });
             signal.throwIfAborted();
-            await this.refreshMachineFromServer(signal);
-            signal.throwIfAborted();
-            await this.prepareMachineRecipientEnvelopes([this.machine.id], signal);
-            signal.throwIfAborted();
-            await this.notifyAccountProjectRowsChanged({ source: 'cursor-gone', signal });
-            await this.notifyAccountSettingsVersionHint({ settingsVersion: null, source: 'cursor-gone' });
-            await this.refreshAllDemandedAccountCatalogs({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
-            signal.throwIfAborted();
-            publishPluginAccountSettingsWatchInvalidation({ kind: 'full' });
-            publishPluginAccountCollectionWatchInvalidation({
-                accountScopeKey,
-                kind: 'reset',
-                changeCursor: result.currentCursor,
-            });
-            await this.reconcileConnectedServicesProjection({ source: 'cursor-gone', executionAuthority }, signal);
-            signal.throwIfAborted();
-            await this.synchronizeSavedSecretCatalog(signal);
-            signal.throwIfAborted();
-            await this.notifyManagedProviderRetainedCurrentnessInvalidation({
-                source: 'cursor-gone',
-                signal,
-            });
-            await this.notifyAutomationEventSourcesInvalidated(signal);
-            signal.throwIfAborted();
-            await writeAccountChangesCursor(accountId, result.currentCursor);
-            signal.throwIfAborted();
-            if (this.isActiveTransportGeneration(transportGeneration)) {
-                this.accountChangesObserverTransportGeneration = transportGeneration;
-            }
-            return;
-        }
-        if (result.status !== 'ok') {
-            if (handleRequestAuthenticationFailure({
-                supervisor: this.connectionSupervisor,
-                error: result.error,
-                hadAuth: true,
-                scope: requestSupervisionScope,
-            })) {
-                return;
+            if (this.projectionSchedulingClosed || !this.isActiveTransportGeneration(transportGeneration)) return;
+            if (result.status !== 'ok' && result.status !== 'cursor-gone'
+                && this.isActiveTransportGeneration(transportGeneration)) {
+                this.accountChangesObserverTransportGeneration = null;
             }
 
-            // Backwards compatibility: old servers may not support /v2/changes yet (e.g. 404).
-            // On reconnect, fall back to a snapshot refresh.
-            const changesEndpointUnavailable = asRecord(result.error)?.status === 404;
-            if (changesEndpointUnavailable) {
+            if (result.status === 'cursor-gone') {
+                void this.notifySessionFollowRulesChanged({ full: true, workflowRunIds: [] });
+                publishSessionFollowWakeInvalidation();
                 this.applyResourceSessionAccessWitness({ accountId });
                 signal.throwIfAborted();
-            }
-            if (opts.reason === 'reconnect' || opts.reason === 'live') {
+                await this.notifySessionAccessReset({ cursor: result.currentCursor });
+                signal.throwIfAborted();
                 await this.refreshMachineFromServer(signal);
-            }
-            if (changesEndpointUnavailable) {
-                await this.notifyAccountProjectRowsChanged({
-                    source: opts.reason === 'live' ? 'changes' : opts.reason,
+                signal.throwIfAborted();
+                await this.prepareMachineRecipientEnvelopes([this.machine.id], signal);
+                signal.throwIfAborted();
+                await this.notifyAccountProjectRowsChanged({ source: 'cursor-gone', signal });
+                await this.notifyAccountSettingsVersionHint({ settingsVersion: null, source: 'cursor-gone' });
+                await this.refreshAllDemandedAccountCatalogs({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
+                signal.throwIfAborted();
+                publishPluginAccountSettingsWatchInvalidation({ kind: 'full' });
+                publishPluginAccountCollectionWatchInvalidation({
+                    accountScopeKey,
+                    kind: 'reset',
+                    changeCursor: result.currentCursor,
+                });
+                await this.reconcileConnectedServicesProjection({ source: 'cursor-gone', executionAuthority }, signal);
+                signal.throwIfAborted();
+                await this.synchronizeSavedSecretCatalog(signal);
+                signal.throwIfAborted();
+                await this.notifyManagedProviderRetainedCurrentnessInvalidation({
+                    source: 'cursor-gone',
                     signal,
                 });
-                await this.refreshAllDemandedAccountCatalogs({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
+                await this.notifyAutomationEventSourcesInvalidated(signal);
+                await this.notifyPluginWebhookInvalidated(signal);
+                await this.notifyManagedMachinePolicyInvalidated(signal);
+                signal.throwIfAborted();
+                await writeAccountChangesCursor(accountId, result.currentCursor);
+                signal.throwIfAborted();
+                if (this.isActiveTransportGeneration(transportGeneration)) {
+                    this.accountChangesObserverTransportGeneration = transportGeneration;
+                }
                 return;
             }
+            if (result.status !== 'ok') {
+                if (handleRequestAuthenticationFailure({
+                    supervisor: this.connectionSupervisor,
+                    error: result.error,
+                    hadAuth: true,
+                    scope: requestSupervisionScope,
+                })) {
+                    return;
+                }
 
-            // A snapshot does not acknowledge a transient changes-feed failure.
-            // Let the canonical retry owner retain and retry the current work.
-            throw result.error;
-        }
+                // Backwards compatibility: old servers may not support /v2/changes yet (e.g. 404).
+                // On reconnect, fall back to a snapshot refresh.
+                const changesEndpointUnavailable = asRecord(result.error)?.status === 404;
+                if (changesEndpointUnavailable) {
+                    this.applyResourceSessionAccessWitness({ accountId });
+                    signal.throwIfAborted();
+                }
+                if (opts.reason === 'reconnect' || opts.reason === 'live') {
+                    await this.refreshMachineFromServer(signal);
+                }
+                if (changesEndpointUnavailable) {
+                    await this.notifyAccountProjectRowsChanged({
+                        source: opts.reason === 'live' ? 'changes' : opts.reason,
+                        signal,
+                    });
+                    await this.refreshAllDemandedAccountCatalogs({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
+                    await this.notifyPluginWebhookInvalidated(signal);
+                    await this.notifyManagedMachinePolicyInvalidated(signal);
+                    return;
+                }
 
-        const changes = result.response.changes;
-        const followSourcesFull = opts.reason !== 'live' || changes.length >= CHANGES_PAGE_LIMIT || changes.some(change => change.kind === 'account'
-            && asRecord(change.hint)?.sessionFollows === true);
-        const workflowRunIds = changes.flatMap(change => change.kind === 'account' && change.entityId.startsWith('workflow-run:')
-            ? [change.entityId.slice('workflow-run:'.length)] : []);
-        const discussionIds = changes.flatMap(change => change.kind === 'discussion' ? [change.entityId] : []);
-        if (followSourcesFull || workflowRunIds.length || discussionIds.length)
-            await this.notifySessionFollowRulesChanged({ full: followSourcesFull, workflowRunIds, discussionIds });
-        if (opts.reason !== 'live' || changes.length >= CHANGES_PAGE_LIMIT || changes.some((change) => change.kind === 'session')) {
-            publishSessionFollowWakeInvalidation();
-        }
-        const nextCursor = result.response.nextCursor;
-        this.applyResourceSessionAccessWitness({
-            accountId,
-            ...(result.response.sessionAccessWitness === undefined
-                ? {}
-                : { witness: result.response.sessionAccessWitness }),
-        });
-        signal.throwIfAborted();
-        const pluginAccountSettingsInvalidations = readPluginAccountSettingsWatchInvalidations(changes);
-        const pluginAccountCollectionInvalidations = readPluginAccountCollectionWatchInvalidations(changes);
+                // A snapshot does not acknowledge a transient changes-feed failure.
+                // Let the canonical retry owner retain and retry the current work.
+                throw result.error;
+            }
 
-        const hasRelevantMachineChange = changes.some(
-            (c) => c.kind === 'machine' && c.entityId === this.machine.id,
-        );
-        const accountSettingsVersions = changes
-            .filter((c) => c.kind === 'account' && c.entityId === 'self')
-            .map((c) => readAccountSettingsVersionFromHint(c.hint))
-            .filter((version): version is number => version !== null);
-        const highestAccountSettingsVersion = accountSettingsVersions.length > 0
-            ? Math.max(...accountSettingsVersions)
-            : null;
-        const hasConnectedServicesChange = changes.some((change) => {
-            if (change.kind !== 'account' || change.entityId !== 'self') return false;
-            const hint = change.hint;
-            return hint !== null
-                && typeof hint === 'object'
-                && !Array.isArray(hint)
-                && (hint as { connectedServices?: unknown }).connectedServices === true;
-        });
-        const hasAutomationSourceChange = changes.some(change => change.kind === 'automation'
-            && change.entityId !== 'automation-source-status');
-        const hasProjectRowsChange = changes.some((change) => {
-            if (change.kind !== 'account') return false;
-            const hint = ProjectAccountRowChangeHintV1Schema.safeParse(change.hint);
-            return hint.success
-                && change.entityId === buildProjectAccountRowPhysicalKeyV1(hint.data.key);
-        });
-        const hasSavedSecretCatalogChange = changesRequireSavedSecretCatalogRefresh(changes);
-        const hasConnectedMetadataCatalogChange = changes.some(change => change.kind === 'account'
-            && (change.entityId === CONNECTED_PRESENTATION_ACCOUNT_KV_KEY_V1
-                || change.entityId === CONNECTED_ACKNOWLEDGEMENTS_ACCOUNT_KV_KEY_V1));
-        const hasNotificationChannelCatalogChange = changes.some(change => change.kind === 'account'
-            && change.entityId === NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1);
-        const hasProfileCatalogChange = changes.some((change) => change.kind === 'account'
-            && isProfileCatalogAccountChangeEntityIdV1(change.entityId));
-        const hasPromptLibraryRowChange = changes.some((change) => change.kind === 'account'
-            && parsePromptLibraryPhysicalKeyV1(change.entityId) !== null);
-        const machineSkillInstalls = this.lifecycleDependencies.machineSkillInstalls;
-        const installedArtifactIds = new Set(machineSkillInstalls?.target.machineId === this.machine.id
-            ? readActiveMachineSkillInstallArtifactIds({ token: this.token, machineInstallDemand: machineSkillInstalls }) : []);
-        const changedInstalledArtifactIds = [...new Set(changes.filter(change => change.kind === 'artifact'
-            && installedArtifactIds.has(change.entityId)).map(change => change.entityId))];
-        const hasPromptLibraryChange = hasPromptLibraryRowChange || changedInstalledArtifactIds.length > 0;
-        const hasProviderConnectionsChange = changes.some((change) => change.kind === 'account'
-            && change.entityId === PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1);
-        const hasAcpCatalogChange = changes.some((change) => change.kind === 'account'
-            && change.entityId === ACP_CATALOG_ACCOUNT_ROW_KEY_V1);
-        const hasMcpServerCatalogChange = changes.some((change) => change.kind === 'account'
-            && change.entityId === MCP_SERVER_CATALOG_ACCOUNT_KEY_V1);
-        const hasConnectedAccountCatalogChange = changes.some((change) => change.kind === 'account'
-            && parseConnectedAccountCatalogPhysicalKeyV1(change.entityId) !== null);
-        const hasTeamChange = changes.some((change) => (
-            change.kind === 'account'
-            && change.entityId === TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1
-        ));
-        const pendingActivationHints = changes.flatMap((change): PendingSessionActivationHintNotification[] => {
-            if (change.kind !== 'session') return [];
-            const hint = asRecord(change.hint);
-            if (!hint) return [];
-            const requestId = typeof hint.pendingActivationRequestId === 'string'
-                ? hint.pendingActivationRequestId.trim()
-                : '';
-            const sessionId = change.entityId.trim();
-            const pendingVersion = hint.pendingVersion;
-            if (
-                !requestId
-                || !sessionId
-                || typeof pendingVersion !== 'number'
-                || !Number.isSafeInteger(pendingVersion)
-                || pendingVersion < 0
-            ) return [];
-            return [{ sessionId, requestId, pendingVersion, source: 'changes' }];
-        });
-        const deletedSessionChangeNotifications = changes.flatMap((change) => {
-            const deletion = readAuthoritativeSessionDeletionChangeV1(change);
-            if (!deletion) return [];
-            // A durable Session-deletion fact is delivered only by the
-            // authenticated Account whose changes feed produced it. Pin that
-            // Account's operation scope onto the notification so cleanup
-            // targets exactly the partition owning the deleted Session's
-            // operation records, even if the ambient credentials rotate
-            // before the listener runs. Fail closed when the delivering
-            // Account cannot be established: the cursor stays untouched and
-            // the fact replays.
-            const accountScope = resolveExternalSessionOperationAccountScope(
-                configuration.activeServerDir,
-                this.token,
+            const changes = result.response.changes;
+            const nextCursor = result.response.nextCursor;
+            if (changes.length >= CHANGES_PAGE_LIMIT && nextCursor <= after) {
+                throw new Error('account_changes_cursor_not_advanced');
+            }
+            const followSourcesFull = reason !== 'live' || changes.some(change => change.kind === 'account'
+                && asRecord(change.hint)?.sessionFollows === true);
+            const workflowRunIds = changes.flatMap(change => change.kind === 'account' && change.entityId.startsWith('workflow-run:')
+                ? [change.entityId.slice('workflow-run:'.length)] : []);
+            const discussionIds = changes.flatMap(change => change.kind === 'discussion' ? [change.entityId] : []);
+            if (followSourcesFull || workflowRunIds.length || discussionIds.length)
+                await this.notifySessionFollowRulesChanged({ full: followSourcesFull, workflowRunIds, discussionIds });
+            if (reason !== 'live' || changes.some((change) => change.kind === 'session')) {
+                publishSessionFollowWakeInvalidation();
+            }
+            this.applyResourceSessionAccessWitness({
+                accountId,
+                ...(result.response.sessionAccessWitness === undefined
+                    ? {}
+                    : { witness: result.response.sessionAccessWitness }),
+            });
+            signal.throwIfAborted();
+            const pluginAccountSettingsInvalidations = readPluginAccountSettingsWatchInvalidations(changes);
+            const pluginAccountCollectionInvalidations = readPluginAccountCollectionWatchInvalidations(changes);
+
+            const hasRelevantMachineChange = changes.some(
+                (c) => c.kind === 'machine' && c.entityId === this.machine.id,
             );
-            if (!accountScope) {
-                throw new Error('account_changes_account_scope_unavailable');
-            }
-            return [{ ...deletion, accountScope }];
-        });
+            const hasManagedPolicyChange = changes.some(change => {
+                if (change.kind !== 'account' || asRecord(change.hint)?.managedMachinePolicy !== true) return false;
+                const hint = ManagedMachinePolicyChangeHintV1Schema.safeParse(change.hint);
+                return hint.success && hint.data.machineId === this.machine.id;
+            });
+            const accountSettingsVersions = changes
+                .filter((c) => c.kind === 'account' && c.entityId === 'self')
+                .map((c) => readAccountSettingsVersionFromHint(c.hint))
+                .filter((version): version is number => version !== null);
+            const highestAccountSettingsVersion = accountSettingsVersions.length > 0
+                ? Math.max(...accountSettingsVersions)
+                : null;
+            const hasConnectedServicesChange = changes.some((change) => {
+                if (change.kind !== 'account' || change.entityId !== 'self') return false;
+                const hint = change.hint;
+                return hint !== null
+                    && typeof hint === 'object'
+                    && !Array.isArray(hint)
+                    && (hint as { connectedServices?: unknown }).connectedServices === true;
+            });
+            const quotaRefreshRecordIds = [...new Set(changes.flatMap(change => {
+                const recordId = readProviderAccountUsageRefreshRecordIdV1(change);
+                return recordId === null ? [] : [recordId];
+            }))];
+            const hasAutomationSourceChange = changes.some(change => change.kind === 'automation'
+                && change.entityId !== 'automation-source-status');
+            const hasWebhookAdmissionChange = changes.some(change => {
+                const parsed = PluginDomainChangeEntrySchema.safeParse(change);
+                return parsed.success && (parsed.data.hint.pluginDomain === 'webhook'
+                    || parsed.data.hint.pluginDomain === 'availability');
+            });
+            const hasProjectRowsChange = changes.some((change) => {
+                if (change.kind !== 'account') return false;
+                const hint = ProjectAccountRowChangeHintV1Schema.safeParse(change.hint);
+                return hint.success
+                    && change.entityId === buildProjectAccountRowPhysicalKeyV1(hint.data.key);
+            });
+            const hasSavedSecretCatalogChange = changesRequireSavedSecretCatalogRefresh(changes);
+            const hasConnectedMetadataCatalogChange = changes.some(change => change.kind === 'account'
+                && (change.entityId === CONNECTED_PRESENTATION_ACCOUNT_KV_KEY_V1
+                    || change.entityId === CONNECTED_ACKNOWLEDGEMENTS_ACCOUNT_KV_KEY_V1));
+            const hasNotificationChannelCatalogChange = changes.some(change => change.kind === 'account'
+                && change.entityId === NOTIFICATION_CHANNELS_ACCOUNT_KV_KEY_V1);
+            const hasProfileCatalogChange = changes.some((change) => change.kind === 'account'
+                && isProfileCatalogAccountChangeEntityIdV1(change.entityId));
+            const hasPromptLibraryRowChange = changes.some((change) => change.kind === 'account'
+                && parsePromptLibraryPhysicalKeyV1(change.entityId) !== null);
+            const machineSkillInstalls = this.lifecycleDependencies.machineSkillInstalls;
+            const installedArtifactIds = new Set(machineSkillInstalls?.target.machineId === this.machine.id
+                ? readActiveMachineSkillInstallArtifactIds({ token: this.token, machineInstallDemand: machineSkillInstalls }) : []);
+            const changedInstalledArtifactIds = [...new Set(changes.filter(change => change.kind === 'artifact'
+                && installedArtifactIds.has(change.entityId)).map(change => change.entityId))];
+            const hasPromptLibraryChange = hasPromptLibraryRowChange || changedInstalledArtifactIds.length > 0;
+            const hasProviderConnectionsChange = changes.some((change) => change.kind === 'account'
+                && change.entityId === PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1);
+            const hasAcpCatalogChange = changes.some((change) => change.kind === 'account'
+                && change.entityId === ACP_CATALOG_ACCOUNT_ROW_KEY_V1);
+            const hasMcpServerCatalogChange = changes.some((change) => change.kind === 'account'
+                && change.entityId === MCP_SERVER_CATALOG_ACCOUNT_KEY_V1);
+            const hasConnectedAccountCatalogChange = changes.some((change) => change.kind === 'account'
+                && parseConnectedAccountCatalogPhysicalKeyV1(change.entityId) !== null);
+            const hasTeamChange = changes.some((change) => (
+                change.kind === 'account'
+                && change.entityId === TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1
+            ));
+            const pendingActivationHints = changes.flatMap((change): PendingSessionActivationHintNotification[] => {
+                if (change.kind !== 'session') return [];
+                const hint = asRecord(change.hint);
+                if (!hint) return [];
+                const requestId = typeof hint.pendingActivationRequestId === 'string'
+                    ? hint.pendingActivationRequestId.trim()
+                    : '';
+                const sessionId = change.entityId.trim();
+                const pendingVersion = hint.pendingVersion;
+                if (
+                    !requestId
+                    || !sessionId
+                    || typeof pendingVersion !== 'number'
+                    || !Number.isSafeInteger(pendingVersion)
+                    || pendingVersion < 0
+                ) return [];
+                return [{ sessionId, requestId, pendingVersion, source: 'changes' }];
+            });
+            const deletedSessionChangeNotifications = changes.flatMap((change) => {
+                const deletion = readAuthoritativeSessionDeletionChangeV1(change);
+                if (!deletion) return [];
+                // A durable Session-deletion fact is delivered only by the
+                // authenticated Account whose changes feed produced it. Pin that
+                // Account's operation scope onto the notification so cleanup
+                // targets exactly the partition owning the deleted Session's
+                // operation records, even if the ambient credentials rotate
+                // before the listener runs. Fail closed when the delivering
+                // Account cannot be established: the cursor stays untouched and
+                // the fact replays.
+                const accountScope = resolveExternalSessionOperationAccountScope(
+                    configuration.activeServerDir,
+                    this.token,
+                );
+                if (!accountScope) {
+                    throw new Error('account_changes_account_scope_unavailable');
+                }
+                return [{ ...deletion, accountScope }];
+            });
 
-        if (changes.length >= CHANGES_PAGE_LIMIT || hasRelevantMachineChange) {
-            await this.refreshMachineFromServer(signal);
-            signal.throwIfAborted();
-        }
-        // The existing grant/Team Account-change producer wakes current Manage holders. The
-        // worklist reauthorizes these exact resources; a wake never grants key or access authority.
-        await this.prepareMachineRecipientEnvelopes([
-            ...(opts.reason !== 'live' ? [this.machine.id] : []),
-            ...changes.filter(change => change.kind === 'machine').map(change => change.entityId),
-        ], signal);
-        signal.throwIfAborted();
-        if (opts.reason !== 'live' || hasProjectRowsChange || changes.length >= CHANGES_PAGE_LIMIT) {
-            await this.notifyAccountProjectRowsChanged({
-                source: changes.length >= CHANGES_PAGE_LIMIT ? 'page-limit'
-                    : opts.reason === 'live' ? 'changes' : opts.reason,
-                signal,
-            });
-        }
-        if (opts.reason !== 'live' || hasProfileCatalogChange || changes.length >= CHANGES_PAGE_LIMIT) {
-            await refreshDemandedActiveProfileCatalog({ token: this.token, signal });
-            signal.throwIfAborted();
-        }
-        if (highestAccountSettingsVersion !== null) {
-            await this.notifyAccountSettingsVersionHint({
-                settingsVersion: highestAccountSettingsVersion,
-                source: 'changes',
-            });
-        } else if (changes.length >= CHANGES_PAGE_LIMIT) {
-            await this.notifyAccountSettingsVersionHint({ settingsVersion: null, source: 'page-limit' });
-        }
-        if (opts.reason !== 'live' || hasPromptLibraryChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
-            await this.refreshDemandedPromptLibraryCatalog({ signal, initializeMachineInstallDemand: opts.reason !== 'live',
-                ...(opts.reason === 'live' && !hasPromptLibraryRowChange && highestAccountSettingsVersion === null
-                    && changes.length < CHANGES_PAGE_LIMIT ? { artifactIds: changedInstalledArtifactIds } : {}) });
-            signal.throwIfAborted();
-        }
-        if (opts.reason !== 'live' || hasProviderConnectionsChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
-            await refreshDemandedActiveProviderConnectionsCatalog({ token: this.token, signal });
-            signal.throwIfAborted();
-        }
-        if (opts.reason !== 'live' || hasAcpCatalogChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
-            await refreshDemandedActiveAcpCatalog({ token: this.token, signal });
-            signal.throwIfAborted();
-        }
-        if (opts.reason !== 'live' || hasMcpServerCatalogChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
-            await refreshDemandedActiveMcpServerCatalog({ token: this.token, signal });
-            try {
-                await this.executionRunAccountSnapshots?.refreshDemandedMcpCatalog(signal);
-            } catch (error) {
+            if (hasRelevantMachineChange) {
+                await this.refreshMachineFromServer(signal);
                 signal.throwIfAborted();
-                if (asRecord(error)?.code === 'provider_authorization_changed') throw error;
-                logger.debug('[API MACHINE] Captured MCP catalog refresh unavailable');
             }
+            // The existing grant/Team Account-change producer wakes current Manage holders. The
+            // worklist reauthorizes these exact resources; a wake never grants key or access authority.
+            await this.prepareMachineRecipientEnvelopes([
+                ...(reason !== 'live' ? [this.machine.id] : []),
+                ...changes.filter(change => change.kind === 'machine').map(change => change.entityId),
+            ], signal);
             signal.throwIfAborted();
-        }
-        if (opts.reason !== 'live' || hasConnectedAccountCatalogChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
-            await refreshDemandedActiveConnectedAccountCatalogs({ token: this.token, signal });
-            signal.throwIfAborted();
-        }
-        publishPluginAccountAvailabilityChanges(accountScopeKey, changes);
-        if (changes.length >= CHANGES_PAGE_LIMIT) {
-            publishPluginAccountSettingsWatchInvalidation({ kind: 'full' });
-            publishPluginAccountCollectionWatchInvalidation({
-                accountScopeKey,
-                kind: 'reset',
-                changeCursor: nextCursor,
-            });
-        } else {
+            if (reason !== 'live' || hasProjectRowsChange) {
+                await this.notifyAccountProjectRowsChanged({
+                    source: reason === 'live' ? 'changes' : reason,
+                    signal,
+                });
+            }
+            if (reason !== 'live' || hasProfileCatalogChange) {
+                await refreshDemandedActiveProfileCatalog({ token: this.token, signal });
+                signal.throwIfAborted();
+            }
+            if (highestAccountSettingsVersion !== null) {
+                await this.notifyAccountSettingsVersionHint({
+                    settingsVersion: highestAccountSettingsVersion,
+                    source: 'changes',
+                });
+            }
+            if (reason !== 'live' || hasPromptLibraryChange || highestAccountSettingsVersion !== null) {
+                await this.refreshDemandedPromptLibraryCatalog({ signal, initializeMachineInstallDemand: reason !== 'live',
+                    ...(reason === 'live' && !hasPromptLibraryRowChange && highestAccountSettingsVersion === null
+                        ? { artifactIds: changedInstalledArtifactIds } : {}) });
+                signal.throwIfAborted();
+            }
+            if (reason !== 'live' || hasProviderConnectionsChange || highestAccountSettingsVersion !== null) {
+                await refreshDemandedActiveProviderConnectionsCatalog({ token: this.token, signal });
+                signal.throwIfAborted();
+            }
+            if (reason !== 'live' || hasAcpCatalogChange || highestAccountSettingsVersion !== null) {
+                await refreshDemandedActiveAcpCatalog({ token: this.token, signal });
+                signal.throwIfAborted();
+            }
+            if (reason !== 'live' || hasMcpServerCatalogChange || highestAccountSettingsVersion !== null) {
+                await refreshDemandedActiveMcpServerCatalog({ token: this.token, signal });
+                try {
+                    await this.executionRunAccountSnapshots?.refreshDemandedMcpCatalog(signal);
+                } catch (error) {
+                    signal.throwIfAborted();
+                    if (asRecord(error)?.code === 'provider_authorization_changed') throw error;
+                    logger.debug('[API MACHINE] Captured MCP catalog refresh unavailable');
+                }
+                signal.throwIfAborted();
+            }
+            if (reason !== 'live' || hasConnectedAccountCatalogChange || highestAccountSettingsVersion !== null) {
+                await refreshDemandedActiveConnectedAccountCatalogs({ token: this.token, signal });
+                signal.throwIfAborted();
+            }
+            publishPluginAccountAvailabilityChanges(accountScopeKey, changes);
             for (const invalidation of pluginAccountSettingsInvalidations) {
                 publishPluginAccountSettingsWatchInvalidation(invalidation);
             }
@@ -5304,97 +5366,109 @@ export class ApiMachineClient {
                     accountScopeKey,
                 });
             }
-        }
-        signal.throwIfAborted();
+            signal.throwIfAborted();
 
-        if (hasConnectedServicesChange || changes.length >= CHANGES_PAGE_LIMIT) {
-            await this.reconcileConnectedServicesProjection({
-                source: hasConnectedServicesChange ? 'changes' : 'page-limit',
-                executionAuthority,
-            }, signal);
-        }
-        if (opts.reason !== 'live' || hasSavedSecretCatalogChange || changes.length >= CHANGES_PAGE_LIMIT) {
-            await this.synchronizeSavedSecretCatalog(signal);
-            signal.throwIfAborted();
-        }
-        if (opts.reason !== 'live' || hasNotificationChannelCatalogChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
-            await refreshDemandedActiveNotificationChannelCatalog({ token: this.token, signal });
-            signal.throwIfAborted();
-        }
-        if (opts.reason !== 'live' || hasConnectedMetadataCatalogChange || highestAccountSettingsVersion !== null || changes.length >= CHANGES_PAGE_LIMIT) {
-            await refreshDemandedActiveConnectedMetadataCatalog({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
-            signal.throwIfAborted();
-        }
-        for (const activationHint of pendingActivationHints) {
-            signal.throwIfAborted();
-            await this.notifyPendingSessionActivationHint(activationHint);
-        }
-        for (const change of changes) {
-            const sessionId = change.entityId.trim();
-            if (change.kind === 'session' && sessionId) {
+            if (hasConnectedServicesChange || quotaRefreshRecordIds.length > 0) {
+                await this.reconcileConnectedServicesProjection({
+                    source: 'changes',
+                    executionAuthority,
+                    ...(quotaRefreshRecordIds.length > 0 ? { quotaRefreshRecordIds } : {}),
+                }, signal);
+            }
+            if (reason !== 'live' || hasSavedSecretCatalogChange) {
+                await this.synchronizeSavedSecretCatalog(signal);
                 signal.throwIfAborted();
-                // Consume this exact durable invalidation before advancing the
-                // Account cursor. Failure replays it through the existing feed.
-                for (const listener of this.sessionChangeListeners) {
-                    await listener({ sessionId, cursor: change.cursor });
+            }
+            if (reason !== 'live' || hasNotificationChannelCatalogChange || highestAccountSettingsVersion !== null) {
+                await refreshDemandedActiveNotificationChannelCatalog({ token: this.token, signal });
+                signal.throwIfAborted();
+            }
+            if (reason !== 'live' || hasConnectedMetadataCatalogChange || highestAccountSettingsVersion !== null) {
+                await refreshDemandedActiveConnectedMetadataCatalog({ token: this.token, signal, serverHttpBaseUrl: this.machineRuntimeServerHttpBaseUrl });
+                signal.throwIfAborted();
+            }
+            for (const activationHint of pendingActivationHints) {
+                signal.throwIfAborted();
+                await this.notifyPendingSessionActivationHint(activationHint);
+            }
+            for (const change of changes) {
+                const sessionId = change.entityId.trim();
+                if (change.kind === 'session' && sessionId) {
                     signal.throwIfAborted();
+                    // Consume this exact durable invalidation before advancing the
+                    // Account cursor. Failure replays it through the existing feed.
+                    for (const listener of this.sessionChangeListeners) {
+                        await listener({ sessionId, cursor: change.cursor });
+                        signal.throwIfAborted();
+                    }
+                }
+                const transcript = readSessionTranscriptChangeHintV1(change);
+                if (!transcript || !sessionId) continue;
+                signal.throwIfAborted();
+                // Append hints also invalidate retained rows: Account changes can
+                // coalesce a revision followed by an append into the latter hint.
+                for (const listener of this.sessionTranscriptRevisionListeners) {
+                    await listener({ sessionId, ...transcript, cursor: change.cursor });
                 }
             }
-            const transcript = readSessionTranscriptChangeHintV1(change);
-            if (!transcript || !sessionId) continue;
-            signal.throwIfAborted();
-            // Append hints also invalidate retained rows: Account changes can
-            // coalesce a revision followed by an append into the latter hint.
-            for (const listener of this.sessionTranscriptRevisionListeners) {
-                await listener({ sessionId, ...transcript, cursor: change.cursor });
+            for (const deletion of deletedSessionChangeNotifications) {
+                signal.throwIfAborted();
+                // Cleanup is part of consuming this durable deletion fact. A
+                // listener failure leaves the Account cursor untouched so the
+                // incumbent changes retry owner replays the exact same deletion.
+                await this.notifySessionDeletedChange(deletion);
             }
-        }
-        for (const deletion of deletedSessionChangeNotifications) {
-            signal.throwIfAborted();
-            // Cleanup is part of consuming this durable deletion fact. A
-            // listener failure leaves the Account cursor untouched so the
-            // incumbent changes retry owner replays the exact same deletion.
-            await this.notifySessionDeletedChange(deletion);
-        }
-        for (const entry of result.response.sessionAccessWitness?.entries ?? []) {
-            if (entry.status !== 'unavailable') continue;
-            signal.throwIfAborted();
-            // Same custody rule as deletion: derived local state for a Session
-            // the Account can no longer reach is cleared before the cursor
-            // advances, so a failed purge replays instead of being lost.
-            await this.notifySessionAccessRevoked({
-                sessionId: entry.sessionId,
-                cursor: entry.cursor,
-            });
-        }
+            for (const entry of result.response.sessionAccessWitness?.entries ?? []) {
+                if (entry.status !== 'unavailable') continue;
+                signal.throwIfAborted();
+                // Same custody rule as deletion: derived local state for a Session
+                // the Account can no longer reach is cleared before the cursor
+                // advances, so a failed purge replays instead of being lost.
+                await this.notifySessionAccessRevoked({
+                    sessionId: entry.sessionId,
+                    cursor: entry.cursor,
+                });
+            }
 
-        if (
-            opts.reason !== 'live'
-            || changes.length >= CHANGES_PAGE_LIMIT
-            || hasTeamChange
-            || hasConnectedServicesChange
-            || hasSavedSecretCatalogChange
-            || hasProviderConnectionsChange
-        ) {
-            signal.throwIfAborted();
-            await this.notifyManagedProviderRetainedCurrentnessInvalidation({
-                source: changes.length >= CHANGES_PAGE_LIMIT
-                    ? 'page-limit'
-                    : opts.reason === 'live' ? 'changes' : opts.reason,
-                signal,
-            });
-        }
+            if (
+                reason !== 'live'
+                || hasTeamChange
+                || hasConnectedServicesChange
+                || hasSavedSecretCatalogChange
+                || hasProviderConnectionsChange
+            ) {
+                signal.throwIfAborted();
+                await this.notifyManagedProviderRetainedCurrentnessInvalidation({
+                    source: reason === 'live' ? 'changes' : reason,
+                    signal,
+                });
+            }
 
-        if (opts.reason !== 'live' || changes.length >= CHANGES_PAGE_LIMIT
-            || hasAutomationSourceChange || hasConnectedServicesChange || hasConnectedAccountCatalogChange
-            || highestAccountSettingsVersion !== null) {
-            await this.notifyAutomationEventSourcesInvalidated(signal);
-        }
-        signal.throwIfAborted();
-        await writeAccountChangesCursor(accountId, nextCursor);
-        signal.throwIfAborted();
-        if (this.isActiveTransportGeneration(transportGeneration)) {
-            this.accountChangesObserverTransportGeneration = transportGeneration;
+            if (reason !== 'live'
+                || hasAutomationSourceChange || hasConnectedServicesChange || hasConnectedAccountCatalogChange
+                || highestAccountSettingsVersion !== null) {
+                await this.notifyAutomationEventSourcesInvalidated(signal);
+            }
+            if (reason !== 'live'
+                || hasWebhookAdmissionChange || hasTeamChange) {
+                await this.notifyPluginWebhookInvalidated(signal);
+            }
+            if (reason !== 'live'
+                || hasRelevantMachineChange || hasManagedPolicyChange || hasTeamChange) {
+                await this.notifyManagedMachinePolicyInvalidated(signal);
+            }
+            signal.throwIfAborted();
+            if (this.projectionSchedulingClosed || !this.isActiveTransportGeneration(transportGeneration)) return;
+            await writeAccountChangesCursor(accountId, nextCursor);
+            signal.throwIfAborted();
+            if (this.isActiveTransportGeneration(transportGeneration)) {
+                this.accountChangesObserverTransportGeneration = transportGeneration;
+            }
+            if (changes.length < CHANGES_PAGE_LIMIT) return;
+            // Each page is consumed before its cursor is acknowledged. Subsequent
+            // pages classify exact changes instead of repeating reconnect recovery.
+            after = nextCursor;
+            reason = 'live';
         }
     }
 

@@ -5,6 +5,7 @@ import { SessionIdSchema } from '../sessions/idsV1.js';
 import { formatSharedSavedSecretRefV1 } from '../account/settings/savedSecretReferenceV1.js';
 import { PluginDomainChangeEntrySchema } from './pluginDomain.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
+import { ProviderAccountUsageRecordIdSchema } from '../connect/providerAccountUsagePrimitives.js';
 
 export {
   PluginDomainAvailabilityChangeHintSchema,
@@ -50,6 +51,23 @@ export const HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1 = 'home-governance' as 
 export const TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 = 'teams' as const;
 /** Content-free invalidation for accepted material Provider Account allowance observations. */
 export const PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 = 'provider-account-usage' as const;
+/** Advisory refresh routing on the existing Account feed; never credential authority. */
+export const ProviderAccountUsageRefreshChangeV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('account'),
+  entityId: z.string(),
+  hint: z.strictObject({ providerAccountUsageRefresh: z.literal(true), recordId: ProviderAccountUsageRecordIdSchema }),
+}).check(z.refine(change => change.entityId === `provider-account-usage-refresh:${change.hint.recordId}`)));
+
+export function buildProviderAccountUsageRefreshChangeV1(recordId: string) {
+  return ProviderAccountUsageRefreshChangeV1Schema.parse({ kind: 'account',
+    entityId: `provider-account-usage-refresh:${recordId}`, hint: { providerAccountUsageRefresh: true, recordId } });
+}
+
+export function readProviderAccountUsageRefreshRecordIdV1(change: Readonly<{ kind: string; entityId: string; hint?: unknown }>): string | null {
+  if (change.kind !== 'account' || !change.entityId.startsWith('provider-account-usage-refresh:')) return null;
+  const parsed = ProviderAccountUsageRefreshChangeV1Schema.safeParse({ kind: change.kind, entityId: change.entityId, hint: change.hint });
+  return parsed.success ? parsed.data.hint.recordId : null;
+}
 /**
  * Coalescing identity for the creator's Runner-activation projection.
  *

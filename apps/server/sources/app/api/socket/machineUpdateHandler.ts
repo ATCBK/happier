@@ -231,15 +231,30 @@ export function machineUpdateHandler(
                 respond({ v: 1, ok: false, error: 'discussion_post_denied' });
                 return;
             }
-            const publication = parsed.data.publication;
+            if (parsed.data.operation === 'workflow_result') {
+                const workflowPublication = parsed.data.publication;
+                const append = { actorAccountId: userId, authentication: readSessionAccessAuthenticationFromSocket(socket),
+                    discussionId: workflowPublication.discussionId, request: workflowPublication.request,
+                    producer: workflowPublication.producer, workflowReturn: { machineId, origin: workflowPublication.origin,
+                        ...(workflowPublication.expectedParentRevision !== undefined ? { expectedParentRevision: workflowPublication.expectedParentRevision } : {}) } };
+                const result = await inTx(async tx => {
+                    const admission = await resolveMachineAdmissionInTx(tx, { actorAccountId: userId, machineId });
+                    if (admission.kind !== 'admitted' || admission.custodianAccountId !== userId
+                        || admission.installationId !== installationId) return null;
+                    return postPreparedDiscussionMessageInTx(tx, append);
+                }, { prepare: () => prepareDiscussionPostMutationAccounts(append) });
+                respond(result ? { v: 1, ...result } : { v: 1, ok: false, error: 'discussion_post_denied' });
+                return;
+            }
+            const reviewedPublication = parsed.data.publication;
             const append = { actorAccountId: userId, authentication: readSessionAccessAuthenticationFromSocket(socket),
-                discussionId: publication.discussionId, request: publication.request, draftReview: publication.draftReview,
-                ...(publication.terminalReturn ? { terminalReturn: publication.terminalReturn } : {}),
-                ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}),
-                producer: { v: 1 as const, kind: 'agent' as const, sessionId: publication.sessionId,
-                    ...(publication.sourceSession ? { sourceSession: publication.sourceSession } : {}),
-                    ...(publication.runId ? { runId: publication.runId } : {}),
-                    ...(publication.toolCallId ? { toolCallId: publication.toolCallId } : {}) } };
+                discussionId: reviewedPublication.discussionId, request: reviewedPublication.request, draftReview: reviewedPublication.draftReview,
+                ...(reviewedPublication.terminalReturn ? { terminalReturn: reviewedPublication.terminalReturn } : {}),
+                ...(reviewedPublication.replyReturn ? { replyReturn: reviewedPublication.replyReturn } : {}),
+                producer: { v: 1 as const, kind: 'agent' as const, sessionId: reviewedPublication.sessionId,
+                    ...(reviewedPublication.sourceSession ? { sourceSession: reviewedPublication.sourceSession } : {}),
+                    ...(reviewedPublication.runId ? { runId: reviewedPublication.runId } : {}),
+                    ...(reviewedPublication.toolCallId ? { toolCallId: reviewedPublication.toolCallId } : {}) } };
             const result = await inTx(async tx => {
                 const admission = await resolveMachineAdmissionInTx(tx, { actorAccountId: userId, machineId });
                 // This is the installed owner's reviewed replay, not a second
@@ -247,11 +262,11 @@ export function machineUpdateHandler(
                 if (admission.kind !== 'admitted' || admission.custodianAccountId !== userId
                     || admission.installationId !== installationId
                     || !await hasCurrentSessionActionRpcSourceBindingInTx(tx, { accountId: userId, machineId,
-                        installationId, sourceSessionId: publication.sessionId, lockAuthority: true })) return null;
-                const session = await tx.session.findUnique({ where: { id: publication.sessionId }, select: { archivedAt: true } });
-                if (!session || session.archivedAt || publication.sourceSession
-                    && (publication.sourceSession.sourceSessionId !== publication.sessionId
-                        || !await isSessionInputSourceCurrentInTx(tx, userId, publication.sourceSession))) return null;
+                        installationId, sourceSessionId: reviewedPublication.sessionId, lockAuthority: true })) return null;
+                const session = await tx.session.findUnique({ where: { id: reviewedPublication.sessionId }, select: { archivedAt: true } });
+                if (!session || session.archivedAt || reviewedPublication.sourceSession
+                    && (reviewedPublication.sourceSession.sourceSessionId !== reviewedPublication.sessionId
+                        || !await isSessionInputSourceCurrentInTx(tx, userId, reviewedPublication.sourceSession))) return null;
                 return postPreparedDiscussionMessageInTx(tx, append);
             }, { prepare: () => prepareDiscussionPostMutationAccounts(append) });
             respond(result ? { v: 1, ...result } : { v: 1, ok: false, error: 'discussion_post_denied' });
@@ -284,9 +299,6 @@ export function machineUpdateHandler(
                     authenticatedAccountId: userId, authenticatedMachineId: machine.id,
                     externalApiKeyId: parsed.data.externalApiKeyId, operationId: parsed.data.operationId,
                 });
-            }, {
-                // Broker retirement composes current Machine installation with external operation custody.
-                isolationLevel: "Serializable",
             });
             callback?.(result);
         } catch {
@@ -347,7 +359,7 @@ export function machineUpdateHandler(
         try {
             if (!await hasCurrentSocketCredential(userId, socket)) { callback?.({ v: 1, ok: false, error: 'forbidden' }); return; }
             callback?.(await inTx(tx => mutateSessionMessageReplyForMachineInTx(tx, { accountId: userId, installationId,
-                mutation: parsed.data, authentication: readSessionAccessAuthenticationFromSocket(socket) }), { isolationLevel: 'Serializable' }));
+                mutation: parsed.data, authentication: readSessionAccessAuthenticationFromSocket(socket) }), { isolationLevel: 'ReadCommitted' }));
         } catch {
             // Indeterminate storage failure retains original custody; no successful ACK.
             callback?.({ v: 1, ok: false, error: 'unavailable' });

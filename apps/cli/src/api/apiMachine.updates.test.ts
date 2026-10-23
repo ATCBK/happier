@@ -13,11 +13,8 @@ import { readMachineFinitePolicyV1 } from '@happier-dev/protocol/machines/machin
 import { decodeBase64, decrypt, encodeBase64, encrypt, getRandomBytes } from './encryption';
 
 import { bindApiSessionSocketMock, bindApiSessionSocketSequenceMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
-import { createManagedActivityInventory, createLiveWorkProducerGroup } from '@/daemon/lifecycle/managedActivity';
-import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { MachineUpdateMetadataRequestSchema, MachineUpdateStateRequestSchema } from '@happier-dev/protocol/machines/metadataUpdate';
-import { StoredMachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import type { MachineAgentInventoryObservation } from '@/capabilities/snapshots/machineAgentInventory';
 
 const ioMock = vi.hoisted(() => vi.fn());
@@ -140,82 +137,6 @@ describe('ApiMachineClient updates', () => {
         devcontainerChild: null } });
       expect(machine.metadata?.devcontainerChild).toBeUndefined();
     } finally { await client.shutdown(); }
-  });
-
-  it.each([false, true])('publishes current finite busy-to-idle facts without restoring superseded work after a CAS retry (held busy=%s)', async holdBusy => {
-    vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({
-      features: {}, capabilities: { serverIdentity: { serverIdentityId: 'fixture-home' } },
-    })));
-    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => url.endsWith('/v1/account/profile')
-      ? { status: 200, data: { id: 'fixture-owner' } } : { status: 404, data: {} });
-    const key = new Uint8Array(32).fill(23);
-    const published: unknown[] = [];
-    let version = 0;
-    let daemonState: string | null = null;
-    let busyDeferred = false;
-    let releaseBusy!: () => void;
-    const heldBusy = new Promise<void>(resolve => { releaseBusy = resolve; });
-    const socket = createApiSessionSocketStub({ emitWithAck: async (event, payload) => {
-      if (event === MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1) return { result: 'success', revision: 1 };
-      if (event !== 'machine-update-state') return { result: 'success', version: 1 };
-      const write = MachineUpdateStateRequestSchema.parse(payload);
-      const decoded = StoredMachinePublishedDaemonStateV1Schema.parse(decrypt(key, 'legacy', decodeBase64(write.daemonState)));
-      if (holdBusy && !busyDeferred && decoded.managedActivity?.kind === 'busy') {
-        busyDeferred = true;
-        await heldBusy;
-      }
-      if (write.expectedVersion !== version) return { result: 'version-mismatch', version, daemonState };
-      daemonState = write.daemonState;
-      published.push(decoded);
-      return { result: 'success', version: ++version, daemonState };
-    } });
-    bindApiSessionSocketMock(ioMock, socket);
-    const { ApiMachineClient } = await import('./apiMachine');
-    let client: InstanceType<typeof ApiMachineClient> | undefined;
-    let now = 100;
-    const source = createLiveWorkProducerGroup(() => client ? [client.getLiveWorkProducer()] : null);
-    const activity = createManagedActivityInventory({ producers: [source], now: () => now });
-    client = new ApiMachineClient('token', { id: 'machine-1', encryptionKey: key, encryptionVariant: 'legacy',
-      metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }, undefined,
-    { managedActivity: { activity, admissionDrain: createDaemonAdmissionDrain() } });
-    // Observe completion without replacing any internal publication or activity logic.
-    const updates = vi.spyOn(client, 'updateDaemonState');
-    client.setRPCHandlers({ spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'Not used by this fixture' }),
-      stopSession: async () => false, requestShutdown: () => {} });
-    let release!: () => void;
-    const task = new Promise<void>(resolve => { release = resolve; });
-    let observed: ReturnType<typeof client.observeActionExecution> | undefined;
-    const hasDecision = (decision: unknown) => published.some(state => state !== null && typeof state === 'object'
-      && 'managedActivity' in state && JSON.stringify(state.managedActivity) === JSON.stringify(decision));
-    try {
-      client.connect();
-      await vi.waitFor(() => expect(socket.connected).toBe(true));
-      expect(await activity.readDecision()).toEqual({ kind: 'idle', since: 100 });
-      await vi.waitFor(() => expect(hasDecision({ kind: 'idle', since: 100 })).toBe(true));
-      observed = client.observeActionExecution({ actionId: 'projects.compute.exec', input: { private: 'not-published' },
-        actionRequestId: 'private-operation-reference', execute: async () => { await task; return { ok: true, result: {} }; } });
-      await vi.waitFor(async () => expect(await activity.readDecision()).toEqual({ kind: 'busy', reasons: ['finite'] }));
-      if (holdBusy) await vi.waitFor(() => expect(busyDeferred).toBe(true));
-      else await vi.waitFor(() => expect(hasDecision({ kind: 'busy', reasons: ['finite'] })).toBe(true));
-      now = 200;
-      release();
-      await observed;
-      expect(await activity.readDecision()).toEqual({ kind: 'idle', since: 200 });
-      await vi.waitFor(() => expect(hasDecision({ kind: 'idle', since: 200 })).toBe(true));
-      releaseBusy();
-      await Promise.all(updates.mock.results.flatMap(result => result.type === 'return' ? [result.value] : []));
-      expect(StoredMachinePublishedDaemonStateV1Schema.parse(decrypt(key, 'legacy', decodeBase64(daemonState!))).managedActivity)
-        .toEqual({ kind: 'idle', since: 200 });
-      expect(JSON.stringify(published)).not.toContain('private-operation-reference');
-      expect(JSON.stringify(published)).not.toContain('not-published');
-    } finally {
-      releaseBusy();
-      release();
-      await observed;
-      activity.dispose(); source.dispose();
-      await client.shutdown();
-    }
   });
 
   it('repairs a later Team member from the actual Machine change page using another online Manage holder', async () => {

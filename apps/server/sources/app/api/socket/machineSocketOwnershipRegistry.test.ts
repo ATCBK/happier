@@ -281,6 +281,29 @@ describe("createMachineSocketOwnershipRegistry", () => {
         expect(oldSocket.disconnect).toHaveBeenCalledWith(true);
     });
 
+    it("keeps the prior owner live until Redis accepts a same-runtime reclaim", async () => {
+        const io = createIoStub();
+        const oldSocket = setSocket(io, "socket-old", true);
+        setSocket(io, "socket-new", true);
+        redisHmgetMock.mockResolvedValue(["socket-old", "runtime-same", null, null, null, null, null]);
+        redisEvalMock.mockResolvedValueOnce("granted");
+        const registry = createMachineSocketOwnershipRegistry({
+            io, config: { enabled: true, instanceId: "instance-1" },
+        });
+        const identity = { accountId: "acct-1", machineId: "machine-1" };
+        await registry.claimOwner({ ...identity, socketId: "socket-old", owner: { runtimeId: "runtime-same" } });
+        redisEvalMock.mockRejectedValueOnce(new Error("redis unavailable"));
+        try {
+            await expect(registry.claimOwner({ ...identity, socketId: "socket-new", owner: { runtimeId: "runtime-same" } }))
+                .rejects.toThrow("redis unavailable");
+            expect(oldSocket.connected).toBe(true);
+            expect(await registry.readOwner(identity)).toMatchObject({ socketId: "socket-old" });
+        } finally {
+            await registry.releaseOwner({ ...identity, socketId: "socket-old" });
+            await registry.releaseOwner({ ...identity, socketId: "socket-new" });
+        }
+    });
+
     it("keeps the replacement owner's refresh loop alive when a stale prior refresh resolves late", async () => {
         vi.useFakeTimers();
         try {
@@ -306,6 +329,7 @@ describe("createMachineSocketOwnershipRegistry", () => {
                 ]);
             redisEvalMock.mockResolvedValueOnce("granted");
             redisEvalMock.mockImplementationOnce(() => staleRefresh);
+            redisEvalMock.mockResolvedValueOnce("self");
             redisEvalMock.mockResolvedValueOnce(1);
 
             const registry = createMachineSocketOwnershipRegistry({
@@ -345,9 +369,9 @@ describe("createMachineSocketOwnershipRegistry", () => {
 
             await vi.advanceTimersByTimeAsync(1000);
 
-            expect(redisEvalMock).toHaveBeenCalledTimes(3);
+            expect(redisEvalMock).toHaveBeenCalledTimes(4);
             expect(redisEvalMock).toHaveBeenNthCalledWith(
-                3,
+                4,
                 expect.stringContaining("updatedAt"),
                 1,
                 "machine-owner:acct-1:machine-1",

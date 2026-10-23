@@ -9,6 +9,8 @@ export type MachineRpcGovernanceClassification = 'action_spec_bound' | 'internal
 export type MachineRpcGovernanceMetadataV1 = Readonly<{
   rpcClassification: MachineRpcGovernanceClassification;
   actionSpecId?: string;
+  /** Exact non-Action read fact, independent of routing and caller authority. */
+  readOnly?: true;
 }>;
 
 const ACTION_SPEC_RPC_METHOD_IDS = Object.freeze({
@@ -226,13 +228,27 @@ const ACTION_SPEC_RPC_METHOD_IDS = Object.freeze({
 // contract owned by the daemon spawn handler. They are not the public V2
 // session.spawn_new Action surface.
 const SESSION_SPAWN_PRIVATE_INTERNAL_METHODS = new Set<string>([
-  RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT,
   RPC_METHODS.SPAWN_HAPPY_SESSION,
   RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE,
 ]);
 
+// Action-bound methods derive effects from their ActionSpec. These transports
+// have no single ActionSpec; keep their existing governance class and read fact
+// together rather than inferring effects from a route class or method suffix.
+const READ_ONLY_RPC_GOVERNANCE = Object.freeze({
+  [RPC_METHODS.CAPABILITIES_DESCRIBE]: 'internal_only',
+  [RPC_METHODS.CAPABILITIES_DETECT]: 'advisory_unclassified',
+  [RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION]: 'advisory_unclassified',
+  [RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE]: 'internal_only',
+  [RPC_METHODS.DAEMON_GUARD_WATCH]: 'internal_only',
+  [RPC_METHODS.DAEMON_VITALS_WATCH]: 'internal_only',
+  [RPC_METHODS.DAEMON_PROCESSES_WATCH]: 'internal_only',
+  [RPC_METHODS.DAEMON_STORAGE_WATCH]: 'internal_only',
+  [RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT]: 'internal_only',
+  [RPC_METHODS.DAEMON_SESSION_GOAL_GET]: 'advisory_unclassified',
+} satisfies Readonly<Record<string, MachineRpcGovernanceClassification>>);
+
 const PMS5_DIRECT_INTERNAL_METHODS = new Set<string>([
-  RPC_METHODS.DAEMON_GUARD_WATCH,
   SESSION_RPC_METHODS.SESSION_GUARD_NOTICE,
   SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1,
   SESSION_RPC_METHODS.SESSION_PROVIDER_CLI_ATTACH_PREPARE,
@@ -259,7 +275,6 @@ const PMS5_DIRECT_INTERNAL_METHODS = new Set<string>([
   RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_LIST,
   RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_STATUS,
   RPC_METHODS.DAEMON_EXTENSIONS_RELOAD_STATUS,
-  RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
   RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE,
   RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_GET,
   RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_MUTATE,
@@ -294,9 +309,6 @@ const PMS5_DIRECT_INTERNAL_METHODS = new Set<string>([
   RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
   RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH,
   RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH,
-  RPC_METHODS.DAEMON_VITALS_WATCH,
-  RPC_METHODS.DAEMON_PROCESSES_WATCH,
-  RPC_METHODS.DAEMON_STORAGE_WATCH,
   RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,
   RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START,
   RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_OPEN_PREVIEW,
@@ -342,7 +354,6 @@ const PMS5_DIRECT_INTERNAL_METHODS = new Set<string>([
   SESSION_RPC_METHODS.SESSION_MANAGED_SERVICE_ENDPOINT_READ_NEXT_V1,
   SESSION_RPC_METHODS.SESSION_MANAGED_SERVICE_ENDPOINT_READ_CANCEL_V1,
   RPC_METHODS.SCM_BACKEND_DESCRIBE,
-  RPC_METHODS.CAPABILITIES_DESCRIBE,
 ]);
 
 const A16X_PLUGIN_UI_INTERNAL_METHODS = new Set<string>([
@@ -417,6 +428,12 @@ export function resolveMachineRpcGovernance(method: string): MachineRpcGovernanc
   const actionSpecId = ACTION_SPEC_RPC_METHOD_IDS[method as keyof typeof ACTION_SPEC_RPC_METHOD_IDS];
   if (actionSpecId) {
     return { rpcClassification: 'action_spec_bound', actionSpecId };
+  }
+  if (Object.hasOwn(READ_ONLY_RPC_GOVERNANCE, method)) {
+    return {
+      rpcClassification: READ_ONLY_RPC_GOVERNANCE[method as keyof typeof READ_ONLY_RPC_GOVERNANCE],
+      readOnly: true,
+    };
   }
   if (
     method === RPC_METHODS.STOP_DAEMON

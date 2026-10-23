@@ -346,7 +346,7 @@ describe('bootstrapMachineSyncRuntime', () => {
             const sessionId = 'c123456789012345678901234';
             const installationId = readOrCreateInstallationIdentitySync().installationId;
             const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
-            const target = { homeId: 'discussion-home', accountId, sessionId, machineId, installationId };
+            const target = { homeId: 'srv_discussion_home', accountId, sessionId, machineId, installationId };
             const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: sessionId };
             const actor = { v: 1, accountId, profile: null };
             const message = { id: 'question', discussionId: 'discussion', localId: 'question', seq: 2,
@@ -414,7 +414,8 @@ describe('bootstrapMachineSyncRuntime', () => {
                 stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => state === 'busy' || state === 'idle_host',
                 resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: target.homeId, machineId }),
                 getServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
-                    features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+                    features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
+                    capabilities: { serverIdentity: { serverIdentityId: target.homeId } },
                 }) }), loadLocalSessionMetadataForHandoff: async () => null, beforeShutdown: async () => {}, requestShutdown: () => {},
                 directPeerServerLifecycle: null, directTransferRegistryHost: createCliRegistryHostV1(),
                 connectedServiceRefreshLoopHandle: null, connectedServiceQuotasLoopHandle: null, daemonServerWorkScheduler: {} as never,

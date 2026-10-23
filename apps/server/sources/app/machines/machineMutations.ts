@@ -2,14 +2,14 @@ import { removeAutomationMachineAssignmentsTx } from "@/app/automations/automati
 import { type MachineKind, isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import { isPlainMachineDataKeyMarker, machineStoredContentMatchesAccountMode } from "@happier-dev/protocol/machines/machineStoredContent";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
-import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, beforeAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     buildNewMachineUpdate,
     buildUpdateMachineUpdate,
     eventRouter,
 } from "@/app/events/eventRouter";
 import { activityCache } from "@/app/presence/sessionCache";
-import { afterTx, type Tx } from "@/storage/inTx";
+import { afterTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { serializeMachineKeyBasis } from "./machineSerialization";
@@ -45,6 +45,20 @@ export function resolveMachineContentPublicKeyFingerprintForStorage(params: Read
     contentPublicKeyFingerprint: string | null;
 }>): string | null {
     return isPlainMachineDataKeyMarker(params.dataEncryptionKey) ? null : params.contentPublicKeyFingerprint;
+}
+
+/** A peer key transition cannot make a legacy mutation return a plain carrier. */
+export function recheckMachineStoredContentMutationAdmissionInTx(tx: Tx, input: Readonly<{
+    accountId: string; machineId: string; supportsCurrentStoredContentProtocol: boolean;
+}>): void {
+    if (input.supportsCurrentStoredContentProtocol) return;
+    beforeAccountChangePublication(tx, [input.accountId], async client => {
+        const current = await client.machine.findFirst({ where: { id: input.machineId, accountId: input.accountId },
+            select: { dataEncryptionKey: true } });
+        if (current && isPlainMachineDataKeyMarker(current.dataEncryptionKey)) {
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
+    });
 }
 
 /** Persistent registration fences its predicates; Runner creation keeps activation's content admission. */

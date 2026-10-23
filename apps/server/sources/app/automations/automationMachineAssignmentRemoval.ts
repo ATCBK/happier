@@ -1,4 +1,6 @@
 import type { Tx } from "@/storage/inTx";
+import { TransactionReplayRequiredError } from "@/storage/inTx";
+import { beforeAccountChangePublication } from "@/app/changes/markAccountChanged";
 
 import {
     emitAutomationMutationAfterTx,
@@ -127,7 +129,21 @@ export class AutomationMachineAssignmentRemovalFenceUnavailableError extends Err
 export async function removeAutomationMachineAssignmentsTx(
     params: AutomationMachineAssignmentRemovalParams,
 ): Promise<AutomationMachineAssignmentRemovalResult> {
-    await acquireWorkflowPublicationLocksInTx(params.tx, machineAssignmentRemovalPublicationScope(params));
+    const publicationScope = machineAssignmentRemovalPublicationScope(params);
+    await acquireWorkflowPublicationLocksInTx(params.tx, publicationScope);
+    const admittedRunIds = new Set((await getWorkflowPublicationAudienceInTx(params.tx, publicationScope)).runIds);
+    beforeAccountChangePublication(params.tx, [params.accountId], async tx => {
+        // A definition or Run may commit while this withdrawal's Machine write
+        // is uncommitted. Publication orders their shared Account, so replay rather
+        // than miss assignments or stranded Runs enumerated before that commit.
+        const [remainingAssignments, current] = await Promise.all([
+            tx.automationAssignment.count({ where: { machineId: params.machineId } }),
+            getWorkflowPublicationAudienceInTx(tx, publicationScope),
+        ]);
+        if (remainingAssignments > 0 || current.runIds.some(runId => !admittedRunIds.has(runId))) {
+            throw new TransactionReplayRequiredError("automation-assignment-admission-changed");
+        }
+    });
     // The Account-first fence orders this composition with every other
     // Account-fenced Automation writer before any of its writes. It is taken
     // unconditionally — including when no current definition assignment

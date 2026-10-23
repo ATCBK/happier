@@ -1769,6 +1769,14 @@ export async function bootstrapMachineSyncRuntime(
         context?.bindSessionFollowSourceReconciliation(async source => {
           if (await isCurrent()) await reconcileFollowReceiverAtHome(sessionId, context, source ?? undefined);
         }, followLifetime.signal);
+        if (context && sourceSessionId) {
+          // Requester source hints use their retained Account's same rule
+          // predicate owner. Their own destination/reconnect recovery stays broad.
+          const selected = await params.dispatchSessionFollowOccurrence?.({ sourceSessionIdChanged: sourceSessionId,
+            contextSessionId: sessionId });
+          if (!selected || !('coveredEvents' in selected) || !selected.receiverSessionIds?.includes(sessionId)
+            || !await isCurrent()) return;
+        }
         const installation = readInstallationIdentityIfExistsSync();
         if (!installation) return;
         const credentials = context?.bootstrap.credentials ?? storedCredentials;

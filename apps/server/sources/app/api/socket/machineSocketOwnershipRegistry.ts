@@ -1,4 +1,5 @@
 import type { Server } from "socket.io";
+import type { Redis } from 'ioredis';
 
 import { getRedisClient } from "@/storage/redis/redis";
 
@@ -130,6 +131,7 @@ function resolveMachineSocketOwnerTtlSeconds(config: MachineSocketOwnershipRegis
 export function createMachineSocketOwnershipRegistry(params: Readonly<{
     io: Server;
     config: MachineSocketOwnershipRegistryConfig;
+    redis?: Pick<Redis, 'eval' | 'hmget'>;
 }>) {
     const localOwners = new Map<string, MachineSocketOwnerSnapshot>();
     const refreshTimers = new Map<string, NodeJS.Timeout>();
@@ -161,7 +163,7 @@ export function createMachineSocketOwnershipRegistry(params: Readonly<{
         disconnectSocketById(socketId);
         if (!params.config.enabled) return;
 
-        const redis = getRedisClient();
+        const redis = params.redis ?? getRedisClient();
         await redis.eval(DEL_IF_SOCKET_ID_SCRIPT, 1, key, socketId);
     }
 
@@ -188,7 +190,7 @@ export function createMachineSocketOwnershipRegistry(params: Readonly<{
 
     async function readRedisOwner(key: string): Promise<MachineSocketOwnerSnapshot | null> {
         if (!params.config.enabled) return null;
-        const redis = getRedisClient();
+        const redis = params.redis ?? getRedisClient();
         const [
             socketId,
             runtimeId,
@@ -226,7 +228,7 @@ export function createMachineSocketOwnershipRegistry(params: Readonly<{
     function startRefreshLoop(key: string, socketId: string): void {
         if (!params.config.enabled) return;
         if (refreshTimers.has(key)) return;
-        const redis = getRedisClient();
+        const redis = params.redis ?? getRedisClient();
         const intervalMs = Math.max(1000, Math.floor((ttlSeconds * 1000) / 2));
         const instanceId = params.config.instanceId;
         const timer = setInterval(() => {
@@ -265,6 +267,14 @@ export function createMachineSocketOwnershipRegistry(params: Readonly<{
     }
 
     return {
+        /** The existing lease is the authority; a partial room census cannot choose a new owner. */
+        async readOwner(identity: Readonly<{ accountId: string; machineId: string }>): Promise<MachineSocketOwnerSnapshot | null> {
+            const key = resolveOwnershipKey(identity);
+            if (params.config.enabled) return await readRedisOwner(key);
+            pruneStaleLocalOwner(key);
+            return localOwners.get(key) ?? null;
+        },
+
         async claimOwner(paramsForClaim: Readonly<{
             accountId: string;
             machineId: string;
@@ -283,23 +293,20 @@ export function createMachineSocketOwnershipRegistry(params: Readonly<{
                     : null;
             let takeoverSocketId: string | null = null;
             if (localOwner) {
-                if (localOwner.socketId === paramsForClaim.socketId) {
-                    localOwners.set(key, normalizedOwner);
-                    startRefreshLoop(key, paramsForClaim.socketId);
-                    return { result: "already-owned-by-self" };
-                }
-
-                if (localOwner.runtimeId && normalizedOwner.runtimeId && localOwner.runtimeId === normalizedOwner.runtimeId) {
-                    if (localOwner.socketId !== paramsForClaim.socketId) {
-                        disconnectSocketById(localOwner.socketId);
+                const isSelf = localOwner.socketId === paramsForClaim.socketId
+                    || Boolean(localOwner.runtimeId && normalizedOwner.runtimeId && localOwner.runtimeId === normalizedOwner.runtimeId);
+                if (isSelf) {
+                    // Redis-backed reclaims must publish the socket before retiring its predecessor.
+                    if (!params.config.enabled) {
+                        if (localOwner.socketId !== paramsForClaim.socketId) {
+                            disconnectSocketById(localOwner.socketId);
+                        }
+                        localOwners.set(key, normalizedOwner);
+                        stopRefreshLoop(key);
+                        startRefreshLoop(key, paramsForClaim.socketId);
+                        return { result: "already-owned-by-self" };
                     }
-                    localOwners.set(key, normalizedOwner);
-                    stopRefreshLoop(key);
-                    startRefreshLoop(key, paramsForClaim.socketId);
-                    return { result: "already-owned-by-self" };
-                }
-
-                if (isSocketLive(localOwner.socketId)) {
+                } else if (isSocketLive(localOwner.socketId)) {
                     if (takeoverRequested && isManualOwner(localOwner)) {
                         takeoverSocketId = localOwner.socketId;
                     } else {
@@ -311,7 +318,7 @@ export function createMachineSocketOwnershipRegistry(params: Readonly<{
             }
 
             if (params.config.enabled) {
-                const redis = getRedisClient();
+                const redis = params.redis ?? getRedisClient();
                 const claimResult = await redis.eval(
                     CLAIM_IF_AVAILABLE_OR_SELF_OR_TAKEOVER_SCRIPT,
                     1,
@@ -372,6 +379,10 @@ export function createMachineSocketOwnershipRegistry(params: Readonly<{
                 return { result: "takeover-granted" };
             }
 
+            // Redis may have lost the lease while the previous socket stayed live.
+            if (localOwner && localOwner.socketId !== paramsForClaim.socketId) {
+                disconnectSocketById(localOwner.socketId);
+            }
             localOwners.set(key, normalizedOwner);
             stopRefreshLoop(key);
             startRefreshLoop(key, paramsForClaim.socketId);
@@ -391,7 +402,7 @@ export function createMachineSocketOwnershipRegistry(params: Readonly<{
             }
             if (!params.config.enabled) return;
 
-            const redis = getRedisClient();
+            const redis = params.redis ?? getRedisClient();
             try {
                 await redis.eval(DEL_IF_SOCKET_ID_SCRIPT, 1, key, paramsForRelease.socketId);
             } catch {

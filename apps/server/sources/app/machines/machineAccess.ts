@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import type { Prisma } from '@prisma/client';
 import { decodeBase64, encodeBase64 } from 'privacy-kit';
 import { computeMachineOwnerEnvelopeFingerprintV1 } from '@happier-dev/protocol/machines/machineOwnerEnvelopeFingerprintV1';
 import { decodePlainMachineStoredContent, machineStoredContentMatchesAccountMode } from '@happier-dev/protocol/machines/machineStoredContent';
@@ -53,28 +54,43 @@ const MACHINE_ACCESS_FACTS_SELECT = {
         } } } },
     } as const;
 
+// Bulk role maps need current permission facts, not Machine content or key material.
+const MACHINE_PERMISSION_FACTS_SELECT = {
+    id: true, kind: true, accountId: true,
+    account: { select: { status: true } },
+    accountGrants: { select: { accountId: true, accessLevel: true, account: { select: { status: true } } } },
+    teamGrants: { select: { teamId: true, accessLevel: true, team: { select: { archivedAt: true,
+        memberships: { select: { accountId: true, status: true, account: { select: { status: true } } } },
+    } } } },
+    groupGrants: { select: { teamGroupId: true, accessLevel: true, teamGroup: { select: {
+        teamId: true, archivedAt: true, team: { select: { archivedAt: true } },
+        memberships: { select: { teamMembership: { select: { accountId: true, status: true, account: { select: { status: true } } } } } },
+    } } } },
+} as const;
+type MachinePermissionFacts = Prisma.MachineGetPayload<{ select: typeof MACHINE_PERMISSION_FACTS_SELECT }>;
+
 async function readFactsInTx(tx: Tx, machineId: string) {
     return tx.machine.findUnique({ where: { id: machineId }, select: MACHINE_ACCESS_FACTS_SELECT });
 }
 type MachineFacts = NonNullable<Awaited<ReturnType<typeof readFactsInTx>>>;
 type Contribution = Readonly<{ principal: PrincipalRefV1; level: 'view' | 'admin'; displayName: string | null; accountIds: readonly string[] }>;
 
-function contributions(row: MachineFacts): Contribution[] {
+function contributions(row: MachineFacts | MachinePermissionFacts): Contribution[] {
     return [
         ...row.accountGrants.map(grant => ({ principal: { kind: 'account' as const, accountId: grant.accountId }, level: grant.accessLevel,
-            displayName: resolveAccountDisplayLabelV1(grant.account), accountIds: grant.account.status === 'active' ? [grant.accountId] : [] })),
+            displayName: resolveAccountDisplayLabelV1('name' in grant.account ? grant.account : {}), accountIds: grant.account.status === 'active' ? [grant.accountId] : [] })),
         ...row.teamGrants.map(grant => ({ principal: { kind: 'team' as const, teamId: grant.teamId }, level: grant.accessLevel,
-            displayName: grant.team.name, accountIds: grant.team.memberships.filter(member => isEffectiveTeamMembership({
+            displayName: 'name' in grant.team ? grant.team.name : null, accountIds: grant.team.memberships.filter(member => isEffectiveTeamMembership({
                 accountStatus: member.account.status, membershipStatus: member.status, teamArchivedAt: grant.team.archivedAt,
             })).map(member => member.accountId) })),
         ...row.groupGrants.map(grant => ({ principal: { kind: 'group' as const, teamId: grant.teamGroup.teamId, groupId: grant.teamGroupId }, level: grant.accessLevel,
-            displayName: grant.teamGroup.name, accountIds: grant.teamGroup.memberships.filter(({ teamMembership: member }) => isEffectiveTeamGroupMembership({
+            displayName: 'name' in grant.teamGroup ? grant.teamGroup.name : null, accountIds: grant.teamGroup.memberships.filter(({ teamMembership: member }) => isEffectiveTeamGroupMembership({
                 accountStatus: member.account.status, membershipStatus: member.status,
                 teamArchivedAt: grant.teamGroup.team.archivedAt, groupArchivedAt: grant.teamGroup.archivedAt,
             })).map(({ teamMembership: member }) => member.accountId) })),
     ];
 }
-function effectiveRole(row: MachineFacts, actorAccountId: string, sources?: readonly Contribution[]): MachineAccessRoleV1 | null {
+function effectiveRole(row: MachineFacts | MachinePermissionFacts, actorAccountId: string, sources?: readonly Contribution[]): MachineAccessRoleV1 | null {
     if (row.accountId === actorAccountId) return row.account.status === 'active' ? 'manage' : null;
     if (row.kind !== 'persistent') return null;
     let role: MachineAccessRoleV1 | null = null;
@@ -92,8 +108,12 @@ export async function resolveEffectiveMachineRoleInTx(tx: Tx, input: MachineActo
 }
 export async function resolveEffectiveMachineAccessForMachinesInTx(tx: Tx, input: Readonly<{ machineIds: readonly string[]; accountIds: readonly string[] }>): Promise<Map<string, Map<string, MachineAccessRoleV1 | null>>> {
     const result = new Map<string, Map<string, MachineAccessRoleV1 | null>>();
-    for (const machineId of new Set(input.machineIds)) {
-        const row = await readFactsInTx(tx, machineId);
+    const machineIds = [...new Set(input.machineIds)];
+    if (machineIds.length === 0) return result;
+    const rows = await tx.machine.findMany({ where: { id: { in: machineIds } }, select: MACHINE_PERMISSION_FACTS_SELECT });
+    const byId = new Map(rows.map(row => [row.id, row]));
+    for (const machineId of machineIds) {
+        const row = byId.get(machineId);
         const sources = row ? contributions(row) : [];
         result.set(machineId, new Map(input.accountIds.map(accountId => [accountId, row ? effectiveRole(row, accountId, sources) : null])));
     }

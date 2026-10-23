@@ -7,8 +7,9 @@ import { socketRpcCodec, type SocketRpcContent } from './socketRpcCodec.js';
 import { markRpcRequestDisposition, readRpcRequestDisposition } from './rpcDisposition.js';
 import { createSocketRpcAbortError, createSocketRpcRequestId, issueSocketRpcCallWithCancellation, raceSocketIoAckTimeout } from './socketRpcCancellation.js';
 import { ExternalActionRequestEnvelopeSchema, type ExternalActionRequestEnvelope } from '@happier-dev/protocol/actions/externalActionApi';
+import { isReadOnlyMachineRpcMethod } from '@happier-dev/protocol/actions/actionSpecs';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { createRpcCallError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { readProjectServiceMoveChildEffectV1 } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
 import { WorkspaceSyncSourceExecutionV1Schema, WorkspaceSyncSeedRoutingV1Schema,
   type WorkspaceSyncSourceExecutionV1, type WorkspaceSyncSeedRoutingV1 } from '@happier-dev/protocol/socketRpc';
@@ -22,6 +23,15 @@ export type SocketRpcSocket = SocketRpcAckScope & Readonly<{
   emit(event: string, ...args: unknown[]): unknown;
   timeout?(timeoutMs: number): SocketRpcAckScope;
 }>;
+
+/** Local native observation, distinct from identically worded remote error ACKs. */
+class SocketRpcDisconnectedError extends RpcError {
+  readonly cause: Error;
+  constructor(cause: Error) {
+    super(cause.message, RPC_ERROR_CODES.OUTCOME_UNKNOWN);
+    this.cause = cause;
+  }
+}
 
 function prepareSocketRpcEmission(socket: SocketRpcSocket, nativeTimeout: number | undefined) {
   // Socket.IO 4.8.3: timeout() returns the physical socket even through the
@@ -101,7 +111,7 @@ export async function emitWithAckCancellable<T>(params: Readonly<{
     // Preserve uncertainty in the public code as well as the local disposition:
     // callers that serialize the failure must not lose the recovery contract.
     const failure = issued && error instanceof Error && error.message === 'socket has been disconnected'
-      ? Object.assign(createRpcCallError({ error: error.message, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN }), { cause: error })
+      ? new SocketRpcDisconnectedError(error)
       : error;
     throw markRpcRequestDisposition(failure, issued ? 'outcomeUnknown' : 'notSent');
   }
@@ -208,6 +218,15 @@ export async function callSocketRpc<R>(params: Readonly<{
     // acknowledgement remains authoritative even if cancellation arrives later.
     return result as R;
   } catch (error) {
+    // The ACK owner observed this namespace close, not a relay refusal or a
+    // decoding failure after an ACK. Reads have no effect to reconcile: retire
+    // their in-flight wait so the existing reconnect owner can revalidate.
+    // Keep issued disposition; transport unavailability is not proof of notSent.
+    if (!acknowledged && error instanceof SocketRpcDisconnectedError && isReadOnlyMachineRpcMethod(params.method)) {
+      throw markRpcRequestDisposition(Object.assign(createRpcCallError({
+        error: 'Socket disconnected before the read completed', errorCode: RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE,
+      }), { cause: error }), 'outcomeUnknown');
+    }
     throw readRpcRequestDisposition(error) === null ? markRpcRequestDisposition(error, acknowledged ? 'outcomeUnknown' : 'notSent') : error;
   }
 }

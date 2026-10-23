@@ -80,19 +80,21 @@ describe('ApiMachineClient filesystem handlers', () => {
       // it does not acquire an actor by calling a native filesystem handler.
       const ownerLocalApproval = await executor.execute('daemon.filesystem.createDirectory', input, {
         surface: 'rpc', authority: 'account_automation', serverId: 'home', runtimeAccountId: 'verified-requester',
+        actionRequestId: 'owner-local-create-directory',
         externalActionTarget: { kind: 'machine', machineId: 'machine-test' },
       });
       expect(ownerLocalApproval, JSON.stringify(ownerLocalApproval)).toMatchObject({ ok: true,
         result: { kind: 'approval_request_created', artifactId: 'approval' } });
       expect(approvals).toEqual([expect.objectContaining({ actionArgs: input,
-        executionOriginV1: expect.objectContaining({ serverId: 'home', machineId: 'machine-test', accountId: 'verified-requester' }),
+        executionOriginV1: expect.objectContaining({ serverId: 'home', machineId: 'machine-test', accountId: 'verified-requester',
+          requestId: 'owner-local-create-directory' }),
       })]);
       await expectPathMissing(join(workspace, 'pending'));
       client.setRPCHandlers(handlers);
       await expect(rpc.invokeLocal('daemon.filesystem.createDirectory', input)).resolves.toMatchObject({
         ok: false, errorCode: 'filesystem_action_owner_unavailable',
       });
-      await expect(rpc.invokeLocal(RPC_METHODS.CREATE_DIRECTORY, { path: 'legacy' })).resolves.toEqual({ success: true });
+      await expect(rpc.invokeLocal(RPC_METHODS.CREATE_DIRECTORY, { path: join(workspace, 'legacy') })).resolves.toEqual({ success: true });
       await expect(access(join(workspace, 'legacy'))).resolves.toBeUndefined();
       await expectPathMissing(join(workspace, 'pending'));
     } finally {

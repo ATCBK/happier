@@ -1,10 +1,11 @@
-import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, beforeAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { buildUpdateMachineUpdate, eventRouter } from "@/app/events/eventRouter";
 import { activityCache } from "@/app/presence/sessionCache";
-import { afterTx } from "@/storage/inTx";
+import { afterTx, TransactionReplayRequiredError } from "@/storage/inTx";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import type { Tx } from "@/storage/inTx";
 import type { MachineReplacementSource } from "./validateMachineReplacement";
+import { validateMachineReplacementTarget } from "./validateMachineReplacement";
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { catchUpAutomationRunLifecycleSourcesForRestoredMachineTx } from "@/app/automations/automationRunLifecycleAdmission";
 import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
@@ -19,6 +20,7 @@ export type ApplyMachineReplacementParams = Readonly<{
     reason: string;
     source: MachineReplacementSource;
     actorUserId: string | null;
+    confirmActiveOldMachine?: boolean;
     replacedAt?: Date;
 }>;
 
@@ -33,6 +35,22 @@ export class MachineReplacementWriteConflictError extends Error {
 
 export async function applyMachineReplacement(params: ApplyMachineReplacementParams): Promise<void> {
     await acquireAccountChangePublicationLocksInTx(params.tx, [params.accountId], { includeSingleAccount: true });
+    const previous = await params.tx.machine.findUnique({ where: { id: params.oldMachineId }, select: { replacedByMachineId: true } });
+    beforeAccountChangePublication(params.tx, [params.accountId], async tx => {
+        const [oldMachine, replacementMachine] = await Promise.all([
+            tx.machine.findUnique({ where: { id: params.oldMachineId } }),
+            tx.machine.findUnique({ where: { id: params.replacementMachineId } }),
+        ]);
+        // Reciprocal replacements write distinct Machine rows but publish the
+        // same custodian Account. Recheck after that existing terminal lock,
+        // when the winning replacement/revocation is visible at ReadCommitted.
+        if (!oldMachine || !replacementMachine || oldMachine.accountId !== params.accountId
+            || replacementMachine.accountId !== params.accountId
+            || (previous?.replacedByMachineId !== params.replacementMachineId
+                && !validateMachineReplacementTarget({ oldMachine, replacementMachine, source: params.source }).ok)) {
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
+    });
     const replacedAt = params.replacedAt ?? new Date();
     const invalidatedSessionBindings = await readMachineAccessKeySessionBindingsInTx(params.tx, {
         accountId: params.accountId,
@@ -76,10 +94,12 @@ export async function applyMachineReplacement(params: ApplyMachineReplacementPar
             }
         }
     } else {
-        await params.tx.machine.update({
-            where: { accountId_id: { accountId: params.accountId, id: params.oldMachineId } },
+        const updated = await params.tx.machine.updateMany({
+            where: { accountId: params.accountId, id: params.oldMachineId,
+                ...(params.confirmActiveOldMachine === true ? {} : { active: false }) },
             data: replacementData,
         });
+        if (updated.count !== 1) throw new TransactionReplayRequiredError('transaction-account-audience-changed');
     }
 
     const cursor = await markAccountChanged(params.tx, {

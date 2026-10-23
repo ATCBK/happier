@@ -39,7 +39,7 @@ export async function readManagedMachinePolicyCensus(input: Readonly<{
 
 /** Scheduling only: the existing native driver owns policy admission, approval and selected waits. */
 export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
-    apiMachine?: Pick<ApiMachineClient, 'onUpdate' | 'onConnectionStateChange'>;
+    apiMachine?: Pick<ApiMachineClient, 'onUpdate' | 'onConnectionStateChange' | 'onManagedMachinePolicyInvalidated'>;
     /** Local controller prerequisites only; census and native admission still decide authority. */
     isAvailable?: () => boolean;
     readCensus(signal: AbortSignal): Promise<ManagedMachinePolicyCensus>;
@@ -156,10 +156,19 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
     };
     const subscriptions: Array<() => void> = [];
     if (params.apiMachine) {
+        subscriptions.push(params.apiMachine.onManagedMachinePolicyInvalidated(notifyChanged));
         subscriptions.push(params.apiMachine.onUpdate(update => {
-            if (update.body.t === 'account-change'
-                || update.body.t === 'pending-changed'
-                || update.body.t === 'automation-run-updated') notifyChanged();
+            const body = update.body;
+            // ApiMachine discovers targeted work. Any change to an origin
+            // already held here must also retire it after withdrawal/retargeting.
+            if ((body.t === 'pending-changed' || body.t === 'automation-run-updated')
+                && [...active.values()].some(({ signature }) => {
+                    const origin = signature.origin;
+                    if (body.t === 'pending-changed') return origin?.kind === 'session-input'
+                        && origin.session.sessionId === (body.sessionId ?? body.sid);
+                    return origin?.kind === 'workflow-assignment' && origin.runId === body.runId
+                        || origin?.kind === 'context-delivery' && origin.delivery.runId === body.runId;
+                })) notifyChanged();
         }));
         subscriptions.push(params.apiMachine.onConnectionStateChange(state => {
             if (state.phase === 'online') notifyChanged();

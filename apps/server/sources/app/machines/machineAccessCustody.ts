@@ -4,7 +4,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { eventRouter } from '@/app/events/connectionEventRouter';
 import { readMachineAccessKeySessionBindingsInTx } from '@/app/accessKeys/sessionMachineAccessKeyMutations';
 import { db } from '@/storage/db';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, inTx, type Tx } from '@/storage/inTx';
 import { log } from '@/utils/logging/log';
 import { resolveEffectiveMachineRoleInTx, resolveMachineAdmissionInTx } from './machineAccess';
 import type { RpcAckResponseEmitter } from '@/app/api/socket/rpc/_types';
@@ -48,15 +48,12 @@ async function forwardMachineAccessCustody(input: MachineCustody, callParams: Ma
 /** Delegates current effective loss to the daemon's existing composed cleanup owners. */
 export async function dispatchMachineAccessLossCustody(input: CustodyLoss): Promise<MachineAccessLossCustodyResponseV1> {
     let lossNoLongerCurrent = false;
-    const readCurrent = () => inTx(async tx => {
+    const readCurrent = () => inReadSnapshot(async tx => {
         if (await resolveEffectiveMachineRoleInTx(tx, { actorAccountId: input.subjectAccountId, machineId: input.machineId }) !== null) {
             lossNoLongerCurrent = true;
             return null;
         }
         return await readCurrentCustodyInTx(tx, input);
-    }, {
-        // Effective access loss and exact installation custody authorize the same remote cleanup.
-        isolationLevel: "Serializable",
     });
     const response = await forwardMachineAccessCustody(input, { v: 1, subjectAccountId: input.subjectAccountId }, readCurrent);
     if (lossNoLongerCurrent) return { kind: 'settled' };
@@ -75,10 +72,7 @@ export async function recoverMachineAccessLossCustody(input: MachineCustody): Pr
     }));
     const subjects = new Set(bindings.map(binding => binding.accountId));
     const response = await forwardMachineAccessCustody(input, { v: 1, kind: 'requesters' },
-        () => inTx(tx => readCurrentCustodyInTx(tx, input), {
-            // Capture current Account/key admission and the exact cleanup installation coherently.
-            isolationLevel: "Serializable",
-        }));
+        () => inReadSnapshot(tx => readCurrentCustodyInTx(tx, input)));
     const census = response?.ok ? MachineAccessLossRequesterCensusResponseV1Schema.safeParse(response.result) : null;
     if (census?.success) for (const accountId of census.data.accountIds) subjects.add(accountId);
     if (!census?.success || census.data.coverage !== 'complete') {
