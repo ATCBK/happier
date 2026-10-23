@@ -52,15 +52,15 @@ describe('session prompt-plan producer', () => {
   beforeEach(() => { installEmptyProjectAccountRowsHttpBoundary(); });
   afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
-  it('omits optional context with a notice, withdraws required context and recovers', async () => {
+  it('keeps optional outages pending, notices only definitive absence, withdraws required context and recovers', async () => {
     const events: unknown[] = [];
     let required = false;
-    let available = false;
+    let status = 503;
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       if (new URL(String(url)).pathname === '/v1/account/encryption')
         return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      return available ? { status: 200, data: plainPromptDocument('private-document', 'Current selected context') }
-        : { status: 503, data: { error: 'unavailable' } };
+      return status === 200 ? { status: 200, data: plainPromptDocument('private-document', 'Current selected context') }
+        : { status, data: { error: status === 404 ? 'not_found' : 'unavailable' } };
     });
     const resolve = createSessionPromptPlanResolver({
       opts: { credentials: { token: 'optional-context-token', encryption: null } },
@@ -74,20 +74,25 @@ describe('session prompt-plan producer', () => {
       readNativeSessionId: () => 'native', daemonBridge,
     });
     await expect(resolve({ baseOverride: 'Required base instructions', includeAdmittedInventory: true }))
+      .rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
+    expect(events).toEqual([]);
+    expect(resolve.readStartupInstructions?.()).toBeNull();
+    status = 404;
+    await expect(resolve({ baseOverride: 'Required base instructions', includeAdmittedInventory: true }))
       .resolves.toMatchObject({ text: expect.stringContaining('Required base instructions'),
-        admittedEntries: [{ outcome: 'unavailable', reason: 'unavailable' }] });
+        admittedEntries: [{ outcome: 'unavailable', reason: 'not_found' }] });
     expect(events).toMatchObject([{ capabilityNoticeV1: { v: 1, items: [
       { kind: 'prompt_library', code: 'prompt_library_unavailable' },
     ] } }]);
     expect(JSON.stringify(events)).not.toContain('private-document');
     expect(resolve.readStartupInstructions?.()).not.toBeNull();
     required = true;
-    await expect(resolve({ baseOverride: 'Required base instructions' })).rejects.toMatchObject({ reason: 'unavailable' });
+    await expect(resolve({ baseOverride: 'Required base instructions' })).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'not_found' });
     expect(resolve.readStartupInstructions?.()).toBeNull();
     expect(resolve.readCodingPromptBehavior?.()).toBeNull();
     expect(resolve.readComposition?.()).toBeNull();
     expect(events).toHaveLength(1);
-    available = true;
+    status = 200;
     expect(await resolve({ baseOverride: 'Required base instructions' })).toContain('Current selected context');
     expect(resolve.readStartupInstructions?.()).not.toBeNull();
   });
