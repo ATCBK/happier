@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { configuration } from '../../configuration';
+import { resolvePluginStorePathLayout } from './pathLayout';
 
 export type PluginStorePaths = Readonly<{
   happyHomeDir: string;
@@ -24,28 +25,8 @@ export type PluginStorePaths = Readonly<{
 export const PLUGIN_MANIFEST_RELATIVE_PATH = join('.happier-plugin', 'plugin.json');
 
 export function resolvePluginStorePaths(params?: Readonly<{ happyHomeDir?: string }>): PluginStorePaths {
-  const happyHomeDir = params?.happyHomeDir ?? configuration.happyHomeDir;
-  const rootDir = join(happyHomeDir, 'plugins', 'plugins');
-  const stateDir = join(rootDir, 'state');
-  return Object.freeze({
-    happyHomeDir,
-    rootDir,
-    stateDir,
-    registryCurrentFilePath: join(stateDir, 'plugin-registry-current.v1.json'),
-    registryCommitLockFilePath: join(stateDir, 'plugin-registry-commit.v1.lock'),
-    stateRevisionsDir: join(rootDir, 'state-revisions'),
-    generationsDir: join(rootDir, 'generations'),
-    npmRegistryProfilesFilePath: join(stateDir, 'npm-registry-profiles.v1.json'),
-    installedDir: join(rootDir, 'installed'),
-    cacheDir: join(rootDir, 'cache'),
-    logsDir: join(rootDir, 'logs'),
-    locksDir: join(rootDir, 'locks'),
-    storageDir: join(rootDir, 'storage'),
-    secretsDir: join(rootDir, 'secrets'),
-    settingsDir: join(rootDir, 'settings'),
-  });
+  return resolvePluginStorePathLayout(params?.happyHomeDir ?? configuration.happyHomeDir);
 }
-
 export async function ensurePluginStoreDirectories(params?: Readonly<{ happyHomeDir?: string }>): Promise<PluginStorePaths> {
   const paths = resolvePluginStorePaths(params);
   await Promise.all([

@@ -12,6 +12,7 @@ import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
 import type { ResolvedLocalPathPluginSourceSuccess } from '@/plugins/discovery/sources/localPath';
 import { resolveInstalledPluginSource } from '@/plugins/discovery/sources/resolve';
 import { readGeneratedPluginUiArtifactsManifest } from '@/plugins/install/ui/generatedArtifacts';
+import { readInstalledPluginSourceDiagnostic } from './installedSource';
 
 export type LoadedPlugin = Readonly<{
   pluginId: string;
@@ -61,23 +62,9 @@ export async function loadPluginsFromState(
       continue;
     }
 
-    if (record.source.kind === 'bundled') {
-      diagnosticsByPluginId[pluginId] = [
-        {
-          code: 'plugin_source_kind_unsupported',
-          message: `Plugin state source kind 'bundled' is host-derived bundled provenance and cannot be claimed by installed plugin state`,
-        },
-      ];
-      continue;
-    }
-
-    if (record.install.mode !== 'managed_install' && record.source.kind !== 'path') {
-      diagnosticsByPluginId[pluginId] = [
-        {
-          code: 'plugin_source_kind_unsupported',
-          message: `Plugin state source kind '${record.source.kind}' is unsupported for non-managed installs; expected 'path'`,
-        },
-      ];
+    const sourceDiagnostic = readInstalledPluginSourceDiagnostic(record);
+    if (sourceDiagnostic) {
+      diagnosticsByPluginId[pluginId] = [sourceDiagnostic];
       continue;
     }
 

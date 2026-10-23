@@ -11,6 +11,7 @@ import {
   PluginAccessSelectionSchema,
 } from './install/accessScopeRegistry';
 import { PluginTrustRecordSchema } from './install/trustIdentity';
+import { createPluginStateFileSchema } from './stateEnvelope';
 
 export const PluginCompatibilityStatusSchema = z.enum(['unknown', 'compatible', 'incompatible', 'load_error']);
 export type PluginCompatibilityStatus = z.infer<typeof PluginCompatibilityStatusSchema>;
@@ -57,16 +58,12 @@ export const PluginStateRecordSchema = z.strictObject({
 });
 export type PluginStateRecord = z.infer<typeof PluginStateRecordSchema>;
 
-const PluginStateFileV1BaseSchema = z.strictObject({
-  t: z.literal('happier_plugin_state_v1'),
-  schemaVersion: z.literal(1),
-  plugins: z.record(z.string().check(z.superRefine((value, context) => {
+const PluginStateFileV1BaseSchema = createPluginStateFileSchema(z.record(z.string().check(z.superRefine((value, context) => {
     const parsed = PluginIdSchema.safeParse(value);
     if (!parsed.success || parsed.data !== value) {
       context.addIssue({ code: 'custom', message: 'Expected a canonical plugin id' });
     }
-  })), PluginStateRecordSchema),
-});
+  })), PluginStateRecordSchema));
 
 const pluginAccessScopeRegistry = createDefaultPluginAccessScopeRegistry();
 

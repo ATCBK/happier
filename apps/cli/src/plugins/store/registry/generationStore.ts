@@ -42,6 +42,9 @@ import {
   type PluginDistributionIdentity,
 } from '../install/trustIdentity';
 import type { PluginStorePaths } from '../paths';
+import { readInstallationStateRevisionValue, stateRevisionPath } from './installationStateRevisionFile';
+import { installationStateRevisionEnvelopeShape } from './installationStateRevisionSchema';
+export { readAdmittedPluginRegistryState } from './admittedState';
 import {
   pluginRegistryCommitRecordsEqual,
   PortableRelativePathSchema,
@@ -386,10 +389,7 @@ export type PluginInstallationStateRevision = {
 };
 
 const CanonicalPluginInstallationStateRevisionSchema: z.ZodMiniType<PluginInstallationStateRevision> = z.strictObject({
-  t: z.literal('happier_plugin_installations_v1'),
-  schemaVersion: z.literal(1),
-  revisionId: PortableStorageIdSchema,
-  createdAtMs: z.number().check(z.int(), z.nonnegative()),
+  ...installationStateRevisionEnvelopeShape,
   plugins: z.record(asHostProtocolZod(PluginIdSchema), PluginInstallationStateRecordSchema),
   rollbackRetention: z.array(PluginRollbackRetentionRecordSchema),
   hardRevocationRevisions: z.optional(z.record(
@@ -1513,10 +1513,6 @@ export async function readPreparedImmutablePluginGeneration(input: Readonly<{
   });
 }
 
-function stateRevisionPath(paths: PluginStorePaths, revisionId: string): string {
-  return join(paths.stateRevisionsDir, revisionId, 'plugin-installations.v1.json');
-}
-
 export async function persistInstallationStateRevision(input: Readonly<{
   paths: PluginStorePaths;
   state: PluginInstallationStateRevision;
@@ -1548,22 +1544,7 @@ export async function readInstallationStateRevision(input: Readonly<{
   reference: InstallationStateRevisionReference;
   commit?: PluginRegistryCommitRecord;
 }>): Promise<PluginInstallationStateRevision> {
-  if (
-    input.commit
-    && input.commit.installationState.revisionId !== input.reference.revisionId
-  ) {
-    throw new Error('Installation state reference does not match its registry commit');
-  }
-  const raw = await readFile(
-    stateRevisionPath(input.paths, input.reference.revisionId),
-    'utf8',
-  );
-  let value: unknown;
-  try {
-    value = JSON.parse(raw) as unknown;
-  } catch (error) {
-    throw new Error('Invalid installation state revision', { cause: error });
-  }
+  const value = await readInstallationStateRevisionValue(input);
   const parsed = createStoredReadSchema(PluginInstallationStateRevisionSchema).safeParse(value);
   if (!parsed.success || parsed.data.revisionId !== input.reference.revisionId) {
     throw new Error('Invalid installation state revision');

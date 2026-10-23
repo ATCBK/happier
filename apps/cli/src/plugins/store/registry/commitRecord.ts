@@ -6,34 +6,16 @@ import { z } from 'zod/mini';
 
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { readPortablePathSegmentViolation } from '@happier-dev/protocol/filesystem/portablePathSegment';
 
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
 import { flushDirectoryDurably, flushFileDurably } from './durability';
 
 import type { PluginStorePaths } from '../paths';
-
-function isPortableSegment(segment: string): boolean {
-  return readPortablePathSegmentViolation(segment) === null;
-}
-
-export const PortableStorageIdSchema = z.string().check(z.minLength(1), z.maxLength(160), z.regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u), z.refine(isPortableSegment, 'Expected a portable storage id'));
-export const PortableRelativePathSchema = z.string().check(z.minLength(1), z.maxLength(512), z.superRefine((value, context) => {
-  if (value.includes('\\') || value.startsWith('/') || /^[A-Za-z]:/u.test(value)) {
-    context.addIssue({ code: 'custom', message: 'Expected a portable relative path' });
-    return;
-  }
-  const segments = value.split('/');
-  if (Buffer.byteLength(value, 'utf8') > 512 || segments.length > 64 || segments.some((segment) => !isPortableSegment(segment))) {
-    context.addIssue({ code: 'custom', message: 'Expected a normalized portable relative path' });
-  }
-}));
-
-export const PluginRegistryGenerationReferenceSchema = z.strictObject({
-  immutableGenerationId: PortableStorageIdSchema,
-});
-export type PluginRegistryGenerationReference = z.infer<typeof PluginRegistryGenerationReferenceSchema>;
+import { invalidCommitRecord, readPluginRegistryCommitRecordFile } from './commitRecordFile';
+export { PluginRegistryCommitRecordInvalidError } from './commitRecordFile';
+import { createPluginRegistryCommitRecordSchema, PluginRegistryGenerationReferenceSchema, PortableStorageIdSchema } from './commitRecordSchema';
+export { PortableStorageIdSchema, PortableRelativePathSchema, PluginRegistryGenerationReferenceSchema, type PluginRegistryGenerationReference } from './commitRecordSchema';
 
 const CanonicalPluginGenerationMapSchema = z.record(asHostProtocolZod(PluginIdSchema), PluginRegistryGenerationReferenceSchema).check(z.superRefine((value, context) => {
     for (const pluginId of Object.keys(value)) {
@@ -44,31 +26,7 @@ const CanonicalPluginGenerationMapSchema = z.record(asHostProtocolZod(PluginIdSc
     }
   }));
 
-export const PluginRegistryCommitRecordSchema = z.strictObject({
-  t: z.literal('happier_plugin_registry_commit_v1'),
-  schemaVersion: z.literal(1),
-  revision: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
-  transactionId: PortableStorageIdSchema,
-  baseRevision: z.nullable(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER))),
-  installationState: z.strictObject({
-    revisionId: PortableStorageIdSchema,
-  }),
-  pluginOccurrenceIds: CanonicalPluginGenerationMapSchema,
-  createdAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
-  creator: z.strictObject({
-    pid: z.number().check(z.int(), z.positive(), z.maximum(0x7fffffff)),
-    instanceId: PortableStorageIdSchema,
-  }),
-}).check(z.superRefine((record, context) => {
-  const expectedBase = record.revision === 0 ? null : record.revision - 1;
-  if (record.baseRevision !== expectedBase) {
-    context.addIssue({
-      code: 'custom',
-      path: ['baseRevision'],
-      message: `Revision ${record.revision} must name base revision ${String(expectedBase)}`,
-    });
-  }
-}));
+export const PluginRegistryCommitRecordSchema = createPluginRegistryCommitRecordSchema(CanonicalPluginGenerationMapSchema);
 export type PluginRegistryCommitRecord = z.infer<typeof PluginRegistryCommitRecordSchema>;
 const PluginRegistryCommitRecordStoredReadSchema = createStoredReadSchema(PluginRegistryCommitRecordSchema);
 
@@ -130,31 +88,6 @@ export class PluginRegistryCommitCurrentConflictError extends Error {
  * "Invalid plugin registry commit record" alone names no field, no path and no
  * file, and cannot be acted on.
  */
-export class PluginRegistryCommitRecordInvalidError extends Error {
-  readonly filePath: string;
-  readonly issues: readonly string[];
-
-  constructor(filePath: string, issues: readonly string[], cause?: unknown) {
-    super(
-      `Invalid plugin registry commit record '${filePath}': ${
-        issues.length > 0 ? issues.join('; ') : 'record did not match the current schema'
-      }`,
-      cause === undefined ? undefined : { cause },
-    );
-    this.name = 'PluginRegistryCommitRecordInvalidError';
-    this.filePath = filePath;
-    this.issues = Object.freeze([...issues]);
-  }
-}
-
-function invalidCommitRecord(
-  filePath: string,
-  issues: readonly string[],
-  cause?: unknown,
-): PluginRegistryCommitRecordInvalidError {
-  return new PluginRegistryCommitRecordInvalidError(filePath, issues, cause);
-}
-
 /**
  * Moves an unreadable current record aside so an explicitly requested recovery
  * start can bootstrap a fresh one. The record is renamed, never deleted, and a
@@ -209,23 +142,7 @@ export function createEmptyPluginRegistryCommitRecord(input: Readonly<{
 export async function readPluginRegistryCommitRecord(
   paths: PluginStorePaths,
 ): Promise<PluginRegistryCommitRecord | null> {
-  try {
-    const raw = await readFile(paths.registryCurrentFilePath, 'utf8');
-    return parsePluginRegistryCommitRecordFromDisk(
-      paths.registryCurrentFilePath,
-      JSON.parse(raw) as unknown,
-    );
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return null;
-    if (error instanceof SyntaxError) {
-      throw invalidCommitRecord(
-        paths.registryCurrentFilePath,
-        [`file is not valid JSON: ${error.message}`],
-        error,
-      );
-    }
-    throw error;
-  }
+  return readPluginRegistryCommitRecordFile(paths, parsePluginRegistryCommitRecordFromDisk);
 }
 
 export async function replacePluginRegistryCommitRecord(input: Readonly<{
