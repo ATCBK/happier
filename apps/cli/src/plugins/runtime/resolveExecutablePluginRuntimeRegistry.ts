@@ -1,5 +1,6 @@
 import type { ManagedExecutableRef } from '@happier-dev/protocol';
 import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { listRuntimeContributedActionDefinitions } from './invocation/actions/createCommittedContributedActionDeps';
 import { derivePluginDaemonContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
 import { resolveProjectNativeAdapter, type ProjectNativeAdapterResolutionV1 } from './lifecycle/contributions/targetProjectNativeAdapters';
 import type { ProjectNativeAdapterRoleV1 } from '@happier-dev/protocol/plugins/contributions/projectNativeAdapters';
@@ -4449,6 +4450,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 : {}),
             resolvePluginNotifications: () => invocationServiceOwners.notifications,
             readPluginVoiceProviders: () => resolvedRuntimeRegistryOwner?.contributes.voiceProviders ?? [],
+            listContributedActionDefinitions: () => listRuntimeContributedActionDefinitions(resolvedRuntimeRegistryOwner),
             revalidatePluginActionCallerMaterialization,
             revalidatePluginActionCallerOccurrence,
             invokeContributedAction: createHostContributedActionInvoker({

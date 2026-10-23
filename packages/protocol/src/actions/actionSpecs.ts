@@ -5,6 +5,7 @@ import { resolveMachineRpcGovernance } from '../machines/peer/mediation/rpc/gove
 import { EXECUTION_RUN_INTENT_OPTIONS } from '../execution/runs/intentPolicyMatrix.js';
 import { CODE_INTELLIGENCE_ACTION_SPECS } from './codeIntelligenceActionFamily.js';
 import { SessionIdSchema } from '../sessions/idsV1.js';
+import { parseQualifiedPluginActionId } from '../plugins/actions/qualifiedActionId.js';
 import { PetChooseInputV1Schema, PetChooseResultV1Schema } from '../pets/selection.js';
 import { RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
 import { ActionSessionTargetDeclarationV1Schema, SessionTargetV1Schema, SessionTargetPreviewV1Schema, withSessionTargetFanoutResultV1, type SessionTargetV1 } from './sessionTargetV1.js';
@@ -861,10 +862,11 @@ import { ActionInvokeInputSchema } from './actionInvokeInput.js';
 import { isSourceQualifiedLocalServicePreviewActionInput } from './specs/localServices.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 export const SessionTargetsResolveInputV1Schema: z.ZodMiniType<
-  { target: SessionTargetV1; actionId: ActionId },
-  { target: SessionTargetV1; actionId: ActionId }
+  { target: SessionTargetV1; actionId: string },
+  { target: SessionTargetV1; actionId: string }
 > = lazyZodSchema(() => z.strictObject({
-  target: SessionTargetV1Schema, actionId: ActionIdSchema,
+  target: SessionTargetV1Schema,
+  actionId: z.string().check(z.refine(id => ActionIdSchema.safeParse(id).success || parseQualifiedPluginActionId(id) !== null)),
 }));
 import {
   ActionContextualDefaultsSchema,
@@ -10225,7 +10227,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
   {
     id: 'session.targets.resolve', sideEffectClass: 'read', approval: { result: 'none' },
     title: 'Preview session targets',
-    description: 'Inspect the complete authorized target selection for an Action without executing it. Final invocation prepares its own current selection.',
+    description: 'Inspect the complete authorized target selection for a host or installed contributed Action without executing it. Final invocation prepares its own current selection.',
     safety: 'safe', executionPlacement: 'account', placements: [],
     bindings: { mcpToolName: 'session_targets_resolve', voiceClientToolName: 'session_targets_resolve', rpcMethod: 'session.targets.resolve' },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -10234,7 +10236,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SESSION_SUFFIX_CONTINUATION = Object.freeze(
     examples: { voice: { argsExample: '{"target":{"selector":"workers"},"actionId":"session.message.send"}' } },
     inputHints: { title: 'Preview session targets', fields: [
       { path: 'target', title: 'Session target', widget: 'json', required: true },
-      { path: 'actionId', title: 'Action', widget: 'text', required: true },
+      { path: 'actionId', title: 'Action', description: 'Host Action id or canonical contributed Action id (<pluginId>/actions/<localId>) from discovery.', widget: 'text', required: true },
     ] },
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'targets', 'resolve'], visibility: 'canonical' }] },
   },
@@ -15466,7 +15468,7 @@ export function getActionSpec(id: ActionId): ActionSpec {
 
 /** Invocation and inspection prepare targets under their own admitted Action root. */
 export function isSessionTargetPreparationAction(id: ActionId): boolean {
-  return id === 'session.targets.resolve' || Boolean(getActionSpec(id).sessionTarget);
+  return id === 'session.targets.resolve' || id === 'action.invoke' || Boolean(getActionSpec(id).sessionTarget);
 }
 
 export function getActionContextualDefaults(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getActionSpec } from './actionSpecs.js';
+import { getActionSpec, isSessionTargetPreparationAction, SessionTargetsResolveInputV1Schema } from './actionSpecs.js';
 import { actionSpecToActionDefinitionV1 } from './actionCatalog.js';
 import { ActionDiscoveryDefinitionV1Schema } from './actionDefinitionV1.js';
 import { compileProtocolJsonSchema } from '../plugins/actions/jsonSchemaCompiler.js';
@@ -7,6 +7,19 @@ import { SessionStatusActionResultV1Schema } from '../sessions/control/contract.
 import { projectSessionSummaryV1 } from '../sessions/control/listResult.js';
 
 describe('Session target declaration discovery', () => {
+  it('admits canonical contributed Action identities for inspection while retaining strict target input', () => {
+    const input = { actionId: 'example.session-targets/actions/inspect', target: { selector: 'self' } };
+    expect(SessionTargetsResolveInputV1Schema.safeParse(input).success).toBe(true);
+    expect(SessionTargetsResolveInputV1Schema.safeParse({ ...input, actionId: 'example.session-targets/inspect' }).success).toBe(false);
+    expect(SessionTargetsResolveInputV1Schema.safeParse({ ...input, extraAuthority: true }).success).toBe(false);
+    expect(SessionTargetsResolveInputV1Schema.safeParse({ ...input, target: { selector: 'self', extraAuthority: true } }).success).toBe(false);
+    // The signed root is the admitted dispatch wrapper, never the described
+    // plugin Action or the host Action used to read a preparation fact.
+    expect(isSessionTargetPreparationAction('action.invoke')).toBe(true);
+    expect(isSessionTargetPreparationAction('session.targets.resolve')).toBe(true);
+    expect(isSessionTargetPreparationAction('teams.archive')).toBe(false);
+  });
+
   it('publishes Session targets through real strict discovery and input-schema consumers', () => {
     for (const [id, cardinality, extraInput] of [
       ['session.message.send', 'many', { message: 'Review the change', wait: true }],

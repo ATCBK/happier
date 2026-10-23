@@ -301,7 +301,11 @@ function projectActionDiscoveryExecution(execution: NonNullable<ActionDefinition
 export function projectActionDefinitionSummaryForExternalDiscovery(
   definition: ActionDefinitionSummaryV1,
 ): ActionDiscoveryDefinitionSummaryV1 {
-  return ActionDiscoveryDefinitionSummaryV1Schema.parse({
+  return ActionDiscoveryDefinitionSummaryV1Schema.parse(projectActionDefinitionSummaryMetadata(definition));
+}
+
+function projectActionDefinitionSummaryMetadata(definition: ActionDefinitionSummaryV1, includeOutputSchema = true): ActionDiscoveryDefinitionSummaryV1 {
+  return {
     id: definition.id,
     title: definition.title,
     ...(definition.confirmVerb === undefined ? {} : { confirmVerb: definition.confirmVerb }),
@@ -341,14 +345,15 @@ export function projectActionDefinitionSummaryForExternalDiscovery(
     ...(definition.toolExposure === undefined ? {} : { toolExposure: definition.toolExposure }),
     ...(definition.prompting === undefined ? {} : { prompting: definition.prompting }),
     ...(definition.contextualDefaults === undefined ? {} : { contextualDefaults: definition.contextualDefaults }),
+    ...(definition.sessionTarget === undefined ? {} : { sessionTarget: definition.sessionTarget }),
     inputHints: definition.inputHints,
-    ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
+    ...(!includeOutputSchema || definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
     ...(definition.execution === undefined
       ? {}
       : { execution: projectActionDiscoveryExecution(definition.execution) }),
     ...(definition.sideEffectClass === undefined ? {} : { sideEffectClass: definition.sideEffectClass }),
     ...(definition.operation === undefined ? {} : { operation: definition.operation }),
-  });
+  };
 }
 
 export function projectActionDefinitionForExternalDiscovery(
@@ -374,32 +379,7 @@ export function searchSerializedActionSpecs(
 }
 
 function actionDefinitionToSummary(definition: ActionDefinitionSummaryV1, includeOutputSchema = true): ActionDefinitionSummaryV1 {
-  return {
-    id: definition.id,
-    title: definition.title,
-    description: definition.description,
-    safety: definition.safety,
-    placements: definition.placements,
-    slash: definition.slash,
-    bindings: definition.bindings,
-    examples: definition.examples,
-    surfaces: definition.surfaces,
-    inputHints: definition.inputHints,
-    ...(definition.approval === undefined ? {} : { approval: definition.approval }),
-    ...(definition.requiredAuthority === undefined
-      ? {}
-      : { requiredAuthority: definition.requiredAuthority }),
-    ...(definition.executionPlacement === undefined
-      ? {}
-      : { executionPlacement: definition.executionPlacement }),
-    ...(definition.toolExposure === undefined ? {} : { toolExposure: definition.toolExposure }),
-    ...(!includeOutputSchema || definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
-    ...(definition.execution === undefined ? {} : { execution: definition.execution }),
-    ...(definition.sideEffectClass === undefined
-      ? {}
-      : { sideEffectClass: definition.sideEffectClass }),
-    ...(definition.operation === undefined ? {} : { operation: definition.operation }),
-  };
+  return projectActionDefinitionSummaryMetadata(definition, includeOutputSchema);
 }
 
 type ActionDefinitionSearchCandidate = Readonly<{

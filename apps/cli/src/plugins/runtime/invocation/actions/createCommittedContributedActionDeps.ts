@@ -36,6 +36,7 @@ function projectDefinition(definition: ResolvedActionDefinition, identity: NonNu
     // a schema. Keep its unconstrained descriptor here, not in the author ABI.
     inputSchema: definition.inputSchema ?? {},
     ...(definition.contextualDefaults === undefined ? {} : { contextualDefaults: definition.contextualDefaults }),
+    ...(definition.sessionTarget === undefined ? {} : { sessionTarget: definition.sessionTarget }),
     ...(definition.approval === undefined ? {} : { approval: definition.approval }),
     ...(definition.toolExposure === undefined ? {} : { toolExposure: definition.toolExposure }),
     ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
@@ -179,22 +180,25 @@ export function createCommittedContributedActionDefinitionLister(input: Readonly
     const lease = tryAcquire();
     if (!lease) return [];
     try {
-      const targetActionInvocations = lease.registry.targetActionInvocations;
-      if (!targetActionInvocations) return [];
-      return Object.freeze(lease.registry.contributes.actions.flatMap((action) => {
-        const identity = action.identity;
-        if (!identity || identity.localId !== action.definition.id) return [];
-        if (
-          targetActionInvocations
-            .evaluateCatalogPolicy(identity.pluginId, identity.localId)
-            .outcome !== 'visible'
-        ) return [];
-        return [projectDefinition(action.definition, identity)];
-      }));
+      return listRuntimeContributedActionDefinitions(lease.registry);
     } finally {
       void lease.release().catch(() => input.onLeaseReleaseError?.());
     }
   };
+}
+
+/** The committed lease and in-runtime SDK dispatcher share the same declaration projection. */
+export function listRuntimeContributedActionDefinitions(
+  registry: Pick<ResolvedExecutablePluginRuntimeRegistry, 'contributes' | 'targetActionInvocations'> | null | undefined,
+): readonly ActionDefinitionV1[] {
+  const targetActionInvocations = registry?.targetActionInvocations;
+  if (!registry || !targetActionInvocations) return [];
+  return Object.freeze(registry.contributes.actions.flatMap(action => {
+    const identity = action.identity;
+    if (!identity || identity.localId !== action.definition.id
+      || targetActionInvocations.evaluateCatalogPolicy(identity.pluginId, identity.localId).outcome !== 'visible') return [];
+    return [projectDefinition(action.definition, identity)];
+  }));
 }
 
 /** Re-read the same current, policy-filtered catalog used by discovery. */

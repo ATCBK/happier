@@ -45,6 +45,7 @@ import {
   createActionInputHintsSchemas,
 } from '../actions/actionInputHints.js';
 import { ActionOperationDeclarationV1Schema } from '../actions/operations/v1.js';
+import { ActionSessionTargetDeclarationV1Schema } from '../actions/sessionTargetV1.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { QualifiedConnectedAccountRefSchema as CanonicalQualifiedConnectedAccountRefSchema } from '../connect/qualifiedConnectedAccountPersistence.js';
 import { ConnectedServiceIdSchema } from '../connect/connectedServiceBindings.js';
@@ -1300,6 +1301,7 @@ export const PluginProjectedActionV2Schema = lazyZodSchema(() => (<T extends z.Z
   // body, so a reader fetches one Action's schemas on demand through
   // `DaemonPluginActionSchemasReadRequestSchema`.
   inputHints: zMini.optional(PluginProjectedActionInputHintsV2Schema),
+  sessionTarget: zMini.optional(ActionSessionTargetDeclarationV1Schema),
   /** Current declared purpose scope, shared by host setup and Action admission. */
   connectedAccountPurposes: z.optional(z.array(PluginProjectedConnectedAccountPurposeDeclarationV1Schema)),
   priority: z.optional(z.number().check(z.int())),

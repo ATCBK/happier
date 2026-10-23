@@ -37,6 +37,31 @@ throw new PluginError({
 });
 ```
 
+### Session targets (0.3 development source)
+
+Declare `sessionTarget: { field: 'sessionId', cardinality: 'one' }` on an Action
+whose input names a Session. Keep the handler's input schema exact, such as a
+string `sessionId`: the host resolves selectors before validating that input or
+entering the handler. Use `cardinality: 'many'` when the Action can run once per
+selected Session. The declaration's field must identify an operand in the
+declared object input schema.
+
+Discovery advertises this declaration for installed plugins. Inspect a target
+with `session.targets.resolve`, passing the Action's qualified discovery id
+(`com.example.plugin/actions/inspect`) and `target`, for example
+`{ selector: 'workers' }`. Invoke it through `action.invoke` with
+`action: { pluginId: 'com.example.plugin', localId: 'inspect' }` and the selector
+in `input.sessionId`. Exact Session ids continue to work.
+
+The host refuses a one-target expansion that selects several Sessions.
+A restricted Session caller stays within its proved subtree: safe reads can
+address its children while writes retain their existing restrictions. Missing
+selector backing returns an unavailable result. Approval retains the concrete selection, so
+membership changes do not add recipients on replay. Selecting a Session grants
+no additional access or mutation authority. This describes unreleased 0.3
+behavior; use the generated API and availability references for your target
+toolchain.
+
 In current 0.3 development source, declare
 `confirmationWhen: { presentUserUi: false }` for a reversible operation that
 people invoke in your UI, such as completing or reopening an item. The scoped

@@ -23,7 +23,7 @@ import { SessionMessageExplicitReplyV1Schema, SessionMessageReplyMutationResultV
   deriveSessionMessageReplyReturnLocalIdV1, type SessionMessageReplyAccountMutationV1 } from '../sessions/messages/sessionMessageReplyV1.js';
 import { AutonomousExchangeControlRequestV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
 import { AutonomousExchangeObservedRevisionV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
-import { ActionResolvedSessionTargetsV1Schema, normalizeSessionTargetV1 } from './sessionTargetV1.js';
+import { ActionResolvedSessionTargetsV1Schema, normalizeSessionTargetV1, type ActionSessionTargetDeclarationV1 } from './sessionTargetV1.js';
 import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1.js';
 import { ScmDiffSummaryModelSelectorSchema } from '../scm/diffSummary.js';
 import * as z from 'zod/mini';
@@ -2641,6 +2641,28 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       : null;
   };
 
+  // Discovery owns the current declaration. The dispatch wrapper merely
+  // projects its operand path into the same input used by host Actions.
+  const readActionSessionTargetDeclaration = (id: string, input: unknown, ctx: ActionExecutorContext):
+    (ActionSessionTargetDeclarationV1 & Readonly<{ scopeSideEffectClass?: ActionSpec['sideEffectClass'] }>) | undefined => {
+    if (id === 'action.invoke') {
+      const action = readRecord(readRecord(input).action);
+      if (typeof action.pluginId !== 'string' || typeof action.localId !== 'string') return undefined;
+      let qualifiedId: QualifiedPluginActionId;
+      try { qualifiedId = formatQualifiedPluginActionId({ pluginId: action.pluginId, localId: action.localId }); }
+      catch { return undefined; }
+      const definition = getContributedActionDefinition(qualifiedId, ctx);
+      const declaration = definition?.sessionTarget;
+      // The contributed dispatcher uses the same safe classification for its
+      // read-only admission. A wrapper cannot supply the handler's effect facts.
+      return definition && declaration ? { ...declaration, field: `input.${declaration.field}`,
+        scopeSideEffectClass: definition.sideEffectClass ?? (definition.safety === 'safe' ? 'read' : 'external') } : undefined;
+    }
+    const hostId = ActionIdSchema.safeParse(id);
+    return hostId.success ? getActionSpec(hostId.data).sessionTarget
+      : getContributedActionDefinition(id, ctx)?.sessionTarget;
+  };
+
   function resolveAvailabilityForContext(spec: ActionSpec, ctx: ActionExecutorContext): ActionSurfaceAvailability | null {
     ctx = actionPolicyContext(spec.id, ctx);
     const surface = parseActionSurfaceKey(ctx.surface);
@@ -2810,8 +2832,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const definitionAction = isActionFamilyId(actionId, WidgetDefinitionActionIdV1Schema)
       || isActionFamilyId(actionId, WidgetLayoutFragmentActionIdV1Schema);
     const definitionSession = definitionAction ? readWidgetDefinitionActionSessionV1(input) : null;
-    const declaredAction = ActionIdSchema.safeParse(actionId);
-    const declaration = declaredAction.success ? getActionSpec(declaredAction.data).sessionTarget : undefined;
+    const declaration = readActionSessionTargetDeclaration(actionId, input, ctx);
     const sessionId = definitionSession?.sessionId ?? widgetSessionId ?? (input === undefined ? null
       : normalizeId(readRecord(input).sessionId) || (declaration && !declaration.field.includes('*')
         ? normalizeId(readActionSessionTargetField(readRecord(input), declaration.field)) : null));
@@ -2872,7 +2893,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // Execution placement is not source attribution. Ask the authenticated host
     // boundary, then re-enter the same grant owner; absent proof stays closed.
     while (failure && readRecord(failure.details).reason === 'target_not_granted') {
-      const declaration = getActionSpec(actionId).sessionTarget;
+      const declaration = readActionSessionTargetDeclaration(actionId, input, ctx);
       const sessionId = normalizeId(readRecord(failure.details).sourceSessionId) || normalizeId(readRecord(input).sessionId)
         || (declaration && !declaration.field.includes('*') ? normalizeId(readActionSessionTargetField(readRecord(input), declaration.field)) : null);
       if (!sessionId || sourceMachineIds.has(sessionId)) return failure;
@@ -4116,40 +4137,41 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // Resolve declared operands before exact domain schemas parse them. The
     // snapshot is also the sole selection used by preparation and replay.
     let admittedInput: unknown = bound.input ?? {};
-    if (spec.sessionTarget && !options?.sessionTargetLeaf) {
+    const sessionTarget = readActionSessionTargetDeclaration(actionId, admittedInput, ctx);
+    if (sessionTarget && !options?.sessionTargetLeaf) {
       if (ctx.sessionTargetsV1) {
         const snapshot = ActionResolvedSessionTargetsV1Schema.safeParse(ctx.sessionTargetsV1);
-        if (!snapshot.success || snapshot.data.actionId !== actionId || snapshot.data.field !== spec.sessionTarget.field) {
+        if (!snapshot.success || snapshot.data.actionId !== actionId || snapshot.data.field !== sessionTarget.field) {
           return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
         }
-        if (!spec.sessionTarget.field.includes('*') && (snapshot.data.operands
-          || spec.sessionTarget.cardinality === 'one' && snapshot.data.targets.length !== 1)) {
+        if (!sessionTarget.field.includes('*') && (snapshot.data.operands
+          || sessionTarget.cardinality === 'one' && snapshot.data.targets.length !== 1)) {
           return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
         }
       } else {
-        if (options?.approvalReplay && (spec.sessionTarget.field.includes('*')
-          ? readActionSessionTargetOperands(readRecord(admittedInput), spec.sessionTarget.field).length > 0
-          : readActionSessionTargetField(readRecord(admittedInput), spec.sessionTarget.field) !== undefined)) {
-          if (spec.sessionTarget.field.includes('*')) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        if (options?.approvalReplay && (sessionTarget.field.includes('*')
+          ? readActionSessionTargetOperands(readRecord(admittedInput), sessionTarget.field).length > 0
+          : readActionSessionTargetField(readRecord(admittedInput), sessionTarget.field) !== undefined)) {
+          if (sessionTarget.field.includes('*')) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
           try {
-            if (typeof normalizeSessionTargetV1(readActionSessionTargetField(readRecord(admittedInput), spec.sessionTarget.field)) !== 'string') {
+            if (typeof normalizeSessionTargetV1(readActionSessionTargetField(readRecord(admittedInput), sessionTarget.field)) !== 'string') {
               return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
             }
           } catch {
             return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
           }
         }
-        const targets = await resolveActionSessionTargets(deps, { actionId, declaration: spec.sessionTarget,
+        const targets = await resolveActionSessionTargets(deps, { actionId, declaration: sessionTarget,
           input: readRecord(admittedInput), context: ctx });
         if (targets && 'ok' in targets) return targets;
         if (targets) ctx = { ...ctx, sessionTargetsV1: targets };
       }
       const snapshot = ctx.sessionTargetsV1;
-      if (spec.sessionTarget.field.includes('*') && snapshot) {
+      if (sessionTarget.field.includes('*') && snapshot) {
         const bound = bindActionSessionTargetOperands(readRecord(admittedInput), snapshot, options?.approvalReplay === true);
         if (!bound) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
         admittedInput = bound;
-      } else if (snapshot && spec.sessionTarget.cardinality === 'one') {
+      } else if (snapshot && sessionTarget.cardinality === 'one') {
         admittedInput = replaceActionSessionTargetField(readRecord(admittedInput), snapshot.field, snapshot.targets[0].sessionId);
       }
     }
@@ -4196,7 +4218,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     }
     const invitationFailure = await admitDiscussionInvitationTargets(actionId, admittedInput, ctx, ctx.sessionTargetsV1);
     if (invitationFailure) return invitationFailure;
-    if (!existingAdmission && ctx.sessionTargetsV1) {
+    if (!existingAdmission && ctx.sessionTargetsV1 && !options?.sessionTargetLeaf) {
       ctx.onSessionTargetsResolved?.({ actionId, input: admittedInput, targets: ctx.sessionTargetsV1 });
     }
     if (actionId === 'session.exchange.control') {
@@ -4273,7 +4295,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     }
     // The Action grant was checked before target reads. Selector intent is not
     // a credential target; each concrete leaf re-enters full target admission.
-    const credentialFailure = spec.sessionTarget && ctx.sessionTargetsV1
+    const credentialFailure = sessionTarget && ctx.sessionTargetsV1 && !options?.sessionTargetLeaf
       ? null : await admitCredentialScope(actionId, ctx, admittedInput);
     if (credentialFailure) return credentialFailure;
     const workspaceFailure = workspaceWriteFailure(spec, admittedInput, ctx);
@@ -4339,17 +4361,20 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     }
     // Selector scope is checked on each concrete leaf, before that leaf's
     // approval/effect admission. The intent itself is not a Session identity.
-    const currentSessionScopeFailure = ctx.sessionTargetsV1 || hasSessionQuestionAnswerOrigin(actionId, ctx)
-      ? null : await resolveActionCurrentSessionScopeFailure(
-      actionId,
-      admittedInput,
-      ctx,
-      spec.contextualDefaults,
-      deps,
-      resolved => { ctx = { ...ctx, agentStartContext: resolved }; },
-    );
-    if (currentSessionScopeFailure) {
-      return classifyExecutionRunStartPreDispatchFailure(actionId, currentSessionScopeFailure);
+    if (!(ctx.sessionTargetsV1 && !ctx.sessionTargetsV1.operands && !options?.sessionTargetLeaf) && !hasSessionQuestionAnswerOrigin(actionId, ctx)) {
+      // A declared operand has the same Session scope regardless of its path
+      // within a native input or a dispatch wrapper's input. Selection never
+      // upgrades the wrapper's effect authority.
+      const delegatedTarget = delegatesApprovalClassificationToResolvedAction(actionId) ? sessionTarget : undefined;
+      const scopeInputs = delegatedTarget
+        ? readActionSessionTargetOperands(readRecord(admittedInput), delegatedTarget.field).map(operand => ({ sessionId: operand.value }))
+        : [admittedInput];
+      for (const scopeInput of scopeInputs) {
+        const currentSessionScopeFailure = await resolveActionCurrentSessionScopeFailure(actionId, scopeInput, ctx,
+          delegatedTarget ? { sessionId: 'current_session' } : spec.contextualDefaults, deps,
+          resolved => { ctx = { ...ctx, agentStartContext: resolved }; }, delegatedTarget?.scopeSideEffectClass);
+        if (currentSessionScopeFailure) return classifyExecutionRunStartPreDispatchFailure(actionId, currentSessionScopeFailure);
+      }
     }
     // Materialized Workflow writes need the same authenticated facts before
     // approval custody as native starts. Replay resolves current baseline and
@@ -5146,7 +5171,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
       }
 
-      if (spec.sessionTarget && ctx.sessionTargetsV1 && !ctx.sessionTargetsV1.operands) {
+      if (sessionTarget && ctx.sessionTargetsV1 && !ctx.sessionTargetsV1.operands && !options?.sessionTargetLeaf) {
         const snapshot = ctx.sessionTargetsV1;
         const runTargets = async (): Promise<ActionExecuteResult> => {
           const results: Array<{ target: ActionSessionAddress; result: ActionExecuteResult }> = [];
@@ -5737,12 +5762,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
       if (actionId === 'session.targets.resolve') {
         const input = SessionTargetsResolveInputV1Schema.parse(parsed.data);
-        const targetSpec = getActionSpec(input.actionId);
-        if (!targetSpec.sessionTarget) {
+        const declaration = readActionSessionTargetDeclaration(input.actionId, undefined, ctx);
+        if (!declaration) {
           return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
         }
-        const result = await previewActionSessionTargets(deps, { actionId: input.actionId,
-          declaration: { field: 'target', cardinality: targetSpec.sessionTarget.cardinality },
+        const result = await previewActionSessionTargets(deps, { actionId,
+          declaration: { field: 'target', cardinality: declaration.cardinality },
           input: { target: input.target }, context: ctx });
         return { ok: true, result };
       }
@@ -11840,10 +11865,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       return settlePrepareResult(actionId, classifyExecutionRunStartPreDispatchFailure(actionId, authorityFailure));
     }
     let selectorIntent = false;
-    if (spec.sessionTarget) {
-      try { selectorIntent = spec.sessionTarget.field.includes('*')
-        ? readActionSessionTargetOperands(readRecord(input), spec.sessionTarget.field).length > 0
-        : typeof normalizeSessionTargetV1(readActionSessionTargetField(readRecord(input), spec.sessionTarget.field)) !== 'string'; }
+    const sessionTarget = readActionSessionTargetDeclaration(actionId, input, ctx);
+    if (sessionTarget) {
+      try { selectorIntent = sessionTarget.field.includes('*')
+        ? readActionSessionTargetOperands(readRecord(input), sessionTarget.field).length > 0
+        : typeof normalizeSessionTargetV1(readActionSessionTargetField(readRecord(input), sessionTarget.field)) !== 'string'; }
       catch { /* Canonical semantic parsing below returns invalid_parameters. */ }
     }
     const credentialFailure = selectorIntent

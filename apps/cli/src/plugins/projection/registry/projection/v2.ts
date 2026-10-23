@@ -777,6 +777,7 @@ function buildActionsById(
                 : {}),
             ...(action.definition.slash ? { slash: { tokens: [...action.definition.slash.tokens] } } : {}),
             ...(inputHints ? { inputHints } : {}),
+            ...(action.definition.sessionTarget === undefined ? {} : { sessionTarget: action.definition.sessionTarget }),
             ...(action.definition.priority === undefined ? {} : { priority: action.definition.priority }),
             dangerLevel: action.definition.dangerLevel,
             ...(action.definition.confirmationWhen === undefined ? {} : { confirmationWhen: action.definition.confirmationWhen }),

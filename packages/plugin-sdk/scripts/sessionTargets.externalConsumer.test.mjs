@@ -40,6 +40,9 @@ test('generated external Action clients accept shared targets without widening e
     const inspect: PluginActionInputById['session.targets.resolve'] = {
       actionId: 'session.message.send', target: workers,
     };
+    const inspectContributed: PluginActionInputById['session.targets.resolve'] = {
+      actionId: 'com.example.worker/actions/inspect', target: workers,
+    };
     const inspected: PluginActionResultById['session.targets.resolve'] = {
       coverage: 'complete', addresses: [{ serverId: 'home', sessionId: 'worker-a' }], error: null,
     };
@@ -97,7 +100,7 @@ test('generated external Action clients accept shared targets without widening e
     const unknown: SessionTargetV1 = { selector: 'workers', widenAuthority: true };
     // @ts-expect-error An inside-Session recipient cannot become a Session selector.
     const wrongRecipient: PluginActionInputById['session.message.send'] = { sessionId: workers, message: 'Review', idempotencyKey: 'wrong', recipient: { selector: 'manager' } };
-    void send; void genericSend; void status; void inspect; void inspected; void invalidInspect; void open; void oldSend; void declaration; void contributedDeclaration; void fanout; void invalidFanout;
+    void send; void genericSend; void status; void inspect; void inspectContributed; void inspected; void invalidInspect; void open; void oldSend; void declaration; void contributedDeclaration; void fanout; void invalidFanout;
     void stop; void cancel; void recent; void archive; void goal; void manager; void coordinator; void handoff; void invalidManager;
     void nested; void unknown; void wrongRecipient;
     void inboxType; void inboxView; void inboxRead; void inboxPage; void inboxSource; void inboxCoverage; void invalidInboxType;
