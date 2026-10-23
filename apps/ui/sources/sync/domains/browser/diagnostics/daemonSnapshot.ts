@@ -99,7 +99,7 @@ export function useBrowserDiagnosticsDaemonSnapshot(
     }, [input.onEvents, input.view, snapshotClient]);
 
     React.useEffect(() => {
-        const view = input.view;
+        const view = viewRef.current;
         if (!enabled || !view || !machineId || !viewKey) {
             return undefined;
         }
@@ -156,5 +156,5 @@ export function useBrowserDiagnosticsDaemonSnapshot(
                 clearInterval(intervalId);
             }
         };
-    }, [enabled, input.view, machineId, refreshIntervalMs, serverId, viewKey]);
+    }, [enabled, machineId, refreshIntervalMs, serverId, viewKey]);
 }
