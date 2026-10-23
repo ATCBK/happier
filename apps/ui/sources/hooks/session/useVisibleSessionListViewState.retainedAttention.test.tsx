@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { createDeferred } from '@/dev/testkit';
+import * as React from 'react';
+import { createDeferred, createRenderCommitCounter, useRenderCommitCounter, renderScreen } from '@/dev/testkit';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import {
     ABSENT_SESSION_FOLLOW_FACTS_V1,
@@ -161,6 +162,109 @@ describe('visible session-list retained attention through real state', () => {
         storage.setState(previousState, true);
         await home.reset();
         projectManager.clear();
+    });
+
+    it('confines repeated row-content publications to the changed row, without list commits', async () => {
+        const { storage, useSessionListRenderableWithServerScope } = await import('@/sync/domains/state/storage');
+        const { useVisibleSessionListViewState } = await import('./useVisibleSessionListViewState');
+        const sessions = Array.from({ length: 24 }, (_, index) => createSessionFixture({
+            id: `render-row-${index}`, serverId, owner: 'u1', seq: 1, lastViewedSessionSeq: 1,
+            viewer: currentViewer(1, 1), updatedAt: 100, active: false, presence: 0,
+            metadata: { name: `Row ${index}`, path: '/workspace', host: 'test' },
+        }));
+        storage.getState().applySessions(sessions);
+        storage.getState().applyServerScopedSessionListRows(serverId,
+            sessions.map(session => storage.getState().sessionListRowsByServerId[serverId]![session.id]!),
+            { source: 'ordinary', mode: 'replace' });
+        route.pathname = '/';
+        const listCounter = createRenderCommitCounter();
+        const rowCounters = new Map(sessions.map(session => [session.id, createRenderCommitCounter()]));
+        function Row({ id }: { id: string }) {
+            useRenderCommitCounter(rowCounters.get(id)!);
+            const row = useSessionListRenderableWithServerScope(serverId, id);
+            return React.createElement('row', { id, name: row?.metadata?.name });
+        }
+        function List() {
+            useRenderCommitCounter(listCounter);
+            const state = useVisibleSessionListViewState();
+            return React.createElement(React.Fragment, null, state.visibleSessionListIndex?.flatMap(item =>
+                item.type === 'session' ? [React.createElement(Row, { key: item.sessionId, id: item.sessionId })] : []));
+        }
+        const screen = await renderScreen(React.createElement(List));
+        try {
+            await flushHookEffects({ cycles: 2, turns: 2 });
+            expect(screen.findAllByType('row')).toHaveLength(24);
+            listCounter.reset();
+            for (const counter of rowCounters.values()) counter.reset();
+            for (let update = 1; update <= 5; update += 1) {
+                await act(async () => {
+                    storage.getState().applySessions([{
+                        ...sessions[0]!, metadataVersion: update,
+                        metadata: { ...sessions[0]!.metadata!, name: `Changed ${update}` },
+                    }]);
+                });
+            }
+            const counts = { list: listCounter.read(), rows: Object.fromEntries(
+                [...rowCounters].map(([id, counter]) => [id, counter.read()])) };
+            expect(screen.findAllByType('row').find(row => row.props.id === sessions[0]!.id)?.props.name).toBe('Changed 5');
+            expect(counts.list).toEqual({ renders: 0, commits: 0 });
+            expect(rowCounters.get(sessions[0]!.id)!.read()).toEqual({ renders: 5, commits: 5 });
+            for (const session of sessions.slice(1)) {
+                expect(rowCounters.get(session.id)!.read()).toEqual({ renders: 0, commits: 0 });
+            }
+        } finally {
+            await act(async () => screen.unmount());
+        }
+    });
+
+    it('retains keyed row projections and confines five new arrivals to the admitted rows', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { useVisibleSessionListViewState } = await import('./useVisibleSessionListViewState');
+        const sessions = Array.from({ length: 24 }, (_, index) => createSessionFixture({
+            id: `admission-row-${index}`, serverId, owner: 'u1', seq: 1,
+            viewer: currentViewer(1, 1), lastViewedSessionSeq: 1, active: false, presence: 0,
+            createdAt: 100 + index, updatedAt: 100 + index,
+        }));
+        storage.getState().applySessions(sessions);
+        storage.getState().applyServerScopedSessionListRows(serverId,
+            sessions.map(session => storage.getState().sessionListRowsByServerId[serverId]![session.id]!),
+            { source: 'ordinary', mode: 'replace' });
+        route.pathname = '/';
+        const counters = new Map(sessions.map(session => [session.id, createRenderCommitCounter()]));
+        const listCounter = createRenderCommitCounter();
+        const Row = React.memo(function Row({ item }: { item: Extract<import('@/sync/domains/sessionList/sessionListIndex').SessionListIndexItem, { type: 'session' }> }) {
+            const counter = counters.get(item.sessionId);
+            if (!counter) throw Error('Missing row counter');
+            useRenderCommitCounter(counter);
+            return React.createElement('admission-row', { id: item.sessionId });
+        });
+        function List() {
+            useRenderCommitCounter(listCounter);
+            const state = useVisibleSessionListViewState();
+            return React.createElement(React.Fragment, null, state.visibleSessionListIndex?.flatMap(item =>
+                item.type === 'session' ? [React.createElement(Row, { key: item.sessionId, item })] : []));
+        }
+        const screen = await renderScreen(React.createElement(List));
+        try {
+            for (const counter of counters.values()) counter.reset();
+            listCounter.reset();
+            for (let index = 0; index < 5; index++) {
+                const session = createSessionFixture({ ...sessions[0]!, id: `new-arrival-${index}`, createdAt: 1_000 + index });
+                counters.set(session.id, createRenderCommitCounter());
+                await act(async () => {
+                    storage.getState().applySessions([session]);
+                    storage.getState().applyServerScopedSessionListRows(serverId,
+                        [storage.getState().sessionListRowsByServerId[serverId]![session.id]!],
+                        { source: 'ordinary', mode: 'append' });
+                });
+            }
+            expect(screen.findAllByType('admission-row')).toHaveLength(29);
+            expect(listCounter.read()).toEqual({ renders: 5, commits: 5 });
+            expect(sessions.map(session => counters.get(session.id)!.read())).toEqual(
+                sessions.map(() => ({ renders: 0, commits: 0 })));
+            for (let index = 0; index < 5; index++) expect(counters.get(`new-arrival-${index}`)!.read())
+                .toEqual({ renders: 1, commits: 1 });
+        } finally { await screen.unmount(); }
     });
 
     it.each(['ordinary', 'query', 'warm query'] as const)('retains multiple pending archive rows in the %s source until their public operations finish', async mode => {
