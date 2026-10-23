@@ -2,6 +2,7 @@ import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/ru
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 import { ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryMetadataSchema } from '@happier-dev/protocol/scm/diffSummary';
 import type { ScmDiffSummaryGenerateOutput, ScmDiffSummaryOutputKind, ScmDiffSummaryResultResponse } from '@happier-dev/protocol';
+import { ScmDiffSummaryPublicationReceiptSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 import type {
   ExecutionRunProfileStartParams, ExecutionRunProfileTurnCompleteParams, ExecutionRunProfileBoundedCompleteResult,
 } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
@@ -53,15 +54,28 @@ export async function readOrCreateSavedScmResult(start: ExecutionRunProfileStart
   return { scope: { ...scope, resultId: result.resultId }, result };
 }
 
-function publicationCompletion(result: ScmDiffSummaryResultResponse, original?: ExecutionRunProfileBoundedCompleteResult) {
+function publicationCompletion(result: ScmDiffSummaryResultResponse, previous: ScmDiffSummaryGenerateOutput,
+  requestedOutputs: readonly ScmDiffSummaryOutputKind[], original?: ExecutionRunProfileBoundedCompleteResult) {
   if (!result.success) return null;
+  const outputs = result.result.output.success ? requestedOutputs.flatMap(kind => {
+    const before = previous.outputs?.[kind]?.value;
+    const after = result.result.output.outputs?.[kind]?.value;
+    return after === undefined || JSON.stringify(before) === JSON.stringify(after) ? []
+      : [{ kind, change: before === undefined ? 'created' as const : 'updated' as const }];
+  }) : [];
+  const receipt = outputs.length ? ScmDiffSummaryPublicationReceiptSchema.parse({ status: 'published', outputs,
+    canUndo: result.result.canUndo }) : undefined;
+  const walkthrough = receipt?.outputs.length === 1 && receipt.outputs[0]?.kind === 'walkthrough' ? receipt.outputs[0] : undefined;
   return { ...(original ?? { status: 'succeeded' as const, summary: 'Walkthrough updated.' }),
+    ...(receipt ? { summary: walkthrough ? `Walkthrough ${walkthrough.change === 'created' ? 'written' : 'updated'}.` : 'Change analysis saved.',
+      toolResultMeta: { ...original?.toolResultMeta, scmResultUpdate: receipt } } : {}),
     toolResultOutput: result.result.output, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: result.result.output } };
 }
 
 async function publicationNotice(scope: ScmDiffSummaryResultScope, response: ScmDiffSummaryResultResponse,
+  previous: ScmDiffSummaryGenerateOutput, requestedOutputs: readonly ScmDiffSummaryOutputKind[],
   original?: ExecutionRunProfileBoundedCompleteResult): Promise<ExecutionRunProfileBoundedCompleteResult | null> {
-  if (response.success) return publicationCompletion(response, original);
+  if (response.success) return publicationCompletion(response, previous, requestedOutputs, original);
   const readable = await scmDiffSummaryResultStore.read(scope);
   if (!readable.success) return null;
   return { status: 'succeeded', summary: response.error,
@@ -96,7 +110,7 @@ export async function publishSavedScmDiffSummaryTurn(params: ExecutionRunProfile
     const output = ScmDiffSummaryGenerateOutputSchema.parse(completion.toolResultOutput);
     const response = await scmDiffSummaryResultStore.publishProgress({ ...saved.scope, expectedRevision: pending.baseRevision, inputId: pending.inputId, output });
     await scmDiffSummaryResultStore.abandonInput({ ...saved.scope, inputId: pending.inputId });
-    return publicationNotice(saved.scope, response, completion);
+    return publicationNotice(saved.scope, response, saved.result.output, pending.outputs, completion);
   }
   const parsed = parseDiffSummaryModelOutput(params.rawText, pending.reviewExplanation
     ? { comparison: saved.result.output.comparison!, requestedOutputs: pending.outputs, allowReviewExplanation: true } : undefined);
@@ -109,7 +123,7 @@ export async function publishSavedScmDiffSummaryTurn(params: ExecutionRunProfile
         const response = await scmDiffSummaryResultStore.publishProgress({ ...saved.scope, expectedRevision: pending.baseRevision,
           inputId: pending.inputId, output: ScmDiffSummaryGenerateOutputSchema.parse(completion.toolResultOutput) });
         await scmDiffSummaryResultStore.abandonInput({ ...saved.scope, inputId: pending.inputId });
-        return publicationNotice(saved.scope, response, completion);
+        return publicationNotice(saved.scope, response, saved.result.output, pending.outputs, completion);
       }
     }
     await scmDiffSummaryResultStore.abandonInput({ ...saved.scope, inputId: pending.inputId });
@@ -122,5 +136,5 @@ export async function publishSavedScmDiffSummaryTurn(params: ExecutionRunProfile
     ...(modelId ? { modelId } : {}),
     ...(completion ? { outputEnvelope: ScmDiffSummaryGenerateOutputSchema.parse(completion.toolResultOutput) } : {}) });
   if (!response.success) await scmDiffSummaryResultStore.abandonInput({ ...saved.scope, inputId: pending.inputId });
-  return publicationNotice(saved.scope, response, completion);
+  return publicationNotice(saved.scope, response, saved.result.output, pending.outputs, completion);
 }

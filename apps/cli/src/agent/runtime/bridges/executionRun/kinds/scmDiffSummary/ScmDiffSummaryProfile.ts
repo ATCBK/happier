@@ -1,12 +1,13 @@
 import { ExecutionRunScmDiffSummaryInputV1Schema, EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
-import { SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryOutputKindSchema, ScmDiffSummaryMetadataSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryModelOutputSchema, ScmDiffSummaryOutputKindSchema, ScmDiffSummaryMetadataSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
-import { ScmDiffSummaryGeneratorSelectionSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
+import { ScmDiffSummaryGeneratorSelectionSchema, ScmDiffSummaryPublicationReceiptSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 import type { ScmDiffSummaryGenerateOutput, ScmDiffSummaryOutputs } from '@happier-dev/protocol';
 import { ProviderBoundModelRefSchema, serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { ExecutionRunIntentProfile, ExecutionRunProfileTurnCompleteParams, ExecutionRunProfileBoundedCompleteResult } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
+import { stripTrailingJsonObjectFromText } from '@/agent/executionRuns/profiles/shared/stripTrailingJsonObjectFromText';
 
 import { buildDiffSummaryPrompt, buildDiffSummaryRefinementTask, SCM_DIFF_SUMMARY_PR_DRAFT_TASK } from './buildDiffSummaryPrompt';
 import { loadScmDiffSummaryContext } from './loadScmDiffSummaryContext';
@@ -14,7 +15,6 @@ import { parseDiffSummaryModelOutput } from './parseDiffSummaryModelOutput';
 import { presentScmDiffSummaryModelContext, scopeScmDiffSummaryComparison } from './presentScmDiffSummaryModelContext';
 import { advanceDiffSummaryAnalysis, hasActiveDiffSummaryAnalysis, planDiffSummaryAnalysis,
   readDiffSummaryPartProgress, admitDiffSummaryPart } from './advanceDiffSummaryAnalysis';
-import { stripTrailingJsonObjectFromText } from '@/agent/executionRuns/profiles/shared/stripTrailingJsonObjectFromText';
 import {
   scmDiffSummaryCacheStore,
   type ScmDiffSummaryCachedValue,
@@ -86,7 +86,8 @@ function readRequestedOutputs(input: Readonly<Record<string, unknown>>) {
 }
 
 function saveCompletedOutput(start: ExecutionRunProfileTurnCompleteParams['start'], completion: ExecutionRunProfileBoundedCompleteResult | null) {
-  if (!completion || completion.nextInput || completion.toolResultMeta?.scmResultUpdate) return completion;
+  if (!completion || completion.nextInput || (completion.toolResultMeta?.scmResultUpdate
+    && !ScmDiffSummaryPublicationReceiptSchema.safeParse(completion.toolResultMeta.scmResultUpdate).success)) return completion;
   if (readRecord(start.intentInput).pullRequestDraft) return completion;
   if (readRecord(readRecord(start.intentInput).reviewNarration).phase === 'writing') return completion;
   const output = ScmDiffSummaryGenerateOutputSchema.safeParse(completion.toolResultOutput);

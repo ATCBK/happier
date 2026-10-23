@@ -832,6 +832,20 @@ describe('ScmDiffSummaryProfile', () => {
     const saved = ScmDiffSummaryGenerateOutputSchema.parse(completed?.toolResultOutput);
     expect(saved.resultId).toEqual(expect.any(String));
     expect(saved.revision).toBe(2);
+    expect(completed?.toolResultMeta).toMatchObject({ scmResultUpdate: { status: 'published', canUndo: true,
+      outputs: [{ kind: 'walkthrough', change: 'created' }] } });
+    const scope = { cwd: '/repo', sessionId: 'sess-1', resultId: saved.resultId! };
+    await scmDiffSummaryResultStore.beginInput({ ...scope, inputId: 'refine', outputs: ['walkthrough'] });
+    const updated = await ScmDiffSummaryProfile.onTurnComplete?.({ start: start({ ...input(['walkthrough']), resultId: saved.resultId }),
+      previousStructuredMeta: completed?.structuredMeta, inputIds: ['refine'], turnId: 'refined-turn', finishedAtMs: 3,
+      rawText: JSON.stringify({ walkthrough: { title: 'Updated explanation', intro: '', stops: [], otherChangeRefs: ['c1'] } }) });
+    expect(updated?.toolResultMeta).toMatchObject({ scmResultUpdate: { status: 'published', canUndo: true,
+      outputs: [{ kind: 'walkthrough', change: 'updated' }] } });
+    await scmDiffSummaryResultStore.beginInput({ ...scope, inputId: 'unchanged', outputs: ['walkthrough'] });
+    const unchanged = await ScmDiffSummaryProfile.onTurnComplete?.({ start: start({ ...input(['walkthrough']), resultId: saved.resultId }),
+      previousStructuredMeta: updated?.structuredMeta, inputIds: ['unchanged'], turnId: 'unchanged-turn', finishedAtMs: 4,
+      rawText: JSON.stringify({ walkthrough: { title: 'Updated explanation', intro: '', stops: [], otherChangeRefs: ['c1'] } }) });
+    expect(unchanged?.toolResultMeta?.scmResultUpdate).toBeUndefined();
   });
 
   it('preserves prior output when later structured turns complete another requested output and ignores invalid discussion', async () => {

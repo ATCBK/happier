@@ -12,7 +12,7 @@ import type { ReviewRunCommentService } from '@/agent/executionRuns/profiles/rev
 import { materializeReviewFindings } from './materializeReviewFindings';
 import { ReviewFindingsV2Schema } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
 import { ReviewPublicationEvidenceSchema } from '@happier-dev/protocol/reviews/reviewPublicationEvidence';
-import { ScmDiffSummaryResultErrorCodeSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
+import { ScmDiffSummaryResultErrorCodeSchema, ScmDiffSummaryPublicationReceiptSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { readReviewNarration } from '@/agent/executionRuns/profiles/review/reviewWalkthroughTurn';
 import { readScmDiffSummaryIntent } from './kinds/scmDiffSummary/publishSavedScmDiffSummaryTurn';
 import { buildExecutionRunProfileStartParams } from './profileStart';
@@ -101,7 +101,8 @@ export async function publishExecutionRunTurn(args: Readonly<{
   }
   const latest = args.runs.get(args.runId);
   if (!latest || latest.status !== 'running' || !current()) return false;
-  const hasPublicationNotice = completion.toolResultMeta?.scmResultUpdate !== undefined;
+  const hasPublicationNotice = completion.toolResultMeta?.scmResultUpdate !== undefined
+    && !ScmDiffSummaryPublicationReceiptSchema.safeParse(completion.toolResultMeta.scmResultUpdate).success;
   const publicationRefusal = ScmDiffSummaryResultErrorCodeSchema.safeParse(
     completion.structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary
       ? readScmDiffSummaryIntent(completion.toolResultMeta?.scmResultUpdate).status : undefined,

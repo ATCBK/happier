@@ -32,6 +32,13 @@ export const ScmResultUpdateNoticeSchema = lazyZodSchema(() => z.strictObject({
   kind: z.enum(['edit', 'generation', 'undo']), revision: z.number().check(z.int(), z.nonnegative()),
   affectedStopIds: z.array(z.string().check(z.minLength(1))), mergedStopIds: z.optional(z.array(z.string().check(z.minLength(1)))),
 }));
+/** Transcript presentation beside the exact saved output in meta.happier; never mutation authority. */
+export const ScmDiffSummaryPublicationReceiptSchema = lazyZodSchema(() => z.strictObject({
+  status: z.literal('published'), canUndo: z.boolean(),
+  outputs: z.array(z.strictObject({ kind: ScmDiffSummaryOutputKindSchema, change: z.enum(['created', 'updated']) }))
+    .check(z.minLength(1), z.refine(outputs => new Set(outputs.map(output => output.kind)).size === outputs.length, 'Published output kinds must be unique')),
+}));
+export type ScmDiffSummaryPublicationReceipt = z.infer<typeof ScmDiffSummaryPublicationReceiptSchema>;
 export const ScmDiffSummaryResultSchema = lazyZodSchema(() => z.strictObject({
   resultId: z.string().check(z.minLength(1)), revision: z.number().check(z.int(), z.nonnegative()),
   output: ScmDiffSummaryGenerateOutputSchema, canUndo: z.boolean(),
