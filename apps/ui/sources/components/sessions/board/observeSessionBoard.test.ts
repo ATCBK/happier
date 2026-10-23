@@ -1,5 +1,6 @@
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { installTimerCensus } from '@/dev/testkit/performance/timerCensus';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createSessionSystemRecordRepository } from '@/sync/domains/sessionSystemRecords/repository';
 import { observeSessionBoard, type SessionBoardBinding, type SessionBoardAuthority } from './observeSessionBoard';
@@ -25,6 +26,42 @@ const layout = record('layout', 'layout.v1', { v: 1, tabs: [{ id: 'overview', ti
 const authority: SessionBoardAuthority = { contentContext: { mode: 'plain' }, capabilities: { readTranscript: true, editSessionRecords: true } };
 
 describe('Board repository binding', () => {
+    it('does no timer, read or publication work during a settled minute and leaves hidden invalidations dormant', async () => {
+        let requests = 0;
+        let publications = 0;
+        const repository = createSessionSystemRecordRepository({ scope, request: async () => {
+            requests++;
+            return Response.json({ records: [layout, record('note', 'item.v1', item)], nextCursor: null, hasNext: false });
+        } });
+        const stop = observeSessionBoard({ session, repository, authority,
+            readCapabilities: () => authority.capabilities, readContentContext: () => authority.contentContext,
+            renewAuthority: async () => ({ status: 'ok', value: authority }), isCurrent: () => true,
+            onChange: () => { publications++; },
+        });
+        await flushHookEffects({ cycles: 50 });
+        expect(requests).toBe(1);
+        expect(publications).toBeGreaterThan(0);
+        vi.useFakeTimers();
+        const timers = installTimerCensus();
+        try {
+            publications = 0;
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect({ reads: requests - 1, publications, timers: timers.read(), pendingTimers: vi.getTimerCount() })
+                .toEqual({ reads: 0, publications: 0, timers: [], pendingTimers: 0 });
+            stop();
+            for (let wake = 0; wake < 60; wake++) {
+                repository.invalidateAll();
+                await vi.advanceTimersByTimeAsync(1000);
+            }
+            expect({ reads: requests - 1, publications, timers: timers.read(), pendingTimers: vi.getTimerCount() })
+                .toEqual({ reads: 0, publications: 0, timers: [], pendingTimers: 0 });
+        } finally {
+            stop();
+            repository.retire();
+            timers.stop();
+            vi.useRealTimers();
+        }
+    });
     it('does not inventory Session content before a Board consumer demands it', async () => {
         const requests: string[] = [];
         const repository = createSessionSystemRecordRepository({ scope, request: async path => {

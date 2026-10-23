@@ -89,7 +89,12 @@ const { CurrentSessionPresentationRuntime } = await import('../presentation/Curr
 const { registerSessionPresentationOnlyTarget } = await import('../presentation/sessionComposerPresentationTargets');
 const { setFocusedSessionId, resetSessionSurfaceVisibilityForTests } = await import('@/sync/domains/session/sessionSurfaceVisibility');
 const { useOptionalSessionViewerController } = await import('./SessionViewerController');
-const { SessionViewerControllerProvider } = await import('./SessionViewerControllerProvider');
+const { SessionViewerScope } = await import('./SessionViewerScope');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
+const { useOpenSessionComputerScreen } = await import('@/components/computer/useOpenSessionComputerScreen');
+const { observeMachinePresenceForTest } = await import('@/dev/testkit/harness/machinePresence');
 const { SessionHeaderComputerButton } = await import('../actions/SessionHeaderComputerButton');
 const initialState = storage.getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
@@ -161,12 +166,23 @@ describe('Session viewer semantic Action ingress', () => {
     };
     publish(serverPresentation);
     setFocusedSessionId('session-a', serverId);
+    const onlineMachine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
+    storage.getState().applyMachines([onlineMachine], true, { sourceServerId: serverId });
+    observeMachinePresenceForTest({ serverId, accountId: 'alice' }, ['machine-1']);
+    let pane: ReturnType<typeof useAppPaneScope> | null = null;
+    let openFromWatch: ReturnType<typeof useOpenSessionComputerScreen> = null;
+    function IngressProbe() {
+      pane = useAppPaneScope(createSessionPaneScopeId('session-a', serverId));
+      openFromWatch = useOpenSessionComputerScreen({ sessionId: 'session-a', serverId });
+      return null;
+    }
     function Wrapper(props: React.PropsWithChildren) {
-      return <SessionViewerControllerProvider sessionId="session-a" serverId={serverId} phone={false} canPresentSource={() => true} openDocked={() => undefined}>
+      return <AppPaneProvider><SessionViewerScope sessionId="session-a" serverId={serverId}>
         <CurrentSessionPresentationRuntime />
         <SessionHeaderComputerButton sessionId="session-a" serverId={serverId} />
+        <IngressProbe />
         {props.children}
-      </SessionViewerControllerProvider>;
+      </SessionViewerScope></AppPaneProvider>;
     }
     stage = 'mounted owner';
     const hook = await renderHook(() => useOptionalSessionViewerController()!, { wrapper: Wrapper });
@@ -233,15 +249,29 @@ describe('Session viewer semantic Action ingress', () => {
       await act(async () => { await hook.getCurrent().requestSemantic({ kind: 'viewer.open', source: 'browser' }); });
       expect(hook.getCurrent().state).toMatchObject({ mode: 'floating', source: 'browser' });
       stage = 'reachable Machine header';
-      const onlineMachine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
       await act(async () => { storage.setState({
         machines: { 'machine-1': onlineMachine }, machineListByServerId: { [serverId]: [onlineMachine] },
       }); });
       await pressHeader();
       await waitForHomeGovernance(() => expect(hook.getCurrent().state).toMatchObject({ mode: 'floating', source: 'computer' }));
       const afterUiOpen = count;
+      await act(async () => { await hook.getCurrent().requestSemantic({ kind: 'viewer.open', source: 'browser' }); });
       await act(async () => { await hook.getCurrent().apply({ kind: 'viewer.dock' }); });
       expect(hook.getCurrent().state.mode).toBe('docked');
+      expect(pane!.scopeState!.details.isOpen).toBe(false);
+      stage = 'docked header source handoff';
+      await pressHeader();
+      expect(hook.getCurrent().state).toMatchObject({ mode: 'docked', source: 'computer' });
+      expect(pane!.scopeState!.details.isOpen).toBe(true);
+      stage = 'docked semantic Browser source handoff';
+      await act(async () => { await hook.getCurrent().requestSemantic({ kind: 'viewer.source.select', source: 'browser' }); });
+      expect(pane!.scopeState!.right).toMatchObject({ isOpen: true, activeTabId: 'browser' });
+      await act(async () => { pane!.closeDetails(); });
+      stage = 'docked transcript Watch source handoff';
+      expect(openFromWatch).toBeTypeOf('function');
+      await act(async () => { openFromWatch!(); });
+      await waitForHomeGovernance(() => expect(hook.getCurrent().state).toMatchObject({ mode: 'docked', source: 'computer' }));
+      expect(pane!.scopeState!.details.isOpen).toBe(true);
       expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterUiOpen);
       stage = 'Ask policy';
       await home.requireUiApproval(serverId, 'session.presentation.apply');

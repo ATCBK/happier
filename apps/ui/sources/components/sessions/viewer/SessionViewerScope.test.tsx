@@ -88,6 +88,34 @@ describe('SessionViewerScope presentable sources', () => {
         expect(switchSurface).toHaveBeenCalledWith('chat');
     });
 
+    describe.each(['viewer.open', 'viewer.source.select'] as const)('docked source handoff through %s', (kind) => {
+        it.each(['computer', 'browser'] as const)('presents the target %s pane on the first source change', async (source) => {
+            await mount('session_online');
+            const previous = source === 'computer' ? 'browser' : 'computer';
+            await act(async () => { controller!.port.apply({ kind: 'viewer.open', source: previous }); });
+            await act(async () => { controller!.apply({ kind: 'viewer.dock' }); });
+            expect(source === 'computer' ? pane!.scopeState!.details.isOpen : pane!.scopeState!.right.isOpen).toBe(false);
+            await act(async () => { expect(controller!.port.apply({ kind, source })).toMatchObject({ status: 'applied' }); });
+            expect(controller!.state).toMatchObject({ mode: 'docked', source });
+            expect(source === 'computer' ? pane!.scopeState!.details.isOpen : pane!.scopeState!.right.isOpen).toBe(true);
+            if (source === 'browser') expect(pane!.scopeState!.right.activeTabId).toBe('browser');
+        });
+    });
+
+    it.each(['computer', 'browser'] as const)('presents the changed %s source when an expanded dock is restored', async (source) => {
+        await mount('session_online');
+        const previous = source === 'computer' ? 'browser' : 'computer';
+        await act(async () => { controller!.port.apply({ kind: 'viewer.open', source: previous }); });
+        await act(async () => { controller!.apply({ kind: 'viewer.dock' }); });
+        await act(async () => { controller!.port.apply({ kind: 'viewer.expand' }); });
+        await act(async () => { controller!.port.apply({ kind: 'viewer.source.select', source }); });
+        expect(source === 'computer' ? pane!.scopeState!.details.isOpen : pane!.scopeState!.right.isOpen).toBe(false);
+        await act(async () => { expect(controller!.port.apply({ kind: 'viewer.restore' })).toMatchObject({ status: 'applied' }); });
+        expect(controller!.state).toMatchObject({ mode: 'docked', source });
+        expect(source === 'computer' ? pane!.scopeState!.details.isOpen : pane!.scopeState!.right.isOpen).toBe(true);
+        if (source === 'browser') expect(pane!.scopeState!.right.activeTabId).toBe('browser');
+    });
+
     describe('Float view', () => {
         const otherTab = { key: 'file:a', kind: 'file', title: 'a', resource: { kind: 'file', path: 'a' } } as const;
         const open = (source: 'computer' | 'browser') => act(async () => { controller?.port.apply({ kind: 'viewer.open', source }); });

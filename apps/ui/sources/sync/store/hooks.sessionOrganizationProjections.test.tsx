@@ -68,4 +68,36 @@ describe('useSessionOrganizationProjections', () => {
         expect(Object.keys(hook.getCurrent()[HOME_A]?.tagsById ?? {})).toEqual(['urgent']);
         expect(Object.keys(hook.getCurrent()[HOME_B]?.tagsById ?? {})).toEqual(['review']);
     });
+
+    it('releases retired Home data even when another Home has a cached projection of the old input maps', async () => {
+        const { Session: InspectorSession } = await import('node:inspector');
+        const retained = (() => {
+            const tags = Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => {
+                const id = `retired-${index}`;
+                return [buildSessionOrganizationServerKey(HOME_A, id), tag(id, id)];
+            }));
+            storage.setState({ sessionOrganizationTagsByTagKey: {
+                ...storage.getState().sessionOrganizationTagsByTagKey, ...tags,
+            } });
+            storageHooks.readSessionOrganizationProjectionCached(storage.getState(), HOME_A);
+            const first = storageHooks.readSessionOrganizationProjectionCached(storage.getState(), HOME_B);
+            expect(storageHooks.readSessionOrganizationProjectionCached(storage.getState(), HOME_B)).toBe(first);
+            return [new WeakRef<object>(storage.getState().sessionOrganizationTagsByTagKey),
+                ...Object.values(tags).map(value => new WeakRef<object>(value))];
+        })();
+        const inspector = new InspectorSession();
+        inspector.connect();
+        try {
+            storage.getState().clearSessionOrganizationForServer(HOME_A);
+            expect(Object.keys(storageHooks.readSessionOrganizationProjectionCached(storage.getState(), HOME_B).tagsById))
+                .toEqual(['review']);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            await new Promise<void>((resolve, reject) => inspector.post('HeapProfiler.collectGarbage',
+                error => error ? reject(error) : resolve()));
+            expect(retained.filter(reference => reference.deref() !== undefined).length,
+                'a cached different Home must not retain retired data through obsolete full input maps').toBe(0);
+        } finally {
+            inspector.disconnect();
+        }
+    });
 });

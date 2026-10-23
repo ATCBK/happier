@@ -297,26 +297,38 @@ describe('composer suggestion picker — host wiring', () => {
         };
         const host = composerReferenceHost(); // This provider declares @ only.
         const actions = { listSlashCommands: () => [] };
-        const hook = await renderHook((props: { host: ComposerReferenceSearchHost; actions: typeof actions; skills: SkillComposerSource }) => {
+        const hook = await renderHook((props: { query: string | null; host: ComposerReferenceSearchHost; actions: typeof actions; skills: SkillComposerSource }) => {
             const source = useSessionComposerSuggestions({ sessionId: SESSION_ID, kinds: SESSION_COMPOSER_SUGGESTION_KINDS,
                 composerReferenceHost: props.host, actionController: props.actions, skillSource: props.skills });
-            return useActiveSuggestions('$project', source);
-        }, { initialProps: { host, actions, skills: skillSource } });
+            return useActiveSuggestions(props.query, source);
+        }, { initialProps: { query: '$project', host, actions, skills: skillSource } });
         await flushHookEffects();
         expect(read).toHaveBeenCalledTimes(1);
-        await hook.rerender({ host: { ...host }, actions: { ...actions }, skills: skillSource });
-        await flushHookEffects();
+        // Scale the publication contract: unrelated @ providers and slash
+        // Actions must never restart the current $ catalog read.
+        for (let publication = 0; publication < 100; publication++) {
+            await hook.rerender({ query: '$project', host: { ...host }, actions: { ...actions }, skills: skillSource });
+            await flushHookEffects();
+        }
         expect(read).toHaveBeenCalledTimes(1);
         const dollarHost = composerReferenceHost(['$']);
-        await hook.rerender({ host: dollarHost, actions, skills: skillSource });
+        await hook.rerender({ query: '$project', host: dollarHost, actions, skills: skillSource });
         await flushHookEffects();
         expect(read).toHaveBeenCalledTimes(2);
-        await hook.rerender({ host: { ...dollarHost }, actions, skills: skillSource });
+        await hook.rerender({ query: '$project', host: { ...dollarHost }, actions, skills: skillSource });
         await flushHookEffects();
         expect(read).toHaveBeenCalledTimes(3);
         const currentRead = vi.fn(async () => facts);
-        await hook.rerender({ host, actions, skills: { ...skillSource, read: currentRead } });
+        await hook.rerender({ query: '$project', host, actions, skills: { ...skillSource, read: currentRead } });
         await flushHookEffects();
+        expect(currentRead).toHaveBeenCalledTimes(1);
+        await hook.rerender({ query: null, host, actions, skills: skillSource });
+        await flushHookEffects();
+        for (let publication = 0; publication < 100; publication++) {
+            await hook.rerender({ query: null, host: { ...dollarHost }, actions: { ...actions }, skills: skillSource });
+            await flushHookEffects();
+        }
+        expect(read).toHaveBeenCalledTimes(3);
         expect(currentRead).toHaveBeenCalledTimes(1);
     });
 
