@@ -4,6 +4,7 @@ import {
     teamCredentialErrorHttpStatusV1,
     type TeamCredentialErrorCodeV1,
     type TeamCredentialResourceCatalogEntryV1,
+    type TeamCredentialResourceDiscoveryPageV1,
     type TeamCredentialResourceEntitledPageV1,
     type TeamCredentialResourceReadInputV1,
 } from '@happier-dev/protocol/teams';
@@ -53,7 +54,7 @@ async function readGathered(pending: readonly PendingRead[]): Promise<void> {
         // Stop an abandoned walk between pages. A remaining caller still needs
         // the same set/cursor, including that page's per-Team refusals.
         if (!pending.some(read => read.request.shouldContinue() && !read.request.signal?.aborted)) break;
-        const result = await requestHomeDomain({
+        const result: HomeDomainResult<TeamCredentialResourceDiscoveryPageV1> = await requestHomeDomain({
             scope: first.scope, method: 'POST', path: TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1,
             input: { teamIds, limit: first.input.limit,
                 ...(first.input.application ? { application: first.input.application } : {}), ...(cursor ? { cursor } : {}) },
