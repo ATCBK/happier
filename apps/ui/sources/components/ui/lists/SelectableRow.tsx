@@ -66,7 +66,8 @@ export type SelectableRowProps = Readonly<{
     onMouseDownCapture?: (event: unknown) => void;
     onKeyDown?: (event: unknown) => void;
     accessibilityLabel?: string;
-    accessibilityRole?: 'radio';
+    /** A checked choice: `radio` among siblings, `checkbox` for a lone on/off row. */
+    accessibilityRole?: 'radio' | 'checkbox';
     /** Overrides the checked state without changing the visual keyboard highlight. */
     accessibilityChecked?: boolean;
     /**
@@ -268,11 +269,11 @@ export const SelectableRow = React.forwardRef<React.ElementRef<typeof Pressable>
     const titleAccessory = React.useMemo(() => normalizeNodeForView(props.titleAccessory ?? null), [props.titleAccessory]);
     const titleLeading = React.useMemo(() => normalizeNodeForView(props.titleLeading ?? null), [props.titleLeading]);
     const subtitleLeading = React.useMemo(() => normalizeNodeForView(props.subtitleLeading ?? null), [props.subtitleLeading]);
-    const explicitWebRole = props.webRole ?? (props.accessibilityRole === 'radio' ? 'radio' : undefined);
+    const explicitWebRole = props.webRole ?? props.accessibilityRole;
     const webRole = Platform.OS === 'web' && props.onPress && (!disabled || explicitWebRole)
         ? (explicitWebRole ?? 'button')
         : undefined;
-    const isRadio = props.accessibilityRole === 'radio' || webRole === 'radio';
+    const isRadio = props.accessibilityRole !== undefined || webRole === 'radio' || webRole === 'checkbox';
     const accessibilityLabel = props.accessibilityLabel ?? (
         webRole ? buildActionRowAccessibilityLabel([props.title, props.subtitle]) : undefined
     );

@@ -114,6 +114,33 @@ describe('SelectableMenuResults (React Native Web Pressable)', () => {
         }
     });
 
+    it('exposes a lone checked row as an on/off checkbox, not a one-option radio', async () => {
+        const { SelectableMenuResults } = await import('./SelectableMenuResults');
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        try {
+            await act(async () => {
+                root.render(<SelectableMenuResults
+                    categories={[{ id: 'check-in', title: 'Check-in', items: [
+                        { id: 'dont-pause', title: "Don't pause", checked: false },
+                        { id: 'rename', title: 'Rename' },
+                    ] }]}
+                    selectedIndex={0}
+                    onSelectionChange={() => {}}
+                    onPressItem={() => {}}
+                    rowVariant="slim"
+                />);
+            });
+            const toggle = container.querySelector('[data-testid="dropdown-option-dont-pause"]');
+            expect(toggle?.getAttribute('role')).toBe('checkbox');
+            expect(toggle?.getAttribute('aria-checked')).toBe('false');
+        } finally {
+            await act(async () => { root.unmount(); });
+            container.remove();
+        }
+    });
+
     it('activates selectable rows through web mouse down capture before the Pressable click path', async () => {
         const { SelectableMenuResults } = await import('./SelectableMenuResults');
         const onPressItem = vi.fn();
