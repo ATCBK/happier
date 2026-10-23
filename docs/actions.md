@@ -279,6 +279,17 @@ policy, principal-label/creation-decision and collaboration-search owners. An
 inspection is advisory: the grant writer still checks current authority and
 policy when access changes.
 
+The same development family exposes `session.access.encryption.prepare`,
+`session.access.encryption.reprepare` and `session.access.layout.update`.
+These client-placed Actions reach the answering app's existing envelope
+preparation and metadata tuple owners. Inputs identify the Session and, for
+Re-prepare, the recipient Account; callers never supply keys or metadata.
+Agent and MCP calls use Ask-first approval. A present user's manual preparation
+uses direct UI admission; historical layout Update keeps its approval policy.
+The dedicated CLI commands accept `--server-id` for the exact Home. Automatic
+post-grant preparation stays a continuation of the admitted grant, and the
+grant's historical-layout preparation runs only after grant admission.
+
 In 0.3 development, `approval.request.list` exposes the Inbox queue's metadata
 read to UI, Agent, MCP and CLI callers. Use `happier actions invoke
 approval.request.list --input-json '{"status":"open"}' --json`, or MCP's
