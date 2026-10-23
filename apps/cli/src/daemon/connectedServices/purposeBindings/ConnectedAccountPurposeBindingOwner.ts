@@ -2192,11 +2192,23 @@ export function createActiveAccountSettingsConnectedAccountPurposeBindingStore(i
       return observed.record.value;
     },
     subscribe(listener) {
-      // Bindings, service configuration and the Saved Secrets they reference
-      // live in the Account snapshot. The Connected Services projection reaches
-      // purpose watches through the runtime's own invalidation instead.
+      // Publish purpose-reader demand only for its Account inputs. Independent
+      // Profile/Prompt/etc. catalog reads are not binding changes. The snapshot
+      // owner retains unchanged preference/key identities; fresh read authority
+      // stays in readCatalog. Connected Services has its own runtime invalidation.
       if (input.subscribe) return input.subscribe(listener);
-      const unsubscribe = subscribeActiveAccountSettingsSnapshotChanges(() => listener());
+      const unsubscribe = subscribeActiveAccountSettingsSnapshotChanges((previous, next) => {
+        if (!previous || !next
+          || previous.scopeKey !== next.scopeKey
+          || previous.source !== next.source
+          || previous.settings !== next.settings
+          || previous.rawSettings !== next.rawSettings
+          || previous.settingsSecretsReadKeys !== next.settingsSecretsReadKeys
+          || previous.connectedPurposeCatalog !== next.connectedPurposeCatalog
+          || previous.connectedConfigurationCatalog !== next.connectedConfigurationCatalog
+          || previous.savedSecretResources !== next.savedSecretResources
+          || previous.savedSecretCatalogState !== next.savedSecretCatalogState) listener();
+      });
       return Object.freeze({ dispose: unsubscribe });
     },
   });
