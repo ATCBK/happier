@@ -88,6 +88,7 @@ export type SessionListQueryHomeStatesState = Readonly<{
     coverageComplete: boolean;
     loadNext(): Promise<void>;
     refresh(): Promise<void>;
+    retry(): Promise<void>;
 }>;
 
 export type SessionListQuerySourceState = Readonly<{
@@ -97,6 +98,7 @@ export type SessionListQuerySourceState = Readonly<{
     coverageComplete: boolean;
     loadNext(): Promise<void>;
     refresh(): Promise<void>;
+    retry(): Promise<void>;
 }>;
 
 /**
@@ -355,12 +357,13 @@ function readRetainedAddresses(membership: SessionListQueryMembership): readonly
  */
 export function useSessionListQueryHomeStates(input: SessionListQueryInput): SessionListQueryHomeStatesState {
     const layer = useSessionListQueryHomeStatesLayer(input);
-    const { statesByServerId, membershipByServerId, coverageComplete, loadNext, refresh } = layer;
-    return React.useMemo(() => ({ statesByServerId, membershipByServerId, coverageComplete, loadNext, refresh }), [
+    const { statesByServerId, membershipByServerId, coverageComplete, loadNext, refresh, retry } = layer;
+    return React.useMemo(() => ({ statesByServerId, membershipByServerId, coverageComplete, loadNext, refresh, retry }), [
         coverageComplete,
         loadNext,
         membershipByServerId,
         refresh,
+        retry,
         statesByServerId,
     ]);
 }
@@ -530,25 +533,29 @@ function useSessionListQueryHomeStatesLayer(input: SessionListQueryInput): Sessi
                 : controllersRef.current.get(home.serverId)?.loadNext()
         )));
     }, [homes, managedOrdinaryHomes]);
-    const refresh = React.useCallback(async () => {
+    const recover = React.useCallback(async (retryFailedOperation: boolean) => {
         const retryableHomes = homes.filter((home) => {
             const state = readHomeState(home);
             return state?.phase === 'offline'
-                || (state?.phase === 'error' && state.failureReason === 'network');
+                || (state?.phase === 'error' && state.failureReason === 'network'
+                    && (!retryFailedOperation || state.failedOperation === undefined || state.failedOperation === 'replace'));
         });
-        // Re-arm every unavailable Home through its transport owner before
-        // asking query controllers for their next page. A failed reconnect is
-        // still followed by refresh so the controller remains the one source
-        // of query state and error presentation.
+        // Replacement recovery re-arms unavailable Homes through their transport owner.
+        // An admitted continuation failure keeps its cursor and retries directly; reconnecting
+        // a still-online Home could replace that request with a first-page read.
         await Promise.allSettled(retryableHomes.map((home) => (
             retrySessionListQueryHome(home.serverId)
         )));
         await Promise.all(homes.map((home) => (
             managedOrdinaryHomes.has(home.serverId)
                 ? refreshOrdinarySessionList(home.serverId)
-                : controllersRef.current.get(home.serverId)?.refresh()
+                : retryFailedOperation
+                    ? controllersRef.current.get(home.serverId)?.retry()
+                    : controllersRef.current.get(home.serverId)?.refresh()
         )));
     }, [homes, readHomeState, managedOrdinaryHomes]);
+    const refresh = React.useCallback(() => recover(false), [recover]);
+    const retry = React.useCallback(() => recover(true), [recover]);
 
     const readRetainedRenderMembership = React.useCallback((
         home: NormalizedQueryHome,
@@ -633,6 +640,7 @@ function useSessionListQueryHomeStatesLayer(input: SessionListQueryInput): Sessi
                 : input.enabled && coverageComplete && !hasPendingSource,
             loadNext,
             refresh,
+            retry,
         };
     }, [
         controllerRevision,
@@ -647,6 +655,7 @@ function useSessionListQueryHomeStatesLayer(input: SessionListQueryInput): Sessi
         readHomeState,
         readRetainedRenderMembership,
         refresh,
+        retry,
         socketStatus,
     ]);
     // Remember only what was committed; an abandoned render must not become the reference point.
@@ -790,6 +799,7 @@ export function useSessionListQuerySourceState(input: SessionListQueryInput): Se
             && previousResult.coverageComplete === coverageComplete
             && previousResult.loadNext === layer.loadNext
             && previousResult.refresh === layer.refresh
+            && previousResult.retry === layer.retry
         ) {
             return previousResult;
         }
@@ -800,6 +810,7 @@ export function useSessionListQuerySourceState(input: SessionListQueryInput): Se
             coverageComplete,
             loadNext: layer.loadNext,
             refresh: layer.refresh,
+            retry: layer.retry,
         };
     }, [activeGroupingV1, inactiveGroupingV1, input.enabled, layer, machineListsByServerId, rowsByServerId, sectionModeV1]);
     React.useLayoutEffect(() => {

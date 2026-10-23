@@ -161,7 +161,7 @@ function BotRosterReports(props: Readonly<{
     {support[serverId] === true && !query.coverageComplete ? <SurfaceFreshnessLine
       testID={`bots-roster.managedSessions:${props.lead.id}.partial`}
       reason={t('bots.partial')}
-      action={{ label: t('common.retry'), onPress: () => fireAndForget(query.refresh(), { tag: 'BotsRoster.managedSessions.retry' }) }}
+      action={{ label: t('common.retry'), onPress: () => fireAndForget(query.retry(), { tag: 'BotsRoster.managedSessions.retry' }) }}
     /> : null}
   </>;
 }
@@ -315,7 +315,7 @@ export function BotsPopoverContent(
     fireAndForget(openAskHappier().then(result => { if (result.kind === 'opened' || result.kind === 'authenticationRequired') close(); }), { tag: 'BotsRoster.startOffer' });
   }, [close, openAskHappier]);
   const retry = React.useCallback(() => {
-    if (query) fireAndForget(query.refresh(), { tag: 'BotsRoster.retry' });
+    if (query) fireAndForget(query.retry(), { tag: 'BotsRoster.retry' });
   }, [query]);
 
   const freshnessLine = failed || incomplete ? (

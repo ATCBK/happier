@@ -249,7 +249,7 @@ export const SessionFollowDestinationPickerModal = React.memo(function SessionFo
             // retained choice stay exactly as they are.
             detail={t('common.retry')}
             disabled={saving}
-            onPress={() => { void querySource.refresh(); }}
+            onPress={() => { void querySource.retry(); }}
             accessibilityLiveRegion="polite"
         /> : statusKey ? <Text
             testID="session-follow-picker-currentness"

@@ -32,7 +32,7 @@ const sessionTitleReadable = (source: SessionDisplayNameSource | null) => readab
  * (`resolveSessionListQueryPresentation`, the Sessions pane's own): nothing while the picker is closed or
  * its Account retired, `loading` until a first page lands or the Home settles, `failed` when it could
  * not be read, then `ready`. A continuation exists only while the owner holds a cursor, and a read that
- * failed after rows were applied keeps them (`pageFailed`; `retryNextPage` when that page can be asked again).
+ * failed after rows were applied keeps them (`pageFailed`); recovery belongs to the query source.
  */
 function readSessionChoices(input: Readonly<{
     enabled: boolean;
@@ -42,7 +42,7 @@ function readSessionChoices(input: Readonly<{
     rowCount: number;
     settlingHomeServerId: string | null;
 }>) {
-    if (!input.enabled) return { status: 'idle' as const, hasMore: false, loadingMore: false, pageFailed: false, retryNextPage: false };
+    if (!input.enabled) return { status: 'idle' as const, hasMore: false, loadingMore: false, pageFailed: false };
     const { state } = input;
     const presentation = resolveSessionListQueryPresentation({ selectedServerIds: [input.serverId],
         statesByServerId: { [input.serverId]: state ?? undefined }, coverageComplete: input.coverageComplete,
@@ -50,14 +50,14 @@ function readSessionChoices(input: Readonly<{
     const applied = state !== null && state.appliedQueryKey !== null;
     const hasMore = applied && ((state.hasNext && state.nextCursor !== null) || (state.attentionHasNext && state.attentionNextCursor !== null));
     if (presentation.kind === 'initial_loading') {
-        return { status: 'loading' as const, hasMore: false, loadingMore: false, pageFailed: false, retryNextPage: false };
+        return { status: 'loading' as const, hasMore: false, loadingMore: false, pageFailed: false };
     }
     const unavailable = presentation.kind === 'error' || presentation.kind === 'partial';
     if (unavailable && input.rowCount === 0) {
-        return { status: 'failed' as const, hasMore: false, loadingMore: false, pageFailed: false, retryNextPage: false };
+        return { status: 'failed' as const, hasMore: false, loadingMore: false, pageFailed: false };
     }
     return { status: 'ready' as const, hasMore, loadingMore: applied && state.phase === 'loading',
-        pageFailed: unavailable, retryNextPage: unavailable && hasMore && state?.phase === 'error' };
+        pageFailed: unavailable };
 }
 
 /**
@@ -153,11 +153,9 @@ export function useDiscussionInviteCandidates(input: Readonly<{
             retry: () => { if (enabled && accountLifetime.isCurrent()) directory.retry('account'); } },
         sessions: { state: sessionState, complete: enabled && source.coverageComplete, ...choices,
             loadMore: async () => { if (enabled && accountLifetime.isCurrent()) await source.loadNext(); },
-            // One recovery: the failed next page when the owner still holds its cursor, else a fresh read
-            // (which also re-arms an unreachable Home).
             retry: async () => {
                 if (!enabled || !accountLifetime.isCurrent()) return;
-                await (choices.retryNextPage ? source.loadNext() : source.refresh());
+                await source.retry();
             } },
     }), [accountLifetime, candidates, choices, directory, enabled, peopleSource, resolvePeople, scope.serverId, sessionState, source]);
 }

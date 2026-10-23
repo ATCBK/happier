@@ -175,6 +175,7 @@ function buildPaneState(
             coverageComplete: false,
             loadNext: async () => {},
             refresh: async () => {},
+            retry: async () => {},
         },
     } as unknown as VisibleSessionListPaneState;
 }

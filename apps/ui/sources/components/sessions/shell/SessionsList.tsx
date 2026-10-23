@@ -379,7 +379,7 @@ function VisibleSessionsListViewContent(
         pageScrollDemandRef.current = false;
         handleLoadMoreSessions();
     }, [handleLoadMoreSessions]);
-    const handleRefreshSessions = React.useCallback(async () => {
+    const handleRefreshSessions = React.useCallback(async (retryFailedOperation = false) => {
         if (!surfaceDataActiveRef.current) return;
         if (refreshingSessionsRef.current) return;
         refreshingSessionsRef.current = true;
@@ -393,7 +393,7 @@ function VisibleSessionsListViewContent(
                 () => props.filterController.filters.show === 'runs'
                     ? Promise.resolve()
                     : props.paneState.query?.active === true
-                        ? props.paneState.query.refresh()
+                        ? retryFailedOperation ? props.paneState.query.retry() : props.paneState.query.refresh()
                         : sync.refreshSessions(),
             );
         } finally {
@@ -401,6 +401,7 @@ function VisibleSessionsListViewContent(
             setRefreshingSessions(false);
         }
     }, [props.filterController.filters.show, props.paneState.query, props.paneState.workflowRunWindow]);
+    const handleRetrySessions = React.useCallback(() => handleRefreshSessions(true), [handleRefreshSessions]);
     const handleClearFilters = React.useCallback(() => {
         props.filterController.resetFilters();
     }, [props.filterController]);
@@ -474,7 +475,7 @@ function VisibleSessionsListViewContent(
             viewContext: props.filterController.viewContext,
             includeInactive: props.filterController.includeInactive,
             hasHiddenInactiveSessions: props.paneState.hasHiddenInactiveSessions,
-            onRetry: handleRefreshSessions,
+            onRetry: handleRetrySessions,
             onLoadMore: handleLoadMoreSessions,
             onClearFilters: handleClearFilters,
             onBrowseAllAccessible: handleBrowseAllAccessible,
@@ -484,7 +485,7 @@ function VisibleSessionsListViewContent(
         handleBrowseAllAccessible,
         handleClearFilters,
         handleLoadMoreSessions,
-        handleRefreshSessions,
+        handleRetrySessions,
         handleShowInactive,
         props.filterController.defaultFilters,
         props.filterController.filters,

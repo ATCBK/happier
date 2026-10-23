@@ -2,7 +2,7 @@ import type { SessionListQueryV1 } from '@happier-dev/protocol';
 
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
-import type { SessionListFetchResult } from '@/sync/engine/sessions/sessionSnapshot';
+import type { SessionListFetchResult, fetchAndApplySessions } from '@/sync/engine/sessions/sessionSnapshot';
 import type { SessionListPageSource } from '@/sync/engine/sessions/sessionHttpCompat';
 import { HappyError } from '@/utils/errors/errors';
 
@@ -40,6 +40,8 @@ export type SessionListQueryHomeState = Readonly<{
     freshnessAt: number | null;
     failureReason: SessionListQueryFailureReason | null;
     failureCode: string | null;
+    /** The admitted request that failed; retained cursors do not identify that request. */
+    failedOperation?: RequestFamily;
     /**
      * Which request adapter produced the applied membership. A released GET
      * adapter cannot answer the strict query's structural selection, so coverage
@@ -77,6 +79,7 @@ export type SessionListQueryPageRequest = Readonly<{
     membership: SessionListPageMembership;
     /** Predicate consumers need settled summaries, not just structural membership. */
     hydration?: 'required';
+    candidateStartedBy?: Parameters<typeof fetchAndApplySessions>[0]['candidateStartedBy'];
     limit?: number;
     cursor?: string | null;
     attentionCursor?: string | null;
@@ -103,6 +106,8 @@ export type SessionListQueryHomeController = Readonly<{
     subscribe(listener: () => void): () => void;
     update(input: ControllerInput): Promise<void>;
     refresh(): Promise<void>;
+    /** Retry the failed request, preserving a continuation's exact cursor. */
+    retry(): Promise<void>;
     /**
      * Re-read page one after an Account change. `'structural'` (a row-level Session
      * write) skips a corpus the ordinary list can answer: its membership is decided by
@@ -314,8 +319,9 @@ export function createSessionListQueryHomeController(params: Readonly<{
             && state.phase === phase
             && state.failureReason === failureReason
             && state.failureCode === failureCode
+            && state.failedOperation === undefined
         ) return;
-        publish({ ...state, requestedQueryKey, phase, failureReason, failureCode });
+        publish({ ...state, requestedQueryKey, phase, failureReason, failureCode, failedOperation: undefined });
     };
 
     const isRequestCurrent = (requestRevision: number, signal: AbortSignal): boolean => (
@@ -351,6 +357,7 @@ export function createSessionListQueryHomeController(params: Readonly<{
                 : 'loading',
             failureReason: null,
             failureCode: null,
+            failedOperation: undefined,
         });
 
         let promise: Promise<void> | undefined;
@@ -397,6 +404,8 @@ export function createSessionListQueryHomeController(params: Readonly<{
                         phase: 'error',
                         failureReason: 'cursor_not_advancing',
                         failureCode: 'cursor_not_advancing',
+                        // The non-advancing cursor was withdrawn; only a replacement can recover.
+                        failedOperation: undefined,
                     });
                     return;
                 }
@@ -420,6 +429,7 @@ export function createSessionListQueryHomeController(params: Readonly<{
                     freshnessAt: now(),
                     failureReason: null,
                     failureCode: null,
+                    failedOperation: undefined,
                 });
             } catch (error) {
                 if (!isRequestCurrent(requestRevision, abortController.signal)) return;
@@ -440,6 +450,7 @@ export function createSessionListQueryHomeController(params: Readonly<{
                     phase: 'error',
                     failureReason: failure.reason,
                     failureCode: failure.code,
+                    failedOperation: family,
                 });
             } finally {
                 if (activeAbortController === abortController) {

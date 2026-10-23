@@ -58,7 +58,7 @@ export const TeamSharedSessionsSection = React.memo(function TeamSharedSessionsS
                 reason={denied ? undefined : state?.failureReason === 'unsupported'
                     ? t('sessionsList.teamListingUnavailableDescription')
                     : items.length ? t('sessionsList.queryRefreshFailedRetainedDescription') : t('sessionsList.queryRefreshFailedEmptyDescription')}
-                action={denied || state?.failureReason === 'unsupported' ? undefined : { label: t('common.retry'), onPress: source.refresh }}
+                action={denied || state?.failureReason === 'unsupported' ? undefined : { label: t('common.retry'), onPress: source.retry }}
             /> : null}
             {empty ? <SurfaceStateCard testID="team-overview-sessions-empty" kind="empty" size="line" title={t('sessionsList.queryTeamEmptyDescription')} /> : null}
             {items.map((item) => {

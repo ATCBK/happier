@@ -57,6 +57,39 @@ function result(
 }
 
 describe('SessionListQueryHomeController', () => {
+    it.each(['replace', 'ordinary', 'attention'] as const)('retries the failed %s operation and clears its recovery state after success', async (operation) => {
+        const requests: SessionListQueryPageRequest[] = [];
+        let failing = false;
+        const controller = createSessionListQueryHomeController({
+            serverId: 'home-a',
+            fetchPage: async request => {
+                requests.push(request);
+                if (failing) throw new Error('Home unavailable');
+                if (request.cursor || request.attentionCursor) return result(['tail']);
+                return result(['head'], operation === 'attention'
+                    ? { attentionNextCursor: 'attention-next', attentionHasNext: true }
+                    : { nextCursor: 'ordinary-next', hasNext: true });
+            },
+        });
+        await controller.update({ query: QUERY_A, selected: true, online: true, supported: true });
+        failing = true;
+        await (operation === 'replace' ? controller.invalidate() : controller.loadNext());
+        expect(controller.getSnapshot()).toMatchObject({ phase: 'error', failedOperation: operation });
+        const failedRequest = requests.at(-1)!;
+        failing = false;
+        await controller.retry();
+        expect(requests.at(-1)).toMatchObject({
+            ...(operation === 'ordinary' ? { cursor: failedRequest.cursor } : {}),
+            ...(operation === 'attention' ? { attentionCursor: failedRequest.attentionCursor } : {}),
+        });
+        if (operation === 'replace') {
+            expect(requests.at(-1)?.cursor).toBeUndefined();
+            expect(requests.at(-1)?.attentionCursor).toBeUndefined();
+        }
+        expect(controller.getSnapshot()).toMatchObject({ phase: 'ready', failedOperation: undefined });
+        controller.dispose();
+    });
+
     it('settles an offline Home before feature discovery and keeps a reachable undecided Home pending', async () => {
         const requests: SessionListQueryPageRequest[] = [];
         const controller = createSessionListQueryHomeController({

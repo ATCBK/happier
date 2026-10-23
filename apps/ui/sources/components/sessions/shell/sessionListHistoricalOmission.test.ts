@@ -170,6 +170,7 @@ describe('historical shares withheld by the Home', () => {
                     coverageComplete,
                     loadNext: () => controller.loadNext(),
                     refresh: () => controller.refresh(),
+                    retry: () => controller.retry(),
                 },
             },
         });

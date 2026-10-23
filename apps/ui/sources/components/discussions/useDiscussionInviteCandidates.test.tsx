@@ -20,6 +20,7 @@ import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlain
 import { readableSessionDisplayTitle, sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 import { selectSessionDisplayNameSource } from '@/sync/domains/state/storage';
 import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, recordMachineRequestFailed, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -349,19 +350,52 @@ describe('Discussion Invite source composition', () => {
             expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain('session:first');
             expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-more')).toBeUndefined();
             boundary.failQueries(home, null);
+            const beforeRetry = boundary.queryRequests.length;
             await act(async () => retry.onSelect?.());
             await vi.waitFor(() => expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain(`session:${boundary.accountId(home)}-page-2`));
             expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain('session:first');
             // The retry asked for the failed page, not a fresh first page.
-            expect(boundary.queryRequests.at(-1)?.cursor).toBe(`cursor:${boundary.accountId(home)}`);
+            expect(boundary.queryRequests.slice(beforeRetry).map(request => [request.serverId, request.cursor]))
+                .toEqual([[home, `cursor:${boundary.accountId(home)}`]]);
             expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeUndefined();
         });
 
-        it('presents nothing and reads nothing once the picker closes or its Account retires', async () => {
+        it('retries the failed replacement after an exact-Home change even while the old page retains a cursor', async () => {
+            const [wrongHome, home] = boundary.serverIds as [string, string, string];
+            boundary.setRows(home, ['first']);
+            const { hook } = await mountPicker(home);
+            await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-more')).toBeDefined());
+            const beforeInvalidation = boundary.queryRequests.length;
+            await act(async () => publishHomeAccountChange(wrongHome, ['new-head'], { sessionListQueryAffects: true }));
+            expect(boundary.queryRequests).toHaveLength(beforeInvalidation);
+
+            boundary.failQueries(home, 'all');
+            await act(async () => publishHomeAccountChange(home, ['new-head'], { sessionListQueryAffects: true }));
+            await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeDefined());
+            expect(boundary.queryRequests.slice(beforeInvalidation).map(request => [request.serverId, request.cursor]))
+                .toEqual([[home, null]]);
+            expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain('session:first');
+
+            boundary.setRows(home, ['new-head', 'first']);
+            boundary.failQueries(home, null);
+            const beforeRetry = boundary.queryRequests.length;
+            await act(async () => find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')!.onSelect?.());
+            await vi.waitFor(() => expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain('session:new-head'));
+            expect(boundary.queryRequests.slice(beforeRetry).map(request => [request.serverId, request.cursor]))
+                .toEqual([[home, null]]);
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeUndefined();
+        });
+
+        it.each(['initial', 'replacement'] as const)('presents nothing and reads nothing after Account retirement following a failed %s read', async (operation) => {
             const home = boundary.serverIds[1]!;
             boundary.setRows(home, ['first']);
-            boundary.failQueries(home, 'all');
+            if (operation === 'initial') boundary.failQueries(home, 'all');
             const { accountLifetime, hook } = await mountPicker(home);
+            if (operation === 'replacement') {
+                await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-more')).toBeDefined());
+                boundary.failQueries(home, 'all');
+                await act(async () => publishHomeAccountChange(home, ['new-head'], { sessionListQueryAffects: true }));
+            }
             await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeDefined());
             const retry = find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')!;
             await act(async () => boundary.switchAccount(home, 'replacement'));
