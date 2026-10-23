@@ -35,10 +35,9 @@ export function useBoardCanvasEntityDrop(binding: WorkBoardEntityBinding, measur
     React.useEffect(() => {
         if (Platform.OS !== 'web' || typeof window === 'undefined') return;
         const setShift = (next: boolean) => {
-            if (shift.current !== next) {
-                shift.current = next;
-                for (const listener of snappingListeners.current) listener();
-            }
+            if (shift.current === next) return;
+            shift.current = next;
+            for (const listener of snappingListeners.current) listener();
             runtime.refresh();
         };
         const modifier = (event: KeyboardEvent | DragEvent) => setShift(event.shiftKey);

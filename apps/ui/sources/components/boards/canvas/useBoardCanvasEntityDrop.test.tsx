@@ -10,6 +10,7 @@ import { installEntityDragCancellation } from '@/components/ui/treeDragDrop/enti
 import { useEntityDragDomBinding } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
 import { projectBoardMembership } from '../model/boardMembership';
+import { BOARD_CANVAS_METRICS } from '../model/boardCanvasGeometry';
 import { createWorkBoardAccountStore } from '../model/workBoardAccountStore';
 import { createWorkBoardUiActionPort, workBoardDragItem } from '../model/workBoardEntityDrop';
 import type { WorkBoardEntityBinding } from '../model/workBoardEntityBinding';
@@ -41,8 +42,13 @@ describe('Canvas browser drop at the shared entity owner', () => {
         const board = { ...createWorkBoardV1({ id: 'board', name: 'Board' }), mode: 'canvas' as const,
             source: { picked: [ref, obstacle] }, positionsByItemRef: placement === 'saved' ? { [key]: { x: 72, y: 0 } } : {} };
         const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
-        const store = createWorkBoardAccountStore(persistence.transport, () => true);
+        let updates = 0;
+        const store = createWorkBoardAccountStore({ ...persistence.transport,
+            update: async input => { updates++; return persistence.transport.update(input); },
+        }, () => true);
+        const releaseView = store.retainView(() => () => {}, `board:${board.id}`);
         await store.refresh();
+        persistence.reads.length = 0;
         const runtime = createEntityDragDropRuntime();
         const context = () => {
             const current = store.getBoards().boards[0]!;
@@ -50,7 +56,8 @@ describe('Canvas browser drop at the shared entity owner', () => {
                 isHomeMounted: () => true, sections: {}, filtered: null }), isHomeMounted: () => true };
         };
         const port = createWorkBoardUiActionPort(context, store.queue, store.readBoardAccess);
-        const binding: WorkBoardEntityBinding = { runtime, scope, isCurrent: () => true, getContext: context,
+        let admissionReads = 0;
+        const binding: WorkBoardEntityBinding = { runtime, scope, isCurrent: () => true, getContext: () => { admissionReads++; return context(); },
             execute: async effect => {
                 const input = WorkBoardActionInputSchemasV1['boards.apply'].parse(effect.input);
                 await port.apply(input.intent);
@@ -93,18 +100,40 @@ describe('Canvas browser drop at the shared entity owner', () => {
             // Native HTML dragging terminates pointer input before dragover delivery.
             source.dispatchEvent(new Event('pointercancel', { bubbles: true }));
             const over = drag('dragover', 721, 460, data);
+            admissionReads = 0;
             act(() => { viewport.dispatchEvent(over); });
+            expect(admissionReads).toBe(1);
             expect(runtime.getSnapshot().admission?.status).toBe('allowed');
             expect(runtime.getSnapshot().destinationKey).toBeNull();
             expect(over.defaultPrevented).toBe(true);
+            if (!snap) {
+                const free = runtime.getSnapshot().admission;
+                act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true })); });
+                const shifted = runtime.getSnapshot().admission;
+                expect(shifted?.status).toBe('allowed');
+                if (shifted?.status === 'allowed') {
+                    const input = WorkBoardActionInputSchemasV1['boards.apply'].parse(shifted.effect.input);
+                    expect(input.intent.kind).toBe('set_positions');
+                    if (input.intent.kind === 'set_positions') {
+                        const point = input.intent.positionsByItemRef[key]!;
+                        expect([point.x % BOARD_CANVAS_METRICS.gridStepPx, point.y % BOARD_CANVAS_METRICS.gridStepPx]).toEqual([0, 0]);
+                    }
+                }
+                act(() => { window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', shiftKey: false })); });
+                expect(runtime.getSnapshot().admission).toEqual(free);
+            }
             const overlap = drag('dragover', 578, 140, data);
             act(() => { viewport.dispatchEvent(overlap); });
             const admission = runtime.getSnapshot().admission;
             expect(admission).toMatchObject({ status: 'allowed', effect: { input: { intent: { positionsByItemRef: { [key]: settled } } } } });
+            expect({ reads: persistence.reads, updates }).toEqual({ reads: [], updates: 0 });
             const drop = drag('drop', 578, 140, data);
             await act(async () => { viewport.dispatchEvent(drop); await vi.waitFor(() => expect(runtime.getSnapshot().outcome?.status).toBe('applied')); });
             expect(drop.defaultPrevented).toBe(true);
             expect(persistence.acknowledged().boards[0]!.positionsByItemRef).toEqual({ [key]: settled, [obstacleKey]: { x: 504, y: 0 } });
+            // CAS reads the exact Board once before writing; its acknowledgement supplies
+            // the new state without another body read or an inventory refresh.
+            expect({ reads: persistence.reads, updates }).toEqual({ reads: [board.id], updates: 1 });
             expect(runtime.getSnapshot().outcome?.status).toBe('applied');
             source.dispatchEvent(drag('dragend', 578, 140, data));
             runtime.begin('invalid');
@@ -113,9 +142,11 @@ describe('Canvas browser drop at the shared entity owner', () => {
             expect(invalid.defaultPrevented).toBe(false);
             await act(async () => { viewport.dispatchEvent(drag('drop', 721, 460, data)); });
             expect(persistence.acknowledged().boards[0]!.positionsByItemRef[key]).toEqual(settled);
+            expect({ reads: persistence.reads, updates }).toEqual({ reads: [board.id], updates: 1 });
         } finally {
             stopCancellation(); runtime.cancel();
             await sourceHook.unmount(); await canvas.unmount(); viewport.remove();
+            releaseView(); store.retire();
         }
     });
 });
