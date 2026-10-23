@@ -6,6 +6,10 @@ type UsageLimitRecoveryIdentity = Pick<
     'issueFingerprint' | 'armedAtMs' | 'runtimeAuthRecoveryAttemptId'
 >;
 
+export function isPendingUsageLimitRecoveryStatus(status: SessionUsageLimitRecoveryV1['status']): boolean {
+    return status === 'armed' || status === 'waiting' || status === 'checking';
+}
+
 /**
  * Canonical lifecycle identity. Legacy/non-runtime records retain tuple identity,
  * while a runtime-auth-linked record can match only the exact immutable attempt.
@@ -155,6 +159,11 @@ function compareUsageLimitRecoveryIntents(
         return statusTieRank[left.status] - statusTieRank[right.status];
     }
     if (left.attemptCount !== right.attemptCount) return left.attemptCount - right.attemptCount;
+    // A provider reset snapshot refines an untimed fallback within this lifecycle.
+    // Keep that evidence even when its precise reset is earlier than the fallback.
+    if ((left.resetAtMs === null) !== (right.resetAtMs === null)) {
+        return left.resetAtMs === null ? -1 : 1;
+    }
     const leftNextCheck = left.nextCheckAtMs ?? -1;
     const rightNextCheck = right.nextCheckAtMs ?? -1;
     if (leftNextCheck !== rightNextCheck) return leftNextCheck - rightNextCheck;

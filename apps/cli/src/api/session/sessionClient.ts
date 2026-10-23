@@ -1,3 +1,8 @@
+import { createSessionUsageLimitRecoveryRuntime } from '@/session/usageLimitRecoveryControls/createSessionUsageLimitRecoveryRuntime';
+import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { resolveUsageLimitRecoveryEnabled } from '@/features/usageLimitRecoveryFeatureGate';
+import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { logger } from '@/ui/logger'
 import { registerSessionQuestionAnswerDelivery } from '@/agent/permissions/sessionQuestionAnswerDelivery';
 import { SessionMessageV1Schema, type SessionMessageV1 } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
@@ -655,6 +660,8 @@ export class ApiSessionClient extends EventEmitter {
     private endSessionAndClosePromise: Promise<void> | null = null;
     private readonly sessionRuntimeControls: Partial<SessionRuntimeControls> = {};
     private sessionRuntimeControlsSettled = false;
+    private readonly usageLimitRecoveryRuntime: ReturnType<typeof createSessionUsageLimitRecoveryRuntime>;
+    private nativeUsageLimitReadiness: SessionRuntimeControls['checkUsageLimitRecoveryNow'] | null = null;
     readonly executionRuns: HappyMcpExecutionRunService;
     /** Existing native runtime accessor installed by applyRunnerMcpSessionContext. */
     declare getBackendTarget?: import('@/mcp/startHappyServer').HappyMcpSessionClient['getBackendTarget'];
@@ -1752,6 +1759,35 @@ export class ApiSessionClient extends EventEmitter {
             },
         });
         this.subscribeDaemonPluginCatalogChanges = registerPluginCatalogSignal({ rpcHandlerManager: this.rpcHandlerManager, events: this });
+        this.usageLimitRecoveryRuntime = createSessionUsageLimitRecoveryRuntime({
+            sessionId: this.sessionId,
+            currentMachineId: options.localMachineId ?? null,
+            getMetadata: () => this.getMetadataSnapshot(),
+            updateMetadata: update => this.updateMetadata(update),
+            runRequest: operation => this.runSessionRequest(operation),
+            readContext: async () => await this.runSessionRequest(async () => {
+                const credentials = await this.readCurrentOwnerCredentials();
+                if (!credentials || this.closed) return null;
+                const transport = await resolveSessionTransportContext({ credentials, idOrPrefix: this.sessionId });
+                if (!transport.ok) return null;
+                const metadata = tryDecryptSessionOwnerMetadataView({ credentials,
+                    accountEncryptionMode: transport.accountEncryptionCurrentness.mode, rawSession: transport.rawSession });
+                return metadata ? { credentials, rawSession: transport.rawSession, metadata,
+                    ...(transport.mode === 'plain' ? { mode: 'plain' as const, ctx: null } : { mode: 'e2ee' as const, ctx: transport.ctx }) } : null;
+            }),
+            getAccountSettings: () => this.runSessionRequest(() => {
+                if (!this.hasOwnerMetadataAuthority()) return null;
+                const admitted = options.actionsSettingsProvider?.getAccountSettings;
+                if (admitted) return admitted();
+                const snapshot = getActiveAccountSettingsSnapshot();
+                return snapshot?.scopeKey === resolveAccountSettingsScopeKeyForToken(this.token) ? snapshot.settings : null;
+            }),
+            isFeatureEnabled: () => resolveUsageLimitRecoveryEnabled({ serverUrl: this.transport.serverUrl }),
+            readNativeReadiness: request => this.nativeUsageLimitReadiness?.(request)
+                ?? { ok: false, errorCode: 'unsupported_session_runtime_method' },
+        });
+        Object.assign(this.sessionRuntimeControls, this.usageLimitRecoveryRuntime.controls);
+        void this.usageLimitRecoveryRuntime.restore().catch(this.usageLimitRecoveryRuntime.reportError);
         this.sessionHandlersRegistration = registerSessionClientRuntimeHandlers({
             rpcHandlerManager: this.rpcHandlerManager,
             token: this.token,
@@ -1768,6 +1804,8 @@ export class ApiSessionClient extends EventEmitter {
             session: this,
             getSessionMetadata: () => this.getMetadataSnapshot(),
             sessionRuntimeControls: this.sessionRuntimeControls,
+            revalidateExplicitUserRequest: () => this.sessionRuntimeControls.checkUsageLimitRecoveryNow
+                === this.usageLimitRecoveryRuntime.controls.checkUsageLimitRecoveryNow ? { status: 'ready' } : null,
             waitForSessionRuntimeControls: (signal) => this.waitForSessionRuntimeControls(signal),
             waitForAppliedChildSelectionReader: async (signal) => (
                 await this.waitForSessionRuntimeControls(signal)
@@ -2306,7 +2344,10 @@ export class ApiSessionClient extends EventEmitter {
     setSessionRuntimeControls(controls: SessionRuntimeControls | null): void {
         const hadGoalControls = typeof this.sessionRuntimeControls.setGoal === 'function'
             || typeof this.sessionRuntimeControls.clearGoal === 'function';
+        this.nativeUsageLimitReadiness = controls?.checkUsageLimitRecoveryNow ?? null;
         applySessionRuntimeControls(this.sessionRuntimeControls, controls);
+        Object.assign(this.sessionRuntimeControls, this.usageLimitRecoveryRuntime.controls);
+        void this.usageLimitRecoveryRuntime.restore().catch(this.usageLimitRecoveryRuntime.reportError);
         this.sessionRuntimeControlsSettled = true;
         this.emit(SESSION_RUNTIME_CONTROLS_EVENT);
         this.sessionRuntimeControls.preparePendingMessageComposerAdmission = async (request) => (
@@ -4239,10 +4280,22 @@ export class ApiSessionClient extends EventEmitter {
         const update = observed.isTerminal
             ? persistedUpdate.then(async () => {
                 await this.durableMutationOutbox.flush('flush');
+                if (mutation.action === 'fail') {
+                    void this.usageLimitRecoveryRuntime.observeFailure(mutation.issue)
+                        .catch(this.usageLimitRecoveryRuntime.reportError);
+                } else if (mutation.action === 'complete' || mutation.action === 'cancel' || mutation.action === 'end_session') {
+                    void this.usageLimitRecoveryRuntime.observeSupersession()
+                        .catch(this.usageLimitRecoveryRuntime.reportError);
+                }
             }).finally(() => {
                 this.observeDurableTerminalSessionTurnMutationForPendingDrain(mutation);
             })
-            : persistedUpdate;
+            : persistedUpdate.then(() => {
+                if (mutation.action === 'begin') {
+                    void this.usageLimitRecoveryRuntime.observeSupersession()
+                        .catch(this.usageLimitRecoveryRuntime.reportError);
+                }
+            });
         this.trackPendingUpdate(this.pendingSessionTurnMutationUpdates, update);
         return update;
     }
@@ -4831,6 +4884,8 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     async close() {
+        this.usageLimitRecoveryRuntime.dispose();
+        this.nativeUsageLimitReadiness = null;
         // Withdraw native controls before asynchronous disposal so startup
         // observers can produce their terminal unsupported response while the
         // reply transport is still available.

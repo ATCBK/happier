@@ -78,11 +78,13 @@ export async function persistUsageLimitRecoveryFieldDurably(params: Readonly<{
   if (split.mutations.length === 0 && candidateChangedUsageLimitField) {
     const nextValue = params.nextMetadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY];
     const currentValue = params.currentMetadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY];
+    const parsedCurrent = SessionStateUsageLimitRecoveryValueSchema.safeParse(currentValue);
     const validNoop = (
       nextValue === null
         ? currentValue === undefined
         : SessionStateUsageLimitRecoveryValueSchema.safeParse(nextValue).success
-          && JSON.stringify(nextValue) === JSON.stringify(currentValue)
+          && parsedCurrent.success
+          && JSON.stringify(durableCandidate[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]) === JSON.stringify(parsedCurrent.data)
     );
     if (validNoop) return durableCandidate;
   }

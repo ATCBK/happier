@@ -12,6 +12,8 @@ import type {
   SessionUsageLimitRecoveryReadinessProbeResult,
 } from './sessionUsageLimitRecoveryControlTypes';
 
+export const DEFAULT_USAGE_LIMIT_RECOVERY_BACKOFF_MS = 600_000;
+
 type MetadataRecord = Record<string, unknown>;
 
 type BackoffUsageLimitRecoveryControlResult =
@@ -180,7 +182,6 @@ function buildNextIntent(params: Readonly<{
     ...params.intent,
     nextCheckAtMs,
   };
-  const attemptCount = baseIntent.attemptCount + 1;
 
   if (baseIntent.maxAttempts > 0 && baseIntent.attemptCount >= baseIntent.maxAttempts) {
     return {
@@ -188,7 +189,6 @@ function buildNextIntent(params: Readonly<{
       intent: {
         ...baseIntent,
         status: 'exhausted',
-        attemptCount,
         lastProbeError: baseIntent.lastProbeError ?? USAGE_LIMIT_RECOVERY_MAX_ATTEMPTS_EXHAUSTED_ERROR,
       },
     };
@@ -199,8 +199,8 @@ function buildNextIntent(params: Readonly<{
       adapterStatus: 'ready',
       intent: {
         ...baseIntent,
-        status: 'cancelled',
-        attemptCount,
+        status: 'paused',
+        nextCheckAtMs: null,
         lastProbeError: null,
       },
     };
@@ -211,7 +211,6 @@ function buildNextIntent(params: Readonly<{
     intent: {
       ...baseIntent,
       status: 'waiting',
-      attemptCount,
       lastProbeError: null,
     },
   };
@@ -257,7 +256,7 @@ export function createBackoffSessionUsageLimitRecoveryControlAdapter(options: Se
       const fallbackBackoffMs = readNonNegativeIntegerFromEnv(
         processEnv,
         options.fallbackBackoffEnvKey,
-        options.defaultFallbackBackoffMs ?? 600_000,
+        options.defaultFallbackBackoffMs ?? DEFAULT_USAGE_LIMIT_RECOVERY_BACKOFF_MS,
       );
       const intent = persistedIntent && persistedIntent.status !== 'cancelled'
         ? persistedIntent

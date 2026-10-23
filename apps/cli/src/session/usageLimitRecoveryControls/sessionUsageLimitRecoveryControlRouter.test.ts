@@ -653,12 +653,12 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
     }));
   });
 
-  it('returns a stable provider-unsupported result for inactive check-now without a provider adapter', async () => {
+  it('keeps inactive check-now without a current failure inactive when no provider probe is available', async () => {
     await expect(routeSessionUsageLimitRecoveryCheckNow({
       token: 'token',
       credentials: createCredentials(),
-      sessionId: 'sess_1',
-      rawSession: createRawSession(),
+      sessionId: 'sess_no_current_failure',
+      rawSession: createRawSession({ id: 'sess_no_current_failure' }),
       metadata: createMetadata({ agentRuntimeDescriptorV1: { v: 1, providerId: 'claude' } }),
       currentMachineId: 'machine-local',
       ctx: null,
@@ -668,9 +668,9 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
       resolveAdapter: vi.fn(async () => null),
     })).resolves.toEqual({
       ok: false,
-      status: 'unsupported',
-      sessionId: 'sess_1',
-      errorCode: 'session_usage_limit_recovery_control_provider_unsupported',
+      status: 'inactive',
+      sessionId: 'sess_no_current_failure',
+      errorCode: 'session_usage_limit_recovery_control_inactive',
     });
   });
 
@@ -803,30 +803,41 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
   });
 
   it('discards a probe that completed after the recovery attempt was cancelled', async () => {
+    const futureResetAtMs = Date.now() + 60_000;
     const armed = {
       v: 1,
       status: 'waiting',
       resumePromptMode: 'standard',
-      issueFingerprint: 'usage-limit:codex:turn-1:1700000000000:1700000060000',
+      issueFingerprint: `usage-limit:codex:turn-1:1700000000000:${futureResetAtMs}`,
       armedAtMs: 1_700_000_000_000,
-      resetAtMs: 1_700_000_060_000,
-      nextCheckAtMs: 1_700_000_060_000,
+      resetAtMs: futureResetAtMs,
+      nextCheckAtMs: futureResetAtMs,
       attemptCount: 1,
       maxAttempts: 3,
       lastProbeError: null,
       selectedAuth: { kind: 'native', serviceId: 'openai-codex' },
     } as const;
     const resumeInactiveSessionWhenReady = vi.fn(async () => true);
-    const checkNow = vi.fn(async () => ({
-      ok: true,
-      status: 'ready',
-      metadata: {
-        machineId: 'machine-local',
-        sessionUsageLimitRecoveryV1: { ...armed, status: 'waiting', attemptCount: 2 },
-      },
-    }));
+    let probeStarted = () => {};
+    const started = new Promise<void>((resolve) => { probeStarted = resolve; });
+    let finishProbe = () => {};
+    const pendingProbe = new Promise<void>((resolve) => { finishProbe = resolve; });
+    let cancelled = false;
+    // The provider transport remains in flight while the user cancels its exact attempt.
+    const checkNow = vi.fn(async () => {
+      probeStarted();
+      await pendingProbe;
+      return {
+        ok: true,
+        status: 'ready',
+        metadata: {
+          machineId: 'machine-local',
+          sessionUsageLimitRecoveryV1: armed,
+        },
+      };
+    });
 
-    const result = await routeSessionUsageLimitRecoveryCheckNow({
+    const pendingResult = routeSessionUsageLimitRecoveryCheckNow({
       token: 'token',
       credentials: createCredentials(),
       sessionId: 'sess_cancel_race',
@@ -839,9 +850,15 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
       callLiveSessionRpc: vi.fn(),
       resolveAdapter: vi.fn(async () => ({ checkNow })),
       resumeInactiveSessionWhenReady,
-      // The user cancelled while the probe was still in flight.
-      readCurrentUsageLimitRecovery: vi.fn(() => ({ ...armed, status: 'cancelled' as const, nextCheckAtMs: null })),
+      readCurrentUsageLimitRecovery: () => cancelled
+        ? { ...armed, status: 'cancelled' as const, nextCheckAtMs: null }
+        : armed,
     });
+
+    await started;
+    cancelled = true;
+    finishProbe();
+    const result = await pendingResult;
 
     expect(result).toMatchObject({
       ok: false,
@@ -849,7 +866,6 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
       sessionId: 'sess_cancel_race',
       errorCode: 'session_usage_limit_recovery_control_inactive',
     });
-    expect(checkNow).toHaveBeenCalledTimes(1);
     expect(stageUsageLimitRecoveryMutation).not.toHaveBeenCalled();
     expect(resumeInactiveSessionWhenReady).not.toHaveBeenCalled();
   });
@@ -908,15 +924,17 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
     expect(resumeInactiveSessionWhenReady).not.toHaveBeenCalled();
   });
 
-  it('persists and resumes a probe result while the recovery attempt is still current', async () => {
+  it('settles a current ready result only after continuation acceptance', async () => {
+    const futureResetAtMs = Date.now() + 60_000;
+    const sessionId = 'sess_current_ready';
     const armed = {
       v: 1,
       status: 'waiting',
       resumePromptMode: 'standard',
-      issueFingerprint: 'usage-limit:codex:turn-1:1700000000000:1700000060000',
+      issueFingerprint: `usage-limit:codex:turn-1:1700000000000:${futureResetAtMs}`,
       armedAtMs: 1_700_000_000_000,
-      resetAtMs: 1_700_000_060_000,
-      nextCheckAtMs: 1_700_000_060_000,
+      resetAtMs: futureResetAtMs,
+      nextCheckAtMs: futureResetAtMs,
       attemptCount: 1,
       maxAttempts: 3,
       lastProbeError: null,
@@ -935,8 +953,8 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
     const result = await routeSessionUsageLimitRecoveryCheckNow({
       token: 'token',
       credentials: createCredentials(),
-      sessionId: 'sess_current',
-      rawSession: createRawSession({ id: 'sess_current' }),
+      sessionId,
+      rawSession: createRawSession({ id: sessionId }),
       metadata: createMetadata({ sessionUsageLimitRecoveryV1: armed }),
       currentMachineId: 'machine-local',
       ctx: null,
@@ -948,9 +966,33 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
       readCurrentUsageLimitRecovery: vi.fn(() => armed),
     });
 
-    expect(result).toMatchObject({ ok: true, status: 'resumed', sessionId: 'sess_current' });
-    expect(stageUsageLimitRecoveryMutation).toHaveBeenCalledTimes(1);
-    expect(resumeInactiveSessionWhenReady).toHaveBeenCalledTimes(1);
+    expect(resumeInactiveSessionWhenReady).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId,
+      readiness: 'provider_ready',
+      metadata: expect.objectContaining({
+        sessionUsageLimitRecoveryV1: expect.objectContaining({
+          status: 'waiting', issueFingerprint: armed.issueFingerprint, attemptCount: armed.attemptCount,
+        }),
+      }),
+    }));
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'resumed',
+      sessionId,
+      metadata: { sessionUsageLimitRecoveryV1: {
+        status: 'cancelled',
+        nextCheckAtMs: null,
+        attemptCount: armed.attemptCount,
+        lastProbeError: null,
+      } },
+    });
+    expect(stageUsageLimitRecoveryMutation).toHaveBeenCalledWith(expect.objectContaining({
+      op: { kind: 'set', value: expect.objectContaining({
+        status: 'cancelled',
+        issueFingerprint: armed.issueFingerprint,
+        attemptCount: armed.attemptCount,
+      }) },
+    }));
   });
 
   it('does not auto-resume inactive check-now when persisted recovery disables resume prompts', async () => {
@@ -983,9 +1025,13 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
       callLiveSessionRpc: vi.fn(),
       resolveAdapter: vi.fn(async () => ({ checkNow })),
       resumeInactiveSessionWhenReady,
-    })).resolves.toEqual({ ok: true, status: 'ready', sessionId: 'sess_off' });
+    })).resolves.toMatchObject({ ok: true, status: 'ready', sessionId: 'sess_off',
+      metadata: { sessionUsageLimitRecoveryV1: { status: 'paused', resumePromptMode: 'off', nextCheckAtMs: null } },
+    });
 
-    expect(checkNow).toHaveBeenCalledTimes(1);
+    expect(stageUsageLimitRecoveryMutation).toHaveBeenCalledWith(expect.objectContaining({
+      op: { kind: 'set', value: expect.objectContaining({ status: 'paused', resumePromptMode: 'off', nextCheckAtMs: null }) },
+    }));
     expect(resumeInactiveSessionWhenReady).not.toHaveBeenCalled();
   });
 
@@ -1015,8 +1061,8 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
     await expect(routeSessionUsageLimitRecoveryCheckNow({
       token: 'token',
       credentials: createCredentials(),
-      sessionId: 'sess_1',
-      rawSession: createRawSession(),
+      sessionId: 'sess_inactive_ready',
+      rawSession: createRawSession({ id: 'sess_inactive_ready' }),
       metadata: createMetadata({ agentRuntimeDescriptorV1: { v: 1, providerId: 'claude' } }),
       currentMachineId: 'machine-local',
       ctx: null,
@@ -1028,14 +1074,16 @@ describe('sessionUsageLimitRecoveryControlRouter', () => {
     })).resolves.toMatchObject({
       ok: true,
       status: 'resumed',
-      sessionId: 'sess_1',
+      sessionId: 'sess_inactive_ready',
     });
 
-    expect(stageUsageLimitRecoveryMutation).toHaveBeenCalledTimes(1);
+    expect(stageUsageLimitRecoveryMutation).toHaveBeenCalledWith(expect.objectContaining({
+      op: { kind: 'set', value: expect.objectContaining({ status: 'cancelled', nextCheckAtMs: null }) },
+    }));
     expect(resumeInactiveSessionWhenReady).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'sess_1',
+      sessionId: 'sess_inactive_ready',
       metadata: expect.objectContaining({
-        sessionUsageLimitRecoveryV1: expect.objectContaining({ status: 'cancelled' }),
+        sessionUsageLimitRecoveryV1: expect.objectContaining({ status: 'waiting' }),
       }),
     }));
   });

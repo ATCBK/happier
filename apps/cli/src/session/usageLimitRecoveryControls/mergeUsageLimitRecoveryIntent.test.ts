@@ -24,6 +24,13 @@ function intent(overrides: Record<string, unknown> = {}) {
 }
 
 describe('mergeUsageLimitRecoveryIntent', () => {
+    it('preserves an observed provider reset over an untimed fallback in either arrival order', () => {
+        const fallback = intent({ resetAtMs: null, nextCheckAtMs: 600_100 });
+        const observed = intent({ resetAtMs: 60_100, nextCheckAtMs: 60_100 });
+        expect(mergeUsageLimitRecoveryIntent(fallback, observed)).toMatchObject({ resetAtMs: 60_100, nextCheckAtMs: 60_100 });
+        expect(mergeUsageLimitRecoveryIntent(observed, fallback)).toEqual(mergeUsageLimitRecoveryIntent(fallback, observed));
+    });
+
     it('is commutative and idempotent across the complete same-attempt status lattice', () => {
         const statuses = ['armed', 'checking', 'waiting', 'paused', 'exhausted', 'cancelled'] as const;
         for (const leftStatus of statuses) {

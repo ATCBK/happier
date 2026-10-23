@@ -40,6 +40,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   models?: AgentSessionRuntimeContext['session']['services']['models'];
   modelListResponse?: unknown;
   accountRead?: () => unknown | Promise<unknown>;
+  rateLimitsRead?: () => unknown | Promise<unknown>;
   connectedAccountService?: Readonly<{ pluginId: string; localId: string }>;
   sessionConnectedAccounts?: AgentSessionOpenRequest['connectedAccounts'];
   pluginListResponse?: unknown;
@@ -143,6 +144,8 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       } else if (message.method === 'account/read') {
         try { result = await options.accountRead?.() ?? {}; }
         catch { error = { code: -32000, message: 'Account read unavailable' }; }
+      } else if (message.method === 'account/rateLimits/read') {
+        result = await options.rateLimitsRead?.() ?? {};
       } else if (message.method === 'thread/start') {
         result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
       } else if (message.method.startsWith('thread/goal/')) {

@@ -98,6 +98,7 @@ export async function continueSessionAfterUsageLimitReset(input: Readonly<{
   metadata: Record<string, unknown>;
   recovery: SessionUsageLimitRecoveryV1;
   customResumePrompt?: string | null;
+  readiness?: 'provider_ready';
   nowMs: number;
   isCurrent: () => boolean | Promise<boolean>;
 }>): Promise<UsageLimitContinuationResult> {
@@ -119,7 +120,7 @@ export async function continueSessionAfterUsageLimitReset(input: Readonly<{
     ? readLatestUsageLimitFailureIssue(input.rawSession) : null;
   if (!issue?.usageLimit || input.rawSession.id !== input.sessionId || input.rawSession.archivedAt != null
     || issue.usageLimit.recoverability === 'manual' || issue.usageLimit.recoverability === 'switch_account'
-    || issue.usageLimit.resetAtMs !== recovery.resetAtMs
+    || (issue.usageLimit.resetAtMs !== null && issue.usageLimit.resetAtMs !== recovery.resetAtMs)
     || !matchesCurrentBinding(input.metadata, recovery.selectedAuth)) return { status: 'superseded' };
   const failedAuth = resolveUsageLimitRecoverySelectedAuthFromIssue({ issue, connectedServices: input.metadata.connectedServices ?? null });
   if (!failedAuth || !matchesAuth(failedAuth, recovery.selectedAuth)) return { status: 'superseded' };
@@ -135,7 +136,7 @@ export async function continueSessionAfterUsageLimitReset(input: Readonly<{
   if (!interruptedOriginId) return { status: 'superseded' };
   const dueAtMs = owned ? recovery.resetAtMs : recovery.nextCheckAtMs ?? recovery.resetAtMs
     ?? (recovery.status === 'paused' ? input.nowMs : null);
-  if (dueAtMs === null || input.nowMs < dueAtMs) return { status: 'not_ready' };
+  if (input.readiness !== 'provider_ready' && (dueAtMs === null || input.nowMs < dueAtMs)) return { status: 'not_ready' };
   const dispatcher = createConnectedServiceContinuationMessageDispatcher({ credentials: input.credentials });
   const enqueued = await dispatcher.enqueueInterruptedOriginContinuation({
     sessionId: input.sessionId,

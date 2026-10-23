@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { SessionStateUsageLimitRecoveryValueSchema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 
 import {
     cancelLatestUsageLimitRecoveryInMetadataAfterExplicitStop,
@@ -180,6 +181,24 @@ describe('persistUsageLimitRecoveryFieldDurably', () => {
             nextMetadata: currentMetadata,
             stageUsageLimitRecoveryMutation,
         })).resolves.toEqual(currentMetadata);
+
+        expect(stageUsageLimitRecoveryMutation).not.toHaveBeenCalled();
+    });
+
+    it('accepts an unchanged released service alias after canonical field normalization', async () => {
+        const stageUsageLimitRecoveryMutation = vi.fn(async () => undefined);
+        const legacyIntent = intent('same', {
+            selectedAuth: { kind: 'native', serviceId: 'openai-codex' },
+        });
+        const currentMetadata = { [key]: legacyIntent };
+        const canonicalIntent = SessionStateUsageLimitRecoveryValueSchema.parse(legacyIntent);
+
+        await expect(persistUsageLimitRecoveryFieldDurably({
+            sessionId: 'session-legacy-service',
+            currentMetadata,
+            nextMetadata: currentMetadata,
+            stageUsageLimitRecoveryMutation,
+        })).resolves.toEqual({ [key]: canonicalIntent });
 
         expect(stageUsageLimitRecoveryMutation).not.toHaveBeenCalled();
     });

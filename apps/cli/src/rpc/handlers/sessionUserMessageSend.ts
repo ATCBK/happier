@@ -75,6 +75,8 @@ export function registerSessionUserMessageSendHandler(
       structuredInputAdmissionPolicy?: SessionStructuredInputAdmissionPolicyV1;
     }) => Promise<void> | void) | null;
     sessionRuntimeControls?: SessionRuntimeControls | null;
+    revalidateExplicitUserRequest?: (request: Readonly<{ localId: string }>) =>
+      Promise<ExplicitUserPromptRecoveryDecision | null> | ExplicitUserPromptRecoveryDecision | null;
   }>,
 ): void {
   const canHandleUserMessage = typeof opts.sessionRuntimeControls?.handleUserMessage === 'function';
@@ -87,6 +89,8 @@ export function registerSessionUserMessageSendHandler(
   }>();
 
   const revalidateExplicitUserRecovery = async (localId: string): Promise<ExplicitUserPromptRecoveryDecision> => {
+    const ownedDecision = await opts.revalidateExplicitUserRequest?.({ localId });
+    if (ownedDecision) return ownedDecision;
     // Admit fresh input to Pending before recovery can enqueue an automatic continuation.
     if (readRuntimeAuthUsageLimitRecoveryAttemptId(opts.getSessionMetadata?.())) return { status: 'ready' };
     const checkNow = opts.sessionRuntimeControls?.checkUsageLimitRecoveryNow;

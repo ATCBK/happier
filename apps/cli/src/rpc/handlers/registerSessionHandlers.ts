@@ -148,6 +148,7 @@ export function registerSessionHandlers(
             structuredInputAdmissionPolicy?: SessionStructuredInputAdmissionPolicyV1;
         }) => Promise<void> | void) | null;
         sessionRuntimeControls?: SessionRuntimeControls | null;
+        revalidateExplicitUserRequest?: Parameters<typeof registerSessionUserMessageSendHandler>[1]['revalidateExplicitUserRequest'];
         waitForSessionRuntimeControls?: (signal?: AbortSignal) => Promise<boolean>;
         accessPolicy?: FilesystemAccessPolicy;
         executionBudgetRegistry?: ExecutionBudgetRegistry;
@@ -267,6 +268,7 @@ export function registerSessionHandlers(
         getSessionMetadata: opts?.getSessionMetadata ?? null,
         enqueueSessionUserMessage: opts?.enqueueSessionUserMessage ?? null,
         sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
+        revalidateExplicitUserRequest: opts?.revalidateExplicitUserRequest,
     });
     registerSessionControlHandlers(authorizedSessionRpcHandlerManager, {
         getSessionMetadata: opts?.getSessionMetadata ?? null,

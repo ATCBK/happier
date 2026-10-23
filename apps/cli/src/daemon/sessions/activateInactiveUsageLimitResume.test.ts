@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Metadata } from '@/api/types';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import type { SessionRuntimeIssueV1, SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
+import { buildUsageLimitIssueFingerprint, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { activateInactiveUsageLimitResume } from './activateInactiveUsageLimitResume';
+import { createBackoffSessionUsageLimitRecoveryControlAdapter } from '@/session/usageLimitRecoveryControls/createBackoffSessionUsageLimitRecoveryControlAdapter';
+import { UsageLimitRecoveryScheduler } from '../connectedServices/usageLimitRecovery/UsageLimitRecoveryScheduler';
+import { resolveInactiveUsageLimitRecoverySchedulerResult } from '../connectedServices/usageLimitRecovery/resolveInactiveUsageLimitRecoverySchedulerResult';
+import { routeSessionUsageLimitRecoveryCheckNow } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryControlRouter';
+import { applyRegisteredSessionStateFieldMutationToMetadata } from '@/api/session/client/transport/mutations/applyRegisteredSessionStateFieldMutation';
 
 // Keep the recovery, authoring and Pending owners real; replace HTTP only.
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
@@ -37,11 +45,90 @@ describe('activateInactiveUsageLimitResume', () => {
   });
 
   it('admits the ready native backoff continuation instead of spawning an empty runtime', async () => {
-    await expect(activateInactiveUsageLimitResume(params)).resolves.toBe(true);
+    await expect(activateInactiveUsageLimitResume(params)).resolves.toEqual({ status: 'continued' });
     expect(http.post).toHaveBeenCalledWith(expect.stringContaining(`/v2/sessions/${sessionId}/pending`),
       expect.objectContaining({ deliveryMode: 'continuation_if_no_queued_user_input',
         requestedAction: { v: 1, kind: 'send_now' } }), expect.anything());
     expect(http.post).toHaveBeenCalledOnce();
+  });
+
+  it('admits Pending from the actual due backoff result without cancelling the continuation first', async () => {
+    const adapter = createBackoffSessionUsageLimitRecoveryControlAdapter({
+      providerId: 'codex', nowMs: () => 200, processEnv: {},
+    });
+    const checked = await adapter.checkNow!({
+      token: credentials.token, credentials, sessionId, rawSession,
+      metadata: { ...metadata, sessionUsageLimitRecoveryV1: { ...recovery, status: 'waiting', nextCheckAtMs: 200 } },
+      currentMachineId: 'machine-1', sessionMachineId: 'machine-1', cwd: '/repo', mode: 'plain', ctx: null,
+    });
+    expect(checked).toMatchObject({ ok: true, status: 'ready' });
+    const checkedMetadata = (checked as { metadata: Record<string, unknown> }).metadata;
+    await expect(activateInactiveUsageLimitResume({ ...params, metadata: checkedMetadata })).resolves.toEqual({ status: 'continued' });
+    expect(http.post).toHaveBeenCalledWith(expect.stringContaining(`/v2/sessions/${sessionId}/pending`),
+      expect.objectContaining({ deliveryMode: 'continuation_if_no_queued_user_input',
+        requestedAction: { v: 1, kind: 'send_now' } }), expect.anything());
+  });
+
+  it('continues the same untimed failure after a native quota observation supplies its reset time', async () => {
+    const untimedIssue: SessionRuntimeIssueV1 = { ...issue, usageLimit: { ...issue.usageLimit!, resetAtMs: null } };
+    const observedRecovery: SessionUsageLimitRecoveryV1 = { ...recovery,
+      issueFingerprint: buildUsageLimitIssueFingerprint(untimedIssue), resetAtMs: 200, nextCheckAtMs: 200 };
+    const observedMetadata = { ...metadata, sessionUsageLimitRecoveryV1: observedRecovery };
+    const observedSession = { ...rawSession, lastRuntimeIssue: untimedIssue, metadata: JSON.stringify(observedMetadata) };
+    const originalRead = http.get.getMockImplementation()!;
+    http.get.mockImplementation(async (url: string) => url.includes(`/v2/sessions/${sessionId}`)
+      ? { status: 200, data: { session: observedSession } } : await originalRead(url));
+    await expect(activateInactiveUsageLimitResume({ ...params,
+      rawSession: observedSession, metadata: observedMetadata })).resolves.toEqual({ status: 'continued' });
+    expect(http.post).toHaveBeenCalledWith(expect.stringContaining(`/v2/sessions/${sessionId}/pending`),
+      expect.objectContaining({ deliveryMode: 'continuation_if_no_queued_user_input',
+        requestedAction: { v: 1, kind: 'send_now' } }), expect.anything());
+    expect(observedSession.lastRuntimeIssue.usageLimit?.resetAtMs).toBeNull();
+    expect(observedRecovery.issueFingerprint).toBe(buildUsageLimitIssueFingerprint(untimedIssue));
+  });
+
+  it('keeps suppressed Pending admission distinct from an accepted continuation', async () => {
+    let currentMetadata: Metadata = { ...createTestMetadata(), ...metadata,
+      sessionUsageLimitRecoveryV1: { ...recovery, status: 'waiting', nextCheckAtMs: 200 } };
+    const readRecovery = () => SessionUsageLimitRecoveryV1Schema.parse(currentMetadata.sessionUsageLimitRecoveryV1);
+    let journalRecovery = readRecovery();
+    const readHttp = http.get.getMockImplementation()!;
+    http.get.mockImplementation(async (url: string) => url.includes(`/v2/sessions/${sessionId}`)
+      ? { status: 200, data: { session: { ...rawSession, metadata: JSON.stringify(currentMetadata) } } }
+      : await readHttp(url));
+    // The real Pending HTTP acknowledgement says the newer queued user input won; no row was written.
+    http.post.mockResolvedValue({ status: 200, data: { didWrite: false, terminal: false, suppressed: true } });
+    const adapter = createBackoffSessionUsageLimitRecoveryControlAdapter({ providerId: 'codex', processEnv: {} });
+    let routedResult: unknown;
+    const scheduler = new UsageLimitRecoveryScheduler({ nowMs: () => 200,
+      store: {
+        // The daemon's scheduler journal and the Session's registered field are separate persistence boundaries.
+        read: () => journalRecovery, readAuthoritative: () => journalRecovery,
+        write: (_sessionId, intent) => { journalRecovery = intent; },
+      },
+      recover: async () => {
+        routedResult = await routeSessionUsageLimitRecoveryCheckNow({
+          token: credentials.token, credentials, sessionId, rawSession,
+          metadata: currentMetadata, currentMachineId: 'machine-1', mode: 'plain', ctx: null,
+          // Compose the actual generic backoff control through its normal adapter hook.
+          resolveAdapter: async () => adapter,
+          callLiveSessionRpc: async () => ({ ok: false, errorCode: 'unsupported_session_runtime_method' }),
+          stageUsageLimitRecoveryMutation: async mutation => {
+            currentMetadata = applyRegisteredSessionStateFieldMutationToMetadata(currentMetadata, mutation);
+          },
+          resumeInactiveSessionWhenReady: input => activateInactiveUsageLimitResume({ ...params, ...input, nowMs: Date.now() }),
+        });
+        return resolveInactiveUsageLimitRecoverySchedulerResult({ result: routedResult,
+          nowMs: 200, fallbackRetryDelayMs: 600_000 });
+      },
+    });
+    try {
+      await scheduler.wake({ sessionId, reason: 'check_now' });
+      expect(routedResult).toMatchObject({ ok: true, status: 'cancelled' });
+      expect(readRecovery()).toMatchObject({ status: 'cancelled', attemptCount: recovery.attemptCount });
+      expect(scheduler.read(sessionId)).toMatchObject({ status: 'cancelled', attemptCount: recovery.attemptCount });
+      expect(http.post).toHaveBeenCalledOnce();
+    } finally { scheduler.dispose(); }
   });
 
   it('refuses recovery without a valid durable recovery intent', async () => {

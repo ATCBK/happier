@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { buildUsageLimitIssueFingerprint } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { activateInactiveUsageLimitResume } from '@/daemon/sessions/activateInactiveUsageLimitResume';
 import { resolveSpawnChildEnvironment } from '@/daemon/spawn/resolveSpawnChildEnvironment';
 import { bindInactiveSessionControlLaunchScope } from '@/daemon/spawn/inactiveSessionControlLaunchScope';
 import { createCodexNativeSessionControls } from '../../../../../packages/plugins/codex/src/agent/runtime/controls';
@@ -763,6 +767,99 @@ describe('native inactive Agent session controls', () => {
     });
   });
 
+  it('admits a Pending continuation after the real Codex control reports quota ready', async () => {
+    await withCodexNativeAttachFixture(async native => {
+      const controls = createCodexNativeSessionControls();
+      const fixture = runtimeRegistryFixture({
+        sessions: { ...controls, async open() { throw new Error('Quota readiness must not open a Session'); } },
+        createServices: async () => ({ ...createUnavailablePluginServices(), exec: native.exec }),
+      });
+      const adapter = createNativeInactiveUsageAdapter({ agentId: fixture.agentId,
+        native: { checkNow: true, consumeResetCredit: false }, dependencies: { acquireRuntimeRegistryLease: fixture.acquire } });
+      const sessionId = 'c123456789012345678901234';
+      const credentials = { token: 'native-quota-recovery-test', encryption: null };
+      const occurredAt = Date.now() - 2_000;
+      const resetAtMs = occurredAt + 60_000;
+      let stored: Record<string, unknown> = { ...metadata(), sessionUsageLimitRecoveryV1: {
+        v: 1, status: 'waiting', resumePromptMode: 'standard',
+        issueFingerprint: `usage-limit:codex:interrupted-turn:${occurredAt}:${resetAtMs}`,
+        armedAtMs: occurredAt, resetAtMs, nextCheckAtMs: resetAtMs,
+        attemptCount: 0, maxAttempts: 3, lastProbeError: null, selectedAuth: { kind: 'native' },
+      } };
+      const raw = createSessionRecordFixture({ id: sessionId, active: false, encryptionMode: 'plain',
+        metadata: JSON.stringify(stored), latestTurnId: 'canonical-failed-turn', latestTurnStatus: 'failed',
+        lastRuntimeIssue: { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit',
+          agentId: 'codex', agentTurnId: 'interrupted-turn', occurredAt,
+          usageLimit: { v: 1, resetAtMs, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' } },
+      });
+      // HTTP is the external boundary; native protocol, routing, continuation authoring and Pending stay real.
+      const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+        if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+          mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+          recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+        } };
+        if (String(url).includes(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: { ...raw, metadata: JSON.stringify(stored) } } };
+        throw new Error(`Unexpected read: ${url}`);
+      });
+      const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { didWrite: true, terminal: false } });
+      try {
+        const result = await routeSessionUsageLimitRecoveryCheckNow({ ...commonRouteParams(sessionId),
+          credentials, rawSession: raw, metadata: stored, request: { sessionId, agentId: 'codex' },
+          stageUsageLimitRecoveryMutation: async mutation => {
+            if (mutation.op.kind === 'set') stored = { ...stored, sessionUsageLimitRecoveryV1: mutation.op.value };
+          },
+          resolveAdapter: async () => adapter,
+          resumeInactiveSessionWhenReady: async input => await activateInactiveUsageLimitResume({ ...input, credentials }),
+        });
+        expect(result).toMatchObject({ ok: true, status: 'resumed' });
+        expect(post).toHaveBeenCalledWith(expect.stringContaining(`/v2/sessions/${sessionId}/pending`),
+          expect.objectContaining({ deliveryMode: 'continuation_if_no_queued_user_input',
+            requestedAction: { v: 1, kind: 'send_now' } }), expect.anything());
+        expect(native.requests.some(request => request.method === 'account/rateLimits/read')).toBe(true);
+      } finally { get.mockRestore(); post.mockRestore(); }
+    });
+  });
+
+  it('retains native quota snapshot timing for an untimed interrupted turn', async () => {
+    const nowMs = Date.now();
+    const resetAtMs = Math.floor((nowMs + 60_000) / 1_000) * 1_000;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    try {
+      await withCodexNativeAttachFixture(async native => {
+        const controls = createCodexNativeSessionControls();
+        const fixture = runtimeRegistryFixture({
+          sessions: { ...controls, async open() { throw new Error('Quota readiness must not open a Session'); } },
+          createServices: async () => ({ ...createUnavailablePluginServices(), exec: native.exec }),
+        });
+        const adapter = createNativeInactiveUsageAdapter({ agentId: fixture.agentId,
+          native: { checkNow: true, consumeResetCredit: false }, dependencies: { acquireRuntimeRegistryLease: fixture.acquire } });
+        const sessionId = 'native-quota-snapshot-timing';
+        const issue = { v: 1 as const, scope: 'primary_session' as const, status: 'failed' as const,
+          source: 'usage_limit' as const, code: 'usage_limit', agentId: 'codex', agentTurnId: 'untimed-turn', occurredAt: nowMs - 2_000,
+          usageLimit: { v: 1 as const, resetAtMs: null, retryAfterMs: null, quotaScope: 'account' as const, recoverability: 'wait' as const } };
+        let stored: Record<string, unknown> = { ...metadata(), sessionUsageLimitRecoveryV1: {
+          v: 1, status: 'waiting', resumePromptMode: 'standard', issueFingerprint: buildUsageLimitIssueFingerprint(issue),
+          armedAtMs: issue.occurredAt, resetAtMs: null, nextCheckAtMs: nowMs + 600_000,
+          attemptCount: 0, maxAttempts: 3, lastProbeError: null, selectedAuth: { kind: 'native' },
+        } };
+        const raw = createSessionRecordFixture({ id: sessionId, active: false, encryptionMode: 'plain',
+          metadata: JSON.stringify(stored), latestTurnId: 'canonical-untimed-turn', latestTurnStatus: 'failed', lastRuntimeIssue: issue });
+        const result = await routeSessionUsageLimitRecoveryCheckNow({ ...commonRouteParams(sessionId),
+          credentials: { token: 'native-quota-snapshot-test', encryption: null }, rawSession: raw,
+          metadata: stored, request: { sessionId, agentId: 'codex' },
+          stageUsageLimitRecoveryMutation: async mutation => {
+            if (mutation.op.kind === 'set') stored = { ...stored, sessionUsageLimitRecoveryV1: mutation.op.value };
+          }, resolveAdapter: async () => adapter,
+        });
+        expect(result).toMatchObject({ ok: true, status: 'waiting', metadata: { sessionUsageLimitRecoveryV1: {
+          issueFingerprint: buildUsageLimitIssueFingerprint(issue), resetAtMs, nextCheckAtMs: resetAtMs,
+        } } });
+        expect(raw.lastRuntimeIssue).toMatchObject({ usageLimit: { resetAtMs: null } });
+        expect(native.requests.some(request => request.method === 'account/rateLimits/read')).toBe(true);
+      }, { rateLimitsRead: () => ({ rateLimits: { primary: { usedPercent: 100, resetsAt: resetAtMs / 1_000 } } }) });
+    } finally { clock.mockRestore(); }
+  });
+
   it('routes usage recovery through the native inactive facet', async () => {
     const execute = vi.fn(async (_request, context) => {
       expect(context.session.activity).toBe('inactive');
@@ -904,7 +1001,7 @@ describe('native inactive Agent session controls', () => {
           issueFingerprint: `usage-limit:pi:turn-1:${occurredAt}:${resetAtMs}`,
           resetAtMs,
           nextCheckAtMs: resetAtMs,
-          attemptCount: 1,
+          attemptCount: 0,
           maxAttempts: 3,
         },
       },

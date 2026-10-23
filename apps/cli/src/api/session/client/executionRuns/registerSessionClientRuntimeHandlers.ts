@@ -165,6 +165,7 @@ export function registerSessionClientRuntimeHandlers(
         getCurrentWorkspaceWrites?: () => 'allow' | 'deny' | undefined;
         prepareWorkspaceWritesPolicy?: RoleWorkspaceWritesPolicyPreparer;
         sessionRuntimeControls?: SessionRuntimeControls | null;
+        revalidateExplicitUserRequest?: NonNullable<Parameters<typeof registerSessionHandlers>[2]>['revalidateExplicitUserRequest'];
         waitForSessionRuntimeControls?: (signal?: AbortSignal) => Promise<boolean>;
         /** Join the owning Session's initial control installation, without a separate startup deadline. */
         waitForAppliedChildSelectionReader?: (signal: AbortSignal) => Promise<boolean>;
@@ -944,6 +945,7 @@ export function registerSessionClientRuntimeHandlers(
         getSessionMetadata: () => params.getSessionMetadata(),
         isUsageLimitRecoveryEnabled: () => resolveUsageLimitRecoveryEnabled({ serverUrl: params.serverUrl }),
         sessionRuntimeControls: params.sessionRuntimeControls ?? null,
+        revalidateExplicitUserRequest: params.revalidateExplicitUserRequest,
         waitForSessionRuntimeControls: params.waitForSessionRuntimeControls,
         enqueueSessionUserMessage: (request: Readonly<{
             callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1;

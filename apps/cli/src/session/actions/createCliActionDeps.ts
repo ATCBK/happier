@@ -1,6 +1,7 @@
 import { readLatestUsageLimitFailureIssue } from '@/session/usageLimitRecoveryControls/readLatestUsageLimitFailureIssue';
 import { readCurrentRunnerAgentStartPolicyV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
 import type { RequesterAgentStartPolicyV1 } from '@/daemon/sessionEncryption/requesterAgentStartPolicy';
+import type { UsageLimitContinuationResult } from '@/daemon/connectedServices/continuation/continueSessionAfterUsageLimitReset';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1, admitActionAgentStartV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { SessionSpawnNewIncompatibleTargetV1Schema, type SessionSpawnNewIncompatibleTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { homedir } from 'node:os';
@@ -649,7 +650,8 @@ export type ResumeInactiveSessionWhenUsageLimitReady = (input: Readonly<{
   sessionId: string;
   rawSession: RawSessionRecord;
   metadata: Record<string, unknown>;
-}>) => Promise<boolean>;
+  readiness?: 'provider_ready';
+}>) => Promise<boolean | UsageLimitContinuationResult>;
 
 export type ScheduleInactiveSessionUsageLimitRecoveryCheck = (input: Readonly<{
   sessionId: string;

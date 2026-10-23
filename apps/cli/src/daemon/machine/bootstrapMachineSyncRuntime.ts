@@ -37,9 +37,8 @@ import {
 } from '@happier-dev/protocol/plugins/events/hostReferencesV1';
 import { parseHostEventPayloadV1, type HostEventEnvelopeV1 } from '@happier-dev/protocol/plugins/events/hostV1';
 import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
-import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { SessionExecutionRunBrokerAuthorityResponseV1Schema } from '@happier-dev/protocol/daemon/executionRuns';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { UpdateBodySchema } from '@happier-dev/protocol/updates';
@@ -136,6 +135,7 @@ import {
   type UsageLimitRecoveryIntent,
 } from '../connectedServices/usageLimitRecovery/UsageLimitRecoveryScheduler';
 import { createInactiveUsageLimitRecoveryCheckOwner } from '../connectedServices/usageLimitRecovery/inactiveUsageLimitRecoveryCheckOwner';
+import { resolveInactiveUsageLimitRecoverySchedulerResult } from '../connectedServices/usageLimitRecovery/resolveInactiveUsageLimitRecoverySchedulerResult';
 import { createPendingResetStartRecoveryPorts } from '../connectedServices/usageLimitRecovery/createPendingResetStartRecoveryPorts';
 import {
   createDaemonSessionMutationCustody,
@@ -297,22 +297,6 @@ const PEER_MEDIATION_MACHINE_RPC_FEATURES_TIMEOUT_MS = 1_500;
 function normalizeNonEmptyString(value: string | null | undefined): string | null {
   const normalized = value?.trim() ?? '';
   return normalized ? normalized : null;
-}
-
-function readUsageLimitRecoveryResultStatus(result: unknown): string | null {
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
-  const status = (result as Record<string, unknown>).status;
-  return typeof status === 'string' ? status : null;
-}
-
-function readUsageLimitRecoveryIntentFromControlResult(result: unknown) {
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
-  const metadata = (result as Record<string, unknown>).metadata;
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
-  const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(
-    (metadata as Record<string, unknown>)[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY],
-  );
-  return parsed.success ? parsed.data : null;
 }
 
 async function resolvePeerMediationMachineRpcServerFeatures(
@@ -1088,31 +1072,9 @@ export async function bootstrapMachineSyncRuntime(
         };
       }
       const result = await inactiveUsageLimitRecoveryCheckOwner.run(context.sessionId);
-      const status = readUsageLimitRecoveryResultStatus(result);
-      if (status === 'ready' || status === 'resumed') {
-        return { status: 'ready' };
-      }
-      const recovery = readUsageLimitRecoveryIntentFromControlResult(result);
-      if (recovery?.status === 'waiting') {
-        return {
-          status: 'wait',
-          nextCheckAtMs: recovery.nextCheckAtMs ?? recovery.resetAtMs ?? Date.now() + 60_000,
-          lastProbeError: recovery.lastProbeError,
-        };
-      }
-      if (status === 'exhausted' || recovery?.status === 'exhausted') {
-        return { status: 'exhausted', lastProbeError: recovery?.lastProbeError };
-      }
-      if (recovery?.status === 'cancelled') {
-        // The probe proved the persisted intent is stale (turn completed or the
-        // intent was cleared out-of-band): stop the wake loop terminally.
-        return { status: 'superseded', lastProbeError: recovery.lastProbeError };
-      }
-      return {
-        status: 'wait',
-        nextCheckAtMs: Date.now() + 60_000,
-        lastProbeError: typeof status === 'string' ? status : 'usage_limit_recovery_probe_unavailable',
-      };
+      return resolveInactiveUsageLimitRecoverySchedulerResult({
+        result, nowMs: Date.now(), fallbackRetryDelayMs: 60_000,
+      });
     },
   });
   disposeInactiveSessionUsageLimitRecovery = () => inactiveUsageLimitRecoveryScheduler.dispose();
@@ -1473,12 +1435,13 @@ export async function bootstrapMachineSyncRuntime(
               },
             }
           : {}),
-        resumeInactiveSessionWhenUsageLimitReady: async ({ sessionId, rawSession, metadata }) =>
+        resumeInactiveSessionWhenUsageLimitReady: async ({ sessionId, rawSession, metadata, readiness }) =>
           storedCredentials ? await activateInactiveUsageLimitResume({
             credentials: storedCredentials,
             sessionId,
             rawSession,
             metadata,
+            readiness,
             customResumePrompt: getActiveAccountSettingsSnapshot()?.settings.usageLimitRecoverySettingsV1?.customResumePrompt ?? null,
           }) : false,
         scheduleInactiveSessionUsageLimitRecoveryCheck: async ({ sessionId, recovery, runCheckNow }) => {
@@ -1908,6 +1871,19 @@ export async function bootstrapMachineSyncRuntime(
         token: credentials.token,
         activate: activatePendingSession,
         visitOwnedSession: async (sessionId, session) => {
+          await inactiveUsageLimitRecoveryCheckOwner.restoreSession({
+            sessionId,
+            credentials,
+            machineId: params.machineId,
+            currentMachineHost: params.preferredHost ?? os.hostname(),
+            currentMachineHomeDir: os.homedir(),
+            scheduler: inactiveUsageLimitRecoveryScheduler,
+            getServerFeaturesSnapshot: () => params.getServerFeaturesSnapshot?.(),
+            isCurrent: () => !params.isShuttingDown(),
+            runCheckNow: currentSessionId => connectedApiMachine.invokeLocalMachineAction(
+              RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW, { sessionId: currentSessionId },
+            ),
+          }).catch(error => logger.warn('[DAEMON RUN] Usage-limit reconnect recovery remains pending', error));
           await reconcileFollowReceiver(sessionId).catch(error => logger.warn('[DAEMON RUN] Follow reconnect read remains pending', error));
           if ((session.pendingCount ?? 0) > 0) await inactiveUsageLimitRecoveryScheduler.reconcilePendingResetStarts(sessionId)
             .catch(error => logger.warn('[DAEMON RUN] Pending reset reconnect demand remains held', error));
