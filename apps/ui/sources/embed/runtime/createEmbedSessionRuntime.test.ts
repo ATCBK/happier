@@ -44,6 +44,26 @@ function deferred<T>() {
 }
 
 describe('frame credential authority', () => {
+    it('does not notify frame consumers for equivalent UI configuration', async () => {
+        const runtime = createEmbedSessionRuntime({ encryption: await createEmbedEncryption(), endpointUrl });
+        let publications = 0;
+        const unsubscribe = runtime.subscribe(() => { publications += 1; });
+        try {
+            const initial = runtime.getSnapshot();
+            runtime.configure({ ui: {} });
+            expect(runtime.getSnapshot()).toBe(initial);
+            expect(publications).toBe(0);
+            runtime.configure({ ui: { attachments: false } });
+            expect(publications).toBe(1);
+            const configured = runtime.getSnapshot();
+            runtime.configure({ ui: { attachments: false } });
+            expect(runtime.getSnapshot()).toBe(configured);
+            expect(publications).toBe(1);
+        } finally {
+            unsubscribe();
+            runtime.dispose();
+        }
+    });
     it('preserves an unknown creation outcome without reporting a credential failure or issuing another create', async () => {
         let spawns = 0;
         setRuntimeFetch(async url => {

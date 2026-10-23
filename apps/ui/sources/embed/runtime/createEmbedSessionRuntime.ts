@@ -17,6 +17,10 @@ import { buildEmbedSessionSpawnInput } from './buildEmbedSessionSpawnInput';
 // Browser/Node timers represent delays as signed 32-bit milliseconds, not credential TTLs.
 const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
 
+function embedUiOverridesEqual(left: EmbedUiOverridesV1, right: EmbedUiOverridesV1): boolean {
+    return left.attachments === right.attachments && left.modelPicker === right.modelPicker;
+}
+
 export type EmbedSessionRuntimeSnapshot = Readonly<{
     phase: 'loading' | 'ready' | 'error';
     requestedSessionId: string | null;
@@ -250,8 +254,12 @@ export function createEmbedSessionRuntime(input: Readonly<{
         },
         configure(value: Readonly<{ ui?: EmbedUiOverridesV1 }>) {
             const ui = EmbedUiOverridesV1Schema.parse(value.ui ?? {});
-            publish({ ...snapshot, ui, creationConfig: snapshot.creationConfig ? { ...snapshot.creationConfig,
-                attachments: snapshot.self?.embedConfig?.ui.attachments !== false && ui.attachments !== false } : null });
+            if (embedUiOverridesEqual(snapshot.ui, ui)) return;
+            const attachments = snapshot.self?.embedConfig?.ui.attachments !== false && ui.attachments !== false;
+            const creationConfig = snapshot.creationConfig && snapshot.creationConfig.attachments !== attachments
+                ? { ...snapshot.creationConfig, attachments }
+                : snapshot.creationConfig;
+            publish({ ...snapshot, ui, creationConfig });
             if (snapshot.phase === 'error') void requestCredential('open');
         },
         async open(sessionId: string | null) {
