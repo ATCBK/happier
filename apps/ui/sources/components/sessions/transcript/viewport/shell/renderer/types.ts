@@ -314,6 +314,11 @@ export type TranscriptListRendererProps<TItem> = Readonly<{
 export type TranscriptListShellProps<TItem> = TranscriptListRendererProps<TItem> & Readonly<{
     olderLoadOverlay?: React.ReactNode;
     catchUpOverlay?: React.ReactNode;
+    /**
+     * The jump-to-bottom the shell places over the list. The main transcript supplies its own affordance
+     * (`null` while hidden); a conversation frame leaves it out and the shell derives it from at-end facts.
+     */
+    jumpToBottom?: Readonly<{ count: number; onPress: () => void; presentation?: 'standard' | 'activity' }> | null;
 }>;
 
 export type TranscriptListRendererComponent = <TItem>(

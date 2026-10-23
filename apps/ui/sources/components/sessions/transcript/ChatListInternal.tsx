@@ -1849,6 +1849,9 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         promotePendingJumpSeqViewportSnapshot,
         shouldSuppressGenericViewportStateForProtectedJumpSeq,
     } = jumpHost;
+    const jumpToBottomAffordanceSlot = React.useMemo(() => jumpToBottomAffordance.isVisible
+        ? { count: jumpToBottomAffordance.count, onPress: jumpToBottom, presentation: jumpToBottomAffordance.presentation }
+        : null, [jumpToBottom, jumpToBottomAffordance.count, jumpToBottomAffordance.isVisible, jumpToBottomAffordance.presentation]);
     const handleRevealNativeItem = React.useCallback((placement: Readonly<{ index: number; itemOffsetPx: number }>) => {
         const item = listDataRef.current[placement.index];
         const messageId = item ? collectTranscriptNavigationMessageIdsForItem(item)[0] : undefined;
@@ -2188,6 +2191,7 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
                     footer={transcriptItemsEdgeSlots.edgeSlots.listFooterNode}
                     olderLoadOverlay={transcriptItemsEdgeSlots.olderLoadOverlay}
                     catchUpOverlay={transcriptItemsEdgeSlots.catchUpOverlay}
+                    jumpToBottom={jumpToBottomAffordanceSlot}
                 />
                 <TranscriptNavigationRail
                     entries={props.transcriptNavigationEntries}
@@ -2206,20 +2210,6 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
                 />
                 {showFirstPaintPlaceholder ? (
                     <TranscriptFirstPaintPlaceholder reducedMotion={reducedMotionPreferred} />
-                ) : null}
-                {jumpToBottomAffordance.isVisible ? (
-                    <ComposerKeyboardFloatingInset
-                        testID="transcript-jump-to-bottom-keyboard-offset"
-                        baseBottom={12}
-                        style={{ position: 'absolute', right: 12 }}
-                    >
-                        <JumpToBottomButton
-                            testID="transcript-jump-to-bottom"
-                            count={jumpToBottomAffordance.count}
-                            onPress={jumpToBottom}
-                            presentation={jumpToBottomAffordance.presentation}
-                        />
-                    </ComposerKeyboardFloatingInset>
                 ) : null}
                 </TranscriptContentDemandProvider>
                 </TranscriptFindSurface>

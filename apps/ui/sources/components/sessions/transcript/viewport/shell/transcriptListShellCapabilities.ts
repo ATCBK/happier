@@ -25,7 +25,7 @@ type TranscriptListShellStreamingFollowCapability = Readonly<{
 }>;
 
 type TranscriptListShellBoundedHydrationCapability = Readonly<{
-    boundedHydration: Readonly<{ kind: 'readOnly' | 'sidechain' }>;
+    boundedHydration: Readonly<{ kind: 'readOnly' | 'sidechain' | 'conversation' }>;
     streamingFollow?: never;
 }>;
 
@@ -66,16 +66,27 @@ export type TranscriptListShellReadOnlyCapability = TranscriptListShellBoundedHy
     toolNavigationDisabled: true;
 }>;
 
+/**
+ * A conversation that is not a Session transcript (a Discussion): bounded pages like a read-only
+ * transcript, but the reader writes below it, so the list keeps the transcript's jump to the end.
+ */
+export type TranscriptListShellConversationCapability = TranscriptListShellBoundedHydrationCapability & Readonly<{
+    catchUpIndicator: false;
+    composerVisible: true;
+    /** The shell shows the transcript's jump-to-bottom from the renderer's own at-end facts. */
+    jumpToBottom: true;
+    kind: 'conversation';
+    olderPagination: true;
+}>;
+
 export type TranscriptListShellCapability =
     | TranscriptListShellMainCapability
     | TranscriptListShellSidechainCapability
-    | TranscriptListShellReadOnlyCapability;
+    | TranscriptListShellReadOnlyCapability
+    | TranscriptListShellConversationCapability;
 
 export type TranscriptListShellFrame = Readonly<{
-    capability:
-        | TranscriptListShellMainCapability
-        | TranscriptListShellSidechainCapability
-        | TranscriptListShellReadOnlyCapability;
+    capability: TranscriptListShellCapability;
     dataOrder: TranscriptListShellDataOrder;
     platform: 'native' | 'web';
     renderer: TranscriptListShellRenderer;
@@ -218,6 +229,24 @@ export function resolveSidechainTranscriptListShellFrame(params: Readonly<{
                         ? TRANSCRIPT_WEB_SCROLL_EVENT_THROTTLE_MS
                         : TRANSCRIPT_NATIVE_SCROLL_EVENT_THROTTLE_MS,
             },
+        },
+    };
+}
+
+export function resolveConversationTranscriptListShellFrame(params: Readonly<{
+    platformOS: string;
+}>): TranscriptListShellFrame {
+    const readOnly = resolveReadOnlyTranscriptListShellFrame({ accessKind: 'public', bottomNoticeVisible: false, platformOS: params.platformOS });
+    return {
+        ...readOnly,
+        capability: {
+            boundedHydration: { kind: 'conversation' },
+            catchUpIndicator: false,
+            composerVisible: true,
+            jumpToBottom: true,
+            kind: 'conversation',
+            olderPagination: true,
+            streamingFollow: undefined,
         },
     };
 }

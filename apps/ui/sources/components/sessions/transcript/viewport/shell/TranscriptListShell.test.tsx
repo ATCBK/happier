@@ -1,15 +1,19 @@
 import { readFileSync } from 'node:fs';
 
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { createWebDomScrollObservation } from '@/components/sessions/transcript/viewport/driver/webDomObservation';
 import { TranscriptListShell } from './TranscriptListShell';
-import { resolveMainTranscriptListShellFrame } from './transcriptListShellCapabilities';
+import { resolveConversationTranscriptListShellFrame, resolveMainTranscriptListShellFrame } from './transcriptListShellCapabilities';
 
 let capturedLegendListProps: any = null;
 let assignedLegendRef: any = null;
+// The mounted list's at-end facts and their listeners (Legend's own state store is the platform boundary).
+const legendEndState = { isAtEnd: true, isNearEnd: true, isWithinMaintainScrollAtEndThreshold: true };
+const legendEndListeners = new Set<() => void>();
 
 const SIDECHAIN_JUMP_TO_MESSAGE = readFileSync(new URL('./sidechainJumpToMessage.ts', import.meta.url), 'utf8');
 
@@ -19,11 +23,13 @@ vi.mock('@legendapp/list/react-native', () => ({
         const instance = {
             getState: () => ({
                 contentLength: 0,
-                isAtEnd: true,
-                isNearEnd: true,
-                isWithinMaintainScrollAtEndThreshold: true,
+                ...legendEndState,
                 scroll: 0,
                 scrollLength: 0,
+                listen: (_key: string, listener: () => void) => {
+                    legendEndListeners.add(listener);
+                    return () => legendEndListeners.delete(listener);
+                },
             }),
             scrollToEnd: vi.fn(() => Promise.resolve()),
             scrollToIndex: vi.fn(() => Promise.resolve()),
@@ -45,6 +51,27 @@ describe('TranscriptListShell', () => {
     beforeEach(() => {
         capturedLegendListProps = null;
         assignedLegendRef = null;
+        Object.assign(legendEndState, { isAtEnd: true, isNearEnd: true, isWithinMaintainScrollAtEndThreshold: true });
+        legendEndListeners.clear();
+    });
+
+    it('gives a conversation frame the transcript jump-to-bottom once the reader leaves the end', async () => {
+        const screen = await renderScreen(
+            <TranscriptListShell<{ id: string }>
+                data={[{ id: 'row-1' }]}
+                dataKey="discussion-test"
+                webDomObservation={createWebDomScrollObservation()}
+                keyExtractor={(item: { id: string }) => item.id}
+                renderItem={({ item }: { item: { id: string } }) => React.createElement('Row', { id: item.id })}
+                frame={resolveConversationTranscriptListShellFrame({ platformOS: 'ios' })}
+            />,
+        );
+        expect(screen.findByTestId('transcript-jump-to-bottom')).toBeNull();
+        Object.assign(legendEndState, { isAtEnd: false, isNearEnd: false, isWithinMaintainScrollAtEndThreshold: false });
+        await act(async () => { for (const listener of [...legendEndListeners]) listener(); });
+        expect(screen.findByTestId('transcript-jump-to-bottom')).not.toBeNull();
+        await screen.pressByTestIdAsync('transcript-jump-to-bottom');
+        expect(assignedLegendRef.scrollToEnd).toHaveBeenCalled();
     });
 
     it('renders the Legend renderer with frame facts, slots, and overlays', async () => {
