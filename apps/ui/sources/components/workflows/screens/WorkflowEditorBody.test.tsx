@@ -279,6 +279,7 @@ const OPEN_SETTINGS_GROUPS: ReadonlyMap<string, boolean> = new Map([
 it('keeps closed workflow and step summaries on the exact admitted Home name without chooser options', async () => {
     const harness = await loadHarness();
     const { WorkflowInspector } = await import('../editor/WorkflowInspector');
+    const { WorkflowContinuityControls } = await import('../editor/WorkflowContinuityControls');
     const { WorkflowAccountLifetimeProvider } = await import('../workflowAccountScope');
     const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
     const { createSessionFixture } = await import('@/dev/testkit');
@@ -296,7 +297,7 @@ it('keeps closed workflow and step summaries on the exact admitted Home name wit
     const focused = { ...addressed, serverId: homes.homes.focused!.id, metadata: { ...addressed.metadata!, name: 'Wrong Home name' } };
     getStorage().setState({ isDataReady: true, sessions: { [sessionId]: focused },
         sessionListRowsByServerId: { [serverId]: { [sessionId]: addressed }, [focused.serverId!]: { [sessionId]: focused } } });
-    const draft = harness.setWorkflowDefaultField(buildDraft(harness), 'conversation', { kind: 'existing_session', sessionId });
+    const draft = harness.setWorkflowDefaultField(buildDraft(harness), 'conversation', { kind: 'existing_session', sessionId, machineId: 'machine-1' });
     let bound = false;
     let firstBinding: ReturnType<typeof useServerCredentialAccountScopeBinding>['binding'] = null;
     function Summary({ admitted, retained = false }: { admitted: boolean; retained?: boolean }) {
@@ -308,6 +309,10 @@ it('keeps closed workflow and step summaries on the exact admitted Home name wit
         return <WorkflowAccountLifetimeProvider value={admitted ? (retained ? firstBinding : binding) ?? null : null}>
             <WorkflowInspector {...props} subject={{ kind: 'workflow' }} presentation="pane" testIDPrefix="closed-default" />
             <WorkflowInspector {...props} subject={{ kind: 'block', blockId: 'analyze' }} presentation="popover" testIDPrefix="closed-step" />
+            <WorkflowContinuityControls draft={draft} conversation={undefined} workspace={undefined}
+                inherited={{ conversation: draft.defaults.conversation, workspace: draft.defaults.workspace }}
+                existingSessions={props.existingSessions} onChangeConversation={() => {}} onChangeWorkspace={() => {}}
+                testIDPrefix="closed-inherited" />
         </WorkflowAccountLifetimeProvider>;
     }
     const screen = await renderScreen(<Summary admitted />);
@@ -2176,6 +2181,13 @@ describe('workflow editor body', () => {
 
     it('shows a recorded existing Session and states when none can be offered', async () => {
         const harness = await loadHarness();
+        const scope = await bindingHome();
+        const { createSessionFixture } = await import('@/dev/testkit');
+        const session = createSessionFixture({ id: 'session-9', serverId: scope.serverId, metadata: {
+            ...createSessionFixture().metadata!, name: 'Ship release', machineId: 'machine-1',
+        } });
+        getStorage().setState({ isDataReady: true, sessions: {},
+            sessionListRowsByServerId: { [scope.serverId]: { [session.id]: session } } });
         const recorded = harness.setWorkflowDefaultField(
             buildDraft(harness),
             'conversation',
@@ -2183,16 +2195,22 @@ describe('workflow editor body', () => {
         );
         const listed = await renderBody(harness, {
             draft: recorded,
+            sessionBindingScope: scope,
             existingSessions: [{ sessionId: 'session-9', machineId: 'machine-1', label: 'Ship release' }],
         });
         const field = dropdownField(listed, 'workflow-editor-defaults-continuity-conversation-field');
         expect(field.props.selectedId).toBe('existing_session');
-        expect(field.props.items.find((item) => item.id === 'existing_session')?.title)
-            .toContain('Ship release');
+        await waitForHomeGovernance(() => expect(dropdownField(listed,
+            'workflow-editor-defaults-continuity-conversation-field').props.items.find((item) => item.id === 'existing_session')?.title)
+            .toContain('Ship release'));
         await listed.unmount();
 
-        const unlisted = await renderBody(harness, { draft: recorded });
+        await act(async () => { getStorage().setState(state => ({ sessionListRowsByServerId: {
+            ...state.sessionListRowsByServerId, [scope.serverId]: {},
+        } })); });
+        const unlisted = await renderBody(harness, { draft: recorded, sessionBindingScope: scope });
         expect(unlisted.getTextContent()).toContain('session-9');
+        expect(unlisted.getTextContent()).not.toContain('Ship release');
         await unlisted.unmount();
 
         const none = await renderBody(harness);
