@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { renderPrismaCompatibleSqliteDatabaseUrl } from "@happier-dev/cli-common/firstPartyRuntime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { db, resolveSqliteRuntimePragmasFromEnv, resolveSqliteStartupDiagnosticsFromEnv } from "@/storage/db";
+import { createDbSqliteMaintenanceClient, db, getPrismaConnectionLimit, resolveSqliteRuntimePragmasFromEnv, resolveSqliteStartupDiagnosticsFromEnv, withSqliteReadSnapshot } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
 describe("storage/prisma sqlite pragmas", () => {
@@ -15,6 +15,26 @@ describe("storage/prisma sqlite pragmas", () => {
         if (harness) {
             await harness.close();
             harness = null;
+        }
+        vi.unstubAllEnvs();
+    });
+
+    it("keeps the main pool's native worker budget when maintenance and snapshot clients open", async () => {
+        vi.stubEnv("TOKIO_WORKER_THREADS", undefined);
+        harness = await createLightSqliteHarness({
+            tempDirPrefix: "happier-sqlite-runtime-budget-",
+            env: { HAPPIER_DB_CONNECTION_LIMIT: "3", HAPPY_DB_CONNECTION_LIMIT: "" },
+        });
+        expect(getPrismaConnectionLimit()).toBe(3);
+        expect(process.env.TOKIO_WORKER_THREADS).toBe("3");
+        const maintenance = await createDbSqliteMaintenanceClient();
+        try {
+            expect(await maintenance.$queryRawUnsafe("SELECT 1 AS value")).toEqual([{ value: 1n }]);
+            expect(await withSqliteReadSnapshot(reader => reader.$queryRawUnsafe("SELECT 1 AS value"))).toEqual([{ value: 1n }]);
+            expect(getPrismaConnectionLimit()).toBe(3);
+            expect(process.env.TOKIO_WORKER_THREADS).toBe("3");
+        } finally {
+            await maintenance.$disconnect();
         }
     });
 

@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { applyEnvValues } from "@/testkit/env";
-import { db, initDbPglite, prismaRuntime, shutdownDbPglite } from "./prisma";
+import { db, getPrismaConnectionLimit, initDbPglite, prismaRuntime, shutdownDbPglite } from "./prisma";
 import { acquirePgliteDirLock } from "./locks/pgliteLock";
 
 const createdDirs: string[] = [];
@@ -33,9 +33,12 @@ describe("storage/prisma initDbPglite", () => {
             if (!dir) continue;
             await rm(dir, { recursive: true, force: true });
         }
+        vi.unstubAllEnvs();
     });
 
     it("rejects re-entrant init attempts while initialization is in progress", async () => {
+        vi.stubEnv("HAPPIER_DB_CONNECTION_LIMIT", "7");
+        vi.stubEnv("TOKIO_WORKER_THREADS", undefined);
         const root = await createHarnessDir();
         applyEnvValues({ HAPPY_SERVER_LIGHT_DATA_DIR: root });
 
@@ -44,6 +47,8 @@ describe("storage/prisma initDbPglite", () => {
         const [firstResult, secondResult] = await Promise.allSettled([first, second]);
 
         expect(firstResult.status).toBe("fulfilled");
+        expect.soft(getPrismaConnectionLimit()).toBe(1);
+        expect.soft(process.env.TOKIO_WORKER_THREADS).toBe("1");
         expect(secondResult.status).toBe("rejected");
         expect(String((secondResult as PromiseRejectedResult).reason?.message ?? (secondResult as PromiseRejectedResult).reason)).toMatch(
             /initialization is already in progress/i,

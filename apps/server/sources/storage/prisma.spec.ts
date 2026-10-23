@@ -8,6 +8,7 @@ import {
     db,
     getDbProviderFromEnv,
     getPrismaConnectionLimit,
+    createDbMaintenanceClient,
     initDbPostgres,
     requireDbProviderFromEnv,
     isPrismaErrorCode,
@@ -267,6 +268,88 @@ describe("storage/prisma", () => {
         expect(applyConfiguredDatabaseConnectionLimit(original, {})).toBe(original);
     });
 
+    it.each(["file:./relative db.sqlite", "file:C:\\Users\\fixture\\data.sqlite"])("preserves the Prisma SQLite path when overriding its pool (%s)", (databaseUrl) => {
+        expect(applyConfiguredDatabaseConnectionLimit(`${databaseUrl}?socket_timeout=5&connection_limit=2`, {
+            HAPPIER_DB_CONNECTION_LIMIT: "3",
+        })).toBe(`${databaseUrl}?socket_timeout=5&connection_limit=3`);
+    });
+
+    it.each(["postgres", "mysql", "sqlite"] as const)("uses the server pool before startup maintenance first loads the engine and keeps that budget for later clients (%s)", async (provider) => {
+        // Each module instance models first construction; native loading remains real.
+        vi.resetModules();
+        const storage = await import("./prisma");
+        const databaseUrl = provider === "sqlite" ? "file:./worker-budget.sqlite" : `${provider === "postgres" ? "postgresql" : "mysql"}://fixture:fixture@localhost/fixture`;
+        vi.stubEnv("DATABASE_URL", `${databaseUrl}?connection_limit=2`);
+        vi.stubEnv("HAPPIER_DB_CONNECTION_LIMIT", "3");
+        vi.stubEnv("HAPPY_DB_CONNECTION_LIMIT", "7");
+        vi.stubEnv("TOKIO_WORKER_THREADS", undefined);
+        const limitsAtLoad: Array<string | undefined> = [];
+        const dlopen = process.dlopen;
+        const loader = vi.spyOn(process, "dlopen").mockImplementation((module, filename, flags) => {
+            if (filename.includes("query_engine")) limitsAtLoad.push(process.env.TOKIO_WORKER_THREADS);
+            return dlopen(module, filename, flags);
+        });
+        const clients: Awaited<ReturnType<typeof createDbMaintenanceClient>>[] = [];
+        try {
+            clients.push(await storage.createDbMaintenanceClient(provider, `${databaseUrl}?connection_limit=1`));
+            await clients[0]!.$disconnect();
+            if (provider === "postgres") storage.initDbPostgres();
+            else if (provider === "mysql") await storage.initDbMysql();
+            else clients.push(await storage.createDbMaintenanceClient("sqlite"));
+            await storage.shutdownDbClient();
+            expect.soft(limitsAtLoad.length).toBeGreaterThan(0);
+            expect.soft(new Set(limitsAtLoad)).toEqual(new Set(["3"]));
+            clients.push(await storage.createDbMaintenanceClient(provider, `${databaseUrl}?connection_limit=1`));
+            await clients.at(-1)!.$disconnect();
+            expect(process.env.TOKIO_WORKER_THREADS).toBe("3");
+        } finally {
+            await Promise.all(clients.map(client => client.$disconnect()));
+            await storage.shutdownDbClient();
+            loader.mockRestore();
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it("preserves an explicit Tokio operator override across main and maintenance clients", async () => {
+        vi.resetModules();
+        const storage = await import("./prisma");
+        vi.stubEnv("DATABASE_URL", "postgresql://fixture:fixture@localhost/fixture?connection_limit=2");
+        vi.stubEnv("HAPPIER_DB_CONNECTION_LIMIT", "3");
+        vi.stubEnv("TOKIO_WORKER_THREADS", "5");
+        let maintenance: Awaited<ReturnType<typeof createDbMaintenanceClient>> | undefined;
+        try {
+            storage.initDbPostgres();
+            expect.soft(process.env.TOKIO_WORKER_THREADS).toBe("5");
+            expect(storage.getPrismaConnectionLimit()).toBe(3);
+            maintenance = await storage.createDbMaintenanceClient("postgres", "postgresql://fixture:fixture@localhost/fixture?connection_limit=1");
+            expect(process.env.TOKIO_WORKER_THREADS).toBe("5");
+        } finally {
+            await maintenance?.$disconnect();
+            await storage.shutdownDbClient();
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it("does not advertise a later client pool as a resized runtime when the first pool was unconfigured", async () => {
+        vi.resetModules();
+        const storage = await import("./prisma");
+        vi.stubEnv("DATABASE_URL", "postgresql://fixture:fixture@localhost/fixture");
+        vi.stubEnv("HAPPIER_DB_CONNECTION_LIMIT", "");
+        vi.stubEnv("HAPPY_DB_CONNECTION_LIMIT", "");
+        vi.stubEnv("TOKIO_WORKER_THREADS", undefined);
+        let maintenance: Awaited<ReturnType<typeof createDbMaintenanceClient>> | undefined;
+        try {
+            storage.initDbPostgres();
+            await storage.shutdownDbClient();
+            maintenance = await storage.createDbMaintenanceClient("postgres", "postgresql://fixture:fixture@localhost/fixture?connection_limit=1");
+            expect(process.env.TOKIO_WORKER_THREADS).toBeUndefined();
+        } finally {
+            await maintenance?.$disconnect();
+            await storage.shutdownDbClient();
+            vi.unstubAllEnvs();
+        }
+    });
+
     it.each([
         { query: "", override: "", expected: null },
         { query: "?connection_limit=invalid", override: "", expected: null },
@@ -277,10 +360,12 @@ describe("storage/prisma", () => {
         vi.stubEnv("DATABASE_URL", `postgresql://fixture:fixture@localhost/fixture${query}`);
         vi.stubEnv("HAPPIER_DB_CONNECTION_LIMIT", "");
         vi.stubEnv("HAPPY_DB_CONNECTION_LIMIT", override);
+        vi.stubEnv("TOKIO_WORKER_THREADS", "1");
         try {
             // Construct the real Prisma owner without opening a connection.
             initDbPostgres();
             expect(getPrismaConnectionLimit()).toBe(expected);
+            expect(process.env.TOKIO_WORKER_THREADS).toBe("1");
             vi.stubEnv("DATABASE_URL", "postgresql://fixture:fixture@localhost/fixture?connection_limit=9");
             expect(getPrismaConnectionLimit()).toBe(expected);
             await shutdownDbClient();

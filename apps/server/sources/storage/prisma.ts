@@ -72,7 +72,8 @@ export function getActivePrismaRuntime(): typeof import("@prisma/client").Prisma
     return activePrismaRuntime;
 }
 
-function createDefaultPrismaClient(databaseUrl?: string): PrismaClientType {
+function createDefaultPrismaClient(databaseUrl?: string, provider: 'postgres' | 'pglite' = 'postgres'): PrismaClientType {
+    preparePrismaEngineRuntime(provider, databaseUrl);
     const { PrismaClient } = loadDefaultPrismaClientModule();
     return databaseUrl
         ? new PrismaClient({ datasources: { db: { url: databaseUrl } } })
@@ -91,6 +92,25 @@ export function applyConfiguredDatabaseConnectionLimit(rawUrl: string, env: Node
     }
 
     return withConnectionLimit(rawUrl, parsed);
+}
+
+let prismaEngineRuntimePrepared = false;
+function preparePrismaEngineRuntime(provider: DbProvider, databaseUrl?: string): void {
+    // PGlite's resolved socket URL is a fixed single-connection resource, not an operator-sized pool.
+    if (provider !== 'pglite' && process.env.DATABASE_URL) {
+        process.env.DATABASE_URL = applyConfiguredDatabaseConnectionLimit(process.env.DATABASE_URL, process.env);
+    }
+    // Tokio is process-wide: honor its operator override, otherwise fix the server-pool budget before first engine load.
+    if (prismaEngineRuntimePrepared) return;
+    prismaEngineRuntimePrepared = true;
+    if (process.env.TOKIO_WORKER_THREADS !== undefined) return;
+    const connectionLimit = parsePositiveInteger(readDatabaseUrlSearchParam({
+        DATABASE_URL: provider === 'pglite' ? databaseUrl ?? process.env.DATABASE_URL : process.env.DATABASE_URL || databaseUrl,
+    }, "connection_limit"));
+    if (connectionLimit !== null) {
+        // Size Prisma's native scheduler from its configured database connection pool.
+        process.env.TOKIO_WORKER_THREADS = String(connectionLimit);
+    }
 }
 
 export function resolveGeneratedClientEntrypoint(modulePath: string): string {
@@ -198,9 +218,6 @@ export function initDbPostgres(): void {
         throw new Error("Database client is already initialized.");
     }
     _provider = "postgres";
-    if (process.env.DATABASE_URL) {
-        process.env.DATABASE_URL = applyConfiguredDatabaseConnectionLimit(process.env.DATABASE_URL, process.env);
-    }
     _db = withSharedQaSchemaDiagnostics(createDefaultPrismaClient());
     activePrismaRuntime = defaultPrismaRuntime;
     initializeConnectionPool("postgres");
@@ -248,6 +265,7 @@ async function createGeneratedPrismaClient(
     client: PrismaClientType;
     prisma: typeof import("@prisma/client").Prisma;
 }>> {
+    preparePrismaEngineRuntime(provider, databaseUrl);
     const entrypoint =
         provider === "mysql"
             ? resolveGeneratedClientEntrypoint("../../generated/mysql-client")
@@ -291,7 +309,7 @@ export async function createDbMaintenanceClient(
     databaseUrl?: string,
 ): Promise<PrismaClientType> {
     if (provider === "postgres" || provider === "pglite") {
-        return createDefaultPrismaClient(databaseUrl);
+        return createDefaultPrismaClient(databaseUrl, provider);
     }
     return (await createGeneratedPrismaClient(provider, databaseUrl)).client;
 }
@@ -403,6 +421,12 @@ function withConnectionLimit(rawUrl: string, limit: number): string {
         }
     })();
     url.searchParams.set("connection_limit", String(limit));
+    if (url.protocol === "file:") {
+        // Prisma accepts relative and Windows file paths that URL serialization would relocate.
+        const suffixAt = rawUrl.search(/[?#]/u);
+        const filePath = suffixAt < 0 ? rawUrl : rawUrl.slice(0, suffixAt);
+        return `${filePath}${url.search}${url.hash}`;
+    }
     return url.toString();
 }
 
@@ -437,7 +461,7 @@ export async function initDbPglite(): Promise<void> {
             // because pglite is single-connection.
             process.env.DATABASE_URL = withConnectionLimit(server.getServerConn(), 1);
 
-            const prismaClient = createDefaultPrismaClient();
+            const prismaClient = createDefaultPrismaClient(process.env.DATABASE_URL, 'pglite');
             _pglite = pglite;
             _pgliteServer = server;
             _provider = "pglite";
