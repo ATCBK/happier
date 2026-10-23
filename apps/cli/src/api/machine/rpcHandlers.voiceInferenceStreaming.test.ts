@@ -18,6 +18,7 @@ import {
   VoiceMediaApplicationAuthorityV1Schema,
   DaemonVoiceInferenceSttStreamFinishResponseSchema,
   DaemonVoiceInferenceSttStreamCancelResponseSchema,
+  DaemonVoiceInferenceSttStreamStatusResponseSchema,
   createPeerTcpTunnelRelayAuthorizationSigningInputV2,
   createPeerApplicationAuthorityDigestV1,
   PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
@@ -987,46 +988,50 @@ describe('registerMachineVoiceInferenceStreamingRpcHandlers', () => {
     })).resolves.toMatchObject({ ok: false, errorCode: 'stream_not_found' });
   });
 
-  it('expires abandoned daemon STT streams and cancels their worker request', async () => {
+  it.each(['upload_bridge', 'runtime'] as const)('expires abandoned %s STT streams and releases native resources', async (streamingMode) => {
     vi.useFakeTimers();
+    const nativeState = { cancelled: false, closed: false };
     const worker = await createWorker({
-      transcribeAudio: vi.fn(async () => {
-        throw new Error('unused');
+      createStreamingTranscriptionSession: async () => ({
+        appendPcm16: async () => ({ events: [] }),
+        finish: async () => ({ text: '', language: null, events: [] }),
+        cancel: async () => { nativeState.cancelled = true; },
+        close: async () => { nativeState.closed = true; },
       }),
     });
-    const cancelStt = vi.spyOn(worker, 'cancelStt');
     const mgr = createRpcHandlerManager();
     registrations.push(registerMachineVoiceInferenceStreamingRpcHandlers({
       rpcHandlerManager: mgr,
       voiceInferenceWorker: worker,
     }));
 
-    const sttStreamStart = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START);
-    const sttStreamStatus = getHandler(mgr, RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_STATUS);
-
-    const started = await sttStreamStart?.({
+    const started = DaemonVoiceInferenceSttStreamStartResponseSchema.parse(await mgr.invokeLocal(RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_START, {
       requestId: 'stream-request-expire',
       packId,
       language: 'en',
-      streamingMode: 'upload_bridge',
-    });
-    expect(started).toMatchObject({ ok: true, streamId: expect.any(String), generation: 0 });
+      streamingMode,
+    }));
+    if (!started.ok) throw new Error('Stream did not start');
+    const address = { streamId: started.streamId, generation: started.generation };
+    const chunk = { ...address, seq: 0, pcm16Base64: 'AAAAAA==' };
+    expect(DaemonVoiceInferenceSttStreamChunkResponseSchema.parse(await mgr.invokeLocal(
+      RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CHUNK, chunk,
+    ))).toMatchObject({ ok: true, ackSeq: 0 });
 
-    await expect(sttStreamStatus?.({
-      streamId: started.streamId,
-      generation: started.generation,
-    })).resolves.toMatchObject({ ok: true, state: 'open' });
+    expect(DaemonVoiceInferenceSttStreamStatusResponseSchema.parse(await mgr.invokeLocal(
+      RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_STATUS, address,
+    ))).toMatchObject({ ok: true, state: 'open', ackSeq: 0 });
+    expect(nativeState).toEqual({ cancelled: false, closed: false });
 
     await vi.advanceTimersByTimeAsync(configuration.filesTransferSessionTtlMs + 1);
 
-    await expect(sttStreamStatus?.({
-      streamId: started.streamId,
-      generation: started.generation,
-    })).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'stream_not_found',
-    });
-    expect(cancelStt).toHaveBeenCalledWith('stream-request-expire');
+    expect(DaemonVoiceInferenceSttStreamStatusResponseSchema.parse(await mgr.invokeLocal(
+      RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_STATUS, address,
+    ))).toMatchObject({ ok: false, errorCode: 'stream_not_found' });
+    expect(DaemonVoiceInferenceSttStreamChunkResponseSchema.parse(await mgr.invokeLocal(
+      RPC_METHODS.DAEMON_VOICE_INFERENCE_STT_STREAM_CHUNK, { ...chunk, seq: 1 },
+    ))).toMatchObject({ ok: false, errorCode: 'stream_not_found' });
+    expect(nativeState).toEqual({ cancelled: streamingMode === 'runtime', closed: streamingMode === 'runtime' });
     // The expiry warning schedules the logger's independent buffered flush.
     logger.flushSync();
     expect(vi.getTimerCount()).toBe(0);
