@@ -1,4 +1,4 @@
-import { PluginError } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk/errors';
 import { SessionSystemRecordSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecord';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { getSessionSystemRecordPayloadSchema, getSessionSystemRecordStoredPayloadSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordCatalog';

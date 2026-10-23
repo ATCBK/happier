@@ -2,7 +2,7 @@ import { logger } from '@/ui/logger';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ActionStartDiagnosticV1 } from '@happier-dev/protocol/actions/executor/actionStartDiagnostics';
 import { ExternalActionRequestIdV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import { isPluginError } from '@happier-dev/plugin-sdk';
+import { isPluginError } from '@happier-dev/plugin-sdk/errors';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 

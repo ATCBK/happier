@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { PluginError, isPluginError } from '@happier-dev/plugin-sdk';
+import { PluginError, isPluginError } from '@happier-dev/plugin-sdk/errors';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { resolveOfflineReconnectionBackoffDelayMs } from '@/api/offline/serverConnectionErrors';
 import { delayUnrefAbortable } from '@/utils/time';
