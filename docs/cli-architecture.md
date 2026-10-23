@@ -1497,6 +1497,10 @@ Category adapters preserve managed-session/model-pack/SCM ownership rather
 than bypassing it with generic filesystem mutation. Restore uses the existing native
 helper's atomic no-overwrite operation; an occupied destination is refused. Move,
 empty and Undo receipts consume the shared Activity log, not a storage-local journal.
+Generic temporary-directory retirement moves the validated sibling owner marker
+beside the payload inside that entry. Put back moves the same marker to the restored
+path without replacing an existing file, preserving the creator's process witness
+and cleanup classification through Undo; it never creates a new witness.
 An entry whose protected manifest is missing, malformed or identity-inconsistent is
 retained and reported in the local file log; it cannot block healthy entries from
 listing or reconciliation. Unknown payloads are never restored or deleted on that
