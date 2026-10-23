@@ -22,6 +22,15 @@ import { readDiscussionMessageInTx } from '@/app/discussions/queries';
 import { admitDiscussionSecondOpinionSourceInTx } from '@/app/discussions/secondOpinion';
 import { mayInjectResourceContextInTx } from '@/app/session/access/sessionContextInjection';
 import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
+import type { Prisma } from '@prisma/client';
+
+/** Existing exact assigned-Machine authority for observing an interrupted Run's retained children. */
+export function workflowInvocationObservationRunWhere(input: Readonly<{
+    accountId: string; runId: string; machineId: string; expectedRevision: number;
+}>): Prisma.AutomationRunWhereInput {
+    return { id: input.runId, accountId: input.accountId, revision: input.expectedRevision, state: 'interrupted',
+        workflowCustodyState: 'pending', assignments: { some: { machineId: input.machineId } } };
+}
 
 /** Workflow selection consumes C3's live grants, speaking policy, keys and disclosure owner. */
 export async function assertWorkflowDiscussionAdmissionInTx(tx: Tx, input: Readonly<{

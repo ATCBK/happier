@@ -13,7 +13,7 @@ import { WorkflowDirectRunAdmissionIdV1Schema, WorkflowInvocationRecordIdSchema 
 import { isWorkflowDraftPublicationLifecycleV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { type WorkflowRunRecipientKeyEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import { type WorkflowRunWaitConditionV1 } from '@happier-dev/protocol/workflows/actionsV1';
-import { resolveWorkflowRunAdmissionVisibilityInTx, storeWorkflowRunInitialKeyEnvelopesInTx, resolveWorkflowRunRecipientAccountIdsInTx, assertWorkflowDiscussionAdmissionInTx } from "./workflowRunAccess";
+import { resolveWorkflowRunAdmissionVisibilityInTx, storeWorkflowRunInitialKeyEnvelopesInTx, resolveWorkflowRunRecipientAccountIdsInTx, assertWorkflowDiscussionAdmissionInTx, workflowInvocationObservationRunWhere } from "./workflowRunAccess";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 
@@ -1852,12 +1852,11 @@ export async function commitWorkflowInvocationFact(params: WorkflowInvocationFac
             });
             if (admitted.count !== 1) throw new WorkflowRunServiceError("currentness_conflict");
         }
-        const parentWhere = {
+        const parentWhere = observation ? workflowInvocationObservationRunWhere({ accountId: params.accountId,
+            runId: params.runId, machineId: params.machineId, expectedRevision: parentCurrentness }) : {
             id: params.runId, accountId: params.accountId,
             assignments: { some: { machineId: params.machineId } }, workflowCustodyState: "pending",
-            ...(observation
-                ? { revision: params.expectedRevision, state: "interrupted" }
-                : { claimedByMachineId: params.machineId, attempt: params.parentAttempt }),
+            claimedByMachineId: params.machineId, attempt: params.parentAttempt,
         } satisfies Prisma.AutomationRunWhereInput;
         const run = await tx.automationRun.findFirst({ where: parentWhere, select: { id: true, updatedAt: true, state: true } });
         if (!run) throw new WorkflowRunServiceError("currentness_conflict");
@@ -2208,12 +2207,15 @@ export async function cancelWorkflowRunTx(
         where: {
             id: params.runId,
             accountId: params.accountId,
-            revision: params.expectedRevision,
+            // Stop targets the same Run across claim/progress writes. Unlike
+            // replacement/recovery, it does not depend on the viewed content.
+            revision: { gte: params.expectedRevision },
             workflowCustodyState: { not: null },
             state: { notIn: [...AUTOMATION_RUN_TERMINAL_STATES] },
         },
         select: {
             state: true,
+            revision: true,
             originKind: true,
             leaseExpiresAt: true,
             workflowInvocations: { take: 1, select: { id: true } },
@@ -2244,7 +2246,7 @@ export async function cancelWorkflowRunTx(
         where: {
             id: params.runId,
             accountId: params.accountId,
-            revision: params.expectedRevision,
+            revision: current.revision,
             state: {
                 equals: current.state,
                 notIn: [...AUTOMATION_RUN_TERMINAL_STATES],

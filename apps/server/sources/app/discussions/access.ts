@@ -258,6 +258,21 @@ export async function resolveDiscussionContextInTx(tx: Tx, params: Readonly<{
     return contexts.get(params.discussionId) ?? null;
 }
 
+/** Recheck mutable collective authority after the existing terminal Account locks. */
+export function recheckDiscussionMutationContextBeforePublication(tx: Tx, input: Readonly<{
+    discussionId: string; accountId: string; authentication: SessionAccessAuthentication;
+    admitted: DiscussionContext; manage?: boolean; requireContent?: boolean;
+}>): void {
+    beforeAccountChangePublication(tx, [input.accountId], async client => {
+        const current = await resolveDiscussionContextInTx(client, input);
+        if (!current || current.storageMode !== input.admitted.storageMode
+            || (input.manage && current.access.level !== 'owner' && current.access.level !== 'admin')
+            || (input.requireContent && !current.keyReadiness)) {
+            throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+        }
+    });
+}
+
 /** Lists and exact reads share one batched capture and the same grant/key projection. */
 export async function resolveDiscussionContextsInTx(tx: Tx, params: Readonly<{
     discussionIds: readonly string[]; accountId: string; authentication: SessionAccessAuthentication;

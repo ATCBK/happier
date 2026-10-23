@@ -13,6 +13,8 @@ import type { Tx } from '@/storage/inTx';
 import { kvMutate } from '@/app/kv/kvMutate';
 import { createDiscussion } from './mutations';
 import { archiveDiscussion } from './mutations';
+import { renameDiscussion } from './mutations';
+import { setDiscussionReadCursor } from './readState';
 import { inviteDiscussionParticipant, removeDiscussionGrant, setDiscussionGrant } from './accessService';
 
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -115,6 +117,50 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Discussion arch
             else process.env.HAPPIER_DB_TX_MAX_RETRIES = maxRetries;
             await current.close();
         }
+    });
+
+    it.each(['rename', 'read'] as const)('%s commits while a peer advances the Account cursor before every publication attempt', async operation => {
+        const current = await fixture();
+        await db.discussionReadState.update({ where: { discussionId_accountId: {
+            discussionId: current.discussionId, accountId: current.owner.id,
+        } }, data: { lastReadSeq: 0 } });
+        const transaction = db.$transaction;
+        let peerWrites = 0;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            let advanced = false;
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, {
+                get(inner, property, innerReceiver) {
+                    if (property !== '$queryRawUnsafe') return Reflect.get(inner, property, innerReceiver);
+                    return (query: string, ...values: unknown[]) => {
+                        const pending = inner.$queryRawUnsafe(query, ...values);
+                        if (!query.includes('FROM "Account"') || !query.includes('FOR NO KEY UPDATE')) return pending;
+                        return observeLazyPrismaQuery(pending, () => ({ started() {}, settled() {} }), async () => {
+                            if (advanced) return;
+                            advanced = true;
+                            await db.account.update({ where: { id: current.owner.id }, data: { seq: { increment: 1 } } });
+                            peerWrites++;
+                        });
+                    };
+                },
+            })), ...args.slice(1)]);
+        } });
+        try {
+            const input = { actorAccountId: current.owner.id, discussionId: current.discussionId, authentication };
+            const result = operation === 'rename'
+                ? await renameDiscussion({ ...input, titleContent: { t: 'plain', v: { v: 1, title: 'Renamed under contention' } } })
+                : await setDiscussionReadCursor({ ...input, lastReadSeq: 1 });
+            expect(peerWrites).toBe(1);
+            expect(result).toMatchObject({ ok: true });
+            expect(await db.account.findUniqueOrThrow({ where: { id: current.owner.id } }))
+                .toMatchObject({ seq: current.initialCursor + 2 });
+            if (operation === 'rename') expect(await db.discussion.findUniqueOrThrow({ where: { id: current.discussionId } }))
+                .toMatchObject({ titleContent: { t: 'plain', v: { title: 'Renamed under contention' } } });
+            else expect(await db.discussionReadState.findUniqueOrThrow({ where: { discussionId_accountId: {
+                discussionId: current.discussionId, accountId: current.owner.id,
+            } } })).toMatchObject({ lastReadSeq: 1 });
+        } finally { db.$transaction = transaction; await current.close(); }
     });
 
     it('replays a newly invited same-Account Session before extending locks past the Discussion parent', async () => {

@@ -2,7 +2,7 @@ import { DISCUSSION_DEFAULT_PAGE_SIZE_V1, DISCUSSION_MAX_PAGE_SIZE_V1, Discussio
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema } from '@happier-dev/protocol/discussions/replyTargets';
 import type { DiscussionSummaryV1, DiscussionMessageV1 } from '@happier-dev/protocol/discussions/models';
 import { admitDiscussionDocSourceInTx, resolveDiscussionDocSourcesInTx, validateDiscussionDocContentSource } from './docPassages';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, type Tx } from '@/storage/inTx';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { resolveDiscussionContextInTx, resolveDiscussionContextsInTx, discussionCandidateWhere, type DiscussionContext } from './access';
 import { buildDiscussionListCursorPredicate, decodeDiscussionListCursorV1, encodeDiscussionListCursorV1 } from './pagination';
@@ -169,7 +169,7 @@ export async function listDiscussions(input: Reader & Readonly<{
     if (input.anchorDocArtifactId !== undefined && !DiscussionListQueryV1Schema.safeParse({
         anchorDocArtifactId: input.anchorDocArtifactId, state: input.state,
     }).success) return discussionFailure('discussion_invalid_content');
-    return inTx(async tx => {
+    return inReadSnapshot(async tx => {
         const cursor = input.cursor === undefined ? null : decodeDiscussionListCursorV1(input.cursor);
         if (input.cursor !== undefined && !cursor) return discussionFailure('discussion_invalid_content');
         const take = pageSize(input.limit);
@@ -208,12 +208,12 @@ export async function listDiscussions(input: Reader & Readonly<{
             frontier = { v: 1, at: last.lastMessageAt.getTime(), id: last.id };
             if (rows.length <= take) return discussionSuccess({ discussions, nextCursor: null });
         }
-    }, { isolationLevel: 'Serializable' });
+    });
 }
 
 /** Exact reads never confirm identity to an unauthorized principal. */
 export async function getDiscussion(input: Reader & Readonly<{ discussionId: string }>): Promise<DiscussionResult<DiscussionDetailsResponseV1>> {
-    return inTx(async tx => {
+    return inReadSnapshot(async tx => {
         const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
         if (!context) return discussionFailure('discussion_not_found');
         const discussion = await readDiscussionRowInTx(tx, input);
@@ -221,7 +221,7 @@ export async function getDiscussion(input: Reader & Readonly<{ discussionId: str
         const projected = await projectDiscussionForViewerInTx(tx, { context, discussion,
             viewerAccountId: input.actorAccountId, authentication: input.authentication });
         return projected.ok ? discussionSuccess({ discussion: projected.value }) : projected;
-    }, { isolationLevel: 'Serializable' });
+    });
 }
 
 /** Ordered, cursor-neutral reads apply the requested sequence ceiling before paging. */
@@ -229,7 +229,7 @@ export async function readDiscussionMessages(input: Reader & Readonly<{
     discussionId: string; beforeSeq?: number; afterSeq?: number; throughSeq?: number; limit?: number;
 }>): Promise<DiscussionResult<DiscussionMessagesResponseV1>> {
     if (input.beforeSeq !== undefined && input.afterSeq !== undefined) return discussionFailure('discussion_invalid_content');
-    return inTx(async tx => {
+    return inReadSnapshot(async tx => {
         const context = await resolveDiscussionContextInTx(tx, { discussionId: input.discussionId, accountId: input.actorAccountId, authentication: input.authentication });
         if (!context) return discussionFailure('discussion_not_found');
         const discussion = await readDiscussionRowInTx(tx, input);
@@ -262,5 +262,5 @@ export async function readDiscussionMessages(input: Reader & Readonly<{
         }) !== null;
         return discussionSuccess({ messages: ordered,
             hasMoreOlder, messageSeq: input.throughSeq === undefined ? discussion.messageSeq : Math.min(discussion.messageSeq, input.throughSeq) });
-    }, { isolationLevel: 'Serializable' });
+    });
 }

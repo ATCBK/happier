@@ -67,6 +67,7 @@ import { createNativeAgentSessionOperations } from '../../../../cli/src/agent/ru
 import { bindSessionProviderInputOutcome, createSessionProviderInputOutcomeBinding } from '../../../../cli/src/agent/runtime/session/input/providerInputOutcome';
 import { MessageBuffer } from '../../../../cli/src/ui/ink/messageBuffer';
 import { createInitialHostRuntimeActivityMutation } from '../../../../cli/src/agent/runtime/session/activity/createHostRuntimeActivityProjection';
+import { deriveWorkflowDiscussionReplyLocalIdV1 } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
 
 const document = (text: string) => ({ v: 1 as const, parts: [{ t: 'text' as const, text }] });
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -639,7 +640,7 @@ describe('First-class Discussions service (SQLite)', () => {
         expect(await enqueuePendingMessageByAuthenticatedMachine(admission)).toMatchObject({ status: 'alreadyAccepted', localId });
         expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId } })).toBe(1);
     });
-    it.each(['participant', 'unregistered', 'native-runtime', 'removed-observing', 'removed-inline'] as const)('publishes a completed Workflow-selected answer once through %s and retains the committed Discussion reference', async mode => {
+    it.each(['participant', 'unregistered', 'native-runtime', 'removed-observing', 'removed-inline', 'workflow-failed'] as const)('publishes a completed Workflow-selected answer once through %s and retains the committed Discussion reference', async mode => {
         const runner = mode === 'native-runtime' ? await createMaterializedEphemeralRunnerFixture() : undefined;
         const selected = runner ? await (async () => {
             const owner = await db.account.findUniqueOrThrow({ where: { id: runner.accountId } });
@@ -650,7 +651,7 @@ describe('First-class Discussions service (SQLite)', () => {
         const { owner, discussionId, created } = selected;
         const session = runner ? await db.session.findUniqueOrThrow({ where: { id: runner.sessionId } })
             : await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
-        if (mode === 'participant' || mode.startsWith('removed-')) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
+        if (mode === 'participant' || mode === 'workflow-failed' || mode.startsWith('removed-')) expect(await inviteDiscussionParticipant({ authentication, actorAccountId: owner.id, discussionId,
             request: { participant: { kind: 'session', sessionId: session.id } } })).toMatchObject({ ok: true });
         // Run… selects a participant for an existing unaddressed message. It does
         // not rewrite the original message into an ordinary @mention request.
@@ -681,6 +682,7 @@ describe('First-class Discussions service (SQLite)', () => {
         const publish = async (replyReturn = marker, draftReview?: { artifactId: string; decidingAccountId: string }) => {
             let result: unknown;
             await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: session.id, discussionId, replyReturn,
+                ...(mode === 'workflow-failed' ? { terminalReturn: true } : {}),
                 ...(draftReview ? { draftReview } : {}),
                 request: { ...postRequest('Accepted answer'), localId, replyTarget: { kind: 'message', messageId: question.id } } },
                 (value: unknown) => { result = value; });
@@ -701,7 +703,7 @@ describe('First-class Discussions service (SQLite)', () => {
             return;
         }
         expect(await publish()).toMatchObject({ ok: false, error: 'discussion_post_denied' });
-        await db.workflowRunInvocation.update({ where: { id: invocation.id }, data: { lifecycle: 'completed' } });
+        await db.workflowRunInvocation.update({ where: { id: invocation.id }, data: { lifecycle: mode === 'workflow-failed' ? 'failed' : 'completed' } });
         expect(await publish({ ...marker, workflow: { ...marker.workflow, invocationAttempt: '1' } })).toMatchObject({ ok: false });
         expect(await publish({ ...marker, workflow: { ...marker.workflow, runId: 'forged-run' } })).toMatchObject({ ok: false });
         if (mode === 'unregistered' && selected.invitee) {
@@ -717,16 +719,52 @@ describe('First-class Discussions service (SQLite)', () => {
         const posted = await publish();
         expect(posted).toMatchObject({ ok: true, value: { message: { addressingV1: { participantSessionIds: [] } } } });
         if (!posted.ok) throw new Error(posted.error);
-        expect(posted.value.message.producerV1).toMatchObject({ runId: run.id, replyReturn: { workflow: marker.workflow } });
+        expect(posted.value.message.producerV1).toMatchObject({ runId: run.id, replyReturn: { workflow: marker.workflow,
+            outcome: mode === 'workflow-failed' ? 'failed' : 'answer' } });
         expect(await publish()).toMatchObject({ ok: true, value: { message: { id: posted.value.message.id } } });
         expect(await db.discussionMessage.count({ where: { discussionId, localId } })).toBe(1);
         expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId: requestLocalId } } })).replyProgress)
-            .toMatchObject({ disposition: 'returned', outcome: { kind: 'answer', publicationRef: { kind: 'discussion', messageId: posted.value.message.id } } });
+            .toMatchObject({ disposition: 'returned', outcome: mode === 'workflow-failed' ? { kind: 'failed' }
+                : { kind: 'answer', publicationRef: { kind: 'discussion', messageId: posted.value.message.id } } });
         if (runner) {
             await db.accessKey.delete({ where: { accountId_machineId_sessionId: { accountId: owner.id, machineId: runner.machineId, sessionId: session.id } } });
             expect(await publish()).toMatchObject({ ok: false });
             expect(await db.discussionMessage.count({ where: { discussionId, localId } })).toBe(1);
         }
+    });
+    it('publishes an accepted non-Session Workflow leaf once through the canonical append and strict Discussion reader', async () => {
+        const { owner, discussionId, created } = await fixture();
+        const machine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: owner.id,
+            metadata: '{}', dataEncryptionKey: null } });
+        const run = await db.automationRun.create({ data: { accountId: owner.id, originKind: 'direct', causeKind: null,
+            scheduledAt: new Date(), dueAt: new Date(), claimedByMachineId: machine.id,
+            workflowAcceptedSnapshotEnvelope: 'accepted-by-workflow-owner', workflowCustodyState: 'pending' } });
+        const invocation = await db.workflowRunInvocation.create({ data: { runId: run.id, sequence: 1n, memberOrdinal: 0n,
+            lifecycle: 'running', contentEnvelope: 'sealed-progress-owned-by-workflow' } });
+        const producer = { v: 1 as const, kind: 'workflow' as const, runId: run.id, invocationRecordId: invocation.id,
+            invocationAttempt: '0', execution: { kind: 'action' as const, actionId: 'plugin:external/check' }, outcome: 'answer' as const };
+        const origin = { discussion: { serverId: 'home', discussionId }, messageId: created.firstMessage.id, throughSeq: created.firstMessage.seq };
+        const localId = deriveWorkflowDiscussionReplyLocalIdV1(producer);
+        const request = { ...postRequest('External action completed'), localId, replyTarget: { kind: 'message' as const, messageId: origin.messageId } };
+        // The installed Machine supplies this protected custody; ordinary HTTP callers cannot.
+        const publish = (selectedOrigin = origin, expectedParentRevision?: number) => postDiscussionMessage({ authentication, actorAccountId: owner.id,
+            discussionId, request, producer, workflowReturn: { machineId: machine.id, origin: selectedOrigin,
+                ...(expectedParentRevision !== undefined ? { expectedParentRevision } : {}) } });
+        expect(await publish()).toMatchObject({ ok: false });
+        await db.workflowRunInvocation.update({ where: { id: invocation.id }, data: { lifecycle: 'completed' } });
+        const posted = await publish();
+        expect(posted).toMatchObject({ ok: true });
+        if (!posted.ok) throw new Error(posted.error);
+        expect(DiscussionPostResponseV1Schema.parse(posted.value).message.producerV1).toEqual(producer);
+        expect(await publish()).toMatchObject({ ok: true, value: { message: { id: posted.value.message.id } } });
+        expect(await db.discussionMessage.count({ where: { discussionId, localId } })).toBe(1);
+        expect(await publish({ ...origin, messageId: 'different-parent' })).toMatchObject({ ok: false });
+        await db.automationRun.update({ where: { id: run.id }, data: { claimedByMachineId: null } });
+        expect(await publish()).toMatchObject({ ok: false });
+        await db.automationRunAssignment.create({ data: { runId: run.id, machineId: machine.id } });
+        await db.automationRun.update({ where: { id: run.id }, data: { state: 'interrupted' } });
+        expect(await publish(origin, run.revision)).toMatchObject({ ok: true, value: { message: { id: posted.value.message.id } } });
+        expect(await publish(origin, run.revision + 1)).toMatchObject({ ok: false });
     });
     it('settles an opaque E2EE Workflow answer through the same original and fails closed when the Discussion key becomes unavailable', async () => {
         const keys = tweetnacl.box.keyPair();
@@ -960,6 +998,7 @@ describe('First-class Discussions service (SQLite)', () => {
         eventRouter.addConnection(owner.id, connection);
         onTestFinished(() => eventRouter.removeConnection(owner.id, connection));
         let phase = 'client startup';
+        onTestFailed(() => console.error('Queued Discussion withdrawal composition:', { phase, transportEvents }));
         const clientSession = createPlainSessionFixture({ id: receiver.id });
         const client = new ApiSessionClient(credentials.token, { ...clientSession, metadata: { ...clientSession.metadata,
             machineId: machine.id, path: '/repo', permissionMode: 'default', permissionModeUpdatedAt: 0 } }, {

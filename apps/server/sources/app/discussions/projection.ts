@@ -144,7 +144,10 @@ export async function projectDiscussionAccountActorsInTx(tx: Tx, rows: readonly 
     messages: { accountActor: SessionMessageAccountActorV1 | null; requesterAccountActor: SessionMessageAccountActorV1 | null }[];
     participants: (SessionMessageAccountActorV1 | null)[];
 }> {
-    const requesters = rows.map(row => readProducer(row.producerV1)?.actionRequestAttributionV1?.requester);
+    const requesters = rows.map(row => {
+        const producer = readProducer(row.producerV1);
+        return producer?.kind === 'agent' ? producer.actionRequestAttributionV1?.requester : undefined;
+    });
     const home = requesters.some(requester => requester != null) ? await readCurrentServerIdentityId(undefined, tx) : null;
     // A matching Account id on another Home is not this Home's person.
     const requesterIds = requesters.map(requester => home && requester?.serverId === home ? requester.accountId : null);

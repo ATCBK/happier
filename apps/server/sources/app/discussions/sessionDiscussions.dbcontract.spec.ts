@@ -7,7 +7,8 @@ import { buildDiscussionMutationRequestBodyV1, DiscussionCreateResponseV1Schema,
 import { createAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import type { Fastify } from '@/app/api/types';
 import { registerDiscussionRoutes } from '@/app/api/routes/discussions/registerDiscussionRoutes';
-import { inTx } from '@/storage/inTx';
+import { inTx, type Tx } from '@/storage/inTx';
+import { observeLazyPrismaQuery } from '@/app/changes/accountPublicationContention.testkit';
 import { observePendingSessionFollowForDestinationInTx, acknowledgeDiscussionFollowInputInTx } from '@/app/session/follow/sessionFollowEdgeService';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { DEFAULT_PENDING_REQUESTED_ACTION_V1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
@@ -39,6 +40,85 @@ describe("Discussion provider contract", () => {
     afterAll(async () => {
         if (connected) await shutdownDbClient();
         vi.unstubAllEnvs();
+    });
+
+    it.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('creates atomically while a peer advances the Account cursor before every publication attempt', async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const app: Fastify = createAuthenticatedTestApp();
+        registerDiscussionRoutes(app);
+        await app.ready();
+        const request: DiscussionCreateRequestV1 = {
+            creationLocalId: randomUUID(), titleContent: { t: 'plain', v: { v: 1, title: 'Busy Account' } },
+            firstMessage: { localId: randomUUID(), content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'First question' }] } }, mentionedAccountIds: [] },
+        };
+        const transaction = db.$transaction;
+        let peerWrites = 0;
+        // Interleave only at the genuine lazy SQL boundary. The peer commits
+        // the same non-key Account update as another Session's cursor publisher;
+        // all Discussion admission, identity, insertion and publication stay real.
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            let advanced = false;
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, {
+                get(inner, property, innerReceiver) {
+                    if (property !== '$queryRawUnsafe') return Reflect.get(inner, property, innerReceiver);
+                    return (query: string, ...values: unknown[]) => {
+                        const pending = inner.$queryRawUnsafe(query, ...values);
+                        if (!query.includes('FROM "Account"') || !query.includes('FOR NO KEY UPDATE')) return pending;
+                        return observeLazyPrismaQuery(pending, () => ({ started() {}, settled() {} }), async () => {
+                            if (advanced) return;
+                            advanced = true;
+                            await db.account.update({ where: { id: owner.id }, data: { seq: { increment: 1 } } });
+                            peerWrites++;
+                        });
+                    };
+                },
+            })), ...args.slice(1)]);
+        } });
+        try {
+            const response = await app.inject({ method: 'POST', url: DISCUSSION_HTTP_PATHS_V1.collection,
+                headers: { 'x-test-user-id': owner.id }, payload: request });
+            expect(peerWrites).toBeGreaterThan(0);
+            expect(response.statusCode, response.body).toBe(200);
+            const created = DiscussionCreateResponseV1Schema.parse(response.json());
+            expect(created).toMatchObject({ discussion: { messageSeq: 1 }, firstMessage: { seq: 1, localId: request.firstMessage.localId } });
+            expect(await db.discussion.count({ where: { createdByAccountId: owner.id } })).toBe(1);
+            expect(await db.discussionMessage.count({ where: { discussionId: created.discussion.id } })).toBe(1);
+            expect(await db.accountChange.findUniqueOrThrow({ where: { accountId_kind_entityId: {
+                accountId: owner.id, kind: 'discussion', entityId: created.discussion.id,
+            } } })).toMatchObject({ cursor: peerWrites + 1 });
+            expect((await db.account.findUniqueOrThrow({ where: { id: owner.id } })).seq).toBe(peerWrites + 1);
+        } finally {
+            db.$transaction = transaction;
+            await app.close();
+            await db.account.delete({ where: { id: owner.id } });
+        }
+    });
+
+    it.each([false, true])('reconciles concurrent creation identity without duplicating the first message (changed intent: %s)', async changed => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const request: DiscussionCreateRequestV1 = {
+            creationLocalId: randomUUID(), titleContent: { t: 'plain', v: { v: 1, title: 'One identity' } },
+            firstMessage: { localId: randomUUID(), content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Original question' }] } }, mentionedAccountIds: [] },
+        };
+        try {
+            const requests = [request, changed ? { ...request,
+                titleContent: { t: 'plain' as const, v: { v: 1 as const, title: 'Changed question' } } } : request];
+            const results = await Promise.all(requests.map(request => createDiscussion({ authentication, actorAccountId: owner.id, request })));
+            const accepted = results.filter(result => result.ok);
+            expect(accepted).toHaveLength(changed ? 1 : 2);
+            if (changed) expect(results.find(result => !result.ok)).toEqual({ ok: false, error: 'discussion_idempotency_conflict' });
+            else expect(results[0]).toEqual(results[1]);
+            expect(await db.discussion.count({ where: { createdByAccountId: owner.id } })).toBe(1);
+            expect(await db.discussionMessage.count({ where: { discussion: { createdByAccountId: owner.id } } })).toBe(1);
+            const cursor = (await db.account.findUniqueOrThrow({ where: { id: owner.id } })).seq;
+            const winner = accepted[0];
+            if (!winner.ok) throw new Error('Expected a committed Discussion');
+            const winningRequest = requests[results.findIndex(result => result.ok)];
+            expect(await createDiscussion({ authentication, actorAccountId: owner.id, request: winningRequest })).toEqual(winner);
+            expect((await db.account.findUniqueOrThrow({ where: { id: owner.id } })).seq).toBe(cursor);
+        } finally { await db.account.delete({ where: { id: owner.id } }); }
     });
 
     it.each([false, true])('commits atomic first-message addressing through HTTP and Follow (addressed: %s)', async addressed => {

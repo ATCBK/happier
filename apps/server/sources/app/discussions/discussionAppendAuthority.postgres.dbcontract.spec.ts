@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { decodeBase64 } from 'privacy-kit';
-import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
-import { DISCUSSION_AGENT_POST_EVENT_V1, DISCUSSION_HTTP_PATHS_V1, DiscussionAgentPostResponseV1Schema } from '@happier-dev/protocol/discussions/api';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER, type DiscussionCreateRequestV1 } from '@happier-dev/protocol';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DISCUSSION_HTTP_PATHS_V1, DiscussionAgentPostResponseV1Schema, DiscussionAgentPublisherResponseV1Schema } from '@happier-dev/protocol/discussions/api';
 import { createAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import type { Fastify } from '@/app/api/types';
 import { createAuthenticatedFakeSocket, getSocketHandler } from '@/app/api/testkit/socketHarness';
@@ -18,7 +18,10 @@ import { createPresentUserSessionAccessAuthentication } from '@/app/session/acce
 import { db, initDbPostgres, shutdownDbClient } from '@/storage/db';
 import { inTx, type Tx } from '@/storage/inTx';
 import { createSessionMachineAccessKeyInTx } from '@/app/accessKeys/sessionMachineAccessKeyMutations';
-import { createDiscussion } from './mutations';
+import { createArtifact, deleteArtifact } from '@/app/artifacts/artifactWriteService';
+import { removeArtifactAccessGrantInTx, setArtifactAccessGrantInTx } from '@/app/artifacts/artifactAccessService';
+import { createDiscussion, renameDiscussion } from './mutations';
+import { setDiscussionReadCursor } from './readState';
 import { inviteDiscussionParticipant, setDiscussionGrant } from './accessService';
 
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -96,6 +99,7 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Discussion appe
         vi.stubEnv('HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED', '1');
         vi.stubEnv('HAPPIER_FEATURE_TEAMS__ENABLED', '1');
         vi.stubEnv('HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY', 'optional');
+        vi.stubEnv('HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_ARTIFACTS_AT_REST', 'none');
         initDbPostgres();
         await db.$connect();
     });
@@ -168,7 +172,8 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Discussion appe
                 .toMatchObject({ ok: true });
             if (direct) expect(await setDiscussionGrant({ authentication, actorAccountId: current.owner.id, discussionId: current.discussionId,
                 request: { principal: { kind: 'account', accountId: actor.id }, accessLevel: 'edit' } })).toMatchObject({ ok: true });
-            return { ...current, actor, add: () => current.app.inject({ method: 'POST', headers: headers(current.owner.id),
+            return { ...current, actor, principal: group ? { kind: 'group' as const, teamId: team.id, groupId: group.id }
+                : { kind: 'team' as const, teamId: team.id }, add: () => current.app.inject({ method: 'POST', headers: headers(current.owner.id),
                 url: homeDomainActionPathForMethod('teams.members.add', 'POST'),
                 payload: { v: 1, teamId: team.id, accountId: actor.id, role: 'member', historyAccess: 'from_membership' },
             }).then(response => { expect(response.statusCode, response.body).toBe(200); return response; }), revoke: async () => {
@@ -202,6 +207,42 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Discussion appe
                 await current.assertMessages(payload.localId, accepted);
                 if (!accepted) expect(await current.publicationState()).toEqual(withdrawn);
             } finally { resume.resolve(); await Promise.allSettled([posting, revoking]); restore(); await current.close(); }
+        });
+
+        it.each(['rename', 'read'] as const)(`orders ${kind} withdrawal against %s publication (surviving direct grant: ${direct})`, async operation => {
+            const current = await collectiveFixture();
+            if (operation === 'rename') expect(await setDiscussionGrant({ authentication, actorAccountId: current.owner.id,
+                discussionId: current.discussionId, request: { principal: current.principal, accessLevel: 'admin' } })).toMatchObject({ ok: true });
+            if (direct && operation === 'rename') expect(await setDiscussionGrant({ authentication, actorAccountId: current.owner.id,
+                discussionId: current.discussionId, request: { principal: { kind: 'account', accountId: current.actor.id }, accessLevel: 'admin' } }))
+                .toMatchObject({ ok: true });
+            await db.discussionReadState.update({ where: { discussionId_accountId: {
+                discussionId: current.discussionId, accountId: current.actor.id,
+            } }, data: { lastReadSeq: 0 } });
+            const paused = signal(); const resume = signal();
+            const restore = beforeMutationQuery((delegate, method) => operation === 'rename'
+                ? delegate === 'discussion' && method === 'update' : delegate === 'discussionReadState' && method === 'updateMany',
+            async () => { paused.resolve(); await resume.promise; });
+            const input = { authentication, actorAccountId: current.actor.id, discussionId: current.discussionId };
+            const mutation = operation === 'rename'
+                ? renameDiscussion({ ...input, titleContent: { t: 'plain', v: { v: 1, title: 'New title' } } })
+                : setDiscussionReadCursor({ ...input, lastReadSeq: 1 });
+            let revoking: ReturnType<typeof current.revoke> | undefined;
+            try {
+                await Promise.race([paused.promise, mutation.then(() => { throw new Error('Mutation ended before authority pause'); })]);
+                revoking = current.revoke();
+                const revokedFirst = await writerCommittedOrBlocked(revoking);
+                expect(revokedFirst).toBe(true);
+                resume.resolve();
+                const [result] = await Promise.all([mutation, revoking]);
+                const accepted = direct || !revokedFirst;
+                expect(result.ok).toBe(accepted);
+                if (operation === 'rename') expect(await db.discussion.findUniqueOrThrow({ where: { id: current.discussionId } }))
+                    .toMatchObject({ titleContent: { t: 'plain', v: { title: accepted ? 'New title' : 'Authority contention' } } });
+                else if (!accepted) expect(await db.discussionReadState.findUnique({ where: { discussionId_accountId: {
+                    discussionId: current.discussionId, accountId: current.actor.id,
+                } } })).not.toMatchObject({ lastReadSeq: 1 });
+            } finally { resume.resolve(); await Promise.allSettled([mutation, revoking]); restore(); await current.close(); }
         });
 
         it(`rechecks ${kind} withdrawal committed before the locking access read (surviving direct grant: ${direct})`, async () => {
@@ -263,8 +304,110 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Discussion appe
             await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, sessionId: session.id, discussionId: current.discussionId, request: payload },
                 (value: unknown) => { response = value; });
             return DiscussionAgentPostResponseV1Schema.parse(response);
+        }, create: async (creationLocalId: string, payload: DiscussionCreateRequestV1['firstMessage'] = request(),
+            participants?: DiscussionCreateRequestV1['participants']) => {
+            let response: unknown;
+            await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 1, operation: 'create', sessionId: session.id,
+                request: { creationLocalId, titleContent: { t: 'plain', v: { v: 1, title: 'Trusted creation' } }, firstMessage: payload, participants } },
+            (value: unknown) => { response = value; });
+            return DiscussionAgentPublisherResponseV1Schema.parse(response);
         }, revoke: () => current.app.inject({ method: 'POST', url: `/v1/machines/${machine.id}/revoke`, headers: headers(current.owner.id) })
             .then(response => { expect(response.statusCode, response.body).toBe(200); return response; }) };
+    }
+
+    for (const transport of ['http', 'socket'] as const) {
+        for (const withdrawal of ['creator-grant', 'reader-grant', 'team', 'team-suspend', 'group', 'team-with-direct', 'delete'] as const) {
+            it(`orders ${withdrawal} Doc-source withdrawal after admission against ${transport} creation with an Account-only roster`, async () => {
+                const current = transport === 'socket' ? await publisherFixture() : await fixture();
+                const sourceOwner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+                const reader = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+                const artifactId = randomUUID();
+                const artifact = await createArtifact({ actorUserId: sourceOwner.id, artifactId,
+                    header: decodeBase64(encodePlainArtifactStoredContent({ kind: 'markdown', title: 'Source authority' })),
+                    body: decodeBase64(encodePlainArtifactStoredContent({ body: 'Source passage' })),
+                    dataEncryptionKey: decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER) });
+                expect(artifact).toMatchObject({ ok: true });
+                const collective = withdrawal === 'team' || withdrawal === 'team-suspend' || withdrawal === 'group' || withdrawal === 'team-with-direct';
+                const team = collective ? await db.team.create({ data: { name: 'Source-only authority' } }) : null;
+                let groupId: string | undefined;
+                if (team) {
+                    await db.teamMembership.create({ data: { teamId: team.id, accountId: sourceOwner.id, role: 'owner' } });
+                    const member = await db.teamMembership.create({ data: { teamId: team.id, accountId: reader.id, role: 'member' } });
+                    if (withdrawal === 'group') {
+                        const group = await db.teamGroup.create({ data: { teamId: team.id, name: 'Source readers', nameKey: 'source-readers' } });
+                        groupId = group.id;
+                        await db.teamGroupMembership.create({ data: { teamId: team.id, teamGroupId: group.id,
+                            teamMembershipId: member.id, nativeContribution: true } });
+                    }
+                    expect(await inTx(tx => setArtifactAccessGrantInTx(tx, { actorAccountId: sourceOwner.id, artifactId,
+                        principal: groupId ? { kind: 'group', teamId: team.id, groupId } : { kind: 'team', teamId: team.id }, accessLevel: 'view' })))
+                        .toMatchObject({ ok: true });
+                }
+                for (const accountId of [current.owner.id, ...(!collective || withdrawal === 'team-with-direct' ? [reader.id] : [])]) {
+                    expect(await inTx(tx => setArtifactAccessGrantInTx(tx, { actorAccountId: sourceOwner.id, artifactId,
+                        principal: { kind: 'account', accountId }, accessLevel: 'view' }))).toMatchObject({ ok: true });
+                }
+                const doc = { ref: { kind: 'doc' as const, artifactId, serverId: 'home' }, revision: { headerVersion: 1, bodyVersion: 1 } };
+                const payload: DiscussionCreateRequestV1['firstMessage'] = { localId: randomUUID(), mentionedAccountIds: [],
+                    content: { t: 'plain', v: { kind: 'doc_passage_comment', passage: { ...doc, range: { start: 0, end: 6 }, quote: 'Source' },
+                        content: { v: 1, parts: [{ t: 'text', text: 'Admitted first message' }] } } }, replyTarget: { kind: 'doc_passage', doc } };
+                const creationLocalId = randomUUID();
+                const participants = [{ kind: 'account' as const, accountId: reader.id }];
+                const publicationState = async () => ({
+                    accounts: await db.account.findMany({ where: { id: { in: [current.owner.id, sourceOwner.id, reader.id] } },
+                        select: { id: true, seq: true }, orderBy: { id: 'asc' } }),
+                    changes: await db.accountChange.findMany({ where: { accountId: { in: [current.owner.id, sourceOwner.id, reader.id] } },
+                        orderBy: [{ accountId: 'asc' }, { kind: 'asc' }, { entityId: 'asc' }] }),
+                    grants: await db.discussionAccountGrant.findMany({ where: { discussion: { createdByAccountId: current.owner.id } },
+                        orderBy: [{ discussionId: 'asc' }, { accountId: 'asc' }] }),
+                });
+                const revoke = async () => {
+                    if (withdrawal === 'delete') {
+                        expect(await deleteArtifact({ actorUserId: sourceOwner.id, artifactId })).toMatchObject({ ok: true });
+                    } else if (team) {
+                        const member = await db.teamMembership.findUniqueOrThrow({ where: { teamId_accountId: { teamId: team.id, accountId: reader.id } } });
+                        const response = await current.app.inject({ method: 'POST', headers: headers(sourceOwner.id),
+                            url: homeDomainActionPathForMethod(groupId ? 'teams.groups.members.remove'
+                                : withdrawal === 'team-suspend' ? 'teams.members.suspend' : 'teams.members.remove', 'POST'),
+                            payload: groupId ? { v: 1, teamId: team.id, groupId, accountId: reader.id }
+                                : { v: 1, teamId: team.id, membershipId: member.id } });
+                        expect(response.statusCode, response.body).toBe(200);
+                    } else {
+                        expect(await inTx(tx => removeArtifactAccessGrantInTx(tx, { actorAccountId: sourceOwner.id, artifactId,
+                            principal: { kind: 'account', accountId: withdrawal === 'creator-grant' ? current.owner.id : reader.id } })))
+                            .toMatchObject({ ok: true, value: { changed: true } });
+                    }
+                };
+                const paused = signal(); const resume = signal();
+                const restore = beforeMutationQuery((delegate, method) => delegate === 'discussion' && method === 'create',
+                    async () => { paused.resolve(); await resume.promise; });
+                const creating = 'create' in current && typeof current.create === 'function' ? current.create(creationLocalId, payload, participants) : current.app.inject({ method: 'POST',
+                    url: DISCUSSION_HTTP_PATHS_V1.collection, headers: headers(current.owner.id), payload: { creationLocalId, participants,
+                        titleContent: { t: 'plain', v: { v: 1, title: 'Source authority' } }, firstMessage: payload } })
+                    .then(response => ({ ok: response.statusCode === 200, value: response.json() }));
+                let revoking: Promise<void> | undefined;
+                try {
+                    await Promise.race([paused.promise, creating.then(() => { throw new Error('Creation ended before source-admission pause'); })]);
+                    revoking = revoke();
+                    const revokedFirst = await writerCommittedOrBlocked(revoking);
+                    const withdrawn = revokedFirst ? await publicationState() : null;
+                    resume.resolve();
+                    const [created] = await Promise.all([creating, revoking]);
+                    const accepted = withdrawal === 'team-with-direct' || !revokedFirst;
+                    expect(created.ok).toBe(accepted);
+                    expect(await db.discussion.count({ where: { createdByAccountId: current.owner.id, creationLocalId } })).toBe(accepted ? 1 : 0);
+                    expect(await db.discussionMessage.count({ where: { localId: payload.localId } })).toBe(accepted ? 1 : 0);
+                    if (accepted) expect(created).toMatchObject({ value: { firstMessage: { content: payload.content, seq: 1 } } });
+                    else expect(await publicationState()).toEqual(withdrawn);
+                } finally {
+                    resume.resolve(); await Promise.allSettled([creating, revoking]); restore();
+                    if (team) await db.team.delete({ where: { id: team.id } });
+                    await current.close();
+                    await db.artifact.deleteMany({ where: { id: artifactId } });
+                    await db.account.deleteMany({ where: { id: { in: [sourceOwner.id, reader.id] } } });
+                }
+            });
+        }
     }
 
     it('orders real Machine revoke against an admitted trusted socket append', async () => {
@@ -298,6 +441,49 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== 'postgres')('Discussion appe
             await current.assertMessages(payload.localId, false);
             expect(await current.publicationState()).toEqual(withdrawn);
         } finally { restore(); await current.close(); }
+    });
+
+    it('orders real Machine revoke against an admitted trusted socket creation', async () => {
+        const current = await publisherFixture();
+        const paused = signal(); const resume = signal();
+        const restore = beforeMutationQuery((delegate, method) => delegate === 'discussion' && method === 'create',
+            async () => { paused.resolve(); await resume.promise; });
+        const creationLocalId = randomUUID();
+        const creating = current.create(creationLocalId);
+        let revoking: ReturnType<typeof current.revoke> | undefined;
+        try {
+            await Promise.race([paused.promise, creating.then(() => { throw new Error('Creation ended before authority pause'); })]);
+            revoking = current.revoke();
+            const revokedFirst = await writerCommittedOrBlocked(revoking);
+            resume.resolve();
+            const [created] = await Promise.all([creating, revoking]);
+            expect(created.ok).toBe(!revokedFirst);
+            expect(await db.discussion.count({ where: { createdByAccountId: current.owner.id, creationLocalId } })).toBe(revokedFirst ? 0 : 1);
+        } finally { resume.resolve(); await Promise.allSettled([creating, revoking]); restore(); await current.close(); }
+    });
+
+    it('creates through the trusted socket when a peer cursor commits after admission without needing recovery', async () => {
+        const current = await publisherFixture();
+        const retries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
+        process.env.HAPPIER_DB_TX_MAX_RETRIES = '0';
+        let advanced = false;
+        const restore = beforeMutationQuery((delegate, _method, args) => delegate === '$queryRawUnsafe'
+            && /FROM "Account".*FOR NO KEY UPDATE/.test(String(args[0])), async () => {
+                await db.account.update({ where: { id: current.owner.id }, data: { seq: { increment: 1 } } });
+                advanced = true;
+            });
+        const creationLocalId = randomUUID();
+        try {
+            expect(await current.create(creationLocalId)).toMatchObject({ ok: true,
+                value: { firstMessage: { seq: 1, producerV1: { kind: 'agent', sessionId: current.binding.sessionId } } } });
+            expect(advanced).toBe(true);
+            expect(await db.discussion.count({ where: { createdByAccountId: current.owner.id, creationLocalId } })).toBe(1);
+        } finally {
+            restore();
+            if (retries === undefined) delete process.env.HAPPIER_DB_TX_MAX_RETRIES;
+            else process.env.HAPPIER_DB_TX_MAX_RETRIES = retries;
+            await current.close();
+        }
     });
 
     it('does not borrow an AccessKey created after the exact locking lookup missed', async () => {

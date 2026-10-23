@@ -122,7 +122,7 @@ describe("Discussion and Session read-state Action authority", () => {
         } as never, reply as never)).resolves.toBe("refused");
     });
 
-    it("binds read-state writes to the verified effect and refuses terminal automation", async () => {
+    it("binds PAT read-state writes to the verified effect and admits ordinary terminal automation", async () => {
         const guard = registeredMutationGuard(registerSessionReadStateRoutes, "POST", "/v2/sessions/:sessionId/read-state");
         expect(guard).toBeDefined();
         const reply = { code: vi.fn(() => ({ send: vi.fn(() => "refused") })) };
@@ -133,7 +133,7 @@ describe("Discussion and Session read-state Action authority", () => {
         } as never, reply as never)).resolves.toBeUndefined();
         await expect(guard!({
             authAuthority: "account_automation", authTokenKind: "terminal", params: { sessionId: "session-1" },
-        } as never, reply as never)).resolves.toBe("refused");
+        } as never, reply as never)).resolves.toBeUndefined();
     });
 
     it("keeps present-user security Actions closed even for a verified approve token", async () => {

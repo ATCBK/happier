@@ -3,18 +3,17 @@ import { DiscussionMessageContentV1StoredSchema } from '@happier-dev/protocol/di
 import type { StrictSessionStoredMessageContentEnvelope } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { mayInjectResourceContextInTx, type ContextDisclosureResource } from '@/app/session/access/sessionContextInjection';
-import { readArtifactForCallerInTx } from '@/app/artifacts/artifactAccessService';
+import { readArtifactForCallerInTx, resolveArtifactAudienceInTx } from '@/app/artifacts/artifactAccessService';
 import { artifactContextStorageAdapter } from '@/app/artifacts/artifactContextInjection';
 import type { Tx } from '@/storage/inTx';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
 
 export type DiscussionDocSource = DiscussionDocPassageReplyTargetV1['doc'];
 
-/** Source identity discovery precedes Account admission; disclosure still uses the Artifact reader below. */
+/** Admit the source's full publication cohort before its parent; the reader below still decides disclosure. */
 export async function readDiscussionDocSourceAuthorityAccountIdsInTx(tx: Tx, source: DiscussionDocSource | null): Promise<string[]> {
     if (!source) return [];
-    const artifact = await tx.artifact.findUnique({ where: { id: source.ref.artifactId }, select: { accountId: true } });
-    return artifact ? [artifact.accountId] : [];
+    return resolveArtifactAudienceInTx(tx, source.ref.artifactId);
 }
 
 /** New posts resolve the existing parent rather than inventing a pending message identity. */
@@ -75,7 +74,7 @@ export function validateDiscussionDocContentSource(input: Readonly<{
     if (!parsed.success) return false;
     const value = parsed.data;
     const passage = 'kind' in value
-        ? value.kind === 'doc_passage_comment' ? value.passage : value.proposal.target : null;
+        ? value.kind === 'doc_passage_comment' ? value.passage : value.kind === 'doc_edit_proposal' ? value.proposal.target : null : null;
     if (!passage) return !input.root;
     // Both references are admitted on this authenticated Home. Profile labels
     // can differ across clients; the stored Artifact identity is authoritative.

@@ -3375,6 +3375,24 @@ describe("workflowRunService (integration)", () => {
         expect(await db.workflowRunInvocation.findUniqueOrThrow({ where: { id: rootId }, select: { lifecycle: true } })).toEqual({ lifecycle: "cancel_requested" });
     });
 
+    it("accepts cancellation after claim progress advances the observed Run revision", async () => {
+        const seeded = await seed();
+        const runId = randomUUID();
+        await admitWorkflowRun({ accountId: seeded.accountId, runId, origin: { kind: "direct" },
+            machineId: seeded.machineId, acceptedEnvelope: await acceptedEnvelope({ ...seeded, runId }) });
+        const observed = await getWorkflowRun({ accountId: seeded.accountId, runId });
+        const claim = await claimAutomationRun({ accountId: seeded.accountId, machineId: seeded.machineId,
+            leaseDurationMs: 45_000, recipeFeaturePolicy: { workflowsEnabled: true } });
+        expect(claim.run?.id).toBe(runId);
+        expect(claim.run?.revision).toBeGreaterThan(observed.run.revision);
+        await expect(cancelWorkflowRun({ accountId: seeded.accountId, runId, expectedRevision: claim.run!.revision + 1 }))
+            .rejects.toMatchObject({ code: "currentness_conflict" });
+        await expect(cancelWorkflowRun({ accountId: seeded.accountId, runId, expectedRevision: observed.run.revision }))
+            .resolves.toMatchObject({ intent: "cancelled", run: { state: "cancelled", workflowCustodyState: "settled" } });
+        expect((await claimAutomationRun({ accountId: seeded.accountId, machineId: seeded.machineId,
+            leaseDurationMs: 45_000, recipeFeaturePolicy: { workflowsEnabled: true } })).run).toBeNull();
+    });
+
     it("settles cancellation before root admission and prevents a later launch", async () => {
         const seeded = await seed();
         const directRunId = randomUUID();

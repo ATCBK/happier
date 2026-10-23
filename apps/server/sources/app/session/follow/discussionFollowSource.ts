@@ -46,12 +46,12 @@ export async function observeAccountDiscussionFollowOccurrenceInTx(tx: Tx, input
             // These are protected append-owner facts: an absent producer is
             // admitted only for present-user ingress, never authored metadata.
             if (!producer && message.authorAccountId === input.accountId
-                || producer?.actionRequestAttributionV1?.requester?.accountId === input.accountId) continue;
+                || producer?.kind === 'agent' && producer.actionRequestAttributionV1?.requester?.accountId === input.accountId) continue;
             if (!producer && message.authorAccountId === null) return null;
             const event = { kind: producer ? 'message' as const : 'person_wrote' as const };
             if (!resolveFollowDeliveryV1({ policies: [follow.policy], event }).selected) continue;
             if (await isDeliveryMutedInTx(tx, { accountId: input.accountId, receiver: { kind: 'account' },
-                candidate: { source, ...(producer ? { senderSessionId: producer.sessionId } : {}) } }) !== false) return null;
+                candidate: { source, ...(producer?.kind === 'agent' ? { senderSessionId: producer.sessionId } : {}) } }) !== false) return null;
             return { source, messageId: message.id, seq: message.seq, event,
                 personal: { policy: follow.policy, alreadyRepresented: deliveredSeq >= message.seq } };
         }
@@ -142,8 +142,8 @@ export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly
                 const addressing = { discussionId, messageId: row.id, throughSeq: row.seq, participantSessionId: input.destinationSessionId };
                 return [{ addressing, localId: deriveDiscussionFollowInputLocalIdV1(addressing), event,
                     original: { id: row.id, discussionId: row.discussionId, seq: row.seq, addressingV1: snapshot.data },
-                    sourceSession: producer?.success ? producer.data.sourceSession : undefined,
-                    senderSessionId: producer?.success ? producer.data.sessionId : undefined }];
+                    sourceSession: producer?.success && producer.data.kind === 'agent' ? producer.data.sourceSession : undefined,
+                    senderSessionId: producer?.success && producer.data.kind === 'agent' ? producer.data.sessionId : undefined }];
             });
             const localIds = candidates.map(candidate => candidate.localId);
             const accepted = localIds.length ? await Promise.all([

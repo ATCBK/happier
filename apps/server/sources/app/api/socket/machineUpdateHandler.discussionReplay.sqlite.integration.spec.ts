@@ -16,6 +16,25 @@ import { inviteDiscussionParticipant, removeDiscussionParticipant, setDiscussion
 import { machineUpdateHandler } from './machineUpdateHandler';
 import { sessionUpdateHandler } from './sessionUpdateHandler';
 import { VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY } from './machineSocketInstallationProof';
+import { createWorkflowDiscussionResultPublisher } from '../../../../../cli/src/daemon/workflows/workflowDiscussionPublication';
+import { deriveWorkflowDiscussionReplyLocalIdV1 } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
+import { buildDiscussionMutationRequestBodyV1 } from '@happier-dev/protocol/discussions/api';
+import { readDiscussionMessages } from '@/app/discussions/queries';
+import { createTestWorkflowCoordinator, createInMemoryWorkflowCoordinatorStore } from '../../../../../cli/src/daemon/workflows/workflowCoordinator.testkit';
+import type { WorkflowCoordinatorInvocation } from '../../../../../cli/src/daemon/workflows/coordinator';
+import { projectWorkflowRetainedRuntimeSelectionV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
+import { createActionExecutor } from '@happier-dev/protocol/actions';
+import { createTargetActionInvocationRegistry } from '../../../../../cli/src/plugins/runtime/invocation/targetActionRegistry';
+import { createTargetActionHostBindingResolver } from '../../../../../cli/src/plugins/runtime/hostAccess/resolve';
+import { createUnavailablePluginServicesFactory } from '../../../../../cli/src/plugins/runtime/invocation/services/factory';
+import { createManagedPluginSourceCustody } from '../../../../../cli/src/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
+import { createPluginRuntimeOccurrenceId } from '../../../../../cli/src/plugins/runtime/runtimeSlots';
+import { createCommittedContributedActionSchemaReader } from '../../../../../cli/src/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { createUnavailableActionTransportDeps } from '../../../../../cli/src/testkit/actionTransportDeps';
+import { buildWorkflowActionContext } from '../../../../../cli/src/daemon/workflows/daemonRuntime';
+import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 
 const authentication = createPresentUserSessionAccessAuthentication();
 const options = { operationSocketBatchLimits: { ok: true as const, limits: { maxItems: 200, maxSerializedBytes: 524_288 } } };
@@ -27,6 +46,141 @@ describe('installed Machine reviewed Discussion publication (SQLite)', () => {
         initAuth: true, initEncrypt: false, initFiles: false, env: { HAPPIER_FEATURE_SESSIONS__ENABLED: '1',
             HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED: '1', HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional' } }); }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it.each(['action', 'detached', 'failed_before_start', 'cancelled_before_start'] as const)('carries a real Workflow result producer through the installed Machine append and Discussion reader without a Session (%s)', async executionKind => {
+        const lifecycle = executionKind === 'failed_before_start' ? 'failed' : executionKind === 'cancelled_before_start' ? 'cancelled' : 'completed';
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, installationId: randomUUID(),
+            metadata: encodePlainMachineStoredContent({}), dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64') } });
+        const created = await createDiscussion({ actorAccountId: owner.id, authentication, request: { creationLocalId: randomUUID(),
+            titleContent: { t: 'plain', v: { v: 1, title: 'Workflow result' } }, firstMessage: { localId: randomUUID(),
+                content: content('Question'), mentionedAccountIds: [] } } });
+        if (!created.ok) throw new Error(created.error);
+        const discussionId = created.value.discussion.id;
+        const run = await db.automationRun.create({ data: { accountId: owner.id, originKind: 'direct', causeKind: null,
+            scheduledAt: new Date(), dueAt: new Date(), claimedByMachineId: machine.id,
+            workflowAcceptedSnapshotEnvelope: 'sealed-accepted', workflowCustodyState: 'pending' } });
+        const invocation = await db.workflowRunInvocation.create({ data: { runId: run.id, sequence: 1n, memberOrdinal: 0n,
+            lifecycle, contentEnvelope: 'sealed-accepted-result' } });
+        const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
+        const socket = Object.assign(createFakeSocket({ data: { clientType: 'machine-scoped', machineId: machine.id,
+            authAuthority: 'present_user', [VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY]: machine.installationId } }),
+            { handshake: { auth: { token } } });
+        machineUpdateHandler(owner.id, socket as never, options);
+        const origin = { discussion: { serverId: 'home', discussionId }, messageId: created.value.firstMessage.id, throughSeq: created.value.firstMessage.seq };
+        const acceptedDelivery = await materializeWorkflowAcceptedSnapshotV1({ definition: { version: 1, inputs: [],
+            defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'external.agent', localId: 'native' } } },
+            blocks: [{ kind: 'step', id: 'check', document: { text: 'Check', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] },
+            admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true }, context: {
+                source: { kind: 'inline' }, inputs: {}, machineId: machine.id, executionTarget: { kind: 'detached_run' },
+                workspaceTarget: { project: { machineId: machine.id, directory: '/repo', checkoutRootPath: '/repo' } },
+                origin: { kind: 'direct', discussion: origin }, resultDelivery: { kind: 'originating_discussion', ...origin },
+                authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' } } });
+        if (!acceptedDelivery.ok || acceptedDelivery.snapshot.resultDelivery?.kind !== 'originating_discussion') throw new Error('Missing accepted Discussion destination');
+        let lastMessageId: string | undefined;
+        const publish = createWorkflowDiscussionResultPublisher({ credentials: { token, encryption: null }, origin: acceptedDelivery.snapshot.resultDelivery,
+            isCurrent: async () => true, publish: async publication => {
+                if (!('kind' in publication)) throw new Error('A non-Session result must not fabricate Session custody');
+                const packet = { v: 1, operation: 'workflow_result', machineId: machine.id, publication: {
+                    discussionId, producer: publication.producer, origin: publication.discussion,
+                    request: buildDiscussionMutationRequestBodyV1({ kind: 'post', localId: deriveWorkflowDiscussionReplyLocalIdV1(publication.workflow),
+                        content: { t: 'plain', v: publication.content }, authoredContent: publication.content, mentionedAccountIds: [],
+                        replyTarget: { kind: 'message', messageId: publication.discussion.messageId } }),
+                } };
+                let reply: unknown;
+                await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)(packet, (value: unknown) => { reply = value; });
+                const parsed = DiscussionAgentPostResponseV1Schema.parse(reply);
+                if (!lastMessageId) expect(parsed, JSON.stringify({ producer: publication.producer,
+                    invocation: await db.workflowRunInvocation.findUnique({ where: { id: publication.workflow.invocationRecordId },
+                        select: { id: true, lifecycle: true, attempt: true } }).then(row => row ? { ...row, attempt: row.attempt.toString() } : row) }))
+                    .toMatchObject({ ok: true });
+                if (parsed.ok) lastMessageId = parsed.value.message.id;
+                return parsed;
+            } });
+        const acceptedInvocation: WorkflowCoordinatorInvocation = { key: 'leaf', recordId: invocation.id, runId: run.id, blockId: 'check',
+            path: { blockId: 'check', scope: [] }, attempt: 0, acceptedAtMs: 0, blockKind: executionKind === 'action' ? 'action' : 'step',
+            lifecycle };
+        let accepted = acceptedInvocation;
+        if (executionKind === 'action') {
+            const pluginId = 'external.publisher';
+            const localId = 'check';
+            const actionId = `${pluginId}/actions/${localId}`;
+            const inputSchema = { type: 'object', properties: {}, additionalProperties: false } satisfies PluginJsonSchemaV2;
+            const outputSchema = { type: 'object', properties: { checked: { type: 'boolean' } }, required: ['checked'], additionalProperties: false };
+            const occurrenceId = createPluginRuntimeOccurrenceId(pluginId);
+            const registry = createTargetActionInvocationRegistry({ actions: [{ pluginId, pluginVersion: '1.0.0', occurrenceId,
+                sourceCustody: createManagedPluginSourceCustody('external-publisher'), localId,
+                definition: { id: localId, dangerLevel: 'externalSideEffect', scopes: ['global'], surfaces: ['agent'],
+                    inputSchema, resultSchema: outputSchema, confirmation: { title: 'Check', body: 'Run check?', confirmLabel: 'Run' } },
+                handler: async () => ({ checked: true }) }], readCurrentPluginOccurrenceId: () => occurrenceId,
+                resolveAuthorizationFacts: action => ({ generation: { targetGeneration: action.occurrenceId,
+                    desiredGeneration: action.occurrenceId, appliedGeneration: action.occurrenceId },
+                    resourceSelections: [], scopedGrants: [], operatingSystemAuthorization: [] }),
+                createServices: createUnavailablePluginServicesFactory(), resolveHostBinding: createTargetActionHostBindingResolver() });
+            const listDefinitions = () => [ActionDefinitionV1Schema.parse({ kindVersion: 1, id: actionId, title: 'Check', description: null,
+                safety: 'danger', placements: [], slash: null, bindings: null, examples: null, surfaces: { agent: true },
+                inputHints: null, inputSchema, outputSchema })];
+            const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), listContributedActionDefinitions: listDefinitions,
+                readContributedActionSchemas: createCommittedContributedActionSchemaReader(listDefinitions), invokeContributedAction: async request => {
+                    const result = await registry.invoke({ ...request.action, input: request.input, surface: 'agent',
+                        initiatingActionCaller: request.context.actionCaller, signal: request.signal,
+                        requestCurrentIntent: async confirmation => ({ status: 'approved', fingerprint: confirmation.fingerprint }) });
+                    if (result.status === 'executed') return { ok: true, result: result.value };
+                    if (result.status === 'deferred') throw new Error('Unexpected deferred target confirmation');
+                    return { ok: false, errorCode: result.code, error: result.message };
+                } });
+            const store = createInMemoryWorkflowCoordinatorStore();
+            const workspace = { machineId: machine.id, directory: '/repo', checkoutRootPath: '/repo' };
+            const materialized = await materializeWorkflowAcceptedSnapshotV1({ definition: { version: 1, inputs: [],
+                blocks: [{ kind: 'action', id: 'check', actionId, input: {} }] }, admission: { kind: 'user' },
+                context: { source: { kind: 'inline' }, inputs: {}, machineId: machine.id, executionTarget: { kind: 'session' },
+                    workspaceTarget: { project: workspace }, origin: { kind: 'direct' },
+                    authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' } },
+                effects: { resolveTargetAvailability: async () => true, readActionContract: async id => id === actionId ? { inputSchema, outputSchema } : null } });
+            if (!materialized.ok) throw new Error(materialized.error.code);
+            const coordinator = createTestWorkflowCoordinator({ store, allocateInvocationRecordId: () => invocation.id,
+                resolveWorkspace: async () => ({ ok: true, workspace }), isAcceptedAuthorizationCurrent: async () => true,
+                executeStep: async () => { throw new Error('An Action must not fabricate a Session'); },
+                action: { executor, buildContext: async input => buildWorkflowActionContext(input),
+                    observeRun: async () => { throw new Error('An immediate Action must not observe a Run'); } }, onInvocationSettled: publish });
+            try { expect(await coordinator.run({ ...materialized.snapshot, runId: run.id })).toMatchObject({ state: 'succeeded' }); }
+            finally { registry.dispose(); }
+            const actual = store.list().find(row => row.blockId === 'check');
+            if (!actual) throw new Error('Workflow Action was not persisted');
+            accepted = actual;
+        } else if (executionKind === 'detached') {
+            const store = createInMemoryWorkflowCoordinatorStore();
+            const coordinator = createTestWorkflowCoordinator({ store, allocateInvocationRecordId: () => invocation.id,
+                isAcceptedAuthorizationCurrent: async () => true,
+                resolveWorkspace: async () => ({ ok: true, workspace: { machineId: machine.id, directory: '/repo', checkoutRootPath: '/repo' } }),
+                executeStep: async input => {
+                    await input.beforeInputAdmission();
+                    await input.onInputAccepted({ kind: 'detached_run', runId: 'native-run', localInputId: 'input',
+                        runtimeSelection: projectWorkflowRetainedRuntimeSelectionV1(input.execution) });
+                    return { kind: 'completed', result: { checked: true }, resultEncoding: 'typed' };
+                }, onInvocationSettled: publish });
+            expect(await coordinator.run({ runId: run.id, inputs: {}, executionTarget: { kind: 'detached_run' },
+                authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' },
+                definition: { version: 1, defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'external.agent', localId: 'native' } } },
+                    blocks: [{ kind: 'step', id: 'check', document: { text: 'Check', references: [], attachments: [] }, input: [],
+                        result: { kind: 'json', schema: { type: 'object', properties: { checked: { type: 'boolean' } }, required: ['checked'], additionalProperties: false } } }] } })).toMatchObject({ state: 'succeeded' });
+            const actual = store.list().find(row => row.blockId === 'check');
+            if (!actual) throw new Error('Workflow leaf was not persisted');
+            accepted = actual;
+        } else await publish({ runId: run.id, invocation: accepted });
+        const firstId = lastMessageId;
+        await publish({ runId: run.id, invocation: accepted });
+        expect(lastMessageId).toBe(firstId);
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(2);
+        const read = await readDiscussionMessages({ actorAccountId: owner.id, authentication, discussionId, query: {} });
+        expect(read).toMatchObject({ ok: true, value: { messages: expect.arrayContaining([expect.objectContaining({
+            id: firstId, producerV1: expect.objectContaining({ kind: 'workflow', invocationRecordId: invocation.id }),
+            content: { t: 'plain', v: expect.objectContaining(lifecycle === 'completed'
+                ? { kind: 'workflow_result', value: { checked: true } } : { v: 1, parts: expect.any(Array) }) },
+        })]) } });
+        await db.machine.update({ where: { id: machine.id }, data: { revokedAt: new Date() } });
+        await expect(publish({ runId: run.id, invocation: accepted })).rejects.toThrow('workflow_discussion_publication_unavailable');
+    });
 
     it.each(['drafts_for_approval', 'when_addressed'] as const)('publishes one reviewed %s reply without a receiver process and rechecks its original authority', async answerPolicy => {
         const owner = await db.account.create({ data: { encryptionMode: 'plain' } });

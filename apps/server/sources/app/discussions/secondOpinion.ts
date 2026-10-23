@@ -12,7 +12,7 @@ import { artifactContextStorageAdapter } from '@/app/artifacts/artifactContextIn
 import { resolveArtifactAccessInTx, resolveArtifactAudienceInTx, readArtifactForCallerInTx } from '@/app/artifacts/artifactAccessService';
 import { resolveResourceGrantAccessFromFacts, resolveResourceGrantAudienceFromFacts, resourceGrantRelationsSelect,
     validateResourceGrantPrincipalInTx, type ResourceGrantAccessFacts } from '@/app/teams/resourceGrantAccess';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inReadSnapshot, type Tx } from '@/storage/inTx';
 import { discussionContextStorageAdapter, discussionGrantStorageAdapter, isDiscussionAccountCredentialAdmittedInTx, newDiscussionContextStorageAdapter } from './access';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
 
@@ -136,7 +136,7 @@ export async function previewDiscussionSecondOpinionInTx(tx: Tx, input: Actor & 
 }
 
 export function previewDiscussionSecondOpinion(input: Parameters<typeof previewDiscussionSecondOpinionInTx>[1]) {
-    return inTx(tx => previewDiscussionSecondOpinionInTx(tx, input), { isolationLevel: 'Serializable' });
+    return inReadSnapshot(tx => previewDiscussionSecondOpinionInTx(tx, input));
 }
 
 /** A committed source-message anchor marks the quoted-source flow; a Session-only anchor stays a link. */

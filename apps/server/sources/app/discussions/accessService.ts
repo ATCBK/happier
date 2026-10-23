@@ -28,6 +28,7 @@ import { applyResourceRecipientKeyEnvelopesInTx, mayManageResourceGrants, projec
     type ResourceRecipientEnvelopeStorageAdapter } from "@/app/teams/resourceGrantAccess";
 import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
+import { beforeAccountChangePublication } from "@/app/changes/markAccountChanged";
 import { acquireDiscussionMutationAccountsInTx, discussionContextStorageAdapter, discussionGrantStorageAdapter, isDiscussionAccountCredentialAdmittedInTx, resolveDiscussionAudienceInTx,
     resolveDiscussionContextInTx, type DiscussionStorageMode } from "./access";
 import { discussionFailure, discussionSuccess, type DiscussionResult } from "./serviceTypes";
@@ -413,8 +414,13 @@ export interface ValidatedDiscussionParticipantBirth {
 
 /** Ordinary Session birth consumes the reserved setup; the public ref alone grants no authority. */
 export async function validateDiscussionParticipantBirthInTx(tx: Tx, input: DiscussionParticipantBirthInput): Promise<DiscussionResult<ValidatedDiscussionParticipantBirth>> {
+    await acquireDiscussionMutationAccountsInTx(tx, { discussionId: input.discussionParticipant.discussionId, actorAccountId: input.accountId });
+    return readDiscussionParticipantBirthAdmissionInTx(tx, input);
+}
+
+/** The same authority read can run after terminal Account locking without taking a resource lock. */
+export async function readDiscussionParticipantBirthAdmissionInTx(tx: Tx, input: DiscussionParticipantBirthInput): Promise<DiscussionResult<ValidatedDiscussionParticipantBirth>> {
     const { discussionId, participantSlotId } = input.discussionParticipant;
-    await acquireDiscussionMutationAccountsInTx(tx, { discussionId, actorAccountId: input.accountId });
     const context = await resolveDiscussionContextInTx(tx, { discussionId, accountId: input.accountId,
         authentication: input.authentication ?? backgroundDeliveryAuthentication() });
     if (!context) return discussionFailure("discussion_not_found");
@@ -436,7 +442,29 @@ export async function validateDiscussionParticipantBirthInTx(tx: Tx, input: Disc
 export async function bindDiscussionParticipantSessionInTx(tx: Tx, input: DiscussionParticipantBirthInput & Readonly<{ sessionId: string }>): Promise<DiscussionResult<ValidatedDiscussionParticipantBirth>> {
     await acquireDiscussionMutationAccountsInTx(tx, { discussionId: input.discussionParticipant.discussionId,
         actorAccountId: input.accountId, additionalSessionIds: [input.sessionId] });
-    const admitted = await validateDiscussionParticipantBirthInTx(tx, input);
+    const admitted = await readDiscussionParticipantSessionAdmissionInTx(tx, input);
+    if (!admitted.ok) return admitted;
+    if (!admitted.value.sessionId) {
+        const bound = await tx.discussionParticipant.updateMany({ where: { discussionId: admitted.value.discussionId,
+            participantSlotId: admitted.value.participantSlotId, removedAt: null, sessionId: null }, data: { sessionId: input.sessionId } });
+        if (bound.count !== 1) return discussionFailure("discussion_idempotency_conflict");
+        await attachDiscussionFollowSourceInTx(tx, { discussionId: admitted.value.discussionId, destinationSessionId: input.sessionId });
+        await markDiscussionReadersChangedInTx({ tx, discussionId: admitted.value.discussionId, accessChanged: true });
+    }
+    beforeAccountChangePublication(tx, [input.accountId], async client => {
+        const current = await readDiscussionParticipantSessionAdmissionInTx(client, input);
+        // Team/Group withdrawal can commit without changing the locked parent.
+        // Replay admission on current facts; the next attempt returns the
+        // ordinary origin refusal and leaves the reserved slot recoverable.
+        if (!current.ok || current.value.sessionId !== input.sessionId) {
+            throw new TransactionReplayRequiredError("discussion-participant-birth-admission-changed");
+        }
+    });
+    return discussionSuccess({ ...admitted.value, sessionId: input.sessionId });
+}
+
+async function readDiscussionParticipantSessionAdmissionInTx(tx: Tx, input: DiscussionParticipantBirthInput & Readonly<{ sessionId: string }>): Promise<DiscussionResult<ValidatedDiscussionParticipantBirth>> {
+    const admitted = await readDiscussionParticipantBirthAdmissionInTx(tx, input);
     if (!admitted.ok) return admitted;
     if (admitted.value.sessionId && admitted.value.sessionId !== input.sessionId) return discussionFailure("discussion_idempotency_conflict");
     const session = await tx.session.findUnique({ where: { id: input.sessionId }, select: {
@@ -452,14 +480,7 @@ export async function bindDiscussionParticipantSessionInTx(tx: Tx, input: Discus
     const runtime = await resolveDiscussionContextInTx(tx, { discussionId: admitted.value.discussionId,
         accountId: session.accountId, authentication: backgroundDeliveryAuthentication() });
     if (!runtime?.keyReadiness) return discussionFailure("discussion_content_unavailable");
-    if (!admitted.value.sessionId) {
-        const bound = await tx.discussionParticipant.updateMany({ where: { discussionId: admitted.value.discussionId,
-            participantSlotId: admitted.value.participantSlotId, removedAt: null, sessionId: null }, data: { sessionId: input.sessionId } });
-        if (bound.count !== 1) return discussionFailure("discussion_idempotency_conflict");
-        await attachDiscussionFollowSourceInTx(tx, { discussionId: admitted.value.discussionId, destinationSessionId: input.sessionId });
-        await markDiscussionReadersChangedInTx({ tx, discussionId: admitted.value.discussionId, accessChanged: true });
-    }
-    return discussionSuccess({ ...admitted.value, sessionId: input.sessionId });
+    return admitted;
 }
 
 /** Own-row removal is idempotent and never discloses a resource owner or roster to an outsider. */

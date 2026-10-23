@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import type { DiscussionAttentionFactsV1 } from '@happier-dev/protocol/discussions/models';
 
 import { getActivePrismaRuntime } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, type Tx } from "@/storage/inTx";
 import { filterDiscussionsWithCurrentReadAccessInTx } from "./access";
 import { countUnreadMentionsInTx, countUnreadMessagesInTx, type DiscussionCursorRow } from "./projection";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
@@ -24,7 +24,7 @@ import { discussionFailure, discussionSuccess, type DiscussionResult } from './s
 export async function readDiscussionAttention(input: Readonly<{
     actorAccountId: string; authentication: SessionAccessAuthentication;
 }> & DiscussionAttentionQueryV1): Promise<DiscussionResult<DiscussionAttentionResponseV1>> {
-    return inTx(async tx => {
+    return inReadSnapshot(async tx => {
         const cursor = input.cursor === undefined ? null : decodeDiscussionListCursorV1(input.cursor);
         if (input.cursor !== undefined && !cursor) return discussionFailure('discussion_invalid_content');
         const candidates = await tx.discussion.findMany({ where: { ...discussionCandidateWhere(input.actorAccountId), archivedAt: null }, select: DISCUSSION_SELECT });
@@ -80,7 +80,7 @@ export async function readDiscussionAttention(input: Readonly<{
         const last = selected.at(-1);
         return discussionSuccess({ discussions: entries, incomplete,
             nextCursor: rows.length > take && last ? encodeDiscussionListCursorV1({ v: 1, at: last.createdAt.getTime(), id: last.id }) : null });
-    }, { isolationLevel: 'Serializable' });
+    });
 }
 
 export type DiscussionAttentionByAccount =
@@ -105,7 +105,7 @@ export async function loadDiscussionAttentionForAccounts(params: Readonly<{
     accountIds: readonly string[];
     sessionIds?: readonly string[];
 }>): Promise<DiscussionAttentionByAccount> {
-    return await inTx(async (tx) => await loadDiscussionAttentionForAccountsInTx(tx, params), { isolationLevel: "Serializable" /* Discussion attention combines viewer tracking and message facts from one snapshot. */ });
+    return await inReadSnapshot(async (tx) => await loadDiscussionAttentionForAccountsInTx(tx, params));
 }
 
 /**
