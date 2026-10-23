@@ -1,11 +1,13 @@
 import { cmd, errorFrame, warn } from '@happier-dev/cli-common/output';
 
 import { handleAuthCommand } from '@/cli/commands/auth';
+import { showLogoutDeprecation, showLogoutHelp } from './auth/help';
 
 import type { CommandContext } from '@/cli/commandRegistry';
 
-export async function handleLogoutCliCommand(_context: CommandContext): Promise<void> {
-  console.log(`${warn(`${cmd('happier logout')} is deprecated. Use ${cmd('happier auth logout')} instead.`)}\n`);
+export async function handleLogoutCliCommand(context: CommandContext): Promise<void> {
+  if (context.args.includes('--help') || context.args.includes('-h')) { showLogoutHelp(); return; }
+  showLogoutDeprecation();
   try {
     await handleAuthCommand(['logout']);
   } catch (error) {

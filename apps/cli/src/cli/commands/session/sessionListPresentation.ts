@@ -3,6 +3,7 @@ import { SessionAwarenessListResultV1Schema } from '@happier-dev/protocol/sessio
 import { SessionListResultSchema } from '@happier-dev/protocol/sessions/control/listResult';
 
 import type { ActionCliPresentation } from '@/cli/actions/commandPresentation';
+import { ACTION_CLI_ENVELOPE_KINDS } from '@/cli/actions/commandPresentationMetadata';
 import { printJsonEnvelope } from '@/cli/output/jsonEnvelope';
 import type { CliSessionRowModel } from '@/cli/output/session/buildCliSessionRowModel';
 import { renderSessionListTable } from '@/ui/renderSessionListTable';
@@ -42,7 +43,7 @@ function isCliSessionRowModel(value: unknown): value is CliSessionRowModel {
 }
 
 export const SESSION_LIST_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: () => 'session_list',
+  envelopeKind: () => ACTION_CLI_ENVELOPE_KINDS['session.list'],
   presentSuccess: async (payload, context) => {
     if (isAwarenessRequest(context.input)) {
       const awareness = SessionAwarenessListResultV1Schema.parse(payload);

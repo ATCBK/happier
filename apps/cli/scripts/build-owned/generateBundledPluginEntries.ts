@@ -124,6 +124,7 @@ import {
   renderCliBundledPluginEntriesTs,
   renderCliBundledPluginManifestEntriesTs,
   renderCliBundledPluginManifestAssets,
+  renderCliBundledActionCliHelpAssets,
 } from './bundledPlugins/registry.ts';
 import {
   collectBundledAgentContributionIdentities,
@@ -3618,7 +3619,7 @@ export async function publishBundledPluginSemanticProjection(
     'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts',
   );
   const cliManifestOut = renderCliBundledPluginManifestEntriesTs({ pluginPackages });
-  const cliManifestAssetOutputs = renderCliBundledPluginManifestAssets({ pluginPackages }).map((asset) => ({
+  const cliManifestAssetOutputs = [...renderCliBundledPluginManifestAssets({ pluginPackages }), ...renderCliBundledActionCliHelpAssets({ pluginPackages })].map((asset) => ({
     outPath: resolve(options.rootDir, 'apps/cli', asset.relativePath), out: asset.out,
   }));
   // Serialized declaration facts suffice for executable roots; never inspect
@@ -4329,7 +4330,7 @@ async function generateDaemonProjections(
   const { cliManifestOutPath } = resolveGeneratorHostProjectionOutPaths(outputRoot);
   const emit = options.daemonOutputRoot ? writeFileAtomic : assertGeneratedOutputMatches;
   emit(cliManifestOutPath, renderCliBundledPluginManifestEntriesTs({ pluginPackages }));
-  for (const asset of renderCliBundledPluginManifestAssets({ pluginPackages })) {
+  for (const asset of [...renderCliBundledPluginManifestAssets({ pluginPackages }), ...renderCliBundledActionCliHelpAssets({ pluginPackages })]) {
     emit(resolve(outputRoot, 'apps/cli', asset.relativePath), asset.out);
   }
   if (options.daemonOutputRoot) writeBundledPluginPublicationFailures(outputRoot, failures);
@@ -4512,7 +4513,7 @@ async function generateBundledPluginEntries(
 
   const cliOut = renderCliBundledPluginEntriesTs({ pluginPackages });
   const cliManifestOut = renderCliBundledPluginManifestEntriesTs({ pluginPackages });
-  const cliManifestAssetOutputs = renderCliBundledPluginManifestAssets({ pluginPackages }).map((asset) => ({
+  const cliManifestAssetOutputs = [...renderCliBundledPluginManifestAssets({ pluginPackages }), ...renderCliBundledActionCliHelpAssets({ pluginPackages })].map((asset) => ({
     outPath: resolve(options.rootDir, 'apps/cli', asset.relativePath), out: asset.out,
   }));
 

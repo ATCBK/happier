@@ -3,10 +3,7 @@
  * universal CLI boundary: it and every later byte belong to positional input
  * and must never be rescanned as a global option.
  */
-export function argvBeforeOptionTerminator(argv: readonly string[]): readonly string[] {
-  const terminatorIndex = argv.indexOf('--');
-  return terminatorIndex < 0 ? argv : argv.slice(0, terminatorIndex);
-}
+export { argvBeforeOptionTerminator } from '../../processArgs';
 
 export function hasFlag(argv: readonly string[], flag: string): boolean {
   return argv.includes(flag);

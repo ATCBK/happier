@@ -1,3 +1,4 @@
+import { readPluginCommandPath, renderPluginCommandHelp } from './pluginCommandHelp';
 import { errorFrame, ok } from '@happier-dev/cli-common/output';
 
 import { configuration } from '@/configuration';
@@ -40,15 +41,6 @@ export type PluginCommandExecutionResult = Readonly<
   }
 >;
 
-/** The command path words, which always precede any option token. */
-function readPluginCommandPath(args: readonly string[]): readonly string[] {
-  const path: string[] = [];
-  for (const token of args) {
-    if (token.startsWith('-')) break;
-    path.push(token);
-  }
-  return Object.freeze(path);
-}
 
 /**
  * Ordinary field flags for a plugin command whose canonical contributed Action
@@ -263,59 +255,6 @@ async function printPluginCommandFailure(
   process.exitCode = 1;
 }
 
-function renderPluginCommandHelp(params: Readonly<{
-  projection: PluginCommandProjection;
-  root: string;
-  args: readonly string[];
-  registry: ResolvedContributionRegistry;
-}>): string {
-  const requestedPath = readPluginCommandPath(params.args);
-  const exact = params.projection.commands.find((command) => (
-    command.path.length === requestedPath.length
-    && command.path.every((segment, index) => segment === requestedPath[index])
-  ));
-  if (exact) {
-    // Help reads the same derivation the parser does, so a documented flag is
-    // always an accepted one.
-    const actionInput = resolvePluginCommandActionInputContract({
-      registry: params.registry,
-      qualifiedActionId: exact.qualifiedActionId,
-    });
-    const documentedFields = actionInput && !actionInput.flagCollision ? actionInput.fields : [];
-    const fieldUsage = documentedFields.length > 0
-      ? `${listActionCliCommandFlags({ fields: documentedFields, positionals: [] }).map((flag) => `[${flag}]`).join(' ')} `
-      : '';
-    return [
-      `${exact.title}`,
-      exact.description ?? '',
-      '',
-      `Usage: happier ${exact.path.join(' ')} ${fieldUsage}[--input-json <json>] [--json]`,
-      'Alias: --input <json>',
-      ...(documentedFields.length > 0
-        ? ['', 'Options:', ...buildFieldOptionRows(documentedFields).map((row) => `  ${row.label}  ${row.description}`), '']
-        : []),
-      `Command: ${exact.qualifiedId}`,
-      `Action: ${exact.qualifiedActionId}`,
-      ...(exact.status === 'available'
-        ? actionInput?.flagCollision
-          ? [`Unavailable: ${actionInput.flagCollision.code}`]
-          : []
-        : [`Unavailable: ${exact.unavailableCode ?? 'plugin_command_unavailable'}`]),
-    ].filter((line, index, lines) => line || (index > 0 && lines[index - 1] !== '')).join('\n');
-  }
-
-  const commands = params.projection.commands.filter((command) => (
-    command.path[0] === params.root
-    && command.status === 'available'
-    && command.visibility === 'default'
-  ));
-  return [
-    `Usage: happier ${params.root} <command> [--input-json <json>] [--json]`,
-    'Alias: --input <json>',
-    '',
-    ...commands.map((command) => `  ${command.path.slice(1).join(' ')}  ${command.description ?? command.title}`),
-  ].join('\n');
-}
 
 export async function handlePluginCommandCliCommand(
   root: string,
@@ -343,7 +282,7 @@ export async function handlePluginCommandCliCommand(
   const asksForHelp = (context.args.length === 1 && !hasRootCommand)
     || hasPluginCliFlagBeforeTerminator(context.args, new Set(['--help', '-h']));
   if (asksForHelp) {
-    const text = renderPluginCommandHelp({ projection, root, args: context.args, registry });
+    const text = await renderPluginCommandHelp({ projection, root, args: context.args, registry });
     if (wantsPluginCommandJson(context.args)) {
       await printJsonEnvelope({
         ok: true,

@@ -1,3 +1,6 @@
+import { PluginCommandActionInputRegistry, PLUGIN_COMMAND_INPUT_JSON_ALIASES, PluginCommandActionInputContract, normalizePluginCommandActionInputTokens, readActionInputJsonSchema, readActionInputHints, resolvePluginCommandActionInputContract } from './pluginCommandInputContract';
+export { PLUGIN_COMMAND_INPUT_JSON_ALIASES, normalizePluginCommandActionInputTokens, resolvePluginCommandActionInputContract } from './pluginCommandInputContract';
+export type { PluginCommandActionInputRegistry, PluginCommandActionInputContract } from './pluginCommandInputContract';
 import { type ActionInputHints, type JsonSchemaObject } from '@happier-dev/protocol';
 
 import {
@@ -13,97 +16,25 @@ import {
   type ActionCliFlagCollision,
   validateActionCliFlagCollisions,
 } from '@/cli/actions/parseCommandInput';
-import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
-
 import type { PluginCommandProjection } from './pluginCommandProjection';
+import { findPluginCommandCompletionCommand } from './pluginCommandMetadata';
 
-/** `--input` remains an accepted spelling of whole-input JSON for installed callers. */
-export const PLUGIN_COMMAND_INPUT_JSON_ALIASES: readonly string[] = Object.freeze(['--input', '--input-json']);
 
-export type PluginCommandActionInputContract = Readonly<{
-  fields: readonly ActionCliField[];
-  inputSchema: JsonSchemaObject;
-  flagCollision: ActionCliFlagCollision | null;
-}>;
 
-/** Translate only the plugin command's retained whole-input alias and host flag. */
-export function normalizePluginCommandActionInputTokens(tokens: readonly string[]): readonly string[] {
-  let positionalOnly = false;
-  return Object.freeze(tokens.flatMap((token) => {
-    if (positionalOnly) return [token];
-    if (token === '--') {
-      positionalOnly = true;
-      return [token];
-    }
-    if (token === '--json') return [];
-    if (token === '--input') return ['--input-json'];
-    if (token.startsWith('--input=')) return [`--input-json=${token.slice('--input='.length)}`];
-    return [token];
-  }));
-}
 
-function readActionInputJsonSchema(definition: Readonly<Record<string, unknown>>): JsonSchemaObject | null {
-  const schema = definition.inputSchema;
-  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null;
-  return schema as JsonSchemaObject;
-}
 
-function readActionInputHints(definition: Readonly<Record<string, unknown>>): ActionInputHints | undefined {
-  const hints = definition.inputHints;
-  if (!hints || typeof hints !== 'object' || Array.isArray(hints)) return undefined;
-  return hints as ActionInputHints;
-}
 
-/**
- * The complete canonical contributed-Action input contract used by command
- * parsing and final validation. `null` means the installed command references
- * a predecessor Action definition which is not present in this registry.
- */
-export function resolvePluginCommandActionInputContract(params: Readonly<{
-  registry: ResolvedContributionRegistry | undefined;
-  qualifiedActionId: string;
-}>): PluginCommandActionInputContract | null {
-  // No registry snapshot means no discoverable canonical definition, which is
-  // exactly the predecessor case: keep the JSON-only adapter.
-  const contribution = (params.registry?.actions ?? []).find((candidate) => (
-    candidate.pluginId
-    && `${candidate.pluginId}/${candidate.definition.id}` === params.qualifiedActionId
-  ));
-  if (!contribution) return null;
-  const definition = contribution.definition as unknown as Readonly<Record<string, unknown>>;
-  const jsonSchema = readActionInputJsonSchema(definition);
-  if (!jsonSchema) return null;
-  const fields = compileActionCliFieldsFromJsonSchema({
-    jsonSchema,
-    hints: readActionInputHints(definition),
-    reservedFlags: PLUGIN_COMMAND_INPUT_JSON_ALIASES,
-  });
-  const flagValidation = validateActionCliFlagCollisions(
-    { fields, positionals: [] },
-    { reservedFlags: PLUGIN_COMMAND_INPUT_JSON_ALIASES },
-  );
-  return Object.freeze({
-    fields,
-    inputSchema: jsonSchema,
-    flagCollision: flagValidation.ok ? null : flagValidation,
-  });
-}
+
 
 function resolvePluginCommandCompletionTarget(params: Readonly<{
-  registry: ResolvedContributionRegistry;
+  registry: PluginCommandActionInputRegistry;
   projection: PluginCommandProjection;
   committed: readonly string[];
 }>): Readonly<{
   command: PluginCommandProjection['commands'][number];
   actionInput: PluginCommandActionInputContract | null;
 }> | null {
-  const command = params.projection.commands
-    .filter((candidate) => (
-      candidate.status === 'available'
-      && candidate.path.length <= params.committed.length
-      && candidate.path.every((segment, index) => params.committed[index] === segment)
-    ))
-    .sort((left, right) => right.path.length - left.path.length)[0];
+  const command = findPluginCommandCompletionCommand(params.projection, params.committed);
   if (!command) return null;
   return Object.freeze({
     command,
@@ -120,7 +51,7 @@ function resolvePluginCommandCompletionTarget(params: Readonly<{
  * choices through the same helper used by first-party friendly commands.
  */
 export function resolvePluginCommandCompletionCandidates(params: Readonly<{
-  registry: ResolvedContributionRegistry;
+  registry: PluginCommandActionInputRegistry;
   projection: PluginCommandProjection;
   committed: readonly string[];
   prefix: string;
@@ -163,7 +94,7 @@ export function resolvePluginCommandCompletionCandidates(params: Readonly<{
 
 /** Dynamic contributed-command completion through the same options Action as built-ins. */
 export async function resolvePluginCommandCompletionCandidatesWithDynamicOptions(params: Readonly<{
-  registry: ResolvedContributionRegistry;
+  registry: PluginCommandActionInputRegistry;
   projection: PluginCommandProjection;
   committed: readonly string[];
   prefix: string;

@@ -1,3 +1,5 @@
+import { usage } from './agents/help';
+import { readResolvedAgentTitle as readAgentTitle } from '@/plugins/projection/registry/agentCommandTitle';
 import {
     getAgentCliSetupRecommendedIds,
 } from '@happier-dev/agents';
@@ -14,7 +16,6 @@ import {
 import type { CommandContext } from '@/cli/commandRegistry';
 import { wantsJson, printJsonEnvelope } from '@/cli/output/jsonEnvelope';
 import { configuration } from '@/configuration';
-import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import type { ResolvedContributionRegistry, ResolvedAgentContribution } from '@/plugins/projection/registry/types';
 import { isInteractiveTerminal } from '@/terminal/prompts/promptInput';
 import { promptMultipleSelection } from '@/terminal/prompts/promptMultipleChoice';
@@ -25,45 +26,6 @@ import { tryHandleAgentCliCommand, type AgentCliInstallOutcome } from '@/cli/act
 import { findCompiledActionCliCommand, listCompiledActionCliCommands } from '@/cli/actions/compiledCommands';
 import { runCompiledActionCliCommand, type ActionCliExecutionDeps } from '@/cli/actions/executeCommand';
 
-function usage(agentRows: readonly AgentStatusRow[] = []): string {
-    const agentRowsSection = agentRows.length > 0
-      ? [{
-          title: 'Available agents:',
-          rows: agentRows.map((row) => ({
-            label: cmd(`${row.title} (${row.id})`),
-            description: row.runtimeSpec
-                ? `Install with ${cmd(`happier agents install ${row.id}`)}`
-                : 'Provided by an installed plugin runtime',
-          })),
-        }]
-      : [];
-
-    return renderHelpPage({
-        title: 'happier agents',
-        subtitle: 'Agent CLI helpers',
-        usage: [
-            { label: 'happier agents list [--json]', description: 'List agents and whether they are installed' },
-            { label: 'happier agents status [--json]', description: 'Show agent status for the current environment' },
-            { label: 'happier agents probe <agentId> [--models] [--modes] [--config-options] [--json]', description: 'Probe agent model, mode, and config-option availability' },
-            { label: 'happier agents auth login <agentId>', description: 'Authenticate an agent-owned managed ACP runtime' },
-            { label: 'happier agents browse [query] [--source <source>]', description: 'Browse registry Agents' },
-            { label: 'happier agents add <source>/<item> [--version <version>] [--install now|first-use] [--machine <id>]', description: 'Add a pinned registry Agent' },
-            { label: 'happier agents remove <agentId> [--definition-id <id>] --machine <id>', description: 'Remove a managed install' },
-            { label: 'happier agents delete <definitionId>', description: 'Delete a configured Agent' },
-            { label: 'happier agents install <agentId> [--machine <id>] [--dry-run] [--force]', description: 'Install one agent CLI' },
-            { label: 'happier agents update <agentId> [--dry-run] [--yes]', description: 'Update an installed agent CLI through its owner' },
-            { label: 'happier agents setup [--provider <id> ...] [--providers <id1,id2>] [--dry-run] [--force] [--yes]', description: 'Install one or more agents' },
-        ],
-        sections: agentRowsSection,
-        notes: [
-            'Agents are the local tools Happier can run sessions with.',
-            'Installs are binary-safe and do not require Node or a package manager.',
-            'Installs, updates and removals use Actions and require approval by default. --yes only grants vendor-recipe consent.',
-            `For cloud-stored API keys and subscription OAuth, use ${cmd('happier connect')}.`,
-            `Non-interactive defaults: ${cmd('happier agents setup --yes')} installs the recommended agents.`,
-        ],
-    });
-}
 
 function readRepeatedFlagValues(argv: readonly string[], flag: string): string[] {
     const values: string[] = [];
@@ -161,19 +123,6 @@ type InstallableAgentStatusRow = AgentStatusRow & Readonly<{
 
 function readAgentCliRuntimeDescriptor(contribution: ResolvedAgentContribution): AgentCliRuntimeDescriptor | null {
     return contribution.runtimeSpec ?? null;
-}
-
-function readAgentTitle(contribution: ResolvedAgentContribution): string {
-    const runtimeTitle = contribution.runtimeSpec?.title;
-    if (runtimeTitle) return runtimeTitle;
-    const definition = contribution.richDefinition?.definition as Readonly<{ title?: unknown }> | undefined;
-    const title = definition?.title;
-    if (typeof title === 'string' && title.trim()) return title.trim();
-    if (title && typeof title === 'object' && 'fallback' in title) {
-        const fallback = (title as Readonly<{ fallback?: unknown }>).fallback;
-        if (typeof fallback === 'string' && fallback.trim()) return fallback.trim();
-    }
-    return contribution.id;
 }
 
 function listAgentStatus(
@@ -302,6 +251,29 @@ async function resolveAgentsSetupSelection(args: readonly string[], rows: readon
 }
 
 export async function handleAgentsCommand(args: string[], options: Readonly<{ signal?: AbortSignal; actionExecutionDeps?: Partial<ActionCliExecutionDeps> }> = {}): Promise<void> {
+    const subcommand = String(args[0] ?? '').trim();
+    const json = wantsJson(args);
+    if (['', 'help', '--help', '-h', 'list', 'status'].includes(subcommand)) {
+        const { resolveAdmittedAgentListingContributions } = await import('@/plugins/projection/registry/admittedAgents');
+        const agentRows = listAgentStatus(await resolveAdmittedAgentListingContributions(configuration.happyHomeDir), process.env);
+        if (subcommand === 'list' || subcommand === 'status') {
+            if (json) {
+                await printJsonEnvelope({
+                    ok: true,
+                    kind: subcommand === 'list' ? 'agents_list' : 'agents_status',
+                    data: { agents: agentRows.map((row) => ({
+                        id: row.id, title: row.title, installed: row.installed,
+                        source: row.resolution?.source ?? null, command: row.resolution?.command ?? null,
+                    })) },
+                });
+            } else {
+                printHumanStatus(agentRows);
+            }
+        } else {
+            console.log(usage(agentRows));
+        }
+        return;
+    }
     const argv = ['agents', ...args];
     const localPlan = (args[0] === 'install' || args[0] === 'update') && args.includes('--dry-run');
     if (!localPlan && await tryHandleAgentCliCommand({ argv, ...options })) return;
@@ -310,12 +282,8 @@ export async function handleAgentsCommand(args: string[], options: Readonly<{ si
         await runCompiledActionCliCommand({ command: compiled, argv, signal: options.signal, deps: options.actionExecutionDeps });
         return;
     }
-    const json = wantsJson(args);
-    const subcommand = String(args[0] ?? '').trim();
     const kind = (() => {
         if (!subcommand) return 'agents_unknown';
-        if (subcommand === 'list') return 'agents_list';
-        if (subcommand === 'status') return 'agents_status';
         if (subcommand === 'probe') return 'agents_probe';
         if (subcommand === 'auth') return 'agents_auth';
         if (subcommand === 'install') return 'agents_install';
@@ -324,50 +292,18 @@ export async function handleAgentsCommand(args: string[], options: Readonly<{ si
     })();
 
     const needsAgentRegistry =
-        subcommand === 'list'
-        || subcommand === 'status'
-        || subcommand === 'probe'
+        subcommand === 'probe'
         || subcommand === 'auth'
         || subcommand === 'install'
         || subcommand === 'update'
-        || subcommand === 'setup'
-        || !subcommand
-        || subcommand === 'help'
-        || subcommand === '--help'
-        || subcommand === '-h';
+        || subcommand === 'setup';
     const mergedRegistry = needsAgentRegistry
-        ? await resolveMergedContributionRegistry({ happyHomeDir: configuration.happyHomeDir })
+        ? await (await import('@/plugins/projection/registry/createResolvedContributionRegistry')).resolveMergedContributionRegistry({ happyHomeDir: configuration.happyHomeDir })
         : null;
     const agentRows = needsAgentRegistry
         ? listAgentStatus(mergedRegistry!, process.env)
         : [];
     const agentRowsById = new Map(agentRows.map((row) => [row.id, row] as const));
-
-    if (!subcommand || subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
-        console.log(usage(agentRows));
-        return;
-    }
-
-    if (subcommand === 'list' || subcommand === 'status') {
-        if (json) {
-            await printJsonEnvelope({
-                ok: true,
-                kind: subcommand === 'list' ? 'agents_list' : 'agents_status',
-                data: {
-                    agents: agentRows.map((row) => ({
-                        id: row.id,
-                        title: row.title,
-                        installed: row.installed,
-                        source: row.resolution?.source ?? null,
-                        command: row.resolution?.command ?? null,
-                    })),
-                },
-            });
-            return;
-        }
-        printHumanStatus(agentRows);
-        return;
-    }
 
     if (subcommand === 'probe') {
         const agentId = String(args[1] ?? '').trim();

@@ -1,3 +1,4 @@
+import { USAGE } from './serviceHelp';
 import { resolveHappyHomeDirFromEnvironment } from '@happier-dev/cli-common/agents';
 
 import { resolveCliSelectedAccountServicePresentation } from '@/auth/accountService/cliAccountServicePresentation';
@@ -16,7 +17,6 @@ export type AuthServiceCommandDeps = Readonly<{
   promptInput?: typeof promptInput;
 }>;
 
-const USAGE = 'Usage: happier auth service status | use <endpoint> | logout';
 
 /** One plain sentence for each way a sign-in can end without a committed credential. */
 function describeUnfinishedSignIn(outcome: Exclude<CliAccountServiceSetupEntryOutcome, { kind: 'signed_in' }>): string {

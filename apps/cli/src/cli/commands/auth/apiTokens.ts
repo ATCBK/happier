@@ -1,3 +1,4 @@
+import { USAGE } from './apiTokensHelp';
 import { randomBytes, randomUUID } from 'node:crypto';
 import tweetnacl from 'tweetnacl';
 import { AccountApiTokensCreateActionInputV1Schema, AccountApiTokensCreateActionOutputV1Schema, AccountApiTokensListActionOutputV1Schema, AccountApiTokensRevokeActionInputV1Schema, AccountApiTokensServerErrorV1Schema, formatAccountApiTokenCredentialV1, parseAccountApiTokenBearerV1 } from '@happier-dev/protocol/auth/accountApiTokens';
@@ -20,7 +21,6 @@ import { assertCommandArguments, readCommandPositionals, readFlagValue } from '@
 import { printJsonEnvelope, wantsJson, writeJsonStdout } from '@/cli/output/jsonEnvelope';
 import { applyServerSelectionFromArgs } from '@/server/serverSelection';
 
-const USAGE = 'Usage: happier auth api-tokens create --label <label> [--expires-at <ISO date>] [--encryption] [--authorize-unattended-team-access] [--yes] | list | revoke <tokenId> [--yes] | revoke-all [--yes] [--json]';
 
 class ApiTokenCommandError extends Error {
   constructor(

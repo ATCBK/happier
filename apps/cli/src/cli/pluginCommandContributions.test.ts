@@ -310,10 +310,10 @@ describe('plugin command completion snapshot', () => {
     expect(await resolveCommandCompletionCandidates(['notes', 'add', '-'])).toEqual(['--help', '--input', '--json']);
 
     synchronizePluginCommandContributions(registry([
-      command({ pluginId: 'acme.tasks', id: 'list', path: ['tasks', 'list'] }),
+      command({ pluginId: 'acme.tasks', id: 'list', path: ['note-tasks', 'list'] }),
     ]));
     expect(await resolveCommandCompletionCandidates(['notes', 'a'])).toEqual([]);
-    expect(await resolveCommandCompletionCandidates(['tasks', 'l'])).toEqual(['list']);
+    expect(await resolveCommandCompletionCandidates(['note-tasks', 'l'])).toEqual(['list']);
   });
 
   it('projects exact inherit, required, and forbidden tmux modes from the same command snapshot', async () => {

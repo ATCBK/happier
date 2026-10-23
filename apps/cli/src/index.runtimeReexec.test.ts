@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 import { captureConsoleText } from '@/testkit/logger/captureOutput';
 
 const {
@@ -138,11 +140,15 @@ describe('CLI startup runtime reexec', () => {
 
     try {
       await import('./index');
+      await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expect(maybeReexecToRuntimeMock).toHaveBeenCalledOnce();
       });
 
       expect(maybeAutoUpdateNoticeMock).not.toHaveBeenCalled();
+      expect(maybeReexecToRuntimeMock).toHaveBeenCalledWith(expect.objectContaining({
+        cliRootDir: dirname(dirname(fileURLToPath(import.meta.url))),
+      }));
       expect(dispatchCliMock).not.toHaveBeenCalled();
       expect(setIntervalSpy).toHaveBeenCalledOnce();
       const keepAliveHandle = setIntervalSpy.mock.results[0]?.value;
@@ -166,6 +172,7 @@ describe('CLI startup runtime reexec', () => {
     process.argv = ['node', '/repo/apps/cli/dist/index.mjs'];
 
     await import('./index');
+    await vi.dynamicImportSettled();
     await Promise.resolve();
 
     expect(maybeReexecToRuntimeMock).not.toHaveBeenCalled();
@@ -181,6 +188,7 @@ describe('CLI startup runtime reexec', () => {
 
     try {
       await import('./index');
+      await vi.dynamicImportSettled();
 
       await vi.waitFor(() => {
         expect(output.lines).toContain('Error: startup blew up');
@@ -194,9 +202,10 @@ describe('CLI startup runtime reexec', () => {
 
   it('skips console stream guard installation when the runtime says not to', async () => {
     shouldInstallConsoleWriteErrorGuardsMock.mockReturnValue(false);
-    process.argv = ['node', '/repo/apps/cli/dist/index.mjs', '--help'];
+    process.argv = ['node', '/repo/apps/cli/dist/index.mjs', 'self', 'check'];
 
     await import('./index');
+    await vi.dynamicImportSettled();
 
     await vi.waitFor(() => {
       expect(shouldInstallConsoleWriteErrorGuardsMock).toHaveBeenCalledOnce();

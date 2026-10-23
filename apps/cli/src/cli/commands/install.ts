@@ -1,43 +1,18 @@
+import { readInstallableProviderRows, usage } from './installHelp';
 import chalk from 'chalk';
 
-import type { AgentCliRuntimeDescriptor } from '@happier-dev/cli-common/agents';
 import { createStepPrinter, fail } from '@happier-dev/cli-common/output';
 
 import type { CommandContext } from '@/cli/commandRegistry';
 import { hasFlag } from '@/cli/commands/shared/argvFlags';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import { describeAgentCliInstallMode, runAgentCliInstallStep } from '@/packagedRuntime/managedTools/agentCliInstallStep';
 import type {
   invokeAgentCliInstall as invokeProviderCliInstallDefault,
 } from '@/packagedRuntime/managedTools/invokeAgentCliInstall';
 import type { runDoctorCommand as runDoctorCommandDefault } from '@/ui/doctor';
 
-type ProviderStatusRow = Readonly<{
-  id: string;
-  title: string;
-  runtimeSpec: AgentCliRuntimeDescriptor;
-}>;
-
-function usage(providerRows: readonly ProviderStatusRow[] = []): string {
-  const lines = [
-    `${chalk.bold('happier install')} - Installation helpers`,
-    '',
-    `${chalk.bold('Usage:')}`,
-    '  happier install doctor',
-    '  happier install provider <providerId> [--dry-run] [--force]',
-    '',
-  ];
-  if (providerRows.length > 0) {
-    lines.push(
-      `${chalk.bold('Available providers:')}`,
-      ...providerRows.map((row) => `  ${row.title} (${row.id}) — Install with happier install provider ${row.id}`),
-      '',
-    );
-  }
-  return lines.join('\n');
-}
 
 type InstallCliDeps = Readonly<{
   log: (...args: unknown[]) => void;
@@ -65,33 +40,11 @@ async function runPluginsCommandLazy(context: CommandContext): Promise<void> {
   await handlePluginsCliCommand(context);
 }
 
-function readAgentCliRuntimeDescriptor(
-  contribution: ResolvedContributionRegistry['agents'][number],
-): AgentCliRuntimeDescriptor | null {
-  return contribution.runtimeSpec ?? null;
-}
-
 function parseProviderInstallFlags(args: readonly string[]): Readonly<{ dryRun: boolean; skipIfInstalled: boolean }> {
   return {
     dryRun: hasFlag(args, '--dry-run'),
     skipIfInstalled: !hasFlag(args, '--force'),
   };
-}
-
-function readInstallableProviderRows(registry: Pick<ResolvedContributionRegistry, 'agents'>): ProviderStatusRow[] {
-  return registry.agents
-    .map((contribution) => {
-      const runtimeSpec = readAgentCliRuntimeDescriptor(contribution);
-      if (!runtimeSpec) return null;
-      if (runtimeSpec.manualInstallKind === 'none') return null;
-      return {
-        id: contribution.id,
-        title: runtimeSpec.title,
-        runtimeSpec,
-      } satisfies ProviderStatusRow;
-    })
-    .filter((row): row is ProviderStatusRow => row !== null)
-    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export async function runInstallCliCommand(

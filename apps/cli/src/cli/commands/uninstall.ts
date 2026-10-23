@@ -1,3 +1,4 @@
+import { usage } from './uninstallHelp';
 import type { CommandContext } from '@/cli/commandRegistry';
 import { writeJsonStdout } from '@/cli/output/jsonEnvelope';
 import { resolveInvokerName } from '@/cli/runtime/resolveInvokerName';
@@ -19,15 +20,7 @@ type UninstallFlags = Readonly<{
     help: boolean;
 }>;
 
-function usage(): string {
-    return [
-        `${sectionTitle('happier uninstall')} - Uninstall the current managed Happier CLI`,
-        '',
-        sectionTitle('Usage:'),
-        `  ${cmd('happier uninstall [--yes] [--dry-run] [--keep-service] [--json]')}`,
-        '',
-    ].join('\n');
-}
+
 
 function parseFlags(args: readonly string[]): UninstallFlags {
     const flags = new Set(args.filter((arg) => arg.startsWith('-')));

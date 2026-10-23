@@ -1,3 +1,4 @@
+import { printDoctorHelp } from './doctorHelp';
 import { readDaemonProcessesForDoctor, stopStaleDaemonForDoctor } from '@/daemon/doctor';
 import { inspectDaemonRunningStateAndCleanupStaleState, requestDaemonSignedRootActionExecution } from '@/daemon/controlClient';
 import { MachineProcessesCleanUpResultV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
@@ -13,17 +14,7 @@ import { handleServiceRepairCliCommand } from './service/repair/handleServiceRep
 import type { CommandContext } from '@/cli/commandRegistry';
 import { writeJsonStdout } from '@/cli/output/jsonEnvelope';
 
-function printDoctorHelp(): void {
-  console.log(renderHelpPage({
-    title: 'happier doctor',
-    subtitle: 'System diagnostics and repair',
-    usage: [
-      { label: 'happier doctor [--json]', description: 'Inspect CLI and daemon health' },
-      { label: 'happier doctor repair [options]', description: 'Plan or apply supported repairs' },
-      { label: 'happier doctor clean', description: 'Stop stale daemons and review confirmed left-behind processes' },
-    ],
-  }));
-}
+
 
 export async function handleDoctorCliCommand(context: CommandContext): Promise<void> {
   const args = context.args;

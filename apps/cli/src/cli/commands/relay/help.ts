@@ -1,5 +1,11 @@
-import { showRelayAccessHelp } from './access';
-import { showRelayHostHelp } from './host';
+import { showRelayAccessHelp } from './accessHelp';
+import { showRelayHostHelp } from './hostHelp';
+
+export function printRelayFamilyHelp(args: readonly string[]): void {
+  if (args[1] === 'host') { showRelayHostHelp(args[2]); return; }
+  if (args[1] === 'access') { showRelayAccessHelp(); return; }
+  showRelayHelp();
+}
 
 export function showRelayHelp(): void {
   // Keep help output concise; detailed relay profile management remains under `happier server ...` for now.

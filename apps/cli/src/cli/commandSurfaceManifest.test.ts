@@ -74,6 +74,7 @@ describe('CLI command-surface manifest', () => {
       'credentials',
       'secrets',
       'workflow',
+      'discussions',
       'claude',
       'opencode',
       'antigravity',

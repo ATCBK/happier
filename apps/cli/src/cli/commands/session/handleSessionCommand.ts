@@ -1,3 +1,6 @@
+import { normalizeHelpSubcommand, isHelpToken, buildSessionTopLevelHelpLines, readCompiledSessionSubcommandHelp, readSessionSubcommandHelp } from './help';
+import { inferSessionKind, emitSessionHelp } from './shared/sessionHelpOutput';
+export { inferSessionKind, emitSessionHelp } from './shared/sessionHelpOutput';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { hasFlag, readCommandPositionals } from '@/cli/commands/shared/argvFlags';
 import { resolveAdmittedActionCliCommand } from '@/cli/commandRegistry';
@@ -11,48 +14,6 @@ import {
   SESSION_TOP_LEVEL_HELP_LINES,
 } from './shared/sessionCommandUsage';
 
-export function inferSessionKind(argv: readonly string[]): string {
-  const sub = String(argv[0] ?? '').trim();
-  if (!sub) return 'session_unknown';
-  if (sub === 'list') return 'session_list';
-  if (sub === 'status') return 'session_status';
-  if (sub === 'create') return 'session_create';
-  if (sub === 'set-title') return 'session_set_title';
-  if (sub === 'set-permission-mode') return 'session_set_permission_mode';
-  if (sub === 'set-model') return 'session_set_model';
-  if (sub === 'send') return 'session_send';
-  if (sub === 'wait') return 'session_wait';
-  if (sub === 'stop') return 'session_stop';
-  if (sub === 'archive') return 'session_archive';
-  if (sub === 'unarchive') return 'session_unarchive';
-  if (sub === 'history') return 'session_history';
-  if (sub === 'actions') {
-    const actionSub = String(argv[1] ?? '').trim();
-    if (actionSub === 'list') return 'session_actions_list';
-    if (actionSub === 'describe') return 'session_actions_describe';
-    if (actionSub === 'execute') return 'session_actions_execute';
-    return 'session_actions_unknown';
-  }
-  if (sub === 'run') {
-    const runSub = String(argv[1] ?? '').trim();
-    if (runSub === 'start') return 'session_run_start';
-    if (runSub === 'list') return 'session_run_list';
-    if (runSub === 'get') return 'session_run_get';
-    if (runSub === 'send') return 'session_run_send';
-    if (runSub === 'stop') return 'session_run_stop';
-    if (runSub === 'action') return 'session_run_action';
-    if (runSub === 'wait') return 'session_run_wait';
-    if (runSub === 'stream-start') return 'session_run_stream_start';
-    if (runSub === 'stream-read') return 'session_run_stream_read';
-    if (runSub === 'stream-cancel') return 'session_run_stream_cancel';
-    return 'session_run_unknown';
-  }
-  if (sub === 'review') return 'session_review_start';
-  if (sub === 'plan') return 'session_plan_start';
-  if (sub === 'delegate') return 'session_delegate_start';
-  if (sub === 'voice-agent' || sub === 'voice_agent') return 'session_voice_agent_start';
-  return `session_${sub}`;
-}
 
 /**
  * Emits usage for one invocation.
@@ -62,26 +23,8 @@ export function inferSessionKind(argv: readonly string[]): string {
  * travels inside that envelope rather than being printed beside it — otherwise
  * the first thing a script probes with is the one shape its parser rejects.
  */
-export async function emitSessionHelp(input: Readonly<{
-  help: readonly string[] | string;
-  json: boolean;
-  kind: string;
-}>): Promise<void> {
-  const help = typeof input.help === 'string' ? input.help : input.help.join('\n');
-  if (input.json) {
-    await printJsonEnvelope({ ok: true, kind: input.kind, data: { help } });
-    return;
-  }
-  console.log(help);
-}
 
-function normalizeHelpSubcommand(value: string): string {
-  return value === 'voice_agent' ? 'voice-agent' : value;
-}
 
-function isHelpToken(value: string): boolean {
-  return value === 'help' || value === '--help' || value === '-h';
-}
 
 /**
  * The `happier session` index: dedicated workflow rows from the usage table plus
@@ -90,33 +33,10 @@ function isHelpToken(value: string): boolean {
  * table cannot restate a grammar the parser no longer accepts, and a dispatchable
  * path is never missing from help.
  */
-async function buildSessionTopLevelHelpLines(): Promise<readonly string[]> {
-  const { listCompiledActionCliUsageLinesForRoot } = await import('@/cli/actions/commandHelp');
-  return [...SESSION_TOP_LEVEL_HELP_LINES, ...listCompiledActionCliUsageLinesForRoot(['session'])];
-}
 
 /** The compiled rows nested under `happier session <subcommand> …`. */
-async function readCompiledSessionSubcommandHelp(
-  subcommand: string,
-): Promise<readonly string[] | null> {
-  const { listCompiledActionCliUsageLinesForRoot } = await import('@/cli/actions/commandHelp');
-  const rows = listCompiledActionCliUsageLinesForRoot(['session', subcommand]);
-  return rows.length > 0 ? rows : null;
-}
 
 /** The usage this argv asks for, or `null` when no subcommand owns one. */
-function readSessionSubcommandHelp(argv: readonly string[]): readonly string[] | string | null {
-  const subcommand = normalizeHelpSubcommand(String(argv[0] ?? '').trim());
-  if (!subcommand) return null;
-
-  const nestedSubcommand = normalizeHelpSubcommand(String(argv[1] ?? '').trim());
-  if (nestedSubcommand && !isHelpToken(nestedSubcommand)) {
-    const nestedHelp = SESSION_NESTED_SUBCOMMAND_HELP_LINES[`${subcommand} ${nestedSubcommand}`];
-    if (nestedHelp) return nestedHelp;
-  }
-
-  return SESSION_SUBCOMMAND_HELP_LINES[subcommand] ?? null;
-}
 
 export async function handleSessionCommand(
   argv: string[],

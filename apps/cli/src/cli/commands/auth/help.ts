@@ -1,4 +1,33 @@
 import chalk from 'chalk';
+import { cmd, warn } from '@happier-dev/cli-common/output';
+import { USAGE as API_TOKEN_USAGE } from './apiTokensHelp';
+import { ACCOUNT_SECURITY_USAGE, CLI_APPROVALS_USAGE } from './accountSecurityHelp';
+import { NATIVE_EMAIL_USAGE } from './nativeEmailHelp';
+import { USAGE as AUTH_SERVICE_USAGE } from './serviceHelp';
+
+export function printAuthFamilyHelp(args: readonly string[]): void {
+  switch (args[1]) {
+    case 'api-tokens': console.log(API_TOKEN_USAGE); return;
+    case 'security': console.log('Usage: happier auth security get [--json]'); return;
+    case 'cli-approvals': console.log(CLI_APPROVALS_USAGE); return;
+    case 'password': console.log(ACCOUNT_SECURITY_USAGE); return;
+    case 'email':
+    case 'recovery-key': console.log(NATIVE_EMAIL_USAGE); return;
+    case 'service': console.log(AUTH_SERVICE_USAGE); return;
+    case 'login':
+      if (args.includes('--email')) { console.log(NATIVE_EMAIL_USAGE); return; }
+  }
+  showAuthHelp();
+}
+
+export function showLogoutDeprecation(): void {
+  console.log(`${warn(`${cmd('happier logout')} is deprecated. Use ${cmd('happier auth logout')} instead.`)}\n`);
+}
+
+export function showLogoutHelp(): void {
+  showLogoutDeprecation();
+  showAuthHelp();
+}
 
 export function showAuthHelp(): void {
   console.log(`

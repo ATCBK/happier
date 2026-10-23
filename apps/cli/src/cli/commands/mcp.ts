@@ -1,4 +1,5 @@
 
+import { printMcpUsage, printMcpServersUsage, printMcpServeUsage } from './mcp/help';
 import type { CommandContext } from '@/cli/commandRegistry';
 import { mapUnknownErrorToControlError } from '@/cli/control/controlErrorMapping';
 import { wantsJson, printJsonEnvelope } from '@/cli/output/jsonEnvelope';
@@ -16,15 +17,7 @@ function isHelpToken(value: string): boolean {
   return trimmed === 'help' || trimmed === '--help' || trimmed === '-h';
 }
 
-function printMcpUsage(): void {
-  console.log('happier mcp serve [--session <session-id>]');
-  console.log('happier --server <saved-home> mcp serve [--session <session-id>]  # pin one Home for this process');
-  console.log(renderActionCliRootHelp('mcp'));
-}
 
-function printMcpServersUsage(): void {
-  console.log(renderActionCliRootHelp('mcp', ['mcp', 'servers']));
-}
 
 function resolveCommandKind(args: readonly string[]): string {
   const group = args[0];
@@ -58,8 +51,7 @@ export async function handleMcpCommand(
 
     if (group === 'serve' || group === 'start') {
       if (isHelpToken(subcommand)) {
-        console.log('happier mcp serve [--session <session-id>]');
-        console.log('happier --server <saved-home> mcp serve [--session <session-id>]  # pin one Home for this process');
+        printMcpServeUsage();
         return;
       }
       const { runMcpServeCommand } = await import('./mcp/serve');

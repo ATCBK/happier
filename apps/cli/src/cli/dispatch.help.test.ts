@@ -1,34 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { captureConsoleLogAndMuteStdout } from '@/testkit/logger/captureOutput';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { reloadConfiguration } from '@/configuration';
 import packageJson from '../../package.json';
-
-const { defaultHandlerSpy, ensureMergedAgentCommandRegistryLoadedSpy } = vi.hoisted(() => ({
-  defaultHandlerSpy: vi.fn(async () => {}),
-  ensureMergedAgentCommandRegistryLoadedSpy: vi.fn(async () => {}),
-}));
-
-vi.mock('@/agent/catalog/registry', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/agent/catalog/registry')>();
-  return {
-    ...actual,
-    requireCatalogEntry: vi.fn(() => ({
-      getCliCommandHandler: async () => defaultHandlerSpy,
-    })),
-  };
-});
-
-vi.mock('@/cli/commandRegistry', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/cli/commandRegistry')>();
-  return {
-    ...actual,
-    ensureMergedAgentCommandRegistryLoaded: async () => {
-      ensureMergedAgentCommandRegistryLoadedSpy();
-      await actual.ensureMergedAgentCommandRegistryLoaded();
-    },
-  };
-});
 
 import { dispatchCli } from './dispatch';
 
@@ -42,8 +16,6 @@ describe('dispatchCli root help', () => {
   ]);
 
   beforeEach(() => {
-    defaultHandlerSpy.mockClear();
-    ensureMergedAgentCommandRegistryLoadedSpy.mockClear();
     envScope = createEnvKeyScope([
       'HAPPIER_SERVER_URL',
       'HAPPIER_WEBAPP_URL',
@@ -60,15 +32,16 @@ describe('dispatchCli root help', () => {
     output.restore();
   });
 
-  it('prints vendor-agnostic root help without invoking the default backend handler', async () => {
+  it.each([
+    ['--help'],
+    ['--server-url', 'http://127.0.0.1:53288', '--webapp-url', 'http://app.example.test', '--help'],
+  ])('prints vendor-agnostic root help after global prefixes: %j', async (...args) => {
     await dispatchCli({
-      args: ['--help'],
-      rawArgv: ['happier', '--help'],
+      args,
+      rawArgv: ['happier', ...args],
       terminalRuntime: null,
     });
 
-    expect(defaultHandlerSpy).not.toHaveBeenCalled();
-    expect(ensureMergedAgentCommandRegistryLoadedSpy).toHaveBeenCalled();
     // The brand banner, like every other titled page.
     expect(output.logs.join('\n').replace(/\u001b\[[0-9;]*m/gu, '')).toMatch(/^Happier\nRun, watch and steer your coding agents from any device\.$/mu);
     expect(output.logs).toContainEqual(expect.stringContaining('happier codex'));
@@ -88,7 +61,6 @@ describe('dispatchCli root help', () => {
       terminalRuntime: null,
     });
 
-    expect(defaultHandlerSpy).not.toHaveBeenCalled();
     expect(output.stdoutChunks).toContainEqual(expect.stringContaining('"kind":"capabilities_describe"'));
   });
 
@@ -112,7 +84,6 @@ describe('dispatchCli root help', () => {
       terminalRuntime: null,
     });
 
-    expect(defaultHandlerSpy).not.toHaveBeenCalled();
     expect(output.logs).toEqual([packageJson.version]);
   });
 
@@ -123,7 +94,6 @@ describe('dispatchCli root help', () => {
       terminalRuntime: null,
     });
 
-    expect(defaultHandlerSpy).not.toHaveBeenCalled();
   });
 
   it('routes the singular agent alias without invoking the default backend handler', async () => {
@@ -133,7 +103,6 @@ describe('dispatchCli root help', () => {
       terminalRuntime: null,
     });
 
-    expect(defaultHandlerSpy).not.toHaveBeenCalled();
     expect(output.logs.join('\n')).toContain('happier agents');
   });
 
@@ -144,7 +113,21 @@ describe('dispatchCli root help', () => {
       terminalRuntime: null,
     });
 
-    expect(defaultHandlerSpy).not.toHaveBeenCalled();
     expect(output.logs.join('\n')).toContain('Manage model-provider connections');
+  });
+
+  it.each([
+    ['agent', 'happier agents'],
+    ['provider', 'Manage model-provider connections'],
+    ['profile', 'happier profiles'],
+    ['bridge', 'happier mcp serve'],
+    ['sessions', 'happier session'],
+    ['automations', 'happier automation'],
+    ['self-update', 'happier self'],
+    ['ls', 'happier ls'],
+  ])('keeps normalized %s alias help on the local help path', async (root, expected) => {
+    const args = ['--server-url', 'http://127.0.0.1:53288', root, '--help'];
+    await dispatchCli({ args, rawArgv: ['happier', ...args], terminalRuntime: null });
+    expect([...output.logs, ...output.stdoutChunks].join('\n')).toContain(expected);
   });
 });

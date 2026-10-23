@@ -1,8 +1,10 @@
 import chalk from 'chalk';
 
-import { configuration } from '@/configuration';
+import { resolveCliHappyHomeDir } from '@/configuration/resolveCliHappyHomeDir';
+import { resolveCliHomeStoragePaths } from '@/configuration/homeStoragePaths';
 
 export function showServerHelp(): void {
+  const configuration = resolveCliHomeStoragePaths(resolveCliHappyHomeDir(process.env));
   console.log(`
 ${chalk.bold('happier server')} - Manage Happier server profiles
 

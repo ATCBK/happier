@@ -1,4 +1,5 @@
 import type { CommandContext } from '@/cli/commandRegistry';
+import { printBrowserHelp, printBrowserSandboxHelp } from './browserHelp';
 import { handleActionCliRootCommand, renderActionCliRootHelp } from '@/cli/actions/rootCommand';
 import { resolveManagedBrowserSidecarCandidate } from '@/daemon/browser/sidecar/source';
 import { installManagedChromiumSandbox, managedChromiumAppArmorProfile } from '@/daemon/browser/sidecar/sandbox';
@@ -8,13 +9,13 @@ export async function handleBrowserCliCommand(context: CommandContext): Promise<
     const args = context.args.slice(1);
     if (args[0] !== 'sandbox') {
         if (!args.length || args.includes('--help') || args.includes('-h')) {
-            console.log(`${renderActionCliRootHelp('browser')}\n  happier browser sandbox install [--print]\n    Allow the managed Chromium executable to use its Linux sandbox (sudo).`);
+            printBrowserHelp();
             return;
         }
         return handleActionCliRootCommand('browser', context);
     }
     if (args.includes('--help') || args.includes('-h')) {
-        console.log('happier browser sandbox install [--print]\nInstalls an executable-scoped AppArmor userns profile with one sudo action. --print displays the profile without applying it.');
+        printBrowserSandboxHelp();
         return;
     }
     if (args[1] !== 'install' || args.slice(2).some(arg => arg !== '--print')) {

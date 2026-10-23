@@ -1,3 +1,4 @@
+import { printProvidersHelp } from './providers/help';
 import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import { errorFrame } from '@happier-dev/cli-common/output';
 
@@ -7,45 +8,22 @@ import { tryHandleApprovalRequestCreated } from '@/cli/commands/session/shared/t
 import { presentProviderCliRefusal } from '@/providers/lifecycle/presentProviderCliRefusal';
 import { executeProvidersCommand, ProviderCliError } from './providers/index';
 import { hasFlag } from './providers/args';
-import { resolveProviderCliDependencies } from './providers/deps';
+import type { resolveProviderCliDependencies } from './providers/deps';
 
-const PROVIDERS_HELP = `happier providers
 
-Manage model-provider connections.
-
-  happier providers list [--available] [--json]
-  happier providers show <connection-id> [--machine <machine-id>] [--json]
-  happier providers add <qualified-contribution-key> [--name <name>] [--candidate-id <id>] [--saved-secret-id <id>] [--json]
-  happier providers add --custom --name <name> --protocol <protocol> --base-url <url> --catalog manual|probe
-  happier providers edit <connection-id> (--name <name>|--automatic-name)
-  happier providers edit <connection-id> --scope account|machine --endpoint-template <id> (--base-url <url>|--clear-endpoint)
-  happier providers enable|disable <connection-id> [--machine <machine-id>]
-  happier providers bind-secret <connection-id> --scope account|machine --saved-secret-id <id>
-  happier providers unbind-secret|replace-secret <connection-id> --scope account|machine
-  happier providers add-model <connection-id> --models <newline-separated-ids>
-  happier providers remove-model <connection-id> --model <model-id>
-  happier providers probe|test|models <connection-id> [--machine <machine-id>]
-  happier providers load-model <connection-id> --model <model-id> [--machine <machine-id>]
-  happier providers remove <connection-id>
-
-Agent CLI setup moved to 'happier agents'.`;
 
 export async function handleProvidersCliCommand(
     context: CommandContext,
-    resolveDependencies: typeof resolveProviderCliDependencies = resolveProviderCliDependencies,
+    resolveDependencies: typeof resolveProviderCliDependencies = async (options) => (
+        await import('./providers/deps')
+    ).resolveProviderCliDependencies(options),
 ): Promise<void> {
     const args = context.args.slice(1);
     const json = hasFlag(args, '--json');
     // `--json` is a machine-output contract: stdout carries the versioned
     // envelope and nothing else. Help is a RESULT of the invocation, so in JSON
     // mode it travels inside that envelope instead of being printed beside it.
-    const emitHelp = async (): Promise<void> => {
-        if (json) {
-            await printJsonEnvelope({ ok: true, kind: 'providers_help', data: { help: PROVIDERS_HELP } });
-            return;
-        }
-        console.log(PROVIDERS_HELP);
-    };
+    const emitHelp = async (): Promise<void> => printProvidersHelp(json);
     try {
         const subcommand = String(args[0] ?? '').trim();
         if (!subcommand || ['help', '--help', '-h'].includes(subcommand)) {

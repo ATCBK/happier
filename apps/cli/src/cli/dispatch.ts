@@ -8,7 +8,6 @@ import {
   resolvePluginCommandTmuxMode,
   type CommandContext,
 } from '@/cli/commandRegistry';
-import { buildRootHelpText } from '@/cli/buildRootHelpText';
 import {
   findCommandSurfaceEntry,
   isStaticCommandSurfaceProviderPlaceholder,
@@ -18,7 +17,7 @@ import { readStartedByArg } from '@/cli/readStartedByArg';
 import { applyDaemonAutostartEnvForInvocation, shouldEnsureDaemonForInvocation } from '@/daemon/daemonAutostartPolicy';
 import { printJsonEnvelope, wantsJson } from '@/cli/output/jsonEnvelope';
 import { errorFrame } from '@happier-dev/cli-common/output';
-import packageJson from '../../package.json';
+import { isTopLevelVersionRequest, printCliVersion } from '@/cli/version';
 import { resolveExplicitSpawnScopedEnvironmentFromProcessEnv } from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
 import {
   CliApiTokenChildContinuationError,
@@ -30,14 +29,7 @@ import {
 } from '@/auth/cliApiToken';
 import type { EphemeralResolvedServerSelection } from '@/server/serverSelection';
 import { argvBeforeOptionTerminator, readFlagValue } from '@/cli/commands/shared/argvFlags';
-
-function isTopLevelVersionRequest(args: readonly string[]): boolean {
-  return args.length === 1 && (args[0] === '--version' || args[0] === '-v');
-}
-
-function isTopLevelHelpRequest(args: readonly string[]): boolean {
-  return args.length === 1 && (args[0] === '--help' || args[0] === '-h');
-}
+import { isFamilyHelpRequest, isTopLevelHelpRequest } from './processArgs';
 
 function isCredentialFreeInvocation(args: readonly string[]): boolean {
   if (isTopLevelVersionRequest(args) || args[0] === 'completion') return true;
@@ -335,13 +327,17 @@ export async function dispatchCli(params: Readonly<{
 
   // Handle top-level version requests before backend resolution/auth flows.
   if (isTopLevelVersionRequest(args)) {
-    console.log(packageJson.version);
+    printCliVersion();
     return;
   }
   if (isTopLevelHelpRequest(args)) {
-    await ensureMergedAgentCommandRegistryLoaded();
-    console.log(buildRootHelpText());
+    const { printRootHelp } = await import('./rootHelp');
+    await printRootHelp();
     return;
+  }
+  if (isFamilyHelpRequest(args)) {
+    const { tryPrintFamilyHelp } = await import('./familyHelp');
+    if (await tryPrintFamilyHelp(args)) return;
   }
 
   // Global Home/token prefixes are resolved before admission. Local information

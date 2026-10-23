@@ -18,7 +18,7 @@ function delegateToSessionCommand(sessionPath: readonly string[]): CommandHandle
         { emitSessionHelp, inferSessionKind },
       ] = await Promise.all([
         import('./commands/session/shared/sessionCommandUsage'),
-        import('./commands/session/handleSessionCommand'),
+        import('./commands/session/shared/sessionHelpOutput'),
       ]);
       const command = context.args[0] ?? sessionPath[0] ?? 'session';
       await emitSessionHelp({

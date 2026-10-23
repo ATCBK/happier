@@ -3,6 +3,7 @@ import { ok } from '@happier-dev/cli-common/output';
 import { SessionStatusResultSchema, SessionStopResultSchema, SessionWaitResultSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 import type { ActionCliPresentation } from '@/cli/actions/commandPresentation';
+import { ACTION_CLI_ENVELOPE_KINDS } from '@/cli/actions/commandPresentationMetadata';
 import { printJsonEnvelope, writeJsonStdout } from '@/cli/output/jsonEnvelope';
 
 /**
@@ -34,7 +35,7 @@ function fixedEnvelopeKind(kind: string): NonNullable<ActionCliPresentation['env
 }
 
 export const SESSION_STATUS_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_status'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['session.status.get']),
   presentSuccess: async (payload, context) => {
     // Presentation validation is downstream of a completed Action. Let the
     // compiled dispatcher catch a stale presenter and emit the canonical
@@ -58,7 +59,7 @@ export const SESSION_STATUS_PRESENTATION: ActionCliPresentation = {
 };
 
 export const SESSION_SET_TITLE_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_set_title'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['session.title.set']),
   presentSuccess: async (payload, context) => {
     const sessionId = readSessionId(payload, context.input);
     if (context.json) {
@@ -75,7 +76,7 @@ export const SESSION_SET_TITLE_PRESENTATION: ActionCliPresentation = {
 };
 
 export const SESSION_SET_PERMISSION_MODE_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_set_permission_mode'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['session.permission_mode.set']),
   presentSuccess: async (payload, context) => {
     const result = readRecord(payload);
     const sessionId = readSessionId(payload, context.input);
@@ -94,7 +95,7 @@ export const SESSION_SET_PERMISSION_MODE_PRESENTATION: ActionCliPresentation = {
 };
 
 export const SESSION_SET_MODEL_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_set_model'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['session.model.set']),
   presentSuccess: async (payload, context) => {
     const result = readRecord(payload);
     const selection = readRecord(result.activeSelection ?? result.selection);
@@ -135,11 +136,11 @@ function archivePresentation(kind: string, verb: string): ActionCliPresentation 
   };
 }
 
-export const SESSION_ARCHIVE_PRESENTATION = archivePresentation('session_archive', 'archived');
-export const SESSION_UNARCHIVE_PRESENTATION = archivePresentation('session_unarchive', 'unarchived');
+export const SESSION_ARCHIVE_PRESENTATION = archivePresentation(ACTION_CLI_ENVELOPE_KINDS['session.archive'], 'archived');
+export const SESSION_UNARCHIVE_PRESENTATION = archivePresentation(ACTION_CLI_ENVELOPE_KINDS['session.unarchive'], 'unarchived');
 
 export const SESSION_STOP_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_stop'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['session.stop']),
   presentSuccess: async (payload, context) => {
     const result = SessionStopResultSchema.parse(payload);
     if (context.json) {
@@ -179,7 +180,7 @@ export const SESSION_STOP_PRESENTATION: ActionCliPresentation = {
 };
 
 export const SESSION_WAIT_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_wait'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['session.wait.idle']),
   presentSuccess: async (payload, context) => {
     const result = SessionWaitResultSchema.parse(payload);
     if (context.json) {

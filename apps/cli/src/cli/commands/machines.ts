@@ -1,3 +1,4 @@
+import { showHelp } from './machinesHelp';
 import chalk from 'chalk';
 import { renderHelpPage } from '@happier-dev/cli-common/output';
 
@@ -8,21 +9,6 @@ import { argvBeforeOptionTerminator } from '@/cli/commands/shared/argvFlags';
 
 const USAGE = 'Usage: happier machines <subcommand> [options] [--json]';
 
-async function showHelp(): Promise<void> {
-  // Every `machines` leaf — the Account inventory and Machine Pool
-  // administration — is a compiled Action command, so the usage rows come from
-  // that descriptor rather than a table that could omit or misstate one.
-  const { listCompiledActionCliUsageLinesForRoot } = await import('@/cli/actions/commandHelp');
-  console.log(renderHelpPage({
-    title: 'happier machines',
-    subtitle: 'Discover machines, inspect resources, and administer Machine Pools',
-    usage: listCompiledActionCliUsageLinesForRoot(['machines']).map((label) => ({ label, description: '' })),
-    notes: [
-      'Authentication may come from happier auth login or HAPPIER_TOKEN.',
-      'Canonical Actions include machines.list, machines.resources.*, machines.processes.*, and machines.pools.*.',
-    ],
-  }));
-}
 
 /**
  * The `machines` root: help and the unknown-subcommand diagnostic.

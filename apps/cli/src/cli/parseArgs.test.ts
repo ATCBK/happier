@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeCliArgv, parseCliArgs } from './parseArgs';
+import { normalizeCliArgv, parseCliArgs, readCliProcessArgs } from './parseArgs';
 
 describe('parseCliArgs', () => {
+    it.each([
+        ['bun', 'C:\\runtime\\index.exe', 'C:\\runtime\\package-dist\\index.mjs', '--version'],
+        ['node', '/repo/apps/cli/bin/happier-dev.mjs', 'src/index.ts', '-v'],
+    ])('normalizes the extra runtime entrypoint before root flags: %j', (...argv) => {
+        expect(readCliProcessArgs(argv)).toEqual([argv.at(-1)]);
+    });
+
     it('strips a leading packaged runtime entrypoint before parsing command args', () => {
         expect(
             parseCliArgs([

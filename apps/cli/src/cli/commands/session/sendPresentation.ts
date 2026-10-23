@@ -1,4 +1,5 @@
 import { ok } from '@happier-dev/cli-common/output';
+import { readActionCliPresentationEnvelopeKind } from '@/cli/actions/commandPresentationMetadata';
 
 import type {
   ActionCliFailure,
@@ -71,7 +72,7 @@ function readRecord(value: unknown): Readonly<Record<string, unknown>> {
  */
 export const SESSION_SEND_PRESENTATION: ActionCliPresentation = {
   envelopeKind: (command) => (
-    command.path.join(' ') === 'session run send' ? 'session_run_send' : 'session_send'
+    readActionCliPresentationEnvelopeKind({ actionId: 'session.message.send', path: command.path })!
   ),
   classifyResult: (payload) => {
     // The executor has already validated the payload against the Action's

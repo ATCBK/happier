@@ -3,6 +3,7 @@ import { ExecutionRunGetResponseSchema, ExecutionRunListResponseSchema, Executio
 import { ExecutionRunTurnStreamCancelResponseSchema, ExecutionRunTurnStreamReadResponseSchema, ExecutionRunTurnStreamStartResponseSchema } from '@happier-dev/protocol/execution/runs/streaming';
 
 import type { ActionCliPresentation } from '@/cli/actions/commandPresentation';
+import { ACTION_CLI_ENVELOPE_KINDS } from '@/cli/actions/commandPresentationMetadata';
 import { printJsonEnvelope, writeJsonStdout } from '@/cli/output/jsonEnvelope';
 
 function readRecord(value: unknown): Readonly<Record<string, unknown>> {
@@ -21,7 +22,7 @@ function fixedEnvelopeKind(kind: string): NonNullable<ActionCliPresentation['env
 }
 
 export const EXECUTION_RUN_LIST_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_run_list'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['execution.run.list']),
   presentSuccess: async (payload, context) => {
     const result = ExecutionRunListResponseSchema.parse(payload);
     if (context.json) {
@@ -39,7 +40,7 @@ export const EXECUTION_RUN_LIST_PRESENTATION: ActionCliPresentation = {
 };
 
 export const EXECUTION_RUN_GET_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_run_get'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['execution.run.get']),
   presentSuccess: async (payload, context) => {
     const result = ExecutionRunGetResponseSchema.parse(payload);
     if (context.json) {
@@ -57,7 +58,7 @@ export const EXECUTION_RUN_GET_PRESENTATION: ActionCliPresentation = {
 };
 
 export const EXECUTION_RUN_START_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_run_start'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['execution.run.start']),
   presentSuccess: async (payload, context) => {
     const result = ExecutionRunStartResponseSchema.parse(payload);
     const backendTarget = readRecord(context.input.backendTarget);
@@ -82,7 +83,7 @@ export const EXECUTION_RUN_START_PRESENTATION: ActionCliPresentation = {
 };
 
 export const EXECUTION_RUN_STOP_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_run_stop'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['execution.run.stop']),
   presentSuccess: async (payload, context) => {
     ExecutionRunStopResponseSchema.parse({ ok: true, ...readRecord(payload) });
     if (context.json) {
@@ -103,7 +104,7 @@ export const EXECUTION_RUN_STOP_PRESENTATION: ActionCliPresentation = {
 };
 
 export const EXECUTION_RUN_WAIT_PRESENTATION: ActionCliPresentation = {
-  envelopeKind: fixedEnvelopeKind('session_run_wait'),
+  envelopeKind: fixedEnvelopeKind(ACTION_CLI_ENVELOPE_KINDS['execution.run.wait']),
   presentSuccess: async (payload, context) => {
     const result = ExecutionRunWaitResultSchema.parse({ ok: true, ...readRecord(payload) });
     if (!result.ok) throw new Error(`execution_run_wait_${result.code}`);
@@ -191,21 +192,21 @@ function streamPresentation(params: Readonly<{
 }
 
 export const EXECUTION_RUN_STREAM_START_PRESENTATION = streamPresentation({
-  kind: 'session_run_stream_start',
+  kind: ACTION_CLI_ENVELOPE_KINDS['execution.run.stream.start'],
   human: 'run stream started',
   includePayload: true,
   parsePayload: (payload) => ExecutionRunTurnStreamStartResponseSchema.parse(payload),
 });
 
 export const EXECUTION_RUN_STREAM_READ_PRESENTATION = streamPresentation({
-  kind: 'session_run_stream_read',
+  kind: ACTION_CLI_ENVELOPE_KINDS['execution.run.stream.read'],
   human: 'run stream read',
   includePayload: true,
   parsePayload: (payload) => ExecutionRunTurnStreamReadResponseSchema.parse(payload),
 });
 
 export const EXECUTION_RUN_STREAM_CANCEL_PRESENTATION = streamPresentation({
-  kind: 'session_run_stream_cancel',
+  kind: ACTION_CLI_ENVELOPE_KINDS['execution.run.stream.cancel'],
   human: 'run stream cancelled',
   includePayload: false,
   fixed: { cancelled: true },

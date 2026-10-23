@@ -1,4 +1,7 @@
 import type { CommandContext } from '@/cli/commandRegistry';
+import { COMPLETION_USAGE } from './completionHelp';
+import { resolveCliHappyHomeDir } from '@/configuration/resolveCliHappyHomeDir';
+import { resolveCommandPathCompletionCandidates } from '@/cli/commandCompletionPaths';
 
 const scripts = Object.freeze({
   bash: `_happier_completion() {
@@ -37,24 +40,33 @@ complete -c happier -f -a '(__happier_completion)'`,
 });
 
 export async function handleCompletionCliCommand(context: CommandContext): Promise<void> {
+  if (context.args.includes('--help') || context.args.includes('-h')) { console.log(COMPLETION_USAGE); return; }
   const args = context.args.slice(1);
   if (args[0] === 'candidates') {
-    const { ensureMergedAgentCommandRegistryLoaded, resolveCommandCompletionCandidates } = await import('@/cli/commandRegistry');
-    const { resolveActionDynamicOptionsForCliCompletion } = await import('./completionDynamicOptions');
-    const { resolveActionDefinitionForCliCompletion } = await import('./actions');
-    await ensureMergedAgentCommandRegistryLoaded();
     const separator = args.indexOf('--');
     const words = separator >= 0 ? args.slice(separator + 1) : args.slice(1);
+    if (words.length <= 1) {
+      const { resolveRootCommandNames } = await import('@/cli/rootHelp');
+      const roots = await resolveRootCommandNames(resolveCliHappyHomeDir(process.env));
+      const candidates = resolveCommandPathCompletionCandidates(roots.map((root) => [root]), words);
+      if (candidates.length > 0) process.stdout.write(`${candidates.join('\n')}\n`);
+      return;
+    }
+    const [{ resolveCommandCompletionCandidates }, { resolveReadOnlyCommandCompletionDeclarations }] = await Promise.all([
+      import('@/cli/commandRegistry'), import('@/cli/rootHelp'),
+    ]);
+    const declarations = await resolveReadOnlyCommandCompletionDeclarations(resolveCliHappyHomeDir(process.env), words);
     const candidates = await resolveCommandCompletionCandidates(words, {
-      resolveDynamicOptions: resolveActionDynamicOptionsForCliCompletion,
-      resolveDynamicActionDefinition: resolveActionDefinitionForCliCompletion,
+      declarations,
+      resolveDynamicOptions: async (request) => (await import('./completionDynamicOptions')).resolveActionDynamicOptionsForCliCompletion(request),
+      resolveDynamicActionDefinition: async (actionId, argv) => (await import('./actions')).resolveActionDefinitionForCliCompletion(actionId, argv),
     });
     if (candidates.length > 0) process.stdout.write(`${candidates.join('\n')}\n`);
     return;
   }
   const shell = args[0] as keyof typeof scripts | undefined;
   if (!shell || !Object.prototype.hasOwnProperty.call(scripts, shell)) {
-    throw new Error('Usage: happier completion <bash|zsh|fish|powershell>');
+    throw new Error(COMPLETION_USAGE);
   }
   process.stdout.write(`${scripts[shell]}\n`);
 }

@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { TOOLS_USAGE } from './toolsHelp';
 
 import type { CommandContext } from '@/cli/commandRegistry';
 import { mapUnknownErrorToControlError } from '@/cli/control/controlErrorMapping';
@@ -388,7 +389,7 @@ export async function handleToolsCommand(args: string[], overrides?: Partial<Too
       return;
     }
 
-    throw new Error('Usage: happier tools <list|call> ...');
+    throw new Error(TOOLS_USAGE);
   } catch (error) {
     if (!json) throw error;
     const mapped = mapUnknownErrorToControlError(error);
@@ -404,6 +405,7 @@ export async function handleToolsCommand(args: string[], overrides?: Partial<Too
 }
 
 export async function handleToolsCliCommand(context: CommandContext): Promise<void> {
+  if (context.args.includes('--help') || context.args.includes('-h')) { console.log(TOOLS_USAGE); return; }
   const args = context.args.slice(1);
   const json = wantsJson(args);
   const kind = resolveCommandKind(args);

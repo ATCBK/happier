@@ -1,18 +1,11 @@
+import { usage } from './capabilitiesHelp';
 import { errorFrame } from '@happier-dev/cli-common/output';
 
 import type { CommandContext } from '@/cli/commandRegistry';
 import { printJsonEnvelope, wantsJson, writeJsonStdout } from '@/cli/output/jsonEnvelope';
 import { createCliCapabilitiesService } from '@/rpc/handlers/capabilities';
 
-function usage(): string {
-  return [
-    'happier capabilities - Inspect local capability metadata',
-    '',
-    'Usage:',
-    '  happier capabilities [describe] [--json]',
-    '',
-  ].join('\n');
-}
+
 
 function resolveSubcommand(args: readonly string[]): string {
   const first = args.find((arg) => !arg.startsWith('-'));
@@ -25,7 +18,7 @@ export async function handleCapabilitiesCliCommand(context: CommandContext): Pro
   const subcommand = resolveSubcommand(args);
 
   try {
-    if (subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
+    if (subcommand === 'help' || args.includes('--help') || args.includes('-h')) {
       console.log(usage());
       return;
     }

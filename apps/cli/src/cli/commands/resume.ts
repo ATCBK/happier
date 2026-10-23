@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { RESUME_USAGE, printResumeHelp } from './resumeHelp';
 import { hostname } from 'node:os';
 import { errorFrame, fail, neutral, warn } from '@happier-dev/cli-common/output';
 
@@ -153,9 +154,7 @@ export async function handleResumeCommand(
     return trimmed === '--help' || trimmed === '-h';
   });
   if (hasHelpFlag) {
-    console.log(SESSION_HELP_LINES.resume);
-    console.log('');
-    console.log('Attaches to a running session, or resumes a stopped session when supported.');
+    printResumeHelp();
     return;
   }
 
@@ -219,7 +218,7 @@ export async function handleResumeCommand(
   if (!sessionIdOrPrefix) {
     console.error(fail('Missing session ID.'));
     console.log('');
-    console.log('Usage: happier resume <sessionId>');
+    console.log(RESUME_USAGE);
     process.exit(1);
   }
 

@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { ATTACH_USAGE, printAttachHelp } from './attachHelp';
 import { spawn } from 'node:child_process';
 import { hostname } from 'node:os';
 
@@ -360,10 +361,7 @@ export async function handleAttachCommand(
     return trimmed === '--help' || trimmed === '-h';
   });
   if (hasHelpFlag) {
-    console.log('happier attach');
-    console.log('happier attach <session-id-or-prefix>');
-    console.log('');
-    console.log('Attaches a terminal to a running session on this computer.');
+    printAttachHelp();
     return;
   }
 
@@ -468,7 +466,7 @@ export async function handleAttachCommand(
   if (!sessionIdOrPrefix) {
     console.error(fail('Missing session ID.'));
     console.log('');
-    console.log('Usage: happier attach <sessionId>');
+    console.log(ATTACH_USAGE);
     process.exit(1);
   }
 

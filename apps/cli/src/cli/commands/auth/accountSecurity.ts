@@ -1,10 +1,9 @@
+import { ACCOUNT_SECURITY_USAGE, CLI_APPROVALS_USAGE } from './accountSecurityHelp';
+export { ACCOUNT_SECURITY_USAGE } from './accountSecurityHelp';
 import axios from 'axios';
 
 import { ACCOUNT_PASSWORD_MUTATION_CHALLENGE_PATH_V1, ACCOUNT_PASSWORD_ENROLL_EMAIL_REQUEST_PATH_V1, AccountEmailChangeRequestV1Schema, AccountPasswordEnrollRequestV1Schema, AccountPasswordEnrollEmailRequestV1Schema, AccountEmailChangeRequestResponseV1Schema, AccountPasswordChangeRequestV1Schema, AccountPasswordRemoveRequestV1Schema, AccountSecurityGetResponseV1Schema, AccountTerminalPresentUserPolicySetRequestV1Schema, AccountTerminalPresentUserPolicySetResponseV1Schema, AccountSecurityRouteErrorV1Schema, PasswordMutationPreparationRequestV1Schema, PasswordMutationPreparationResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
-import { AccountProfileResponseSchema } from '@happier-dev/protocol/account/profile';
 import { AccountExternalAuthProofV1Schema } from '@happier-dev/protocol/auth/accountExternalAuthProof';
-import { AuthEntryProjectionV1Schema, AuthEntryRequestV1Schema } from '@happier-dev/protocol/auth/entry';
-import { ExternalOAuthParamsResponseSchema } from '@happier-dev/protocol/auth/externalOAuth';
 import { buildE2eeAccountPasswordChangeRequestV1, buildE2eeAccountPasswordEnrollRequestV1, buildE2eeAccountPasswordRemoveRequestV1 } from '@happier-dev/protocol/auth/accountSecurityCrypto';
 import { canonicalizeKeyChallengeV2AudienceOrigin } from '@happier-dev/protocol/auth/keyChallenge';
 import { createPasswordCredentialMutationDigestV1, createPasswordCredentialTargetDigestV1 } from '@happier-dev/protocol/auth/passwordMutationChallenge';
@@ -14,17 +13,12 @@ import type { ActionExecuteResult, ActionId, AccountSecurityGetResponseV1, Accou
 import { isAuthenticationError } from '@/api/client/httpStatusError';
 import { configuration } from '@/configuration';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { hasStoredSessionCredentialProvenance, readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { assertCommandArguments, readCommandPositionals, readFlagValue, readRawFlagValue } from '@/cli/commands/shared/argvFlags';
 import { printJsonEnvelope, wantsJson, writeJsonStdout } from '@/cli/output/jsonEnvelope';
 import { applyServerSelectionFromArgs } from '@/server/serverSelection';
-import { createExternalAuthProof } from '@/auth/externalAuthProof';
 
-export const ACCOUNT_SECURITY_USAGE =
-  'Usage: happier auth security get [--json] | happier auth password change [--current-password <password>] --new-password <password> [--recover] [--json] | happier auth password remove [--current-password <password>] [--json] | happier auth password enroll-email-request --email <email> [--json] | happier auth password enroll --email <email> --password <password> [--verification-token <token>] [--json] | happier auth email change-request --email <email> [--json]';
 
-const CLI_APPROVALS_USAGE = 'Usage: happier auth cli-approvals get [--json] | set allowed|disallowed [--yes] [--json]';
 
 class AccountSecurityCommandError extends Error {
   constructor(
@@ -136,6 +130,7 @@ async function resolveMutationAudience(
   credentials: StoredCredentials,
   signal?: AbortSignal,
 ) {
+  const { fetchServerFeaturesSnapshot } = await import('@/features/serverFeaturesClient');
   const origin = canonicalizeKeyChallengeV2AudienceOrigin(runtime.serverUrl);
   const snapshot = await fetchServerFeaturesSnapshot({
     serverUrl: runtime.serverApiUrl,
@@ -154,6 +149,7 @@ async function resolveAccountProfile(
   credentials: StoredCredentials,
   signal?: AbortSignal,
 ) {
+  const { AccountProfileResponseSchema } = await import('@happier-dev/protocol/account/profile');
   signal?.throwIfAborted();
   const response = await axios.get<unknown>(`${runtime.serverApiUrl}/v1/account/profile`, {
     headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
@@ -186,6 +182,7 @@ async function acquirePlainEnrollmentExternalAuthProof(input: Readonly<{
   requestDigest: string;
   signal?: AbortSignal;
 }>) {
+  const { AuthEntryProjectionV1Schema, AuthEntryRequestV1Schema } = await import('@happier-dev/protocol/auth/entry');
   const entryResponse = await axios.post<unknown>(
     `${input.runtime.serverApiUrl}/v1/auth/entry`,
     AuthEntryRequestV1Schema.parse({ v: 1, scope: { kind: 'home' } }),
@@ -214,6 +211,7 @@ async function acquirePlainEnrollmentExternalAuthProof(input: Readonly<{
     .find((id) => id.length > 0 && available.has(id));
   if (!provider) throw new AccountSecurityCommandError('reauthentication_required');
 
+  const { createExternalAuthProof } = await import('@/auth/externalAuthProof');
   const { proof, proofHash } = createExternalAuthProof();
   if (provider === 'mtls') {
     const response = await axios.post<unknown>(
@@ -252,6 +250,7 @@ async function acquirePlainEnrollmentExternalAuthProof(input: Readonly<{
     callbackPath: `/oauth/${provider}`,
     ...(input.signal ? { signal: input.signal } : {}),
     resolveAuthorizationUrl: async (callbackOrigin) => {
+      const { ExternalOAuthParamsResponseSchema } = await import('@happier-dev/protocol/auth/externalOAuth');
       const query = new URLSearchParams({
         mode: 'keyless',
         purpose: 'account_password_enrollment',

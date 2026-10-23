@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
 
 import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -36,6 +41,26 @@ import { handleAgentsCommand } from './agents';
 describe('happier agents --json', () => {
   let home = '';
   let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'PATH']);
+
+  async function seedAdmittedAgent(): Promise<void> {
+    const pluginRoot = join(home, 'admitted-agent');
+    const manifest = PluginManifestV2Schema.parse(createPluginManifestV2Fixture({
+      id: 'acme.agents-list',
+      contributes: { agents: [{
+        id: 'listed', title: 'Admitted Agent', runtime: { kind: 'custom' }, primary: 'sessions',
+        capabilities: { surfaces: ['terminal'], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        cli: {
+          executable: { binaryName: 'admitted-agent', sourcePreference: 'system-first', acceptsJavaScriptFileOverride: false },
+          install: { manual: { kind: 'none' } },
+          auth: { support: 'login_terminal', loginLaunches: [{ kind: 'primary', args: ['login'] }] },
+        },
+      }] },
+    }));
+    await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
+    await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify(manifest));
+    await writeFile(join(pluginRoot, 'daemon.mjs'), 'export function activate() {}\n');
+    await seedCurrentLocalPathPluginFixture({ happyHomeDir: home, pluginRoot, pluginId: manifest.id, manifestVersion: manifest.version, devWatch: true });
+  }
 
   beforeEach(async () => {
     authenticateDeclaredAcpAgentMock.mockReset();
@@ -129,6 +154,7 @@ describe('happier agents --json', () => {
   });
 
   it('prints an agents_list JSON envelope', async () => {
+    await seedAdmittedAgent();
     const output = captureConsoleLogAndMuteStdout();
     try {
       await handleAgentsCommand(['list', '--json']);
@@ -138,10 +164,10 @@ describe('happier agents --json', () => {
       expect(parsed.kind).toBe('agents_list');
       expect(Array.isArray(parsed.data?.agents)).toBe(true);
       expect(parsed.data.agents.length).toBeGreaterThan(0);
-      const first = parsed.data.agents[0];
+      const first = parsed.data.agents.find((row: { id: string }) => row.id === 'acme.agents-list/listed');
       expect(first).toEqual(expect.objectContaining({
-        id: 'acme.providers.list',
-        title: 'Acme Providers List',
+        id: 'acme.agents-list/listed',
+        title: 'Admitted Agent',
         installed: expect.any(Boolean),
       }));
       expect(first.source === null || typeof first.source === 'string').toBe(true);
@@ -152,6 +178,7 @@ describe('happier agents --json', () => {
   });
 
   it('prints an agents_status JSON envelope', async () => {
+    await seedAdmittedAgent();
     const output = captureConsoleLogAndMuteStdout();
     try {
       await handleAgentsCommand(['status', '--json']);
@@ -162,8 +189,8 @@ describe('happier agents --json', () => {
       expect(parsed.data.agents).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            id: 'acme.providers.list',
-            title: 'Acme Providers List',
+            id: 'acme.agents-list/listed',
+            title: 'Admitted Agent',
           }),
         ]),
       );
@@ -172,15 +199,16 @@ describe('happier agents --json', () => {
     }
   });
 
-  it('projects the merged provider registry into the help page', async () => {
+  it('projects admitted Agent declarations into the help page', async () => {
+    await seedAdmittedAgent();
     const output = captureConsoleLogAndMuteStdout();
     try {
       await handleAgentsCommand(['help']);
       const text = output.logs.join('\n');
       expect(text).toContain('Available agents:');
-      expect(text).toContain('Acme Providers List');
-      expect(text).toContain('acme.providers.list');
-      expect(text).toContain('happier agents install acme.providers.list');
+      expect(text).toContain('Admitted Agent');
+      expect(text).toContain('acme.agents-list/listed');
+      expect(text).toContain('happier agents install acme.agents-list/listed');
     } finally {
       output.restore();
     }

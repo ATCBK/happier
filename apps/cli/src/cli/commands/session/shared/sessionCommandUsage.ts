@@ -1,4 +1,5 @@
-import { AGENT_PERMISSION_INTENTS_V1 } from '@happier-dev/protocol/runtime/permissionIntentV1';
+import { BUNDLED_CLI_HELP_FACTS } from '@/plugins/projection/registry/sources/generatedBundledCliHelpFacts';
+import { SESSION_RESUME_HELP_LABEL } from './sessionCommandLabels';
 
 const SESSION_CREATE_HELP = [
   'happier session create [options]',
@@ -8,7 +9,7 @@ const SESSION_CREATE_HELP = [
   '  [--title <text>]',
   '  [<prompt>|--prompt <text>|--message <text>]',
   '  [--model <model-id> [--provider-connection <connection-id>]]',
-  `  [--permission-mode <${AGENT_PERMISSION_INTENTS_V1.join('|')}>] [--mode <agent-mode-id>]`,
+  `  [--permission-mode <${BUNDLED_CLI_HELP_FACTS.permissionIntents.join('|')}>] [--mode <agent-mode-id>]`,
   '    Aliases include read_only, ro, safe, full-access, accept-edits, and bypass-permissions.',
   '  [--config-option <id=value>] [--reasoning-effort <value>]',
   '  [--config-overrides-json <json>] [--launch-profile <profile-id>]',
@@ -24,7 +25,7 @@ const SESSION_CREATE_HELP = [
 ].join('\n');
 
 export const SESSION_HELP_LINES = {
-  resume: 'happier resume [<session-id-or-prefix>]',
+  resume: SESSION_RESUME_HELP_LABEL,
   create: SESSION_CREATE_HELP,
   history: 'happier session history <session-id-or-prefix-or-tag> [--machine-id <machineId>] ([--tail N|--limit N] [--format compact|raw] [--raw] [--include-meta] [--include-structured-payload] [--json] | --follow [--jsonl])',
   reviewStart: 'happier session review start <session-id-or-prefix-or-tag> --engines <id1,id2> --instructions <text> [--json]',

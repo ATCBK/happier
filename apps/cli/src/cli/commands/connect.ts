@@ -1,3 +1,4 @@
+import { type ConnectTarget, localizedText, sameService, exactServiceCommandId, legacyServiceIdFor, projectConnectTargets, showConnectHelp } from './connect/help';
 import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID } from '@happier-dev/protocol/connect/generatedBuiltInLegacyConnectedAccountCompatibility';
 import { PluginConnectedAccountDescriptorContributionV2Schema } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
 import { PluginJsonValueV2Schema } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
@@ -68,12 +69,6 @@ type ConfigurationField = Readonly<{
   }>;
 }>;
 
-type ConnectTarget = Readonly<{
-  service: PluginContributionIdentityV1;
-  descriptor: PluginConnectedAccountDescriptorContributionV2;
-  commandId: string;
-  aliases: readonly string[];
-}>;
 
 type AuthenticationIntent =
   | Readonly<{
@@ -89,135 +84,21 @@ type AuthenticationIntent =
       }>;
     }>;
 
-function localizedText(
-  value: string | Readonly<{ fallback: string }> | undefined,
-): string {
-  return typeof value === 'string' ? value : value?.fallback ?? '';
-}
 
-function sameService(
-  left: PluginContributionIdentityV1,
-  right: PluginContributionIdentityV1,
-): boolean {
-  return left.pluginId === right.pluginId && left.localId === right.localId;
-}
 
-function exactServiceCommandId(service: PluginContributionIdentityV1): string {
-  return `${service.pluginId}/${service.localId}`;
-}
 
-function legacyServiceIdFor(
-  service: PluginContributionIdentityV1,
-): string | null {
-  for (const [serviceId, compatibility] of Object.entries(
-    BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID,
-  )) {
-    if (sameService(service, compatibility.service)) return serviceId;
-  }
-  return null;
-}
 
-function resolveConnectTargets(
-  registry: Pick<ResolvedContributionRegistry, 'connectedAccountDescriptors'>,
-): readonly ConnectTarget[] {
-  const candidates = (registry.connectedAccountDescriptors ?? []).flatMap(
-    (contribution) => {
-      const pluginId = contribution.pluginId?.trim();
-      if (!pluginId) return [];
-      const descriptor =
-        PluginConnectedAccountDescriptorContributionV2Schema.safeParse(
-          contribution.definition,
-        );
-      if (!descriptor.success) return [];
-      const service = Object.freeze({
-        pluginId,
-        localId: descriptor.data.id,
-      });
-      return [
-        {
-          service,
-          descriptor: descriptor.data,
-          legacyServiceId: legacyServiceIdFor(service),
-        },
-      ];
-    },
-  );
-  const localIdCounts = new Map<string, number>();
-  for (const candidate of candidates) {
-    localIdCounts.set(
-      candidate.service.localId,
-      (localIdCounts.get(candidate.service.localId) ?? 0) + 1,
-    );
-  }
-  return Object.freeze(
-    candidates
-      .map(({ service, descriptor, legacyServiceId }) => {
-        const exactId = exactServiceCommandId(service);
-        const aliases = new Set<string>([exactId]);
-        if (localIdCounts.get(service.localId) === 1) {
-          aliases.add(service.localId);
-        }
-        if (legacyServiceId) aliases.add(legacyServiceId);
-        return Object.freeze({
-          service,
-          descriptor,
-          commandId: legacyServiceId ?? (
-            localIdCounts.get(service.localId) === 1
-              ? service.localId
-              : exactId
-          ),
-          aliases: Object.freeze([...aliases]),
-        });
-      })
-      .sort((left, right) => left.commandId.localeCompare(right.commandId)),
-  );
-}
 
 async function loadConnectTargets(): Promise<readonly ConnectTarget[]> {
   const registry = await resolveMergedContributionRegistry({
     happyHomeDir: configuration.happyHomeDir,
   });
-  return resolveConnectTargets(registry);
+  return projectConnectTargets({ connectedAccountDescriptors: registry.connectedAccountDescriptors.flatMap((contribution) => {
+    const parsed = PluginConnectedAccountDescriptorContributionV2Schema.safeParse(contribution.definition);
+    return parsed.success ? [{ ...contribution, definition: parsed.data }] : [];
+  }) });
 }
 
-function showConnectHelp(targets: readonly ConnectTarget[]): void {
-  const targetLines =
-    targets.length > 0
-      ? targets
-          .map((target) => {
-            const title =
-              localizedText(target.descriptor.title) || target.service.localId;
-            return `  happier connect ${target.commandId.padEnd(20)} ${title}`;
-          })
-          .join('\n')
-      : '  (no connected-account services registered)';
-  console.log(
-    [
-      `${sectionTitle('happier connect')} - Connect accounts through the Happier daemon`,
-      '',
-      sectionTitle('Usage:'),
-      targetLines,
-      `  ${cmd('happier connect status')}                      Show connection status`,
-      `  ${cmd('happier connect <service> --account <id>')}    Reconnect an exact account`,
-      `  ${cmd('happier connect <service> --mode <mode>')}     Select an authentication mode`,
-      `  ${cmd('happier connect <service> --import --source <id>')} Import a native login on this machine`,
-      `  ${cmd('happier connect <service> --oauth')}           Select authorization-code OAuth`,
-      `  ${cmd('happier connect <service> --device')}          Select device-code OAuth`,
-      `  ${cmd('happier connect <service> --token')}           Select the built-in token mode`,
-      `  ${cmd('happier connect <service> --no-open')}         Do not open a browser`,
-      `  ${cmd('happier connect <service> --timeout <seconds>')} Bound the interactive flow`,
-      '',
-      sectionTitle('Notes:'),
-      bullets([
-        `Authenticate with Happier first using ${cmd('happier auth login')}`,
-        'Authentication state, PKCE, credentials, and settlement stay in the selected daemon',
-        'External services use the unambiguous <pluginId>/<localId> command form',
-        'Native import creates a host-owned account; name it afterward in connected-account settings',
-      ]),
-      '',
-    ].join('\n'),
-  );
-}
 
 function findTarget(
   targets: readonly ConnectTarget[],
