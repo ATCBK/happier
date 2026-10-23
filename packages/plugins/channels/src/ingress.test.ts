@@ -1,6 +1,7 @@
 import { arePluginMachineExecutionOriginsEqual, definePlugin, PluginError } from '@happier-dev/plugin-sdk';
 import { arePluginMachineExecutionRoutingsEqual, getPluginMachineExecutionRouting, type PluginMachineExecutionOriginV1, type PluginMachineExecutionRoutingV1 } from '@happier-dev/plugin-sdk/actions';
 import type { SessionSendRequest, SessionSummary } from '@happier-dev/plugin-sdk/sessions';
+import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
 import type {
   JsonValue,
   PluginInvocationContext,
@@ -11,6 +12,7 @@ import type {
 } from '@happier-dev/plugin-sdk';
 import {
   PLUGIN_COLLECTION_MUTATION_BATCH_MAX_ROWS_V1,
+  PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
   type PluginCollectionBatchMeasurement,
   type PluginCollectionLimits,
   type PluginCollectionMutation,
@@ -84,6 +86,7 @@ import { createConversationPairingResourceRuntime } from './pairingResource.js';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { CHANNELS_PLUGIN, PLUGIN_MANIFEST } from './manifest.js';
 import { classifySupervisorFailure } from './supervisorFailure.js';
+import { createIngressSupervisor } from './checkpointedPollSupervisor.js';
 import { resourceText } from './testkit/resourceContract.js';
 
 /**
@@ -473,6 +476,7 @@ type IngressHarnessOptions = Readonly<{
     rows: Map<string, StoredStateRow>;
     operations: readonly CollectionMutation[];
   }>) => void | Promise<void>;
+  afterBatch?: (input: Readonly<{ operations: readonly CollectionMutation[] }>) => void;
   loseNextUpdatedBatchResponse?: boolean;
   pollResult?: JsonValue;
   getPollResult?: () => JsonValue | Promise<JsonValue>;
@@ -1214,6 +1218,7 @@ function createIngressHarness(options: IngressHarnessOptions = {}) {
       }
       rows.clear();
       for (const [id, row] of snapshot) rows.set(id, row);
+      options.afterBatch?.({ operations });
       if (loseNextUpdatedBatchResponse) {
         loseNextUpdatedBatchResponse = false;
         throw new Error('Simulated Account Collection response loss.');
@@ -6236,6 +6241,232 @@ pairingRequestId: 'pairing-request-1',
     } finally { vi.useRealTimers(); }
   });
 
+  it.each([false, true])('finishes the ingress retention keyset sweep before replaying Collection invalidations from its own compaction (continuation failure: %s)', async (failContinuation) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const generation = new AbortController();
+    const changes = new Set<() => void>();
+    const harness = createIngressHarness({ connection: socketChannelConnection(), afterBatch: () => {
+      // Authenticated Collection publication is the system boundary. Match
+      // its level-triggered microtask delivery, including this owner's writes.
+      queueMicrotask(() => { for (const notify of changes) notify(); });
+    } });
+    let running: Promise<void> | undefined;
+    const supervisor = createIngressSupervisor();
+    try {
+      for (let index = 0; index <= PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1; index++) {
+        await ingestConversationProviderObservationForInvocation(observation({
+          occurrenceId: `telegram:retention-page:${index}`, messageRevision: `retention-page:${index}`,
+          occurredAt: 1_000, transport: 'socket',
+        }), harness.context);
+      }
+      const censusRows = [...harness.rows.values()].filter(row => row.value['record-kind'] === 'ingress-census');
+      expect(censusRows).toHaveLength(PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 + 1);
+      const firstPageCursor = censusRows.map(row => row.rowId).sort()[PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 - 1];
+      const account = harness.context.services.storage.account;
+      if (!account) throw new Error('Missing Account storage boundary');
+      const collection = account.collection(CHANNEL_STATE_COLLECTION);
+      const retentionCursors: Array<string | undefined> = [];
+      let secondPageStarted: (() => void) | undefined;
+      const secondPage = new Promise<void>(resolve => { secondPageStarted = resolve; });
+      let fourthPageStarted: (() => void) | undefined;
+      const fourthPage = new Promise<void>(resolve => { fourthPageStarted = resolve; });
+      const watchedCollection = { ...collection,
+        async query(...args: Parameters<typeof collection.query>) {
+          if (args[0].index === 'by-kind' && args[0].prefix?.[0] === 'ingress-census') {
+            retentionCursors.push(args[0].cursor);
+            if (retentionCursors.length === 2) {
+              secondPageStarted?.();
+              if (failContinuation) throw new Error('Simulated Account Collection query failure.');
+            }
+            if (retentionCursors.length === 4) fourthPageStarted?.();
+          }
+          return await collection.query(...args);
+        },
+        watch(_request: unknown, notify: () => void) {
+          changes.add(notify);
+          return { dispose: () => { changes.delete(notify); } };
+        },
+      };
+      // Only Account storage and Event transport are supplied by the fixture;
+      // ingress production, retention and supervision all remain real.
+      const context: BackgroundServiceContext = { ...harness.context, surface: 'background', session: undefined, signal: generation.signal,
+        services: { ...harness.context.services,
+          storage: { account: { collection: () => watchedCollection } },
+          events: { plugin: { emit: async () => ({ status: 'admitted', sequence: 1, subscriberCount: 0 }) } },
+        } as unknown as PluginServices,
+      };
+      running = supervisor.run(context);
+      if (failContinuation) {
+        await secondPage;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(retentionCursors).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(retentionCursors).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await fourthPage;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(retentionCursors).toEqual(failContinuation
+        ? [undefined, firstPageCursor, firstPageCursor, undefined, firstPageCursor]
+        : [undefined, firstPageCursor, undefined, firstPageCursor]);
+      for (const census of censusRows) {
+        expect(record(harness.rows.get(census.rowId)?.value.payload).normalizedIngress).toBeNull();
+      }
+      const parkedCursors = [...retentionCursors];
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(retentionCursors).toEqual(parkedCursors);
+    } finally {
+      generation.abort();
+      await running;
+      await supervisor.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['recovery', 'paged-recovery', 'change', 'expiry'] as const)('preserves physical-retirement recovery without withholding %s wakes', async (wakeKind) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const generation = new AbortController();
+    const changes = new Set<() => void>();
+    const forgetTimes: number[] = [];
+    let retried: (() => void) | undefined;
+    const retryAttempt = new Promise<void>(resolve => { retried = resolve; });
+    let blockedMemberId: string | undefined;
+    let retirementBlocked = true;
+    let compactionTargetId: string | undefined;
+    let compactionDone: (() => void) | undefined;
+    let changedOutcome: ((outcome: 'compacted' | 'parked') => void) | undefined;
+    const harness = createIngressHarness({
+      connection: socketChannelConnection(),
+      beforeCollectionForget: ({ rowId }) => {
+        if (rowId !== blockedMemberId) return;
+        forgetTimes.push(Date.now());
+        if (forgetTimes.length === 2) retried?.();
+        if (retirementBlocked) throw new Error('Simulated physical retirement failure.');
+      },
+      afterBatch: () => queueMicrotask(() => {
+        for (const notify of changes) notify();
+        if (compactionTargetId !== undefined
+          && record(harness.rows.get(compactionTargetId)?.value.payload).normalizedIngress === null) compactionDone?.();
+      }),
+    });
+    let parked: (() => void) | undefined;
+    const recoveryWait = new Promise<void>(resolve => { parked = resolve; });
+    const supervisor = createIngressSupervisor({ clock: {
+      now: () => Date.now(),
+      sleep: (delayMs, signal) => new Promise<void>((resolve, reject) => {
+        if (signal.aborted) { reject(signal.reason); return; }
+        const onAbort = () => { globalThis.clearTimeout(timer); reject(signal.reason); };
+        const timer = globalThis.setTimeout(() => {
+          signal.removeEventListener('abort', onAbort);
+          resolve();
+        }, delayMs);
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (delayMs === (wakeKind === 'expiry' ? 500 : 1_000)) parked?.();
+        if (changedOutcome !== undefined && compactionTargetId !== undefined && Date.now() === 61_251) {
+          const payload = record(harness.rows.get(compactionTargetId)?.value.payload);
+          if (payload.phase === 'prepared' && payload.normalizedIngress !== null) changedOutcome('parked');
+        }
+      }),
+    } });
+    let running: Promise<void> | undefined;
+    try {
+      const identities = await Promise.all(Array.from({ length: wakeKind === 'paged-recovery'
+        ? PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 + 1 : 2 }, async (_, index) => {
+        const occurrenceId = `telegram:retention-recovery:${index}`;
+        return { occurrenceId, censusId: await deriveIngressCensusRowId({
+          routingIdentityKey: socketChannelConnection().payload.routingIdentityKey,
+          connectionId: 'connection-1', occurrenceId,
+        }) };
+      }));
+      identities.sort((left, right) => left.censusId < right.censusId ? -1 : left.censusId === right.censusId ? 0 : 1);
+      const [expired, ...retained] = identities;
+      if (!expired) throw new Error('Missing expired ingress identity');
+      await ingestConversationProviderObservationForInvocation(observation({
+        occurrenceId: expired.occurrenceId, messageRevision: expired.occurrenceId,
+        occurredAt: 1_000, transport: 'socket',
+      }), harness.context);
+      await settleAcceptedInputReplyProjection(harness);
+      blockedMemberId = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-obligation')?.rowId;
+      if (blockedMemberId === undefined) throw new Error('Missing expired census member');
+      vi.setSystemTime(61_001);
+      for (const identity of retained) {
+        await ingestConversationProviderObservationForInvocation(observation({
+          occurrenceId: identity.occurrenceId, messageRevision: identity.occurrenceId,
+          occurredAt: wakeKind === 'expiry' ? 1_500 : 61_001, transport: 'socket',
+        }), harness.context);
+      }
+      compactionTargetId = retained.at(-1)?.censusId;
+      const firstCompaction = new Promise<void>(resolve => { compactionDone = resolve; });
+      const account = harness.context.services.storage.account;
+      if (!account) throw new Error('Missing Account storage boundary');
+      const collection = account.collection(CHANNEL_STATE_COLLECTION);
+      const retentionTimes: number[] = [];
+      const watchedCollection = { ...collection,
+        async forget(...args: Parameters<typeof collection.forget>) {
+          const result = await collection.forget(...args);
+          queueMicrotask(() => { for (const notify of changes) notify(); });
+          return result;
+        },
+        async query(...args: Parameters<typeof collection.query>) {
+          if (args[0].index === 'by-kind' && args[0].prefix?.[0] === 'ingress-census') retentionTimes.push(Date.now());
+          return await collection.query(...args);
+        },
+        watch(_request: unknown, notify: () => void) {
+          changes.add(notify);
+          return { dispose: () => { changes.delete(notify); } };
+        },
+      };
+      // Account storage and Event transport remain the only supplied boundaries.
+      const context: BackgroundServiceContext = { ...harness.context, surface: 'background', session: undefined, signal: generation.signal,
+        services: { ...harness.context.services,
+          storage: { account: { collection: () => watchedCollection } },
+          events: { plugin: { emit: async () => ({ status: 'admitted', sequence: 1, subscriberCount: 0 }) } },
+        } as unknown as PluginServices,
+      };
+      running = supervisor.run(context);
+      await firstCompaction;
+      await recoveryWait;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(forgetTimes).toEqual([61_001]);
+      if (wakeKind === 'change') {
+        await vi.advanceTimersByTimeAsync(250);
+        // The completed failed sweep is parked. Repair its transient storage
+        // failure before later real producer writes, so another failing sweep
+        // does not establish a fresh maintenance recovery deadline.
+        retirementBlocked = false;
+        const priorAdmissions = harness.send.mock.calls.length;
+        const changed = observation({ occurrenceId: 'telegram:retention-recovery:changed',
+          messageRevision: 'retention-recovery:changed', occurredAt: Date.now(), transport: 'socket' });
+        compactionTargetId = await deriveIngressCensusRowId({ routingIdentityKey: socketChannelConnection().payload.routingIdentityKey,
+          connectionId: 'connection-1', occurrenceId: fullTextIngress(changed).occurrenceId });
+        const changedCompaction = new Promise<'compacted' | 'parked'>(resolve => {
+          changedOutcome = resolve;
+          compactionDone = () => { resolve('compacted'); };
+        });
+        await ingestConversationProviderObservationForInvocation(changed, harness.context);
+        expect(harness.send).toHaveBeenCalledTimes(priorAdmissions + 1);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(retentionTimes).toContain(61_251);
+        expect(await changedCompaction).toBe('compacted');
+        expect(Date.now()).toBe(61_251);
+      } else {
+        const delay = wakeKind === 'expiry' ? 500 : 1_000;
+        await vi.advanceTimersByTimeAsync(delay - 1);
+        expect(forgetTimes).toEqual([61_001]);
+        await vi.advanceTimersByTimeAsync(1);
+        await retryAttempt;
+        expect(forgetTimes).toEqual([61_001, 61_001 + delay]);
+      }
+    } finally {
+      generation.abort();
+      await running;
+      await supervisor.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it('compacts a settled census in place, then still decides replay equality without its message body', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -7680,6 +7911,173 @@ pairingRequestId: 'pairing-request-1',
 });
 
 describe('Conversation checkpointed-poll ingress', () => {
+  it('keeps unchanged empty-poll checkpoints stable without publishing another Collection mutation', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    // IMAP's real empty listSince result retains these exact provider progress
+    // fields; the host boundary supplies that provider outcome, not poll logic.
+    const harness = createIngressHarness({ pollResult: {
+      kind: 'checkpointOnly', checkpointAfterBatch: { uidValidity: '12345', lastUid: 12 },
+    } });
+    try {
+      await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context))
+        .resolves.toMatchObject({ kind: 'committed' });
+      const baseline = structuredClone(currentCheckpoint(harness.rows));
+      expect(baseline).toBeDefined();
+      for (let index = 0; index < 3; index += 1) {
+        vi.setSystemTime(Date.now() + 1_000);
+        await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context))
+          .resolves.toMatchObject({ kind: 'committed' });
+      }
+      expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledTimes(4);
+      expect(currentCheckpoint(harness.rows)).toEqual(baseline);
+      expect(harness.send).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['token', 'deadline', 'authority', 'lastOccurrence'] as const)('persists a real %s change even when the other checkpoint fields are unchanged', async change => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    let poll = 0;
+    const event = observation({ messageRevision: 'semantic-checkpoint-change', occurrenceId: 'telegram:update:checkpoint-change' });
+    const harness = createIngressHarness({ getPollResult: () => {
+      poll += 1;
+      return {
+        kind: poll > 1 && change === 'lastOccurrence' ? 'batch' : 'checkpointOnly',
+        checkpointAfterBatch: { cursor: poll > 1 && change === 'token' ? 'advanced' : 'baseline' },
+        ...(poll > 1 && change === 'deadline' ? { retryHint: { retryAfterMs: 2_500 } } : {}),
+        ...(poll > 1 && change === 'lastOccurrence' ? { observations: [event.entry] } : {}),
+      };
+    } });
+    try {
+      await runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context);
+      const baseline = currentCheckpoint(harness.rows);
+      if (baseline === undefined) throw new Error('Expected baseline checkpoint.');
+      vi.setSystemTime(Date.now() + 1_000);
+      if (change === 'authority') advanceConnectionAuthorityEpoch(harness.rows);
+      await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context))
+        .resolves.toMatchObject({ kind: 'committed' });
+      const updated = currentCheckpoint(harness.rows);
+      expect(updated?.revision).toBe(baseline.revision + 1);
+      expect(updated?.value.payload).toMatchObject({
+        opaqueToken: { cursor: change === 'token' ? 'advanced' : 'baseline' },
+        authorityEpoch: change === 'authority' ? 5 : 4,
+        lastOccurrenceId: change === 'lastOccurrence' ? 'telegram:update:checkpoint-change' : null,
+        nextPollNotBeforeMs: change === 'deadline' ? Date.now() + 2_500 : null,
+      });
+      if (change === 'lastOccurrence') {
+        expect(harness.send).toHaveBeenCalledTimes(1);
+        const census = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-census');
+        expect(census?.value.payload).toMatchObject({ checkpointCoveredAt: Date.now() });
+      }
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not wake parked ingress retention from unchanged empty poll checkpoints while keeping fresh poll authority reads', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    const generation = new AbortController();
+    const changes = new Set<() => void>();
+    const event = observation({ messageRevision: 'parked-retention', occurrenceId: 'telegram:update:parked-retention' });
+    let poll = 0;
+    let mutationPublications = 0;
+    let checkpointId: string | undefined;
+    let completedPollAssertions = 0;
+    let retainedMemberId: string | undefined;
+    let retainedMemberReads = 0;
+    let freshConnectionReads = 0;
+    const harness = createIngressHarness({
+      getPollResult: (): JsonValue => {
+        poll += 1;
+        return poll === 2
+          ? { kind: 'batch', observations: [event.entry], checkpointAfterBatch: { cursor: 'retained' } }
+          : { kind: 'checkpointOnly', checkpointAfterBatch: { cursor: poll === 1 ? 'baseline' : 'retained' } };
+      },
+      beforeCollectionGet: ({ rowId }) => {
+        if (rowId === retainedMemberId) retainedMemberReads += 1;
+        if (rowId === 'connection-1') freshConnectionReads += 1;
+      },
+      afterBatch: ({ operations }) => {
+        if (operations.some(operation => operation.kind !== 'assert')) {
+          // The real Data mutation publisher emits only for changed rows,
+          // never for an assertion-only successful atomic batch.
+          mutationPublications += 1;
+          queueMicrotask(() => { for (const notify of changes) notify(); });
+        } else if (operations.some(operation => operation.kind === 'assert' && operation.rowId === checkpointId)) {
+          completedPollAssertions += 1;
+        }
+      },
+    });
+    let onPollParked: () => void = () => {};
+    const pollParked = new Promise<void>(resolve => { onPollParked = resolve; });
+    const supervisor = createIngressSupervisor({ clock: {
+      now: () => Date.now(),
+      sleep: (delayMs, signal) => {
+        const sleeping = new Promise<void>((resolve, reject) => {
+          if (signal.aborted) { reject(signal.reason); return; }
+          const onAbort = () => { globalThis.clearTimeout(timer); reject(signal.reason); };
+          const timer = globalThis.setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, delayMs);
+          signal.addEventListener('abort', onAbort, { once: true });
+        });
+        if (delayMs === 1_000) onPollParked();
+        return sleeping;
+      },
+    } });
+    let running: Promise<void> | undefined;
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        await runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context);
+      }
+      await runConversationIngressRetentionForInvocation({ now: Date.now() }, harness.context);
+      checkpointId = currentCheckpoint(harness.rows)?.rowId;
+      retainedMemberId = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-obligation')?.rowId;
+      if (checkpointId === undefined || retainedMemberId === undefined) throw new Error('Expected retained ingress fixture.');
+      const account = harness.context.services.storage.account;
+      if (!account) throw new Error('Missing Account storage boundary.');
+      const collection = account.collection(CHANNEL_STATE_COLLECTION);
+      const watchedCollection = { ...collection, watch(_request: unknown, notify: () => void) {
+        changes.add(notify); return { dispose: () => { changes.delete(notify); } };
+      } };
+      const context: BackgroundServiceContext = { ...harness.context, surface: 'background', session: undefined, signal: generation.signal,
+        // Only persistent Account storage and Event transport are boundaries.
+        services: { ...harness.context.services, storage: { account: { collection: () => watchedCollection } },
+          events: { plugin: { emit: async () => ({ status: 'admitted', sequence: 1, subscriberCount: 0 }) } },
+        } as unknown as PluginServices,
+      };
+      running = supervisor.run(context);
+      await vi.waitFor(() => expect(completedPollAssertions).toBeGreaterThan(0), { interval: 0 });
+      await pollParked;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(retainedMemberReads).toBeGreaterThan(0);
+      const parkedMemberReads = retainedMemberReads;
+      const parkedPublications = mutationPublications;
+      const authorityReads = freshConnectionReads;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => expect(completedPollAssertions).toBeGreaterThan(1), { interval: 0 });
+      expect(retainedMemberReads).toBe(parkedMemberReads);
+      expect(mutationPublications).toBe(parkedPublications);
+      expect(freshConnectionReads).toBeGreaterThan(authorityReads);
+    } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['connection', 'checkpoint'] as const)('fences an unchanged checkpoint against a concurrent %s change at the final atomic batch', async authority => {
+    let race = false;
+    let raced = false;
+    const harness = createIngressHarness({ beforeBatch: ({ rows }) => {
+      if (!race || raced) return;
+      raced = true;
+      const rowId = authority === 'connection' ? 'connection-1' : currentCheckpoint(rows)?.rowId;
+      if (rowId === undefined) throw new Error('Expected final checkpoint authority row.');
+      reviseStateRow(rows, rowId);
+    } });
+    await runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context);
+    race = true;
+    await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context))
+      .rejects.toMatchObject({ code: 'channels_checkpointed_poll_conflict' });
+    expect(raced).toBe(true);
+    expect(harness.send).not.toHaveBeenCalled();
+  });
+
   it.each(['machine', 'home', 'unavailable'] as const)('keeps a foreign %s poll inert before provider or checkpoint effects', async (foreign) => {
     const harness = createIngressHarness();
     const routing = { ...getPluginMachineExecutionRouting(telegramExecutionOrigin), pluginId: 'happier.channels' };
@@ -7788,13 +8186,15 @@ describe('Conversation checkpointed-poll ingress', () => {
               checkpointAfterBatch: { cursor: 'covered' },
             };
         },
-        beforeBatch: ({ operations }) => {
-          const writesOccurrence = operations.some((operation) => {
-            if (!isCheckpointPut(operation)) return false;
-            const payload = record(operation.value.payload);
+        beforeBatch: ({ rows, operations }) => {
+          const commitsOccurrence = operations.some((operation) => {
+            const checkpoint = isCheckpointPut(operation) ? operation.value
+              : operation.kind === 'assert' ? rows.get(operation.rowId)?.value : undefined;
+            if (checkpoint?.['record-kind'] !== 'checkpoint') return false;
+            const payload = record(checkpoint.payload);
             return payload.lastOccurrenceId === occurrenceId;
           });
-          if (writesOccurrence) checkpointBatches.push(operations);
+          if (commitsOccurrence) checkpointBatches.push(operations);
         },
       });
 
@@ -7811,6 +8211,8 @@ describe('Conversation checkpointed-poll ingress', () => {
         row.deleted !== true && row.value['record-kind'] === 'ingress-census'
       ));
       if (coveredCensus === undefined) throw new Error('Expected a checkpoint-covered census.');
+      const coveredCheckpoint = currentCheckpoint(harness.rows);
+      if (coveredCheckpoint === undefined) throw new Error('Expected the committed checkpoint.');
 
       await expect(runConversationCheckpointedPollForInvocation({
         connectionId: 'connection-1',
@@ -7837,11 +8239,17 @@ describe('Conversation checkpointed-poll ingress', () => {
       expect(checkpointBatches[1]).toEqual(expect.arrayContaining([
         {
           kind: 'assert',
+          rowId: coveredCheckpoint.rowId,
+          expectedRevision: coveredCheckpoint.revision,
+        },
+        {
+          kind: 'assert',
           rowId: coveredCensus.rowId,
           expectedRevision: coveredCensus.revision,
         },
       ]));
       expect(checkpointBatches[1]?.some(isIngressCensusPut)).toBe(false);
+      expect(checkpointBatches[1]?.some(isCheckpointPut)).toBe(false);
       expect(harness.rows.get(coveredCensus.rowId)).toEqual(coveredCensus);
     } finally {
       vi.useRealTimers();

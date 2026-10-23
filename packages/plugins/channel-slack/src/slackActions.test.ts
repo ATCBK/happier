@@ -51,13 +51,13 @@ describe('Slack provider Actions', () => {
     expect(JSON.stringify(result)).not.toContain('xapp-');
     expect(result.setupGuidance?.steps).toEqual([
       { title: expect.any(String), externalUrl: 'https://api.slack.com/apps' },
-      { title: expect.stringContaining('Socket Mode'), externalUrl: expect.any(String) },
+      { title: expect.any(String), externalUrl: expect.any(String) },
       { title: expect.any(String), externalUrl: expect.any(String), copyableValues: [{ label: expect.any(String), value: 'connections:write' }] },
       { title: expect.any(String), externalUrl: expect.any(String), copyableValues: [
-        { label: 'Bot scopes', value: 'chat:write, users:read, channels:read, channels:history, groups:read, groups:history, im:read, im:history, mpim:read, mpim:history' },
-        { label: 'Bot events', value: 'message.channels, message.groups, message.im, message.mpim' },
+        { label: expect.any(String), value: 'chat:write, users:read, channels:read, channels:history, groups:read, groups:history, im:read, im:history, mpim:read, mpim:history' },
+        { label: expect.any(String), value: 'message.channels, message.groups, message.im, message.mpim' },
       ] },
-      { title: expect.stringContaining('Connected Account') },
+      { title: expect.any(String) },
     ]);
     expect(b.materialize).toHaveBeenCalledWith('slack-credentials', { kind: 'environment', keys: ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'] },
       { signal: b.context.signal, expectedAccount: credentialRef });

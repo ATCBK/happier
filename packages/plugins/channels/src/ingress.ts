@@ -7135,6 +7135,11 @@ async function commitCurrentCheckpointedPoll(input: Readonly<{
     );
   }
   const writesConnection = connection.value.payload.pollFailure !== null;
+  const writesCheckpoint = input.checkpoint === undefined
+    || input.checkpoint.value.payload.authorityEpoch !== connection.value.payload.authorityEpoch
+    || !pluginJsonValuesEqual(input.checkpoint.value.payload.opaqueToken, input.checkpointAfter)
+    || input.checkpoint.value.payload.lastOccurrenceId !== input.lastOccurrenceId
+    || input.checkpoint.value.payload.nextPollNotBeforeMs !== input.nextPollNotBeforeMs;
   const now = Date.now();
   const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
   const operations: readonly PluginCollectionMutation<JsonRecord>[] = [
@@ -7149,19 +7154,27 @@ async function commitCurrentCheckpointedPoll(input: Readonly<{
           rowId: connection.row.rowId,
           expectedRevision: connection.row.revision,
         }]),
-    {
-      kind: 'put' as const,
-      value: createCheckpointValue({
-        connection,
-        checkpointId: input.checkpointId,
-        checkpoint: input.checkpoint,
-        checkpointAfter: input.checkpointAfter,
-        lastOccurrenceId: input.lastOccurrenceId,
-        nextPollNotBeforeMs: input.nextPollNotBeforeMs,
-        now,
-      }),
-      expectedRevision: input.checkpoint?.row.revision ?? 'absent',
-    },
+    ...(input.checkpoint !== undefined && !writesCheckpoint
+      ? [{
+          // Even a semantic no-op commits against both final authority rows.
+          // It need not manufacture a revision and a Collection invalidation.
+          kind: 'assert' as const,
+          rowId: input.checkpointId,
+          expectedRevision: input.checkpoint.row.revision,
+        }]
+      : [{
+          kind: 'put' as const,
+          value: createCheckpointValue({
+            connection,
+            checkpointId: input.checkpointId,
+            checkpoint: input.checkpoint,
+            checkpointAfter: input.checkpointAfter,
+            lastOccurrenceId: input.lastOccurrenceId,
+            nextPollNotBeforeMs: input.nextPollNotBeforeMs,
+            now,
+          }),
+          expectedRevision: input.checkpoint?.row.revision ?? 'absent' as const,
+        }]),
     ...censusSettlements.map((settlement) => (
       settlement.kind === 'cover'
         ? {
@@ -7188,7 +7201,9 @@ async function commitCurrentCheckpointedPoll(input: Readonly<{
       true,
     );
   }
-  const checkpointRow = result.results.find((entry) => entry.rowId === input.checkpointId && !entry.deleted);
+  const checkpointRow = writesCheckpoint
+    ? result.results.find((entry) => entry.rowId === input.checkpointId && !entry.deleted)
+    : input.checkpoint?.row;
   if (checkpointRow === undefined) {
     throw pluginError(
       'channels_checkpointed_poll_result_invalid',

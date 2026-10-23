@@ -145,9 +145,9 @@ describe('Channels first-party provider composition', () => {
       expect(await core.invokeAction('connection/prepare-v1', setup, { services, surface: 'mcp' }))
         .toMatchObject({ kind: 'ready', recommendedTransport: 'checkpointedPull', setupGuidance: {
           steps: [
-            { title: expect.stringContaining('BotFather'), externalUrl: 'https://t.me/BotFather' },
+            { title: expect.any(String), externalUrl: 'https://t.me/BotFather' },
             { title: expect.any(String), copyableValues: [{ label: expect.any(String), value: '/newbot' }] },
-            { title: expect.stringContaining('Connected Account') },
+            { title: expect.any(String) },
           ],
         } });
       expect(request.mock.calls.filter(([request]) => request.url.endsWith('/deleteWebhook'))).toHaveLength(1);

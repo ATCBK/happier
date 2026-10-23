@@ -977,10 +977,9 @@ export function createConversationOutwardDeliverySupervisor(
     const sessions = new Map<string, { dispose(): void }>();
     const unavailablePermissionBindings = new Set<string>();
     let permissionSourcesInvalidated = false;
+    let discoveryInvalidated = false;
     const invalidate = () => {
-      deliveryCursor = undefined;
-      deliveryDeadline = undefined;
-      retentionSweep = undefined;
+      discoveryInvalidated = true;
       wake.wake();
     };
     const invalidatePermissionSources = () => {
@@ -996,10 +995,20 @@ export function createConversationOutwardDeliverySupervisor(
             definition === CHANNEL_STATE_COLLECTION ? invalidatePermissionSources : invalidate));
         }
         while (!supervisorController.signal.aborted) {
+          // Retirement and delivery writes emit the same hints as foreign
+          // changes. Finish the current keyset pass before replaying them,
+          // otherwise each written page restarts discovery at the same prefix.
+          // The fresh pass still discovers changes behind either cursor.
+          if (discoveryInvalidated && deliveryCursor === undefined && retentionSweep?.cursor === undefined) {
+            discoveryInvalidated = false;
+            deliveryDeadline = undefined;
+            retentionSweep = undefined;
+          }
           wake.reset();
           permissionSourcesInvalidated = false;
           const observedSessions = new Set<string>();
           let nextWakeAt: number | undefined;
+          let continuationStalled = false;
           const workerContext = {
             ...context,
             signal: supervisorController.signal,
@@ -1020,19 +1029,19 @@ export function createConversationOutwardDeliverySupervisor(
               ...(deliveryCursor === undefined ? {} : { deliveryCursor }),
               ...(retentionSweep === undefined ? {} : { retentionSweep }),
             });
+            const advancedContinuation = (cycle.nextDeliveryCursor !== undefined && cycle.nextDeliveryCursor !== deliveryCursor)
+              || (cycle.nextRetentionSweep?.cursor !== undefined && cycle.nextRetentionSweep.cursor !== retentionSweep?.cursor);
+            continuationStalled = (cycle.nextDeliveryCursor !== undefined && cycle.nextDeliveryCursor === deliveryCursor)
+              || (cycle.nextRetentionSweep?.cursor !== undefined && cycle.nextRetentionSweep.cursor === retentionSweep?.cursor);
             deliveryCursor = cycle.nextDeliveryCursor;
             retentionSweep = cycle.nextRetentionSweep;
             // An invalidation during the pending read must not be overwritten
             // by that read's later terminal failure.
             if (permissionSourcesInvalidated) unavailablePermissionBindings.clear();
-            if (wake.isInvalidated()) {
-              deliveryCursor = undefined;
-              retentionSweep = undefined;
-            }
             nextWakeAt = cycle.nextWakeAt;
             if (nextWakeAt !== undefined) deliveryDeadline = Math.min(deliveryDeadline ?? Infinity, nextWakeAt);
             nextWakeAt = deliveryDeadline;
-            if (deliveryCursor !== undefined || retentionSweep?.cursor !== undefined) nextWakeAt = clock.now();
+            if (advancedContinuation || (discoveryInvalidated && !continuationStalled)) nextWakeAt = clock.now();
             else if (retentionSweep?.notBefore !== undefined) {
               nextWakeAt = Math.min(nextWakeAt ?? Infinity, retentionSweep.notBefore);
             }
@@ -1045,10 +1054,15 @@ export function createConversationOutwardDeliverySupervisor(
             if (!supervisorController.signal.aborted) {
               logOutwardDeliverySupervisorCycleFailure(workerContext, error);
               nextWakeAt = clock.now() + reconciliationIntervalMs;
+              continuationStalled = true;
             }
           }
           if (supervisorController.signal.aborted) break;
           try {
+            // The pending hint is retained above. Do not let its wake bit
+            // bypass a failed page's recovery. Healthy exhausted scans still
+            // replay hints immediately, independently of unrelated deadlines.
+            if (continuationStalled && discoveryInvalidated && nextWakeAt !== undefined && nextWakeAt > clock.now()) wake.reset();
             await wake.wait(clock, nextWakeAt);
           } catch {
             if (!supervisorController.signal.aborted) {

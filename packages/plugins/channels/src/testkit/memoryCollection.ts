@@ -221,6 +221,12 @@ export class MemoryCollection<TValue extends Record<string, unknown> = Record<st
     assertDeclaredCollectionIndex(input.index);
     const prefix = input.prefix?.[0];
     const bindingPrefix = input.prefix?.[1];
+    const compareRows = (left: StoredRow, right: StoredRow): number => {
+      const comparison = input.index === CHANNEL_STATE_INDEX_ID.byConnectionBindingV2
+        ? compareConnectionBindingRows(left, right)
+        : left.rowId.localeCompare(right.rowId);
+      return input.order === 'desc' ? -comparison : comparison;
+    };
     const all = [...this.rows.values()]
       .filter((row) => {
         if (row.deleted === true) return false;
@@ -244,15 +250,15 @@ export class MemoryCollection<TValue extends Record<string, unknown> = Record<st
         }
         return true;
       })
-      .sort((left, right) => {
-        const comparison = input.index === CHANNEL_STATE_INDEX_ID.byConnectionBindingV2
-          ? compareConnectionBindingRows(left, right)
-          : left.rowId.localeCompare(right.rowId);
-        return input.order === 'desc' ? -comparison : comparison;
-      });
-    const cursorIndex = input.cursor === undefined
-      ? 0
-      : Math.max(0, all.findIndex((row) => row.rowId === input.cursor) + 1);
+      .sort(compareRows);
+    // A retained keyset anchor can have been deleted by the preceding page.
+    // Its stored index key still defines the continuation, just as the real
+    // Collection cursor does; absence from the live result is not page one.
+    const cursorRow = input.cursor === undefined ? undefined : this.rows.get(input.cursor);
+    const afterCursor = cursorRow === undefined ? undefined : all.findIndex(row => compareRows(row, cursorRow) > 0);
+    const cursorIndex = afterCursor === undefined
+      ? input.cursor === undefined ? 0 : Math.max(0, all.findIndex(row => row.rowId === input.cursor) + 1)
+      : afterCursor < 0 ? all.length : afterCursor;
     const rows = all.slice(cursorIndex, cursorIndex + input.limit);
     const final = rows.at(-1);
     return {

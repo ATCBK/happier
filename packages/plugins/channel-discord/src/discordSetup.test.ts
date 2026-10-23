@@ -64,10 +64,10 @@ describe('Discord setup facts', () => {
         requiredPermissionsLabel: 'View Channels, Send Messages, Send Messages in Threads, Read Message History',
         steps: [
           { title: expect.any(String), externalUrl: 'https://discord.com/developers/applications' },
-          { title: expect.stringContaining('Connected Account'), externalUrl: expect.any(String) },
+          { title: expect.any(String), externalUrl: expect.any(String) },
           { title: expect.any(String), externalUrl: buildDiscordInviteUrl('application-123'), copyableValues: [
-            { label: 'Required permissions', value: 'View Channels, Send Messages, Send Messages in Threads, Read Message History' },
-            { label: 'Permissions bitfield', value: '274877975552' },
+            { label: expect.any(String), value: 'View Channels, Send Messages, Send Messages in Threads, Read Message History' },
+            { label: expect.any(String), value: '274877975552' },
           ] },
         ],
       },

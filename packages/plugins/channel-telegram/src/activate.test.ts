@@ -344,6 +344,16 @@ describe('Telegram Channel plugin activation', () => {
         // group and supergroup messages. Setup carries that authenticated
         // truth so no binding can promise `allAllowedMessages` there.
         sharedEndpointInputModes: ['directMentionsOnly', 'addressedMessages'],
+        setupGuidance: {
+          externalUrl: 'https://t.me/BotFather',
+          requiredPermissionsLabel: expect.any(String),
+          steps: [
+            { title: expect.any(String), externalUrl: 'https://t.me/BotFather' },
+            { title: expect.any(String), externalUrl: 'https://core.telegram.org/bots/tutorial#obtain-your-bot-token',
+              copyableValues: [{ label: expect.any(String), value: '/newbot' }] },
+            { title: expect.any(String) },
+          ],
+        },
         pairingDeepLinkTemplate: 'https://t.me/HappierBot?start={{token}}',
       });
       expect(connectedAccounts.materialize).toHaveBeenCalledWith(

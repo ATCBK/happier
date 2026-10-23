@@ -12,6 +12,7 @@ import type {
 } from '@happier-dev/plugin-sdk';
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
 import { getPluginMachineExecutionRouting, type PluginMachineExecutionRoutingV1 } from '@happier-dev/plugin-sdk/actions';
+import { PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 } from '@happier-dev/plugin-sdk/collections';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -1262,6 +1263,8 @@ describe('Channels outward-delivery supervisor', () => {
     const state = new MemoryCollection();
     const deliveries = new MemoryCollection();
     await seedProjectionState(state);
+    const stateReads = vi.spyOn(state, 'get');
+    const deliveryReads = vi.spyOn(deliveries, 'get');
     let changed: (() => void) | undefined;
     let answer = false;
     const dispose = vi.fn();
@@ -1281,14 +1284,155 @@ describe('Channels outward-delivery supervisor', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(changed).toBeTypeOf('function');
       const initialReads = execute.mock.calls.length;
+      const initialStateReads = stateReads.mock.calls.length;
+      const initialDeliveryReads = deliveryReads.mock.calls.length;
+      expect(initialStateReads).toBeGreaterThan(0);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(execute).toHaveBeenCalledTimes(initialReads);
+      expect(stateReads).toHaveBeenCalledTimes(initialStateReads);
+      expect(deliveryReads).toHaveBeenCalledTimes(initialDeliveryReads);
       answer = true; changed?.();
       await vi.advanceTimersByTimeAsync(0);
       await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1), { interval: 0 });
       expect(deliver).toHaveBeenCalledTimes(1);
+      expect(stateReads.mock.calls.length).toBeGreaterThan(initialStateReads);
     } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('finishes the retention keyset pass before replaying invalidations from its own retirement writes (failed continuation: %s)', async failContinuation => {
+    const pageSize = PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1;
+    const now = 31 * 24 * 60 * 60 * 1_000;
+    let persistedAt = 0;
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await state.put(connectionRow(), { expectedRevision: 'absent' });
+    const generation = new AbortController();
+    const store = createConversationOutwardDeliveryCollectionStore({
+      stateCollection: state as never,
+      deliveriesCollection: deliveries as never,
+      signal: generation.signal,
+      now: () => persistedAt,
+    });
+    const created = [];
+    for (let index = 0; index < pageSize * 3; index += 1) {
+      const result = await store.ensure({ ...outwardObligation(),
+        source: { kind: 'sessionProjection', sessionId: 'session-1', semanticItemId: `retention-${index}` },
+        deliveryKey: `retention-page:${index}` });
+      if (result.kind !== 'created') throw new Error('Expected retention custody fixture.');
+      created.push(result.record);
+    }
+    created.sort((left, right) => left.custodyId.localeCompare(right.custodyId));
+    for (const [index, record] of created.entries()) {
+      // The first page cannot age yet. Every later page is eligible now.
+      persistedAt = index < pageSize ? now - 1 : 100;
+      const settled = await store.compareAndSwap({ custodyId: record.custodyId,
+        expectedRevision: record.revision,
+        custody: { state: 'delivered', attemptCount: 1, providerMessageIds: ['receipt'] } });
+      if (settled.kind !== 'updated') throw new Error('Expected terminal retention fixture.');
+    }
+    let changed: (() => void) | undefined;
+    Object.assign(deliveries, { watch: (_request: unknown, listener: () => void) => {
+      changed = listener;
+      return { dispose() {} };
+    } });
+    // Persistent Collection writes deliver the same level-triggered hint as
+    // foreign writes. Keep the real retirement store and page scanner beneath it.
+    const batch = deliveries.batch.bind(deliveries);
+    vi.spyOn(deliveries, 'batch').mockImplementation(async operations => {
+      const result = await batch(operations);
+      if (result.status === 'updated') changed?.();
+      return result;
+    });
+    const readPage = deliveries.query.bind(deliveries);
+    let continuationFailed = false;
+    const query = vi.spyOn(deliveries, 'query').mockImplementation(async input => {
+      if (failContinuation && !continuationFailed && input.prefix?.[0] === true && input.cursor !== undefined) {
+        continuationFailed = true;
+        changed?.();
+        throw new Error('Collection temporarily unavailable during continuation.');
+      }
+      return readPage(input);
+    });
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const supervisor = createConversationOutwardDeliverySupervisor();
+    const running = supervisor.run({ ...backgroundContext({ state, deliveries,
+      execute: vi.fn(), executeAdmittedTargetedOperationWithExecutionOrigin: vi.fn() }), signal: generation.signal });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      if (failContinuation) {
+        expect(continuationFailed).toBe(true);
+        expect([...deliveries.rows.values()].filter(row => row.deleted)).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(999);
+        expect([...deliveries.rows.values()].filter(row => row.deleted)).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      await vi.waitFor(() => expect([...deliveries.rows.values()].filter(row => row.deleted)).toHaveLength(pageSize * 2), { interval: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      const retentionStarts = () => query.mock.calls.filter(([input]) => input.prefix?.[0] === true && input.cursor === undefined).length;
+      // One original sweep and one coalesced fresh sweep, not a restart after
+      // every retired page that repeatedly reads the retained first page.
+      expect(retentionStarts()).toBe(2);
+      const exhaustedReads = query.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(query).toHaveBeenCalledTimes(exhaustedReads);
+    } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
+  });
+
+  it('discovers ready custody arriving behind an exhausted scan without waiting for an unrelated future retry', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    const generation = new AbortController();
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await seedProjectionState(state);
+    const store = createConversationOutwardDeliveryCollectionStore({ stateCollection: state as never,
+      deliveriesCollection: deliveries as never, signal: generation.signal, now: () => Date.now() });
+    const old = await store.ensure(outwardObligation());
+    if (old.kind !== 'created') throw new Error('Expected future retry fixture.');
+    const retryAt = Date.now() + 50_000;
+    const deferred = await store.compareAndSwap({ custodyId: old.record.custodyId,
+      expectedRevision: old.record.revision,
+      custody: { state: 'retryDue', attemptCount: 1, providerMessageIds: [], retryNotBefore: retryAt } });
+    if (deferred.kind !== 'updated') throw new Error('Expected deferred custody fixture.');
+    let changed: (() => void) | undefined;
+    Object.assign(deliveries, { watch: (_request: unknown, listener: () => void) => {
+      changed = listener; return { dispose() {} };
+    } });
+    const readPage = deliveries.query.bind(deliveries);
+    let newCustodyId: string | undefined;
+    vi.spyOn(deliveries, 'query').mockImplementation(async input => {
+      if (input.prefix?.[0] === true && newCustodyId === undefined) {
+        const added = await store.ensure({ ...outwardObligation(), deliveryKey: 'new-ready-during-scan',
+          source: { kind: 'sessionProjection', sessionId: 'session-1', semanticItemId: 'new-ready' } });
+        if (added.kind !== 'created') throw new Error('Expected concurrently admitted ready custody.');
+        newCustodyId = added.record.custodyId;
+        changed?.();
+      }
+      return readPage(input);
+    });
+    const execute = vi.fn(async (action: string) => action === 'session.permission.remote.pending.list'
+      ? emptyPendingPermissionPage()
+      : { ok: true, projection: 'externalShareableV1', sessionId: 'session-1', scannedThroughSeq: 0,
+        nextCursor: '0', hasMore: false, items: [] });
+    const deliver = vi.fn(async () => ({ result: { kind: 'delivered', providerMessageIds: ['new-ready-receipt'] },
+      executionOrigin: providerTransportOrigin }));
+    const supervisor = createConversationOutwardDeliverySupervisor();
+    const running = supervisor.run({ ...backgroundContext({ state, deliveries, execute,
+      executeAdmittedTargetedOperationWithExecutionOrigin: deliver }), signal: generation.signal });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => expect(newCustodyId).toBeTypeOf('string'), { interval: 0 });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1), { interval: 0 });
+      if (newCustodyId === undefined) throw new Error('Expected newly admitted custody.');
+      const admittedCustodyId = newCustodyId;
+      await vi.waitFor(() => expect(deliveries.rows.get(admittedCustodyId)?.value.payload).toMatchObject({ state: 'delivered' }), { interval: 0 });
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliveries.rows.get(old.record.custodyId)?.value).toMatchObject({ 'retry-not-before': retryAt, payload: { state: 'retryDue' } });
+      await vi.advanceTimersByTimeAsync(49_999);
+      expect(deliver).toHaveBeenCalledTimes(1);
+    } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
   });
 
   it('retires known terminal custody at the exact thirty-day cutoff while preserving ambiguity', async () => {

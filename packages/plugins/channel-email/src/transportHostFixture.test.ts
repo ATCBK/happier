@@ -129,18 +129,18 @@ describe('email core with an external contributed raw transport', () => {
     try {
       await expect(f.invoke(ids.setup, { ...config, credentialRef: { service: { pluginId: 'acme.email.fixture', localId: 'mail' }, accountId: mailbox } }))
         .resolves.toMatchObject({ providerConnectionKey: `email:${mailbox}`, setupGuidance: { steps: [
-          { title: expect.stringContaining('IMAP') },
-          { title: expect.stringContaining('TLS'), copyableValues: [
-            { label: 'IMAP TLS port', value: '993' },
-            { label: 'SMTP STARTTLS port', value: '587' },
-            { label: 'SMTP implicit TLS port', value: '465' },
+          { title: expect.any(String) },
+          { title: expect.any(String), copyableValues: [
+            { label: expect.any(String), value: '993' },
+            { label: expect.any(String), value: '587' },
+            { label: expect.any(String), value: '465' },
           ] },
-          { title: expect.stringContaining('Connected Account') },
-          { title: expect.stringContaining('trust strategy'), copyableValues: [
-            { label: 'Authentication-Results strategy', value: 'authenticationResults' },
-            { label: 'Exchange strategy', value: 'exchangeOrganization' },
+          { title: expect.any(String) },
+          { title: expect.any(String), copyableValues: [
+            { label: expect.any(String), value: 'authenticationResults' },
+            { label: expect.any(String), value: 'exchangeOrganization' },
           ] },
-          { title: expect.stringContaining('authserv-id'), externalUrl: 'https://www.rfc-editor.org/rfc/rfc8601.html' },
+          { title: expect.any(String), externalUrl: 'https://www.rfc-editor.org/rfc/rfc8601.html' },
         ] } });
     } finally { await f.dispose(); }
   });

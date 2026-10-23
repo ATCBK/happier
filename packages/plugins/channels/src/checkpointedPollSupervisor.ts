@@ -183,6 +183,7 @@ export function createIngressSupervisor(
     else context.signal.addEventListener('abort', abortFromContext, { once: true });
     let retentionCursor: string | undefined;
     let retentionDeadline: number | undefined;
+    let retentionRetryRequired = false;
     let retentionInvalidated = false;
     // The first wake owns the startup pass: there is no earlier sweep to pace.
     let nextRetentionSweepAt = 0;
@@ -234,8 +235,12 @@ export function createIngressSupervisor(
           // outstanding simply does not start a second pass over the cursor it
           // is already advancing.
           if (retentionPass === null && now >= nextRetentionSweepAt) {
-            if (retentionInvalidated) {
-              retentionCursor = undefined;
+            if (retentionInvalidated && retentionCursor === undefined) {
+              // Finish this keyset sweep before replaying invalidations. The
+              // sweep's own compaction writes also publish Collection changes;
+              // restarting every page would repeatedly reread its prefix.
+              // Keep the pending invalidation until exhaustion so rows changed
+              // behind the cursor are still covered by the following sweep.
               retentionDeadline = undefined;
               retentionInvalidated = false;
             }
@@ -251,15 +256,23 @@ export function createIngressSupervisor(
                   retentionDeadline = Math.min(retentionDeadline ?? Infinity, retention.nextRetentionAt);
                 }
                 if (retention.retryRequired) {
+                  retentionRetryRequired = true;
                   retentionDeadline = Math.min(retentionDeadline ?? Infinity, clock.now() + reconciliationIntervalMs);
                 }
                 // A live cursor means this sweep is still mid-collection, so the
-                // next wake takes its next page. An exhausted sweep parks until
-                // an owner-derived expiry or Collection invalidation.
-                nextRetentionSweepAt = retentionCursor === undefined
-                  ? retentionDeadline ?? Number.POSITIVE_INFINITY
-                  : now;
-                if (retentionCursor === undefined) retentionDeadline = undefined;
+                // next wake takes its next page. After exhaustion, replay any
+                // pending invalidation before parking until an owner-derived
+                // expiry. A soft failure on any page retains the existing
+                // recovery deadline (or earlier expiry) after exhaustion;
+                // this sweep's own writes must not immediately retry it.
+                // Later Collection hints still wake fresh work immediately.
+                nextRetentionSweepAt = retentionCursor !== undefined || (retentionInvalidated && !retentionRetryRequired)
+                  ? now
+                  : retentionDeadline ?? Number.POSITIVE_INFINITY;
+                if (retentionCursor === undefined) {
+                  retentionDeadline = undefined;
+                  retentionRetryRequired = false;
+                }
               } catch (error) {
                 if (supervisorController.signal.aborted) return;
                 logIngressSupervisorFailure(workerContext, 'retention', error);
@@ -272,7 +285,6 @@ export function createIngressSupervisor(
             // Cleared the same way, and for the same reason, as a poll key.
             void pass.finally(() => {
               retentionPass = null;
-              if (retentionInvalidated) nextRetentionSweepAt = 0;
               if (Number.isFinite(nextRetentionSweepAt)) wake.wake();
             });
           }
