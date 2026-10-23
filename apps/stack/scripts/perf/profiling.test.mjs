@@ -1,7 +1,50 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { summarizeMainThreadTrace, summarizeHeapProfile, evaluateSettledHome } from './profiling.mjs';
+import * as profiling from './profiling.mjs';
+const { summarizeMainThreadTrace, summarizeHeapProfile, evaluateSettledHome, summarizeJsThreadLagSampler } = profiling;
 import { frameKey } from './analysis.mjs';
+
+test('sampler overhead subtracts only proven callback slices, preserving unrelated work and GC', () => {
+  assert.equal(typeof summarizeJsThreadLagSampler, 'function', 'the trace owner must expose sampler cost separately');
+  const e = (name, ts, dur, data = {}) => ({ name, ph: 'X', ts, dur, pid: 7, tid: 9, args: { data } });
+  const events = [
+    e('RunTask', 0, 120000), e('TimerFire', 10000, 70000),
+    e('FunctionCall', 11000, 68000, { scriptId: '5', lineNumber: 120 }),
+    e('MinorGC', 20000, 10000), e('MinorGC', 100000, 5000),
+    e('RunTask', 200000, 60000), e('TimerFire', 200000, 60000),
+    e('FunctionCall', 201000, 58000, { scriptId: '5', lineNumber: 999 }),
+    e('RunTask', 300000, 10000), e('TimerFire', 300000, 10000),
+    e('FunctionCall', 300100, 9000, { url: 'https://app.test/jsThreadLagTelemetry.ts', lineNumber: 90 }),
+    e('TimerFire', 10000, 70000, { scriptId: '5' }),
+    { ...e('TimerFire', 0, 200000), tid: 10 },
+  ];
+  const result = summarizeJsThreadLagSampler(events, { startUs: 0, endUs: 400000, pid: 7, tid: 9 },
+    [{ scriptId: '5', startLine: 100, endLine: 200 }]);
+  assert.equal(result.available, true);
+  assert.equal(result.timerFireCount, 3);
+  assert.equal(result.timerSliceMs, 80, 'nested/duplicate slices are unioned, not double-counted');
+  assert.equal(result.gcInsideSamplerMs, 10);
+  assert.equal(result.observed.mainThreadBusyMs, 190);
+  assert.equal(result.withoutSamplerSlices.mainThreadBusyMs, 110);
+  assert.equal(result.withoutSamplerSlices.busyFraction, .275);
+  assert.equal(result.withoutSamplerSlices.longTaskCount, 1);
+  assert.equal(result.withoutSamplerSlices.maxTaskMs, 60);
+  assert.equal(result.withoutSamplerSlices.gcMs, 5);
+  assert.equal(result.counterfactual, false, 'slice subtraction never certifies sampler-off runtime or induced GC');
+});
+
+test('sampler attribution is unavailable without proof, never inferred from a 50ms timer or shared task', () => {
+  assert.equal(typeof summarizeJsThreadLagSampler, 'function', 'the trace owner must expose sampler cost separately');
+  const event = (name, ts, dur, data = {}) => ({ name, ph: 'X', ts, dur, pid: 1, tid: 1, args: { data } });
+  const events = [event('RunTask', 0, 100000), event('TimerFire', 0, 100000),
+    event('FunctionCall', 1, 99000, { scriptId: '5', lineNumber: 900 }),
+    event('FunctionCall', 2, 1000, { scriptId: '5', lineNumber: 120 })];
+  const window = { startUs: 0, endUs: 200000, pid: 1, tid: 1 };
+  assert.equal(summarizeJsThreadLagSampler(events, window).available, false);
+  const result = summarizeJsThreadLagSampler(events, window, [{ scriptId: '5', startLine: 100, endLine: 200 }]);
+  assert.equal(result.timerFireCount, 0, 'a nested sampler call does not own an unrelated outer callback');
+  assert.equal(result.withoutSamplerSlices.mainThreadBusyMs, 100);
+});
 
 test('trace work is clipped to the explicit main thread/window and nested work is unioned', () => {
   const event = (name, ts, dur, extra = {}) => ({ name, ph: 'X', ts, dur, pid: 7, tid: 9, ...extra });

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { createRequire } from 'node:module';
+import { createRequire, stripTypeScriptTypes } from 'node:module';
+import { readFile } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -12,9 +13,18 @@ import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
 
 test('counts capture retains async request issuers; timing and cleanup remain uninstrumented', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-perf-browser-' });
+  // The real sampler implementation runs in Chrome. Only the Metro registry
+  // and telemetry sink are fixture boundaries; callback locations are real CDP.
+  const samplerSource = stripTypeScriptTypes(await readFile(new URL('../../../ui/sources/sync/runtime/performance/jsThreadLagTelemetry.ts', import.meta.url), 'utf8'))
+    .replace('export function createJsThreadLagTelemetry', 'function createJsThreadLagTelemetry');
+  const samplerBundle = `globalThis.fixtureFactory = function(global) { ${samplerSource}
+    global.fixtureLag = createJsThreadLagTelemetry({telemetry:global.__HAPPIER_SYNC_PERFORMANCE__});
+  }; globalThis.__r = {getModules: () => new Map([[1, {isInitialized:true,
+    verboseName:'apps/ui/sources/sync/runtime/performance/jsThreadLagTelemetry.ts',factory:fixtureFactory}]])};
+  fixtureFactory(globalThis);`;
   const html = `<!doctype html><div data-testid="session-list-view-options-trigger">Shell</div><script>
     globalThis.__HAPPIER_SYNC_PERFORMANCE__ = { isEnabled: () => globalThis.__HAPPIER_PERF_CAPTURE_MODE__ === 'counts',
-      reset() {}, markScenario() {}, flush() { return {events: []}; } };
+      reset() {}, markScenario() {}, count() {}, flush() { return {events: []}; } };
     function defaultRuntimeFetch() { return fetch('/probe?token=never-save').then(response => response.text()); }
     function issuingOperation() { return new Promise(resolve => setTimeout(() => {
       const start = performance.now(); while (performance.now() - start < 80) {}
@@ -22,9 +32,12 @@ test('counts capture retains async request issuers; timing and cleanup remain un
       performance.clearMeasures('\u200bFixture'); resolve();
     }, 0)).then(defaultRuntimeFetch); }
     function showWelcome() { document.body.innerHTML = '<div data-testid="welcome-decision-panel">Welcome</div>'; }
-  </script>`;
+  </script><script src="/metro-fixture.bundle"></script>`;
   const probeBody = 'never-save response é'.repeat(256);
   const server = createServer((req, res) => {
+    if (req.url === '/metro-fixture.bundle') {
+      res.setHeader('content-type', 'application/javascript'); res.end(samplerBundle); return;
+    }
     res.setHeader('content-type', req.url.startsWith('/probe') ? 'text/plain; charset=utf-8' : 'text/html; charset=utf-8');
     if (req.url.startsWith('/probe')) {
       res.setHeader('content-encoding', 'gzip');
@@ -54,10 +67,11 @@ test('counts capture retains async request issuers; timing and cleanup remain un
     const discovery = await (await fetch(`http://127.0.0.1:${endpoint.port}/json/list`)).json();
     const pageId = discovery.find(target => target.url === page.url()).id;
     const capture = await startCapture({ cdp: `http://127.0.0.1:${endpoint.port}`, pageId, cache: 'warm', captureMode,
-      profiling: captureMode === 'timing', outputDir: fixture.root });
+      profiling: true, outputDir: fixture.root });
     let cleanup;
     try {
       await capture.begin();
+      await page.evaluate(async () => { fixtureLag.start(); await new Promise(resolve => setTimeout(resolve, 180)); });
       await page.evaluate(() => issuingOperation());
       await page.evaluate(() => showWelcome());
       const result = await capture.finish();
@@ -73,6 +87,12 @@ test('counts capture retains async request issuers; timing and cleanup remain un
       assert.equal(result.authState.end.authenticated, null, 'DOM state cannot certify credential authority');
       assert.equal(result.authState.end.retirementReasonCode, null, 'never infer a sign-out reason');
       assert.ok(!JSON.stringify(result).includes('never-save'), 'query, response and arbitrary page text stay excluded');
+      const sampler = result.profiling.trace.instrumentation.jsThreadLagSampler;
+      assert.equal(sampler.available, true, 'loaded Metro factory locations must prove timer ownership');
+      assert.equal(sampler.timerFireCount > 0, captureMode === 'counts', 'counts telemetry enables the real sampler; timing does not');
+      assert.equal(sampler.timerSliceMs > 0, captureMode === 'counts');
+      assert.equal(sampler.counterfactual, false);
+      assert.ok(sampler.withoutSamplerSlices.mainThreadBusyMs <= sampler.observed.mainThreadBusyMs);
       if (captureMode === 'timing') {
         assert.equal(result.profiling.trace.dataLossOccurred, false);
         assert.equal(result.profiling.trace.summary.available, true);
