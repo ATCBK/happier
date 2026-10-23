@@ -333,17 +333,20 @@ describe('Discussion repository', () => {
         const requests: URL[] = [];
         const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
             const url = new URL(path, 'https://home.invalid');
-            const row = { ...storedSummary('discussion-a'), messageSeq: 100, latestMessage: {
-                ...storedSummary('discussion-a').latestMessage, id: 'message-100', seq: 100 } };
+            const messageSeq = rows.at(-1)!.seq;
+            const row = { ...storedSummary('discussion-a'), messageSeq, latestMessage: {
+                ...storedSummary('discussion-a').latestMessage, id: `message-${messageSeq}`, seq: messageSeq } };
             if (url.pathname === '/v1/discussions') return response({ discussions: [{ ...row, anchor: { kind: 'doc', doc: {
                 ref: root.content.v.proposal.target.ref, revision: root.content.v.proposal.target.revision } }, firstMessage: rootMessage }], nextCursor: null });
             if (!url.pathname.endsWith('/messages')) return response({ discussion: row });
             requests.push(url);
+            const messageId = url.searchParams.get('messageId');
+            if (messageId !== null) return response({ messages: rows.filter(message => message.id === messageId), hasMoreOlder: false, messageSeq });
             const after = url.searchParams.get('afterSeq');
             const before = url.searchParams.get('beforeSeq');
             const messages = after !== null ? rows.filter(message => message.seq > Number(after)).slice(0, 20)
                 : rows.filter(message => before === null || message.seq < Number(before)).slice(-20);
-            return response({ messages, hasMoreOlder: (messages[0]?.seq ?? 1) > 1, messageSeq: 100 });
+            return response({ messages, hasMoreOlder: (messages[0]?.seq ?? 1) > 1, messageSeq });
         }) });
         return { repository, requests, rows };
     }
@@ -358,8 +361,11 @@ describe('Discussion repository', () => {
         await repository.refreshMessages('discussion-a');
         expect(repository.getSnapshot().threads['discussion-a']!.messages.map(row => row.seq)).toEqual([1, ...tail.map(row => row.seq)]);
         expect(repository.getSnapshot().threads['discussion-a']!.messages.at(-1)).toBe(tail.at(-1));
+        const readsBeforeFocus = requests.length;
         const focused = await repository.openMessage(message(25).messageRef);
         expect(focused?.seq).toBe(25);
+        expect(requests.slice(readsBeforeFocus).map(url => url.search)).toEqual(['?messageId=message-25']);
+        expect(repository.getSnapshot().threads['discussion-a']!.messages.map(row => row.seq)).toEqual([1, 25, ...tail.map(row => row.seq)]);
         for (let page = 0; page < 5 && repository.getSnapshot().threads['discussion-a']!.hasMoreOlder; page += 1) {
             await repository.loadOlderMessages('discussion-a');
         }
@@ -368,17 +374,32 @@ describe('Discussion repository', () => {
         expect(requests.filter(url => url.searchParams.has('beforeSeq')).map(url => Number(url.searchParams.get('beforeSeq')))).toEqual([80, 60, 40, 20]);
     });
 
-    it('keeps a cold immutable Doc root tail-lazy while retaining access to its missing older history', async () => {
+    it('keeps cold immutable Doc roots and exact focused rows tail-lazy while retaining missing older history', async () => {
         const { repository, requests } = docRootHistory('comment');
         await repository.readList({ state: 'active', anchorDocArtifactId: 'doc-a' });
+        await repository.openMessage(message(25).messageRef);
         await repository.refreshMessages('discussion-a');
         expect(repository.getSnapshot().threads['discussion-a']!.messages.map(row => row.seq)).toEqual([
-            1, ...Array.from({ length: 21 }, (_, index) => index + 80).filter(seq => seq !== 90),
+            1, 25, ...Array.from({ length: 21 }, (_, index) => index + 80).filter(seq => seq !== 90),
         ]);
         expect(repository.getSnapshot().threads['discussion-a']!.hasMoreOlder).toBe(true);
-        expect(requests.map(url => url.search)).toEqual(['']);
+        expect(requests.map(url => url.search)).toEqual(['?messageId=message-25', '']);
         await repository.loadOlderMessages('discussion-a');
         expect(repository.getSnapshot().threads['discussion-a']!.messages.some(row => row.seq === 60)).toBe(true);
+    });
+
+    it('catches up every new history row after an exact focus ahead of the loaded tail', async () => {
+        const { repository, requests, rows } = docRootHistory('comment');
+        await repository.refreshDiscussion('discussion-a');
+        const tail = repository.getSnapshot().threads['discussion-a']!.messages;
+        rows.push(...Array.from({ length: 40 }, (_, index) => storedMessage('discussion-a', index + 101)));
+        expect((await repository.openMessage(message(140).messageRef))?.seq).toBe(140);
+        requests.length = 0;
+        await repository.refreshMessages('discussion-a');
+        expect(repository.getSnapshot().threads['discussion-a']!.messages.map(row => row.seq)).toEqual([
+            ...tail.map(row => row.seq), ...Array.from({ length: 40 }, (_, index) => index + 101),
+        ]);
+        expect(requests.map(url => url.search)).toEqual(['?afterSeq=100', '?afterSeq=120']);
     });
 
     it('refreshes accepted and declined proposals on older retained pages from the existing Discussion change', async () => {
@@ -649,7 +670,7 @@ describe('Discussion repository', () => {
         await repository.refreshAttention();
         expect(repository.getSnapshot().attention).toMatchObject({ status: 'revoked', discussions: [] });
     });
-    it('opens the exact qualified root across older pages and hides it when its Doc source becomes unavailable', async () => {
+    it('opens only the exact qualified root and hides it when its Doc source becomes unavailable', async () => {
         const root = storedMessage('discussion-a', 1);
         let denied = false;
         const requests: string[] = [];
@@ -658,13 +679,13 @@ describe('Discussion repository', () => {
             if (denied) return response({ error: 'discussion_content_unavailable' }, 409);
             if (path === '/v1/discussions/discussion-a') return response({ discussion: { ...storedSummary('discussion-a'), messageSeq: 3 } });
             const url = new URL(path, 'https://home.invalid');
-            const older = url.searchParams.has('beforeSeq');
-            return response({ messages: older ? [root, storedMessage('discussion-a', 2)] : [storedMessage('discussion-a', 3)],
-                hasMoreOlder: !older, messageSeq: 3 });
+            return response({ messages: url.searchParams.get('messageId') === root.id ? [root] : [storedMessage('discussion-a', 3)],
+                hasMoreOlder: false, messageSeq: 3 });
         }) });
         const ref = createDiscussionMessageRefV1({ ...address, discussionId: 'discussion-a' }, root);
         expect(await repository.openMessage(ref)).toMatchObject({ id: root.id, messageRef: ref });
-        expect(requests.some(path => path.includes('beforeSeq=3'))).toBe(true);
+        expect(requests.filter(path => path.includes('/messages'))).toEqual(['/v1/discussions/discussion-a/messages?messageId=message-1']);
+        expect(repository.getSnapshot().threads['discussion-a']?.messages).toHaveLength(1);
         const count = requests.length;
         expect(await repository.openMessage({ ...ref, discussion: { ...ref.discussion, serverId: 'other-home' } })).toBeNull();
         expect(requests).toHaveLength(count);
@@ -758,6 +779,7 @@ describe('Discussion repository', () => {
         const messageLocalId = 'same-message-local-id';
         const own = { ...storedSummary('discussion-a'), creationLocalId };
         const foreign = { ...storedSummary('discussion-foreign'), creationLocalId };
+        const messageReads: URL[] = [];
         let committed = false;
         const repository = createDiscussionRepository({ scope, address, client: httpClient(async (path, init) => {
             const url = new URL(path, 'https://home.invalid');
@@ -768,13 +790,17 @@ describe('Discussion repository', () => {
             if (url.pathname === '/v1/discussions') return response({ discussions: !committed || url.searchParams.get('state') === 'archived' ? []
                 : url.searchParams.get('creationLocalId') === creationLocalId ? [own] : [foreign, own], nextCursor: null });
             const discussionId = url.pathname.split('/')[3]!;
-            if (url.pathname.endsWith('/messages')) return response({ messages: [{ ...storedMessage(discussionId, 1), localId: messageLocalId }],
-                hasMoreOlder: false, messageSeq: 1 });
+            if (url.pathname.endsWith('/messages')) {
+                messageReads.push(url);
+                return response({ messages: [{ ...storedMessage(discussionId, 1), localId: messageLocalId }],
+                    hasMoreOlder: false, messageSeq: 1 });
+            }
             return response({ discussion: discussionId === own.id ? own : foreign });
         }) });
         expect(await repository.create({ creationLocalId, messageLocalId, title: 'Mine',
             content: { v: 1, parts: [{ t: 'text', text: 'Mine' }] }, draftSubmission: draftSubmission() })).toMatchObject({ kind: 'checking' });
         await vi.waitFor(() => expect(repository.getSnapshot().mutations[creationLocalId]?.status).toBe('observed_success'));
+        expect(messageReads.map(url => url.search)).toEqual([`?localId=${messageLocalId}`]);
         expect(repository.getSnapshot().mutations[creationLocalId]?.discussionId).toBe(own.id);
         expect(repository.getSnapshot().threads[foreign.id]).toBeUndefined();
     });
@@ -1406,12 +1432,23 @@ describe('Discussion repository', () => {
         expect(post).toHaveBeenCalledTimes(1);
     });
 
-    it('adopts a reload-restored post identity by reconciling before any resend', async () => {
-        const published = { ...message(2, 'post-local-restored'), discussionId: 'discussion-a' };
-        const read = vi.fn<DiscussionRepositoryClient['read']>()
-            .mockResolvedValue({ kind: 'succeeded', value: readResult([published], false, 2) });
-        const post = vi.fn<DiscussionRepositoryClient['post']>();
-        const repository = createDiscussionRepository({ scope, address, client: client({ read, post }) });
+    it('adopts a reload-restored post by exact local identity without draining unrelated history or resending', async () => {
+        const published = { ...storedMessage('discussion-a', 425), localId: 'post-local-restored' };
+        const rows = Array.from({ length: 1000 }, (_, index) => index + 1 === published.seq ? published : storedMessage('discussion-a', index + 1));
+        const foreign = { ...storedMessage('discussion-a', 1000), localId: published.localId, authorAccountId: 'account-b',
+            accountActor: { v: 1 as const, accountId: 'account-b', profile: null } };
+        rows[rows.length - 1] = foreign;
+        const requests: URL[] = [];
+        const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+            const url = new URL(path, 'https://home.invalid');
+            if (!url.pathname.endsWith('/messages')) return response({ discussion: { ...storedSummary('discussion-a'), messageSeq: rows.length } });
+            requests.push(url);
+            return response({ messages: url.searchParams.get('localId') === published.localId ? [published] : rows.slice(-20),
+                hasMoreOlder: false, messageSeq: rows.length });
+        }) });
+        await repository.refreshMessages('discussion-a');
+        expect(repository.getSnapshot().threads['discussion-a']?.messages.find(row => row.id === foreign.id)?.authorAccountId).toBe('account-b');
+        requests.length = 0;
 
         repository.adoptPendingIntent({
             kind: 'post',
@@ -1421,9 +1458,10 @@ describe('Discussion repository', () => {
             draftSubmission: draftSubmission('discussion'),
         });
 
-        await vi.waitFor(() => expect(repository.getSnapshot().mutations['post-local-restored']?.status)
-            .toBe('observed_success'));
-        expect(post).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(repository.getSnapshot().mutations['post-local-restored']?.status).toBe('observed_success'));
+        expect(requests.map(url => url.pathname + url.search)).toEqual(['/v1/discussions/discussion-a/messages?localId=post-local-restored']);
+        expect(repository.getSnapshot().threads['discussion-a']?.messages.find(row => row.id === published.id)?.authorAccountId).toBe(scope.accountId);
+        expect(repository.getSnapshot().threads['discussion-a']?.messages.find(row => row.id === foreign.id)?.authorAccountId).toBe('account-b');
     });
 
     it('separates a dismissable definitive refusal from a retryable transient failure', async () => {

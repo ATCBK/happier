@@ -8,7 +8,6 @@ import type {
     DiscussionOpenedMessageV1,
     DiscussionOpenedSummaryV1,
     DiscussionPostResultV1,
-    DiscussionReadResultV1,
     DiscussionReadStateResultV1,
 } from '@happier-dev/protocol';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -29,7 +28,7 @@ export type DiscussionRepositoryClient = Readonly<Pick<ReturnType<typeof createD
     attention(input?: DiscussionAttentionQueryV1, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionAttentionResultV1>>;
     list(input?: DiscussionListInputV1, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionListResultV1>>;
     get(discussionId: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
-    read(discussionId: string, input?: Readonly<{ beforeSeq?: number; afterSeq?: number; limit?: number }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionReadResultV1>>;
+    read: ReturnType<typeof createDiscussionClient>['read'];
     create(input: Readonly<{ creationLocalId: string; messageLocalId: string; title: string; content: DiscussionMessageContentV1; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[]; anchor?: DiscussionAnchorV1; participants?: readonly NonNullable<DiscussionCreateInputV1['participants']>[number][]; onResolvedParticipants?: (participants: readonly DiscussionInitialParticipantV1[]) => void; replyTarget?: DiscussionReplyTargetV1 }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionCreateResultV1>>;
     post(input: Readonly<{ discussionId: string; localId: string; content: DiscussionMessageContentV1; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[]; replyTarget?: DiscussionReplyTargetV1 }>, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionPostResultV1>>;
     rename(discussionId: string, title: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
@@ -143,6 +142,9 @@ export type DiscussionRepositoryThreadSnapshot = Readonly<{
     summary: DiscussionOpenedSummaryV1 | null;
     messages: readonly DiscussionOpenedMessageV1[];
     hasMoreOlder: boolean;
+    /** The oldest ordinary history-page row; independently opened rows do not advance paging. */
+    oldestHistorySeq?: number;
+    newestHistorySeq?: number;
     messageSeq: number;
     status: DiscussionRepositoryStatus;
     errorCode: string | null;
@@ -240,13 +242,6 @@ export function mergeDiscussionMessages(
         if (retained !== current) { byId.set(row.id, retained); changed = true; }
     }
     return changed ? [...byId.values()].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id)) : previous;
-}
-
-function olderMessageFrontier(messages: readonly DiscussionOpenedMessageV1[]): number | undefined {
-    // Scoped discovery can admit the root independently of a loaded history
-    // page. It must not move that page's older boundary to seq1. Other gaps can
-    // be intentional source withholding, so do not infer numeric contiguity.
-    return messages[0]?.seq === 1 && messages.length > 1 ? messages[1]!.seq : messages[0]?.seq;
 }
 
 function statusForFailure(errorCode: string): DiscussionRepositoryStatus {
@@ -700,17 +695,18 @@ export function createDiscussionRepository(options: Readonly<{
         const messages = retained.messages;
         let messageSeq = retained.messageSeq;
         let observedHasMoreOlder: boolean | null = null;
+        let oldestHistorySeq = retained.oldestHistorySeq;
+        let newestHistorySeq = retained.newestHistorySeq;
         const received: DiscussionOpenedMessageV1[] = [];
         // Locked content and open proposal dispositions can change without a new
         // message sequence. Revisit their earliest retained row, even when it is
         // older than the server's default tail page.
         const firstMutableIndex = messages.findIndex((row) => row.content === null || row.docEditProposalDispositionV1?.state === 'open');
-        const onlyImmutableRoot = firstMutableIndex < 0 && messages.length === 1 && messages[0]!.seq === 1 && retained.messageSeq > 1;
-        let afterSeq = firstMutableIndex >= 0
+        // A scoped root or exact focused row is not a history page. First load
+        // the ordinary tail, regardless of which isolated rows were opened.
+        let afterSeq = oldestHistorySeq === undefined ? undefined : firstMutableIndex >= 0
             ? messages[firstMutableIndex]!.seq - 1
-            // A root is not an initial history page. Use the existing default
-            // tail read rather than eagerly downloading every immutable reply.
-            : onlyImmutableRoot ? undefined : messages.at(-1)?.seq;
+            : newestHistorySeq;
         for (;;) {
             const outcome = await client.read(discussionId, afterSeq === undefined ? {} : { afterSeq }, signal);
             if (!isCurrentOperation(operationEpoch)) return;
@@ -737,9 +733,13 @@ export function createDiscussionRepository(options: Readonly<{
                 return;
             }
             received.push(...outcome.value.messages);
-            if (afterSeq === undefined) observedHasMoreOlder = outcome.value.hasMoreOlder;
+            if (afterSeq === undefined) {
+                observedHasMoreOlder = outcome.value.hasMoreOlder;
+                oldestHistorySeq = outcome.value.messages[0]?.seq;
+            }
             messageSeq = Math.max(messageSeq, outcome.value.messageSeq);
             const highest = outcome.value.messages.reduce((highest, row) => Math.max(highest, row.seq), afterSeq ?? 0);
+            if (outcome.value.messages.length > 0) newestHistorySeq = Math.max(newestHistorySeq ?? 0, highest);
             if (highest >= messageSeq
                 || outcome.value.messages.length === 0
                 || (afterSeq !== undefined && highest <= afterSeq)) {
@@ -757,6 +757,10 @@ export function createDiscussionRepository(options: Readonly<{
             ...current,
             messages: merged,
             hasMoreOlder: observedHasMoreOlder ?? current.hasMoreOlder,
+            oldestHistorySeq: current.oldestHistorySeq === undefined ? oldestHistorySeq
+                : Math.min(current.oldestHistorySeq, oldestHistorySeq ?? current.oldestHistorySeq),
+            newestHistorySeq: newestHistorySeq === undefined ? current.newestHistorySeq
+                : Math.max(current.newestHistorySeq ?? 0, newestHistorySeq),
             messageSeq: Math.max(current.messageSeq, messageSeq),
             status: incomplete ? 'locked' : 'ready',
             errorCode: null,
@@ -806,7 +810,7 @@ export function createDiscussionRepository(options: Readonly<{
     const loadOlderMessages = async (discussionId: string, signal?: AbortSignal): Promise<void> => {
         const retained = snapshot.threads[discussionId] ?? emptyThread();
         const operationEpoch = captureOperation(discussionId);
-        const beforeSeq = olderMessageFrontier(retained.messages);
+        const beforeSeq = retained.oldestHistorySeq;
         if (beforeSeq === undefined || !retained.hasMoreOlder) return;
         updateThread(discussionId, { ...retained, status: 'loading', errorCode: null });
         const outcome = await client.read(discussionId, { beforeSeq }, signal);
@@ -828,6 +832,7 @@ export function createDiscussionRepository(options: Readonly<{
             ...current,
             messages: merged,
             hasMoreOlder: outcome.value.hasMoreOlder,
+            oldestHistorySeq: Math.min(current.oldestHistorySeq ?? beforeSeq, outcome.value.messages[0]?.seq ?? beforeSeq),
             messageSeq: Math.max(current.messageSeq, outcome.value.messageSeq),
             status: incomplete ? 'locked' : 'ready',
             errorCode: null,
@@ -931,7 +936,7 @@ export function createDiscussionRepository(options: Readonly<{
         // authorized envelope through the same create Action and shared runner.
         if (found.encryptionMode === 'e2ee' && intent.participants?.some(participant => participant.kind === 'account')) return false;
         const resourceOperation = captureOperation(found.id);
-        const messages = await client.read(found.id, { beforeSeq: 2 }, signal);
+        const messages = await client.read(found.id, { localId: intent.messageLocalId }, signal);
         if (operationEpoch !== accessLossEpoch || !isCurrentOperation(resourceOperation)) return false;
         if (messages.kind !== 'succeeded') {
             if (messages.kind === 'failed' && isExplicitAccessLoss(messages.errorCode)) {
@@ -965,32 +970,16 @@ export function createDiscussionRepository(options: Readonly<{
             });
             return true;
         }
-        let afterSeq = retained.messages.at(-1)?.seq;
-        for (;;) {
-            const outcome = await client.read(
-                intent.discussionId,
-                afterSeq === undefined ? {} : { afterSeq },
-                signal,
-            );
-            if (!isCurrentOperation(operationEpoch)) return false;
-            if (outcome.kind !== 'succeeded') {
-                if (outcome.kind === 'failed' && isExplicitAccessLoss(outcome.errorCode)) purgeDiscussion(intent.discussionId, outcome.errorCode);
-                return false;
-            }
-            const found = outcome.value.messages.find((row) => row.localId === intent.localId);
-            if (found) {
-                completePost(intent, {
-                    v: 1,
-                    serverId: options.address.serverId,
-                    message: found,
-                    messageSeq: outcome.value.messageSeq,
-                });
-                return true;
-            }
-            const nextAfterSeq = outcome.value.messages.at(-1)?.seq;
-            if (nextAfterSeq === undefined || nextAfterSeq <= (afterSeq ?? 0) || nextAfterSeq >= outcome.value.messageSeq) return false;
-            afterSeq = nextAfterSeq;
+        const outcome = await client.read(intent.discussionId, { localId: intent.localId }, signal);
+        if (!isCurrentOperation(operationEpoch)) return false;
+        if (outcome.kind !== 'succeeded') {
+            if (outcome.kind === 'failed' && isExplicitAccessLoss(outcome.errorCode)) purgeDiscussion(intent.discussionId, outcome.errorCode);
+            return false;
         }
+        const found = outcome.value.messages.find((row) => row.localId === intent.localId);
+        if (!found) return false;
+        completePost(intent, { v: 1, serverId: options.address.serverId, message: found, messageSeq: outcome.value.messageSeq });
+        return true;
     };
 
     const reconcileIntent = async (intent: MutationIntent, signal?: AbortSignal): Promise<boolean> => (
@@ -1211,21 +1200,27 @@ export function createDiscussionRepository(options: Readonly<{
         refreshAnchoredList(anchorSessionId: string, state: 'active' | 'archived', signal?: AbortSignal) { return refreshList(state, signal, anchorSessionId); },
         loadMoreAnchoredList(anchorSessionId: string, state: 'active' | 'archived', signal?: AbortSignal) { return loadMoreList(state, signal, anchorSessionId); },
         refreshDiscussion,
-        /** Reopen a saved committed message in its own Home, paging the canonical thread until that root is found. */
+        /** Reopen one committed message in its own Home without acquiring unrelated history. */
         async openMessage(ref: DiscussionMessageRefV1, signal?: AbortSignal): Promise<DiscussionOpenedMessageV1 | null> {
             if (ref.discussion.serverId !== options.address.serverId) return null;
             const discussionId = ref.discussion.discussionId;
-            await refreshDiscussion(discussionId, signal);
-            for (;;) {
-                const thread = snapshot.threads[discussionId];
-                if (!thread || (thread.status !== 'ready' && thread.status !== 'loading')) return null;
-                const found = thread.messages.find(message => message.id === ref.messageId);
-                if (found) return found;
-                if (!thread.hasMoreOlder) return null;
-                const beforeSeq = olderMessageFrontier(thread.messages);
-                await loadOlderMessages(discussionId, signal);
-                if (olderMessageFrontier(snapshot.threads[discussionId]?.messages ?? []) === beforeSeq) return null;
+            if (!await refreshSummary(discussionId, signal)) return null;
+            const operationEpoch = captureOperation(discussionId);
+            const outcome = await client.read(discussionId, { messageId: ref.messageId }, signal);
+            if (!isCurrentOperation(operationEpoch)) return null;
+            const current = snapshot.threads[discussionId] ?? emptyThread();
+            if (outcome.kind !== 'succeeded') {
+                const code = outcome.kind === 'failed' ? outcome.errorCode : outcome.kind;
+                if (isExplicitAccessLoss(code)) purgeDiscussion(discussionId, code);
+                else updateThread(discussionId, { ...current, status: statusForFailure(code), errorCode: code });
+                return null;
             }
+            const messages = mergeDiscussionMessages(current.messages, outcome.value.messages);
+            const incomplete = messages.some(row => row.content === null);
+            updateThread(discussionId, { ...current, messages, messageSeq: Math.max(current.messageSeq, outcome.value.messageSeq),
+                status: incomplete ? 'locked' : 'ready', errorCode: null, incomplete });
+            return outcome.value.messages.some(row => row.id === ref.messageId)
+                ? messages.find(row => row.id === ref.messageId && row.content !== null) ?? null : null;
         },
         refreshMessages,
         loadOlderMessages,
