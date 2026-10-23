@@ -775,7 +775,7 @@ export class RpcHandlerManager {
                 nextPhase('authorize_request');
                 diagnostic.callerClass = 'unadmitted';
                 diagnostic.admissionPredicate = 'authorize_request';
-                const authorization = await this.authorizeRequest(authorizationRequest);
+                const authorization = await timeWebLatencyPhase('machineRpc.authorize', () => this.authorizeRequest!(authorizationRequest));
                 // Home verification can settle false because this request was cancelled.
                 // Preserve that lifecycle result before interpreting an access refusal.
                 controller.signal.throwIfAborted();
@@ -904,7 +904,7 @@ export class RpcHandlerManager {
                 const preparationRequest = finitePreparation ? WorkspaceSyncPrepareBetweenRequestV1Schema.safeParse(decryptedParams) : null;
                 if (finitePreparation && (!installation || !preparationRequest?.success)) return await deny('requester_account_admission');
                 nextPhase('requester_preparation');
-                const prepared = await this.prepareRequesterAccountContext({ authorization: callerInputAuthorization,
+                const prepared = await timeWebLatencyPhase('machineRpc.requesterPreparation', () => this.prepareRequesterAccountContext!({ authorization: callerInputAuthorization!,
                     purpose: finitePreparation && installation && preparationRequest?.success
                         ? { kind: 'workspace_sync_prepare', controller: { machineId: this.scopePrefix, installationId: installation.installationId },
                             request: preparationRequest.data }
@@ -917,7 +917,7 @@ export class RpcHandlerManager {
                     ...(finitePreparation ? { verifyWorkspaceSyncPrepareCurrent: async () => {
                         try { return !controller.signal.aborted && this.authorizeRequest !== undefined
                             && (await this.authorizeRequest(authorizationRequest)).ok; } catch { return false; }
-                    } } : {}), signal: controller.signal });
+                    } } : {}), signal: controller.signal }));
                 nextPhase('input_binding');
                 if (!prepared) {
                     return await deny('requester_account_preparation');
@@ -1047,7 +1047,7 @@ export class RpcHandlerManager {
             return response;
         } finally {
             nextPhase('requester_cleanup');
-            await disposeRequesterAccountContext?.();
+            await timeWebLatencyPhase('machineRpc.requesterCleanup', () => disposeRequesterAccountContext?.());
             nextPhase('complete');
             if (handlerExecutionId !== null) {
                 this.activeHandlerExecutions.delete(handlerExecutionId);
