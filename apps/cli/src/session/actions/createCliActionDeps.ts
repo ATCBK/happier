@@ -8520,6 +8520,7 @@ export function createCliActionDeps(params: Readonly<{
     },
 
     sessionStatusGet: async ({ sessionId, live, readiness, operation, credentialPurpose, credentialTeamSelection, context, signal, serverId }) => {
+        ...(archived && context?.actionCaller?.kind === 'workflowRun' ? { originRunId: context.actionCaller.runId } : {}),
       const operationSignal = signal ?? context?.signal;
       operationSignal?.throwIfAborted();
       if (!params.credentials) {
