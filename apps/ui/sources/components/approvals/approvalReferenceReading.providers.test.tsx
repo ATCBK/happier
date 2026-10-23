@@ -3,7 +3,8 @@ import { installApprovalCommonModuleMocks } from './approvalsTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createDeferred, renderHook, flushHookEffects } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceReadInputV1Schema } from '@happier-dev/protocol/teams';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceCatalogEntryV1Schema,
+    TeamCredentialResourceDiscoverInputV1Schema, TeamCredentialResourceDiscoveryPageV1Schema } from '@happier-dev/protocol/teams';
 import { PROVIDER_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import { describeApprovalActionFields } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
@@ -164,11 +165,12 @@ describe('Provider approval reference reading', () => {
         const directory = bindHomeDomainActionHttpRequestV1('teams.list', { v: 1, scope: 'member', archived: 'active' });
         harness.answer(home, `${directory.method} ${directory.path.split('?')[0]}`,
             { body: { items: [teamSummaryFixture({ id: resource.teamId, name: 'Platform' })], nextCursor: null } });
-        const catalog = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: resource.teamId });
-        harness.answer(home, `${catalog.method} ${catalog.path.split('?')[0]}`, { select: input => {
-            const { application } = TeamCredentialResourceReadInputV1Schema.parse(input);
-            return { body: { resources: [application ? resource : { ...resource, providerModels: [],
-                sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } } }] } };
+        harness.answer(home, `POST ${TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1}`, { select: input => {
+            const { application, teamIds } = TeamCredentialResourceDiscoverInputV1Schema.parse(input);
+            expect(teamIds).toEqual([resource.teamId]);
+            return { body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: [application ? resource : { ...resource, providerModels: [],
+                sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } } }],
+                failures: [], nextCursor: null }) };
         } });
         const fields = describeApprovalActionFields({ actionId, actionArgs: input });
         const connection = fields.rows.find(row => row.path === 'connectionId');
@@ -209,19 +211,20 @@ describe('Provider approval reference reading', () => {
                 confirmationSource: { connectionId: input.connectionId,
                     catalogSourceKey: sourceMatches ? input.catalogSourceKey : 'x'.repeat(43) } }],
         });
-        const catalog = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: resource.teamId });
-        harness.answer(home, `${catalog.method} ${catalog.path.split('?')[0]}`, { select: value => {
-            const { application } = TeamCredentialResourceReadInputV1Schema.parse(value);
-            if (!application) return { body: { resources: [TeamCredentialResourceCatalogEntryV1Schema.parse({
-                ...pendingResource, providerModels: [],
-            })] } };
+        harness.answer(home, `POST ${TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1}`, { select: value => {
+            const { application, teamIds } = TeamCredentialResourceDiscoverInputV1Schema.parse(value);
+            expect(teamIds).toEqual([resource.teamId]);
+            if (!application) return { body: TeamCredentialResourceDiscoveryPageV1Schema.parse({
+                resources: [{ ...pendingResource, providerModels: [] }], failures: [], nextCursor: null,
+            }) };
             if (JSON.stringify(application) !== JSON.stringify(pendingResource.providerModels[0]!.application)) {
-                return { body: { resources: [TeamCredentialResourceCatalogEntryV1Schema.parse({ ...pendingResource, providerModels: [],
+                return { body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: [{ ...pendingResource, providerModels: [],
                     readiness: { kind: 'broker_unavailable', reason: 'projection_unavailable' },
-                })] } };
+                }], failures: [], nextCursor: null }) };
             }
             requested.resolve();
-            return { respondAfter: response.promise, body: { resources: [pendingResource] } };
+            return { respondAfter: response.promise,
+                body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: [pendingResource], failures: [], nextCursor: null }) };
         } });
         // CLI-created c88 approval: both original operands and the observation preview
         // retain the Agent target and opaque confirmation-source identity.
