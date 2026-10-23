@@ -8,6 +8,7 @@ import {
   type PlanetSceneOptions,
 } from '@happier-dev/brand/planet';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { PlanetCanvas } from '../PlanetCanvas';
 import type { HomePane } from '../homePlanetPlacement';
 import { PlanetMomentCanvas } from './PlanetMomentCanvas';
@@ -15,6 +16,8 @@ import { welcomePlanetPhase } from './planetMomentTimeline';
 import { useMomentClock } from './useMomentClock';
 
 type Prepared = Readonly<{
+  options: PlanetSceneOptions;
+  dpr: number;
   assembly: PlanetAssembly;
   haze: readonly PlanetSceneDot[];
 }>;
@@ -40,18 +43,23 @@ export function WelcomePlanet(
   const { pane, options } = props;
   const dpr = PixelRatio.get();
   const activelyViewed = useHostActivelyViewed();
+  const presented = useLayoutPresentationActive();
   const [prepared, setPrepared] = React.useState<Prepared | null>(null);
   React.useEffect(() => {
+    if (!activelyViewed || !presented || !props.visible || props.writing || props.reducedMotion) return;
+    if (prepared?.options === options && prepared.dpr === dpr) return;
     // Prepared after Home's first frame, so Home never waits on it; the clock starts once it is.
     const frame = requestAnimationFrame(() => {
       const scene = { ...options, dpr };
       setPrepared({
+        options,
+        dpr,
         assembly: planetAssembly(scene),
         haze: createPlanetScene({ ...scene, rise: 1 }).haze,
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [dpr, options]);
+  }, [activelyViewed, presented, props.visible, props.writing, props.reducedMotion, dpr, options, prepared]);
   const [landed, setLanded] = React.useState(false);
   const t = useMomentClock(prepared !== null && !landed && !props.reducedMotion, !activelyViewed || !props.visible || props.writing);
   const phase = welcomePlanetPhase(t, props.reducedMotion);
@@ -62,7 +70,7 @@ export function WelcomePlanet(
     setLanded(true);
     onLanded.current();
   }, [landed, phase.kind]);
-  if (!prepared || phase.kind === 'landed') return null;
+  if (!prepared || phase.kind === 'landed' || !presented) return null;
   return (
     <View
       pointerEvents="none"

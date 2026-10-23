@@ -2,11 +2,13 @@ import * as React from 'react';
 import { PixelRatio, StyleSheet, View } from 'react-native';
 import {
   createPlanetScene,
+  PLANET_MOMENT_TIMINGS,
   planetAssembly,
   type PlanetAssembly,
   type PlanetSceneDot,
 } from '@happier-dev/brand/planet';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { PlanetCanvas } from '../PlanetCanvas';
 import type { HomePane } from '../homePlanetPlacement';
 import { PlanetMomentCanvas } from './PlanetMomentCanvas';
@@ -59,12 +61,15 @@ type Prepared = Readonly<{
 export function LoadingPlanet(props: LoadingPlanetProps) {
   const { pane, target, reducedMotion } = props;
   const activelyViewed = useHostActivelyViewed();
+  const presented = useLayoutPresentationActive();
   const [landed, setLanded] = React.useState<Readonly<{
     fast: boolean;
   }> | null>(null);
-  const t = useMomentClock(landed === null, props.paused || !activelyViewed);
+  const ready = props.ready && target !== null;
+  const t = useMomentClock(landed === null, props.paused || !activelyViewed,
+    reducedMotion && !ready ? PLANET_MOMENT_TIMINGS.L4.GRACE : undefined);
   const readyAt = React.useRef<number | null>(null);
-  if (readyAt.current === null && props.ready && target !== null)
+  if (readyAt.current === null && ready)
     readyAt.current = t;
   const toPlanet = target?.kind === 'planet';
   const phase = loadingPlanetPhase(t, readyAt.current, {
@@ -84,7 +89,8 @@ export function LoadingPlanet(props: LoadingPlanetProps) {
   const sourceKey = JSON.stringify(source);
   const [prepared, setPrepared] = React.useState<Prepared | null>(null);
   React.useEffect(() => {
-    if (landed || pane.width <= 0 || pane.height <= 0) return;
+    if (landed || !activelyViewed || !presented || props.paused || pane.width <= 0 || pane.height <= 0) return;
+    if (prepared?.key === sourceKey) return;
     const frame = requestAnimationFrame(() => {
       setPrepared({
         key: sourceKey,
@@ -93,7 +99,7 @@ export function LoadingPlanet(props: LoadingPlanetProps) {
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [landed, pane.height, pane.width, source, sourceKey]);
+  }, [activelyViewed, presented, props.paused, landed, pane.height, pane.width, source, sourceKey, prepared]);
 
   const stage: LoadingPlanetStage =
     phase.kind === 'landed'

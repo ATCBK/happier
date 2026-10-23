@@ -36,6 +36,7 @@ function Home(
     drawn: boolean;
     reducedMotion?: boolean;
     abort?: boolean;
+    paused?: boolean;
     seen: Seen[];
   }>,
 ) {
@@ -52,7 +53,7 @@ function Home(
     waiting: props.waiting,
     start: 'mount',
     abort: props.abort,
-    paused: false,
+    paused: props.paused ?? false,
     reducedMotion: props.reducedMotion ?? false,
     theme: 'dark',
     pane,
@@ -79,6 +80,21 @@ describe('Home loading moment', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('schedules no assembly preparation while its loading host is paused', async () => {
+    const seen: Seen[] = [];
+    const screen = await renderScreen(<Home waiting target={null} drawn={false} paused seen={seen} />);
+    expect(vi.getTimerCount()).toBe(0);
+    await screen.update(<Home waiting target={null} drawn={false} seen={seen} />);
+    await frames(400);
+    expect(screen.findByTestId('loading-planet.assembly')).not.toBeNull();
+    await screen.update(<Home waiting target={null} drawn={false} paused seen={seen} />);
+    expect(vi.getTimerCount()).toBe(0);
+    await screen.update(<Home waiting target={null} drawn={false} seen={seen} />);
+    expect(vi.getTimerCount()).toBe(1);
+    await screen.unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("shows no loader when Home is ready inside the grace, and Home's planet arrives as usual", async () => {
@@ -141,6 +157,13 @@ describe('Home loading moment', () => {
     );
     await frames(1000);
     expect(screen.findByTestId('loading-planet.assembly')).not.toBeNull();
+    // The reduced-motion resting planet has no changing fact to display while Home connects.
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(vi.getTimerCount()).toBe(0);
+    // Home can be connected before its measured planet target is available.
+    await screen.update(<Home waiting={false} target={null} drawn={false} reducedMotion seen={seen} />);
+    expect(vi.getTimerCount()).toBe(0);
     await screen.update(
       <Home
         waiting={false}

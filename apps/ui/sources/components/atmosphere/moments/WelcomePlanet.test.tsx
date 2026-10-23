@@ -6,6 +6,7 @@ import { HomePlanet, homePlanetFootFade, useHomePlanetOptions, type HomePlanetLo
 import { PlanetCanvas } from '../PlanetCanvas';
 import { PlanetMomentCanvas } from './PlanetMomentCanvas';
 import { WelcomePlanet } from './WelcomePlanet';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -34,6 +35,41 @@ describe('Welcome landing and live motion inputs', () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'performance'] }); });
   afterEach(() => { vi.useRealTimers(); });
 
+  it('withdraws every Welcome canvas while retained and resumes the same assembly clock', async () => {
+    const onLanded = vi.fn();
+    const scene = (presented: boolean) => <PluginSurfaceFocusEligibilityProvider active={presented} presentationActive={presented}>
+      <Scene onLanded={onLanded} />
+    </PluginSurfaceFocusEligibilityProvider>;
+    const screen = await renderScreen(scene(true));
+    try {
+      await frames(320);
+      const before = screen.findByType(PlanetMomentCanvas).props.frame.t;
+      await screen.update(scene(false));
+      expect(screen.findAllHostsByTestId('welcome-planet.assembly')).toHaveLength(0);
+      expect(screen.findAllHostsByTestId('welcome-planet.rest')).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+      await frames(2400);
+      expect(onLanded).not.toHaveBeenCalled();
+      await screen.update(scene(true));
+      expect(screen.findByType(PlanetMomentCanvas).props.frame.t).toBe(before);
+      await frames(1800);
+      expect(onLanded).toHaveBeenCalledOnce();
+    } finally { await screen.unmount(); }
+  });
+
+  it('does not prepare the assembly in an inactive Home pane', async () => {
+    const onLanded = vi.fn();
+    const screen = await renderScreen(<Scene visible={false} onLanded={onLanded} />);
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(vi.getTimerCount()).toBe(0);
+    await screen.update(<Scene onLanded={onLanded} />);
+    expect(vi.getTimerCount()).toBe(1);
+    await frames(2100);
+    expect(onLanded).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('holds its finite clock while Home is unfocused or the person writes, then resumes', async () => {
     const onLanded = vi.fn();
     const screen = await renderScreen(<Scene onLanded={onLanded} />);
@@ -50,6 +86,7 @@ describe('Welcome landing and live motion inputs', () => {
     expect(screen.findByType(PlanetMomentCanvas).props.frame.t).toBe(before);
     expect(onLanded).not.toHaveBeenCalled();
     await screen.update(<Scene onLanded={onLanded} />);
+    expect(vi.getTimerCount()).toBe(1);
     await frames(1800);
     expect(onLanded).toHaveBeenCalledOnce();
     expect(screen.findByTestId('welcome-planet') === null).toBe(true);
