@@ -40,6 +40,7 @@ export type ImagePreviewCacheEntry = Readonly<{
     sessionId: string;
     signature: string;
     filePath: string;
+    retirement?: Retirement;
 }>;
 
 export type ImagePreviewCacheOptions = Readonly<{
@@ -51,7 +52,7 @@ export type ImagePreviewCacheOptions = Readonly<{
 export class ImagePreviewCache {
     private readonly entries = new Map<string, ImagePreviewCacheEntry>();
     private readonly retained = new Map<string, number>();
-    private readonly pending = new Map<string, { controller: AbortController; promise: Promise<ImagePreviewCacheValue>; progress: ImagePreviewCacheProgress | null }>();
+    private readonly pending = new Map<string, { controller: AbortController; promise: Promise<ImagePreviewCacheValue>; progress: ImagePreviewCacheProgress | null; retirement?: Retirement }>();
     private readonly progressListeners = new Map<string, Set<ProgressListener>>();
     private readonly valueListeners = new Map<string, Set<ValueListener>>();
     private totalBytes = 0;
@@ -107,13 +108,20 @@ export class ImagePreviewCache {
     load(
         key: ImagePreviewCacheKey,
         loader: (signal: AbortSignal, onProgress: ProgressListener) => Promise<ImagePreviewCacheValue>,
+        lifetime?: PreviewLifetime,
     ): Promise<ImagePreviewCacheValue> {
+        if (lifetime?.isCurrent() === false) {
+            this.invalidateSession(key.sessionId);
+            return Promise.resolve({ status: 'error', error: 'Resource is unavailable', errorCode: 'resource_unavailable' });
+        }
         const cached = this.get(key);
         if (cached) return Promise.resolve(cached);
         const storageKey = this.toStorageKey(key);
         const pending = this.pending.get(storageKey);
         if (pending && !pending.controller.signal.aborted) return pending.promise;
         const controller = new AbortController();
+        let retirement: Retirement | undefined;
+        let entryOwnsRetirement = false;
         const report: ProgressListener = (progress) => {
             const current = this.pending.get(storageKey);
             if (!current || current.controller !== controller) return;
@@ -127,12 +135,20 @@ export class ImagePreviewCache {
                 return value;
             }
             // A late successful fill is still cache-owned and subject to ordinary eviction.
-            if (value.status === 'loaded') this.set(key, value);
+            if (value.status === 'loaded') {
+                this.set(key, value, retirement);
+                entryOwnsRetirement = true;
+            }
             return value;
         }).finally(() => {
             if (this.pending.get(storageKey)?.promise === promise) this.pending.delete(storageKey);
+            if (!entryOwnsRetirement) retirement?.dispose();
         });
-        this.pending.set(storageKey, { controller, promise, progress: null });
+        const fill = { controller, promise, progress: null, retirement: undefined as Retirement | undefined };
+        this.pending.set(storageKey, fill);
+        retirement = lifetime?.onRetire(() => this.invalidateSession(key.sessionId));
+        fill.retirement = retirement;
+        if (controller.signal.aborted) retirement?.dispose();
         return promise;
     }
 
@@ -156,7 +172,7 @@ export class ImagePreviewCache {
         this.evictIfNeeded();
     }
 
-    set(key: ImagePreviewCacheKey, value: ImagePreviewCacheValue): void {
+    set(key: ImagePreviewCacheKey, value: ImagePreviewCacheValue, retirement?: Retirement): void {
         if (!key.sessionId || !key.signature || !key.filePath) return;
         const storageKey = this.toStorageKey(key);
 
@@ -164,7 +180,7 @@ export class ImagePreviewCache {
         if (previous) {
             this.totalBytes -= previous.byteSize;
             this.entries.delete(storageKey);
-            this.cleanupValue(previous.value);
+            this.cleanupEntry(previous);
         }
 
         const byteSize = this.estimateBytes(value);
@@ -175,6 +191,7 @@ export class ImagePreviewCache {
             sessionId: key.sessionId,
             signature: key.signature,
             filePath: key.filePath,
+            retirement,
         };
         this.entries.set(storageKey, entry);
         this.totalBytes += byteSize;
@@ -184,11 +201,17 @@ export class ImagePreviewCache {
 
     invalidateSession(sessionId: string): void {
         if (!sessionId) return;
+        for (const [storageKey, pending] of this.pending) {
+            if (!storageKey.startsWith(`${sessionId}\u0000`)) continue;
+            this.pending.delete(storageKey);
+            pending.controller.abort();
+            pending.retirement?.dispose();
+        }
         for (const [storageKey, entry] of this.entries) {
             if (entry.sessionId !== sessionId) continue;
             this.entries.delete(storageKey);
             this.totalBytes -= entry.byteSize;
-            this.cleanupValue(entry.value);
+            this.cleanupEntry(entry);
             for (const listener of this.valueListeners.get(storageKey) ?? []) listener(null);
         }
     }
@@ -202,7 +225,7 @@ export class ImagePreviewCache {
             if (!input.paths.has(entry.filePath)) continue;
             this.entries.delete(storageKey);
             this.totalBytes -= entry.byteSize;
-            this.cleanupValue(entry.value);
+            this.cleanupEntry(entry);
             for (const listener of this.valueListeners.get(storageKey) ?? []) listener(null);
         }
     }
@@ -224,6 +247,11 @@ export class ImagePreviewCache {
         } catch {}
     }
 
+    private cleanupEntry(entry: ImagePreviewCacheEntry): void {
+        entry.retirement?.dispose();
+        this.cleanupValue(entry.value);
+    }
+
     private toStorageKey(key: ImagePreviewCacheKey): string {
         return `${key.sessionId}\u0000${key.signature}\u0000${key.filePath}`;
     }
@@ -239,9 +267,14 @@ export class ImagePreviewCache {
             this.entries.delete(oldestKey);
             if (oldest) {
                 this.totalBytes -= oldest.byteSize;
-                this.cleanupValue(oldest.value);
+                this.cleanupEntry(oldest);
                 for (const listener of this.valueListeners.get(oldestKey) ?? []) listener(null);
             }
         }
     }
 }
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+
+type PreviewLifetime = Pick<ServerAccountScopeLifetime, 'isCurrent' | 'onRetire'>;
+type Retirement = ReturnType<PreviewLifetime['onRetire']>;
+

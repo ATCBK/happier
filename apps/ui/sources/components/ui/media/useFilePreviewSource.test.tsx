@@ -6,7 +6,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { FilesystemDownloadOutput } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 
-import { renderHook, renderScreen } from '@/dev/testkit';
+import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 import { createSessionFileNativeTransferBoundary } from '@/components/sessions/files/sessionFileNativeTransferTestkit';
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { transferMachine } from '@/components/sessions/files/sessionFileTransferTestkit';
@@ -19,6 +19,7 @@ import { useImageCompare } from '@/components/workspaces/scm/review/imageCompare
 
 const files = vi.hoisted(() => new Map<string, { exists: boolean; chunks: Uint8Array[]; closed: number; deletes: number }>());
 const handoffs = vi.hoisted(() => ({ copies: [] as string[], shares: [] as number[][] }));
+const nativeSharing = vi.hoisted(() => ({ wait: null as Promise<void> | null, onAvailable: () => {} }));
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' }, {
@@ -31,7 +32,7 @@ vi.mock('react-native', async () => {
 vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated'))
     .createReanimatedModuleMock({ settleTimingCallbacks: true }));
 // Availability is the native share-sheet boundary; materialization and file handoff stay real.
-vi.mock('expo-sharing', () => ({ isAvailableAsync: async () => true }));
+vi.mock('expo-sharing', () => ({ isAvailableAsync: async () => { nativeSharing.onAvailable(); await nativeSharing.wait; return true; } }));
 // Accept the real Action owner's in-place read confirmation at the modal boundary.
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -77,6 +78,8 @@ describe('useFilePreviewSource', () => {
         files.clear();
         handoffs.copies.length = 0;
         handoffs.shares.length = 0;
+        nativeSharing.wait = null;
+        nativeSharing.onAvailable = () => {};
         downloadFailure = null;
         interruptTransfer = false;
         transfer = createSessionFileNativeTransferBoundary();
@@ -118,6 +121,73 @@ describe('useFilePreviewSource', () => {
         });
     });
     afterEach(async () => { await fixture.dispose(); });
+
+    it('reads qualified resource bytes only on demand, shares the stage acquisition and purges retirement', async () => {
+        let reads = 0;
+        let current = true;
+        const retire = new Set<() => void>();
+        const source = { kind: 'resource' as const, id: JSON.stringify(['home', 'account', 'discussion', 'message', 'blob']), name: 'resource.png',
+            readBytes: async () => { reads++; return new Uint8Array([7, 8, 9]); },
+            lifetime: { isCurrent: () => current, onRetire: (listener: () => void) => { retire.add(listener); return { dispose: () => { retire.delete(listener); } }; } } };
+        const input = { source, cacheKey: 'verified-sha', mimeType: 'image/png', sizeBytes: 3 };
+        const closed = await renderHook(() => useFilePreviewSource({ ...input, enabled: false }));
+        expect(reads).toBe(0);
+        const inline = await renderHook(() => useFilePreviewSource({ ...input, enabled: true }));
+        await vi.waitFor(() => expect(inline.getCurrent().status).toBe('loaded'));
+        const stage = await renderHook(() => useFilePreviewSource({ ...input, enabled: true }));
+        await vi.waitFor(() => expect(stage.getCurrent().status).toBe('loaded'));
+        expect(reads).toBe(1);
+        const uri = inline.getCurrent().uri!;
+        expect(files.get(uri)?.exists).toBe(true);
+        act(() => { current = false; for (const callback of retire) callback(); });
+        await vi.waitFor(() => expect(files.get(uri)?.exists).toBe(false));
+        expect(inline.getCurrent().status).not.toBe('loaded');
+        await closed.unmount();
+        await inline.unmount();
+        await stage.unmount();
+    });
+
+    it('retires cache-owned resource bytes after the last preview consumer unmounts', async () => {
+        let current = true;
+        const retire = new Set<() => void>();
+        const source = { kind: 'resource' as const, id: 'unmounted-resource-cache', name: 'retired.png',
+            readBytes: async () => new Uint8Array([1, 2, 3]),
+            lifetime: { isCurrent: () => current, onRetire: (listener: () => void) => { retire.add(listener); return { dispose: () => { retire.delete(listener); } }; } } };
+        const preview = await renderHook(() => useFilePreviewSource({ source, cacheKey: 'verified', mimeType: 'image/png', sizeBytes: 3, enabled: true }));
+        await vi.waitFor(() => expect(preview.getCurrent().status).toBe('loaded'));
+        const uri = preview.getCurrent().uri!;
+        await preview.unmount();
+        expect(files.get(uri)?.exists).toBe(true);
+        current = false;
+        for (const callback of retire) callback();
+        await vi.waitFor(() => expect(files.get(uri)?.exists).toBe(false));
+        expect(retire.size).toBe(0);
+    });
+
+    it('cancels a resource Save after native availability yields to retirement', async () => {
+        const { MediaStage } = await import('./stage/MediaStage');
+        const available = createDeferred<void>();
+        const entered = createDeferred<void>();
+        nativeSharing.wait = available.promise;
+        nativeSharing.onAvailable = () => entered.resolve();
+        let current = true;
+        const retire = new Set<() => void>();
+        const source = { kind: 'resource' as const, id: 'resource-handoff', name: 'private.png',
+            readBytes: async () => new Uint8Array([7, 8, 9]),
+            lifetime: { isCurrent: () => current, onRetire: (listener: () => void) => { retire.add(listener); return { dispose: () => { retire.delete(listener); } }; } } };
+        const screen = await renderScreen(React.createElement(MediaStage, { initialIndex: 0, onClose: () => {}, items: [{ kind: 'image', title: 'private.png',
+            source: { enabled: true, source, cacheKey: 'verified-handoff', mimeType: 'image/png', sizeBytes: 3 } }] }));
+        try {
+            await vi.waitFor(() => expect(screen.findByTestId('media-stage-image')).toBeTruthy());
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 100, height: 60 } }));
+            await act(async () => screen.findByTestId('media-stage-save')!.props.onPress());
+            await entered.promise;
+            await act(async () => { current = false; for (const callback of retire) callback(); available.resolve(); });
+            expect(handoffs.copies).toHaveLength(1);
+            expect(handoffs.shares).toEqual([]);
+            expect([...files.entries()].filter(([uri]) => uri.includes('happier-downloads')).every(([, file]) => !file.exists)).toBe(true);
+        } finally { available.resolve(); await screen.unmount(); }
+    });
 
     it.each([
         { kind: 'workspace', cacheKey: null },

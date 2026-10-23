@@ -822,6 +822,7 @@ export function MediaStage(props: MediaStageProps & CustomModalInjectedProps) {
   const handoff = React.useCallback((action?: 'open') => {
     if (!savable) return;
     void saveFileUri({ uri: savable, fileName: item.title, action,
+      ...(item.source.source.kind === 'resource' ? { isCurrent: item.source.source.lifetime.isCurrent } : {}),
       mimeType: resolveFileViewerKind({ path: item.title, mimeType: handoffMime ?? item.source.mimeType }).mimeType })
       .catch(error => Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.operationFailed')));
   }, [handoffMime, item, savable]);

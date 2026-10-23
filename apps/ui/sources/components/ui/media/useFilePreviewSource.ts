@@ -15,6 +15,16 @@ import {
 } from '@/sync/domains/sessionFilePreviews/createSessionFilePreviewSource';
 import { ImagePreviewCache, resolveImagePreviewCacheKey, type ImagePreviewCacheProgress, type ImagePreviewCacheValue } from './imagePreviewCache';
 import { buildWorkspacePreviewIdentity } from './buildWorkspacePreviewIdentity';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+
+export type ResourceFilePreviewSource = Readonly<{
+    kind: 'resource';
+    /** Qualified resource/message/blob identity, including the owning Home and Account. */
+    id: string;
+    name: string;
+    readBytes: (signal: AbortSignal) => Promise<Uint8Array>;
+    lifetime: Pick<ServerAccountScopeLifetime, 'isCurrent' | 'onRetire'>;
+}>;
 
 export type FilePreviewSource =
     | Readonly<{ kind: 'workspace'; scope: WorkspaceScopeBase; filePath: string }>
@@ -22,6 +32,7 @@ export type FilePreviewSource =
     | Readonly<{ kind: 'attachment'; handle: SessionAttachmentHandleV1; fileName: string }>
     | Readonly<{ kind: 'composerStage'; handle: ComposerContentHandleV1 }>
     | Readonly<{ kind: 'bytes'; bytes: Uint8Array; name: string }>
+    | ResourceFilePreviewSource
     | Readonly<{ kind: 'uri'; uri: string }>;
 
 export type UseFilePreviewSourceInput = Readonly<{
@@ -87,10 +98,11 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
     const attachment = source.kind === 'attachment' ? source.handle : null;
     const bytes = source.kind === 'bytes' ? source.bytes : null;
     const directUri = source.kind === 'uri' ? source.uri : null;
+    const resourceLifetime = source.kind === 'resource' ? source.lifetime : null;
     const filePath = source.kind === 'workspace' || source.kind === 'session' ? source.filePath
         : source.kind === 'attachment' ? source.fileName
         : source.kind === 'composerStage' ? source.handle.name
-        : source.kind === 'bytes' ? source.name : source.uri;
+        : source.kind === 'bytes' || source.kind === 'resource' ? source.name : source.uri;
     const sizeBytes = stage?.sizeBytes ?? bytes?.byteLength ?? input.sizeBytes ?? null;
     const viewer = resolveFileViewerKind({ path: filePath, mimeType: stage?.mimeType ?? input.mimeType });
     const mimeType = viewer.mimeType;
@@ -104,7 +116,7 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
         ? JSON.stringify(['session-attachment', attachment.sessionId, attachment.id])
         : stage ? JSON.stringify(['composer-stage', stage.executionTarget.serverId, stage.executionTarget.machineId, stage.owner.pluginId, stage.owner.localId, stage.id])
         : scope ? buildWorkspacePreviewIdentity(scope, filePath, sizeBytes, null).cacheScopeId
-        : source.kind === 'session' ? source.sessionId : source.kind === 'bytes' ? 'bytes' : '');
+        : source.kind === 'session' ? source.sessionId : source.kind === 'resource' ? source.id : source.kind === 'bytes' ? 'bytes' : '');
     const cacheKey = resolveImagePreviewCacheKey({ cacheScopeId, filePath,
         cacheKey: input.cacheKey ?? stage?.sha256, acquisitionKey: input.acquisitionKey, retryCount })?.signature ?? null;
     const stageIdentity = stage ? JSON.stringify(stage) : null;
@@ -128,20 +140,32 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
             return;
         }
         let active = true;
+        let retired = resourceLifetime?.isCurrent() === false;
         const controller = new AbortController();
         const key = cacheKey ? { sessionId: cacheScopeId, signature: cacheKey, filePath } : null;
         let uncached: ImagePreviewCacheValue | null = null;
         const publish = (value: ImagePreviewCacheValue) => {
-            if (active) setResource({ identity, bytes, state: previewState(value) });
+            if (active && !retired && resourceLifetime?.isCurrent() !== false) setResource({ identity, bytes, state: previewState(value) });
         };
+        const retirement = resourceLifetime?.onRetire(() => {
+            retired = true;
+            controller.abort();
+            imagePreviewCache.invalidateSession(cacheScopeId);
+            if (active) { setResource(null); setProgress(null); }
+        });
+        if (retired) {
+            imagePreviewCache.invalidateSession(cacheScopeId);
+            setResource(null);
+            return () => { active = false; retirement?.dispose(); };
+        }
         if (cacheOnly) {
-            if (!key) { setResource(null); return; }
+            if (!key) { setResource(null); retirement?.dispose(); return; }
             imagePreviewCache.retain(key);
             const stop = imagePreviewCache.observeValue(key, value => {
                 if (value) publish(value);
                 else if (active) setResource(null);
             });
-            return () => { active = false; stop(); imagePreviewCache.release(key); };
+            return () => { active = false; retirement?.dispose(); stop(); imagePreviewCache.release(key); };
         }
         const report = (value: ImagePreviewCacheProgress) => {
             if (!active) return;
@@ -151,7 +175,9 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
         const load = async (signal: AbortSignal, onProgress: (value: ImagePreviewCacheProgress) => void): Promise<ImagePreviewCacheValue> => {
             const current = sourceRef.current;
             try {
-                const result = current.kind === 'composerStage'
+                const result = current.kind === 'resource'
+                    ? await createBytesPreviewSource({ bytes: await current.readBytes(signal), fileName: filePath, mimeType, maxBytes: normalizedMaxBytes, signal })
+                    : current.kind === 'composerStage'
                     ? await createComposerStagedMediaPreviewSource({ handle: current.handle, maxBytes: normalizedMaxBytes, signal })
                     : current.kind === 'attachment'
                     ? await createSessionAttachmentPreviewSource({ handle: current.handle, fileName: filePath, mimeType, maxBytes: normalizedMaxBytes, expectedSizeBytes: sizeBytes, signal, onProgress })
@@ -162,13 +188,14 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
                     ...(result.errorCode ? { errorCode: result.errorCode } : {}) };
                 return { status: 'loaded', uri: result.source.uri, byteLength: result.source.byteLength, mimeType: result.source.mimeType, cleanup: cleanupPreviewSource(result.source) };
             } catch (error) {
-                return { status: 'error', error: error instanceof Error ? error.message : t('files.fileReadFailed') };
+                return { status: 'error', error: error instanceof Error ? error.message : t('files.fileReadFailed'),
+                    ...(error instanceof Error && 'code' in error && typeof error.code === 'string' ? { errorCode: error.code } : {}) };
             }
         };
         if (key) imagePreviewCache.retain(key);
         const stopObserving = key ? imagePreviewCache.observeProgress(key, report) : null;
         const tooLarge = viewer.previewable && normalizedMaxBytes !== null && sizeBytes !== null && sizeBytes > normalizedMaxBytes;
-        const pending = tooLarge ? Promise.resolve<ImagePreviewCacheValue>({ status: 'error', error: t('files.imagePreviewTooLarge'), errorCode: 'too_large' }) : key ? imagePreviewCache.load(key, load) : load(controller.signal, report).then(value => {
+        const pending = tooLarge ? Promise.resolve<ImagePreviewCacheValue>({ status: 'error', error: t('files.imagePreviewTooLarge'), errorCode: 'too_large' }) : key ? imagePreviewCache.load(key, load, resourceLifetime ?? undefined) : load(controller.signal, report).then(value => {
             uncached = value;
             if (!active && value.status === 'loaded') void Promise.resolve(value.cleanup?.()).catch(() => undefined);
             return value;
@@ -176,14 +203,16 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
         void pending.then(publish);
         return () => {
             active = false;
+            retirement?.dispose();
             stopObserving?.();
             controller.abort();
             if (key) imagePreviewCache.release(key);
             else if (uncached?.status === 'loaded') void Promise.resolve(uncached.cleanup?.()).catch(() => undefined);
         };
-    }, [enabled, cacheOnly, identity, kind, cacheScopeId, cacheKey, filePath, mimeType, sizeBytes, normalizedMaxBytes, scope, bytes, viewer.previewable]);
+    }, [enabled, cacheOnly, identity, kind, cacheScopeId, cacheKey, filePath, mimeType, sizeBytes, normalizedMaxBytes, scope, bytes, viewer.previewable, resourceLifetime]);
 
     if (!enabled) return { status: 'disabled', uri: null, error: null };
+    if (resourceLifetime?.isCurrent() === false) return { status: 'error', uri: null, error: t('files.fileReadFailed'), errorCode: 'resource_unavailable' };
     if (directUri !== null) return { status: 'loaded', uri: directUri, error: null };
     if (resource?.identity === identity && resource.bytes === bytes) return resource.state;
     if (cacheOnly) return { status: 'disabled', uri: null, error: null };
