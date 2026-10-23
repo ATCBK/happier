@@ -266,11 +266,7 @@ describe('requester HTTP authority on the existing external Action carrier', () 
         sessionActionOrigin: origin, sessionActionSource: { machineId: args.sourceMachineId, installationId: args.installationId },
       } } };
     });
-    const started = performance.now();
     const admitted = await prepareExternalActionRequesterAccountAuthorization({ ...args, isCurrent });
-    console.info('Remote source authorization latency (20ms Home currentness)', {
-      elapsedMs: Math.round(performance.now() - started), currentnessReads: events.filter(event => event === 'currentness').length,
-    });
     expect(admitted).not.toBeNull();
     expect(events).toEqual(['currentness', 'mint', 'currentness']);
     if (!admitted) throw new Error('Original source authorization was not admitted');

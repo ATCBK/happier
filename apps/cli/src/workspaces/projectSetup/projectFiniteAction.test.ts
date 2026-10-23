@@ -682,11 +682,6 @@ describe('authenticated finite Project Action owner', () => {
             expect.soft(phaseReads['project.command.review']).toEqual([{ config: 0, project: 0 }, { config: 1, project: 0 }]);
             expect.soft(phaseReads['project.sync.prepare']).toEqual([{ config: 0, project: 0 }]);
             expect(requests.filter(path => path === '/v1/account/encryption')).toHaveLength(3);
-            console.info('FX89d finite Home request counts', { requestsAtAcceptance, requestsAtNative: requests.length,
-                projectReads: projectReads.length,
-                phaseReads,
-                configReads: requests.filter(path => path.endsWith('/read')).length,
-                modeReads: requests.filter(path => path === '/v1/account/encryption').length });
             const stages = diagnostics.mock.calls.filter(([event]) => event === '[external-action-stage]')
                 .map(([, fields]) => fields);
             expect(stages).toEqual(expect.arrayContaining([
@@ -933,7 +928,6 @@ describe('authenticated finite Project Action owner', () => {
             machineAdmission: { ...h.context.machineAdmission!, actorAccountId: 'bob' },
             verifyMachineAdmissionCurrent: () => admitted.isCurrent() };
         h.get.mockClear(); h.post.mockClear();
-        const started = performance.now();
         try {
             if (actionId === 'projects.inspect') {
                 const { ApiMachineClient } = await import('@/api/apiMachine');
@@ -986,8 +980,6 @@ describe('authenticated finite Project Action owner', () => {
                         } }) } });
                 expect(result, JSON.stringify(result)).toMatchObject({ operation: { scope: { accountId: 'bob' } } });
                 expect(ProjectCommandActionOutputV1Schema.safeParse(result).success).toBe(true);
-                console.info('Requester operation acceptance (20ms Home boundary)', { elapsedMs: Math.round(performance.now() - started),
-                    verify: h.post.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length });
                 if (change !== 'current') {
                     const terminal = await Promise.race([
                         h.operationRuntime.runner.waitForTerminal({ accountId: 'bob', machineId: 'machine' }, 'operation'),
@@ -1003,7 +995,6 @@ describe('authenticated finite Project Action owner', () => {
             }
             const counts = { encryption: h.get.mock.calls.filter(([url]) => String(url).endsWith('/currentness')).length,
                 verify: h.post.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length };
-            console.info('Requester decision HTTP reads', actionId, counts, { elapsedMs: Math.round(performance.now() - started) });
             if (actionId === 'projects.inspect') {
                 // Fresh requester admission and final disclosure. Passive review
                 // between them consumes the installed execution's local custody.

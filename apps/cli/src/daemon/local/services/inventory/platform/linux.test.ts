@@ -187,7 +187,6 @@ describe('readLinuxLocalServiceListeners', () => {
         };
         const previous = await measure(incumbent);
         const optimized = await measure(current);
-        console.info('Linux listener same-run cycle cost', { previous, optimized, outputBytes: Buffer.byteLength(JSON.stringify(await current())) });
         expect(optimized.readsPerCycle).toBe(previous.readsPerCycle);
         expect(optimized.bytesPerCycle).toBe(previous.bytesPerCycle);
         expect(optimized.cpuMicros).toBeLessThan(previous.cpuMicros * 0.65);

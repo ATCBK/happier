@@ -264,7 +264,6 @@ import { createCliActionExecutorFromCredentials } from '@/session/actions/create
 import { createLocalServicesDaemonRuntimeActionExecutor } from '@/daemon/local/services/actions/runtimeActionExecutor';
 import { createProjectServiceRelocationRoute } from '@/daemon/local/services/actions/projectServiceRelocationRoute';
 import { createLocalServicesDaemonFeatureGate } from '@/daemon/local/services/featureGate';
-import { pluginReloadController as localServicesPluginRuntimeController } from '@/plugins/runtime/reload/singleton';
 import type { createManagedServicesOwner, ProjectManagedServiceHandle } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import {
@@ -2880,8 +2879,9 @@ export async function startDaemonSessionControlRuntime(
   let notifySessionLiveWorkChanged: () => void = () => {};
   // Every live acquisition in this daemon uses its same admitted controller;
   // retained Run snapshots keep their already captured lease below.
+  const pluginRuntimeController = params.pluginRuntimeController ?? pluginReloadController;
   const acquireDaemonPluginRuntimeRegistryLease = () => acquireAuthoritativePluginRuntimeRegistryLease({
-    happyHomeDir: configuration.happyHomeDir, controller: params.pluginRuntimeController,
+    happyHomeDir: configuration.happyHomeDir, controller: pluginRuntimeController,
   });
   let controlRuntimeResourcesDisposed = false;
   const isRuntimePublicationQuiescing =
@@ -4306,7 +4306,7 @@ export async function startDaemonSessionControlRuntime(
         observeRootSource('execution_run_markers', () => listExecutionRunMarkersForRehydration()),
         observeRootSource('boot_time', () => readProcessOwnershipBootTimeMs()),
       ]);
-      const managedServices = (localServicesPluginRuntimeController.getState().activeRegistry?.projectManagedServices.readResourceTargets() ?? [])
+      const managedServices = (pluginRuntimeController.getState().activeRegistry?.projectManagedServices.readResourceTargets() ?? [])
         .map(target => processActionOwnerAdapters?.captureServiceRoot(target) ?? target.root);
       const markerBySession = new Map(markers.map(marker => [marker.happySessionId, marker]));
       // Physical cleanup consumes native ownership and existing lifecycle facts.
@@ -4362,7 +4362,7 @@ export async function startDaemonSessionControlRuntime(
     }>,
   ) => Promise<void> = async () => {};
   const runnerExecutionRunSnapshots = createRunnerExecutionRunSnapshots({ machineId: params.machineId,
-    controller: params.pluginRuntimeController,
+    controller: pluginRuntimeController,
     withNativeModelAccount: async (context, read) => {
       return await withSessionAccountContext(context.sessionId, async (requester) => {
         await assertSessionAccountCurrent(context.sessionId, requester);
@@ -11732,7 +11732,7 @@ export async function startDaemonSessionControlRuntime(
   function listProjectServices(): readonly ProjectManagedServiceHandle[];
   function listProjectServices(options: Readonly<{ requireComplete: true; workspaceRoot?: string }>): Promise<readonly ProjectManagedServiceHandle[]>;
   function listProjectServices(options?: Readonly<{ requireComplete: true; workspaceRoot?: string }>) {
-    const owner = localServicesPluginRuntimeController.getState().activeRegistry?.projectManagedServices;
+    const owner = pluginRuntimeController.getState().activeRegistry?.projectManagedServices;
     if (options) {
       if (!owner) return Promise.reject(Object.assign(new Error('Project service native owner is unavailable'),
         { code: 'project_service_bindings_unavailable' }));
@@ -11745,11 +11745,11 @@ export async function startDaemonSessionControlRuntime(
     'listProjectServices' | 'resolveProjectService' | 'readProcessRoots'
   > = {
     readProcessRoots: () =>
-      localServicesPluginRuntimeController.getState().activeRegistry
+      pluginRuntimeController.getState().activeRegistry
         ?.projectManagedServices.readProcessRoots() ?? [],
     listProjectServices,
     resolveProjectService: (target) =>
-      localServicesPluginRuntimeController
+      pluginRuntimeController
         .getState()
         .activeRegistry?.projectManagedServices.resolveProjectService(
           target,
@@ -12907,7 +12907,7 @@ export async function startDaemonSessionControlRuntime(
         try {
           const owner = lease.registry.projectManagedServices;
           const ownerIsCurrent = () =>
-            pluginReloadController.getState().activeRegistry
+            pluginRuntimeController.getState().activeRegistry
               ?.projectManagedServices === owner;
           const verifyCurrentMachineAdmission = async () =>
             ownerIsCurrent() &&
@@ -13520,7 +13520,7 @@ export async function startDaemonSessionControlRuntime(
             });
           },
           isCurrent: () =>
-            pluginReloadController.isRuntimeRegistryCurrent(lease.registry),
+            pluginRuntimeController.isRuntimeRegistryCurrent(lease.registry),
           release: lease.release,
         });
       },
@@ -14751,7 +14751,7 @@ export async function startDaemonSessionControlRuntime(
     });
   };
   unsubscribeRunnerAgentAuthorityCurrentness =
-    pluginReloadController.subscribeRunningSessionDisposition((result) => {
+    pluginRuntimeController.subscribeRunningSessionDisposition((result) => {
       if (
         result.changedPluginIds.length === 0 ||
         result.runningSessionDisposition !== 'revokeRunningSessions'
@@ -17314,7 +17314,7 @@ export async function startDaemonSessionControlRuntime(
               ok: false as const, error: { code: 'execution_run_host_action_context_unavailable',
                 message: 'Review host-action context is unavailable' },
             };
-            const authority = await readCurrentReviewHostPluginAuthority(request.operation.pluginId, params.pluginRuntimeController);
+            const authority = await readCurrentReviewHostPluginAuthority(request.operation.pluginId, pluginRuntimeController);
             if (context.signal?.aborted || !await context.isCurrent()) return {
               ok: false as const, error: { code: 'execution_run_host_action_context_unavailable',
                 message: 'Review host-action context is unavailable' },
@@ -20144,7 +20144,7 @@ export async function startDaemonSessionControlRuntime(
     });
   };
   processActionOwnerAdapters = createProcessActionOwnerAdapters({
-    readServiceTargets: () => localServicesPluginRuntimeController.getState().activeRegistry?.projectManagedServices.readResourceTargets() ?? [],
+    readServiceTargets: () => pluginRuntimeController.getState().activeRegistry?.projectManagedServices.readResourceTargets() ?? [],
     readBrowsers: () => guardBrowserResourceOwner?.readResourceTargets?.() ?? [],
     startService: localServicesRuntime.launcherRoutes.startTarget,
     getBrowserAdapter: () => guardBrowserResourceOwner?.adapter ?? null,
@@ -20202,7 +20202,7 @@ export async function startDaemonSessionControlRuntime(
     guardSources: {
       readBrowsers: () => guardBrowserResourceOwner?.readResourceTargets?.() ?? [],
       readServices: (signal?: AbortSignal) => localServicesRuntime.refreshInventoryNow({ stage: 'native', signal }),
-      readServiceTargets: () => localServicesPluginRuntimeController.getState().activeRegistry?.projectManagedServices.readResourceTargets() ?? [],
+      readServiceTargets: () => pluginRuntimeController.getState().activeRegistry?.projectManagedServices.readResourceTargets() ?? [],
     },
     processOwnershipRuntime,
     processLeftBehindPass,

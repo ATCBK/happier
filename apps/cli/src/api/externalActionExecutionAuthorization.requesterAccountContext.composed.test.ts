@@ -629,13 +629,9 @@ describe('ordinary CLI requester Account custody on the existing Action carrier'
       requestId: 'request-1', target: { kind: 'machine', machineId: 'alice-machine' } as const,
       credentials: { token: token(), encryption: null }, serverIdentityId: homeIdentityId };
     await dispatchOriginalAccountAction({ ...request, serverHttpBaseUrl: measured.url });
-    const samples = [];
     for (let sample = 0; sample < 3; sample++) {
-      const started = performance.now();
       expect(await dispatchOriginalAccountAction({ ...request, serverHttpBaseUrl: measured.url })).toMatchObject({ ok: true, result: ownMachineResult });
-      samples.push(Math.round(performance.now() - started));
     }
-    console.info('Original Account dispatch (20ms mode and inventory HTTP boundaries)', { samples });
     let releaseMode!: () => void;
     let inventoryRead = false;
     const modeGate = new Promise<void>(resolve => { releaseMode = resolve; });

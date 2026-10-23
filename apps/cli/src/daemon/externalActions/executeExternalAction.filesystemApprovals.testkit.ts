@@ -167,7 +167,7 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
     await writeFile(join(rootPath, '.happier/project.json'), JSON.stringify({ version: 1,
       ...(setup ? { workspace: { setup: [{ kind: 'command', command: 'echo setup-reviewed' }] } } : {}),
       services: { checked: { ...(worker ? { execution: 'portable' } : {}),
-        source: { kind: 'command', command: 'echo service-admitted' } } } }));
+        source: { kind: 'command', command: `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)"` } } } }));
   }
   await writeFile(join(directory, 'outside'), 'outside unchanged');
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL', 'HAPPIER_MACHINE_RPC_WORKING_DIRECTORY']);
@@ -1130,7 +1130,8 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
             resolveWorkspaceSyncHandoffAdapter: () => sourceWorkspaceSync?.handoffAdapter ?? null });
           const sourceExecutor = createCliActionExecutorFromCredentials({ credentials, machineId: moveTarget.machineId,
             serverId: 'srv_n2', serverApiUrl: params.serverHttpBaseUrl, serverIdentityId: homeId,
-            actionsSettingsProvider: settings,
+            // This is the receiving SOURCE daemon, matching the production composer.
+            actionsSettingsProvider: settings, pluginActionExecutionOwner: 'current_process',
             externalActionMachineInstallationId: moveInstallation.installationId, externalActionMachineRequestPrivateKey: moveKey,
             runActionOperation: operations.runActionOperation,
             projectDefinitionAction: sourceDefinitionAction,

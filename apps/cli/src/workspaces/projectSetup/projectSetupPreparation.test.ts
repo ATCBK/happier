@@ -154,21 +154,15 @@ describe('current Project setup effect and preparation admission', () => {
         // Observe real OS commands without substituting SCM or effect logic.
         const commands = vi.spyOn(scmProcess, 'runScmCommand');
         const statusReads = () => commands.mock.calls.filter(([request]) => request.args.includes('status')).length;
-        const initialStartedAt = performance.now();
         const untracked = await reviewed(provenanceInput);
-        const initialDurationMs = Math.round(performance.now() - initialStartedAt);
         expect(untracked.reviewedEffect).toMatchObject({ presentation: { provenance: {
             file: '.happier/project.json', kind: 'repository', headCommit: repository.headCommit,
             branch: repository.branchName, fileState: 'untracked',
         } } });
         const initialStatusReads = statusReads();
         expect(initialStatusReads).toBeGreaterThan(0);
-        const checkpointStartedAt = performance.now();
         const checkpoint = await reviewProjectSetupEffect(provenanceInput, untracked.reviewedEffect.presentation);
         expect(checkpoint).toMatchObject({ kind: 'reviewed', plan: { reviewedEffectDigest: untracked.reviewedEffectDigest } });
-        console.info('R7 Project provenance source measurement', { initialDurationMs,
-            checkpointDurationMs: Math.round(performance.now() - checkpointStartedAt), initialStatusReads,
-            checkpointStatusReads: statusReads() - initialStatusReads });
         expect(statusReads()).toBe(initialStatusReads);
         await writeFile(join(repository.rootPath, '.happier/project.json'), JSON.stringify({ ...manifest,
             workspace: { setup: [{ kind: 'command', command: 'echo changed' }] } }));
