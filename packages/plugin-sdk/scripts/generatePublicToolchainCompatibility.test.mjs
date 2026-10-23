@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -403,6 +403,55 @@ test('checks the generated packet against source facts and rejects a stale publi
   });
   assert.notEqual(stale.status, 0);
   assert.match(stale.stderr, /output is stale/i);
+});
+
+test('public toolchain generation mutates only changed outputs and repairs missing output', async t => {
+  const root = await createFixtureRoot();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputPaths = [
+    'packages/plugin-sdk/src/ui/build/publicToolchainCompatibility.generated.ts',
+    'packages/tests/fixtures/plugin-platform/composer-external-dogfood/package.json',
+    'packages/tests/fixtures/plugin-platform/packed-targeted-contribution-projection/contributor/package.json',
+    'apps/docs/content/docs/plugins/packaging/versioning-compat.mdx',
+    'apps/docs/content/docs/plugins/manifest/index.mdx',
+  ].map(path => join(root, path));
+  const oldTimestamp = new Date('2000-01-01T00:00:00.000Z');
+  const baseline = await Promise.all(outputPaths.map(async path => {
+    await utimes(path, oldTimestamp, oldTimestamp);
+    return { path, source: await readFile(path, 'utf8'), mtimeMs: (await stat(path)).mtimeMs };
+  }));
+  const run = mode => {
+    const result = spawnSync(process.execPath, [GENERATOR_PATH, '--repo-root', root, mode], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  const mutatedOutputs = async () => (await Promise.all(baseline.map(async output => (
+    (await stat(output.path)).mtimeMs === output.mtimeMs ? [] : [output.path]
+  )))).flat();
+
+  run('--write');
+  assert.equal((await mutatedOutputs()).length, 0, 'unchanged generation must mutate zero public outputs');
+
+  const [module, consumer, , documentation] = baseline;
+  await writeFile(module.path, '// stale output\n', 'utf8');
+  const manifest = JSON.parse(consumer.source);
+  manifest.dependencies.react = '0.0.0';
+  await writeJson(consumer.path, manifest);
+  await writeFile(documentation.path, [
+    '{/* public-toolchain-compatibility:versioning-facts:start */}',
+    '{/* public-toolchain-compatibility:versioning-facts:end */}',
+    '',
+  ].join('\n'), 'utf8');
+  const stale = spawnSync(process.execPath, [GENERATOR_PATH, '--repo-root', root, '--check'], { encoding: 'utf8' });
+  assert.notEqual(stale.status, 0);
+  assert.match(stale.stderr, /output is stale/i);
+
+  run('--write');
+  assert.equal((await mutatedOutputs()).length, 3, 'repair must leave unrelated generated outputs untouched');
+  for (const output of baseline) assert.equal(await readFile(output.path, 'utf8'), output.source);
+  await rm(module.path);
+  run('--write');
+  assert.equal(await readFile(module.path, 'utf8'), module.source);
+  run('--check');
 });
 
 test('Plugin UI local typecheck derives a stale toolchain packet before compiling', async t => {

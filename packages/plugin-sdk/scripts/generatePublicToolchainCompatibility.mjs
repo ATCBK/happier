@@ -83,12 +83,10 @@ function requiredString(value, label) {
 }
 
 async function readJson(path, label) {
-  let source;
-  try {
-    source = await readFile(path, 'utf8');
-  } catch (cause) {
-    throw new Error(`${label} is unavailable at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
-  }
+  return parseJson(await readSource(path, label), label);
+}
+
+function parseJson(source, label) {
   try {
     return asRecord(JSON.parse(source), label);
   } catch (cause) {
@@ -102,6 +100,10 @@ async function readSource(path, label) {
   } catch (cause) {
     throw new Error(`${label} is unavailable at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
   }
+}
+
+async function writeFileIfChanged(path, source, output) {
+  if (source !== output) await writeFile(path, output, 'utf8');
 }
 
 function readDependency(manifest, packageName, label) {
@@ -328,13 +330,15 @@ async function deriveGeneratedConsumerPackageOutputs(repoRoot, packet) {
     collectConsumerPackagePaths(resolve(repoRoot, relativeRoot))
   )))).flat().sort();
   return Promise.all(packagePaths.map(async (packagePath) => {
-    const [manifest, sourcePaths] = await Promise.all([
-      readJson(packagePath, 'generated consumer package manifest'),
+    const [source, sourcePaths] = await Promise.all([
+      readSource(packagePath, 'generated consumer package manifest'),
       consumerPackageSourcePaths(packagePath),
     ]);
+    const manifest = parseJson(source, 'generated consumer package manifest');
     return Object.freeze({
       output: renderGeneratedConsumerPackageJson(manifest, packet, packagePath, sourcePaths),
       packagePath,
+      source,
     });
   }));
 }
@@ -351,7 +355,7 @@ async function checkGeneratedConsumerPackageOutputs(repoRoot, packet) {
 
 async function writeGeneratedConsumerPackageOutputs(repoRoot, packet) {
   const outputs = await deriveGeneratedConsumerPackageOutputs(repoRoot, packet);
-  await Promise.all(outputs.map(({ output, packagePath }) => writeFile(packagePath, output, 'utf8')));
+  await Promise.all(outputs.map(({ output, packagePath, source }) => writeFileIfChanged(packagePath, source, output)));
 }
 
 function copiedPublicToolchainSourceFact(source) {
@@ -508,6 +512,7 @@ async function deriveGeneratedDocumentationOutputs(repoRoot, packet) {
         renderGeneratedDocumentationBlock(documentation, packet),
       ),
       path,
+      source,
     });
   }));
 }
@@ -530,7 +535,7 @@ async function checkGeneratedDocumentationOutputs(repoRoot, packet) {
 
 async function writeGeneratedDocumentationOutputs(repoRoot, packet) {
   const outputs = await deriveGeneratedDocumentationOutputs(repoRoot, packet);
-  await Promise.all(outputs.map(({ output, path }) => writeFile(path, output, 'utf8')));
+  await Promise.all(outputs.map(({ output, path, source }) => writeFileIfChanged(path, source, output)));
 }
 
 /**
@@ -772,7 +777,7 @@ async function main() {
     return;
   }
   if (options.write) {
-    await writeFile(outputPath, expected, 'utf8');
+    await writeFileIfChanged(outputPath, current, expected);
     await writeGeneratedConsumerPackageOutputs(options.repoRoot, packet);
     await writeGeneratedDocumentationOutputs(options.repoRoot, packet);
     return;
