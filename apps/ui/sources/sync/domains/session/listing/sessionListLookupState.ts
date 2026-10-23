@@ -196,14 +196,19 @@ export function resolveSessionListPreferredSessionMetadataFromState(
     const address = resolveLookupAddress(state, target);
     if (!address) return null;
     const directSession = state?.sessions?.[address.sessionId];
-    const directServerId = normalizeTrimmedString(directSession?.serverId)
-        || normalizeTrimmedString(options?.activeServerId)
-        || getActiveServerSnapshot().serverId;
-    const directMetadata = directServerId === address.serverId
-        && directSession?.metadata && typeof directSession.metadata === 'object'
+    const directMetadataValue = directSession?.metadata && typeof directSession.metadata === 'object'
         ? directSession.metadata as SessionMetadataLike
         : null;
-    const cachedMetadata = findSessionListLookupSession(state, address, options)?.session.metadata;
+    const directServerId = directMetadataValue
+        ? normalizeTrimmedString(directSession?.serverId)
+            || normalizeTrimmedString(options?.activeServerId)
+            || getActiveServerSnapshot().serverId
+        : null;
+    const directMetadata = directServerId === address.serverId ? directMetadataValue : null;
+    // Metadata needs the keyed row, not the labeled entry's presentation-index scan.
+    const cachedMetadata = readSessionListRowForServerId(
+        state?.sessionListRowsByServerId, address.serverId, address.sessionId,
+    )?.metadata;
     if (!cachedMetadata) return directMetadata;
     if (resolveSessionMachineId(cachedMetadata)) return cachedMetadata;
     const machineId = resolveSessionMachineId(directMetadata);

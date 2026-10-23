@@ -19,6 +19,38 @@ const row = (id: string, name = id) => createSessionListRenderableSessionFixture
 });
 
 describe('sessionListLookupState', () => {
+    it('reads metadata for 1000 real-store rows without visiting their presentation index', async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { upsertServerProfile, removeServerProfile } = await import('@/sync/domains/server/serverProfiles');
+        const previousState = storage.getState();
+        const profile = await upsertServerProfile({ serverUrl: 'https://metadata-read-cost.example.test', name: 'Metadata read cost' });
+        const rows = Array.from({ length: 1_000 }, (_, index) => row(`metadata-cost-${index}`));
+        let indexVisits = 0;
+        const index = rows.map(session => ({
+            type: 'session' as const,
+            serverId: profile.id,
+            get sessionId() { indexVisits += 1; return session.id; },
+        }));
+        try {
+            storage.setState({
+                sessions: {},
+                sessionListRowsByServerId: { [profile.id]: Object.fromEntries(rows.map(session => [session.id, session])) },
+                sessionListIndexByServerId: { [profile.id]: index },
+            });
+            for (const session of rows) {
+                expect(resolveSessionListPreferredSessionMetadataFromState(storage.getState(), {
+                    serverId: profile.id, sessionId: session.id,
+                })).toBe(session.metadata);
+            }
+            // Metadata already lives in the keyed row owner. Presentation labels
+            // have no reader in this operation, regardless of corpus size.
+            expect(indexVisits).toBe(0);
+        } finally {
+            storage.setState(previousState, true);
+            await removeServerProfile(profile.id);
+        }
+    });
+
     it('looks up the exact qualified row and never borrows the active Home metadata', () => {
         const a = row('same', 'A');
         const b = row('same', 'B');
