@@ -1,4 +1,5 @@
-import type { Message, ToolCall } from "@happier-dev/session-core/messages";
+import { compareTranscriptMessagesOldestFirst, type Message, type ToolCall } from "@happier-dev/session-core/messages";
+import { readParticipantRecipientRoutingIdentityV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import {
@@ -13,6 +14,25 @@ import { findMatchingSessionSubagentForTool } from '../findMatchingSessionSubage
 import type { SessionSubagentActiveExecutionRunState } from '../types';
 import { createVisibleMessagesResolverFromDescriptor } from './visibleMessageDescriptors';
 import { resolveProjectedAgentUiBehaviorEntry } from '@/agents/registry/agentUiBehaviorProjection';
+import { readExecutionRunIdFromToolPayload } from '../../participants/deriveExecutionRunPollingRefreshKey';
+
+/** Run replies live in a sidechain; committed participant questions live in the parent transcript. */
+export function resolveExecutionRunVisibleMessages(params: Readonly<{
+    runId: string;
+    messages: readonly Message[];
+    focusedMessages: readonly Message[];
+}>): readonly Message[] {
+    const { focusedMessages } = params;
+    const ids = new Set(focusedMessages.flatMap(message => [message.id, message.realID].filter(Boolean)));
+    const localIds = new Set(focusedMessages.map(message => message.localId).filter(Boolean));
+    const questions = params.messages.filter(message => {
+        if (message.kind !== 'user-text' || ids.has(message.id) || (message.realID && ids.has(message.realID))
+            || (message.localId && localIds.has(message.localId))) return false;
+        const recipient = readParticipantRecipientRoutingIdentityV1(message.meta, 'stored');
+        return recipient?.kind === 'execution_run' && recipient.runId === params.runId;
+    });
+    return questions.length === 0 ? focusedMessages : [...focusedMessages, ...questions].sort(compareTranscriptMessagesOldestFirst);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -39,6 +59,8 @@ export function resolveSessionSubagentVisibleMessages(params: Readonly<{
     focusedMessages?: readonly Message[];
     activeExecutionRuns?: readonly SessionSubagentActiveExecutionRunState[];
 }>): readonly Message[] {
+    const runId = params.tool.name === 'SubAgentRun' ? readExecutionRunIdFromToolPayload(params.tool) : null;
+    if (runId) return resolveExecutionRunVisibleMessages({ ...params, runId, focusedMessages: params.focusedMessages ?? [] });
     if (!Array.isArray(params.focusedMessages) || params.focusedMessages.length === 0) return [];
 
     const subagents = deriveSessionSubagents({

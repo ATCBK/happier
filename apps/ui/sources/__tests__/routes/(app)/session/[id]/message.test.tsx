@@ -22,12 +22,19 @@ import {
   renderScreen,
   standardCleanup,
 } from '@/dev/testkit';
+import { createPlainSessionByIdResponseFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('react-native-reanimated', async () => {
   const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
   return createReanimatedModuleMock();
+});
+
+// Supply the native recycler viewport, not a transcript/route implementation.
+vi.mock('@legendapp/list/react-native', async importOriginal => {
+  const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
+  return (await import('@/dev/testkit/mocks/legendList')).createCapturingLegendListMock({ original, emitViewability: true }).module;
 });
 
 let mockSession: any = null;
@@ -47,6 +54,10 @@ let mockSearchParams: any = { id: 'session-1', messageId: 'message-1' };
 let loadOlderDeferred: DeferredPromise<Response> | null = null;
 let initialMessagesDeferred: DeferredPromise<Response> | null = null;
 let olderHistoryAvailable = false;
+let coldSource = false;
+let sourceStatus = 200;
+let sourceReads = 0;
+let sourceSessionId = 'session-1';
 const mockTheme = {
   colors: {
     chrome: { header: { background: '#000', foreground: '#fff' } },
@@ -55,10 +66,12 @@ const mockTheme = {
 } as const;
 
 installSessionRouteCommonModuleMocks({
+  nativeNavigation: async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock({ renderInitialNavigatorScreen: true }),
   reactNative: async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
       TurboModuleRegistry: { get: () => ({}) },
+      useWindowDimensions: () => ({ width: 1400, height: 900, scale: 1, fontScale: 1 }),
     });
   },
   router: async () => {
@@ -90,7 +103,19 @@ const runtime = installSessionPaneRuntimeTestHarness({
   sessionId: 'session-1',
   request: async (url, init) => {
     const address = new URL(String(url));
+    if (coldSource && address.pathname === `/v2/sessions/${sourceSessionId}`) {
+      sourceReads += 1;
+      if (sourceStatus !== 200) return Response.json({ error: sourceStatus === 403 ? 'Forbidden' : 'Session not found' }, { status: sourceStatus });
+      return Response.json(createPlainSessionByIdResponseFixture(createSessionFixture({ id: sourceSessionId, active: false })));
+    }
     if ((init?.method ?? 'GET') !== 'GET' || address.pathname !== '/v1/sessions/session-1/messages') return null;
+    if (coldSource) return Response.json({ messages: [{
+      id: 'source-answer', seq: 1, localId: null, sidechainId: null, createdAt: 1, updatedAt: 1,
+      content: { t: 'plain', v: { role: 'agent', content: { type: 'output', data: {
+        type: 'assistant', uuid: 'source-answer-uuid', isSidechain: false,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Exact inactive source answer' }] },
+      } } } },
+    }], hasMore: false, nextBeforeSeq: null });
     if (address.searchParams.has('beforeSeq') && loadOlderDeferred) return (await loadOlderDeferred.promise).clone();
     if (initialMessagesDeferred) return (await initialMessagesDeferred.promise).clone();
     return Response.json({ messages: [], hasMore: olderHistoryAvailable, nextBeforeSeq: olderHistoryAvailable ? 2 : null });
@@ -158,6 +183,7 @@ const {
   default: MessageScreen,
   createSessionMessageRouteStyles,
 } = await import('@/app/(app)/session/[id]/message/[messageId]');
+const { readInboxSessionTitle } = await import('@/components/inbox/sessionAttention/inboxSessionPrivacy');
 
 describe('Session message route hydration', () => {
   beforeEach(async () => {
@@ -172,6 +198,10 @@ describe('Session message route hydration', () => {
     loadOlderDeferred = null;
     initialMessagesDeferred = null;
     olderHistoryAvailable = false;
+    coldSource = false;
+    sourceStatus = 200;
+    sourceReads = 0;
+    sourceSessionId = 'session-1';
     mockSearchParams = { id: 'session-1', messageId: 'message-1' };
     routerBackSpy.mockClear();
     routerReplaceSpy.mockClear();
@@ -190,6 +220,7 @@ describe('Session message route hydration', () => {
       vi.clearAllTimers();
     }
     await standardCleanup();
+    coldSource = false;
     loadOlderDeferred?.resolve(Response.json({ messages: [], hasMore: false, nextBeforeSeq: null }));
     initialMessagesDeferred?.resolve(Response.json({ messages: [], hasMore: false, nextBeforeSeq: null }));
     syncOnSessionVisibleSpy.mockRestore();
@@ -227,6 +258,47 @@ describe('Session message route hydration', () => {
     return renderScreen(<runtime.Wrapper><Screen /></runtime.Wrapper>);
   }
 
+  it.each(['profile', 'canonical'] as const)('opens an inactive unlisted source in its transcript at the committed server message (%s Home)', async home => {
+    coldSource = true;
+    mockSearchParams = { id: 'session-1', serverId: home === 'canonical' ? runtime.serverIdentityId : runtime.serverId,
+      messageId: 'server:source-answer' };
+    storage.setState({ sessions: {}, sessionMessages: {}, sessionListRowsByServerId: {}, sessionListIndexByServerId: {} });
+    const screen = await renderScreen(<runtime.Wrapper><MessageScreen /></runtime.Wrapper>);
+    await waitForHomeGovernance(() => {
+      expect(storage.getState().sessionMessages['session-1']?.isLoaded).toBe(true);
+    });
+    expect(storage.getState().sessions['session-1']?.active).toBe(false);
+    expect(routerBackSpy).not.toHaveBeenCalled();
+    expect(routerReplaceSpy).not.toHaveBeenCalled();
+    const sourceMessageId = Object.values(storage.getState().sessionMessages['session-1']!.messagesById)
+      .find(message => message.realID === 'source-answer')!.id;
+    await waitForHomeGovernance(() => expect(screen.findAllByTestId(`transcript-message-${sourceMessageId}`)).toHaveLength(1));
+    const { ChatList } = await import('@/components/sessions/transcript/ChatList');
+    expect(screen.findByType(ChatList).props).toMatchObject({ jumpToSeq: 1, jumpToMessageId: 'server:source-answer' });
+  });
+
+  it.each([403, 404])('does not display a cached source after the exact Session read returns %s', async status => {
+    coldSource = true;
+    sourceStatus = status;
+    // A definitive deletion must not be followed by resurrecting that same
+    // immutable Session id in another case's synthetic Home.
+    sourceSessionId = `withdrawn-source-${status}`;
+    mockSearchParams = { id: sourceSessionId, serverId: runtime.serverId, messageId: 'cached-answer' };
+    mockMessage = { kind: 'tool-call', id: 'cached-answer', seq: 1, localId: null, createdAt: 1,
+      tool: { id: 'cached-call', name: 'Task', input: {}, result: null, state: 'completed' }, children: [] };
+    storage.getState().applySessions([createSessionFixture({ id: sourceSessionId, serverId: runtime.serverId })]);
+    storage.setState(state => ({ sessionMessages: { ...state.sessionMessages, [sourceSessionId]: createSessionMessagesFixture({
+      messageIdsOldestFirst: ['cached-answer'], messagesById: { 'cached-answer': mockMessage }, isLoaded: true,
+    }) } }));
+    const screen = await renderScreen(<runtime.Wrapper><MessageScreen /></runtime.Wrapper>);
+    await waitForHomeGovernance(() => expect(sourceReads).toBeGreaterThan(0));
+    await flushHookEffects({ cycles: 5, turns: 2 });
+    expect(screen.findAllByTestId('session-invalid-link')).toHaveLength(1);
+    expect(screen.findAllByTestId('tool-full-view')).toHaveLength(0);
+    expect(screen.tree.findAll(node => node.props.testID?.startsWith('transcript-message-') && typeof node.type === 'string')).toHaveLength(0);
+    expect(routerBackSpy).not.toHaveBeenCalled();
+  });
+
   it('keeps the focused transcript viewport above measured bottom chrome as its height changes', async () => {
     mockMessage = {
       kind: 'tool-call', id: 'message-1', localId: null, createdAt: 1,
@@ -249,30 +321,32 @@ describe('Session message route hydration', () => {
     }
   });
 
-  describe('names the Agent that asked a question a manager handles', () => {
-    const questionTool = {
-      id: 'q1', name: 'AskUserQuestion', state: 'running', result: null,
-      input: { questions: [{ question: 'Record manager attribution?', header: 'Attribution', options: [{ label: 'Yes' }, { label: 'No' }], multiSelect: false }] },
-      permission: { id: 'q1', status: 'pending' },
-    };
-    const openQuestion = (currentHandler: unknown) => {
+  describe('names the Agent that asked a question a manager answered', () => {
+    const openAnsweredQuestion = (answeredBy: unknown) => {
       mockSearchParams = { id: 'session-1', messageId: 'message-1' };
-      mockSession = {
-        id: 'session-1', accessLevel: 'edit', metadata: { name: 'Worker that asks' },
-        agentState: { requests: { q1: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, currentHandler } } },
+      mockSession = { id: 'session-1', accessLevel: 'edit', metadata: { name: 'Worker that asks' } };
+      mockMessage = {
+        kind: 'tool-call', id: 'message-1', localId: null, createdAt: 1, children: [],
+        tool: {
+          id: 'q1', name: 'AskUserQuestion', state: 'completed', result: null,
+          input: { questions: [{ question: 'Record manager attribution?', options: [{ label: 'Yes' }, { label: 'No' }], multiSelect: false }] },
+          permission: { id: 'q1', status: 'approved', answeredBy },
+        },
       };
-      mockMessage = { kind: 'tool-call', id: 'message-1', localId: null, createdAt: 1, tool: questionTool, children: [] };
     };
     const headerAskedBy = () => (toolFullViewSpy.mock.calls.at(-1)?.[0].header as React.ReactElement<{ askedBy?: string | null }>).props.askedBy;
 
-    it('passes the asking Session name to the page header when a manager Session is handling the question', async () => {
-      openQuestion({ kind: 'session', sessionId: 'manager-1' });
+    it('passes the asking Session name to the page header when a manager Session answered the question', async () => {
+      openAnsweredQuestion({ kind: 'session', sessionId: 'manager-1' });
       await renderMessageScreen(MessageScreen);
-      expect(headerAskedBy()).toBe('Worker that asks');
+      // The page names the asker as the Inbox does: the Session's own title projection.
+      const asker = storage.getState().sessions['session-1'];
+      expect(asker).toBeDefined();
+      expect(headerAskedBy()).toBe(readInboxSessionTitle(asker!, asker!.serverId ?? null));
     });
 
-    it('adds no asker when the person is the one handling it', async () => {
-      openQuestion({ kind: 'person' });
+    it('adds no asker when the person answered it', async () => {
+      openAnsweredQuestion({ kind: 'person' });
       await renderMessageScreen(MessageScreen);
       expect(headerAskedBy() ?? null).toBeNull();
     });
@@ -285,26 +359,15 @@ describe('Session message route hydration', () => {
     expect(syncOnSessionVisibleSpy).not.toHaveBeenCalled();
   });
 
-  it('does not navigate back until message backfill completes', async () => {
-
-    applyMessageFixtures();
-    olderHistoryAvailable = true;
-    // Seed the real pagination owner through a completed Home response, then hold
-    // its next older HTTP page until the case releases it.
-    await sync.loadOlderMessagesFromCursor('session-1', 2);
-    loadOlderDeferred = createDeferredPromise<Response>();
-
+  it('keeps an exhausted message link unavailable on its route rather than navigating back', async () => {
+    // The Home's real initial page explicitly ends this empty history. Pending
+    // cursor retention is covered separately below through a held HTTP read.
     const screen = await renderMessageScreen(MessageScreen);
-    await flushHookEffects({ cycles: 1, turns: 1 });
-
-    expect(syncOnSessionVisibleSpy).toHaveBeenCalledWith('session-1');
-    expect(syncLoadOlderMessagesSpy).toHaveBeenCalledWith('session-1');
+    await vi.waitFor(() => {
+      expect(screen.findAllByTestId('session-invalid-link')).toHaveLength(1);
+    }, { timeout: 5_000 });
+    expect(routerReplaceSpy).not.toHaveBeenCalled();
     expect(routerBackSpy).not.toHaveBeenCalled();
-
-    loadOlderDeferred!.resolve(Response.json({ messages: [], hasMore: false, nextBeforeSeq: null }));
-    await waitForHomeGovernance(() => {
-      expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
-    });
   });
 
   it('keeps a stable tool route open when the route id resolves to a hydrated internal tool message id', async () => {
@@ -424,6 +487,11 @@ describe('Session message route hydration', () => {
     await flushHookEffects({ cycles: 1, turns: 1 });
 
     expect(await sync.loadOlderMessages('session-1')).toMatchObject({ status: 'not_ready' });
+    await vi.waitFor(() => {
+      expect(syncLoadOlderMessagesSpy.mock.calls.length).toBeGreaterThan(1);
+    });
+    // A temporary pagination refusal is not proof the committed message is gone.
+    await new Promise(resolve => setTimeout(resolve, 5_200));
     expect(routerReplaceSpy).not.toHaveBeenCalled();
     expect(routerBackSpy).not.toHaveBeenCalled();
   });
