@@ -118,6 +118,7 @@ export function useTriageActions(): TriageMountedActionsV1 {
   const generation = useRef(0);
 
   const load = useCallback(async (signal: AbortSignal): Promise<void> => {
+    if (readiness.pending || readiness.ready === false) return;
     generation.current += 1;
     const current = generation.current;
     try {
@@ -136,20 +137,21 @@ export function useTriageActions(): TriageMountedActionsV1 {
       setLoaded(false);
       setUnavailableReason(text('plugins.triage.surface.actions.unavailable', UNAVAILABLE_REASON));
     }
-  }, [text, transport]);
+  }, [text, transport, readiness.pending, readiness.ready]);
 
   useEffect(() => {
-    if (readiness.pending) return;
+    if (readiness.pending || readiness.ready === false) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => { controller.abort(); };
-  }, [load, readiness.pending, readiness.revision]);
+  }, [load, readiness.pending, readiness.ready, readiness.revision]);
 
   const retry = useCallback(() => {
+    if (readiness.pending || readiness.ready === false) return;
     const controller = new AbortController();
     setUnavailableReason(null);
     void load(controller.signal);
-  }, [load]);
+  }, [load, readiness.pending, readiness.ready]);
 
   const resolveForExecution = useCallback(async (
     actionId: string,
@@ -158,6 +160,7 @@ export function useTriageActions(): TriageMountedActionsV1 {
     | Readonly<{ status: 'resolved'; action: TriageActionV1 }>
     | Readonly<{ status: 'missing' | 'unavailable' }>
   > => {
+    if (readiness.pending || readiness.ready === false) return { status: 'unavailable' };
     const controller = new AbortController();
     try {
       const projection = await transport.read({ signal: controller.signal });
@@ -195,7 +198,7 @@ export function useTriageActions(): TriageMountedActionsV1 {
       setUnavailableReason(text('plugins.triage.surface.actions.unavailable', UNAVAILABLE_REASON));
       return { status: 'unavailable' };
     }
-  }, [text, transport]);
+  }, [text, transport, readiness.pending, readiness.ready]);
 
   const administer = useCallback(async (
     input: TriageAdministerActionInputV1,

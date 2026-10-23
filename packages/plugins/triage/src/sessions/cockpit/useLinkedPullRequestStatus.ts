@@ -33,7 +33,7 @@ export function useLinkedPullRequestStatus(entry: TriageSessionLinkedEntrySummar
     const settled = React.useRef<Readonly<{ owner: PluginUiEphemeralSharedScope | null; inputJson: string; observationAtMs: number | null; refreshRevision: number; readinessRevision: number }> | null>(null);
 
     React.useEffect(() => {
-        if (!expanded || readiness.pending || input === null || inputJson === null || identity === null) return;
+        if (!expanded || readiness.pending || readiness.ready === false || input === null || inputJson === null || identity === null) return;
         const previous = settled.current;
         if (previous?.owner === owner && previous.inputJson === inputJson
             && previous.observationAtMs === observationAtMs && previous.refreshRevision === refreshRevision
@@ -58,7 +58,7 @@ export function useLinkedPullRequestStatus(entry: TriageSessionLinkedEntrySummar
             }
         })();
         return () => { controller.abort(); };
-    }, [expanded, host, identity, input, inputJson, observationAtMs, owner, refreshRevision, readiness.pending, readiness.revision]);
+    }, [expanded, host, identity, input, inputJson, observationAtMs, owner, refreshRevision, readiness.pending, readiness.ready, readiness.revision]);
 
     // A changed Account/plugin scope or selected connection never renders the previous owner's facts.
     const current = read?.owner === owner && read.identity === identity ? read : IDLE;

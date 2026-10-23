@@ -381,7 +381,7 @@ function seedConfiguredSource(harness: DurableHarness, seed = 2): void {
 }
 
 describe('durable Account state with no daemon reachable', () => {
-    it('recovers pins and saved views after cold Account reads fail and the host becomes ready, without Retry', async () => {
+    it('recovers pins and saved views after cold Account reads fail and the requester is re-admitted, without Retry', async () => {
         let failing = true;
         const harness = createDurableHarness({ accountReadsFail: () => failing });
         await seedPin(harness, 'Replace the duplicated normalizer');
@@ -393,6 +393,10 @@ describe('durable Account state with no daemon reachable', () => {
         await act(async () => {
             await fixture.updateSurface({ ...context, machineConnectionPending: false, machineExecutionReady: true });
         });
+        await expect(fixture.getByText('pins:unavailable')).resolves.toBeDefined();
+        await expect(fixture.getByText('views:unavailable')).resolves.toBeDefined();
+        await act(async () => { await fixture.updateSurface({ ...context, requesterExecutionReady: false }); });
+        await act(async () => { await fixture.updateSurface({ ...context, requesterExecutionReady: true }); });
         await expect(fixture.getByText('pins:[Replace the duplicated normalizer]')).resolves.toBeDefined();
         await expect(fixture.getByText('views:absent:[]')).resolves.toBeDefined();
         expect(harness.actionCalls).toEqual([]);

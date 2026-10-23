@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useTriageListWindowViewDemand } from './useTriageListWindowViewDemand.js';
+import type { PluginUiHostReadiness } from '@happier-dev/plugin-ui';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -21,13 +22,14 @@ afterEach(() => {
 type Props = Readonly<{
   active: boolean;
   demand: () => Promise<void>;
+  readiness?: PluginUiHostReadiness;
 }>;
 
 function render(initial: Props): Readonly<{
   update(next: Props): Promise<void>;
 }> {
   function Probe(props: Props): null {
-    useTriageListWindowViewDemand(props.active, props.demand);
+    useTriageListWindowViewDemand(props.active, props.demand, props.readiness);
     return null;
   }
 
@@ -44,6 +46,17 @@ function render(initial: Props): Readonly<{
 }
 
 describe('the mounted Triage list view-demand producer', () => {
+
+  it('defers demand while requester admission is false and reacquires once after admission', async () => {
+    const demand = vi.fn(async () => {});
+    const readiness = { pending: false, ready: false, revision: 0 };
+    const harness = render({ active: true, demand, readiness });
+    expect(demand).not.toHaveBeenCalled();
+    await harness.update({ active: true, demand, readiness: { ...readiness, ready: true, revision: 1 } });
+    expect(demand).toHaveBeenCalledTimes(1);
+    await harness.update({ active: true, demand, readiness });
+    expect(demand).toHaveBeenCalledTimes(1);
+  });
 
   it('does not demand while first mounted or retained inactive, including callback replacement', async () => {
     const first = vi.fn(async () => {});

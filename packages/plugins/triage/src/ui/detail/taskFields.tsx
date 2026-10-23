@@ -22,8 +22,7 @@ import { readTriageSourceGetOperationV1, resolveTriageSourceDescriptorV1, resolv
 function useTriageTaskExecutionUnavailable(): boolean {
   const machineBound = Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon');
   const readiness = usePluginHostReadiness(machineBound);
-  const context = useSurfaceContext();
-  return readiness.pending || (machineBound && context.machineExecutionReady === false);
+  return readiness.pending || readiness.ready === false;
 }
 
 /** A single explicit form commit; provider authorization and settlement stay in tasks/* and the source. */

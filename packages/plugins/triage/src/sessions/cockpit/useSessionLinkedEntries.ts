@@ -215,7 +215,7 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
         }
         setSourceRead((previous) => previous.owner === owner && previous.sessionId === sessionId
             ? { ...previous, status: 'loading' } : { owner, sessionId, status: 'loading', links: [] });
-        if (readiness.pending) return () => controller.abort();
+        if (readiness.pending || readiness.ready === false) return () => controller.abort();
         void (async () => {
             try {
                 const result = TriageReadSourceSessionLinksResultV1Schema.parse(await host.executeAction(
@@ -238,7 +238,7 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
             }
         })();
         return () => controller.abort();
-    }, [host, owner, readiness.pending, readiness.revision, sessionId, sourceReadAvailable, sourceRefresh]);
+    }, [host, owner, readiness.pending, readiness.ready, readiness.revision, sessionId, sourceReadAvailable, sourceRefresh]);
     const parameters = React.useMemo(
         () => triageSessionLinkedEntriesParameters(sessionId),
         [sessionId],
@@ -263,9 +263,9 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
     const { hydration, retryUnreadable } = useLinkHydration(targets);
     const refresh = React.useCallback(async () => {
         retryUnreadable();
-        setSourceRefresh((value) => value + 1);
+        if (!readiness.pending && readiness.ready !== false) setSourceRefresh((value) => value + 1);
         await query.refresh();
-    }, [query.refresh, retryUnreadable]);
+    }, [query.refresh, retryUnreadable, readiness.pending, readiness.ready]);
 
     const view = React.useMemo(
         () => projectTriageSessionLinkedEntries({ query: queryState, hydration, entries: window.snapshot.window?.rows,

@@ -290,11 +290,13 @@ export function useTriageEntryDetail(
     setState(next);
   }, []);
   const retry = useCallback((): void => {
+    if (readiness.pending || readiness.ready === false) return;
     replaceLoadedLinkedSessionPages.current = true;
     setRetryGeneration((generation) => generation + 1);
-  }, []);
+  }, [readiness.pending, readiness.ready]);
 
   const loadMoreLinkedSessions = useCallback((): void => {
+    if (readiness.pending || readiness.ready === false) return;
     const currentState = stateRef.current;
     if (currentState?.kind !== 'ready'
       || currentState.linkedSessionsNextCursor === undefined
@@ -387,7 +389,7 @@ export function useTriageEntryDetail(
         }));
       }
     })();
-  }, [entryRef, observation, publish, sourceInstanceId, transport]);
+  }, [entryRef, observation, publish, sourceInstanceId, transport, readiness.pending, readiness.ready]);
 
   useEffect(() => {
     readPending.current = false;
@@ -412,7 +414,7 @@ export function useTriageEntryDetail(
         ? retained
         : READING
     );
-    if (readiness.pending) return () => controller.abort();
+    if (readiness.pending || readiness.ready === false) return () => controller.abort();
     readPending.current = true;
     void (async () => {
       const next = await readTriageEntryDetailStateThrough(
@@ -445,17 +447,17 @@ export function useTriageEntryDetail(
       readPending.current = false;
       linkedSessionsController.current?.abort();
     };
-  }, [entryRef, publish, retryGeneration, sourceInstanceId, transport, readiness.pending, readiness.revision]);
+  }, [entryRef, publish, retryGeneration, sourceInstanceId, transport, readiness.pending, readiness.ready, readiness.revision]);
 
   useEffect(() => {
-    if (observation === undefined || readiness.pending
+    if (observation === undefined || readiness.pending || readiness.ready === false
       || (readObservation.current?.observedAtMs === observedAtMs
         && readObservation.current?.sourceUpdatedAtMs === sourceUpdatedAtMs)) return;
     // A fresh observation also admits same-id connection metadata refreshes.
     // Finish the current Account read before acquiring that newer projection.
     if (readPending.current) refreshAfterRead.current = true;
     else setRetryGeneration((generation) => generation + 1);
-  }, [observedAtMs, sourceUpdatedAtMs, readiness.pending]);
+  }, [observedAtMs, sourceUpdatedAtMs, readiness.pending, readiness.ready]);
 
   return useMemo(() => {
     if (entryRef === undefined || sourceInstanceId === undefined || observation === undefined) return null;

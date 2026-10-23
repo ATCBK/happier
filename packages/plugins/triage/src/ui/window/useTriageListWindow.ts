@@ -79,23 +79,25 @@ export function useTriageListWindow(): TriageMountedListWindowV1 {
     () => readTriageMountedWindowReadState(hostApi, sharedScope),
     [hostApi, sharedScope],
   );
+  const { snapshot: acquired, readiness: readClientReadiness } = useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
+  // Before subscription commits there is no transport client. Use this mount's
+  // shared host fact rather than inventing an admitted initial observation.
+  const readiness = readClientReadiness ?? hostReadiness;
   const refresh = useCallback(
-    (trigger: TriageRefreshTriggerV1) => refreshTriageListWindow(trigger, hostApi, sharedScope),
-    [hostApi, sharedScope],
+    (trigger: TriageRefreshTriggerV1) => readiness.pending || readiness.ready === false
+      ? Promise.resolve() : refreshTriageListWindow(trigger, hostApi, sharedScope),
+    [hostApi, sharedScope, readiness.pending, readiness.ready],
   );
   const loadMore = useCallback(
-    () => loadMoreTriageListWindow(hostApi, sharedScope),
-    [hostApi, sharedScope],
+    () => readiness.pending || readiness.ready === false
+      ? Promise.resolve() : loadMoreTriageListWindow(hostApi, sharedScope),
+    [hostApi, sharedScope, readiness.pending, readiness.ready],
   );
   const setLens = useCallback(
     (lens: TriageListLensV1) => { setTriageListWindowLens(lens, hostApi, sharedScope); },
     [hostApi, sharedScope],
   );
 
-  const { snapshot: acquired, readiness: readClientReadiness } = useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
-  // Before subscription commits there is no transport client. Use this mount's
-  // shared host fact rather than inventing an admitted initial observation.
-  const readiness = readClientReadiness ?? hostReadiness;
   const snapshot = useMemo<TriageListWindowSnapshotV1>(() => {
     if (!readiness.pending) return acquired;
     const { error: _error, unreadableSources: _unreadableSources, ...retained } = acquired;

@@ -41,7 +41,7 @@ export function useTriageSessionLinkCandidates(
     const { targetedContributions } = useSurfaceContext();
     const links = useTriageSessionLinkedEntries(sessionId);
     const view = links.view;
-    useTriageListWindowViewDemand(true, window.refresh);
+    useTriageListWindowViewDemand(true, window.refresh, window.readiness);
 
     useEffect(() => {
         if (view.kind === 'linked' && view.more && view.notice === null) {

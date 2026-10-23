@@ -90,6 +90,7 @@ import { TRIAGE_VIEW_REFRESH_MIN_INTERVAL_MS } from '../refresh/refreshEligibili
 import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralSharedScope.test-support.js';
 import { useTriageListWindow } from './window/useTriageListWindow.js';
 import { useTriageListWindowViewDemand } from './window/useTriageListWindowViewDemand.js';
+import { usePersonalTaskOrder } from './list/usePersonalTaskOrder.js';
 
 /**
  * Opening a row all the way into the source's own detail body.
@@ -1044,6 +1045,70 @@ function openedFixtureEntry(): string {
 }
 
 describe('opening a row into the source detail', () => {
+    it('defers Account detail, fix links and personal task acquisition until requester admission', async () => {
+        const harness = createHarness();
+        const calls: string[] = [];
+        const entryRef = TriageEntryRefV1Schema.parse({ source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' });
+        const input = { selection: { entryRef, sourceInstanceId: INSTANCE }, observation: {
+            entryRef, observedAtMs: 4_000, locator: testkitLocator(), snapshot: testkitSnapshot(), viewer: testkitViewer(),
+        } } satisfies TriageEntryDetailInputSourceV1;
+        const fixInput = { entryRef, display: { title: 'Example', scopeLabel: 'example/repository' },
+            workflowSubjectOf: () => 'issue' as const, presentationOf: () => null };
+        const surface = defineUiSurface(() => {
+            const detail = useTriageEntryDetail(input);
+            const fix = useTriageFixPullRequests(fixInput);
+            usePersonalTaskOrder(true, 0);
+            return <Text value={`${detail?.kind}:${fix?.kind}`} />;
+        });
+        const context = { ...surfaceContext(), requesterExecutionReady: false,
+            machineConnectionPending: false, machineExecutionReady: true };
+        const shell = await createPluginUiTestkit({ identity: { instanceId: 'detail-admission', mountNonce: 'detail-admission' },
+            authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' }, surface, surfaceContext: context,
+            adapter: createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope: harness.ephemeralSharedScope }),
+            handlers: { executeAction: request => {
+                calls.push(String(request.action));
+                if (request.action === 'marks/read-fix-pull-requests-v1') return { v: 1, candidates: [], primary: null, incomplete: false };
+                if (request.action === 'tasks.internal.list') return { status: 'unavailable' };
+                return harness.executeAction(request);
+            } },
+        });
+        mounted.push(shell);
+        expect(calls).toEqual([]);
+        await act(async () => { await shell.updateSurface({ ...context, requesterExecutionReady: true }); });
+        await vi.waitFor(() => expect(document.body.textContent).toContain('ready:ready'));
+        expect(calls).toHaveLength(3);
+        await act(async () => { await shell.updateSurface(context); });
+        expect(calls).toHaveLength(3);
+    });
+
+    it('defers manual Account list refresh while requester admission is false', async () => {
+        const harness = createHarness();
+        const calls: string[] = [];
+        const surface = defineUiSurface(() => {
+            const window = useTriageListWindow();
+            useTriageListWindowViewDemand(true, window.refresh, window.readiness);
+            return <><Text value={window.snapshot.window?.rows[0]?.content?.outcome.snapshot.title ?? 'reading'} />
+                <Button title="manual-window-refresh" onPress={() => window.refresh('manual')} /></>;
+        });
+        const context = { ...surfaceContext(), requesterExecutionReady: false,
+            machineConnectionPending: true, machineExecutionReady: false };
+        const shell = await createPluginUiTestkit({ identity: { instanceId: 'account-list-admission', mountNonce: 'account-list-admission' },
+            authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' }, surface,
+            surfaceContext: context, adapter: createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope: harness.ephemeralSharedScope }),
+            handlers: { executeAction: request => { calls.push(String(request.action)); return harness.executeAction(request); } },
+        });
+        mounted.push(shell);
+        expect(calls).toEqual([]);
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'manual-window-refresh' })); });
+        expect(calls).toEqual([]);
+        await act(async () => { await shell.updateSurface({ ...context, requesterExecutionReady: true }); });
+        await vi.waitFor(() => expect(document.body.textContent).toContain('Replace the duplicated normalizer'));
+        const reads = calls.length;
+        await act(async () => { await shell.updateSurface(context); });
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'manual-window-refresh' })); });
+        expect(calls).toHaveLength(reads);
+    });
+
     it('demands the Account aggregate list while no Machine is reachable', async () => {
         const harness = createHarness();
         const surface = defineUiSurface(() => {
@@ -1240,6 +1305,12 @@ describe('opening a row into the source detail', () => {
         });
         mounted.push(shell);
         await vi.waitFor(() => expect(ready().linkedSessions).toHaveLength(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1));
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: false }); });
+        const beforeWithdrawalRead = harness.readDetailInstanceIds.length;
+        await act(async () => { ready().loadMoreLinkedSessions(); ready().refreshLinkedSessions(); });
+        expect(harness.readDetailInstanceIds).toHaveLength(beforeWithdrawalRead);
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: true }); });
+        await vi.waitFor(() => expect(ready().linkedSessions).toHaveLength(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1));
         await act(async () => { ready().loadMoreLinkedSessions(); });
         await vi.waitFor(() => expect(ready().linkedSessions).toHaveLength(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1));
         const removed = ready().linkedSessions.at(-1);
@@ -1316,6 +1387,47 @@ describe('opening a row into the source detail', () => {
         await vi.waitFor(() => { expect(document.body.textContent).toBe('ready'); });
     });
 
+    it('defers Account catalog acquisition and manual retry until requester admission', async () => {
+        const calls: string[] = [];
+        const initial = { ...surfaceContext(), requesterExecutionReady: false,
+            machineConnectionPending: false, machineExecutionReady: true };
+        const surface = defineUiSurface(() => {
+            const actions = useTriageActions();
+            const views = useTriageSavedViews();
+            const pins = useTriagePinnedEntries();
+            return <><Text value={actions.loaded && views.saved !== null && pins.loadMore.kind !== 'loading' ? 'ready' : 'reading'} />
+                <Button title="retry-catalogs" onPress={() => { actions.retry(); views.retry(); pins.retry(); }} />
+                <Button title="resolve-action" onPress={() => { void actions.resolveForExecution('missing', []); }} /></>;
+        });
+        const kv = createTestkitAccountKv();
+        const shell = await createPluginUiTestkit({ identity: { instanceId: 'catalog-admission', mountNonce: 'catalog-admission' },
+            authorPlugin: { id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, version: '0.0.0' },
+            surface, surfaceContext: initial, adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+            handlers: { executeAction: async ({ action, input }) => {
+                calls.push(String(action));
+                if (action === 'actions/read-v1') return await readTriageActionsForSurface(TriageReadActionsInputV1Schema.parse(input), {
+                    catalog: kv.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1), mintActionId: () => 'unused',
+                });
+                if (action === TRIAGE_LIST_PINNED_ENTRIES_ACTION_LOCAL_ID_V1) return { v: 1, pins: [] };
+                return await readTriageSavedViewsForSurface(TriageReadSavedViewsInputV1Schema.parse(input), {
+                    catalog: kv.catalog(TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1), mintViewId: () => 'unused',
+                });
+            } },
+        });
+        mounted.push(shell);
+        expect(calls).toEqual([]);
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'retry-catalogs' })); });
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'resolve-action' })); });
+        expect(calls).toEqual([]);
+        await act(async () => { await shell.updateSurface({ ...initial, requesterExecutionReady: true }); });
+        await vi.waitFor(() => expect(document.body.textContent).toContain('ready'));
+        expect(calls).toHaveLength(3);
+        await act(async () => { await shell.updateSurface(initial); });
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'retry-catalogs' })); });
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'resolve-action' })); });
+        expect(calls).toHaveLength(3);
+    });
+
     it.each([false, true])('reads Account catalogs without a Machine and recovers an actual host refusal (withdrawn: %s)', async (initiallyWithdrawn) => {
         let withdrawn = initiallyWithdrawn;
         const kv = createTestkitAccountKv();
@@ -1345,7 +1457,8 @@ describe('opening a row into the source detail', () => {
         mounted.push(shell);
         await vi.waitFor(() => { expect(document.body.textContent).toBe(initiallyWithdrawn ? 'error' : 'ready'); });
         withdrawn = false;
-        await act(async () => { await shell.updateSurface({ ...initial, machineConnectionPending: false, machineExecutionReady: true }); });
+        await act(async () => { await shell.updateSurface({ ...initial, requesterExecutionReady: false }); });
+        await act(async () => { await shell.updateSurface({ ...initial, requesterExecutionReady: true }); });
         await vi.waitFor(async () => { await expect(shell.getByText('ready')).resolves.toBeDefined(); });
     });
 
@@ -1356,7 +1469,8 @@ describe('opening a row into the source detail', () => {
         await openTheRow(shell);
         await expect(shell.getByText('These details could not be read')).resolves.toBeDefined();
         refusedHostReads.clear();
-        await act(async () => { await shell.updateSurface({ ...surfaceContext(), machineConnectionPending: false, machineExecutionReady: true }); });
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: false }); });
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: true }); });
         await vi.waitFor(async () => { await expect(shell.getByText(DETAIL_BODY_TEXT)).resolves.toBeDefined(); });
     });
 
@@ -1385,16 +1499,18 @@ describe('opening a row into the source detail', () => {
         mounted.push(shell);
         await vi.waitFor(() => { expect(document.body.textContent).toBe(initiallyWithdrawn ? 'unreachable' : 'ready'); });
         withdrawn = false;
-        await act(async () => { await shell.updateSurface({ ...initial, machineConnectionPending: false, machineExecutionReady: true }); });
+        await act(async () => { await shell.updateSurface({ ...initial, requesterExecutionReady: false }); });
+        await act(async () => { await shell.updateSurface({ ...initial, requesterExecutionReady: true }); });
         await vi.waitFor(async () => { await expect(shell.getByText('ready')).resolves.toBeDefined(); });
     });
 
-    it('reacquires a refused cold read when exact host execution is re-admitted after loading settled', async () => {
+    it('reacquires a refused cold read when exact requester execution is re-admitted after loading settled', async () => {
         const hostTarget = { ready: false, pending: false, executionReady: false };
         const shell = await mountShell({ hostTarget, activeSurface: true, automaticDemandOnly: true });
         await expect(shell.getByText('Your sources could not be reached')).resolves.toBeDefined();
         hostTarget.ready = true;
-        await act(async () => { await shell.updateSurface({ ...surfaceContext(), machineExecutionReady: true }); });
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: false }); });
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: true }); });
         await vi.waitFor(async () => {
             await expect(shell.getByRole('button', { name: 'Replace the duplicated normalizer' })).resolves.toBeDefined();
         });
@@ -1434,6 +1550,10 @@ describe('opening a row into the source detail', () => {
         expect(reads).toBe(previousReads);
         hostTarget.ready = true;
         await act(async () => { await shell.updateSurface(surfaceContext()); });
+        await expect(shell.getByText('Your sources could not be reached')).resolves.toBeDefined();
+        expect(reads).toBe(previousReads);
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: false }); });
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: true }); });
         await expect(shell.getByRole('button', { name: 'Replace the duplicated normalizer' })).resolves.toBeDefined();
     });
 
@@ -1449,7 +1569,8 @@ describe('opening a row into the source detail', () => {
         await expect(shell.getByText('Your sources could not be reached')).resolves.toBeDefined();
 
         hostTarget.ready = true;
-        await act(async () => { await shell.updateSurface(surfaceContext()); });
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: false }); });
+        await act(async () => { await shell.updateSurface({ ...surfaceContext(), requesterExecutionReady: true }); });
         await expect(shell.getByRole('button', { name: 'Replace the duplicated normalizer' })).resolves.toBeDefined();
     });
 

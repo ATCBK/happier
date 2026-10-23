@@ -91,6 +91,7 @@ export function useTriageSavedViews(): TriageMountedSavedViewsV1 {
   const generation = useRef(0);
 
   const read = useCallback(async (signal: AbortSignal): Promise<void> => {
+    if (readiness.pending || readiness.ready === false) return;
     generation.current += 1;
     const current = generation.current;
     try {
@@ -105,22 +106,23 @@ export function useTriageSavedViews(): TriageMountedSavedViewsV1 {
       // actually said, and blanking it would read as "you saved no views".
       setUnavailableReason(text('plugins.triage.surface.views.unavailable', UNAVAILABLE_REASON));
     }
-  }, [text, transport]);
+  }, [text, transport, readiness.pending, readiness.ready]);
 
   useEffect(() => {
-    if (readiness.pending) return;
+    if (readiness.pending || readiness.ready === false) return;
     const controller = new AbortController();
     void read(controller.signal);
     return () => { controller.abort(); };
-  }, [read, readiness.pending, readiness.revision]);
+  }, [read, readiness.pending, readiness.ready, readiness.revision]);
 
   const retry = useCallback(() => {
+    if (readiness.pending || readiness.ready === false) return;
     const controller = new AbortController();
     // Keep the unavailable state visible until the Account actually answers;
     // clearing it at press time would enable stale-view writes while this read
     // is still unresolved.
     void read(controller.signal);
-  }, [read]);
+  }, [read, readiness.pending, readiness.ready]);
 
   const administer = useCallback(async (
     input: TriageAdministerSavedViewInputV1,

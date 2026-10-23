@@ -163,7 +163,7 @@ export function useTriageFixPullRequests(
     setSettled((previous) => (
       previous.kind === 'read' && sameTriageEntryRefV1(previous.entryRef, entryRef) ? previous : { kind: 'reading' }
     ));
-    if (readiness.pending) return () => controller.abort();
+    if (readiness.pending || readiness.ready === false) return () => controller.abort();
     void (async () => {
       let next: Settled;
       try {
@@ -175,7 +175,7 @@ export function useTriageFixPullRequests(
       setSettled(next);
     })();
     return () => controller.abort();
-  }, [entryKey, readGeneration, transport, readiness.pending, readiness.revision]);
+  }, [entryKey, readGeneration, transport, readiness.pending, readiness.ready, readiness.revision]);
 
   const write = useCallback((intent: TriageSetFixPullRequestInputV1): void => {
     setBusy(true);
@@ -193,7 +193,10 @@ export function useTriageFixPullRequests(
     })();
   }, [transport]);
 
-  const retry = useCallback(() => setReadGeneration((value) => value + 1), []);
+  const retry = useCallback(() => {
+    if (readiness.pending || readiness.ready === false) return;
+    setReadGeneration((value) => value + 1);
+  }, [readiness.pending, readiness.ready]);
 
   return useMemo(() => {
     if (entryRef === undefined || display === undefined

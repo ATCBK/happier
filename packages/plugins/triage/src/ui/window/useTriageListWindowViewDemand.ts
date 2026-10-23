@@ -45,7 +45,7 @@ export function useTriageListWindowViewDemand(
     // Readiness is supplied by the host, independently from public activity.
     // Hand the declared read's readiness edge to the same window/coalescing owner.
     // Nested sources decide their own execution placement, not this page demand.
-    if (!active || readiness.pending || (!mountOrScopeChanged && !regainedActivity && !reacquire)) return;
+    if (!active || readiness.pending || readiness.ready === false || (!mountOrScopeChanged && !regainedActivity && !reacquire)) return;
 
     void refresh(reacquire ? 'manual' : 'view');
   }, [active, refresh, readiness]);

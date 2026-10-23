@@ -13,7 +13,7 @@ export function usePersonalTaskOrder(enabled: boolean, pass: number) {
   const [revision, invalidate] = useReducer((value: number) => value + 1, 0);
   const [read, setRead] = useState<Readonly<{ scope: typeof scope; value: PersonalTaskOrder | null; available: boolean }> | null>(null);
   useEffect(() => {
-    if (!enabled || scope === null || !activity.active || readiness.pending) return;
+    if (!enabled || scope === null || !activity.active || readiness.pending || readiness.ready === false) return;
     const cancellation = new AbortController();
     const fail = () => {
       if (!cancellation.signal.aborted) setRead(previous => ({ scope, available: false, value: previous?.scope === scope ? previous.value : null }));
@@ -24,7 +24,7 @@ export function usePersonalTaskOrder(enabled: boolean, pass: number) {
       setRead({ scope, value: result, available: true });
     }).catch(fail);
     return () => cancellation.abort();
-  }, [host, scope, enabled, activity.active, readiness.pending, readiness.revision, pass, revision]);
+  }, [host, scope, enabled, activity.active, readiness.pending, readiness.ready, readiness.revision, pass, revision]);
   const current = enabled && scope !== null && read?.scope === scope ? read : null;
   // Settlement only invalidates this read; the host remains the sole writer.
   const onDropOutcome = useCallback(() => { invalidate(); }, []);

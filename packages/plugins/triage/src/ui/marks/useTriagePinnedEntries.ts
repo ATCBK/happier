@@ -156,6 +156,7 @@ export function useTriagePinnedEntries(): TriageMountedPinsV1 {
     signal: AbortSignal,
     request: TriagePinsDemandV1,
   ): Promise<void> => {
+    if (readiness.pending || readiness.ready === false) return;
     generation.current += 1;
     const current = generation.current;
     /** Reads settle out of order; only the newest one may publish. */
@@ -212,17 +213,17 @@ export function useTriagePinnedEntries(): TriageMountedPinsV1 {
     setUnavailableReason(null);
     setAppendFailed(false);
     setReading(false);
-  }, [text, transport]);
+  }, [text, transport, readiness.pending, readiness.ready]);
 
   useEffect(() => {
-    if (readiness.pending) return;
+    if (readiness.pending || readiness.ready === false) return;
     const controller = new AbortController();
     void read(controller.signal, demand);
     return () => { controller.abort(); };
-  }, [demand, read, readiness.pending, readiness.revision]);
+  }, [demand, read, readiness.pending, readiness.ready, readiness.revision]);
 
   const loadMorePins = useCallback((): void => {
-    if (reading) return;
+    if (reading || readiness.pending || readiness.ready === false) return;
     setDemand((current) => ({
       // A failed append retries the depth it already asked for. Deepening here
       // would step past a page this mount never received.
@@ -230,13 +231,13 @@ export function useTriagePinnedEntries(): TriageMountedPinsV1 {
       appending: true,
       nonce: current.nonce + 1,
     }));
-  }, [appendFailed, reading]);
+  }, [appendFailed, reading, readiness.pending, readiness.ready]);
 
   const retry = useCallback((): void => {
-    if (reading) return;
+    if (reading || readiness.pending || readiness.ready === false) return;
     // The same depth, re-demanded: `nonce` is what makes it a new read.
     setDemand((current) => ({ ...current, appending: false, nonce: current.nonce + 1 }));
-  }, [reading]);
+  }, [reading, readiness.pending, readiness.ready]);
 
   const setPinned = useCallback((row: TriageListDisplayRowV1): void => {
     if (busyKey !== null || unavailableReason !== null) return;
