@@ -11,8 +11,8 @@ import { discussionFailure, discussionSuccess, type DiscussionResult } from './s
 import { readHeldDiscussionPendingInputsInTx } from '@/app/session/pending/pendingMessageService';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { admitDiscussionSecondOpinionSourceInTx } from './secondOpinion';
-import { prismaRuntime as sql, getDbProviderFromEnv } from '@/storage/prisma';
-import { discussionJsonText, discussionSqlName as name } from './readSql';
+import { prismaRuntime as sql } from '@/storage/prisma';
+import { discussionJsonText, discussionSqlName as name, discussionSqlTimestamp } from './readSql';
 
 /** Only the authenticated runtime/original supplies an executable destination. */
 function contentDestination(authentication: SessionAccessAuthentication) {
@@ -182,8 +182,7 @@ export async function listDiscussions(input: Reader & Readonly<{
         for (;;) {
             // SQLite's Prisma connector has no JSON-path filter. Select exact
             // Doc candidates in SQL on every provider before ORM/page admission.
-            const at = frontier ? new Date(frontier.at) : null;
-            const position = getDbProviderFromEnv(process.env, 'postgres') === 'sqlite' && at ? at.getTime() : at;
+            const position = frontier ? discussionSqlTimestamp(new Date(frontier.at)) : sql.empty;
             const scopedIds = input.anchorDocArtifactId === undefined ? null : await tx.$queryRaw<{ id: string }[]>(sql.sql`
                 SELECT d.${name('id')} AS id FROM ${name('Discussion')} d
                 WHERE ${discussionCandidateSql(input.actorAccountId)} AND d.${name('archivedAt')} IS NULL

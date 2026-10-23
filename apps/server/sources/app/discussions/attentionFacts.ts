@@ -16,7 +16,7 @@ import { decodeDiscussionListCursorV1, encodeDiscussionListCursorV1 } from './pa
 import { admitArtifactEditProposalDecisionDocInTx } from '@/app/artifacts/artifactEditProposalService';
 import { discussionFailure, discussionSuccess, type DiscussionResult } from './serviceTypes';
 import { prismaRuntime as sql, getDbProviderFromEnv } from '@/storage/prisma';
-import { discussionSqlName as name } from './readSql';
+import { discussionSqlName as name, discussionSqlTimestamp } from './readSql';
 import type { DiscussionContext } from './access';
 
 /**
@@ -43,8 +43,7 @@ export async function readDiscussionAttention(input: Readonly<{
             const open = provider === 'sqlite' ? sql.sql`json(${disposition}) = ${JSON.stringify({ state: 'open' })}`
                 : provider === 'mysql' ? sql.sql`${disposition} = CAST(${JSON.stringify({ state: 'open' })} AS JSON)`
                 : sql.sql`${disposition} = ${JSON.stringify({ state: 'open' })}::jsonb`;
-            const at = frontier ? new Date(frontier.at) : null;
-            const position = provider === 'sqlite' && at ? at.getTime() : at;
+            const position = frontier ? discussionSqlTimestamp(new Date(frontier.at)) : sql.empty;
             const ids: { id: string }[] = await tx.$queryRaw(sql.sql`SELECT m.${name('id')} AS id FROM ${name('DiscussionMessage')} m
                 JOIN ${name('Discussion')} d ON d.${name('id')} = m.${name('discussionId')}
                 WHERE ${discussionCandidateSql(input.actorAccountId)} AND d.${name('archivedAt')} IS NULL
