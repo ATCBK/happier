@@ -7,17 +7,23 @@ import type {
 
 import { resolvePreferredLaunchMachineId } from '@/components/settings/pickers/resolvePreferredMachineId';
 import { normalizeOptionalParam } from '@/profileRouteParams';
-import type { Machine, Session } from '@/sync/domains/state/storageTypes';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
-import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceSnapshot } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
+import { useServerScopedMachine } from '@/sync/store/hooks';
+import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
+import { getMachineDisplayName, getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveDefaultDirectoryForMachine } from '@/utils/sessions/machineDefaultDirectory';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
-import { useStableRecentPathsResolver } from '@/utils/sessions/useStableRecentPathsForMachine';
+import { useStableRecentPathsResolver, type RecentPathSessionsInput } from '@/utils/sessions/useStableRecentPathsForMachine';
+import { useNewSessionPlacementSessions } from './useNewSessionPlacementSessions';
 import type { ManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 import { resolveManagedMachineArchiveChoiceAvailability, type ManagedMachineArchiveChoiceAvailability } from '@/components/sessions/new/components/machineSelection/managedMachineSelection';
 
 type RecentMachinePathsList = Array<{ machineId: string; path: string }>;
+const NO_MACHINE_DEADLINES: readonly Machine[] = [];
+const readNoMachineDeadlines = () => NO_MACHINE_DEADLINES;
 
 function normalizeMachineIdParam(raw: unknown): string {
     const normalized = normalizeOptionalParam(
@@ -102,9 +108,9 @@ export function useNewSessionMachinePathState(params: Readonly<{
     /** Fresh one-shot handoff identity for an explicit rich picker target. */
     executionTargetRequestKey?: string | null;
     routeSelectionOrigin?: MachinePoolSelectionOriginV1;
-    machines: ReadonlyArray<Machine>;
+    machines: ReadonlyArray<Machine> | (() => ReadonlyArray<Machine>);
     recentMachinePaths: unknown;
-    sessions?: ReadonlyArray<Session | string> | null | undefined;
+    sessions?: RecentPathSessionsInput;
     machineIdParam: unknown;
     pathParam: unknown;
     /** Explicit intent returned by a pushed folder picker; separate from its remembered path. */
@@ -130,6 +136,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
     setManagedMachineArchiveEffect: (effect: ManagedMachineSelectionDraft['archiveEffect']) => void;
     cancelManagedMachineTarget: () => void;
     selectedMachineId: string | null;
+    selectedMachine: Machine | null;
+    selectedMachineSentenceName: string | null;
     /**
      * The machine whose open Agent catalog this screen shows.
      *
@@ -173,9 +181,11 @@ export function useNewSessionMachinePathState(params: Readonly<{
     getRequestedPath: () => string;
     getBestPathForMachine: (machineId: string | null) => string;
 }> {
-    const reachabilityRevision = useMachineReachabilityRevision();
     const { binding } = useServerCredentialAccountScopeBinding(params.serverId);
     const scope = binding?.isCurrent() ? binding.scope : null;
+    const liveInventory = typeof params.machines === 'function';
+    const readMachines = React.useCallback(() => typeof params.machines === 'function' ? params.machines() : params.machines,
+        [params.machines]);
     const recentMachinePaths = React.useMemo((): RecentMachinePathsList => {
         return Array.isArray(params.recentMachinePaths) ? (params.recentMachinePaths as any[]).slice() as any : [];
     }, [params.recentMachinePaths]);
@@ -188,19 +198,19 @@ export function useNewSessionMachinePathState(params: Readonly<{
     const resolveMachineId = React.useCallback((preferredMachineId: string | null): string | null => (
         resolvePreferredLaunchMachineId({
             scope,
-            machines: params.machines.filter(machine => isMachineReachable(scope, machine)),
+            machines: readMachines().filter(machine => isMachineReachable(scope, machine)),
             preferredMachineId,
             recentMachinePaths,
         })
-    ), [params.machines, scope, reachabilityRevision, recentMachinePaths]);
+    ), [readMachines, scope, recentMachinePaths]);
 
     const getBestPathForMachine = React.useCallback((machineId: string | null): string => (
         resolveDefaultDirectoryForMachine({
             machineId,
-            machines: params.machines,
+            machines: readMachines(),
             recentPaths: params.isBot ? [] : resolveRecentPathsForMachine(machineId),
         })
-    ), [params.isBot, params.machines, resolveRecentPathsForMachine]);
+    ), [params.isBot, readMachines, resolveRecentPathsForMachine]);
 
     const getPersistedPathForMachine = React.useCallback((machineId: string | null): string => {
         if (!machineId) return '';
@@ -253,7 +263,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
         scope,
         isBot: params.isBot,
         serverId: params.serverId,
-        machines: params.machines,
+        machines: readMachines(),
         recentMachinePaths,
         resolveRecentPathsForMachine,
         machineIdParam: params.machineIdParam,
@@ -271,13 +281,15 @@ export function useNewSessionMachinePathState(params: Readonly<{
     const [managedMachineSelectionState, setManagedMachineSelection] = React.useState<ManagedMachineSelectionDraft | null>(
         () => normalizeMachineIdParam(params.machineIdParam) ? null : params.requestedManagedMachineSelection ?? params.persistedManagedMachineSelection ?? null,
     );
+    const controllerSnapshot = useServerScopedMachine(params.serverId,
+        liveInventory ? managedMachineSelectionState?.receipt.controller.machineId ?? '' : '');
     const resolveArchiveChoiceAvailability = React.useCallback((draft: ManagedMachineSelectionDraft) => (
         resolveManagedMachineArchiveChoiceAvailability({ draft,
-            controller: params.machines.find(machine => machine.id === draft.receipt.controller.machineId) })
-    ), [params.machines]);
+            controller: readMachines().find(machine => machine.id === draft.receipt.controller.machineId) })
+    ), [readMachines]);
     const managedMachineArchiveChoiceAvailability = React.useMemo(() => managedMachineSelectionState
         ? resolveArchiveChoiceAvailability(managedMachineSelectionState) : null,
-    [managedMachineSelectionState, resolveArchiveChoiceAvailability]);
+    [controllerSnapshot, managedMachineSelectionState, resolveArchiveChoiceAvailability]);
     // A foreign controller cannot host this Account's automatic rule. The paid
     // recipe stays usable and Keep leaves manual power/delete authority intact.
     const managedMachineSelection = React.useMemo(() => managedMachineSelectionState
@@ -287,9 +299,21 @@ export function useNewSessionMachinePathState(params: Readonly<{
     [managedMachineSelectionState, managedMachineArchiveChoiceAvailability]);
     const managedSelectionServerRef = React.useRef(params.serverId);
     const selectedMachineId = executionTarget?.kind === 'machine' ? executionTarget.target.machineId : null;
-    const agentCatalogMachineId = (managedMachineSelection !== null && selectedMachineId === null) || executionTarget?.kind === 'temporary_computer'
-        ? resolveMachineId(resolvePersistedMachineId())
-        : selectedMachineId;
+    const selectedMachineSnapshot = useServerScopedMachine(params.serverId, liveInventory ? selectedMachineId ?? '' : '');
+    const selectedMachine = liveInventory
+        ? selectedMachineSnapshot && isMachineVisibleForSelection(selectedMachineSnapshot) ? selectedMachineSnapshot : null
+        : readMachines().find(machine => machine.id === selectedMachineId) ?? null;
+    // A selected name can acquire a disambiguating suffix when another Machine
+    // appears. Observe that one primitive, not the fleet objects, and schedule no
+    // presence deadlines for a label which is independent of reachability.
+    const readSelectedMachineSentenceName = React.useCallback(() => {
+        const machines = readMachines();
+        const machine = machines.find(row => row.id === selectedMachineId);
+        return machine ? getMachineSentenceName(machine, getMachineDisplayName(machine, machines)) : null;
+    }, [readMachines, selectedMachineId]);
+    const nameTargets = React.useMemo(() => liveInventory && selectedMachineId ? [{ serverId: params.serverId }] : [],
+        [liveInventory, params.serverId, selectedMachineId]);
+    const selectedMachineSentenceName = useMachinePresenceSnapshot(readNoMachineDeadlines, readSelectedMachineSentenceName, nameTargets);
     const executionTargetRef = React.useRef(executionTarget);
     executionTargetRef.current = executionTarget;
     const setSelectedMachineIdState = React.useCallback((machineId: string | null) => {
@@ -314,6 +338,23 @@ export function useNewSessionMachinePathState(params: Readonly<{
         || params.persistedExecutionTarget != null
         || Boolean(params.requestedManagedMachineSelection),
     );
+    // Observe the destination decision, through the existing Home-scoped presence
+    // lifecycle. An authored target needs no automatic placement observation;
+    // its admission owner keeps observing that exact Machine's availability.
+    const needsCatalogFallback = (managedMachineSelection !== null && selectedMachineId === null)
+        || executionTarget?.kind === 'temporary_computer';
+    const observesPreferredMachine = needsCatalogFallback
+        || (!hasCommittedExactTargetRef.current && !hasUserSelectedMachineRef.current);
+    const readPlacementMachines = React.useCallback(() => observesPreferredMachine ? readMachines() : [],
+        [observesPreferredMachine, readMachines]);
+    const readPreferredMachine = React.useCallback(() => observesPreferredMachine
+        ? resolveMachineId(needsCatalogFallback ? resolvePersistedMachineId() : selectedMachineId)
+        : null,
+    [needsCatalogFallback, observesPreferredMachine, resolveMachineId, resolvePersistedMachineId, selectedMachineId]);
+    const placementPresenceTargets = React.useMemo(() => observesPreferredMachine ? [{ serverId: params.serverId }] : [],
+        [observesPreferredMachine, params.serverId]);
+    const preferredMachineId = useMachinePresenceSnapshot(readPlacementMachines, readPreferredMachine, placementPresenceTargets);
+    const agentCatalogMachineId = needsCatalogFallback ? preferredMachineId : selectedMachineId;
     const lastAppliedPersistedMachineIdRef = React.useRef<string>('');
     const lastAppliedExecutionTargetRequestKeyRef = React.useRef<string | null>(
         params.executionTargetRequestKey ?? null,
@@ -342,8 +383,14 @@ export function useNewSessionMachinePathState(params: Readonly<{
     const selectedPathDraftRef = React.useRef<string>(selectedPath);
     const hasUserEditedPathRef = React.useRef(Boolean(params.isBot && normalizePathParam(params.persistedPath)
         && formatPathRelativeToHome(normalizePathParam(params.persistedPath),
-            params.machines.find(machine => machine.id === (initialPlacement.machineId
+            readMachines().find(machine => machine.id === (initialPlacement.machineId
                 ?? managedMachineSelection?.receipt.controller.machineId))?.metadata?.homeDir) !== '~'));
+    // A not-yet-resolved default must observe the first history arrival. Once a
+    // folder is committed, later history is read only when another is chosen.
+    const unresolvedPlacementHistory = useNewSessionPlacementSessions(
+        typeof params.sessions === 'function' && !fixedDirectoryIntent && selectedMachineId !== null
+        && selectedPath.trim().length === 0 && !hasUserEditedPathRef.current && !normalizePathParam(params.pathParam),
+    );
     const lastAppliedMachineParamRef = React.useRef<Readonly<{ machineId: string; scopeKey: string | null }> | null>(null);
     const lastAppliedPathParamRef = React.useRef<string>('');
     const applyCommittedSelectedPath = React.useCallback((nextPath: string) => {
@@ -498,8 +545,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
 
     const hasMachine = React.useCallback((machineId: string | null): boolean => {
         if (!machineId) return false;
-        return params.machines.some((machine) => machine.id === machineId);
-    }, [params.machines]);
+        return readMachines().some((machine) => machine.id === machineId);
+    }, [readMachines]);
 
     // Handle machine route param from picker screens (main's navigation pattern)
     React.useEffect(() => {
@@ -641,7 +688,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
     React.useEffect(() => {
         if (executionTarget !== null || managedMachineSelection !== null) return;
         if (hasUserSelectedMachineRef.current) return;
-        if (params.machines.length === 0) return;
+        if (readMachines().length === 0) return;
         if (normalizeMachineIdParam(params.machineIdParam)) return;
         // Let persisted reconciliation own hydration when its preferred machine is available.
         // Otherwise this fallback can enqueue a competing selection in the same effect flush,
@@ -656,7 +703,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
         setSelectedMachineIdState(machineIdToUse);
         hasUserEditedPathRef.current = false;
         applyCommittedSelectedPath(trimmedPath || getPersistedPathForMachine(machineIdToUse) || getBestPathForMachine(machineIdToUse));
-    }, [applyCommittedSelectedPath, executionTarget, managedMachineSelection, getBestPathForMachine, getPersistedPathForMachine, params.machines, params.pathParam, params.persistedExecutionTarget, params.serverId, reachabilityRevision, resolveMachineId, setSelectedMachineIdState]);
+    }, [applyCommittedSelectedPath, executionTarget, managedMachineSelection, getBestPathForMachine, getPersistedPathForMachine, readMachines, params.pathParam, params.persistedExecutionTarget, params.serverId, preferredMachineId, resolveMachineId, setSelectedMachineIdState]);
 
     // Keep selection valid when machine snapshots change (server/account switch, revoke, reconnect).
     React.useEffect(() => {
@@ -672,7 +719,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
         setSelectedMachineIdState(machineIdToUse);
         hasUserEditedPathRef.current = false;
         applyCommittedSelectedPath(getPersistedPathForMachine(machineIdToUse) || getBestPathForMachine(machineIdToUse));
-    }, [applyCommittedSelectedPath, getBestPathForMachine, getPersistedPathForMachine, hasMachine, resolveMachineId, selectedMachineId]);
+    }, [applyCommittedSelectedPath, getBestPathForMachine, getPersistedPathForMachine, hasMachine, resolveMachineId, selectedMachine, selectedMachineId]);
 
     // An automatic default follows current reachability, including a machine that was
     // online earlier. Explicit user/route choices and authored directories stay exact.
@@ -693,7 +740,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
         const trimmedPath = normalizePathParam(params.pathParam);
         hasUserEditedPathRef.current = false;
         applyCommittedSelectedPath(trimmedPath || getPersistedPathForMachine(machineIdToUse) || getBestPathForMachine(machineIdToUse));
-    }, [applyCommittedSelectedPath, getBestPathForMachine, getPersistedPathForMachine, params.machineIdParam, params.pathParam, resolveMachineId, selectedMachineId]);
+    }, [applyCommittedSelectedPath, getBestPathForMachine, getPersistedPathForMachine, params.machineIdParam, params.pathParam, preferredMachineId, resolveMachineId, selectedMachineId]);
 
     // Handle path route param from picker screens (main's navigation pattern)
     React.useEffect(() => {
@@ -742,7 +789,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
         }
 
         applyCommittedSelectedPath(bestPath);
-    }, [applyCommittedSelectedPath, fixedDirectoryIntent, getBestPathForMachine, getPersistedPathForMachine, params.pathParam, selectedMachineId, selectedPath]);
+    }, [applyCommittedSelectedPath, fixedDirectoryIntent, getBestPathForMachine, getPersistedPathForMachine, params.pathParam, selectedMachine, selectedMachineId, selectedPath, unresolvedPlacementHistory]);
 
     const effectivePath = fixedDirectoryIntent
         ? (fixedDirectoryIntent.kind === 'path' ? fixedDirectoryIntent.path : '')
@@ -763,6 +810,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
         setManagedMachineArchiveEffect,
         cancelManagedMachineTarget,
         selectedMachineId,
+        selectedMachine,
+        selectedMachineSentenceName,
         agentCatalogMachineId,
         setSelectedMachineId,
         setSelectedMachineTarget,

@@ -2,6 +2,28 @@ import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServ
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 
+/** Picker history belongs to the target Home's current inventory, in remembered order. */
+export function resolveNewSessionMachinePickerHistory(input: Readonly<{
+    machines: ReadonlyArray<Machine>;
+    recentMachinePaths: ReadonlyArray<Readonly<{ machineId: string; path: string }>>;
+    favoriteMachineIds: ReadonlyArray<string>;
+}>): Readonly<{ recentMachines: Machine[]; favoriteMachineItems: Machine[] }> {
+    const byId = new Map(input.machines.map((machine) => [machine.id, machine] as const));
+    const seen = new Set<string>();
+    const recentMachines: Machine[] = [];
+    for (const entry of input.recentMachinePaths) {
+        if (seen.has(entry.machineId)) continue;
+        const machine = byId.get(entry.machineId);
+        if (!machine) continue;
+        seen.add(entry.machineId);
+        recentMachines.push(machine);
+    }
+    return {
+        recentMachines,
+        favoriteMachineItems: input.machines.filter((machine) => input.favoriteMachineIds.includes(machine.id)),
+    };
+}
+
 /**
  * What New Session places a draft among on its target Home: that Home's machines, and the
  * Account's recent folders and sessions only when they belong to that same Home.

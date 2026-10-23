@@ -3,7 +3,7 @@ import * as React from 'react';
 import { useModalPortalTarget } from '@/modal/portal/ModalPortalTarget';
 import type { AgentInputContentPopoverConfig } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
 import { NewSessionPathSelectionContent } from '@/components/sessions/new/components/NewSessionPathSelectionContent';
-import { NewSessionMachineSelectionContent } from '@/components/sessions/new/components/NewSessionMachineSelectionContent';
+import { NewSessionMachineSelectionContent, type NewSessionMachineSelectionContentProps } from '@/components/sessions/new/components/NewSessionMachineSelectionContent';
 import { NewSessionResumeSelectionContent } from '@/components/sessions/new/components/NewSessionResumeSelectionContent';
 import type { ServerScopedMachineGroup } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -28,6 +28,36 @@ import {
 import { buildTemporaryComputerSelectionRows } from '@/components/sessions/new/components/machineSelection/buildTemporaryComputerSelectionRows';
 import { managedMachineSelectionOptionId, type ManagedMachineSelectionDraft, type ManagedMachineSelectionOffer } from '@/components/sessions/new/components/machineSelection/managedMachineSelection';
 import { SELECTION_LIST_LARGE_POPOVER_SIZE } from '@/components/ui/selectionList';
+import { useNewSessionPlacementSessions } from './useNewSessionPlacementSessions';
+import { useNewSessionMachinePickerInventory, type NewSessionMachinePickerInventory } from './useNewSessionMachinePickerInventory';
+
+type MachineSelectionContentProps = NewSessionMachineSelectionContentProps<Machine>;
+
+function NewSessionPopoverMachineInventoryContent(params: MachineSelectionContentProps & Readonly<{
+    inventory: NewSessionMachinePickerInventory;
+}>) {
+    const { inventory, ...content } = params;
+    const { groups, poolGroups, recentMachines, favoriteMachineItems } = useNewSessionMachinePickerInventory(inventory);
+    return <NewSessionMachineSelectionContent {...content} groups={groups} poolGroups={poolGroups}
+        recentMachines={recentMachines} favoriteMachines={favoriteMachineItems} />;
+}
+
+function NewSessionPopoverMachineSelectionContent(params: MachineSelectionContentProps & Readonly<{
+    inventory?: NewSessionMachinePickerInventory;
+}>) {
+    const { inventory, ...content } = params;
+    return inventory
+        ? <NewSessionPopoverMachineInventoryContent {...content} inventory={inventory} />
+        : <NewSessionMachineSelectionContent {...content} />;
+}
+
+function NewSessionPopoverPathSelectionContent(params: React.ComponentProps<typeof NewSessionPathSelectionContent> & Readonly<{
+    readRecentPaths?: () => ReadonlyArray<string>;
+}>) {
+    const { readRecentPaths, ...content } = params;
+    useNewSessionPlacementSessions(Boolean(readRecentPaths));
+    return <NewSessionPathSelectionContent {...content} recentPaths={readRecentPaths?.() ?? content.recentPaths} />;
+}
 
 const LARGE_PICKER_LAYOUT: Pick<
     AgentInputContentPopoverConfig,
@@ -70,6 +100,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
     /** Chooses no folder; absent where no-folder is not offered (Temporary computer). */
     onSelectNoFolder?: () => void;
     recentPaths: ReadonlyArray<string>;
+    readRecentPaths?: () => ReadonlyArray<string>;
     usePathPickerSearch: boolean;
     pathPickerSearchQuery: string;
     setPathPickerSearchQuery: React.Dispatch<React.SetStateAction<string>>;
@@ -81,6 +112,8 @@ export function useNewSessionInputPopovers(params: Readonly<{
      * popover consumes that exact set instead of resolving a second one.
      */
     machineGroups: ReadonlyArray<ServerScopedMachineGroup>;
+    /** Closed simple composers carry intent; full inventory mounts inside the open popover. */
+    machineInventory?: NewSessionMachinePickerInventory;
     selectedServerId: string | null;
     recentMachines: ReadonlyArray<Machine>;
     favoriteMachineItems: ReadonlyArray<Machine>;
@@ -151,6 +184,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
         onResolved: params.selectMachinePoolTarget,
     });
     const machinePopoverRenderParamsRef = useLatestRef({
+        machineInventory: params.machineInventory,
         favoriteMachineItems: params.favoriteMachineItems,
         selectMachineTarget: params.selectMachineTarget,
         toggleFavoriteMachine: params.toggleFavoriteMachine,
@@ -177,7 +211,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
 
     const pathPopover = React.useMemo<AgentInputContentPopoverConfig>(() => ({
         renderContent: ({ maxHeight, requestClose }) => (
-            <NewSessionPathSelectionContent
+            <NewSessionPopoverPathSelectionContent
                 machineHomeDir={params.selectedMachine?.metadata?.homeDir || '/home'}
                 selectedPath={params.selectedPath}
                 initialSuggestionMode="history"
@@ -193,6 +227,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
                     requestClose();
                 }}
                 recentPaths={params.recentPaths}
+                readRecentPaths={params.readRecentPaths}
                 usePickerSearch={params.usePathPickerSearch}
                 searchQuery={params.pathPickerSearchQuery}
                 onChangeSearchQuery={params.setPathPickerSearchQuery}
@@ -226,6 +261,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
         params.onSelectNoFolder,
         params.pathPickerSearchQuery,
         params.recentPaths,
+        params.readRecentPaths,
         params.selectedMachine?.id,
         params.selectedMachine?.metadata?.homeDir,
         params.selectedPath,
@@ -238,6 +274,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
     ]);
 
     const machinePopoverSignature = React.useMemo(() => buildNewSessionPopoverSignature({
+        machineInventory: params.machineInventory,
         favoriteMachineItems: params.favoriteMachineItems,
         machinePopoverGroups,
         machinePoolGroups: params.machinePoolGroups,
@@ -256,6 +293,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
             : null,
     }), [
         machinePopoverGroups,
+        params.machineInventory,
         params.favoriteMachineItems,
         params.machinePoolGroups,
         params.recentMachines,
@@ -292,7 +330,8 @@ export function useNewSessionInputPopovers(params: Readonly<{
                 },
             });
             return (
-                <NewSessionMachineSelectionContent
+                <NewSessionPopoverMachineSelectionContent
+                    inventory={renderParams.machineInventory}
                     groups={renderParams.machinePopoverGroups}
                     poolGroups={renderParams.machinePoolGroups}
                     poolSelectionStatus={renderParams.machinePoolSelection.status}

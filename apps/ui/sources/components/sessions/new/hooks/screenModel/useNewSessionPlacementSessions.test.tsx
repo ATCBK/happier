@@ -16,7 +16,7 @@ describe('useNewSessionPlacementSessions', () => {
         storage.setState({ sessions: {}, isDataReady: false });
     });
 
-    it('keeps its sessions through activity-only rewrites and changes when a session moves or arrives', async () => {
+    it('does not render for Session publications and reads current placement history on demand', async () => {
         const first = createSessionFixture({ id: 's1', createdAt: 1, metadata: { path: '/w/app', host: 'mac', machineId: 'm1' } as never });
         storage.setState({ sessions: { s1: first }, isDataReady: true });
         let renders = 0;
@@ -24,15 +24,23 @@ describe('useNewSessionPlacementSessions', () => {
             renders += 1;
             return useNewSessionPlacementSessions();
         });
-        const initial = hook.getCurrent();
+        const readSessions = () => {
+            const current = hook.getCurrent();
+            return typeof current === 'function' ? current() : current;
+        };
+        const initial = readSessions();
         expect(initial?.map((session) => session.id)).toEqual(['s1']);
         const rendersAfterMount = renders;
 
-        // The session works: its record is rewritten, but where it ran is unchanged.
-        await act(async () => {
-            storage.setState({ sessions: { s1: { ...first, updatedAt: 99, active: true, thinking: true } } });
-        });
-        expect(hook.getCurrent()).toBe(initial);
+        // Session title/status publications have no visible placement consumer while closed.
+        for (let index = 0; index < 5; index += 1) {
+            await act(async () => {
+                storage.setState({ sessions: { s1: { ...first, updatedAt: 99 + index, active: true, thinking: true,
+                    metadata: { ...first.metadata!, summary: { text: `Title ${index}`, updatedAt: 99 + index } },
+                } } });
+            });
+        }
+        expect(readSessions()?.[0]?.updatedAt).toBe(103);
         expect(renders).toBe(rendersAfterMount);
 
         // A new session starts somewhere: placement history changed.
@@ -40,14 +48,34 @@ describe('useNewSessionPlacementSessions', () => {
         await act(async () => {
             storage.setState({ sessions: { s1: first, s2: second } });
         });
-        expect(hook.getCurrent()?.map((session) => session.id)).toEqual(['s1', 's2']);
+        expect(readSessions()?.map((session) => session.id)).toEqual(['s1', 's2']);
+        expect(renders).toBe(rendersAfterMount);
 
         // Its folder changes.
         await act(async () => {
             storage.setState({ sessions: { s1: first, s2: { ...second, metadata: { path: '/w/other', host: 'mac', machineId: 'm1' } as never } } });
         });
-        expect(hook.getCurrent()?.[1]?.metadata?.path).toBe('/w/other');
+        expect(readSessions()?.[1]?.metadata?.path).toBe('/w/other');
+        expect(renders).toBe(rendersAfterMount);
 
+        await hook.unmount();
+    });
+
+    it('publishes readiness for a missing default and keeps open history current', async () => {
+        storage.setState({ sessions: {}, isDataReady: false });
+        const hook = await renderHook(() => useNewSessionPlacementSessions(true));
+        const readSessions = () => {
+            const current = hook.getCurrent();
+            return typeof current === 'function' ? current() : current;
+        };
+        expect(readSessions()).toBeNull();
+        const first = createSessionFixture({ id: 's1', metadata: { path: '/arrived', host: 'mac', machineId: 'm1' } as never });
+        await act(async () => storage.setState({ sessions: { s1: first }, isDataReady: true }));
+        expect(readSessions()?.[0]?.metadata?.path).toBe('/arrived');
+        const beforeMove = hook.getCurrent();
+        await act(async () => storage.setState({ sessions: { s1: { ...first, metadata: { ...first.metadata!, path: '/moved' } } } }));
+        expect(hook.getCurrent()).not.toBe(beforeMove);
+        expect(readSessions()?.[0]?.metadata?.path).toBe('/moved');
         await hook.unmount();
     });
 });

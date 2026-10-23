@@ -24,8 +24,6 @@ import {
     useCurrentRememberedEngineSelectionsByScopeV1Mutable,
     useCurrentSecretBindingsByProfileIdMutable,
     useLaunchSelectionMachines,
-    useMachineListByServerId,
-    useMachineListStatusByServerId,
     useSetting,
     useSettingMutable,
 } from '@/sync/domains/state/storage';
@@ -36,6 +34,7 @@ import type { Settings } from '@/sync/domains/settings/settings';
 import { projectCurrentSecretBindingsByProfileId } from '@/sync/domains/settings/secretBindings';
 import { usePathname } from 'expo-router';
 import { useNewSessionPlacementSessions } from '@/components/sessions/new/hooks/screenModel/useNewSessionPlacementSessions';
+import { useNewSessionPlacementMachines } from '@/components/sessions/new/hooks/screenModel/useNewSessionPlacementMachines';
 import {
     useNewSessionEmbeddedHost,
     useNewSessionHostDemanded,
@@ -123,6 +122,7 @@ import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/s
 import { useMachinePoolGroups } from '@/components/sessions/new/hooks/machines/useMachinePoolGroups';
 import { invalidateMachinePoolProjection } from '@/sync/engine/machines/machinePoolProjection';
 import { useServerScopedMachineOptions } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { useNewSessionRepoScmSnapshot } from '@/components/sessions/new/hooks/screenModel/useNewSessionRepoScmSnapshot';
 import { buildAcpConfigOptionOverridesV1, type AcpConfigOptionOverridesV1 } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { MachinePoolSelectionOriginV1Schema } from '@happier-dev/protocol/machines/pools/v1';
@@ -159,7 +159,6 @@ import { useNewSessionProfileBackendReconciliation } from '@/components/sessions
 import { useNewSessionProfileSelectionPresentation } from '@/components/sessions/new/hooks/screenModel/useNewSessionProfileSelectionPresentation';
 import { useNewSessionProfileActions } from '@/components/sessions/new/hooks/screenModel/useNewSessionProfileActions';
 import {
-    resolveNewSessionTargetMachines,
     resolveNewSessionTargetRecentMachinePaths,
     resolveNewSessionTargetSessions,
 } from '@/components/sessions/new/modules/newSessionPlacementSources';
@@ -343,7 +342,6 @@ import {
     presentMaterializedTemporaryComputerSessionAndContinueSettlement,
     settlePersistedMaterializedTemporaryComputerSession,
 } from '@/components/sessions/new/navigation/settleMaterializedTemporaryComputerSession';
-import { getMachineDisplayName, getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { resolveAgentSessionStartBlockLine } from '@/components/machines/agents/agentSessionStartBlockLine';
 import { machineCollectionHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
@@ -433,6 +431,8 @@ function resolvePersistedWindowsLaunchOverrideForMachine(
 /** One frozen empty projection record, so an absent projection keeps a stable identity. */
 const EMPTY_PLUGIN_PROJECTION_RECORD = Object.freeze({}) as Readonly<Record<string, never>>;
 const EMPTY_ROUTE_SOURCES: readonly never[] = [];
+const EMPTY_PLACEMENT_MACHINES: Machine[] = [];
+const EMPTY_DESTINATION_SERVER_IDS: readonly string[] = [];
 
 export type TemporaryComputerCreatorDependencies = Readonly<{
     /**
@@ -1036,10 +1036,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const selectableProfiles = React.useMemo(() => {
         return allProfiles.filter((profile) => isProfileEnabled(profile, profileEnabledById));
     }, [allProfiles, profileEnabledById]);
-    const activeMachines = useLaunchSelectionMachines(newSessionLayoutPresented);
-    const sessions = useNewSessionPlacementSessions();
-    const machineListByServerId = useMachineListByServerId(newSessionLayoutPresented, 'launch');
-    const machineListStatusByServerId = useMachineListStatusByServerId();
+    const activeMachines = useLaunchSelectionMachines(newSessionLayoutPresented, useEnhancedSessionWizard);
+    const readPlacementSessions = useNewSessionPlacementSessions(useEnhancedSessionWizard);
     // One resolved Home-group set feeds every destination family. When an explicit settings target
     // is rejected the Machine side used to widen to the resolved allowed Homes while Pools stayed
     // projected from the empty set, so one recovery path silently dropped every Pool row.
@@ -1048,20 +1046,16 @@ export function useNewSessionScreenModel(input?: Readonly<{
         : resolvedSettingsTarget.allowedServerIds;
     const serverScopedMachineGroups = useServerScopedMachineOptions({
         inventoryPurpose: 'launch',
-        allowedServerIds: destinationServerIds,
+        allowedServerIds: useEnhancedSessionWizard ? destinationServerIds : EMPTY_DESTINATION_SERVER_IDS,
         activeServerId: activeServerSource.activeServerId,
         activeMachines,
         refreshToken: activeServerSource.serverProfilesSignature,
         presented: newSessionLayoutPresented,
     });
-    const machinePoolGroups = useMachinePoolGroups(serverScopedMachineGroups);
-    const machines = React.useMemo(() => resolveNewSessionTargetMachines({
-        targetServerId,
+    const readPlacementMachines = useNewSessionPlacementMachines({
+        serverId: targetServerId,
         activeServerId: activeServerSource.activeServerId,
-        activeMachines,
-        machineListByServerId,
-        machineListStatusByServerId,
-    }), [activeMachines, activeServerSource.activeServerId, machineListByServerId, machineListStatusByServerId, targetServerId]);
+    });
     const initialImplicitProfileId = React.useMemo(() => {
         if (!useProfiles) {
             return null;
@@ -1114,9 +1108,9 @@ export function useNewSessionScreenModel(input?: Readonly<{
         }),
         [accountSettingsScope?.serverId, recentMachinePaths, targetServerId],
     );
-    const targetSessions = React.useMemo(
-        () => resolveNewSessionTargetSessions({ targetServerId, draftScopeServerId: draftScope?.serverId, sessions }),
-        [draftScope?.serverId, sessions, targetServerId],
+    const targetSessions = React.useCallback(
+        () => resolveNewSessionTargetSessions({ targetServerId, draftScopeServerId: draftScope?.serverId, sessions: readPlacementSessions() }),
+        [draftScope?.serverId, readPlacementSessions, targetServerId],
     );
 
     const persistedTargetMatches = !persistedDraft?.targetServerId
@@ -1162,6 +1156,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
         setManagedMachineArchiveEffect,
         cancelManagedMachineTarget,
         selectedMachineId,
+        selectedMachine,
+        selectedMachineSentenceName,
         agentCatalogMachineId,
         setSelectedMachineId,
         setSelectedMachineTarget,
@@ -1185,7 +1181,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             ? (typeof dataId === 'string' ? dataId : null)
             : null,
         routeSelectionOrigin: routeSelectionOrigin?.success ? routeSelectionOrigin.data : undefined,
-        machines,
+        machines: readPlacementMachines,
         recentMachinePaths: targetRecentMachinePaths,
         sessions: targetSessions,
         machineIdParam: effectiveMachineIdParam,
@@ -1197,6 +1193,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         fixedDirectoryIntent: input?.fixedDirectoryIntent,
         cacheScopeKey: capabilityServerId,
     });
+    const machines = useEnhancedSessionWizard ? readPlacementMachines() : EMPTY_PLACEMENT_MACHINES;
     const [managedMachineAcquisition, setManagedMachineAcquisition] = React.useState<ManagedMachineAcquisitionDraft | null>(
         () => !tempSessionData?.managedMachineSelection && persistedTargetMatches ? persistedDraft?.managedMachineAcquisition ?? null : null,
     );
@@ -1217,6 +1214,14 @@ export function useNewSessionScreenModel(input?: Readonly<{
         if (managedMachineSelection === null) setManagedMachineAcquisition(null);
     }, [managedMachineSelection]);
     const selectionOrigin = executionTarget?.kind === 'machine' ? executionTarget.selectionOrigin : undefined;
+    const destinationHomeGroups = React.useMemo(() => destinationServerIds.map(serverId => ({
+        serverId, serverName: resolveHomeDisplayLabel(getServerProfileById(serverId), serverId),
+        machines: EMPTY_PLACEMENT_MACHINES, loading: false, signedOut: false,
+    })), [destinationServerIds, activeServerSource.serverProfilesSignature]);
+    const poolLabelGroups = React.useMemo(() => selectionOrigin
+        ? destinationHomeGroups.filter(group => areServerProfileIdentifiersEquivalent(group.serverId, targetServerId)) : [],
+    [destinationHomeGroups, selectionOrigin, targetServerId]);
+    const machinePoolGroups = useMachinePoolGroups(useEnhancedSessionWizard ? serverScopedMachineGroups : poolLabelGroups);
     // The Agent catalog is a machine's open plugin projection. For a machine
     // target that is the selected machine; for a Temporary computer, which has
     // no machine of its own, it is the creator's focused machine, so an
@@ -1775,16 +1780,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
     }, [currentEngineSelectionRef, rememberCurrentEngineSelection, setSessionConfigOptionOverrides]);
 
     const [pathPickerSearchQuery, setPathPickerSearchQuery] = React.useState('');
-    const selectedMachine = React.useMemo(() => {
-        if (!selectedMachineId) return null;
-        return machines.find(m => m.id === selectedMachineId) ?? null;
-    }, [selectedMachineId, machines]);
-    // Only ever read inside copy ("Not on {machine} yet", "Run setup on {machine}"): a machine whose name
-    // is still loading reads "this machine", never its placeholder title.
-    const selectedMachineSentenceName = React.useMemo(
-        () => selectedMachine ? getMachineSentenceName(selectedMachine, getMachineDisplayName(selectedMachine, machines)) : null,
-        [selectedMachine, machines],
-    );
     const selectedMachineHomeDir = selectedMachine?.metadata?.homeDir ?? null;
     // The "Runs through" popover names the selected Agent's Gateways and Providers from this projection.
     const newSessionRouteSources = React.useMemo(() => providersFeatureEnabled && selectedMachineId !== null ? {
@@ -2595,10 +2590,12 @@ export function useNewSessionScreenModel(input?: Readonly<{
         recentMachines,
         favoriteMachineItems,
         recentPaths,
+        readRecentPaths,
     } = useNewSessionMachineRefreshState({
         focused: newSessionRouteIsFocused && newSessionLayoutPresented,
         capabilityServerId,
         selectedMachineId,
+        selectedMachine,
         machines,
         recentMachinePaths: targetRecentMachinePaths,
         sessions: targetSessions,
@@ -2983,6 +2980,14 @@ export function useNewSessionScreenModel(input?: Readonly<{
     // No folder is a machine target's choice; a Temporary computer's endpoint chooses its folder.
     const offersNoFolder = executionTarget?.kind === 'machine' && !directoryIntentFixed;
     const { pathPopover: composerPathPopover, machinePopover, resumePopover } = useNewSessionInputPopovers({
+        machineInventory: useEnhancedSessionWizard ? undefined : {
+            allowedServerIds: destinationServerIds,
+            activeServerId: activeServerSource.activeServerId,
+            refreshToken: activeServerSource.serverProfilesSignature,
+            targetServerId,
+            recentMachinePaths: targetRecentMachinePaths,
+            favoriteMachineIds: favoriteMachines,
+        },
         selectedMachine,
         selectedMachineId,
         selectedPath,
@@ -2991,6 +2996,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         noFolderSelected: directoryKind === 'managed',
         onSelectNoFolder: offersNoFolder ? selectNoFolder : undefined,
         recentPaths,
+        readRecentPaths,
         usePathPickerSearch,
         pathPickerSearchQuery,
         setPathPickerSearchQuery,
@@ -4483,7 +4489,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             executionTarget,
             destination: {
                 selectionOrigin,
-                machineGroups: serverScopedMachineGroups,
+                machineGroups: useEnhancedSessionWizard ? serverScopedMachineGroups : destinationHomeGroups,
                 poolGroups: machinePoolGroups,
             },
             machinePopover,

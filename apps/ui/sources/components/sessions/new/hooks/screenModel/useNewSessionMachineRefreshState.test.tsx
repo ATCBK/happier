@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createMachineFixture, renderHook } from '@/dev/testkit';
+import { createMachineFixture, createRenderCommitCounter, renderHook, useRenderCommitCounter } from '@/dev/testkit';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import { act } from 'react-test-renderer';
+import { recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 
 const capabilityBoundary = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
@@ -16,6 +17,11 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 // decisions real; these projection-only cases never request a machine refresh.
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+// Load the real Sync graph during suite collection, not inside the first
+// behavioral test's budget; the mocked Socket boundary above remains installed.
+await import('@/sync/syncEngine');
+const { useNewSessionMachineRefreshState } = await import('./useNewSessionMachineRefreshState');
 
 type UseNewSessionMachineRefreshState = typeof import('./useNewSessionMachineRefreshState').useNewSessionMachineRefreshState;
 type HookParams = Parameters<UseNewSessionMachineRefreshState>[0];
@@ -64,14 +70,38 @@ function createSession(input: Readonly<{
 }
 
 async function renderMachineRefreshState(initialProps: HookParams) {
-    await import('@/sync/syncEngine');
-    const { useNewSessionMachineRefreshState } = await import('./useNewSessionMachineRefreshState');
     return renderHook((props: HookParams) => useNewSessionMachineRefreshState(props), {
         initialProps,
     });
 }
 
 describe('useNewSessionMachineRefreshState', () => {
+    it.each([
+        { useEnhancedSessionWizard: false, focused: true },
+        { useEnhancedSessionWizard: true, focused: false },
+    ])('does not subscribe inactive wizard prefetch to fleet reachability (%j)', async demand => {
+        const counter = createRenderCommitCounter();
+        const params: HookParams = {
+            ...demand,
+            capabilityServerId: 'refresh-own-home', selectedMachineId: 'quiet-0',
+            machines: Array.from({ length: 100 }, (_, index) => makeMachine({ id: `quiet-${index}` })),
+            recentMachinePaths: [], favoriteMachines: [], sessions: [], refreshMachineEnvPresence: () => {},
+        };
+        const hook = await renderHook(() => {
+            useRenderCommitCounter(counter);
+            return useNewSessionMachineRefreshState(params);
+        });
+        try {
+            counter.reset();
+            for (let arrival = 0; arrival < 5; arrival += 1) {
+                await act(async () => recordMachineRequestSucceeded({
+                    serverId: 'refresh-foreign-home', accountId: 'refresh-foreign-account', machineId: `arrival-${arrival}`,
+                }));
+            }
+            expect(counter.read()).toEqual({ renders: 0, commits: 0 });
+        } finally { await hook.unmount(); }
+    });
+
     it('cancels a manual refresh on target change and retries on the next target', async () => {
         let signal: AbortSignal | undefined;
         capabilityBoundary.rpc.mockImplementationOnce((args: { signal?: AbortSignal }) => {

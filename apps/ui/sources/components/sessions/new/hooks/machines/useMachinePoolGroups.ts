@@ -3,7 +3,7 @@ import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDispla
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 
 import type { ServerScopedMachinePoolGroup } from '@/components/sessions/new/components/machineSelection/useMachineSelectionListModel';
-import { useMachinePoolProjections } from '@/sync/engine/machines/useMachinePoolProjections';
+import { useMachinePoolProjections, type MachinePoolProjectionScope } from '@/sync/engine/machines/useMachinePoolProjections';
 
 import type { ServerScopedMachineGroup } from './useServerScopedMachineOptions';
 
@@ -16,7 +16,7 @@ export type MachinePoolGroup = ServerScopedMachinePoolGroup;
  */
 export function useMachinePoolGroups(
     machineGroups: ReadonlyArray<
-        Pick<ServerScopedMachineGroup, 'serverId' | 'serverName' | 'machines'>
+        Pick<ServerScopedMachineGroup, 'serverId' | 'serverName'> & MachinePoolProjectionScope
         & Partial<Pick<ServerScopedMachineGroup, 'loading' | 'signedOut' | 'error'>>
     >,
 ): MachinePoolGroup[] {

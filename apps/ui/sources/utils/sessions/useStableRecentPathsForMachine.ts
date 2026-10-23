@@ -14,6 +14,9 @@ type RecentPathSessionSource =
     | Pick<Session, 'id' | 'createdAt' | 'updatedAt' | 'metadata'>
     | Pick<SessionListRenderableSession, 'id' | 'createdAt' | 'updatedAt' | 'metadata'>;
 
+type RecentPathSessions = ReadonlyArray<RecentPathSessionSource | string> | null | undefined;
+export type RecentPathSessionsInput = RecentPathSessions | (() => RecentPathSessions);
+
 function buildCacheKey(input: Readonly<{
     cacheScopeKey?: string | null;
     machineId: string;
@@ -40,7 +43,7 @@ function mergeCurrentWithCachedPaths(
 export function useStableRecentPathsForMachine(params: Readonly<{
     machineId: string | null | undefined;
     recentMachinePaths: ReadonlyArray<RecentMachinePath>;
-    sessions: ReadonlyArray<RecentPathSessionSource | string> | null | undefined;
+    sessions: RecentPathSessionsInput;
     cacheScopeKey?: string | null;
 }>): ReadonlyArray<string> {
     const resolveRecentPathsForMachine = useStableRecentPathsResolver({
@@ -56,7 +59,7 @@ export function useStableRecentPathsForMachine(params: Readonly<{
 
 export function useStableRecentPathsResolver(params: Readonly<{
     recentMachinePaths: ReadonlyArray<RecentMachinePath>;
-    sessions: ReadonlyArray<RecentPathSessionSource | string> | null | undefined;
+    sessions: RecentPathSessionsInput;
     cacheScopeKey?: string | null;
 }>): (machineId: string | null | undefined) => ReadonlyArray<string> {
     const pathsByScopeAndMachineRef = React.useRef<Map<string, string[]>>(new Map());
@@ -65,17 +68,18 @@ export function useStableRecentPathsResolver(params: Readonly<{
         const machineId = typeof rawMachineId === 'string' ? rawMachineId.trim() : '';
         if (!machineId) return [];
 
+        const sessions = typeof params.sessions === 'function' ? params.sessions() : params.sessions;
         const currentPaths = getRecentPathsForMachine({
             machineId,
             recentMachinePaths: params.recentMachinePaths,
-            sessions: params.sessions,
+            sessions,
         });
         const cacheKey = buildCacheKey({
             cacheScopeKey: params.cacheScopeKey,
             machineId,
         });
 
-        if (params.sessions === null || params.sessions === undefined) {
+        if (sessions === null || sessions === undefined) {
             const cachedPaths = pathsByScopeAndMachineRef.current.get(cacheKey);
             return cachedPaths ? mergeCurrentWithCachedPaths(currentPaths, cachedPaths) : currentPaths;
         }

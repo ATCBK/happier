@@ -2,15 +2,16 @@ import * as React from 'react';
 
 import { CAPABILITIES_REQUEST_NEW_SESSION } from '@/capabilities/requests';
 import { useNewSessionCapabilitiesPrefetch } from '@/components/sessions/new/hooks/useNewSessionCapabilitiesPrefetch';
-import type { Machine, Session } from '@/sync/domains/state/storageTypes';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 import { sync } from '@/sync/sync';
 import { prefetchMachineCapabilities, prefetchMachineCapabilitiesIfStale } from '@/hooks/server/useMachineCapabilitiesCache';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { useStableRecentPathsForMachine } from '@/utils/sessions/useStableRecentPathsForMachine';
+import { useStableRecentPathsResolver, type RecentPathSessionsInput } from '@/utils/sessions/useStableRecentPathsForMachine';
 import { resolveDaemonCapabilitiesCacheKeySalt } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
+import { resolveNewSessionMachinePickerHistory } from '@/components/sessions/new/modules/newSessionPlacementSources';
 
 type RecentMachinePath = Readonly<{
     machineId: string;
@@ -48,9 +49,10 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
     focused?: boolean;
     capabilityServerId: string;
     selectedMachineId: string | null;
+    selectedMachine?: Machine | null;
     machines: ReadonlyArray<Machine>;
     recentMachinePaths: ReadonlyArray<RecentMachinePath>;
-    sessions?: ReadonlyArray<Session | string> | null | undefined;
+    sessions?: RecentPathSessionsInput;
     favoriteMachines: ReadonlyArray<string>;
     useEnhancedSessionWizard: boolean;
     refreshMachineEnvPresence: () => void;
@@ -59,8 +61,13 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
     recentMachines: ReadonlyArray<Machine>;
     favoriteMachineItems: ReadonlyArray<Machine>;
     recentPaths: ReadonlyArray<string>;
+    readRecentPaths: () => ReadonlyArray<string>;
 }> {
-    const reachabilityRevision = useMachineReachabilityRevision();
+    // Only the visible wizard prefetch consumes this reachability callback.
+    // Manual refresh reads current facts at intent; a simple/hidden composer
+    // has no consumer for fleet request receipts.
+    const wizardPrefetchDemanded = params.useEnhancedSessionWizard && params.focused !== false;
+    const reachabilityRevision = useMachineReachabilityRevision(wizardPrefetchDemanded);
     const { binding } = useServerCredentialAccountScopeBinding(params.capabilityServerId);
     const scope = binding?.isCurrent() ? binding.scope : null;
     const machineReachable = React.useCallback(
@@ -80,7 +87,8 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
         params.refreshMachineEnvPresence();
 
         if (params.selectedMachineId) {
-            const selectedMachine = params.machines.find((machine) => machine.id === params.selectedMachineId) ?? null;
+            const selectedMachine = params.selectedMachine === undefined
+                ? params.machines.find((machine) => machine.id === params.selectedMachineId) ?? null : params.selectedMachine;
             fireAndForget(prefetchMachineCapabilities({
                 machineId: params.selectedMachineId,
                 serverId: params.capabilityServerId,
@@ -89,33 +97,19 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
                 request: { ...CAPABILITIES_REQUEST_NEW_SESSION, bypassCache: true },
             }), { tag: 'NewSessionScreenModel.prefetchMachineCapabilities' });
         }
-    }, [params.capabilityServerId, params.machines, params.refreshMachineEnvPresence, params.selectedMachineId, manualRefreshLifetime]);
+    }, [params.capabilityServerId, params.machines, params.refreshMachineEnvPresence, params.selectedMachineId, params.selectedMachine, manualRefreshLifetime]);
 
-    const rawRecentMachines = React.useMemo(() => {
-        if (params.machines.length === 0) return [];
-        if (params.recentMachinePaths.length === 0) return [];
-
-        const byId = new Map(params.machines.map((machine) => [machine.id, machine] as const));
-        const seen = new Set<string>();
-        const result: Machine[] = [];
-        for (const entry of params.recentMachinePaths) {
-            if (seen.has(entry.machineId)) continue;
-            const machine = byId.get(entry.machineId);
-            if (!machine) continue;
-            seen.add(entry.machineId);
-            result.push(machine);
-        }
-        return result;
-    }, [params.machines, params.recentMachinePaths]);
+    const { recentMachines: rawRecentMachines, favoriteMachineItems: rawFavoriteMachineItems } = React.useMemo(
+        () => resolveNewSessionMachinePickerHistory({ machines: params.machines,
+            recentMachinePaths: params.recentMachinePaths, favoriteMachineIds: params.favoriteMachines }),
+        [params.machines, params.recentMachinePaths, params.favoriteMachines],
+    );
     const recentMachinesSignature = React.useMemo(
         () => buildMachineRefreshListSignature(rawRecentMachines),
         [rawRecentMachines],
     );
     const recentMachines = useStableValueBySignature(rawRecentMachines, recentMachinesSignature);
 
-    const rawFavoriteMachineItems = React.useMemo(() => {
-        return params.machines.filter((machine) => params.favoriteMachines.includes(machine.id));
-    }, [params.favoriteMachines, params.machines]);
     const favoriteMachineItemsSignature = React.useMemo(
         () => buildMachineRefreshListSignature(rawFavoriteMachineItems),
         [rawFavoriteMachineItems],
@@ -123,7 +117,7 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
     const favoriteMachineItems = useStableValueBySignature(rawFavoriteMachineItems, favoriteMachineItemsSignature);
 
     useNewSessionCapabilitiesPrefetch({
-        enabled: params.useEnhancedSessionWizard && params.focused !== false,
+        enabled: wizardPrefetchDemanded,
         serverId: params.capabilityServerId,
         machines: params.machines,
         favoriteMachineItems,
@@ -135,17 +129,20 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
         prefetchMachineCapabilitiesIfStale,
     });
 
-    const recentPaths = useStableRecentPathsForMachine({
-        machineId: params.selectedMachineId,
+    const resolveRecentPaths = useStableRecentPathsResolver({
         recentMachinePaths: params.recentMachinePaths,
         sessions: params.sessions,
         cacheScopeKey: params.capabilityServerId,
     });
+    const readRecentPaths = React.useCallback(() => resolveRecentPaths(params.selectedMachineId),
+        [params.selectedMachineId, resolveRecentPaths]);
+    const recentPaths = React.useMemo(readRecentPaths, [readRecentPaths]);
 
     return {
         refreshMachineData,
         recentMachines,
         favoriteMachineItems,
         recentPaths,
+        readRecentPaths,
     };
 }

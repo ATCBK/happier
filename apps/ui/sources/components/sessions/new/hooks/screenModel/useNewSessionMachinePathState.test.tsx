@@ -1,11 +1,16 @@
 import { act } from 'react-test-renderer';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { createMachineFixture, renderHook } from '@/dev/testkit';
+import { createMachineFixture, createSessionFixture, renderHook } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 
 import { createManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
+import { recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { storage } from '@/sync/domains/state/storageStore';
+import { useNewSessionPlacementSessions } from './useNewSessionPlacementSessions';
+import { useNewSessionPlacementMachines } from './useNewSessionPlacementMachines';
+import { getMachineDisplayName, getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 
 const network = await installSessionOpsNetworkBoundary();
 beforeAll(async () => {
@@ -49,7 +54,7 @@ function makeMachine({ id, metadata, ...overrides }: MachineFixtureInput): Machi
     };
 }
 
-function toMachines(...machines: MachineFixtureInput[]): HookParams['machines'] {
+function toMachines(...machines: MachineFixtureInput[]): Machine[] {
     return machines.map(makeMachine);
 }
 
@@ -99,6 +104,151 @@ function renderMachinePathState(initialProps: HookParams) {
 }
 
 describe('useNewSessionMachinePathState', () => {
+    it('keeps live placement local while exact hydration and automatic candidate arrivals remain current', async () => {
+        const home = await network.addHome('https://server-a', 'account-a');
+        const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
+        const serverId = resolveServerProfileScopeId(home);
+        const previous = storage.getState();
+        const selected = makeMachine({ id: 'live-selected', metadata: null });
+        const other = makeMachine({ id: 'live-other' });
+        storage.setState({ machines: { [selected.id]: selected, [other.id]: other },
+            machineListByServerId: { [serverId]: [selected, other] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            const machines = useNewSessionPlacementMachines({ serverId, activeServerId: serverId });
+            return useNewSessionMachinePathState({ serverId, machines, recentMachinePaths: [],
+                machineIdParam: selected.id, pathParam: null });
+        });
+        try {
+            const mounted = renders;
+            for (let index = 0; index < 5; index += 1) {
+                const changed = { ...other, metadata: { ...other.metadata!, displayName: `Other ${index}` } };
+                await act(async () => storage.setState({ machines: { [selected.id]: selected, [other.id]: changed },
+                    machineListByServerId: { [serverId]: [selected, changed], foreign: [makeMachine({ id: `foreign-${index}` })] } }));
+            }
+            expect(renders - mounted).toBe(0);
+            expect(hook.getCurrent().selectedPath).toBe('');
+            const hydrated = makeMachine({ id: selected.id, metadata: { homeDir: '/hydrated' } });
+            await act(async () => storage.setState({ machines: { [selected.id]: hydrated }, machineListByServerId: { [serverId]: [hydrated] } }));
+            expect(hook.getCurrent().selectedPath).toBe('/hydrated');
+            expect(hook.getCurrent().selectedMachine).toBe(hydrated);
+            const plainName = hook.getCurrent().selectedMachineSentenceName;
+            const duplicate = { ...hydrated, id: 'duplicate' };
+            await act(async () => storage.setState({ machines: { [selected.id]: hydrated, duplicate },
+                machineListByServerId: { [serverId]: [hydrated, duplicate] } }));
+            const disambiguated = getMachineSentenceName(hydrated, getMachineDisplayName(hydrated, [hydrated, duplicate]));
+            expect(disambiguated).not.toBe(plainName);
+            expect(hook.getCurrent().selectedMachineSentenceName).toBe(disambiguated);
+            await act(async () => hook.getCurrent().setSelectedPath('/authored'));
+            await act(async () => storage.setState({ machines: {}, machineListByServerId: { [serverId]: [] } }));
+            expect(hook.getCurrent().selectedMachineId).toBe(selected.id);
+            expect(hook.getCurrent().selectedPath).toBe('/authored');
+        } finally {
+            await hook.unmount();
+            storage.setState({ machines: previous.machines, machineListByServerId: previous.machineListByServerId,
+                machineListStatusByServerId: previous.machineListStatusByServerId });
+        }
+        storage.setState({ machines: {}, machineListByServerId: { [serverId]: [] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+        const automatic = await renderHook(() => {
+            const machines = useNewSessionPlacementMachines({ serverId, activeServerId: serverId });
+            return useNewSessionMachinePathState({ serverId, machines, recentMachinePaths: [], machineIdParam: null, pathParam: null });
+        });
+        try {
+            expect(automatic.getCurrent().selectedMachineId).toBeNull();
+            const arrived = makeMachine({ id: 'arrived', active: true, activeAt: Date.now(), metadata: { homeDir: '/arrived' } });
+            await act(async () => storage.setState({ machines: { arrived }, machineListByServerId: { [serverId]: [arrived] } }));
+            expect(automatic.getCurrent().selectedMachineId).toBe('arrived');
+            expect(automatic.getCurrent().selectedPath).toBe('/arrived');
+        } finally {
+            await automatic.unmount();
+            storage.setState({ machines: previous.machines, machineListByServerId: previous.machineListByServerId,
+                machineListStatusByServerId: previous.machineListStatusByServerId });
+        }
+    });
+
+    it('resolves the first history arrival and reads later paths at intent without changing an authored folder', async () => {
+        const previous = storage.getState();
+        const machines = toMachines({ id: 'history-machine', metadata: null });
+        storage.setState({ sessions: {}, machines: { 'history-machine': machines[0]! }, isDataReady: true });
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            const sessions = useNewSessionPlacementSessions();
+            return useNewSessionMachinePathState({ serverId: 'server-a', machines, recentMachinePaths: [],
+                sessions, machineIdParam: 'history-machine', pathParam: null });
+        });
+        try {
+            expect(hook.getCurrent().selectedPath).toBe('');
+            const first = createSessionFixture({ id: 'history-session', metadata: {
+                machineId: 'history-machine', host: 'history', path: '/arrived', homeDir: '/home/history',
+            } });
+            await act(async () => storage.setState({ sessions: { 'history-session': first } }));
+            expect(hook.getCurrent().selectedPath).toBe('/arrived');
+            await act(async () => hook.getCurrent().setSelectedPath('/authored'));
+            const authoredRenders = renders;
+            await act(async () => storage.setState({ sessions: {
+                'history-session': { ...first, metadata: { ...first.metadata!, path: '/moved' } },
+            } }));
+            expect(renders).toBe(authoredRenders);
+            expect(hook.getCurrent().selectedPath).toBe('/authored');
+            expect(hook.getCurrent().getBestPathForMachine('history-machine')).toBe('/moved');
+        } finally {
+            await hook.unmount();
+            storage.setState({ sessions: previous.sessions, machines: previous.machines, isDataReady: previous.isDataReady });
+        }
+    });
+
+    it('observes automatic placement changes rather than unrelated fleet reachability revisions', async () => {
+        const home = await network.addHome('https://server-a', 'account-a');
+        const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
+        const serverId = resolveServerProfileScopeId(home);
+        let renders = 0;
+        const machines = toMachines(
+            { id: 'automatic-a', active: true, activeAt: Date.now(), metadata: { homeDir: '/home/a' } },
+            { id: 'automatic-b', active: true, activeAt: Date.now(), metadata: { homeDir: '/home/b' } },
+        );
+        const hook = await renderHook(() => {
+            renders += 1;
+            return useNewSessionMachinePathState({ serverId, machines, recentMachinePaths: [],
+                machineIdParam: null, pathParam: null });
+        });
+        expect(hook.getCurrent().selectedMachineId).toBe('automatic-a');
+        const mountedRenders = renders;
+        for (let index = 0; index < 5; index += 1) {
+            await act(async () => recordMachineRequestSucceeded({
+                serverId: 'https://server-b', accountId: 'account-b', machineId: `automatic-unrelated-${index}`,
+            }));
+        }
+        expect(renders - mountedRenders).toBe(0);
+        await act(async () => recordMachineRequestFailed({
+            serverId, accountId: home.accountId, machineId: 'automatic-a',
+        }));
+        expect(getSelection(hook.getCurrent())).toEqual({ selectedMachineId: 'automatic-b', selectedPath: '/home/b' });
+        await hook.unmount();
+    });
+
+    it('keeps an exact authored target quiet for unrelated machine reachability publications', async () => {
+        let renders = 0;
+        const machines = toMachines({ id: 'machine-a', metadata: { homeDir: '/home/alice' } });
+        const hook = await renderHook(() => {
+            renders += 1;
+            return useNewSessionMachinePathState({
+                serverId: 'server-a', machines, recentMachinePaths: [],
+                machineIdParam: 'machine-a', pathParam: '/authored',
+            });
+        });
+        const mountedRenders = renders;
+        for (let index = 0; index < 5; index += 1) {
+            await act(async () => recordMachineRequestSucceeded({
+                serverId: 'https://server-b', accountId: 'account-b', machineId: `unrelated-${index}`,
+            }));
+        }
+        expect(renders - mountedRenders).toBe(0);
+        expect(getSelection(hook.getCurrent())).toEqual({ selectedMachineId: 'machine-a', selectedPath: '/authored' });
+        await hook.unmount();
+    });
+
     it('keeps the committed folder for submission when an uncommitted picker edit is blank', async () => {
         const hook = await renderMachinePathState({
             machines: toMachines({ id: 'machine-a', metadata: { homeDir: '/home/alice' } }),
