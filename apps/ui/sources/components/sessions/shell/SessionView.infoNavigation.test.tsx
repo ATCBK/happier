@@ -38,6 +38,7 @@ vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
 // truthfully an empty bundled inventory rather than requiring a generator run.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: Object.freeze([]),
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: Object.freeze([]),
 }));
 
 const routerPushSpy = vi.hoisted(() => vi.fn());
