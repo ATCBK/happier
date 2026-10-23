@@ -7,6 +7,7 @@ import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { isServerReachabilityNetworkAllowed, subscribeServerReachabilityNetworkAllowed } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 import { createAccountSessionFollowController, projectAccountSessionFollowPolicyEditor } from './accountSessionFollowController';
+import { isSessionFollowAccountChangeRelevant } from './sessionFollowAccountChange';
 
 /** Every personal Follow host shares this captured Account/Home lifetime. */
 export function useAccountSessionFollowController(address: SessionAddress, enabled: boolean, onRetire?: () => void) {
@@ -32,12 +33,14 @@ export function useAccountSessionFollowController(address: SessionAddress, enabl
             controller.setOnline(online);
             if (online && wasOffline) void controller.refresh();
         });
+        const sessionIds = new Set([sessionId]);
         const changes = subscribeHomeAccountChange(event => {
-            if (areServerProfileIdentifiersEquivalent(event.serverId, serverId)) void controller.refresh();
+            if (areServerProfileIdentifiersEquivalent(event.serverId, serverId)
+                && isSessionFollowAccountChangeRelevant(event, sessionIds)) void controller.refresh();
         });
         void controller.refresh();
         return () => { retirement.dispose(); credentials(); connectivity(); changes(); };
-    }, [controller, enabled, serverId]);
+    }, [controller, enabled, serverId, sessionId]);
     const policyEditor = React.useMemo(() => projectAccountSessionFollowPolicyEditor(state), [state]);
     return { controller, state, policyEditor };
 }

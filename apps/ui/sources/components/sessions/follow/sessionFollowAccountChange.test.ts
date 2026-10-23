@@ -37,4 +37,19 @@ describe('Follow census invalidation', () => {
         expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', entityIds: ['new-source'], changeKinds: ['artifact'] })).toBe(false);
         expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', entityIds: ['new-source'], changeKinds: ['machine'] })).toBe(false);
     });
+
+    it('uses the list planner for corpus demand while keeping exact detail and independent changes fresh', () => {
+        const transcript = { serverId: 'home', entityIds: ['source'], changeKinds: ['session'], sessionListQueryAffects: false } as const;
+        expect(isSessionFollowAccountChangeRelevant(transcript)).toBe(false);
+        expect(isSessionFollowAccountChangeRelevant(transcript, sourceIds)).toBe(true);
+        expect(isSessionFollowAccountChangeRelevant({ ...transcript, sessionListQueryAffects: 'structural' })).toBe(true);
+        expect(isSessionFollowAccountChangeRelevant({ ...transcript, sessionListQueryAffects: true })).toBe(true);
+        expect(isSessionFollowAccountChangeRelevant({ ...transcript, changeKinds: ['session', 'share'] })).toBe(true);
+        expect(isSessionFollowAccountChangeRelevant({ ...transcript, entityIds: [ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID],
+            changeKinds: ['session', 'account'] })).toBe(true);
+        expect(isSessionFollowAccountChangeRelevant({ ...transcript, entityIds: [`${PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1}payments`],
+            changeKinds: ['session', 'kv'] })).toBe(true);
+        expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', entityIds: ['session-tags'],
+            changeKinds: ['kv'], sessionListQueryAffects: true })).toBe(true);
+    });
 });
