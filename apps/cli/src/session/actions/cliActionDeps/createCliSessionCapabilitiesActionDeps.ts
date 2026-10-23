@@ -7,16 +7,16 @@ import type { SkillRulesActionPortV1 } from '@happier-dev/protocol/prompts/libra
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { StoredCredentials } from '@/persistence';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
-import { updateSessionMetadataForTarget } from '@/session/services/updateSessionMetadataForTarget';
-import { tryDecryptSessionOwnerMetadataView, readSessionOwnerLocality } from '@/session/transport/encryption/sessionEncryptionContext';
-import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
-import { findCatalogEntry } from '@/agent/catalog/registry';
-import { resolveCapabilityApplyAgentFacts } from '@/session/runtime/capabilityApplyFacts';
-import { readPluginMcpServerMetadata } from '@/mcp/runtime/pluginMcpServerItems';
-import { createCliMcpServerStore, createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
+import type { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import type { updateSessionMetadataForTarget } from '@/session/services/updateSessionMetadataForTarget';
+import type { tryDecryptSessionOwnerMetadataView, readSessionOwnerLocality } from '@/session/transport/encryption/sessionEncryptionContext';
+import type { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
+import type { findCatalogEntry } from '@/agent/catalog/registry';
+import type { resolveCapabilityApplyAgentFacts } from '@/session/runtime/capabilityApplyFacts';
+import type { readPluginMcpServerMetadata } from '@/mcp/runtime/pluginMcpServerItems';
+import type { createCliMcpServerStore, createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import type { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 
 type CapabilityDeps = Pick<ActionExecutorDeps, 'sessionCapabilities' | 'sessionCapabilitiesGet' | 'spawnCapabilitiesPreview'>;
@@ -36,6 +36,7 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
   const read = async (sessionId: string, context: ActionExecutorContext, actionId: 'session.capabilities.set' | 'session.capabilities.get' = 'session.capabilities.set') => {
     context.signal?.throwIfAborted();
     if (context.serverId && context.serverId !== params.serverId) return null;
+    const [{ resolveSessionTransportContext }, { tryDecryptSessionOwnerMetadataView }] = await Promise.all([import("@/session/services/resolveSessionTransportContext"), import("@/session/transport/encryption/sessionEncryptionContext")]);
     const transport = await withinHome(() => resolveSessionTransportContext({ credentials: params.credentials, idOrPrefix: sessionId,
       resolveAuthorizationHeaders: request => params.resolveAuthorizationHeaders(actionId, context, request), signal: context.signal }));
     if (!transport.ok) {
@@ -71,6 +72,7 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
       try {
         const session = await read(input.sessionId, context, 'session.capabilities.get');
         if (!session) return { ok: false, code: 'not_found' };
+        const [{ readSessionOwnerLocality }, { resolveBackendTargetFromSessionMetadata }] = await Promise.all([import("@/session/transport/encryption/sessionEncryptionContext"), import("@/session/backendTargets/resolveBackendTargetFromSessionMetadata")]);
         const machineId = readSessionOwnerLocality({ metadata: session.metadata, rawSession: session.transport.rawSession })?.machineId;
         const agent = resolveBackendTargetFromSessionMetadata(session.metadata);
         if (!machineId || agent?.kind !== 'backend') return { ok: false, code: 'session_unavailable' };
@@ -94,6 +96,7 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
       readSession: async (input, context) => {
         const session = await read(input.sessionId, context);
         if (!session) return null;
+        const [{ resolveBackendTargetFromSessionMetadata }, { findCatalogEntry }, { resolveCapabilityApplyAgentFacts }] = await Promise.all([import("@/session/backendTargets/resolveBackendTargetFromSessionMetadata"), import("@/agent/catalog/registry"), import("@/session/runtime/capabilityApplyFacts")]);
         const target = resolveBackendTargetFromSessionMetadata(session.metadata);
         if (target?.kind !== 'backend') throw Object.assign(new Error('Session Agent is unavailable'), { code: 'session_unavailable' });
         const entry = findCatalogEntry(target.backendId);
@@ -120,7 +123,11 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
           if (addressed.some(item => item.id === input.id)) return input.id;
           return resolveSessionCapabilityItemIdentityV1(await params.skillRules.listSkills(context.signal), input.id);
         }
-        if (!params.operationContext) await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking' });
+        if (!params.operationContext) {
+          const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
+          await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking' });
+        }
+        const [{ readPluginMcpServerMetadata }, { createCliMcpServerStoreForOperation, createCliMcpServerStore }] = await Promise.all([import("@/mcp/runtime/pluginMcpServerItems"), import("@/settings/mcp/mcpServerStore")]);
         const store = params.operationContext ? createCliMcpServerStoreForOperation({ operationContext: params.operationContext,
           serverId: params.serverId, signal: context.signal }) : createCliMcpServerStore({ credentials: params.credentials,
           serverId: params.serverId, signal: context.signal });
@@ -130,7 +137,9 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
       }),
       writeMetadata: async (input, context) => withinHome(async () => {
         let result;
-        try { result = await updateSessionMetadataForTarget({ credentials: params.credentials, idOrPrefix: input.sessionId,
+        try { 
+        const { updateSessionMetadataForTarget } = await import("@/session/services/updateSessionMetadataForTarget");
+        result = await updateSessionMetadataForTarget({ credentials: params.credentials, idOrPrefix: input.sessionId,
           expectedSessionId: input.sessionId,
           currentness: { signal: context.signal },
           resolveAuthorizationHeaders: request => params.resolveAuthorizationHeaders('session.capabilities.set', context, request),

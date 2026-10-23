@@ -1,7 +1,6 @@
 import type { ActionExecutorContext, BackendTargetRefV2, ExternalActionTargetV1 } from '@happier-dev/protocol';
 import type { StoredCredentials } from '@/persistence';
 import type { ResolveSessionTransportContextResult } from '@/session/services/resolveSessionTransportContext';
-import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import { readSessionLegacyMetadata } from './cliActionDeps/sessionStateReaders';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { resolveSessionStoredContentEncryptionMode, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -85,6 +84,7 @@ export async function resolveCliActionCallerSession(params: Readonly<{
     accountEncryptionMode: transport.accountEncryptionCurrentness.mode, rawSession: transport.rawSession });
   if (!metadata) return null;
   const readString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
+  const { resolveBackendTargetFromSessionMetadata } = await import('@/session/backendTargets/resolveBackendTargetFromSessionMetadata');
   return { sessionId, metadata, workDepth: transport.rawSession.workDepth,
     backendTarget: resolveBackendTargetFromSessionMetadata(metadata),
     machineId: readString(transport.rawSession.machineId) ?? readString(metadata?.machineId),

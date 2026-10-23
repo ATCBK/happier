@@ -36,8 +36,8 @@ export function createCliProviderActionExecuteV1(params: Readonly<{
       context, effectActionId: request.actionId, exactMachine: true,
       ...(operationTimeoutMs === null ? { timeoutMs: null } : {}),
     }),
-    setDefault: (input, context) => setDefaultProviderModelSelection({ credentials: params.credentials, ...input, signal: context.signal }),
-    readAccountCatalog: context => {
+    setDefault: async (input, context) => setDefaultProviderModelSelection({ credentials: params.credentials, ...input, signal: context.signal }),
+    readAccountCatalog: async context => {
       const store = params.operationContext
         ? createCliProviderConnectionsStoreForOperation({ operationContext: params.operationContext, signal: context.signal })
         : createCliProviderConnectionsStore({ credentials: params.credentials, signal: context.signal,

@@ -5,12 +5,12 @@ import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { StoredCredentials } from '@/persistence';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from '@/providers/settings/catalogStore';
-import { refreshActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
-import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import { promoteSavedSecretWithProviderConnectionsCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import type { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from '@/providers/settings/catalogStore';
+import type { refreshActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
+import type { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import type { promoteSavedSecretWithProviderConnectionsCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { indexAgentRoutingIdsByContributionIdentity, readAgentRoutingIdForContributionIdentity } from '@/plugins/projection/registry/agentRoutingIdentity';
+import type { indexAgentRoutingIdsByContributionIdentity, readAgentRoutingIdForContributionIdentity } from '@/plugins/projection/registry/agentRoutingIdentity';
 
 /** CLI and daemon Account Actions supply transport to the same Protocol semantics. */
 export function createCliAccountProviderActionExecuteV1(params: Readonly<{
@@ -23,6 +23,7 @@ export function createCliAccountProviderActionExecuteV1(params: Readonly<{
   preparedSavedSecret?: Parameters<typeof promoteSavedSecretWithProviderConnectionsCatalog>[0]['preparedSavedSecret'];
 }>): NonNullable<ActionExecutorDeps['providerActionExecute']> {
   return (request, context) => runWithServerHttpBaseUrl(params.serverHttpBaseUrl, async (): Promise<ActionExecuteResult> => {
+    const { createCliProviderConnectionsStoreForOperation, createCliProviderConnectionsStore } = await import("@/providers/settings/catalogStore");
     const store = params.operationContext
       ? createCliProviderConnectionsStoreForOperation({ operationContext: params.operationContext, signal: context.signal })
       : createCliProviderConnectionsStore({ credentials: params.credentials, signal: context.signal,
@@ -37,7 +38,11 @@ export function createCliAccountProviderActionExecuteV1(params: Readonly<{
     }
     let registry: ReturnType<typeof resolveMergedContributionRegistry> | undefined;
     let wroteCatalog = false;
-    const readRegistry = () => registry ??= resolveMergedContributionRegistry();
+    const readRegistry = async () => {
+      if (registry) return registry;
+      const { resolveMergedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
+      return registry ??= resolveMergedContributionRegistry();
+    };
     const execute = createAccountProviderActionExecuteV1({
       assertCurrent: () => store.assertCurrent(),
       readCatalog: () => store.readCatalogForMutation(),
@@ -47,6 +52,7 @@ export function createCliAccountProviderActionExecuteV1(params: Readonly<{
           wroteCatalog = result.status === 'updated';
           return result;
         }
+        const { promoteSavedSecretWithProviderConnectionsCatalog } = await import("@/settings/secrets/hydrateSavedSecretCatalog");
         const result = await promoteSavedSecretWithProviderConnectionsCatalog({ credentials: params.credentials,
           preparedSavedSecret: params.preparedSavedSecret, providerConnections: value,
           operationContext: params.operationContext, signal: context.signal });
@@ -66,6 +72,7 @@ export function createCliAccountProviderActionExecuteV1(params: Readonly<{
       readAgentProviderRequirements: async agentTargetKey => {
         const target = parseBackendTargetKeyV2(agentTargetKey);
         const projection = await readRegistry();
+        const { readAgentRoutingIdForContributionIdentity, indexAgentRoutingIdsByContributionIdentity } = await import("@/plugins/projection/registry/agentRoutingIdentity");
         const agentId = target.kind === 'backend' ? target.backendId : readAgentRoutingIdForContributionIdentity(
           indexAgentRoutingIdsByContributionIdentity([...projection.agentDefinitionsById.values()]), target.identity);
         await store.verifyCurrent();
@@ -78,6 +85,7 @@ export function createCliAccountProviderActionExecuteV1(params: Readonly<{
     if (result.ok && wroteCatalog) {
       try {
         if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return result;
+        const { refreshActiveProviderConnectionsCatalog } = await import("@/providers/settings/hydrate");
         await refreshActiveProviderConnectionsCatalog({ credentials: params.credentials,
           operationContext: params.operationContext, signal: context.signal,
           isCredentialCurrent: params.isCredentialCurrent }, { afterChange: true });

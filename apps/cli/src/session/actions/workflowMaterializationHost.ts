@@ -3,25 +3,25 @@ import { buildMachineAgentsDetectRequest, buildMachineAgentInventoryDescriptors,
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
-import { requireReadyAcpCatalog } from '@/agent/acp/catalog/configured/resolveBackend';
-import { refreshActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
-import { readAccountLaunchProfiles } from '@/settings/profiles/readProfilesFromAccountSettings';
+import type { requireReadyAcpCatalog } from '@/agent/acp/catalog/configured/resolveBackend';
+import type { refreshActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
+import type { readAccountLaunchProfiles } from '@/settings/profiles/readProfilesFromAccountSettings';
 import type { AiLaunchProfile, AccountSettings, materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
-import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import type { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { StoredCredentials } from '@/persistence';
-import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { prepareActiveAccountRoleOverrides } from '@/settings/prompts/hydratePromptLibraryCatalog';
-import { createRoleSourceReader, type RoleSourceReader } from '@/session/roles/roleSources';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { resolveWorkflowAuthorizedSession } from '@/daemon/workflows/invocationRecoveryObserver';
+import type { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import type { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
+import type { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { prepareActiveAccountRoleOverrides } from '@/settings/prompts/hydratePromptLibraryCatalog';
+import type { createRoleSourceReader, RoleSourceReader } from '@/session/roles/roleSources';
+import type { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import type { resolveWorkflowAuthorizedSession } from '@/daemon/workflows/invocationRecoveryObserver';
 import type { WorkflowTargetUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { ActionSessionAddressV1Schema } from '@happier-dev/protocol/actions/sessionTargetV1';
-import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import type { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import type { WorkflowSessionConversation } from '@/daemon/workflows/sessionStepExecutor';
 import { freezeWorkflowActionContractV1 } from '@happier-dev/protocol/actions/actionCatalog';
 
@@ -63,6 +63,7 @@ function object(value: unknown): Readonly<Record<string, unknown>> | null {
 /** Captures one exact-machine catalog observation for one admission. */
 export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializationHostDeps) {
   return async (target: MachineTarget): Promise<Materialization> => {
+    const { resolveWorkflowAuthorizedSession } = await import('@/daemon/workflows/invocationRecoveryObserver');
     const call = (method: string, request: unknown) => deps.callMachineAction({
       machineId: target.machineId, method, request, ...(target.signal ? { signal: target.signal } : {}),
     });
@@ -90,6 +91,7 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
     let observation: ReturnType<typeof observeMachine> | undefined;
     const readMachine = () => observation ??= observeMachine();
     const sessions = new Map<string, ReturnType<typeof resolveWorkflowAuthorizedSession>>();
+    const { runWithServerHttpBaseUrl } = await import("@/api/client/serverHttpBaseUrl");
     const readSession = (sessionId: string) => {
       let observation = sessions.get(sessionId);
       if (!observation) {
@@ -113,6 +115,7 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
       target.signal?.throwIfAborted();
       // Optional contextual choices cannot make native admission depend on the
       // configured catalog. Explicit selections still require ready membership.
+      const { requireReadyAcpCatalog } = await import("@/agent/acp/catalog/configured/resolveBackend");
       return !required && catalog?.status !== 'ready' ? [] : requireReadyAcpCatalog(catalog).record.definitions.map((definition) => definition.id);
     };
     if (roleSelection.defaultEngine) {
@@ -188,6 +191,7 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
           const address = ActionSessionAddressV1Schema.safeParse(typeof value === 'string'
             ? { serverId, sessionId: value } : value);
           if (!address.success) return null;
+          const { isServerProfileHomeIdentity } = await import("@/server/serverProfiles");
           if (address.data.serverId !== serverId && address.data.serverId !== deps.serverId
             && !await isServerProfileHomeIdentity(deps.serverId, address.data.serverId)) return null;
           const authorized = await readSession(address.data.sessionId);
@@ -204,6 +208,7 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
             const serverId = deps.serverIdentityId ?? deps.serverId;
             const participantServerId = participant.kind === 'session'
               ? participant.session.serverId : participant.launch.executionTarget.serverId;
+            const { isServerProfileHomeIdentity } = await import("@/server/serverProfiles");
             if (!deps.serverId || !serverId || participantServerId !== serverId
               && participantServerId !== deps.serverId
               && !await isServerProfileHomeIdentity(deps.serverId, participantServerId)) {
@@ -292,6 +297,7 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
     const resolve = async () => {
       target.signal?.throwIfAborted();
       const operation = params.savedSecretOperationContext;
+      const [{ readAccountIdFromToken }, { bootstrapAccountSettingsContext }, { resolveAccountSettingsScopeKeyForToken }, { getActiveAccountSettingsSnapshotLifetimeToken, getActiveAccountSettingsSnapshot }, { createRoleSourceReader }, { runWithServerHttpBaseUrl }] = await Promise.all([import("@/cloud/decodeJwtPayload"), import("@/settings/accountSettings/bootstrapAccountSettingsContext"), import("@/settings/accountSettings/accountSettingsScopeKey"), import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/session/roles/roleSources"), import("@/api/client/serverHttpBaseUrl")]);
       const scopeKey = resolveAccountSettingsScopeKeyForToken(params.credentials.token);
       if (operation && (operation.credentials.token !== params.credentials.token || !await operation.isCurrent())) {
         throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
@@ -307,6 +313,7 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
       const readSnapshot = () => operation ? operation.readSnapshot() : getActiveAccountSettingsSnapshot();
       const assertCurrent = async (signal?: AbortSignal) => {
         signal?.throwIfAborted();
+        const { getActiveAccountSettingsSnapshotLifetimeToken } = await import("@/settings/accountSettings/activeAccountSettingsSnapshot");
         if (operation && !await operation.isCurrent() || readSnapshot()?.scopeKey !== scopeKey
           || !operation && getActiveAccountSettingsSnapshotLifetimeToken() !== roleAccount.lifetimeToken) {
           throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
@@ -321,6 +328,7 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
       });
       let launchProfiles: ReturnType<typeof readAccountLaunchProfiles> | undefined;
       const readLaunchProfile = async (profileId: string) => {
+        const { readAccountLaunchProfiles } = await import("@/settings/profiles/readProfilesFromAccountSettings");
         launchProfiles ??= readAccountLaunchProfiles(current.settings, params.credentials, target.signal, undefined, operation);
         const matching = (await launchProfiles).visibleProfiles.filter((candidate) => candidate.id === profileId);
         return matching.length === 1 && matching[0]!.enabled !== false ? matching[0]! : null;
@@ -330,6 +338,7 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
         readAcpCatalog: async (signal) => {
           await assertCurrent(signal);
           const catalog = readSnapshot()?.acpCatalog;
+          const { refreshActiveAcpCatalog } = await import("@/agent/acp/catalog/hydrateAcpCatalog");
           const prepared = catalog?.status === 'ready' ? catalog : await refreshActiveAcpCatalog({ credentials: params.credentials, signal, operationContext: operation });
           await assertCurrent(signal);
           return prepared;
@@ -348,6 +357,7 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
             const roleSources = await sourceReader(signal, { roleIds: [roleId] });
             await assertCurrent(signal);
             // Open current Account overrides only when a Role is consumed.
+            const { prepareActiveAccountRoleOverrides } = await import("@/settings/prompts/hydratePromptLibraryCatalog");
             const roleOverrides = await prepareActiveAccountRoleOverrides(roleAccount);
             await assertCurrent(signal);
             if (roleOverrides.status !== 'ready') throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable' });
@@ -361,6 +371,7 @@ export function createCredentialedWorkflowMaterializationHostV1(params: Omit<Wor
       return { ...materialization, agentStartPolicySnapshot: { policy: current.settings.sessionAgentSpawnPolicyV1,
         workDepthLimit: current.settings.workDepthLimit, allowLists: current.settings.sessionAgentStartAllowListsV1 } };
     };
+    const { runWithServerHttpBaseUrl } = await import("@/api/client/serverHttpBaseUrl");
     return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, resolve) : resolve());
   };
 }

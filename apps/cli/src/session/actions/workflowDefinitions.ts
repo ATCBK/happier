@@ -6,8 +6,6 @@ import type { WorkflowPluginSourceReaderV1 } from '@happier-dev/protocol';
 
 import { encodeAccountArtifactListCursor, type createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import type { createWorkflowMaterializationHostV1 } from './workflowMaterializationHost';
-import { readPluginWorkflowSources } from '@/plugins/projection/registry/workflows';
-import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 
 /** CLI crypto/transport adapts the shared atomic definition and admission owners. */
 export function createWorkflowDefinitionActions(params: Readonly<{
@@ -20,7 +18,13 @@ export function createWorkflowDefinitionActions(params: Readonly<{
   return createSharedWorkflowDefinitionActions({
     artifactStore: params.artifactStore,
     encodeListCursor: encodeAccountArtifactListCursor,
-    readPluginWorkflows: params.readPluginWorkflows ?? (() => readPluginWorkflowSources(readCurrentContributionRegistry())),
+    readPluginWorkflows: params.readPluginWorkflows ?? (async () => {
+      const [{ readPluginWorkflowSources }, { readCurrentContributionRegistry }] = await Promise.all([
+        import('@/plugins/projection/registry/workflows'),
+        import('@/agent/catalog/snapshot'),
+      ]);
+      return readPluginWorkflowSources(readCurrentContributionRegistry());
+    }),
     ...(params.readWorkflowTriggerSummaries ? { readWorkflowTriggerSummaries: params.readWorkflowTriggerSummaries } : {}),
     ...(params.removeWorkflowTriggers ? { removeWorkflowTriggers: params.removeWorkflowTriggers } : {}),
     assertDefinitionWriteAllowed: async (definition, context, caller) => {

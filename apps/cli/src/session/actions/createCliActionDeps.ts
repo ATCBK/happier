@@ -1,28 +1,27 @@
-import { readLatestUsageLimitFailureIssue } from '@/session/usageLimitRecoveryControls/readLatestUsageLimitFailureIssue';
-import { readCurrentRunnerAgentStartPolicyV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
-import type { RequesterAgentStartPolicyV1 } from '@/daemon/sessionEncryption/requesterAgentStartPolicy';
 import type { UsageLimitContinuationResult } from '@/daemon/connectedServices/continuation/continueSessionAfterUsageLimitReset';
+import type { readLatestUsageLimitFailureIssue } from '@/session/usageLimitRecoveryControls/readLatestUsageLimitFailureIssue';
+import type { readCurrentRunnerAgentStartPolicyV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
+import type { RequesterAgentStartPolicyV1 } from '@/daemon/sessionEncryption/requesterAgentStartPolicy';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1, admitActionAgentStartV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { SessionSpawnNewIncompatibleTargetV1Schema, type SessionSpawnNewIncompatibleTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { homedir } from 'node:os';
 import { DaemonLspApplyResponseSchema, DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema } from '@happier-dev/protocol/machines/languageIntelligence';
-import { logger } from '@/ui/logger';
-import { executeCapturedMachineAction } from '@/api/machine/capturedMachineAction';
-import { isOriginalSessionInputAccountActionCustody } from "@/daemon/sessionEncryption/requesterAccountActionProjection";
-import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
+import type { logger } from '@/ui/logger';
+import type { executeCapturedMachineAction } from '@/api/machine/capturedMachineAction';
+import type { isOriginalSessionInputAccountActionCustody } from "@/daemon/sessionEncryption/requesterAccountActionProjection";
+import type { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import { createReviewedSecondOpinionSessionCreationAuthorization } from '@/api/externalActionExecutionAuthorization';
 import { setModelFavoriteV1 } from '@happier-dev/protocol/providers/modelFavoritesV1';
-import { updateAccountSettingsV2OnceAgainstLatest } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
+import type { updateAccountSettingsV2OnceAgainstLatest } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { rejectUndispatchedSessionAgentTransition } from '@happier-dev/protocol/sessions/agentTransitionEffectStage';
 import { projectAutomationEligibleEventsCatalogV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { projectCurrentSessionPresentationActionResult } from '@/session/presentation/currentSessionPresentationService';
+import type { projectCurrentSessionPresentationActionResult } from '@/session/presentation/currentSessionPresentationService';
 import { flattenWidgetLayoutWidgetsV1 } from '@happier-dev/protocol/widgets/widgetLayoutItemV1';
 import axios from 'axios';
-import { autonomousExchangePath, readAutonomousExchangeStatus,
-  mutateAutonomousExchangeControl } from '@/api/sessionAutonomousExchangeTransport';
+import type { autonomousExchangePath, readAutonomousExchangeStatus, mutateAutonomousExchangeControl } from '@/api/sessionAutonomousExchangeTransport';
 import { MachineCapabilityInstallInputSchema, MachineCapabilityInstallOutputSchema, MachineReplacementSetInputSchema } from '@happier-dev/protocol/actions/specs/machineConnection';
-import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
-import { readManagedMachine } from '@/machines/managed/readManagedMachine';
+import type { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
+import type { readManagedMachine } from '@/machines/managed/readManagedMachine';
 import { readMachineReferenceCensusV1, type MachineReferenceCensusV1 } from '@happier-dev/protocol/machines/machineReferenceCensusV1';
 import { MACHINE_VITALS_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineVitals';
 import { MACHINE_RESOURCES_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineResources';
@@ -35,14 +34,14 @@ import { ManagedGetInputV1Schema, ManagedGetOutputV1Schema, ManagedDeleteInputV1
   managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { MachinePoolListOutputV1Schema } from '@happier-dev/protocol/machines/pools/v1';
 import { machinePoolActionEndpointPathV1 } from '@happier-dev/protocol/machines/pools/actionsV1';
-import { listAutomationDefinitions } from '@/api/automations';
-import { createCliProfileStore, createCliProfileStoreForOperation } from '@/settings/profiles/profileStore';
+import type { listAutomationDefinitions } from '@/api/automations';
+import type { createCliProfileStore, createCliProfileStoreForOperation } from '@/settings/profiles/profileStore';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { AcpCatalogUnavailableError } from '@/agent/acp/catalog/configured/resolveBackend';
-import { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
+import type { AcpCatalogUnavailableError } from '@/agent/acp/catalog/configured/resolveBackend';
+import type { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
 import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
-import { withdrawPendingQueueV2Message, updatePendingQueueV2RequestedAction, markPendingQueueV2DeliveryHandled, dismissPendingQueueV2Delivery, sendPendingQueueV2DeliveryAsNew } from '@/api/session/pendingQueueV2Transport';
-import { readProviderAccountUsageHistoryWitnessV4, readProviderAccountUsageQuotaV4 } from '@/daemon/connectedServices/accountUsage/readQuota';
+import type { withdrawPendingQueueV2Message, updatePendingQueueV2RequestedAction, markPendingQueueV2DeliveryHandled, dismissPendingQueueV2Delivery, sendPendingQueueV2DeliveryAsNew } from '@/api/session/pendingQueueV2Transport';
+import type { readProviderAccountUsageHistoryWitnessV4, readProviderAccountUsageQuotaV4 } from '@/daemon/connectedServices/accountUsage/readQuota';
 import { evaluatePendingResetStartAdmissionV1, PendingResetStartWaitingReasonV1Schema } from '@happier-dev/protocol/sessions/pending/pendingResetStartReadinessV1';
 import { PENDING_INPUT_PROTOCOL_VERSION_V4 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { createServerUrlComparableKey } from '@happier-dev/protocol/server/urls/serverUrlComparableKey';
@@ -54,20 +53,19 @@ import { executeActionOperationActionV1 } from '@happier-dev/protocol/actions/ex
 import { ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { updatePersonalProjectContextV1 } from '@happier-dev/protocol/projects/projectContextV1';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
-import { readProjectAccountRows, createProjectAccountSnapshotMutation, mutateProjectAccountOrganization, mutateProjectAccountRows,
-  type OpenedProjectAccountRowMutationRequest, type ProjectAccountRowsInput } from '@/workspaces/projectAccountRows';
-import { readProjectLastOpenedMemoryMap } from '@/workspaces/projectLastOpenedMemory';
+import type { readProjectAccountRows, createProjectAccountSnapshotMutation, mutateProjectAccountOrganization, mutateProjectAccountRows, OpenedProjectAccountRowMutationRequest, ProjectAccountRowsInput } from '@/workspaces/projectAccountRows';
+import type { readProjectLastOpenedMemoryMap } from '@/workspaces/projectLastOpenedMemory';
 import { buildProjectLastOpenedMemoryKeyV1 } from '@happier-dev/protocol/account/authoringMemory';
 import { projectProjectListV1 } from '@happier-dev/protocol/workspaces';
 import { setProjectVisibilityV1 } from '@happier-dev/protocol/projects/projectVisibilityV1';
-import { postWebhookJsonAsync, WebhookDestinationAdmissionError } from '@/notifications/activity/sendWebhookActivityNotification';
+import type { postWebhookJsonAsync, WebhookDestinationAdmissionError } from '@/notifications/activity/sendWebhookActivityNotification';
 import { createCliSettingsDeclarationAction } from './settingsDeclarationAction';
-import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibraryStore';
-import { getServerProfile, isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
-import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import type { createCliPromptLibraryStore } from '@/settings/prompts/promptLibraryStore';
+import type { getServerProfile, isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
+import type { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
-import { readCliMemoryInheritedContext, readCliMemoryScopeContext } from './readCliMemoryInheritedContext';
-import { createCliProjectTrustAction } from './projectTrustAction';
+import type { readCliMemoryInheritedContext, readCliMemoryScopeContext } from './readCliMemoryInheritedContext';
+import type { createCliProjectTrustAction } from './projectTrustAction';
 import { PROJECT_ACTION_INPUT_SCHEMAS_V1, PROJECT_ACTION_OUTPUT_SCHEMAS_V1, PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { resolveProjectActionMachineV1 } from '@happier-dev/protocol/actions/executor/projectActionPlacement';
 import { createCliProjectSourceActionDeps } from './projectSourceActionDeps';
@@ -75,12 +73,12 @@ import { admitSessionContextIntentV1 } from '@happier-dev/protocol/sessions/cont
 import { admitDeclaredSessionVoicePreferenceV1, readBuiltInSessionVoiceDeclarationV1 } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol/plugins/contributions/voice';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { withCliPromptLibraryArtifactReader, resolveCliPromptStackSystemAppendBlocks } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
+import type { withCliPromptLibraryArtifactReader, resolveCliPromptStackSystemAppendBlocks } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { applyTodoSessionLinkV1, TodoSessionLinkErrorV1, TodoSessionLinkInputV1Schema, projectTodoSessionLinkFailureV1 } from '@happier-dev/protocol/todos/todoSessionLinkV1';
-import { createCliAccountKvJsonTransport, createCliAccountKvJsonCollectionTransport } from '@/api/client/accountKvJsonTransport';
+import type { createCliAccountKvJsonTransport, createCliAccountKvJsonCollectionTransport } from '@/api/client/accountKvJsonTransport';
 import { executeInternalTaskAction, executeInternalTaskReorder } from '@happier-dev/protocol/todos/todoActionOperationsV1';
-import { readCliWidgetCatalogProjectionV1, cliWidgetCatalogEntryV1 } from './widgetCatalogProjection';
+import type { readCliWidgetCatalogProjectionV1, cliWidgetCatalogEntryV1 } from './widgetCatalogProjection';
 import { describeWidgetAreaApprovalSurfaceV1 } from '@happier-dev/protocol/widgets';
 import { createCliWidgetInputActionDepsV1 } from './widgetInputActionDeps';
 import { createCliWidgetAreaActionDepsV1 } from './widgetAreaActionDeps';
@@ -95,7 +93,7 @@ import type { SessionUpdatePostInputV1 } from '@happier-dev/protocol';
 import { SessionAwarenessProjectionV1Schema } from '@happier-dev/protocol/sessions/awareness/projectionV1';
 import { projectSessionAwarenessV1 } from '@happier-dev/protocol/sessions/awareness/projectV1';
 import { waitForSessionAwarenessV1 } from '@happier-dev/protocol/sessions/awareness/waitV1';
-import { openSessionEventSource } from '@/session/transport/socket/sessionSocketAgentState';
+import type { openSessionEventSource } from '@/session/transport/socket/sessionSocketAgentState';
 import { createCliConnectedServiceAction } from './connectedServiceActionDeps';
 import { createCliProfileActionExecuteV1 } from './cliActionDeps/createCliProfileActionDeps';
 import { createCliMcpServerActionExecuteV1 } from './cliActionDeps/createCliMcpServerActionDeps';
@@ -106,7 +104,7 @@ import { createUsageSourceActionPort } from '@happier-dev/protocol/actions/execu
 import { createCliRemoteHostActionExecuteV1 } from './cliActionDeps/createCliRemoteHostActionDeps';
 import { randomUUID } from 'node:crypto';
 import { DaemonLocalServiceLauncherSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
-import { createFoundSkillBundleReader } from '@/cli/actions/foundSkillBundleReader';
+import type { createFoundSkillBundleReader } from '@/cli/actions/foundSkillBundleReader';
 import { admitScmRemotePolicy } from '@happier-dev/protocol/scm/remotePolicy';
 import { admitScmCommitPolicy, admitScmCommitUndoLast } from '@happier-dev/protocol/scm/capabilities';
 import { ScmBackendDescribeResponseSchema, ScmRemoteRequestSchema, ScmCommitCreateRequestSchema } from '@happier-dev/protocol/scm';
@@ -125,10 +123,10 @@ import { DaemonLocalServicePublicPreviewCreateResponseV1Schema, DaemonLocalServi
   LocalServicePublicPreviewSnapshotV1Schema, redactLocalServicePublicPreviewCreateResponseForAgentEgress,
   redactLocalServicePublicPreviewRevokeResponseForAgentEgress, redactLocalServicePublicPreviewSnapshotForAgentEgress } from '@happier-dev/protocol/local/services/public/v1';
 import type { RpcHandlerContext, RpcLocalActionContext } from '@/api/rpc/types';
-import { resolveFilesystemAccessPolicy, type FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
-import { resolveCwd } from '@/scm/runtime';
-import { acquireAuthoritativePluginRuntimeRegistryLease, tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
-import { bindScmActionToSessionWorkspace, isRetainedScmReviewAction } from '@/scm/actions/placement';
+import type { resolveFilesystemAccessPolicy, FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
+import type { resolveCwd } from '@/scm/runtime';
+import type { acquireAuthoritativePluginRuntimeRegistryLease, tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import type { bindScmActionToSessionWorkspace, isRetainedScmReviewAction } from '@/scm/actions/placement';
 import { requiresExplicitScmMachineTarget } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveSocketRpcSessionAuthorization, type SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
 import { hasReceivedWorkflowSessionRoleAuthority, resolveSessionRoleRpcOrigin } from './sessionRoleRpcOrigin';
@@ -193,7 +191,7 @@ import { listPromptInvocationsInLibrary, resolvePromptInvocationInLibrary } from
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { SessionAccessErrorCodeV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { normalizeSessionCreationOrganizationPlacementV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
-import { buildSessionCreationCorrespondence } from '@/session/shared/sessionCreationCorrespondence';
+import type { buildSessionCreationCorrespondence } from '@/session/shared/sessionCreationCorrespondence';
 import { projectDiscussionModelParticipantLaunchV1 } from '@happier-dev/protocol/discussions/modelParticipantLaunch';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { SessionCreationTargetPreparationResultV1Schema, SessionCreationDirectoryApprovalV1Schema,
@@ -220,46 +218,36 @@ import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, RawIngressStructuredInputV1Sc
 import { SessionPendingMessageComposerAdmissionPrepareResponseV1Schema } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { buildUploadedAttachment } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
-import { projectSessionAttachmentInputV1 } from '@/session/attachments/projectRawIngressSessionAttachmentsV1';
+import type { projectSessionAttachmentInputV1 } from '@/session/attachments/projectRawIngressSessionAttachmentsV1';
 import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { freezeWorkflowActionContractV1, readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { resolveActionAgentStartContextV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
-import { requestDaemonSignedRootActionExecution, recordDaemonSkillUse } from '@/daemon/controlClient';
-import { resolveHappierSkillIdentity } from '@/prompts/skills/runtime/resolveHappierSkillIdentity';
-import { doesWorkflowImmediateEligibleStepTargetSession } from '@/daemon/workflows/coordinator';
-import { SpawnSessionTerminalSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
-import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
-import { createStableSpawnNonce } from '@/session/shared/spawnNonce';
-import {
-  AGENT_IDS,
-  DEFAULT_AGENT_ID,
-  parsePermissionIntentAlias,
-  resolvePermissionIntentFromSessionMetadata,
-  resolveCanonicalAgentIdFromFlavor,
-  resolveAgentIdFromSessionMetadata,
-  isBundledAgentId,
-  type AgentId,
-  type PermissionIntent,
-} from '@happier-dev/agents';
+import type { requestDaemonSignedRootActionExecution, recordDaemonSkillUse } from '@/daemon/controlClient';
+import type { resolveHappierSkillIdentity } from '@/prompts/skills/runtime/resolveHappierSkillIdentity';
+import type { doesWorkflowImmediateEligibleStepTargetSession } from '@/daemon/workflows/coordinator';
+import type { SpawnSessionTerminalSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
+import type { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
+import type { createStableSpawnNonce } from '@/session/shared/spawnNonce';
+import type { AGENT_IDS, DEFAULT_AGENT_ID, parsePermissionIntentAlias, resolvePermissionIntentFromSessionMetadata, resolveCanonicalAgentIdFromFlavor, resolveAgentIdFromSessionMetadata, isBundledAgentId, AgentId, PermissionIntent } from '@happier-dev/agents';
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { configuration } from '@/configuration';
 import { resolveServerHttpBaseUrl, normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { AdmittedRequesterSessionBootstrap } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { projectRequesterSessionCredentialDisclosure } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
-import { MachineAdmissionTransportUnavailableError } from '@/daemon/machineAdmissionTransport';
-import { isAuthenticationError } from '@/api/client/httpStatusError';
-import { readSessionCreationTerminalSpawnErrorDetail } from '@/api/session/sessionCreationTerminalSpawnErrorDetail';
-import { readMachineOperationProtocolCapabilitiesV1 } from '@/api/machine/machineOperationProtocolCapabilities';
+import type { MachineAdmissionTransportUnavailableError } from '@/daemon/machineAdmissionTransport';
+import type { isAuthenticationError } from '@/api/client/httpStatusError';
+import type { readSessionCreationTerminalSpawnErrorDetail } from '@/api/session/sessionCreationTerminalSpawnErrorDetail';
+import type { readMachineOperationProtocolCapabilitiesV1 } from '@/api/machine/machineOperationProtocolCapabilities';
 import {
   SessionInitialAccessEnvelopeHostError,
   SessionInitialAccessUpdateRequiredError,
 } from '@/api/session/sessionCreationInitialAccess';
-import { getPreferredHostName } from '@/daemon/machine/metadata';
+import type { getPreferredHostName } from '@/daemon/machine/metadata';
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
 import { createAcknowledgedAccountArtifactTransport, createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
-import { createCliArtifactActions } from './artifactActions';
+import type { createCliArtifactActions } from './artifactActions';
 import { createCliInboxReadAction } from './inboxActions';
 import { createWorkflowDefinitionActions } from './workflowDefinitions';
 import { createCliWorkflowTriggerActions } from './workflowTriggers';
@@ -267,54 +255,43 @@ import { getWorkflowStarterExamplesV1 } from '@happier-dev/protocol/workflows/bu
 import { createRoleActionExecutor, type RoleWorkspaceWritesPolicyPreparer } from './roleActions';
 import { createRoleSourceReader, type RoleSourceReader } from '@/session/roles/roleSources';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
-import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
-import { createWorkflowActionExecutor, normalizeWorkflowActionThrownError } from './workflowActionExecutor';
-import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
-import { createWorkflowRunActionOwner } from './workflowRunActions';
-import { createCommittedInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import type { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
+import type { createWorkflowActionExecutor, normalizeWorkflowActionThrownError } from './workflowActionExecutor';
+import type { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet';
+import type { createWorkflowRunActionOwner } from './workflowRunActions';
+import type { createCommittedInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
 import { createCredentialedWorkflowMaterializationHostV1, projectWorkflowConversationRoleSelection } from './workflowMaterializationHost';
 import { createWorkflowRunStorageClient } from '@/daemon/workflows/workflowRunStorageClient';
-import { createWorkflowInvocationRecoveryObserver, observeWorkflowInvocationRecoveryEvidence, resolveWorkflowSessionConversation } from '@/daemon/workflows/invocationRecoveryObserver';
-import { createWorkflowInvocationRecoveryFactWriter } from '@/daemon/workflows/recovery';
-import { createWorkflowRunPushNotificationClient } from '@/daemon/workflows/production';
-import { createWorkflowRunReviewEntryNotificationHandler } from '@/notifications/activity/dispatchWorkflowRunUpdateNotification';
+import type { createWorkflowInvocationRecoveryObserver, observeWorkflowInvocationRecoveryEvidence, resolveWorkflowSessionConversation } from '@/daemon/workflows/invocationRecoveryObserver';
+import type { createWorkflowInvocationRecoveryFactWriter } from '@/daemon/workflows/recovery';
+import type { createWorkflowRunPushNotificationClient } from '@/daemon/workflows/production';
+import type { createWorkflowRunReviewEntryNotificationHandler } from '@/notifications/activity/dispatchWorkflowRunUpdateNotification';
 import type { WorkflowAccountRunActionDeps } from '@happier-dev/protocol';
-import { getWorkflowRuntimeFeatureDecision } from '@/daemon/automation/workflowFeatureGate';
-import { listCurrentAccountAdministrationMachines, listCurrentAccountMachines, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
+import type { getWorkflowRuntimeFeatureDecision } from '@/daemon/automation/workflowFeatureGate';
+import type { listCurrentAccountAdministrationMachines, listCurrentAccountMachines, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { isMachineRequestReachabilityFailureV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
-import { resolveFilesystemTransferCustodyFailure } from './filesystemTransferCustody';
-import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
-import { prepareWorkflowAcceptedWorkspaceTarget, restoreRecordedWorkflowWorkspace } from '@/daemon/workflows/resolveWorkflowWorkspace';
-import {
-  createAutomationAccountEncryptionMaterialSnapshotV1,
-  resolveValidatedAutomationAccountEncryptionV1,
-} from '@/plugins/runtime/automations/automationAccountCurrentness';
-import { fetchChangesAccountId } from '@/api/changes';
-import { hasStoredSessionCredentialProvenance, readSettings, type StoredCredentials } from '@/persistence';
-import {
-  createSpawnedSession,
-  type DirectSpawnedSessionTransport,
-  type ReplaySeededSessionCreationV1,
-} from '@/session/services/createSpawnedSession';
-import { resolveSessionHandoffSourceAuthority } from '@/session/handoff/resolveSessionHandoffSourceAuthority';
-import { buildReplaySeededSpawnRecipe } from '@/session/replay/buildReplaySeededSpawnRecipe';
-import { resolveReplaySourceContextAuthority } from '@/session/replay/resolveReplaySourceContextAuthority';
-import {
-  type ResolveSpawnConnectedServicesTeamResourceCatalog,
-  mergeSessionTeamCredentialBindingIntents,
-  resolveSessionSpawnConnectedServicesDefaultsPayload,
-} from '@/session/services/spawnConnectedServicesDefaults';
-import { getSessionEvents } from '@/session/services/getSessionEvents';
-import { getSessionTranscript } from '@/session/services/getSessionTranscript';
-import { buildCliSessionAwarenessInputV1 } from '@/cli/output/session/sessionAwareness';
-import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
-import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
-import { getSessionStatus } from '@/session/services/getSessionStatus';
+import type { resolveFilesystemTransferCustodyFailure } from './filesystemTransferCustody';
+import type { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import type { prepareWorkflowAcceptedWorkspaceTarget, restoreRecordedWorkflowWorkspace } from '@/daemon/workflows/resolveWorkflowWorkspace';
+import type { createAutomationAccountEncryptionMaterialSnapshotV1, resolveValidatedAutomationAccountEncryptionV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
+import type { fetchChangesAccountId } from '@/api/changes';
+import type { hasStoredSessionCredentialProvenance, readSettings, StoredCredentials } from '@/persistence';
+import type { createSpawnedSession, DirectSpawnedSessionTransport, ReplaySeededSessionCreationV1 } from '@/session/services/createSpawnedSession';
+import type { resolveSessionHandoffSourceAuthority } from '@/session/handoff/resolveSessionHandoffSourceAuthority';
+import type { buildReplaySeededSpawnRecipe } from '@/session/replay/buildReplaySeededSpawnRecipe';
+import type { resolveReplaySourceContextAuthority } from '@/session/replay/resolveReplaySourceContextAuthority';
+import type { ResolveSpawnConnectedServicesTeamResourceCatalog, mergeSessionTeamCredentialBindingIntents, resolveSessionSpawnConnectedServicesDefaultsPayload } from '@/session/services/spawnConnectedServicesDefaults';
+import type { getSessionEvents } from '@/session/services/getSessionEvents';
+import type { getSessionTranscript } from '@/session/services/getSessionTranscript';
+import type { buildCliSessionAwarenessInputV1 } from '@/cli/output/session/sessionAwareness';
+import type { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import type { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
+import type { getSessionStatus } from '@/session/services/getSessionStatus';
 import { createSessionBoardActionDeps } from '@/session/board/sessionBoardActionDeps';
 import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
-import { resolveWorkflowDiscussionOrigin } from '@/daemon/workflows/workflowDiscussion';
+import type { resolveWorkflowDiscussionOrigin } from '@/daemon/workflows/workflowDiscussion';
 import { createSessionListActionDeps } from './sessionListActionDependency';
-import { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
+import type { resolveCliAgentStartContextV1 } from './resolveCliAgentStartContextV1';
 import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import { createCliBoundSessionMetadataReader, readCliActionBoundSessionId, resolveCliActionCallerSession, resolveCliActionCallerWorkflowTarget } from './resolveCliActionCallerSession';
 import {
@@ -326,11 +303,8 @@ import {
   type ExternalActionHomeBinding,
 } from '@/api/externalActionExecutionAuthorization';
 import { isProjectServiceMoveChildInputV1 } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
-import { requestSessionStop } from '@/session/services/requestSessionStop';
-import {
-  admitPluginSessionInputAttachmentsV1,
-  buildPluginSessionInputAttachmentDraftsV1,
-} from '@/session/composer/admitPluginSessionInputAttachmentsV1';
+import type { requestSessionStop } from '@/session/services/requestSessionStop';
+import type { admitPluginSessionInputAttachmentsV1, buildPluginSessionInputAttachmentDraftsV1 } from '@/session/composer/admitPluginSessionInputAttachmentsV1';
 
 type SessionSpawnNewErrorResult = Extract<SessionSpawnNewResultV1, Readonly<{ type: 'error' }>>;
 
@@ -373,105 +347,68 @@ export function projectSessionInitialAccessEnvelopeHostErrorResult(
   }
 }
 import type { ComposerAttachmentSendPreparationRegistryV1 } from '@/session/composer/prepareComposerAttachmentDraftsForSendV1';
-import { notifyComposerAttachmentsAfterMessageAccepted } from '@/session/composer/notifyComposerAttachmentsAfterMessageAccepted';
-import {
-  sendSessionMessage,
-  waitForSessionInputResult,
-  type SendSessionMessageResult,
-} from '@/session/services/sendSessionMessage';
-import { mutateSessionMessageReplyObservation } from '@/session/services/sessionMessageReply';
+import type { notifyComposerAttachmentsAfterMessageAccepted } from '@/session/composer/notifyComposerAttachmentsAfterMessageAccepted';
+import type { sendSessionMessage, waitForSessionInputResult, SendSessionMessageResult } from '@/session/services/sendSessionMessage';
+import type { mutateSessionMessageReplyObservation } from '@/session/services/sessionMessageReply';
 import { SessionMessageReplyObservationRequestV1Schema, SessionMessageReplyMutationResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
-import { resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
-import { findPersistedSessionUserMessageAdmission } from '@/api/session/client/transcript/sessionUserMessageAdmissionRejoin';
-import { validateComposerAttachmentRejoinCorrespondenceV1 } from '@/session/services/admitSessionStructuredInputV1';
-import {
-  buildCausalSessionInputAdmissionV1,
-  buildSessionSpawnInitialInputAdmissionForLocalIdV1,
-  buildPluginSessionInputAdmissionV1,
-  requiresMachineAdmissionForSessionInput,
-  resolveSessionInputTargetMachineId,
-  resolveProtectedSessionInputActionTarget,
-} from '@/session/services/sessionInputAdmissionIdentity';
-import {
-  indexAgentRoutingIdsByContributionIdentity,
-  readAgentRoutingIdForContributionIdentity,
-} from '@/plugins/projection/registry/agentRoutingIdentity';
-import { resolveSessionCreationAgentTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
-import { projectSessionSpawnFailure } from '@/session/creation/projectSessionSpawnFailure';
-import { setSessionArchivedState } from '@/session/services/setSessionArchivedState';
-import { setSessionModel } from '@/session/services/setSessionModel';
+import type { resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
+import type { findPersistedSessionUserMessageAdmission } from '@/api/session/client/transcript/sessionUserMessageAdmissionRejoin';
+import type { validateComposerAttachmentRejoinCorrespondenceV1 } from '@/session/services/admitSessionStructuredInputV1';
+import type { buildCausalSessionInputAdmissionV1, buildSessionSpawnInitialInputAdmissionForLocalIdV1, buildPluginSessionInputAdmissionV1, requiresMachineAdmissionForSessionInput, resolveSessionInputTargetMachineId, resolveProtectedSessionInputActionTarget } from '@/session/services/sessionInputAdmissionIdentity';
+import type { indexAgentRoutingIdsByContributionIdentity, readAgentRoutingIdForContributionIdentity } from '@/plugins/projection/registry/agentRoutingIdentity';
+import type { resolveSessionCreationAgentTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
+import type { projectSessionSpawnFailure } from '@/session/creation/projectSessionSpawnFailure';
+import type { setSessionArchivedState } from '@/session/services/setSessionArchivedState';
+import type { setSessionModel } from '@/session/services/setSessionModel';
 import { SessionModelTransitionResultV1Schema } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
-import { setSessionMode } from '@/session/services/setSessionMode';
-import { setSessionPermissionMode } from '@/session/services/setSessionPermissionMode';
-import { updateSessionStateFieldForTarget } from '@/session/services/updateSessionStateFieldForTarget';
-import { waitForSessionIdle } from '@/session/services/waitForSessionIdle';
-import { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
+import type { setSessionMode } from '@/session/services/setSessionMode';
+import type { setSessionPermissionMode } from '@/session/services/setSessionPermissionMode';
+import type { updateSessionStateFieldForTarget } from '@/session/services/updateSessionStateFieldForTarget';
+import type { waitForSessionIdle } from '@/session/services/waitForSessionIdle';
+import type { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
 import { SessionResumeRequestV1Schema, type SessionResumeRequestV1 } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { buildSessionRunnerRuntimeRefreshRequestV1, RestartSessionRunnerResultV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRestartV1';
 import { SessionRunnerRuntimeStateV1Schema } from '@happier-dev/protocol/sessions/control/sessionRunnerRuntimeV1';
-import { resolveSessionMachineWorkspacePath } from '@/session/machineControlLocality';
-import {
-  resolveCurrentSessionCapabilityBinding,
-  resolveCurrentSessionUiBinding,
-} from '@/session/presentation/currentSessionUiBindings';
+import type { resolveSessionMachineWorkspacePath } from '@/session/machineControlLocality';
+import { resolveCurrentSessionCapabilityBinding } from '@/session/presentation/currentSessionUiBindings';
+import type { resolveCurrentSessionUiBinding } from '@/session/presentation/currentSessionUiBindings';
 
 import type {
   SessionStoredContentCryptoContext,
 } from '@/session/transport/encryption/sessionStoredContentCodec';
 import type { SessionTransportEncryptionMaterial } from '@/session/transport/encryption/sessionEncryptionContext';
-import {
-  cancelExecutionRunStream,
-  ensureExecutionRun,
-  ensureOrStartExecutionRun,
-  executeExecutionRunAction,
-  getExecutionRun,
-  listExecutionRuns,
-  readExecutionRunStream,
-  startExecutionRun,
-  startExecutionRunStream,
-  stopExecutionRun,
-  waitForExecutionRun,
-} from '@/session/services/executionRuns';
-import { buildPluginInstallApprovalPreview } from '@/plugins/devLoop/installApprovalPreview';
-import { decideUserPluginChange, requestUserPluginChange } from '@/plugins/daemon/changeClient';
+import type { cancelExecutionRunStream, ensureExecutionRun, ensureOrStartExecutionRun, executeExecutionRunAction, getExecutionRun, listExecutionRuns, readExecutionRunStream, startExecutionRun, startExecutionRunStream, stopExecutionRun, waitForExecutionRun } from '@/session/services/executionRuns';
+import type { buildPluginInstallApprovalPreview } from '@/plugins/devLoop/installApprovalPreview';
+import type { decideUserPluginChange, requestUserPluginChange } from '@/plugins/daemon/changeClient';
 import type { DaemonPluginChangeService } from '@/plugins/daemon/changeService';
 import { readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/actions/actionApprovalPresentation';
-import {
-  normalizeExecutionRunWaitTimeoutMs,
-} from '@/session/services/executionRunWaitTiming';
-import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import type { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/executionRunWaitTiming';
+import type { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { readSessionOwnerLocality, tryDecryptSessionMetadata, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
-import { updateSessionMetadataForTarget } from '@/session/services/updateSessionMetadataForTarget';
-import { fetchSessionById, fetchSessionByIdCompat, fetchSessionTurnsProjection, fetchSessionsQueryPage, setSessionAttentionStanding, setSessionOrganizationPin, setSessionManager, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
+import type { updateSessionMetadataForTarget } from '@/session/services/updateSessionMetadataForTarget';
+import type { fetchSessionById, fetchSessionByIdCompat, fetchSessionTurnsProjection, fetchSessionsQueryPage, setSessionAttentionStanding, setSessionOrganizationPin, setSessionManager, RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from '@/providers/settings/catalogStore';
-import { refreshActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
+import type { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from '@/providers/settings/catalogStore';
+import type { refreshActiveProviderConnectionsCatalog } from '@/providers/settings/hydrate';
 import { revokeMachineWithProviderCleanup } from '@happier-dev/protocol/machines/account/revokeWithProviderCleanup';
-import { callSessionRpc, resolveSessionRpcContent } from '@/session/transport/rpc/sessionRpc';
-import { readRuntimeAuthUsageLimitRecoveryAttemptId } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
-import {
-  callExactMachineRpc,
-  callMachineRpc,
-  dispatchRequesterSessionSpawnNewRpc,
-  readMachineRpcRequestDisposition,
-} from '@/session/transport/rpc/machineRpc';
-import { resolveLiveDaemonControlTargetForServer } from '@/daemon/multiDaemon';
+import type { callSessionRpc, resolveSessionRpcContent } from '@/session/transport/rpc/sessionRpc';
+import type { readRuntimeAuthUsageLimitRecoveryAttemptId } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
+import type { callExactMachineRpc, callMachineRpc, dispatchRequesterSessionSpawnNewRpc, readMachineRpcRequestDisposition } from '@/session/transport/rpc/machineRpc';
+import type { resolveLiveDaemonControlTargetForServer } from '@/daemon/multiDaemon';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError, isRpcMethodNotFoundResult, RPC_ERROR_CODES, readRpcErrorCode, RpcError } from '@happier-dev/protocol/rpcErrors';
 import { readExecutionRunProtocolV2Support, type ExecutionRunCapabilityObservation } from '@happier-dev/protocol/execution/runs/protocolSupport';
-import { routeSessionCatalogControl } from '@/session/catalogControls/sessionCatalogControlRouter';
-import { routeSessionGoalControl } from '@/session/goalControls/sessionGoalControlRouter';
-import {
-  normalizeUsageLimitRecoveryOperationResult,
-} from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult';
-import { executePluginDevLoopAction } from '@/plugins/devLoop/actions';
-import { executePluginSettingsAdministrationAction } from '@/plugins/settings/administration';
-import { getSessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
-import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
+import type { routeSessionCatalogControl } from '@/session/catalogControls/sessionCatalogControlRouter';
+import type { routeSessionGoalControl } from '@/session/goalControls/sessionGoalControlRouter';
+import type { normalizeUsageLimitRecoveryOperationResult } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult';
+import type { executePluginDevLoopAction } from '@/plugins/devLoop/actions';
+import type { executePluginSettingsAdministrationAction } from '@/plugins/settings/administration';
+import type { getSessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
+import type { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import { createCliActionInventoryDeps } from './cliActionDeps/createCliActionInventoryDeps';
 import {
   readSessionAgentState,
@@ -481,13 +418,10 @@ import {
   hostSubagentStore,
   type HostSubagentActor,
 } from '@/session/subagents/hostSubagentStore';
-import {
-  resolveUsageLimitRecoveryEnabled,
-  usageLimitRecoveryDisabledResult,
-} from '@/features/usageLimitRecoveryFeatureGate';
-import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
-import { createCliRegistryUpdateCheck } from '@/registries/updates/createCliRegistryUpdateCheck';
-import { createMarketplaceIndexService } from '@/plugins/store/marketplace/service';
+import type { resolveUsageLimitRecoveryEnabled, usageLimitRecoveryDisabledResult } from '@/features/usageLimitRecoveryFeatureGate';
+import type { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
+import type { createCliRegistryUpdateCheck } from '@/registries/updates/createCliRegistryUpdateCheck';
+import type { createMarketplaceIndexService } from '@/plugins/store/marketplace/service';
 import { createPluginPermissionGrantActionExecutor } from '@/plugins/runtime/lifecycle/permissions/pluginPermissionGrantActionExecutor';
 import { createPluginWebhookActionExecutor } from '@/plugins/runtime/webhooks/pluginWebhookActionExecutor';
 import { createAutomationConversationActionExecutor } from '@/plugins/runtime/automations/automationConversationActionExecutor';
@@ -499,44 +433,43 @@ import type {
   RevalidatePluginActionCallerOccurrence,
   RevalidatePluginActionCallerMaterialization,
 } from '@/plugins/runtime/invocation/services/actionCaller';
-import { executeScmActionOperation } from '@/scm/actions/executeScmActionOperation';
-import { sendFileReviewNoteToSession } from '@/session/services/sendFileReviewNote';
-import { createCliScmReviewedMarkAction } from '@/scm/actions/executeScmReviewedMarkAction';
-import { executeScmDiffSummaryAction } from '@/scm/actions/executeScmDiffSummaryAction';
-import { createRepositoryCheckpointTranscriptPageReader } from '@/scm/checkpoints/readRepositoryCheckpointTranscriptPage';
+import type { executeScmActionOperation } from '@/scm/actions/executeScmActionOperation';
+import type { sendFileReviewNoteToSession } from '@/session/services/sendFileReviewNote';
+import type { createCliScmReviewedMarkAction } from '@/scm/actions/executeScmReviewedMarkAction';
+import type { executeScmDiffSummaryAction } from '@/scm/actions/executeScmDiffSummaryAction';
+import type { createRepositoryCheckpointTranscriptPageReader } from '@/scm/checkpoints/readRepositoryCheckpointTranscriptPage';
 import type { ReadPullRequestComparisonPage } from '@/scm/comparisons/readPullRequestComparisonPage';
 import { createCliReviewCommentActionExecutorFromCredentials } from '@/agent/reviews/comments/executor';
-import { executePluginExternalSessionAction } from './externalSessions/pluginExternalSessionActionExecutor';
+import type { executePluginExternalSessionAction } from './externalSessions/pluginExternalSessionActionExecutor';
 import { createHostExternalSessionActionTransport } from './externalSessions/hostExternalSessionActionTransport';
 import type {
   ExternalSessionPluginAdmissionOwner,
 } from './externalSessions/pluginExternalSessionAdmissionOwner';
-import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { fetchAccountProfile } from '@/api/accountProfile';
+import type { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import type { fetchAccountProfile } from '@/api/accountProfile';
 import { readSessionOperationCredentialReadinessV1 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
 import { resolveMachineRpcRoutePolicy } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import { TeamCredentialResourceEntitledPageV1Schema, type TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
-import { PushNotificationClient } from '@/api/pushNotifications';
-import { dispatchActivityNotificationAsync, listActivityNotificationChannels,
-  NotificationChannelCatalogUnavailableError } from '@/notifications/activity/dispatchActivityNotification';
-import { hydrateNotificationChannelCatalogForActiveAccount, hydrateNotificationChannelCatalogForOperation } from '@/settings/notifications/hydrateNotificationChannelCatalog';
-import { createSavedSecretMaterializerFromSnapshotV1, SavedSecretResolutionError } from '@/settings/secrets/savedSecretCatalog';
+import type { PushNotificationClient } from '@/api/pushNotifications';
+import type { dispatchActivityNotificationAsync, listActivityNotificationChannels, NotificationChannelCatalogUnavailableError } from '@/notifications/activity/dispatchActivityNotification';
+import type { hydrateNotificationChannelCatalogForActiveAccount, hydrateNotificationChannelCatalogForOperation } from '@/settings/notifications/hydrateNotificationChannelCatalog';
+import type { createSavedSecretMaterializerFromSnapshotV1, SavedSecretResolutionError } from '@/settings/secrets/savedSecretCatalog';
 import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
 import { createActionSettingsProvider, type RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent, readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { readPreparedAccountRoleOverrides, type SessionRoleContext } from '@/session/roles/sessionRoleContext';
-import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
-import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
-import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
-import { prepareActiveAccountRoleOverrides } from '@/settings/prompts/hydratePromptLibraryCatalog';
-import { runWithRequesterSessionCurrentnessCheckpoint, runWithoutRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';
+import type { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import type { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
+import type { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
+import type { prepareActiveAccountRoleOverrides } from '@/settings/prompts/hydratePromptLibraryCatalog';
+import type { runWithRequesterSessionCurrentnessCheckpoint, runWithoutRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { resolveWorkspaceRefById } from '@/workspaces/workspaceRefsV1';
+import type { resolveWorkspaceRefById } from '@/workspaces/workspaceRefsV1';
 import { projectWorkspaceRefV1, resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
-import { isServerFeaturesProbeRetryable, type CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
-import { createCliAcpCatalogStore } from '@/agent/acp/catalog/acpCatalogStore';
+import type { isServerFeaturesProbeRetryable, CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import type { createCliAcpCatalogStore } from '@/agent/acp/catalog/acpCatalogStore';
 
 /**
  * Projects the low-level send wrapper onto the one public Action result.
@@ -765,6 +698,7 @@ async function resolveSpawnConnectedServicesDefaultPayload(params: Readonly<{
   if (params.backendTarget.sourceKind !== 'built_in') return null;
   // ONE defaulting owner (QA2-F02): session spawn and execution-run start resolve defaults
   // through the same fresh-bootstrap owner; no local settings-snapshot path.
+  const { resolveSessionSpawnConnectedServicesDefaultsPayload } = await import("@/session/services/spawnConnectedServicesDefaults");
   return await resolveSessionSpawnConnectedServicesDefaultsPayload({
     agentId: params.backendTarget.backendId,
     credentials: params.credentials,
@@ -968,7 +902,10 @@ export function createCliActionDeps(params: Readonly<{
   const roleAccountLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const readNotificationContext = async (signal?: AbortSignal) => {
     const credentials = params.credentials;
-    if (!credentials) throw new NotificationChannelCatalogUnavailableError('unauthorized');
+    if (!credentials) {
+      const { NotificationChannelCatalogUnavailableError } = await import("@/notifications/activity/dispatchActivityNotification");
+      throw new NotificationChannelCatalogUnavailableError('unauthorized');
+    }
     const operation = params.savedSecretOperationContext;
     const home = operation?.serverHttpBaseUrl ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
     const scopeKey = runWithServerHttpBaseUrl(home, () => resolveAccountSettingsScopeKeyForToken(credentials.token));
@@ -980,28 +917,44 @@ export function createCliActionDeps(params: Readonly<{
       && (!params.isCredentialCurrent || await params.isCredentialCurrent());
     const assertCurrent = async () => {
       signal?.throwIfAborted();
-      if (!await isCurrent()) throw new NotificationChannelCatalogUnavailableError('scope-retired');
+      if (!await isCurrent()) {
+        const { NotificationChannelCatalogUnavailableError } = await import("@/notifications/activity/dispatchActivityNotification");
+        throw new NotificationChannelCatalogUnavailableError('scope-retired');
+      }
     };
     await assertCurrent();
     let snapshot = readSnapshot();
-    if (!snapshot) throw new NotificationChannelCatalogUnavailableError('scope-retired');
+    if (!snapshot) {
+      const { NotificationChannelCatalogUnavailableError } = await import("@/notifications/activity/dispatchActivityNotification");
+      throw new NotificationChannelCatalogUnavailableError('scope-retired');
+    }
     if (!snapshot.notificationChannelCatalog || snapshot.notificationChannelCatalog.status === 'loading') {
       if (operation) {
+        const { hydrateNotificationChannelCatalogForOperation } = await import("@/settings/notifications/hydrateNotificationChannelCatalog");
         const catalog = await hydrateNotificationChannelCatalogForOperation({ operationContext: operation, signal, assertCurrent });
-        if (catalog.status === 'unavailable' && catalog.reason === 'scope-retired') throw new NotificationChannelCatalogUnavailableError('scope-retired');
+        if (catalog.status === 'unavailable' && catalog.reason === 'scope-retired') {
+          const { NotificationChannelCatalogUnavailableError } = await import("@/notifications/activity/dispatchActivityNotification");
+          throw new NotificationChannelCatalogUnavailableError('scope-retired');
+        }
       } else {
+        const { hydrateNotificationChannelCatalogForActiveAccount } = await import("@/settings/notifications/hydrateNotificationChannelCatalog");
         await runWithServerHttpBaseUrl(home, () => hydrateNotificationChannelCatalogForActiveAccount({ credentials, scopeKey, lifetimeToken, signal }));
       }
       await assertCurrent();
       snapshot = readSnapshot();
     }
-    if (!snapshot) throw new NotificationChannelCatalogUnavailableError('scope-retired');
+    if (!snapshot) {
+      const { NotificationChannelCatalogUnavailableError } = await import("@/notifications/activity/dispatchActivityNotification");
+      throw new NotificationChannelCatalogUnavailableError('scope-retired');
+    }
     const captured = snapshot;
+    const { createSavedSecretMaterializerFromSnapshotV1 } = await import("@/settings/secrets/savedSecretCatalog");
     return { settings: captured.settings, notificationChannelCatalog: captured.notificationChannelCatalog ?? { status: 'loading' as const },
       savedSecretMaterializer: createSavedSecretMaterializerFromSnapshotV1(captured,
         operation ? { isCurrent: () => operation.readSnapshot() === captured } : undefined), isCurrent };
   };
-  const notificationFailure = (error: unknown) => {
+  const notificationFailure = async (error: unknown) => {
+    const [{ NotificationChannelCatalogUnavailableError }, { SavedSecretResolutionError }] = await Promise.all([import("@/notifications/activity/dispatchActivityNotification"), import("@/settings/secrets/savedSecretCatalog")]);
     if (error instanceof NotificationChannelCatalogUnavailableError) return { ok: false as const,
       errorCode: error.code, error: 'Notification channel catalog is unavailable', details: { reason: error.reason } };
     if (error instanceof SavedSecretResolutionError) return { ok: false as const,
@@ -1020,9 +973,11 @@ export function createCliActionDeps(params: Readonly<{
   };
   const prepareAccountRoleOverrides = async (signal?: AbortSignal): Promise<void> => {
     const sessionRoles = params.getSessionRoleContext?.();
+    const { runWithoutRequesterSessionCurrentnessCheckpoint } = await import("@/daemon/sessionEncryption/requesterCurrentness");
     if (sessionRoles) { await runWithoutRequesterSessionCurrentnessCheckpoint(() => sessionRoles.prepare(signal, true)); return; }
     const credentials = params.credentials;
     if (!credentials) return;
+    const { prepareActiveAccountRoleOverrides } = await import("@/settings/prompts/hydratePromptLibraryCatalog");
     const prepare = () => prepareActiveAccountRoleOverrides({ credentials,
       scopeKey: roleAccountScopeKey, lifetimeToken: roleAccountLifetimeToken, signal,
       operationContext: params.savedSecretOperationContext });
@@ -1045,10 +1000,14 @@ export function createCliActionDeps(params: Readonly<{
     await params.resolveServerFeaturesSnapshot?.();
   const projectHomeId = params.serverId ?? configuration.activeServerId;
   const actionHomeId = params.serverIdentityId ?? projectHomeId;
-  const resolveProjectHomeIdentity = async () => await resolveServerProfileHomeIdentityId(projectHomeId) ?? actionHomeId;
+  const resolveProjectHomeIdentity = async () => {
+    const { resolveServerProfileHomeIdentityId } = await import("@/server/serverProfiles");
+    return await resolveServerProfileHomeIdentityId(projectHomeId) ?? actionHomeId;
+  };
   const isSameActionHomeId = (serverId: string) => areServerProfileIdentifiersEquivalent(actionHomeId, serverId, identifier =>
     identifier === projectHomeId || identifier === params.serverIdentityId ? params.serverIdentityId : undefined);
   const projectHomeAdmission = async (serverId?: string, context?: ActionExecutorContext) => {
+    const { isServerProfileHomeIdentity } = await import("@/server/serverProfiles");
     if ((serverId !== undefined && !await isServerProfileHomeIdentity(projectHomeId, serverId.trim()))
       || (context?.serverId && !await isServerProfileHomeIdentity(projectHomeId, context.serverId))
       || (params.serverId === undefined && configuration.activeServerId !== projectHomeId)) {
@@ -1105,6 +1064,7 @@ export function createCliActionDeps(params: Readonly<{
     context?.signal?.throwIfAborted();
   };
   const readProjectRows = async (signal?: AbortSignal, context?: ActionExecutorContext, effectActionId?: string) => {
+    const { readProjectAccountRows } = await import("@/workspaces/projectAccountRows");
     return await withProjectHome(() => readProjectAccountRows(projectRowsAuthority(context, effectActionId, signal)));
   };
   const readProjectRequesterArtifact = async (ref: Parameters<NonNullable<ExternalActionExecutionAuthorizationV1['requesterAccountProjection']>['readArtifact']>[0],
@@ -1148,6 +1108,7 @@ export function createCliActionDeps(params: Readonly<{
     if (!params.credentials) return { kind: 'waiting', reason: 'runner_unreachable', cause: 'credentials_unavailable' };
     if (!input.context) return { kind: 'waiting', reason: 'runner_unreachable', cause: 'action_context_unavailable' };
     try {
+      const { createSessionFollowSourceKeyPreparationAfterSet } = await import("@/agent/runtime/session/follow/createSessionFollowSourceKeyPreparationAfterSet");
       return await createSessionFollowSourceKeyPreparationAfterSet({
         credentials: params.credentials,
         effectActionId: input.effectActionId,
@@ -1186,6 +1147,7 @@ export function createCliActionDeps(params: Readonly<{
       }
       return captured.rawSettings;
     }
+    const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
     const current = await bootstrapAccountSettingsContext({ credentials: params.credentials!, mode: 'blocking',
       ...(params.savedSecretOperationContext ? { publication: 'invocation' as const, refresh: 'force' as const, honorAccountSettingsModeEnv: false } : {}),
       ...(options?.requireCurrentNetwork ? { refresh: 'force', publication: 'invocation', honorAccountSettingsModeEnv: false } as const : {}) });
@@ -1203,6 +1165,7 @@ export function createCliActionDeps(params: Readonly<{
       return unavailable('requester_authority');
     }
     return await runWithServerHttpBaseUrl(machineReferenceServerUrl, async () => {
+      const [{ buildCurrentAccountStoredContentCompatibilityHttpHeaders }, { listAutomationDefinitions }] = await Promise.all([import("@/api/clientCompatibility/cliClientCompatibility"), import("@/api/automations")]);
       const headers = { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${params.credentials!.token}` };
       let machine: ReturnType<typeof ManagedGetOutputV1Schema.parse>;
       try {
@@ -1228,6 +1191,7 @@ export function createCliActionDeps(params: Readonly<{
         } },
         readSettings: async () => {
           await readRawRoleSettings();
+          const { createCliProfileStoreForOperation, createCliProfileStore } = await import("@/settings/profiles/profileStore");
           profileStore = params.savedSecretOperationContext
             ? createCliProfileStoreForOperation({ operationContext: params.savedSecretOperationContext, signal })
             : createCliProfileStore({ credentials: params.credentials!, signal });
@@ -1256,6 +1220,7 @@ export function createCliActionDeps(params: Readonly<{
       ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => sourceReader(signal, options)) : sourceReader(signal, options);
     // The built-in reader only lists/reads artifacts and, for this private
     // Account, reads captured Settings. Injected readers retain their own scope.
+    const { runWithRequesterSessionCurrentnessCheckpoint, runWithoutRequesterSessionCurrentnessCheckpoint } = await import("@/daemon/sessionEncryption/requesterCurrentness");
     const sources = await (params.savedSecretOperationContext && !params.readRoleSources
       ? runWithRequesterSessionCurrentnessCheckpoint(read, { readOnly: true })
       : runWithoutRequesterSessionCurrentnessCheckpoint(read));
@@ -1269,6 +1234,7 @@ export function createCliActionDeps(params: Readonly<{
     context, credentials: params.credentials, boundSessionId: params.sessionId, resolveTransportForSession,
     readBoundSession: async () => {
       const metadata = await readCurrentSessionMetadata(context.signal);
+      const { resolveBackendTargetFromSessionMetadata } = await import("@/session/backendTargets/resolveBackendTargetFromSessionMetadata");
       return { metadata, workDepth: params.getCurrentSessionWorkDepth?.() ?? params.rawSession?.workDepth,
         backendTarget: params.getCurrentSessionBackendTarget?.() ?? resolveBackendTargetFromSessionMetadata(metadata),
         machineId: await resolveCurrentSessionValue('machineId', context.signal), directory: await resolveCurrentSessionValue('path', context.signal) };
@@ -1327,6 +1293,7 @@ export function createCliActionDeps(params: Readonly<{
     let starterDepth: unknown = admittedCaller?.success ? admittedCaller.data.starterDepth : session.workDepth;
     if (starterDepth === undefined && !runCaller) {
       try {
+        const { fetchSessionById } = await import("@/session/transport/http/sessionsHttp");
         const persisted = await fetchSessionById({ token: params.token, sessionId: session.sessionId });
         if (persisted && 'workDepth' in persisted) starterDepth = persisted.workDepth;
       } catch { return refuse('caller_depth_unavailable'); }
@@ -1349,13 +1316,17 @@ export function createCliActionDeps(params: Readonly<{
       const roleSources = scopeOnly ? undefined
         : await measureActionStartPhaseV1(context, 'role_sources', () => readRoleSources(context.signal));
       const settings = scopeOnly ? null : await measureActionStartPhaseV1(context, 'account_settings', async () =>
-        requiresBoundStartPolicy ? await (params.readAgentStartPolicy
+        {
+        const [{ readCurrentRunnerAgentStartPolicyV1 }, { runWithoutRequesterSessionCurrentnessCheckpoint }, { bootstrapAccountSettingsContext }] = await Promise.all([import("@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient"), import("@/daemon/sessionEncryption/requesterCurrentness"), import("@/settings/accountSettings/bootstrapAccountSettingsContext")]);
+        return requiresBoundStartPolicy ? await (params.readAgentStartPolicy
           ? params.readAgentStartPolicy(context.signal) : readCurrentRunnerAgentStartPolicyV1(session.sessionId, context.signal))
         : params.actionsSettingsProvider?.getAccountSettings?.()
         ?? (params.credentials ? (await runWithoutRequesterSessionCurrentnessCheckpoint(() =>
-          bootstrapAccountSettingsContext({ credentials: params.credentials!, mode: 'blocking' }))).settings : null));
+          bootstrapAccountSettingsContext({ credentials: params.credentials!, mode: 'blocking' }))).settings : null);
+      });
       let appliedChildSelection: import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelection | undefined;
       if (!scopeOnly && session.sessionId === params.sessionId && params.getCurrentAppliedChildSelection) {
+        const { runWithoutRequesterSessionCurrentnessCheckpoint } = await import("@/daemon/sessionEncryption/requesterCurrentness");
         try { appliedChildSelection = await runWithoutRequesterSessionCurrentnessCheckpoint(async () => params.getCurrentAppliedChildSelection!()); }
         catch { appliedChildSelection = { status: 'unavailable' }; }
       }
@@ -1366,6 +1337,7 @@ export function createCliActionDeps(params: Readonly<{
     // Built-in Role/Artifact, captured Settings and ACP reads join one bounded
     // observation. Their owners exclude migrations, source/history maintenance
     // and private publication; injected preparation above also leaves the scope.
+    const [{ runWithRequesterSessionCurrentnessCheckpoint }, { resolveCliAgentStartContextV1 }] = await Promise.all([import("@/daemon/sessionEncryption/requesterCurrentness"), import("./resolveCliAgentStartContextV1")]);
     const { roleSources, settings, appliedChildSelection, availableAgents } = await (params.savedSecretOperationContext && !scopeOnly
       ? runWithRequesterSessionCurrentnessCheckpoint(prepareStartReads, { readOnly: true }) : prepareStartReads());
     context.signal?.throwIfAborted();
@@ -1395,19 +1367,27 @@ export function createCliActionDeps(params: Readonly<{
     operationContext: params.savedSecretOperationContext }) : null;
   const pluginChangeService = params.pluginChangeService;
   const pluginChangeServices = pluginChangeService ? {
-    requestUserPluginChange: (input: Parameters<typeof requestUserPluginChange>[0]) => requestUserPluginChange(input, {
+    requestUserPluginChange: async (input: Parameters<typeof requestUserPluginChange>[0]) => {
+      const { requestUserPluginChange } = await import("@/plugins/daemon/changeClient");
+      return requestUserPluginChange(input, {
       ensureDaemon: async () => undefined,
       requestChange: pluginChangeService.requestPluginChange,
       decideChange: pluginChangeService.decidePluginChange,
-    }),
-    decideUserPluginChange: (input: Parameters<typeof decideUserPluginChange>[0]) => decideUserPluginChange(input, {
+    });
+    },
+    decideUserPluginChange: async (input: Parameters<typeof decideUserPluginChange>[0]) => {
+      const { decideUserPluginChange } = await import("@/plugins/daemon/changeClient");
+      return decideUserPluginChange(input, {
       ensureDaemon: async () => undefined,
       readStatus: pluginChangeService.statusPluginChange,
       decideChange: pluginChangeService.decidePluginChange,
-    }),
+    });
+    },
   } : {};
   const pluginInstallApprovalChangeServices = pluginChangeService ? {
-    requestUserPluginChange: (input: Parameters<typeof requestUserPluginChange>[0]) => requestUserPluginChange(input, {
+    requestUserPluginChange: async (input: Parameters<typeof requestUserPluginChange>[0]) => {
+      const { requestUserPluginChange } = await import("@/plugins/daemon/changeClient");
+      return requestUserPluginChange(input, {
       ensureDaemon: async () => undefined,
       // The Action's ordinary approval remains authoritative even when this
       // exact source is already trusted by the daemon's install policy.
@@ -1415,12 +1395,14 @@ export function createCliActionDeps(params: Readonly<{
         options?: Parameters<DaemonPluginChangeService['requestPluginChange']>[1]) =>
         pluginChangeService.requestPluginChange(request, { ...options, retainReview: true }),
       decideChange: pluginChangeService.decidePluginChange,
-    }),
+    });
+    },
   } : {};
   const cancelRetainedPluginInstallReview = async (request: unknown): Promise<void> => {
     const pending = readPluginInstallApprovalPendingReview(readRecord(request).preview);
     if (!pending) return;
     try {
+      const { decideUserPluginChange } = await import("@/plugins/daemon/changeClient");
       await (pluginChangeServices.decideUserPluginChange ?? decideUserPluginChange)({ pendingChangeId: pending.pendingChangeId, decision: 'reject' });
     } catch {
       // The daemon owns expiry. Artifact persistence remains authoritative even
@@ -1440,6 +1422,7 @@ export function createCliActionDeps(params: Readonly<{
   const executeSkillAction = async ({ actionId, input, context }: Parameters<NonNullable<ActionExecutorDeps['skillActionExecute']>>[0]) => {
       if (!approvalsStore || !params.credentials) return notSupported();
       const readFoundSkillBundle: NonNullable<Parameters<typeof createSkillActionExecuteV1>[0]['readFoundSkillBundle']> = async (machineId, path, signal) => {
+        const [{ isServerProfileHomeIdentity }, { createFoundSkillBundleReader }] = await Promise.all([import("@/server/serverProfiles"), import("@/cli/actions/foundSkillBundleReader")]);
         const localHome = await isServerProfileHomeIdentity(params.serverId ?? configuration.activeServerId, configuration.activeServerId);
         const localMachine = localHome ? await readCurrentMachineControlIdentity() : null;
         return createFoundSkillBundleReader({ machineId: localMachine?.machineId ?? null,
@@ -1451,6 +1434,7 @@ export function createCliActionDeps(params: Readonly<{
           }),
         })(machineId, path, signal);
       };
+      const { createCliRegistryHostV1 } = await import("@/registries/createCliRegistryHost");
       const registry = createCliRegistryHostV1({ credentials: params.credentials, port: approvalsStore.promptLibraryStore.organization, signal: context.signal,
         operationContext: params.savedSecretOperationContext });
       const execute = createSkillActionExecuteV1({ store: approvalsStore.promptLibraryStore, skillRules: approvalsStore.skillRules, randomId: randomUUID, readFoundSkillBundle, readPluginSkills: approvalsStore.readPluginSkills,
@@ -1476,6 +1460,7 @@ export function createCliActionDeps(params: Readonly<{
     const credentials = params.credentials;
     if (!credentials) return null;
     const read = async () => {
+      const { createCliPromptLibraryStore } = await import("@/settings/prompts/promptLibraryStore");
       const store = createCliPromptLibraryStore({ credentials, signal });
       const catalog = await store.readPromptLibraryCatalog();
       const absent = (catalog.status === 'ready' || catalog.status === 'partial')
@@ -1491,7 +1476,8 @@ export function createCliActionDeps(params: Readonly<{
     try { return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, read) : read()); }
     catch { signal?.throwIfAborted(); return null; }
   };
-  const resolveSessionAgentIdentity = (metadata: Record<string, unknown> | null | undefined, backendTarget?: BackendTargetRefV2 | null) => {
+  const resolveSessionAgentIdentity = async (metadata: Record<string, unknown> | null | undefined, backendTarget?: BackendTargetRefV2 | null) => {
+    const [{ resolveAgentIdFromSessionMetadata, isBundledAgentId }, { readAgentCatalogSnapshot }] = await Promise.all([import("@happier-dev/agents"), import("@/agent/catalog/snapshot")]);
     const agentId = backendTarget?.sourceKind === 'built_in'
       ? backendTarget.backendId : resolveAgentIdFromSessionMetadata(metadata);
     return agentId ? (backendTarget?.sourceKind === 'built_in' && isBundledAgentId(agentId) ? BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[agentId]
@@ -1618,7 +1604,8 @@ export function createCliActionDeps(params: Readonly<{
             nativeGoalOwner = result.nativeGoalOwner;
           }
         }
-        const identity = resolveSessionAgentIdentity(metadata, resolveBackendTargetFromSessionMetadata(metadata));
+        const { resolveBackendTargetFromSessionMetadata } = await import("@/session/backendTargets/resolveBackendTargetFromSessionMetadata");
+        const identity = await resolveSessionAgentIdentity(metadata, resolveBackendTargetFromSessionMetadata(metadata));
         const selection = identity ? WorkflowStepExecutionSelectionSchema.safeParse({
           agentTarget: { kind: 'agent', identity }, ...(metadata?.permissionMode ? { permissionMode: metadata.permissionMode } : {}),
         }) : null;
@@ -1651,6 +1638,7 @@ export function createCliActionDeps(params: Readonly<{
           if (!transport.ok || readExecutionRunTransportMachineId(transport) !== source.machineId) {
             throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
           }
+          const { getExecutionRun } = await import("@/session/services/executionRuns");
           const observed = await getExecutionRun({ ...transport, token: params.token, sessionId: transport.sessionId,
             request: { runId: source.runId }, ...(caller?.signal ? { signal: caller.signal } : {}) });
           if (!observed.ok) throw Object.assign(new Error('source_unavailable'), { code: 'source_unavailable' });
@@ -1730,6 +1718,7 @@ export function createCliActionDeps(params: Readonly<{
     context?: ActionExecutorContext;
     signal?: AbortSignal;
   }>): Promise<boolean> => {
+    const [{ isServerProfileHomeIdentity }, { createCurrentMachineExecutionOriginContextResolver }] = await Promise.all([import("@/server/serverProfiles"), import("@/api/machine/resolveCurrentMachineExecutionOriginContext")]);
     if (!input.serverId || await isServerProfileHomeIdentity(params.serverId ?? configuration.activeServerId, input.serverId)) return true;
     const context = input.context;
     // Exact daemon replay retains the creator's profile label in its signed
@@ -1801,6 +1790,7 @@ export function createCliActionDeps(params: Readonly<{
     }
     // Opened requester custody is host-private. Sending it back through a
     // serialized self-RPC drops its private readers; spend it at this installed owner.
+    const [{ readRequesterAccountActionContext }, { callExactMachineRpc, callMachineRpc }] = await Promise.all([import("@/daemon/sessionEncryption/requesterAccountActionContext"), import("@/session/transport/rpc/machineRpc")]);
     const requester = readRequesterAccountActionContext(input.context?.externalActionExecutionAuthorization);
     const admittedLocalRequester = requester?.authorization.binding.machineId === input.machineId;
     // Session-scoped SCM evidence needs verified ingress. This local adapter
@@ -1915,6 +1905,7 @@ export function createCliActionDeps(params: Readonly<{
         answeringAccountWidgetMachines.delete(key);
       }
     }
+    const { listCurrentAccountAdministrationMachines } = await import("@/api/machine/resolveCurrentAccountMachineTarget");
     const candidates = await listCurrentAccountAdministrationMachines({ token: params.token,
       ...(params.serverHttpBaseUrl ? { serverHttpBaseUrl: params.serverHttpBaseUrl } : {}),
       ...(signal ? { signal } : {}), ...(requiredPluginId ? { requiredPluginId } : {}),
@@ -1953,6 +1944,7 @@ export function createCliActionDeps(params: Readonly<{
   };
   const readWidgetCandidates = async (signal?: AbortSignal, sessionRef?: Readonly<{ serverId: string; sessionId: string }>, requiredPluginId?: string) => {
     const projection = await readWidgetProjection(signal, sessionRef, requiredPluginId);
+    const { readCliWidgetCatalogProjectionV1 } = await import("./widgetCatalogProjection");
     return projection ? readCliWidgetCatalogProjectionV1(projection)
       : BUILTIN_WIDGET_DESCRIPTORS_V1.map(candidate => ({ ...candidate, fields: candidate.inputs?.fields ?? [], connectedAccountPurposeBindings: [] }));
   };
@@ -2013,6 +2005,7 @@ export function createCliActionDeps(params: Readonly<{
       readHostActionContract: async (actionId, target) => {
         const action = await readCompleteActionSpecV1({ actionId, ...(target.signal ? { signal: target.signal } : {}),
           read: async input => {
+            const { requestDaemonSignedRootActionExecution } = await import("@/daemon/controlClient");
             const result = await requestDaemonSignedRootActionExecution({ actionId: 'action.spec.get', input,
               target: { kind: 'machine', machineId: target.machineId, project: { machineId: target.machineId, directory: target.directory } },
             }, target.signal ? { signal: target.signal } : {});
@@ -2042,6 +2035,7 @@ export function createCliActionDeps(params: Readonly<{
     const relationships = current.relationships;
     const relationship = input.relationshipId ? relationships.find(entry => entry.relationshipId === input.relationshipId) : undefined;
     const selectedRefId = input.workspaceRefId ?? relationship?.alphaWorkspaceRefId;
+    const { resolveWorkspaceRefById } = await import("@/workspaces/workspaceRefsV1");
     const selectedRef = selectedRefId ? resolveWorkspaceRefById(workspaceRefs, selectedRefId, params.serverIdentityId ?? projectHomeId)
       ?? resolveWorkspaceRefById(workspaceRefs, selectedRefId) : null;
     const currentServerId = selectedRef?.serverId ?? params.serverIdentityId ?? projectHomeId;
@@ -2087,7 +2081,7 @@ export function createCliActionDeps(params: Readonly<{
     // The live Session client is the canonical current Agent authority for the
     // hosting Session. The synced Session record is a fallback for a field the
     // live context does not supply, never an unconditional prerequisite.
-    const agentIdentity = resolveSessionAgentIdentity(session.metadata, session.backendTarget);
+    const agentIdentity = await resolveSessionAgentIdentity(session.metadata, session.backendTarget);
     const { machineId, directory } = session;
     return WorkflowIngressContextV1Schema.parse({
       ...(agentIdentity ? { agentTarget: { kind: 'agent', identity: agentIdentity } } : {}),
@@ -2114,6 +2108,7 @@ export function createCliActionDeps(params: Readonly<{
           throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable',
             details: { code: 'target_unavailable', reason: 'target_binding_mismatch' } });
         }
+        const { readSettings } = await import("@/persistence");
         const settingsMachineId = operationMachineId || authorizationMachineId ? null : normalizeStringValue((await readSettings()).machineId);
         const resolvedMachineId = operationMachineId ?? authorizationMachineId ?? settingsMachineId ?? await resolveCurrentSessionValue('machineId');
         if (!resolvedMachineId) throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable',
@@ -2141,15 +2136,22 @@ export function createCliActionDeps(params: Readonly<{
       method: 'GET', path: '/v1/account/encryption/currentness',
     });
     if (!authorizationHeaders) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+    const [{ resolveValidatedAutomationAccountEncryptionV1 }, { classifyServerEndpointError }] = await Promise.all([import("@/plugins/runtime/automations/automationAccountCurrentness"), import("@/api/client/classifyServerEndpointError")]);
     const resolved = await resolveValidatedAutomationAccountEncryptionV1({
       signal: signal ?? new AbortController().signal,
-      resolveAccountEncryptionCurrentness: async (currentnessSignal) => await fetchAccountEncryptionCurrentness({
+      resolveAccountEncryptionCurrentness: async (currentnessSignal) => {
+        const { fetchAccountEncryptionCurrentness } = await import("@/api/client/connectedServiceCredentialApi");
+        return await fetchAccountEncryptionCurrentness({
         token: params.token,
         serverBaseUrl: workflowRunServerHttpBaseUrl,
         authorizationHeaders,
         ...(currentnessSignal ? { signal: currentnessSignal } : {}),
-      }),
-      resolveAccountEncryptionMaterial: async () => createAutomationAccountEncryptionMaterialSnapshotV1(params.credentials!),
+      });
+      },
+      resolveAccountEncryptionMaterial: async () => {
+        const { createAutomationAccountEncryptionMaterialSnapshotV1 } = await import("@/plugins/runtime/automations/automationAccountCurrentness");
+        return createAutomationAccountEncryptionMaterialSnapshotV1(params.credentials!);
+      },
     });
     if (resolved.kind === 'unavailable' && 'cause' in resolved
       && classifyServerEndpointError(resolved.cause).retryable) throw resolved.cause;
@@ -2162,10 +2164,12 @@ export function createCliActionDeps(params: Readonly<{
       // Each invocation retains its original proof; concurrent Session calls
       // must never spend another caller's authority through a shared closure.
       const workflowRunStorage = createWorkflowRunStorage(args);
+      const [{ createWorkflowActionExecutor }, { logger }, { createWorkflowRunActionOwner }, { createCommittedInputTypeDeps }, { doesWorkflowImmediateEligibleStepTargetSession }] = await Promise.all([import("./workflowActionExecutor"), import("@/ui/logger"), import("./workflowRunActions"), import("@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps"), import("@/daemon/workflows/coordinator")]);
       const execute = createWorkflowActionExecutor({
         onFailureDiagnostic: diagnostic => logger.infoFile(JSON.stringify(diagnostic)),
         isWorkflowFeatureEnabled: async () => {
           const snapshot = await readServerFeaturesSnapshot();
+          const [{ getWorkflowRuntimeFeatureDecision }, { isServerFeaturesProbeRetryable }] = await Promise.all([import("@/daemon/automation/workflowFeatureGate"), import("@/features/serverFeaturesClient")]);
           const decision = getWorkflowRuntimeFeatureDecision(process.env, snapshot);
           if (decision.state === 'unknown' && (!snapshot || isServerFeaturesProbeRetryable(snapshot))) {
             throw Object.assign(new Error('storage_unavailable'), { code: 'storage_unavailable' });
@@ -2176,6 +2180,7 @@ export function createCliActionDeps(params: Readonly<{
           if (args.actionId === 'workflow.run.start') {
             // Admission materializes the current executable catalog. Refuse a
             // non-daemon process before Account/source reads or Run storage.
+            const { acquireAuthoritativePluginRuntimeRegistryLease } = await import("@/plugins/runtime/reload/runtimeLease");
             const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
             await lease.release();
           }
@@ -2183,6 +2188,7 @@ export function createCliActionDeps(params: Readonly<{
         },
         resolveTargetValidation: async (args) => {
           try {
+            const { listCurrentAccountMachines } = await import("@/api/machine/resolveCurrentAccountMachineTarget");
             const machines = await listCurrentAccountMachines({
               token: params.token,
               ...(params.serverHttpBaseUrl ? { serverHttpBaseUrl: params.serverHttpBaseUrl } : {}),
@@ -2211,6 +2217,7 @@ export function createCliActionDeps(params: Readonly<{
         runs: createWorkflowRunActionOwner({
           resolveServerProfileScopeId: identifier => isSameActionHomeId(identifier) ? actionHomeId : null,
           resolveDiscussionOrigin: async ({ origin, context }) => {
+            const [{ readRequesterAccountActionContext }, { resolveWorkflowDiscussionOrigin }] = await Promise.all([import("@/daemon/sessionEncryption/requesterAccountActionContext"), import("@/daemon/workflows/workflowDiscussion")]);
             const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
             const credentials = requester?.credentials ?? params.credentials;
             if (!credentials || context.externalActionExecutionAuthorization && !requester) {
@@ -2237,6 +2244,7 @@ export function createCliActionDeps(params: Readonly<{
             return result;
           },
           resolveRunReportPolicy: async ({ context }) => {
+            const [{ readRequesterAccountActionContext }, { createSessionRunReportPolicyReader }] = await Promise.all([import("@/daemon/sessionEncryption/requesterAccountActionContext"), import("@/api/sessionFollowCreationPreferences")]);
             const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
             const credentials = requester?.credentials ?? params.credentials;
             const accountId = context.externalActionExecutionAuthorization?.binding.accountId
@@ -2259,6 +2267,7 @@ export function createCliActionDeps(params: Readonly<{
               && (!args.context.actionCaller || args.context.actionCaller.kind === 'host')
               && args.context.defaultSessionId) {
               const sessionId = args.context.defaultSessionId;
+              const [{ readRequesterAccountActionContext }, { resolveWorkflowSessionConversation }] = await Promise.all([import("@/daemon/sessionEncryption/requesterAccountActionContext"), import("@/daemon/workflows/invocationRecoveryObserver")]);
               const requester = readRequesterAccountActionContext(args.context.externalActionExecutionAuthorization);
               const credentials = requester?.credentials ?? params.credentials;
               if (!credentials || args.context.externalActionCredential && !requester) {
@@ -2287,17 +2296,22 @@ export function createCliActionDeps(params: Readonly<{
             });
           },
           doesImmediateEligibleStepTargetSession: doesWorkflowImmediateEligibleStepTargetSession,
-          resolveAccountId: async (signal) => args.context.externalActionExecutionAuthorization?.binding.accountId
+          resolveAccountId: async (signal) => {
+            const { fetchChangesAccountId } = await import("@/api/changes");
+            return args.context.externalActionExecutionAuthorization?.binding.accountId
             ?? await fetchChangesAccountId({
             token: params.token,
             serverHttpBaseUrl: workflowRunServerHttpBaseUrl,
             ...(signal ? { signal } : {}),
-          }),
+          });
+          },
           storage: workflowRunStorage,
           definitions: workflowDefinitions,
           readPluginWorkflows: workflowDefinitions.readPluginWorkflows,
           resolveEncryption: (signal) => resolveWorkflowRunEncryption(args, signal),
-          observeRecovery: async ({ run, progress, signal }) => await observeWorkflowInvocationRecoveryEvidence({
+          observeRecovery: async ({ run, progress, signal }) => {
+            const { observeWorkflowInvocationRecoveryEvidence } = await import("@/daemon/workflows/invocationRecoveryObserver");
+            return await observeWorkflowInvocationRecoveryEvidence({
             credentials: params.credentials!, machineId: run.machineId, progress,
             getApproval: async artifactId => ({ artifactId,
               request: await approvalsStore?.approvalsGet({ artifactId, serverId: null }) }),
@@ -2307,13 +2321,15 @@ export function createCliActionDeps(params: Readonly<{
             getRun: async (request) => await callDetachedExecutionRunRpc(null, SESSION_RPC_METHODS.EXECUTION_RUN_GET,
               request, { exactMachineId: run.machineId, ...(signal ? { signal } : {}) }),
             ...(signal ? { signal } : {}),
-          }),
+          });
+          },
           reattachInvocation: async ({ run, index, signal }) => {
             const census = WorkflowRunRecipientCensusResponseV1Schema.parse(await workflowRunStorage.execute({
               operation: 'run-key.census', runId: run.id,
             }, signal ? { signal } : {}));
             const resolved = resolveWorkflowRunDataKeyV1({ encryption: await resolveWorkflowRunEncryption(args, signal), census });
             if (resolved.kind !== 'available') throw Object.assign(new Error('content_unavailable'), { code: 'content_unavailable' });
+            const [{ createWorkflowInvocationRecoveryFactWriter }, { createWorkflowRunReviewEntryNotificationHandler }, { createWorkflowRunPushNotificationClient }, { createWorkflowInvocationRecoveryObserver }] = await Promise.all([import("@/daemon/workflows/recovery"), import("@/notifications/activity/dispatchWorkflowRunUpdateNotification"), import("@/daemon/workflows/production"), import("@/daemon/workflows/invocationRecoveryObserver")]);
             const writer = createWorkflowInvocationRecoveryFactWriter({ accountId: census.ownerAccountId, run, expectedRevision: run.revision,
               encryption: resolved.encryption,
               onReviewEntered: createWorkflowRunReviewEntryNotificationHandler({
@@ -2367,10 +2383,12 @@ export function createCliActionDeps(params: Readonly<{
           },
           prepareWorkspace: async ({ projectTarget, definition }) => {
             if (!projectTarget.workspaceRefId) {
+              const { prepareWorkflowAcceptedWorkspaceTarget } = await import("@/daemon/workflows/resolveWorkflowWorkspace");
               return await prepareWorkflowAcceptedWorkspaceTarget({ projectTarget, definition });
             }
             const rows = await readProjectRows();
             const workspaceServerId = params.serverIdentityId ?? projectHomeId;
+            const [{ prepareWorkflowAcceptedWorkspaceTarget }, { resolveWorkspaceRefById }] = await Promise.all([import("@/daemon/workflows/resolveWorkflowWorkspace"), import("@/workspaces/workspaceRefsV1")]);
             return await prepareWorkflowAcceptedWorkspaceTarget({
               projectTarget,
               definition,
@@ -2382,7 +2400,10 @@ export function createCliActionDeps(params: Readonly<{
               ),
             });
           },
-          restoreWorkspace: async (workspace) => await restoreRecordedWorkflowWorkspace({ workspace }),
+          restoreWorkspace: async (workspace) => {
+            const { restoreRecordedWorkflowWorkspace } = await import("@/daemon/workflows/resolveWorkflowWorkspace");
+            return await restoreRecordedWorkflowWorkspace({ workspace });
+          },
           ...(params.workflowAcceptedAuthorizationCurrentness
             ? { isAcceptedAuthorizationCurrent: params.workflowAcceptedAuthorizationCurrentness }
             : {}),
@@ -2398,6 +2419,7 @@ export function createCliActionDeps(params: Readonly<{
     currentMachineControlIdentityPromise ??= (async () => {
       let machineId: string | null = null;
       try {
+        const { readSettings } = await import("@/persistence");
         machineId = normalizeStringValue((await readSettings()).machineId);
       } catch {
         machineId = null;
@@ -2405,6 +2427,7 @@ export function createCliActionDeps(params: Readonly<{
 
       let host: string | null = null;
       try {
+        const { getPreferredHostName } = await import("@/daemon/machine/metadata");
         host = normalizeStringValue(await getPreferredHostName());
       } catch {
         host = null;
@@ -2421,7 +2444,8 @@ export function createCliActionDeps(params: Readonly<{
 
   const resolveSessionSpawnAgentInventorySelection: NonNullable<
     ActionExecutorDeps['resolveSessionSpawnAgentInventorySelection']
-  > = ({ agentTarget }) => {
+  > = async ({ agentTarget }) => {
+    const { resolveSessionCreationAgentTarget } = await import("@/session/creation/resolveSessionCreationAgentTarget");
     const resolvedTarget = resolveSessionCreationAgentTarget(agentTarget);
     return resolvedTarget
       ? {
@@ -2461,6 +2485,7 @@ export function createCliActionDeps(params: Readonly<{
     }
     const serverFeaturesSnapshot = await readServerFeaturesSnapshot();
     const credentials = params.credentials;
+    const { resolveSessionTransportContext } = await import('@/session/services/resolveSessionTransportContext');
     const read = () => resolveSessionTransportContext({
       credentials,
       idOrPrefix: normalized,
@@ -2528,6 +2553,7 @@ export function createCliActionDeps(params: Readonly<{
         approvedNewDirectoryCreation: _approvedNewDirectoryCreation, ...controls } = input.resumeRequest;
       return controls;
     })() : undefined;
+    const { requestInactiveSessionResume } = await import("@/session/services/requestInactiveSessionResume");
     return await requestInactiveSessionResume({
       credentials: params.credentials,
       sessionId: input.transport.sessionId,
@@ -2705,6 +2731,7 @@ export function createCliActionDeps(params: Readonly<{
       const getRequest = method === SESSION_RPC_METHODS.EXECUTION_RUN_GET
         ? ExecutionRunGetRequestSchema.safeParse(request)
         : null;
+      const { callMachineRpc } = await import("@/session/transport/rpc/machineRpc");
       return await callMachineRpc({
         credentials: params.credentials,
         machineId: target.machineId,
@@ -2720,6 +2747,7 @@ export function createCliActionDeps(params: Readonly<{
         ...(opts?.signal ? { signal: opts.signal } : {}),
       });
     } catch (error) {
+      const { readMachineRpcRequestDisposition } = await import("@/session/transport/rpc/machineRpc");
       const requestDisposition = readMachineRpcRequestDisposition(error);
       const runCreation = requestDisposition === 'notSent'
         ? 'noRunCreated'
@@ -2786,6 +2814,7 @@ export function createCliActionDeps(params: Readonly<{
     }
 
     try {
+      const { callSessionRpc } = await import("@/session/transport/rpc/sessionRpc");
       return await callSessionRpc({
         ...transport,
         token: params.credentials.token,
@@ -2844,11 +2873,13 @@ export function createCliActionDeps(params: Readonly<{
         isCurrent: async () => await isWorkflowAuthorizationCurrent(context),
       });
       if (!authorization) throw new RoleActionRefusalV1('run_access_denied');
+      const { resolveSessionRpcContent } = await import("@/session/transport/rpc/sessionRpc");
       return await params.sessionActionRpcTransport({ sessionId: transport.sessionId, method, input,
         content: resolveSessionRpcContent(transport), executionAuthorization: authorization,
         ...(context.signal ? { signal: context.signal } : {}) });
     }
     const origin = readSessionActionRpcOrigin(method, context);
+    const { resolveSessionRpcContent } = await import("@/session/transport/rpc/sessionRpc");
     return await params.sessionActionRpcTransport({ sessionId: transport.sessionId, method, input,
       content: resolveSessionRpcContent(transport), origin,
       ...(context.signal ? { signal: context.signal } : {}),
@@ -2916,6 +2947,7 @@ export function createCliActionDeps(params: Readonly<{
     }
     const sessionContext = await resolveLifecycleHookSessionContext(event);
 
+    const { getSessionHostBridge } = await import("@/agent/runtime/bridges/session/SessionHostBridge");
     await getSessionHostBridge().emitLifecycleHookEvent({
       happyHomeDir,
       eventId: event.eventId,
@@ -2951,6 +2983,7 @@ export function createCliActionDeps(params: Readonly<{
     if (typeof params.isUsageLimitRecoveryEnabled === 'function') {
       return await params.isUsageLimitRecoveryEnabled();
     }
+    const { resolveUsageLimitRecoveryEnabled } = await import("@/features/usageLimitRecoveryFeatureGate");
     return await resolveUsageLimitRecoveryEnabled();
   };
 
@@ -2966,6 +2999,7 @@ export function createCliActionDeps(params: Readonly<{
     const authority = options?.context ? options.context.authority ?? 'account_automation' : undefined;
     signal?.throwIfAborted();
     if (!params.credentials) {
+      const { normalizeUsageLimitRecoveryOperationResult } = await import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult");
       return normalizeUsageLimitRecoveryOperationResult(
         { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' },
         { sessionId },
@@ -2986,6 +3020,7 @@ export function createCliActionDeps(params: Readonly<{
     const invokeBoundSessionRpc = params.invokeBoundSessionRpc;
     if (sessionId === params.sessionId && invokeBoundSessionRpc) {
       const metadata = params.getCurrentSessionMetadata?.() ?? null;
+      const { routeSessionGoalControl } = await import("@/session/goalControls/sessionGoalControlRouter");
       return await routeSessionGoalControl({
         token: params.credentials.token,
         credentials: params.credentials,
@@ -3018,9 +3053,11 @@ export function createCliActionDeps(params: Readonly<{
       ? admittedTransport
       : await resolveTransportForSession(sessionId, signal);
     const transportResolvedAt = performance.now();
+    const [{ logger }, { routeSessionGoalControl }] = await Promise.all([import("@/ui/logger"), import("@/session/goalControls/sessionGoalControlRouter")]);
     logger.debug('[SessionGoal] Action transport resolution', { sessionId, operation,
       durationMs: Math.round(transportResolvedAt - preparationStartedAt) });
     if (!transport.ok) {
+      const { normalizeUsageLimitRecoveryOperationResult } = await import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult");
       return normalizeUsageLimitRecoveryOperationResult(
         {
           ok: false,
@@ -3106,6 +3143,7 @@ export function createCliActionDeps(params: Readonly<{
     const rpcRequest = {
       ...(typeof request.cwd === 'string' && request.cwd.trim().length > 0 ? { cwd: request.cwd.trim() } : {}),
     };
+    const { routeSessionCatalogControl } = await import("@/session/catalogControls/sessionCatalogControlRouter");
     return await routeSessionCatalogControl({
       ...transport,
       token: params.credentials.token,
@@ -3132,6 +3170,7 @@ export function createCliActionDeps(params: Readonly<{
     request: Record<string, unknown>,
   ): Promise<unknown> => {
     if (!params.credentials) {
+      const { normalizeUsageLimitRecoveryOperationResult } = await import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult");
       return normalizeUsageLimitRecoveryOperationResult(
         { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' },
         { sessionId },
@@ -3140,6 +3179,7 @@ export function createCliActionDeps(params: Readonly<{
 
     const transport = await resolveTransportForSession(sessionId);
     if (!transport.ok) {
+      const { normalizeUsageLimitRecoveryOperationResult } = await import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult");
       return normalizeUsageLimitRecoveryOperationResult(
         {
           ok: false,
@@ -3151,8 +3191,10 @@ export function createCliActionDeps(params: Readonly<{
     }
 
     const metadata = readTransportSessionOwnerMetadata(transport);
+    const [{ readRuntimeAuthUsageLimitRecoveryAttemptId }, { readLatestUsageLimitFailureIssue }] = await Promise.all([import("@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl"), import("@/session/usageLimitRecoveryControls/readLatestUsageLimitFailureIssue")]);
     const daemonOwnedCheck = operation === 'checkNow' && readRuntimeAuthUsageLimitRecoveryAttemptId(metadata, readLatestUsageLimitFailureIssue(transport.rawSession)) !== null;
     if (transport.rawSession.active === true && !daemonOwnedCheck) {
+      const { normalizeUsageLimitRecoveryOperationResult } = await import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult");
       return normalizeUsageLimitRecoveryOperationResult(await callSessionRpcForTransport(
         transport,
         operation === 'enable'
@@ -3169,6 +3211,7 @@ export function createCliActionDeps(params: Readonly<{
     const rawMachineId = normalizeStringValue(transport.rawSession.machineId);
     const metadataMachineId = normalizeStringValue(metadata?.machineId);
     if (rawMachineId && metadataMachineId && rawMachineId !== metadataMachineId) {
+      const { normalizeUsageLimitRecoveryOperationResult } = await import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult");
       return normalizeUsageLimitRecoveryOperationResult({
         ok: false,
         errorCode: 'session_usage_limit_recovery_control_target_machine_mismatch',
@@ -3177,6 +3220,7 @@ export function createCliActionDeps(params: Readonly<{
     }
     const machineId = rawMachineId ?? metadataMachineId;
     if (!machineId) {
+      const { normalizeUsageLimitRecoveryOperationResult } = await import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult");
       return normalizeUsageLimitRecoveryOperationResult({
         ok: false,
         errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable',
@@ -3192,6 +3236,7 @@ export function createCliActionDeps(params: Readonly<{
           ? RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CONSUME_RESET_CREDIT
           : RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW;
     try {
+      const [{ normalizeUsageLimitRecoveryOperationResult }, { callMachineRpc }] = await Promise.all([import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult"), import("@/session/transport/rpc/machineRpc")]);
       return normalizeUsageLimitRecoveryOperationResult(await callMachineRpc({
         credentials: params.credentials,
         machineId,
@@ -3199,6 +3244,7 @@ export function createCliActionDeps(params: Readonly<{
         request,
       }), { sessionId: transport.sessionId });
     } catch {
+      const { normalizeUsageLimitRecoveryOperationResult } = await import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult");
       return normalizeUsageLimitRecoveryOperationResult({
         ok: false,
         errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable',
@@ -3214,6 +3260,7 @@ export function createCliActionDeps(params: Readonly<{
     executeCanonicalAction,
   }) => {
     const localReviewHomeCurrent = async () => {
+      const { isServerProfileHomeIdentity } = await import("@/server/serverProfiles");
       if (context.serverId && !await isServerProfileHomeIdentity(configuration.activeServerId, context.serverId)) return false;
       if (params.serverId && !await isServerProfileHomeIdentity(configuration.activeServerId, params.serverId)) return false;
       if (!params.serverHttpBaseUrl) return true;
@@ -3225,6 +3272,7 @@ export function createCliActionDeps(params: Readonly<{
     };
     const localReviewContext = { ...context, serverId: configuration.activeServerId };
     const requesterAccountId = context.externalActionCredential?.accountId ?? context.runtimeAccountId;
+    const [{ createCliScmReviewedMarkAction }, { resolveBackendTargetFromSessionMetadata }, { readAgentRoutingIdForContributionIdentity, indexAgentRoutingIdsByContributionIdentity }, { createRepositoryCheckpointTranscriptPageReader }, { isRetainedScmReviewAction, bindScmActionToSessionWorkspace }, { resolveSessionMachineWorkspacePath }, { executeScmActionOperation }] = await Promise.all([import("@/scm/actions/executeScmReviewedMarkAction"), import("@/session/backendTargets/resolveBackendTargetFromSessionMetadata"), import("@/plugins/projection/registry/agentRoutingIdentity"), import("@/scm/checkpoints/readRepositoryCheckpointTranscriptPage"), import("@/scm/actions/placement"), import("@/session/machineControlLocality"), import("@/scm/actions/executeScmActionOperation")]);
     const accountMarksDeps = params.credentials ? {
       executeReviewedMarks: (evidence: import('@happier-dev/protocol').ScmComparison | import('@happier-dev/protocol').ScmReviewedMarksSource, request: import('@happier-dev/protocol').ScmReviewedMarkInput, reviewed: boolean) => createCliScmReviewedMarkAction({
         credentials: params.credentials!, ...('id' in evidence ? { comparison: evidence } : { source: evidence }),
@@ -3258,8 +3306,12 @@ export function createCliActionDeps(params: Readonly<{
       : {};
     const reviewNoteCredentials = params.credentials;
     const emitFileReviewNote: Parameters<typeof executeScmActionOperation>[0]['emitFileReviewNote'] = reviewNoteCredentials
-      ? async ({ sessionId, ...note }) => await sendFileReviewNoteToSession({ credentials: reviewNoteCredentials, sessionId, note })
+      ? async ({ sessionId, ...note }) => {
+        const { sendFileReviewNoteToSession } = await import("@/session/services/sendFileReviewNote");
+        return await sendFileReviewNoteToSession({ credentials: reviewNoteCredentials, sessionId, note });
+      }
       : undefined;
+    const { readAgentCatalogSnapshot } = await import("@/agent/catalog/snapshot");
     const resolveScmBackendTarget = (metadata: Record<string, unknown> | null) => {
       const selector = inputRecord.modelSelector;
       const selectorRecord = selector && typeof selector === 'object' && !Array.isArray(selector)
@@ -3284,6 +3336,7 @@ export function createCliActionDeps(params: Readonly<{
       // An ingress proof is the caller's ceiling; never widen it with the
       // runtime owner's credentials. Ordinary CLI callers prove access at Home.
       if (context.rpcSessionAuthorization) return context.rpcSessionAuthorization.sessionId === sessionId;
+      const { fetchSessionById } = await import("@/session/transport/http/sessionsHttp");
       const snapshot = await fetchSessionById({ token: params.token, sessionId,
         ...(params.serverHttpBaseUrl ? { serverUrl: params.serverHttpBaseUrl } : {}),
         resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, actionId, request),
@@ -3313,6 +3366,7 @@ export function createCliActionDeps(params: Readonly<{
       sessionAuthorization = context.rpcSessionAuthorization, sessionRoot?: string) => {
       const selectedTarget = context.externalActionTarget?.kind === 'machine' ? context.externalActionTarget : undefined;
       const root = sessionRoot ?? selectedTarget?.project?.directory;
+      const [{ bindScmActionToSessionWorkspace }, { tryAcquireAuthoritativePluginRuntimeRegistryLease }, { executeCapturedMachineAction }] = await Promise.all([import("@/scm/actions/placement"), import("@/plugins/runtime/reload/runtimeLease"), import("@/api/machine/capturedMachineAction")]);
       const inputRecord = root && context.defaultSessionId && context.actionCaller?.kind === 'session'
         ? bindScmActionToSessionWorkspace(actionId, selectedInput, root, context.defaultSessionId) : selectedInput;
       const cwd = normalizeStringValue(actionId === 'scm.repository.clone'
@@ -3338,6 +3392,7 @@ export function createCliActionDeps(params: Readonly<{
         const currentMachine = await readCurrentMachineControlIdentity();
         if (currentMachine.machineId === machineId) {
           if (!await localReviewHomeCurrent()) return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+          const [{ executeScmActionOperation }, { resolveCwd }, { resolveFilesystemAccessPolicy }] = await Promise.all([import("@/scm/actions/executeScmActionOperation"), import("@/scm/runtime"), import("@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy")]);
           return executeScmActionOperation({ actionId, input: inputRecord, workingDirectory: cwd ?? process.cwd(),
             emitFileReviewNote,
             ...(root && context.defaultSessionId && (context.actionCaller?.kind === 'session'
@@ -3358,6 +3413,7 @@ export function createCliActionDeps(params: Readonly<{
               if (parentMachineId && parentMachineId !== machineId) {
                 return { success: false, errorCode: 'DIFF_UNAVAILABLE', error: 'scm_action_session_not_local' };
               }
+              const { executeScmDiffSummaryAction } = await import("@/scm/actions/executeScmDiffSummaryAction");
               return await executeScmDiffSummaryAction({
                 request: summary, machineId, credentials: params.credentials,
                 ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
@@ -3422,6 +3478,7 @@ export function createCliActionDeps(params: Readonly<{
           ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke()));
       } catch (error) {
         if (actionId !== 'scm.change.discard') throw error;
+        const { readMachineRpcRequestDisposition } = await import("@/session/transport/rpc/machineRpc");
         if (readMachineRpcRequestDisposition(error) === 'notSent'
           || isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
           return { success: false, errorCode: 'COMPARISON_UNAVAILABLE', error: 'Prepared Undo delivery is unavailable' };
@@ -3441,6 +3498,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!selectedRoot) {
         return { ok: false, errorCode: 'invalid_input', error: 'invalid_input' };
       }
+      const { executeScmActionOperation } = await import("@/scm/actions/executeScmActionOperation");
       return await executeScmActionOperation({
         actionId,
         input: inputRecord,
@@ -3514,6 +3572,7 @@ export function createCliActionDeps(params: Readonly<{
     }
 
     if (params.scmFilesystemAccessPolicy) {
+      const { resolveCwd } = await import("@/scm/runtime");
       const authorized = resolveCwd(workingDirectory, workingDirectory, params.scmFilesystemAccessPolicy);
       if (!authorized.ok) return { ok: false, errorCode: 'scm_action_path_denied', error: authorized.error };
     }
@@ -3659,6 +3718,7 @@ export function createCliActionDeps(params: Readonly<{
           result: incompatibleSessionSpawnTarget('target_preparation_rpc_unavailable'),
         };
       }
+      const { isAuthenticationError } = await import("@/api/client/httpStatusError");
       if (isAuthenticationError(error) || readRpcErrorCode(error) === RPC_ERROR_CODES.FORBIDDEN) {
         return {
           ok: false,
@@ -3724,6 +3784,7 @@ export function createCliActionDeps(params: Readonly<{
     ...(params.readAdmittedInputTypeOptions ? { readAdmittedInputTypeOptions: params.readAdmittedInputTypeOptions } : {}),
     registryActionExecute: async ({actionId,input,context}) => {
       if(!params.credentials) throw new Error('account_credentials_unavailable');
+      const [{ createCliRegistryHostV1 }, { createCliRegistryUpdateCheck }] = await Promise.all([import("@/registries/createCliRegistryHost"), import("@/registries/updates/createCliRegistryUpdateCheck")]);
       return createCliRegistryHostV1({credentials:params.credentials,
         port:approvalsStore?.promptLibraryStore.organization,signal:context.signal,operationContext:params.savedSecretOperationContext,
         updates: filter => createCliRegistryUpdateCheck({ credentials: params.credentials!, serverId: params.serverId,
@@ -3739,6 +3800,7 @@ export function createCliActionDeps(params: Readonly<{
           ...(context.signal ? { signal: context.signal } : {}),
         });
       } catch (error) {
+        const { readMachineRpcRequestDisposition } = await import("@/session/transport/rpc/machineRpc");
         if (readMachineRpcRequestDisposition(error) === 'notSent') {
           return { ok: false, errorCode: 'request_not_sent', error: 'request_not_sent' };
         }
@@ -3821,6 +3883,7 @@ export function createCliActionDeps(params: Readonly<{
       readSession: async (ref, context) => {
         if (!params.credentials) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
         const read = async () => {
+          const { resolveSessionTransportContext } = await import("@/session/services/resolveSessionTransportContext");
           const target = await resolveSessionTransportContext({ credentials: params.credentials!, idOrPrefix: ref.sessionId,
             signal: context.signal, resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'memory.remember', request) });
           if (!target.ok || target.sessionId !== ref.sessionId) throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
@@ -3833,6 +3896,7 @@ export function createCliActionDeps(params: Readonly<{
       },
       readInheritedContext: async (snapshot, context) => {
         if (!params.credentials) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+        const { readCliMemoryInheritedContext } = await import("./readCliMemoryInheritedContext");
         const read = () => readCliMemoryInheritedContext({ credentials: params.credentials!,
           serverId: actionHomeId, snapshot, context });
         return params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, read) : read();
@@ -3845,6 +3909,7 @@ export function createCliActionDeps(params: Readonly<{
         if (!actionDeps.projectsContextUpdate || !actionDeps.projectSourcesRead || !actionDeps.projectSourcesUpdate) {
           throw Object.assign(new Error('project_context_unavailable'), { code: 'project_context_unavailable' });
         }
+        const { readCliMemoryScopeContext } = await import("./readCliMemoryInheritedContext");
         const read = () => readCliMemoryScopeContext({ credentials: params.credentials!,
           serverId: target.scope === 'project' ? target.projectRef.serverId : todoHomeServerId, target, context,
           readProjectRows: () => readProjectRows(context.signal, context, 'memory.remember'),
@@ -3861,6 +3926,7 @@ export function createCliActionDeps(params: Readonly<{
           && (!isSameActionHomeId(serverId) || refs.some(ref => ref.serverId?.trim() && !isSameActionHomeId(ref.serverId)))) {
           throw Object.assign(new Error('server_target_mismatch'), { code: 'server_target_mismatch' });
         }
+        const { withCliPromptLibraryArtifactReader } = await import("@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks");
         return withCliPromptLibraryArtifactReader(reader => Promise.all(refs.map(async ref =>
           (await reader.readArtifactHeader(ref.serverId && isSameActionHomeId(ref.serverId)
             ? { ...ref, serverId } : ref))?.header ?? null)), {
@@ -3898,6 +3964,7 @@ export function createCliActionDeps(params: Readonly<{
             payload: { key: organizationKey, value: { ...organization, pinned } } });
         }
         if (mutations.length > 0) {
+          const { mutateProjectAccountRows } = await import("@/workspaces/projectAccountRows");
           const result = await withProjectHome(() => mutateProjectAccountRows({ ...projectRowsAuthority(context, 'projects.workspace.update', operationSignal),
             request: { mutations, expectedRefs: [], topologyChange: false }, ...(operationSignal ? { signal: operationSignal } : {}) }));
           if (result.status !== 'updated') return executionRunActionFailure(result.status === 'conflict' ? 'project_account_rows_conflict' : `project_account_rows_${result.status}`);
@@ -3921,6 +3988,7 @@ export function createCliActionDeps(params: Readonly<{
       if (refused) return refused;
       serverId = await resolveProjectHomeIdentity();
       try {
+        const { createProjectAccountSnapshotMutation } = await import("@/workspaces/projectAccountRows");
         const result = await withProjectHome(() => createProjectAccountSnapshotMutation(projectRowsAuthority(context, 'projects.workspace.forget', context?.signal))(snapshot => {
           return { ...snapshot, workspaceRefs: resolveProjectAccountWorkspaceRefRemovalV1(snapshot,
             { serverId, workspaceRefId: workspaceId }) };
@@ -3965,6 +4033,7 @@ export function createCliActionDeps(params: Readonly<{
       readArtifact: async (ref, options, context) => {
         if (context.externalActionExecutionAuthorization) return readProjectRequesterArtifact(ref, options, context);
         if (await projectAccountAdmission(projectHomeId, context) || !roleArtifactStore) return null;
+        const [{ isServerProfileHomeIdentity }, { withCliPromptLibraryArtifactReader }] = await Promise.all([import("@/server/serverProfiles"), import("@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks")]);
         if (await isServerProfileHomeIdentity(projectHomeId, ref.serverId)) {
           return runWithServerHttpBaseUrl(todoHomeBaseUrl, () => roleArtifactStore.read(ref.artifactId, options));
         }
@@ -4011,6 +4080,7 @@ export function createCliActionDeps(params: Readonly<{
           const authorizeRequest = (request: Readonly<{ method: string; path: string; body?: unknown }>) =>
             resolveServerRequestHeaders(context, context.externalActionExecutionAuthorization?.binding.actionId ?? 'widgets.catalog.list', request);
           const catalogInput = { credentials, signal, operationContext, authorizeRequest };
+          const [{ createCliConnectedAccountCatalogStore }, { readActiveConnectedAccountCatalog }, { fetchAccountProfile }] = await Promise.all([import("@/settings/connectedAccounts/connectedAccountCatalogStore"), import("@/settings/connectedAccounts/hydrateConnectedAccountCatalog"), import("@/api/accountProfile")]);
           const store = createCliConnectedAccountCatalogStore(catalogInput);
           store.assertCurrent();
           const purpose = await readActiveConnectedAccountCatalog({ ...catalogInput, key: 'purposes' });
@@ -4056,6 +4126,7 @@ export function createCliActionDeps(params: Readonly<{
       const read = await port.read(surface, _context, signal);
       if ('ok' in read) return read;
       const instances = read.instances.map(entry => entry.instance);
+      const { cliWidgetCatalogEntryV1 } = await import("./widgetCatalogProjection");
       const entries = candidates.map(candidate => cliWidgetCatalogEntryV1(candidate, countWidgetInstancesV1(instances, widgetCandidateDefinitionV1(candidate))));
       for (const summary of await actionDeps.widgetDefinitionArtifacts?.list(signal) ?? []) {
         const reference = { kind: 'artifact' as const, artifactId: summary.artifactId };
@@ -4076,6 +4147,7 @@ export function createCliActionDeps(params: Readonly<{
     }) } : {}),
     artifactAction: async (args) => {
       if (!roleArtifactStore) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      const { createCliArtifactActions } = await import("./artifactActions");
       const execute = createCliArtifactActions({ store: roleArtifactStore, onPublicLinkIssued: params.onPublicLinkIssued,
         authorizationHeaders: (context, effectActionId) => async request => {
           const headers = resolveServerRequestHeaders(context, effectActionId, request);
@@ -4189,7 +4261,11 @@ export function createCliActionDeps(params: Readonly<{
       if (denied) throw Object.assign(new Error(denied.errorCode), { code: denied.errorCode });
       return await runWithServerHttpBaseUrl(launchProfilePublicationServerUrl, async () => {
         context?.signal?.throwIfAborted();
-        if (!params.savedSecretOperationContext && !getActiveAccountSettingsSnapshot()) await bootstrapAccountSettingsContext({ credentials, mode: 'blocking' });
+        if (!params.savedSecretOperationContext && !getActiveAccountSettingsSnapshot()) {
+          const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
+          await bootstrapAccountSettingsContext({ credentials, mode: 'blocking' });
+        }
+        const [{ createCliProfileStoreForOperation, createCliProfileStore }, { refreshActiveProfileCatalog }] = await Promise.all([import("@/settings/profiles/profileStore"), import("@/settings/profiles/hydrateProfileCatalog")]);
         const profileStore = params.savedSecretOperationContext
           ? createCliProfileStoreForOperation({ operationContext: params.savedSecretOperationContext, signal: context?.signal })
           : createCliProfileStore({ credentials, signal: context?.signal });
@@ -4243,6 +4319,8 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       context.signal?.throwIfAborted();
       try {
+        const { PushNotificationClient } = await import("@/api/pushNotifications");
+        const { listActivityNotificationChannels } = await import("@/notifications/activity/dispatchActivityNotification");
         const items = await listActivityNotificationChannels({ ...await readNotificationContext(context.signal),
           pushTokenReader: new PushNotificationClient(params.credentials.token,
             params.savedSecretOperationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl,
@@ -4256,10 +4334,12 @@ export function createCliActionDeps(params: Readonly<{
       context.signal?.throwIfAborted();
       let result: Awaited<ReturnType<typeof postWebhookJsonAsync>>;
       try {
+        const { postWebhookJsonAsync } = await import("@/notifications/activity/sendWebhookActivityNotification");
         result = await postWebhookJsonAsync({ ...input,
           idempotencyKey: context.actionRequestId ?? randomUUID(),
           ...(context.signal ? { signal: context.signal } : {}) });
       } catch (error) {
+        const { WebhookDestinationAdmissionError } = await import("@/notifications/activity/sendWebhookActivityNotification");
         if (error instanceof WebhookDestinationAdmissionError) {
           return { ok: false, errorCode: 'webhook_destination_rejected', error: 'Webhook destination rejected' };
         }
@@ -4272,6 +4352,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       context.signal?.throwIfAborted();
       if (input.open?.kind === 'session') {
+        const { fetchSessionById } = await import("@/session/transport/http/sessionsHttp");
         const session = await fetchSessionById({ token: params.credentials.token, sessionId: input.open.sessionId,
           ...(params.savedSecretOperationContext?.serverHttpBaseUrl || params.serverHttpBaseUrl
             ? { serverUrl: params.savedSecretOperationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl } : {}),
@@ -4286,6 +4367,8 @@ export function createCliActionDeps(params: Readonly<{
       }
       context.signal?.throwIfAborted();
       try {
+      const { PushNotificationClient } = await import("@/api/pushNotifications");
+      const { dispatchActivityNotificationAsync } = await import("@/notifications/activity/dispatchActivityNotification");
       return await dispatchActivityNotificationAsync({
         ...await readNotificationContext(context.signal),
         expoPushSender: new PushNotificationClient(params.credentials.token,
@@ -4411,8 +4494,10 @@ export function createCliActionDeps(params: Readonly<{
           return await (params.serverHttpBaseUrl
             ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, operation) : operation());
         } catch (error) {
+          const { readSessionPreparationFailureDiagnostic } = await import("@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue");
           const diagnostic = readSessionPreparationFailureDiagnostic(error);
           if (diagnostic.originalCode === 'context_source_unavailable' || diagnostic.originalCode === 'role_overrides_unavailable') {
+            const { logger } = await import("@/ui/logger");
             logger.infoFile('[Session] Role Action refused', diagnostic);
           }
           throw error;
@@ -4455,6 +4540,7 @@ export function createCliActionDeps(params: Readonly<{
             const reports: { sessionId: string; ownerAccountId: string }[] = [];
             let cursor: string | undefined;
             do {
+              const { fetchSessionsQueryPage } = await import("@/session/transport/http/sessionsHttp");
               const read = () => fetchSessionsQueryPage({ token: params.credentials!.token,
                 query: { v: 1, storage, includeInactive: true, scope: 'all_accessible', attention: 'any', audiences: [], tagIds: [],
                   underSessionId: leadSessionId, ...(cursor ? { cursor } : {}) },
@@ -4495,6 +4581,7 @@ export function createCliActionDeps(params: Readonly<{
             }
             outcome = 'ok';
           } finally {
+            const { logger } = await import("@/ui/logger");
             logger.infoFile('[Session] Role Apply recipient delivery', { sessionId: params.sessionId, reportSessionId: sessionId,
               phase: rpcStartedAt === undefined ? 'transport' : 'rpc',
               transportDurationMs: transportDurationMs ?? Math.round(performance.now() - startedAt),
@@ -4505,6 +4592,7 @@ export function createCliActionDeps(params: Readonly<{
         },
         readRawAccountSettings: readRawRoleSettings,
         mutateAccountRoleOverrides: async (mutation, context) => {
+          const { createCliPromptLibraryStore } = await import("@/settings/prompts/promptLibraryStore");
           await createCliPromptLibraryStore({ credentials: params.credentials!, signal: context.signal,
             operationContext: params.savedSecretOperationContext }).mutateRoleOverride(mutation);
         },
@@ -4582,6 +4670,7 @@ export function createCliActionDeps(params: Readonly<{
           details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
         };
       }
+      const { startExecutionRun } = await import("@/session/services/executionRuns");
       return await startExecutionRun({
         ...transport,
         token: params.token,
@@ -4604,6 +4693,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
+      const { listExecutionRuns } = await import("@/session/services/executionRuns");
       return await listExecutionRuns({
         ...transport,
         token: params.token,
@@ -4627,6 +4717,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
+      const { getExecutionRun } = await import("@/session/services/executionRuns");
       return await getExecutionRun({
         ...transport,
         token: params.token,
@@ -4656,6 +4747,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
+      const { ensureExecutionRun } = await import("@/session/services/executionRuns");
       return await ensureExecutionRun({
         ...transport,
         token: params.token,
@@ -4678,6 +4770,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
+      const { ensureOrStartExecutionRun } = await import("@/session/services/executionRuns");
       return await ensureOrStartExecutionRun({
         ...transport,
         token: params.token,
@@ -4700,6 +4793,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
+      const { startExecutionRunStream } = await import("@/session/services/executionRuns");
       return await startExecutionRunStream({
         ...transport,
         token: params.token,
@@ -4722,6 +4816,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
+      const { readExecutionRunStream } = await import("@/session/services/executionRuns");
       return await readExecutionRunStream({
         ...transport,
         token: params.token,
@@ -4744,6 +4839,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { details: transport.candidates } : {}) };
       }
+      const { cancelExecutionRunStream } = await import("@/session/services/executionRuns");
       return await cancelExecutionRunStream({
         ...transport,
         token: params.token,
@@ -4759,6 +4855,7 @@ export function createCliActionDeps(params: Readonly<{
       }
       const transport = await resolveTransportForSession(sessionId, opts?.signal);
       if (!transport.ok) return { ok: false, code: transport.code };
+      const { callSessionRpc } = await import("@/session/transport/rpc/sessionRpc");
       return await callSessionRpc({
         ...transport, token: params.token, sessionId: transport.sessionId,
         method: SESSION_RPC_METHODS.EXECUTION_RUN_CANCEL_TURN_V1, request,
@@ -4779,6 +4876,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
+      const { stopExecutionRun } = await import("@/session/services/executionRuns");
       return await stopExecutionRun({
         ...transport,
         token: params.token,
@@ -4801,6 +4899,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!transport.ok) {
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
+      const { executeExecutionRunAction } = await import("@/session/services/executionRuns");
       return await executeExecutionRunAction({
         ...transport,
         token: params.token,
@@ -4830,6 +4929,7 @@ export function createCliActionDeps(params: Readonly<{
         });
       }
       if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      const { callExactMachineRpc } = await import("@/session/transport/rpc/machineRpc");
       return await callExactMachineRpc({
         credentials: params.credentials,
         machineId: target.machineId,
@@ -4845,6 +4945,7 @@ export function createCliActionDeps(params: Readonly<{
         if (!params.credentials) return { ok: false, code: 'not_authenticated' };
         const target = await resolveExecutionRunMachineTarget(sessionId, opts);
         if (!target.ok) return { ok: false, code: target.errorCode };
+        const [{ waitForExecutionRun }, { normalizeExecutionRunWaitTimeoutMs }] = await Promise.all([import("@/session/services/executionRuns"), import("@/session/services/executionRunWaitTiming")]);
         return await waitForExecutionRun({ credentials: params.credentials, machineId: target.machineId,
           serverUrl: params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
           ...executionRunAuthorityCeiling(opts), runId: request.runId,
@@ -4864,6 +4965,7 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, code: transport.code, ...(transport.candidates ? { candidates: transport.candidates } : {}) };
       }
 
+      const [{ waitForExecutionRun }, { normalizeExecutionRunWaitTimeoutMs }] = await Promise.all([import("@/session/services/executionRuns"), import("@/session/services/executionRunWaitTiming")]);
       return await waitForExecutionRun({
         ...transport,
         token: params.token,
@@ -4925,6 +5027,7 @@ export function createCliActionDeps(params: Readonly<{
       // A capability on one daemon cannot authorize a successor or another
       // Home. Keep released transcript-only target replacement unchanged.
       const serverUrl = params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
+      const { callExactMachineRpc, callMachineRpc } = await import("@/session/transport/rpc/machineRpc");
       const callMemoryRpc = (method: string, request: unknown) =>
         (exactScopeRequired ? callExactMachineRpc : callMachineRpc)({
           credentials, machineId, method, request, timeoutMs: null,
@@ -4948,6 +5051,7 @@ export function createCliActionDeps(params: Readonly<{
         isMemorySessionSearchHitV1(hit) ? [hit.sessionId] : [],
       ))].map(async (sessionId) => {
         try {
+          const { fetchSessionById } = await import("@/session/transport/http/sessionsHttp");
           const session = await fetchSessionById({
             token: credentials.token,
             sessionId,
@@ -4982,6 +5086,7 @@ export function createCliActionDeps(params: Readonly<{
       if (request.source !== undefined) {
         if (!await isMachineActionServerScopeCurrent({ serverId, machineId, signal })) throw Object.assign(
           new Error('Exact Home scope is unavailable.'), { code: 'not_authenticated' as const });
+        const { callExactMachineRpc } = await import("@/session/transport/rpc/machineRpc");
         return MemoryWindowV1Schema.parse(await callExactMachineRpc({ credentials: params.credentials,
           machineId, serverUrl: params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(),
           method: RPC_METHODS.DAEMON_MEMORY_GET_WINDOW, request: { ...request, v: 1 },
@@ -4989,6 +5094,7 @@ export function createCliActionDeps(params: Readonly<{
         }));
       }
       const { sessionId, seqFrom, seqTo } = request;
+      const [{ fetchSessionById }, { callMachineRpc }] = await Promise.all([import("@/session/transport/http/sessionsHttp"), import("@/session/transport/rpc/machineRpc")]);
       const session = await fetchSessionById({
         token: params.credentials.token,
         sessionId,
@@ -5017,6 +5123,7 @@ export function createCliActionDeps(params: Readonly<{
     },
     daemonMemoryEnsureUpToDate: async ({ machineId, sessionId }) => {
       if (!params.credentials) return notSupported();
+      const { callMachineRpc } = await import("@/session/transport/rpc/machineRpc");
       return await callMachineRpc({
         credentials: params.credentials,
         machineId,
@@ -5058,6 +5165,7 @@ export function createCliActionDeps(params: Readonly<{
           throw Object.assign(new Error('task_scope_mismatch'), { code: 'task_scope_mismatch' });
         }
       };
+      const { createCliAccountKvJsonCollectionTransport } = await import("@/api/client/accountKvJsonTransport");
       return executeInternalTaskAction({ actionId, input, scope: { serverId: todoHomeServerId, accountId: homeAccountId }, requireCurrent, createId: randomUUID,
         port: createCliAccountKvJsonCollectionTransport({ credentials: params.credentials, serverBaseUrl: todoHomeBaseUrl, signal,
           shouldContinue: () => !signal?.aborted && (params.serverId !== undefined || configuration.activeServerId === todoHomeServerId),
@@ -5072,6 +5180,7 @@ export function createCliActionDeps(params: Readonly<{
           throw Object.assign(new Error('task_scope_mismatch'), { code: 'task_scope_mismatch' });
         }
       };
+      const { createCliAccountKvJsonCollectionTransport } = await import("@/api/client/accountKvJsonTransport");
       return executeInternalTaskReorder({ input, scope: { serverId: todoHomeServerId, accountId: homeAccountId }, requireCurrent,
         port: createCliAccountKvJsonCollectionTransport({ credentials: params.credentials, serverBaseUrl: todoHomeBaseUrl, signal,
           shouldContinue: () => !signal?.aborted && (params.serverId !== undefined || configuration.activeServerId === todoHomeServerId),
@@ -5092,6 +5201,7 @@ export function createCliActionDeps(params: Readonly<{
       };
       try {
         requireCurrent();
+        const { createCliAccountKvJsonTransport } = await import("@/api/client/accountKvJsonTransport");
         await applyTodoSessionLinkV1(parsed.data, createCliAccountKvJsonTransport({
           credentials: params.credentials, key: `todo.${parsed.data.taskId}`,
           serverBaseUrl: todoHomeBaseUrl,
@@ -5110,8 +5220,10 @@ export function createCliActionDeps(params: Readonly<{
         try {
           if (!params.savedSecretOperationContext && getActiveAccountSettingsSnapshot()?.scopeKey
             !== resolveAccountSettingsScopeKeyForToken(params.credentials!.token)) {
+            const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
             await bootstrapAccountSettingsContext({ credentials: params.credentials!, mode: 'blocking' });
           }
+          const { createCliAcpCatalogStore } = await import("@/agent/acp/catalog/acpCatalogStore");
           const result = await createCliAcpCatalogStore({ credentials: params.credentials!, signal,
             operationContext: params.savedSecretOperationContext }).updateCatalog(mutate, { expectedRevision, sourceSettingsVersion });
           // Publication may retire after acknowledgement; the durable row receipt still succeeds.
@@ -5126,6 +5238,7 @@ export function createCliActionDeps(params: Readonly<{
           const errorCode = result.status === 'conflict' ? 'conflict' : `acp_catalog_${result.status}`;
           return { ok: false as const, errorCode, error: errorCode, ...(Object.keys(details).length > 0 ? { details } : {}) };
         } catch (error) {
+          const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
           if (error instanceof AcpCatalogUnavailableError) {
             return { ok: false as const, errorCode: error.code, error: error.code, details: {
               reason: error.reason,
@@ -5147,6 +5260,7 @@ export function createCliActionDeps(params: Readonly<{
         serverId: await resolveProjectHomeIdentity() } };
       const accountId = context?.externalActionExecutionAuthorization?.binding.accountId ?? homeAccountId;
       if (!accountId) return { ok: false, errorCode: 'project_context_access_denied' };
+      const { mutateProjectAccountOrganization } = await import("@/workspaces/projectAccountRows");
       const run = () => updatePersonalProjectContextV1({
         accountScope: () => params.serverId === undefined && configuration.activeServerId !== projectHomeId
           ? null : { serverId: input.target.serverId, accountId },
@@ -5156,6 +5270,7 @@ export function createCliActionDeps(params: Readonly<{
             return artifact?.promptLibraryArtifact ?? null;
           }
           if (!approvalsStore) return null;
+          const [{ isServerProfileHomeIdentity }, { withCliPromptLibraryArtifactReader }] = await Promise.all([import("@/server/serverProfiles"), import("@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks")]);
           if (!ref.serverId || await isServerProfileHomeIdentity(projectHomeId, ref.serverId)) return approvalsStore.promptLibraryStore.read(ref.artifactId, options);
           // Delegated provenance cannot borrow the user's saved foreign Home.
           if (context?.externalActionCredential || context?.externalActionExecutionAuthorization) return null;
@@ -5172,6 +5287,7 @@ export function createCliActionDeps(params: Readonly<{
     },
     projectAction: async (args) => {
       if (args.actionId === 'projects.trust.list' || args.actionId === 'projects.trust.revoke') {
+        const { createCliProjectTrustAction } = await import("./projectTrustAction");
         return await createCliProjectTrustAction({ token: params.token, credentials: params.credentials,
           accountId: homeAccountId, ...exactHome })(args);
       }
@@ -5273,6 +5389,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!source) return unavailable;
       try {
         source.assertCurrent();
+        const { withCliPromptLibraryArtifactReader } = await import("@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks");
         const result = await withCliPromptLibraryArtifactReader((reader) => resolvePromptInvocationInLibrary({ invocations: source.invocations,
           store: approvalsStore.promptLibraryStore, readArtifact: async (ref) => {
             source.assertCurrent();
@@ -5307,6 +5424,7 @@ export function createCliActionDeps(params: Readonly<{
         let rules: Awaited<ReturnType<typeof readSkillRulesForItemV1>> | undefined;
         // Name reads are addressed by the Session's admitted identity, just like id
         // reads. An unrelated plugin source is not authority for this content.
+        const { resolveHappierSkillIdentity } = await import("@/prompts/skills/runtime/resolveHappierSkillIdentity");
         const skillId = 'skillId' in request ? request.skillId : resolveHappierSkillIdentity(
           { name: request.name }, sessionItems ? { items: sessionItems } : undefined);
         const pluginSkills = await approvalsStore.readPluginSkills(signal, skillId ? [skillId] : []);
@@ -5316,13 +5434,17 @@ export function createCliActionDeps(params: Readonly<{
             rules = await readSkillRulesForItemV1(approvalsStore.skillRules, selected.skillId, signal);
             signal?.throwIfAborted();
             const currentItems = params.getCurrentSessionSkillItems?.();
+            const { resolveHappierSkillIdentity } = await import("@/prompts/skills/runtime/resolveHappierSkillIdentity");
             const identity = resolveHappierSkillIdentity({ name: selected.name }, currentItems ? { items: currentItems } : undefined);
             const current = currentItems?.find(item => item.skillId === identity);
             if (identity !== selected.skillId || current?.digest !== selected.digest) return false;
             const accountId = params.credentials ? readAccountIdFromToken(params.credentials.token) : null;
-            if (accountId) await recordDaemonSkillUse({ skillIds: [identity], account: { accountId,
+            if (accountId) {
+              const { recordDaemonSkillUse } = await import("@/daemon/controlClient");
+              await recordDaemonSkillUse({ skillIds: [identity], account: { accountId,
               serverHttpBaseUrl: normalizeServerHttpBaseUrl(params.savedSecretOperationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl()),
             } }, { ...(signal ? { signal } : {}) }).catch(() => {});
+            }
             return true;
           } });
         return 'skillId' in result ? { ...result, rules: rules ?? await readSkillRulesForItemV1(approvalsStore.skillRules, result.skillId, signal) } : result;
@@ -5355,6 +5477,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!approvalsStore || !params.credentials) return notSupported();
       const localMachine = await requireLocalPromptActionMachine(request.machineId);
       if (!localMachine.ok) return localMachine;
+      const { createCliRegistryHostV1 } = await import("@/registries/createCliRegistryHost");
       const registry = createCliRegistryHostV1({ credentials: params.credentials, port: approvalsStore.promptLibraryStore.organization, signal,
         operationContext: params.savedSecretOperationContext });
       return installPromptRegistryItemInLibrary({
@@ -5463,6 +5586,7 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, errorCode: 'machine_not_found', error: 'machine_not_found' };
       }
       const { signal, ...request } = args;
+      const { callMachineRpc } = await import("@/session/transport/rpc/machineRpc");
       return await callMachineRpc({
         credentials: params.credentials,
         machineId,
@@ -5567,6 +5691,7 @@ export function createCliActionDeps(params: Readonly<{
       // WorkspaceRefs are keyed by the stable Home identity when available.
       // Admission accepts either identifier; domain lookup must use the Home.
       const currentServerId = normalizeStringValue(serverIdentityId) ?? actionHomeId;
+      const { resolveWorkspaceRefById } = await import('@/workspaces/workspaceRefsV1');
       const source = resolveWorkspaceRefById(rows.workspaceRefs, input.sourceWorkspaceRefId, currentServerId)
         ?? (serverId === undefined && params.serverIdentityId === undefined
           ? resolveWorkspaceRefById(rows.workspaceRefs, input.sourceWorkspaceRefId) : null);
@@ -5726,6 +5851,7 @@ export function createCliActionDeps(params: Readonly<{
       // coordinator: machine custody and transcript-storage authority both come
       // from OWNER metadata, and an unresolved link refuses here rather than
       // being stamped as `persisted` on a request that stops the source.
+      const { resolveSessionHandoffSourceAuthority } = await import('@/session/handoff/resolveSessionHandoffSourceAuthority');
       const source = resolveSessionHandoffSourceAuthority({
         credentials: params.credentials,
         rawSession: transport.rawSession,
@@ -5802,12 +5928,14 @@ export function createCliActionDeps(params: Readonly<{
       if (input.admittedInput && params.credentials && params.credentials.credentialProvenance !== 'api_token'
         && isSameActionHomeId(input.admittedInput.executionTarget.serverId)
         && (reviewedOpinionSpawn || params.sessionSpawnDirectTargetTransport?.machineId !== input.executionTarget.machineId)) {
+        const { resolveLiveDaemonControlTargetForServer } = await import("@/daemon/multiDaemon");
         const localDaemon = reviewedOpinionSpawn ? null
           : await resolveLiveDaemonControlTargetForServer(projectHomeId).catch(() => null);
         const ownsRequestedMachine = localDaemon?.accountId === readAccountIdFromToken(params.credentials.token)
           && localDaemon?.machineId === input.executionTarget.machineId;
         if (!ownsRequestedMachine) {
           try {
+            const { dispatchRequesterSessionSpawnNewRpc } = await import("@/session/transport/rpc/machineRpc");
             const dispatched = await dispatchRequesterSessionSpawnNewRpc({ credentials: params.credentials, input: input.admittedInput,
               context: input.context, serverId: input.admittedInput.executionTarget.serverId, serverUrl: machineReferenceServerUrl,
               serverIdentityId: params.serverIdentityId ?? input.context?.serverIdentityId,
@@ -5916,6 +6044,7 @@ export function createCliActionDeps(params: Readonly<{
         }
         // New Sessions use persisted Account mode, never the parent's mode or
         // credential key presence. Existing Session sends read their own mode.
+        const [{ fetchAccountEncryptionCurrentness }, { buildSessionSpawnInitialInputAdmissionForLocalIdV1, requiresMachineAdmissionForSessionInput }] = await Promise.all([import("@/api/client/connectedServiceCredentialApi"), import("@/session/services/sessionInputAdmissionIdentity")]);
         const currentness = await fetchAccountEncryptionCurrentness({
           token: params.credentials.token,
           ...(params.serverHttpBaseUrl ? { serverBaseUrl: params.serverHttpBaseUrl } : {}),
@@ -5936,6 +6065,7 @@ export function createCliActionDeps(params: Readonly<{
             ? { callerInputAuthorization: context.externalActionExecutionAuthorization }
             : {}),
         })) {
+          const [{ MachineAdmissionTransportUnavailableError }, { SPAWN_SESSION_ERROR_CODES }] = await Promise.all([import("@/daemon/machineAdmissionTransport"), import("@/session/shared/spawnSessionContract")]);
           const cause = new MachineAdmissionTransportUnavailableError();
           // Refuse unadmittable protected input before a Session exists.
           throw Object.assign(new Error(cause.message, { cause }), {
@@ -5949,6 +6079,7 @@ export function createCliActionDeps(params: Readonly<{
       }
       if (managedCreation) {
         try {
+          const { readManagedMachine } = await import("@/machines/managed/readManagedMachine");
           const retained = await readManagedMachine({ credentials: params.credentials,
             serverHttpBaseUrl: machineReferenceServerUrl, homeId: managedCreation.homeId,
             managedId: managedCreation.managedId, signal,
@@ -5964,6 +6095,7 @@ export function createCliActionDeps(params: Readonly<{
             return { type: 'error', code: 'invalid_input', retryable: false };
           }
         } catch (error) {
+          const { isAuthenticationError } = await import("@/api/client/httpStatusError");
           return isAuthenticationError(error)
             ? { type: 'error', code: 'permission_denied', retryable: false }
             : { type: 'error', code: 'spawn_failed', retryable: true };
@@ -5973,6 +6105,7 @@ export function createCliActionDeps(params: Readonly<{
       if (resumeActionRequest === true && !normalizedActionRequestId) {
         return { type: 'error', code: 'invalid_input', retryable: false };
       }
+      const [{ createStableSpawnNonce }, { mergeSessionTeamCredentialBindingIntents }, { SpawnSessionTerminalSchema }, { buildSessionCreationCorrespondence }] = await Promise.all([import("@/session/shared/spawnNonce"), import("@/session/services/spawnConnectedServicesDefaults"), import("@/rpc/handlers/spawnSessionOptionsContract"), import("@/session/shared/sessionCreationCorrespondence")]);
       const spawnNonce = normalizedActionRequestId
         ? createStableSpawnNonce('session.spawn_new.action', { actionRequestId: normalizedActionRequestId })
         : undefined;
@@ -5989,6 +6122,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!directTargetTransport) {
         let targetCapabilityProjection: Awaited<ReturnType<typeof readMachineOperationProtocolCapabilitiesV1>>;
         try {
+          const { readMachineOperationProtocolCapabilitiesV1 } = await import("@/api/machine/machineOperationProtocolCapabilities");
           targetCapabilityProjection = await readMachineOperationProtocolCapabilitiesV1({
             credentials: params.credentials,
             machineId: executionTarget.machineId,
@@ -6006,6 +6140,7 @@ export function createCliActionDeps(params: Readonly<{
             }
             return { type: 'error', code: 'cancelled', retryable: true };
           }
+          const { isAuthenticationError } = await import("@/api/client/httpStatusError");
           if (isAuthenticationError(error)) {
             return { type: 'error', code: 'permission_denied', retryable: false };
           }
@@ -6058,6 +6193,7 @@ export function createCliActionDeps(params: Readonly<{
         };
       }
 
+      const [{ parsePermissionIntentAlias }, { resolveSessionCreationAgentTarget }] = await Promise.all([import("@happier-dev/agents"), import("@/session/creation/resolveSessionCreationAgentTarget")]);
       const resolvedAgentTarget = resolveSessionCreationAgentTarget(agentTarget);
       if (!resolvedAgentTarget) {
         return { type: 'error', code: 'target_unavailable', retryable: false };
@@ -6270,11 +6406,13 @@ export function createCliActionDeps(params: Readonly<{
       if (sourceContext && resumeActionRequest !== true) {
         let sourceAuthority: Awaited<ReturnType<typeof resolveReplaySourceContextAuthority>>;
         try {
+          const { resolveReplaySourceContextAuthority } = await import("@/session/replay/resolveReplaySourceContextAuthority");
           sourceAuthority = await resolveReplaySourceContextAuthority({
             credentials: params.credentials,
             sourceSessionId: sourceContext.sourceSessionId,
           });
         } catch (error) {
+          const { isAuthenticationError } = await import("@/api/client/httpStatusError");
           return isAuthenticationError(error)
             ? { type: 'error', code: 'permission_denied', retryable: false }
             : { type: 'error', code: 'spawn_failed', retryable: true };
@@ -6295,6 +6433,7 @@ export function createCliActionDeps(params: Readonly<{
         if (directory.kind === 'managed' && sameMachine) managedDirectorySeed = sourceAuthority.managedDirectorySeed;
         const filesNotCopied = directory.kind === 'managed' && sourceAuthority.sourceMachineId !== null && !sameMachine
           ? { reason: 'cross_machine' as const } : undefined;
+        const { buildReplaySeededSpawnRecipe } = await import("@/session/replay/buildReplaySeededSpawnRecipe");
         const recipeResult = await buildReplaySeededSpawnRecipe({
           credentials: params.credentials,
           cwd: normalizedDirectory,
@@ -6337,6 +6476,7 @@ export function createCliActionDeps(params: Readonly<{
         };
       }
       try {
+        const [{ createSpawnedSession }, { buildSessionSpawnInitialInputAdmissionForLocalIdV1 }, { buildPluginSessionInputAttachmentDraftsV1 }] = await Promise.all([import("@/session/services/createSpawnedSession"), import("@/session/services/sessionInputAdmissionIdentity"), import("@/session/composer/admitPluginSessionInputAttachmentsV1")]);
         const created = await createSpawnedSession({
           ...(context?.operationAcceptance?.actionId === 'session.spawn_new'
             && context.operationAcceptance.previousSessionCreationFailure
@@ -6356,6 +6496,7 @@ export function createCliActionDeps(params: Readonly<{
           ...(initialAccess !== undefined ? { initialAccess } : {}),
           ...(prepareInitialTriggers ? { prepareInitialTriggers } : {}),
           ...((promptStack?.length ?? 0) > 0 ? { preparePromptStack: async () => {
+            const { resolveCliPromptStackSystemAppendBlocks } = await import("@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks");
             await resolveCliPromptStackSystemAppendBlocks({ surface: 'coding', sessionEntries: promptStack,
               credentials: params.credentials, serverId: executionTarget.serverId, ...(memoryEnabled !== undefined ? { memoryEnabled } : {}),
               ...(signal ? { signal } : {}) });
@@ -6502,6 +6643,7 @@ export function createCliActionDeps(params: Readonly<{
           if (signal?.aborted || code === 'cancelled') {
             return { type: 'error', code: 'cancelled', retryable: true };
           }
+          const [{ isAuthenticationError }, { projectSessionSpawnFailure }] = await Promise.all([import("@/api/client/httpStatusError"), import("@/session/creation/projectSessionSpawnFailure")]);
           if (isAuthenticationError(error) || code === 'permission_denied' || code === 'run_access_denied'
             || code === 'visible_team_not_granted') {
             return { type: 'error', code: 'permission_denied', retryable: false };
@@ -6522,6 +6664,7 @@ export function createCliActionDeps(params: Readonly<{
             errorMessage: readRecord(error).message });
         }
         const details = readRecord(readRecord(error).details);
+        const [{ readSessionCreationTerminalSpawnErrorDetail }, { isAuthenticationError }, { SPAWN_SESSION_ERROR_CODES }, { readMachineRpcRequestDisposition }, { projectSessionSpawnFailure }] = await Promise.all([import("@/api/session/sessionCreationTerminalSpawnErrorDetail"), import("@/api/client/httpStatusError"), import("@/session/shared/spawnSessionContract"), import("@/session/transport/rpc/machineRpc"), import("@/session/creation/projectSessionSpawnFailure")]);
         const spawnErrorDetails = [readSessionCreationTerminalSpawnErrorDetail(error), details, details.errorDetail, readRecord(details.spawnResponse).errorDetail]
           .map(normalizeSpawnSessionErrorDetail);
         const initialTriggerRefusal = spawnErrorDetails.find(
@@ -6617,6 +6760,7 @@ export function createCliActionDeps(params: Readonly<{
         serverId: await resolveProjectHomeIdentity() } };
       const accountId = context?.externalActionExecutionAuthorization?.binding.accountId ?? homeAccountId;
       if (!accountId) return { ok: false, errorCode: 'project_visibility_access_denied' };
+      const { mutateProjectAccountOrganization } = await import("@/workspaces/projectAccountRows");
       return runWithServerHttpBaseUrl(todoHomeBaseUrl, () => setProjectVisibilityV1({
         accountScope: () => params.serverId === undefined && configuration.activeServerId !== projectHomeId
           ? null : { serverId: input.target.serverId, accountId },
@@ -6631,6 +6775,7 @@ export function createCliActionDeps(params: Readonly<{
       const serverId = await resolveProjectHomeIdentity();
       return runWithServerHttpBaseUrl(todoHomeBaseUrl, async () => {
         const authority = { ...projectRowsAuthority(context, 'projects.list', context?.signal), serverId };
+        const [{ readProjectAccountRows }, { readProjectLastOpenedMemoryMap }] = await Promise.all([import("@/workspaces/projectAccountRows"), import("@/workspaces/projectLastOpenedMemory")]);
         const snapshot = await readProjectAccountRows(authority);
         const recency = await readProjectLastOpenedMemoryMap(authority);
         const workspaceRefs = snapshot.workspaceRefs.map(ref => {
@@ -6640,6 +6785,7 @@ export function createCliActionDeps(params: Readonly<{
         const projected = projectProjectListV1({ ...args, serverId,
           workspaceRefs, organizations: snapshot.organizations, coverage: 'complete' });
         let machines: Awaited<ReturnType<typeof listCurrentAccountMachines>> | null;
+        const { listCurrentAccountMachines } = await import("@/api/machine/resolveCurrentAccountMachineTarget");
         try { machines = await listCurrentAccountMachines({ ...(authority.authorization
           ? { authorization: authority.authorization, effectActionId: authority.effectActionId }
           : { token: authority.credentials.token }), serverHttpBaseUrl: todoHomeBaseUrl, signal: context?.signal }); }
@@ -6808,6 +6954,7 @@ export function createCliActionDeps(params: Readonly<{
       };
       return withProjectHome(async () => {
         const spec = getActionSpec(actionId);
+        const { executeCapturedMachineAction } = await import("@/api/machine/capturedMachineAction");
         const raw = await executeCapturedMachineAction({ actionId, assertCurrent,
           invoke: options => callMachineAction({ machineId: parsed.data.machineId, serverId,
             method: spec.bindings!.rpcMethod!, request: { ...parsed.data, serverId },
@@ -6843,6 +6990,7 @@ export function createCliActionDeps(params: Readonly<{
         signal?.throwIfAborted();
       };
       return withProjectHome(async () => {
+        const { executeCapturedMachineAction } = await import("@/api/machine/capturedMachineAction");
         const raw = await executeCapturedMachineAction({ actionId, assertCurrent,
           invoke: options => callMachineAction({ machineId: parsed.data.machineId, serverId,
             method: getActionSpec(actionId).bindings!.rpcMethod!, request: { ...parsed.data, serverId },
@@ -6921,6 +7069,7 @@ export function createCliActionDeps(params: Readonly<{
         if (!await current()) return { status: 'unavailable' };
         if (actionId === 'machines.resources.policy.set') {
           const request = MACHINE_RESOURCES_ACTION_INPUT_SCHEMAS[actionId].parse(input);
+          const { executeCapturedMachineAction } = await import("@/api/machine/capturedMachineAction");
           return executeCapturedMachineAction({ actionId, assertCurrent: async () => {
             signal?.throwIfAborted();
             if (!await current()) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
@@ -6956,8 +7105,11 @@ export function createCliActionDeps(params: Readonly<{
         signal?.throwIfAborted();
       };
       const targetLocalAction = params.machineGuardAction;
-      if (actionId === 'machines.guard.activity.undo' && targetLocalAction) return withProjectHome(() =>
+      if (actionId === 'machines.guard.activity.undo' && targetLocalAction) {
+        const { executeCapturedMachineAction } = await import("@/api/machine/capturedMachineAction");
+        return withProjectHome(() =>
         executeCapturedMachineAction({ actionId, assertCurrent, invoke: () => targetLocalAction(args) }));
+      }
       const { executeMachineGuardAction } = await import('@/api/machine/machineGuard');
       return withProjectHome(() => executeMachineGuardAction({ actionId, input, serverId,
         assertCurrent,
@@ -7014,6 +7166,7 @@ export function createCliActionDeps(params: Readonly<{
       }
     },
     filesystemActionExecute: async ({ actionId, input, context }) => {
+      const { resolveFilesystemTransferCustodyFailure } = await import("./filesystemTransferCustody");
       const custodyFailure = resolveFilesystemTransferCustodyFailure(actionId, context);
       if (custodyFailure) return custodyFailure;
       const target = context.externalActionTarget;
@@ -7291,6 +7444,7 @@ export function createCliActionDeps(params: Readonly<{
         const request = actionId === 'machines.replacement.set' ? MachineReplacementSetInputSchema.parse(input) : null;
         const body = request ? { replacementMachineId: request.replacementMachineId,
           ...(request.confirmActiveOldMachine === undefined ? {} : { confirmActiveOldMachine: request.confirmActiveOldMachine }) } : undefined;
+        const { buildCurrentAccountStoredContentCompatibilityHttpHeaders } = await import("@/api/clientCompatibility/cliClientCompatibility");
         const response = await axios.request<unknown>({ url: `${home.replace(/\/+$/, '')}${transport.path.replace(':machineId', encodeURIComponent(input.machineId))}`,
           method: transport.method, data: body,
           headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${credentials.token}` },
@@ -7313,6 +7467,7 @@ export function createCliActionDeps(params: Readonly<{
         }
         const home = params.savedSecretOperationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
         return runWithServerHttpBaseUrl(home, async () => {
+          const { createCliProviderConnectionsStoreForOperation, createCliProviderConnectionsStore } = await import("@/providers/settings/catalogStore");
           const store = params.savedSecretOperationContext
             ? createCliProviderConnectionsStoreForOperation({ operationContext: params.savedSecretOperationContext, signal: context.signal })
             : createCliProviderConnectionsStore({ credentials, signal: context.signal,
@@ -7321,6 +7476,7 @@ export function createCliActionDeps(params: Readonly<{
             revoke: async () => {
               try {
                 await store.verifyCurrent();
+                const { buildCurrentAccountStoredContentCompatibilityHttpHeaders } = await import("@/api/clientCompatibility/cliClientCompatibility");
                 const response = await axios.post(`${home.replace(/\/+$/, '')}/v1/machines/${encodeURIComponent(input.machineId)}/revoke`, {}, {
                   headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${credentials.token}` },
                   validateStatus: () => true, ...(context.signal ? { signal: context.signal } : {}),
@@ -7339,6 +7495,7 @@ export function createCliActionDeps(params: Readonly<{
           });
           if (outcome.ok && outcome.providerCleanup === 'complete') {
             try {
+              const { refreshActiveProviderConnectionsCatalog } = await import("@/providers/settings/hydrate");
               await refreshActiveProviderConnectionsCatalog({ credentials,
                 operationContext: params.savedSecretOperationContext, signal: context.signal,
                 isCredentialCurrent: params.isCredentialCurrent }, { afterChange: true });
@@ -7421,6 +7578,7 @@ export function createCliActionDeps(params: Readonly<{
       }
       const caller = context.actionCaller;
       if (sessionInputSource && caller?.kind !== 'session') return rejectUndispatchedSessionAgentTransition('forbidden');
+      const { buildCausalSessionInputAdmissionV1, buildPluginSessionInputAdmissionV1 } = await import("@/session/services/sessionInputAdmissionIdentity");
       const inputAdmission = sessionInputSource && caller?.kind === 'session'
         ? buildCausalSessionInputAdmissionV1({ ...sessionInputSource, callerDepth: readAgentStartCallerWorkDepthV1(caller) })
         : caller?.kind === 'plugin'
@@ -7431,6 +7589,7 @@ export function createCliActionDeps(params: Readonly<{
       if (context.authority !== 'present_user' && !inputAdmission) return rejectUndispatchedSessionAgentTransition('forbidden');
       let restrictedAdmission = inputAdmission;
       if (inputAdmission && context.authority !== 'present_user' && caller?.kind !== 'session') {
+        const { parsePermissionIntentAlias } = await import("@happier-dev/agents");
         let ceiling = (typeof context.callerPermissionMode === 'string'
           ? parsePermissionIntentAlias(context.callerPermissionMode) : null) ?? 'default';
         const constraints = [context.callerInputConstraints, context.externalActionCredential?.grant]
@@ -7438,6 +7597,7 @@ export function createCliActionDeps(params: Readonly<{
         if (constraints.some(constraint => !isPermissionModeGrantedV1(constraint, ceiling))) {
           const restricted = constraints.find(constraint => constraint.permissionModes !== null);
           if (!restricted || restricted.permissionModes === null) return rejectUndispatchedSessionAgentTransition('forbidden');
+          const { parsePermissionIntentAlias } = await import("@happier-dev/agents");
           const permissionModes = restricted.permissionModes.filter(mode => {
             if (constraints.some(constraint => !isPermissionModeGrantedV1(constraint, mode))) return false;
             const narrowed = resolveEffectivePermissionMode({ currentMode: ceiling, admittedPermissionCeiling: mode });
@@ -7502,6 +7662,7 @@ export function createCliActionDeps(params: Readonly<{
     }) => {
       const pluginCaller = actionCaller?.kind === 'plugin' ? actionCaller : null;
       if (callerInputConstraints && typeof permissionModeOverride === 'string' && permissionModeOverride.trim()) {
+        const { parsePermissionIntentAlias } = await import("@happier-dev/agents");
         const requestedMode = parsePermissionIntentAlias(permissionModeOverride.trim());
         if (!requestedMode || !isPermissionModeGrantedV1(callerInputConstraints, requestedMode)) {
           return { status: 'rejected' as const, code: 'session_input_invalid' as const };
@@ -7592,6 +7753,7 @@ export function createCliActionDeps(params: Readonly<{
             idempotencyKey: idempotencyKey!,
           })
         : undefined;
+      const [{ buildPluginSessionInputAdmissionV1, buildCausalSessionInputAdmissionV1 }, { sendSessionMessage }, { isOriginalSessionInputAccountActionCustody }, { resolveSessionMessageAdmissionTimeoutMs }, { hasStoredSessionCredentialProvenance }] = await Promise.all([import("@/session/services/sessionInputAdmissionIdentity"), import("@/session/services/sendSessionMessage"), import("@/daemon/sessionEncryption/requesterAccountActionProjection"), import("@/session/transport/shared/sessionTimeouts"), import("@/persistence")]);
       const pluginInputAdmission = pluginCaller
         ? buildPluginSessionInputAdmissionV1({
             caller: pluginCaller,
@@ -7672,6 +7834,7 @@ export function createCliActionDeps(params: Readonly<{
             code: 'session_input_target_unavailable' as const,
           };
         }
+        const { buildPluginSessionInputAttachmentDraftsV1 } = await import("@/session/composer/admitPluginSessionInputAttachmentsV1");
         const rawAttachmentMeta = {
           [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: {
             v: 1 as const,
@@ -7684,6 +7847,7 @@ export function createCliActionDeps(params: Readonly<{
         };
         let persisted: Awaited<ReturnType<typeof findPersistedSessionUserMessageAdmission>>;
         try {
+          const { findPersistedSessionUserMessageAdmission } = await import("@/api/session/client/transcript/sessionUserMessageAdmissionRejoin");
           persisted = await findPersistedSessionUserMessageAdmission({
             token: params.credentials.token,
             sessionId: transport.sessionId,
@@ -7705,6 +7869,7 @@ export function createCliActionDeps(params: Readonly<{
         }
         if (persisted) {
           try {
+            const { validateComposerAttachmentRejoinCorrespondenceV1 } = await import("@/session/services/admitSessionStructuredInputV1");
             validateComposerAttachmentRejoinCorrespondenceV1({
               meta: rawAttachmentMeta,
               preparedComposerAttachments: persisted.composerAttachments,
@@ -7719,6 +7884,7 @@ export function createCliActionDeps(params: Readonly<{
           rejoinedMessageMeta = persisted.meta;
           admittedComposerAttachments = persisted.composerAttachments;
         } else {
+          const { admitPluginSessionInputAttachmentsV1 } = await import("@/session/composer/admitPluginSessionInputAttachmentsV1");
           const attachmentAdmission = await admitPluginSessionInputAttachmentsV1({
             attachments: composerAttachmentRegistry,
             pluginId: pluginCaller.pluginId,
@@ -7764,9 +7930,11 @@ export function createCliActionDeps(params: Readonly<{
         const descriptors = response.data.sessionAttachmentMetadata.envelope.payload.attachments;
         if (descriptors.some(descriptor => !descriptor.sha256)) return unsupported;
         try {
+          const { validateComposerAttachmentRejoinCorrespondenceV1 } = await import("@/session/services/admitSessionStructuredInputV1");
           validateComposerAttachmentRejoinCorrespondenceV1({ meta: legacyMeta,
             preparedComposerAttachments: [], preparedSessionAttachments: descriptors });
         } catch { return unsupported; }
+        const { projectSessionAttachmentInputV1 } = await import("@/session/attachments/projectRawIngressSessionAttachmentsV1");
         const projected = projectSessionAttachmentInputV1({ text: authoredMessageText,
           meta: { ...(messageMeta ?? {}), ...(admittedAttachmentMeta ?? {}) },
           uploaded: descriptors.map(descriptor => buildUploadedAttachment(descriptor)) });
@@ -7820,6 +7988,7 @@ export function createCliActionDeps(params: Readonly<{
               SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY_OBSERVE_V1, input,
               { ...sourceContext, ...(observationSignal ? { signal: observationSignal } : {}) }));
           }
+          const { mutateSessionMessageReplyObservation } = await import("@/session/services/sessionMessageReply");
           return mutateSessionMessageReplyObservation({ ...address, operation, ...(observationSignal ? { signal: observationSignal } : {}) });
         };
         const release = async () => {
@@ -7835,6 +8004,7 @@ export function createCliActionDeps(params: Readonly<{
             details: { admission } };
         }
         try {
+          const { waitForSessionInputResult } = await import("@/session/services/sendSessionMessage");
           const observed = await waitForSessionInputResult({ credentials: replyCredentials,
             idOrPrefix: sent.sessionId, localId: admission.localId, observeReply: true,
             ...((serverId ?? params.serverId) ? { serverId: serverId ?? params.serverId } : {}),
@@ -7869,6 +8039,7 @@ export function createCliActionDeps(params: Readonly<{
         }
       };
       if (protectedInputAdmission) {
+        const [{ sendSessionMessage }, { resolveSessionMessageAdmissionTimeoutMs }] = await Promise.all([import("@/session/services/sendSessionMessage"), import("@/session/transport/shared/sessionTimeouts")]);
         const protectedResult = await sendSessionMessage({
           ...(context?.authority ? { executionAuthority: context.authority } : {}),
           ...(context?.externalActionExecutionAuthorization ? { callerInputAuthorization: context.externalActionExecutionAuthorization } : {}),
@@ -7927,6 +8098,7 @@ export function createCliActionDeps(params: Readonly<{
           composerAttachmentRegistry
           && (admissionResult.status === 'accepted' || admissionResult.status === 'alreadyAccepted')
         ) {
+          const { notifyComposerAttachmentsAfterMessageAccepted } = await import("@/session/composer/notifyComposerAttachmentsAfterMessageAccepted");
           notifyComposerAttachmentsAfterMessageAccepted({
             sessionId: canonicalSessionId,
             localId: admissionResult.localId,
@@ -7997,6 +8169,7 @@ export function createCliActionDeps(params: Readonly<{
         // No input was issued: the standalone CLI has no authenticated Machine
         // socket. Its host children use the same original-Account ingress as a
         // top-level protected Send, preserving input identity and caller authority.
+        const [{ resolveSessionTransportContext }, { resolveSessionInputTargetMachineId, resolveProtectedSessionInputActionTarget }] = await Promise.all([import("@/session/services/resolveSessionTransportContext"), import("@/session/services/sessionInputAdmissionIdentity")]);
         const transport = await resolveSessionTransportContext({ credentials: params.credentials, idOrPrefix: sessionId,
           ...(sendServerFeaturesSnapshot ? { serverFeaturesSnapshot: sendServerFeaturesSnapshot } : {}),
           ...(signal ? { signal } : {}) });
@@ -8056,6 +8229,7 @@ export function createCliActionDeps(params: Readonly<{
         const credentials = params.credentials;
         if (!credentials) return { v: 1 as const, ok: false as const, error: 'unavailable' as const };
         await assertProjectRequesterCurrent(context);
+        const { mutateSessionMessageReplyObservation } = await import("@/session/services/sessionMessageReply");
         return withProjectHome(() => mutateSessionMessageReplyObservation({ credentials,
           sessionId, localId: requestLocalId, operation: reviewDecision,
           resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'approval.request.decide', request),
@@ -8075,6 +8249,7 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionExchangePrepare: async ({ sessionId, originInputLocalId, context, serverId, signal }) => {
       const homeServerId = params.serverId ?? configuration.activeServerId;
+      const [{ isServerProfileHomeIdentity }, { autonomousExchangePath, readAutonomousExchangeStatus }] = await Promise.all([import("@/server/serverProfiles"), import("@/api/sessionAutonomousExchangeTransport")]);
       if ((serverId && !await isServerProfileHomeIdentity(homeServerId, serverId))
         || (context.serverId && !await isServerProfileHomeIdentity(homeServerId, context.serverId))) return null;
       const path = autonomousExchangePath(sessionId, originInputLocalId);
@@ -8089,6 +8264,7 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionExchangeControl: async ({ sessionId, originInputLocalId, request, context, serverId, signal }) => {
       const homeServerId = params.serverId ?? configuration.activeServerId;
+      const [{ isServerProfileHomeIdentity }, { autonomousExchangePath, mutateAutonomousExchangeControl }] = await Promise.all([import("@/server/serverProfiles"), import("@/api/sessionAutonomousExchangeTransport")]);
       if ((serverId && !await isServerProfileHomeIdentity(homeServerId, serverId))
         || (context.serverId && !await isServerProfileHomeIdentity(homeServerId, context.serverId))) {
         return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
@@ -8121,6 +8297,7 @@ export function createCliActionDeps(params: Readonly<{
       signal?.throwIfAborted();
       const homeServerId = params.serverId ?? configuration.activeServerId;
       const homeServerHttpBaseUrl = params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
+      const { isServerProfileHomeIdentity } = await import("@/server/serverProfiles");
       if ((serverId && !await isServerProfileHomeIdentity(homeServerId, serverId))
         || (context.serverId && !await isServerProfileHomeIdentity(homeServerId, context.serverId))) {
         return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
@@ -8138,6 +8315,7 @@ export function createCliActionDeps(params: Readonly<{
       }
       return await runWithServerHttpBaseUrl(homeServerHttpBaseUrl, async () => {
         const serverFeaturesSnapshot = await readServerFeaturesSnapshot();
+        const { resolveSessionTransportContext } = await import("@/session/services/resolveSessionTransportContext");
         const transport = await resolveSessionTransportContext({
           credentials, idOrPrefix: sessionId,
           ...(resolveAuthorizationHeaders ? { resolveAuthorizationHeaders } : {}),
@@ -8149,6 +8327,7 @@ export function createCliActionDeps(params: Readonly<{
             ...(transport.candidates ? { candidates: transport.candidates } : {}) };
         }
         try {
+          const { callSessionRpc } = await import("@/session/transport/rpc/sessionRpc");
           const result = await callSessionRpc({
             ...transport, token: credentials.token, sessionId: transport.sessionId,
             method: `${transport.sessionId}:abort`,
@@ -8199,6 +8378,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
+      const { requestSessionStop } = await import("@/session/services/requestSessionStop");
       return await requestSessionStop({ credentials: params.credentials, idOrPrefix: sessionId,
         invokeMachineRpc: request => callMachineAction({ machineId: request.machineId, method: request.method,
           request: request.request, requestId: request.requestId, timeoutMs: request.timeoutMs,
@@ -8235,6 +8415,7 @@ export function createCliActionDeps(params: Readonly<{
           return await callSessionActionRpc(transport, 'session.update.post', input, context);
         });
       }
+      const { fetchSessionById } = await import("@/session/transport/http/sessionsHttp");
       const read = () => fetchSessionById({
         token: params.token, sessionId: params.sessionId,
         ...(context.signal ? { signal: context.signal } : {}),
@@ -8260,6 +8441,7 @@ export function createCliActionDeps(params: Readonly<{
       if (params.serverId !== undefined && serverId != null && !isSameActionHomeId(serverId)) {
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
+      const { setSessionManager } = await import("@/session/transport/http/sessionsHttp");
       const mutate = () => setSessionManager({
         token: credentials.token, sessionId, managerSessionId, expectedManagerSessionId,
         ...(signal ? { signal } : {}),
@@ -8284,6 +8466,7 @@ export function createCliActionDeps(params: Readonly<{
         if (request.pinned && request.surface === 'rail') {
           // Re-read on every addition: a cached transport could retain a demoted Bot marker.
           const serverFeaturesSnapshot = await readServerFeaturesSnapshot();
+          const { resolveSessionTransportContext } = await import("@/session/services/resolveSessionTransportContext");
           const transport = await resolveSessionTransportContext({ credentials, idOrPrefix: sessionId,
             resolveAuthorizationHeaders: (httpRequest) => resolveServerRequestHeaders(context, 'session.organization.pin.set', httpRequest),
             ...(signal ? { signal } : {}),
@@ -8295,6 +8478,7 @@ export function createCliActionDeps(params: Readonly<{
           if (!readSessionBotV1(metadata.bot)) return { ok: false, errorCode: 'session_not_bot', error: 'session_not_bot' };
         }
         signal?.throwIfAborted();
+        const { setSessionOrganizationPin } = await import("@/session/transport/http/sessionsHttp");
         return await setSessionOrganizationPin({ token: credentials.token, sessionId, request,
           ...(signal ? { signal } : {}),
           resolveAuthorizationHeaders: (httpRequest) => resolveServerRequestHeaders(context, 'session.organization.pin.set', httpRequest),
@@ -8307,6 +8491,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       if (params.serverId !== undefined && serverId != null && !isSameActionHomeId(serverId)) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       const credentials = params.credentials;
+      const { setSessionAttentionStanding } = await import("@/session/transport/http/sessionsHttp");
       const mutate = () => setSessionAttentionStanding({
         token: credentials.token, sessionId, request,
         ...(signal ? { signal } : {}),
@@ -8319,6 +8504,7 @@ export function createCliActionDeps(params: Readonly<{
       const credentials = params.credentials;
       if (!credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       if (params.serverId !== undefined && serverId != null && !isSameActionHomeId(serverId)) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+      const { updateSessionMetadataForTarget } = await import("@/session/services/updateSessionMetadataForTarget");
       const mutate = () => updateSessionMetadataForTarget({
         credentials, idOrPrefix: sessionId,
         resolveAuthorizationHeaders: (request) => resolveServerRequestHeaders(context, 'session.approval_reviewer.set', request),
@@ -8350,6 +8536,7 @@ export function createCliActionDeps(params: Readonly<{
       if (fieldId === 'intent.context') {
         const readerServerId = credentials.requesterSessionCredentialScope?.serverId ?? projectHomeId;
         if (!isSameActionHomeId(readerServerId)) return executionRunActionFailure('server_target_mismatch');
+        const { withCliPromptLibraryArtifactReader } = await import("@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks");
         await withCliPromptLibraryArtifactReader(reader => admitSessionContextIntentV1(value, ref => reader.readArtifactHeader(
           ref.serverId && isSameActionHomeId(ref.serverId) ? { ...ref, serverId: readerServerId } : ref)), {
           credentials, serverId: readerServerId, signal: context.signal,
@@ -8374,6 +8561,7 @@ export function createCliActionDeps(params: Readonly<{
           declaration, providerConfig, preference: value });
         if (admitted.kind === 'unavailable') return { ok: false, errorCode: admitted.reason, error: admitted.reason };
       }
+      const { updateSessionStateFieldForTarget } = await import("@/session/services/updateSessionStateFieldForTarget");
       const mutate = () => updateSessionStateFieldForTarget({
         credentials,
         idOrPrefix: sessionId,
@@ -8401,6 +8589,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!credentials) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
+      const { parsePermissionIntentAlias } = await import("@happier-dev/agents");
       const parsed = parsePermissionIntentAlias(String(permissionMode ?? '').trim());
       if (!parsed) {
         return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
@@ -8412,6 +8601,7 @@ export function createCliActionDeps(params: Readonly<{
       if (externalRequest && !resolveAuthorizationHeaders({ method: 'GET', path: '/v1/account/encryption/currentness' })) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
+      const { setSessionPermissionMode } = await import("@/session/services/setSessionPermissionMode");
       const mutate = () => setSessionPermissionMode({
         credentials,
         idOrPrefix: sessionId,
@@ -8430,6 +8620,7 @@ export function createCliActionDeps(params: Readonly<{
     modelFavoriteSet: async (input, context) => {
       const credentials = params.credentials;
       if (!credentials) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+      const { updateAccountSettingsV2OnceAgainstLatest } = await import("@/settings/accountSettings/updateAccountSettingsV2WithRetry");
       const mutate = () => updateAccountSettingsV2OnceAgainstLatest({ credentials,
         signal: context.signal, mutate: raw => setModelFavoriteV1(raw, input) });
       return params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, mutate) : mutate();
@@ -8443,6 +8634,7 @@ export function createCliActionDeps(params: Readonly<{
         || !resolveAuthorizationHeaders({ method: 'GET', path: '/v1/account/encryption/currentness' }))) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
+      const { setSessionModel } = await import("@/session/services/setSessionModel");
       const mutate = () => setSessionModel({ credentials: params.credentials!, idOrPrefix: sessionId, serverId: projectHomeId, unarm: true,
         ...(externalRequest ? { resolveAuthorizationHeaders } : {}),
         ...(externalRequest && params.externalActionMachineInstallationId && params.externalActionMachineRequestPrivateKey ? {
@@ -8471,6 +8663,7 @@ export function createCliActionDeps(params: Readonly<{
         || !resolveAuthorizationHeaders({ method: 'GET', path: '/v1/account/encryption/currentness' }))) {
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
+      const { setSessionModel } = await import("@/session/services/setSessionModel");
       const mutate = () => setSessionModel({
         credentials,
         idOrPrefix: sessionId,
@@ -8532,6 +8725,7 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
       const effectActionId = archived ? 'session.archive' : 'session.unarchive';
+      const { setSessionArchivedState } = await import("@/session/services/setSessionArchivedState");
       return await setSessionArchivedState({ credentials: params.credentials, idOrPrefix: sessionId, archived: archived === true,
         ...(archived && context?.actionCaller?.kind === 'workflowRun' ? { originRunId: context.actionCaller.runId } : {}),
         ...(context?.signal ? { signal: context.signal } : {}),
@@ -8550,10 +8744,14 @@ export function createCliActionDeps(params: Readonly<{
       }
       // A Session read is addressed by the captured Home identity, exactly as the widget Session validator
       // decides it; the saved profile's exact binding still proves a Home id this process was not given.
-      const sessionHome = async (id?: string | null) => !id || isSameActionHomeId(id) || await isServerProfileHomeIdentity(projectHomeId, id.trim());
+      const sessionHome = async (id?: string | null) => {
+        const { isServerProfileHomeIdentity } = await import("@/server/serverProfiles");
+        return !id || isSameActionHomeId(id) || await isServerProfileHomeIdentity(projectHomeId, id.trim());
+      };
       if (!await sessionHome(serverId) || !await sessionHome(context?.serverId)) return executionRunActionFailure('server_scope_mismatch');
       const credentials = params.credentials;
       const serverFeaturesSnapshot = await readServerFeaturesSnapshot();
+      const { getSessionStatus } = await import("@/session/services/getSessionStatus");
       const read = () => getSessionStatus({ credentials, idOrPrefix: sessionId, live: live === true,
         ...(operation ? { operation } : {}), ...(credentialPurpose ? { credentialPurpose } : {}),
         ...(credentialTeamSelection ? { credentialTeamSelection } : {}),
@@ -8575,6 +8773,7 @@ export function createCliActionDeps(params: Readonly<{
             }));
             const authorizeRequest = (request: Readonly<{ method: string; path: string; body?: unknown }>) =>
               resolveServerRequestHeaders(currentContext, 'session.status.get', request);
+            const [{ createCliConnectedAccountCatalogStore }, { fetchAccountProfile }] = await Promise.all([import("@/settings/connectedAccounts/connectedAccountCatalogStore"), import("@/api/accountProfile")]);
             const store = teamSelection ? null : createCliConnectedAccountCatalogStore({ credentials, operationContext: params.savedSecretOperationContext,
               authorizeRequest, ...(operationSignal ? { signal: operationSignal } : {}) });
             const catalog = store ? await store.readAdmittedCatalog('purposes') : null;
@@ -8640,6 +8839,7 @@ export function createCliActionDeps(params: Readonly<{
     sessionPendingActionSet: async ({ sessionId, localId, requestedAction, resumeWhenAvailable, serverId, context }) => {
       const denied = await projectHomeAdmission(serverId, context);
       if (denied) return denied;
+      const { updatePendingQueueV2RequestedAction } = await import("@/api/session/pendingQueueV2Transport");
       return withProjectHome(() => updatePendingQueueV2RequestedAction({ token: params.token, sessionId, localId, requestedAction,
         ...(resumeWhenAvailable !== undefined ? { resumeWhenAvailable } : {}),
         ...(context.signal ? { signal: context.signal } : {}),
@@ -8649,6 +8849,7 @@ export function createCliActionDeps(params: Readonly<{
     sessionPendingWithdraw: async ({ sessionId, localId, serverId, targetExecutionRunId, context }) => {
       const denied = await projectHomeAdmission(serverId, context);
       if (denied) return denied;
+      const { withdrawPendingQueueV2Message } = await import("@/api/session/pendingQueueV2Transport");
       return withProjectHome(() => withdrawPendingQueueV2Message({ token: params.token, sessionId, localId,
         ...(targetExecutionRunId ? { targetExecutionRunId } : {}), ...(context.signal ? { signal: context.signal } : {}),
         resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.pending.withdraw', request),
@@ -8658,6 +8859,7 @@ export function createCliActionDeps(params: Readonly<{
       const denied = await projectHomeAdmission(serverId, context);
       if (denied) return denied;
       return withProjectHome(async () => {
+        const { markPendingQueueV2DeliveryHandled } = await import("@/api/session/pendingQueueV2Transport");
         await markPendingQueueV2DeliveryHandled({ token: params.token, sessionId, localId,
           ...(context.signal ? { signal: context.signal } : {}),
           resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.pending.markHandled', request),
@@ -8669,6 +8871,7 @@ export function createCliActionDeps(params: Readonly<{
       const denied = await projectHomeAdmission(serverId, context);
       if (denied) return denied;
       return withProjectHome(async () => {
+        const { dismissPendingQueueV2Delivery } = await import("@/api/session/pendingQueueV2Transport");
         await dismissPendingQueueV2Delivery({ token: params.token, sessionId, localId,
           ...(targetExecutionRunId ? { targetExecutionRunId } : {}), ...(context.signal ? { signal: context.signal } : {}),
           resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.pending.dismiss', request),
@@ -8680,6 +8883,7 @@ export function createCliActionDeps(params: Readonly<{
       const denied = await projectHomeAdmission(serverId, context);
       if (denied) return denied;
       return withProjectHome(async () => {
+        const { sendPendingQueueV2DeliveryAsNew } = await import("@/api/session/pendingQueueV2Transport");
         const { newLocalId } = await sendPendingQueueV2DeliveryAsNew({ token: params.token, sessionId, localId,
           ...(targetExecutionRunId ? { targetExecutionRunId } : {}), ...(context.signal ? { signal: context.signal } : {}),
           resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.pending.sendAsNew', request),
@@ -8711,6 +8915,7 @@ export function createCliActionDeps(params: Readonly<{
             throw Object.assign(new Error('reset_start_unsupported'), { code: 'reset_start_unsupported' });
           }
           const headers = authorizeRequest({ method: 'GET', path: '/v1/account/encryption/currentness' });
+          const [{ fetchAccountEncryptionCurrentness }, { readProviderAccountUsageQuotaV4, readProviderAccountUsageHistoryWitnessV4 }, { updatePendingQueueV2RequestedAction }] = await Promise.all([import("@/api/client/connectedServiceCredentialApi"), import("@/daemon/connectedServices/accountUsage/readQuota"), import("@/api/session/pendingQueueV2Transport")]);
           const authority = await fetchAccountEncryptionCurrentness({ token: credentials.token, authorizationHeaders: headers,
             ...(context.signal ? { signal: context.signal } : {}) });
           await assertCurrent();
@@ -8745,6 +8950,7 @@ export function createCliActionDeps(params: Readonly<{
     sessionPendingResetStartCancel: async ({ sessionId, localId, serverId, context }) => {
       const denied = await projectHomeAdmission(serverId, context);
       if (denied) return denied;
+      const { withdrawPendingQueueV2Message } = await import("@/api/session/pendingQueueV2Transport");
       return withProjectHome(() => withdrawPendingQueueV2Message({ token: params.token, sessionId, localId,
         ...(context.signal ? { signal: context.signal } : {}),
         resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.pending.resetStart.cancel', request),
@@ -8769,6 +8975,7 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionUsageLimitWaitResumeEnable: async ({ sessionId, issueFingerprint, remember, resumePromptMode }) => {
       if (!await isUsageLimitRecoveryEnabled()) {
+        const [{ normalizeUsageLimitRecoveryOperationResult }, { usageLimitRecoveryDisabledResult }] = await Promise.all([import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult"), import("@/features/usageLimitRecoveryFeatureGate")]);
         return normalizeUsageLimitRecoveryOperationResult(usageLimitRecoveryDisabledResult(), { sessionId });
       }
       const normalizedResumePromptMode = readResumePromptMode(resumePromptMode);
@@ -8783,6 +8990,7 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionUsageLimitWaitResumeCancel: async ({ sessionId, issueFingerprint, armedAtMs, runtimeAuthRecoveryAttemptId }) => {
       if (!await isUsageLimitRecoveryEnabled()) {
+        const [{ normalizeUsageLimitRecoveryOperationResult }, { usageLimitRecoveryDisabledResult }] = await Promise.all([import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult"), import("@/features/usageLimitRecoveryFeatureGate")]);
         return normalizeUsageLimitRecoveryOperationResult(usageLimitRecoveryDisabledResult(), { sessionId });
       }
       const request = {
@@ -8800,6 +9008,7 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionUsageLimitCheckNow: async ({ sessionId, agentId, resumePromptMode }) => {
       if (!await isUsageLimitRecoveryEnabled()) {
+        const [{ normalizeUsageLimitRecoveryOperationResult }, { usageLimitRecoveryDisabledResult }] = await Promise.all([import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult"), import("@/features/usageLimitRecoveryFeatureGate")]);
         return normalizeUsageLimitRecoveryOperationResult(usageLimitRecoveryDisabledResult(), { sessionId });
       }
       const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() : '';
@@ -8813,6 +9022,7 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionUsageLimitSwitchAccountNow: async ({ sessionId, agentId, resumePromptMode }) => {
       if (!await isUsageLimitRecoveryEnabled()) {
+        const [{ normalizeUsageLimitRecoveryOperationResult }, { usageLimitRecoveryDisabledResult }] = await Promise.all([import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult"), import("@/features/usageLimitRecoveryFeatureGate")]);
         return normalizeUsageLimitRecoveryOperationResult(usageLimitRecoveryDisabledResult(), { sessionId });
       }
       const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() : '';
@@ -8827,6 +9037,7 @@ export function createCliActionDeps(params: Readonly<{
 
     sessionUsageLimitConsumeResetCredit: async ({ sessionId, agentId, issueFingerprint, resumePromptMode }) => {
       if (!await isUsageLimitRecoveryEnabled()) {
+        const [{ normalizeUsageLimitRecoveryOperationResult }, { usageLimitRecoveryDisabledResult }] = await Promise.all([import("@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryOperationResult"), import("@/features/usageLimitRecoveryFeatureGate")]);
         return normalizeUsageLimitRecoveryOperationResult(usageLimitRecoveryDisabledResult(), { sessionId });
       }
       const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() : '';
@@ -8858,6 +9069,7 @@ export function createCliActionDeps(params: Readonly<{
 	          ? Math.min(1000, Math.floor(limit))
 	          : 50;
 	      const normalizedFormat = format === 'raw' || format === 'compact' ? format : 'compact';
+	      const { getSessionEvents } = await import("@/session/services/getSessionEvents");
 	      return await getSessionEvents({
 	        credentials: params.credentials,
 	        idOrPrefix: sessionId,
@@ -8901,6 +9113,7 @@ export function createCliActionDeps(params: Readonly<{
       })) {
         return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated' };
       }
+      const { getSessionTranscript } = await import("@/session/services/getSessionTranscript");
       return await getSessionTranscript({
         credentials: params.credentials,
         resolveAuthorizationHeaders,
@@ -8944,6 +9157,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated' };
       }
+      const { getSessionEvents } = await import("@/session/services/getSessionEvents");
       return await getSessionEvents({
         credentials: params.credentials,
         idOrPrefix: sessionId,
@@ -8971,6 +9185,7 @@ export function createCliActionDeps(params: Readonly<{
 	        typeof timeoutSeconds === 'number' && Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
 	          ? Math.min(3600, timeoutSeconds)
 	          : 300;
+	      const { waitForSessionIdle } = await import("@/session/services/waitForSessionIdle");
 	      return await waitForSessionIdle({
 	        credentials: params.credentials,
 	        idOrPrefix: sessionId,
@@ -9010,6 +9225,7 @@ export function createCliActionDeps(params: Readonly<{
             const transport = await resolveTransportForSession(args.input.sessionId, args.signal, { context, actionId: args.actionId });
             if (!transport.ok) return { ok: false, errorCode: transport.code, error: transport.code };
             try {
+              const { callSessionRpc } = await import("@/session/transport/rpc/sessionRpc");
               return await callSessionRpc({ ...transport, token: credentials.token, sessionId: transport.sessionId,
                 method: `${transport.sessionId}:${args.actionId}`, request: args.input,
                 ...(context.authority !== 'present_user' ? { authorityCeiling: 'account_automation' as const } : {}),
@@ -9218,6 +9434,7 @@ export function createCliActionDeps(params: Readonly<{
         || !resolveAuthorizationHeaders?.({ method: 'GET', path: '/v1/account/encryption/currentness' }))) {
         return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated', sessionId };
       }
+      const { resolveSessionTransportContext } = await import("@/session/services/resolveSessionTransportContext");
       const transport = resolveAuthorizationHeaders
         ? await resolveSessionTransportContext({
             credentials: params.credentials,
@@ -9235,6 +9452,7 @@ export function createCliActionDeps(params: Readonly<{
         };
       }
       try {
+        const { callSessionRpc } = await import("@/session/transport/rpc/sessionRpc");
         const result = await callSessionRpc({
           ...transport,
           token: params.credentials.token,
@@ -9322,6 +9540,7 @@ export function createCliActionDeps(params: Readonly<{
         || !resolveAuthorizationHeaders?.({ method: 'GET', path: '/v1/account/encryption/currentness' }))) {
         return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated', sessionId };
       }
+      const { resolveSessionTransportContext } = await import("@/session/services/resolveSessionTransportContext");
       const transport = resolveAuthorizationHeaders
         ? await resolveSessionTransportContext({
             credentials: params.credentials,
@@ -9388,6 +9607,7 @@ export function createCliActionDeps(params: Readonly<{
           ...(signal ? { signal } : {}),
         });
         if (!resumed.ok) return { ok: false, errorCode: resumed.code, errorMessage: resumed.message, sessionId: transport.sessionId };
+        const { callSessionRpc } = await import("@/session/transport/rpc/sessionRpc");
         const result = (context?.actionCaller?.kind === 'session' || context?.readSessionActionRpcOrigin)
           && context.authority !== 'present_user' && !externalRequest
           ? await callSessionActionRpc(transport, 'session.user_action.answer', request, context)
@@ -9422,6 +9642,7 @@ export function createCliActionDeps(params: Readonly<{
       const transport = await resolveTransportForSession(sessionId, signal, { context, actionId: 'session.control.switch' });
       if (!transport.ok) return { ok: false, errorCode: transport.code, error: transport.code };
       try {
+        const { callSessionRpc } = await import("@/session/transport/rpc/sessionRpc");
         const switched = await callSessionRpc({ ...transport, token: params.credentials.token,
           sessionId: transport.sessionId, method: `${transport.sessionId}:switch`, request: { to },
           ...(context.authority !== 'present_user' ? { authorityCeiling: 'account_automation' as const } : {}),
@@ -9448,6 +9669,7 @@ export function createCliActionDeps(params: Readonly<{
 
       const normalizedModeId = String(modeId ?? '').trim();
       const updatedAt = Date.now();
+      const { setSessionMode } = await import("@/session/services/setSessionMode");
       const res = await setSessionMode({
         credentials: params.credentials,
         idOrPrefix: sessionId,
@@ -9473,6 +9695,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!operationId) {
         return { ok: false, errorCode: 'action_request_id_required', error: 'action_request_id_required' };
       }
+      const [{ resolveCurrentSessionUiBinding }, { projectCurrentSessionPresentationActionResult }] = await Promise.all([import("@/session/presentation/currentSessionUiBindings"), import("@/session/presentation/currentSessionPresentationService")]);
       const presentation = resolveCurrentSessionUiBinding(sessionId)?.presentation;
       if (!presentation) {
         return {
@@ -9556,6 +9779,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) return { disposition: 'permission_denied' };
       if (!params.serverId || input.target.serverId !== params.serverId) return { disposition: 'permission_denied' };
       const sessionId = input.target.sessionId;
+      const { openSessionEventSource } = await import("@/session/transport/socket/sessionSocketAgentState");
       return waitForSessionAwarenessV1({
         condition: input.condition, deadlineMs: options.deadlineMs,
         ...(options.signal ? { signal: options.signal } : {}),
@@ -9568,6 +9792,7 @@ export function createCliActionDeps(params: Readonly<{
             throw new Error('session_awareness_wait_result_invalid');
           }
           if (input.condition.kind !== 'turn_terminal') return { awareness: parsed.data };
+          const { fetchSessionTurnsProjection } = await import("@/session/transport/http/sessionsHttp");
           const turns = await fetchSessionTurnsProjection({ token: params.token, sessionId,
             ...(options.signal ? { signal: options.signal } : {}),
             resolveAuthorizationHeaders: (request) => resolveServerRequestHeaders(context, 'session.activity.get', request),
@@ -9603,6 +9828,7 @@ export function createCliActionDeps(params: Readonly<{
       signal?.throwIfAborted();
       const serverFeaturesSnapshot = await readServerFeaturesSnapshot();
       signal?.throwIfAborted();
+      const [{ fetchSessionByIdCompat }, { fetchAccountEncryptionCurrentness }, { buildCliSessionAwarenessInputV1 }] = await Promise.all([import("@/session/transport/http/sessionsHttp"), import("@/api/client/connectedServiceCredentialApi"), import("@/cli/output/session/sessionAwareness")]);
       const session = await fetchSessionByIdCompat({
         token: params.credentials.token,
         sessionId,
@@ -9653,6 +9879,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials) {
         return { ok: false, errorCode: 'not_authenticated', errorMessage: 'not_authenticated' };
       }
+      const { getSessionTranscript } = await import("@/session/services/getSessionTranscript");
       return await getSessionTranscript({
         credentials: params.credentials,
         idOrPrefix: sessionId,
@@ -9752,6 +9979,7 @@ export function createCliActionDeps(params: Readonly<{
         }
       }
       const operation = async () => {
+        const [{ createCliRegistryHostV1 }, { executePluginDevLoopAction }, { createMarketplaceIndexService }] = await Promise.all([import("@/registries/createCliRegistryHost"), import("@/plugins/devLoop/actions"), import("@/plugins/store/marketplace/service")]);
         const registry = marketplaceInstall && params.credentials && approvalsStore
           ? createCliRegistryHostV1({ credentials: params.credentials,
             port: approvalsStore.promptLibraryStore.organization, signal: context.signal,
@@ -9784,7 +10012,9 @@ export function createCliActionDeps(params: Readonly<{
       return params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, operation) : operation();
     },
 
-    pluginSettingsAdministrationAction: Object.assign(async ({ actionId, input, context }: Parameters<NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']>>[0]) => (
+    pluginSettingsAdministrationAction: Object.assign(async ({ actionId, input, context }: Parameters<NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']>>[0]) => {
+      const { executePluginSettingsAdministrationAction } = await import("@/plugins/settings/administration");
+      return (
       await executePluginSettingsAdministrationAction({
         actionId,
         input,
@@ -9792,8 +10022,11 @@ export function createCliActionDeps(params: Readonly<{
         ...(context.actionCaller ? { actionCaller: context.actionCaller } : {}),
         ...(context.signal ? { signal: context.signal } : {}),
       })
-    ), {
-      admitInput: async ({ actionId, input, context }: Parameters<NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']>>[0]) => (
+    );
+    }, {
+      admitInput: async ({ actionId, input, context }: Parameters<NonNullable<ActionExecutorDeps['pluginSettingsAdministrationAction']>>[0]) => {
+        const { executePluginSettingsAdministrationAction } = await import("@/plugins/settings/administration");
+        return (
         await executePluginSettingsAdministrationAction.admitInput({
           actionId,
           input,
@@ -9801,7 +10034,8 @@ export function createCliActionDeps(params: Readonly<{
           ...(context.actionCaller ? { actionCaller: context.actionCaller } : {}),
           ...(context.signal ? { signal: context.signal } : {}),
         })
-      ),
+      );
+      },
     }),
 
     pluginPermissionGrantAction: async (args) => pluginPermissionGrantAction
@@ -9848,6 +10082,7 @@ export function createCliActionDeps(params: Readonly<{
         return await measureActionStartPhaseV1(context, 'workflow_owner',
           () => workflowAction({ ...args, context } as Parameters<typeof workflowAction>[0]));
       } catch (error) {
+        const [{ normalizeWorkflowActionThrownError }, { logger }] = await Promise.all([import("./workflowActionExecutor"), import("@/ui/logger")]);
         return normalizeWorkflowActionThrownError(error, {
           operation: args.actionId, durationMs: Date.now() - startedAtMs,
           emit: diagnostic => logger.infoFile(JSON.stringify(diagnostic)),
@@ -9882,6 +10117,7 @@ export function createCliActionDeps(params: Readonly<{
 
     resolveApiTokenGrantSessionMachineId: async ({ actionId, sessionId, context }) => {
       if (!params.credentials || !context.externalActionCredential) return null;
+      const { resolveSessionTransportContext } = await import("@/session/services/resolveSessionTransportContext");
       const transport = await resolveSessionTransportContext({
         credentials: params.credentials,
         idOrPrefix: sessionId,
@@ -9903,7 +10139,9 @@ export function createCliActionDeps(params: Readonly<{
       },
     }) : undefined,
 
-    externalSessionAction: async (args) => params.credentials
+    externalSessionAction: async (args) => {
+      const { executePluginExternalSessionAction } = await import("./externalSessions/pluginExternalSessionActionExecutor");
+      return params.credentials
       ? await executePluginExternalSessionAction(
           { ...args, credentials: params.credentials },
           params.externalSessionPluginAdmissionOwner?.materializeStart
@@ -9913,7 +10151,8 @@ export function createCliActionDeps(params: Readonly<{
               }
             : {},
         )
-      : { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' },
+      : { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+    },
 
     managedMachineReferences,
     machineEnvironmentApply: async ({ input, context, signal }) => {
@@ -9943,6 +10182,9 @@ export function createCliActionDeps(params: Readonly<{
         }
       }
       if (actionId === 'plugins.install') {
+        const [{ buildPluginInstallApprovalPreview }, { executePluginDevLoopAction }] = await Promise.all([
+          import('@/plugins/devLoop/installApprovalPreview'), import('@/plugins/devLoop/actions'),
+        ]);
         const installInput = readRecord(input);
         const requestedSource = readRecord(installInput.source);
         const developmentPathInstall = installInput.dev === true && installInput.dryRun !== true
@@ -9957,7 +10199,7 @@ export function createCliActionDeps(params: Readonly<{
           && 'source' in input && input.source !== null && typeof input.source === 'object'
           && 'kind' in input.source && input.source.kind === 'marketplace';
         const registry = marketplaceInstall && params.credentials && approvalsStore
-          ? createCliRegistryHostV1({ credentials: params.credentials,
+          ? (await import('@/registries/createCliRegistryHost')).createCliRegistryHostV1({ credentials: params.credentials,
             port: approvalsStore.promptLibraryStore.organization, signal: context.signal,
             operationContext: params.savedSecretOperationContext })
           : null;
@@ -9969,7 +10211,7 @@ export function createCliActionDeps(params: Readonly<{
           context,
         }, {
           ...pluginInstallApprovalChangeServices,
-          ...(registry ? { marketplaceIndexService: createMarketplaceIndexService({
+          ...(registry ? { marketplaceIndexService: (await import('@/plugins/store/marketplace/service')).createMarketplaceIndexService({
             happyHomeDir: params.happyHomeDir,
             readRegistrySources: registry.readSources,
           }) } : {}),

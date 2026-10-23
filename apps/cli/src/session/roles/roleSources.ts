@@ -1,8 +1,6 @@
 import { createRoleSourceReaderV1, type RoleSourceReaderV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
 import type { PluginRoleContributionV1 } from '@happier-dev/protocol';
 import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
-import { readPluginRoleSources } from '@/plugins/projection/registry/roles';
-import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { logger } from '@/ui/logger';
 
 export type RoleSourceReaderParams = Readonly<{
@@ -15,7 +13,13 @@ export type RoleSourceReader = RoleSourceReaderV1;
 
 /** One source reader for Action, prompt and permission role resolution. */
 export function createRoleSourceReader(params: RoleSourceReaderParams): RoleSourceReader {
-  const readPluginRoles = params.readPluginRoles ?? (() => readPluginRoleSources(readCurrentContributionRegistry()));
+  const readPluginRoles = params.readPluginRoles ?? (async () => {
+    const [{ readPluginRoleSources }, { readCurrentContributionRegistry }] = await Promise.all([
+      import('@/plugins/projection/registry/roles'),
+      import('@/agent/catalog/snapshot'),
+    ]);
+    return readPluginRoleSources(readCurrentContributionRegistry());
+  });
   const read = createRoleSourceReaderV1({ ...params, readPluginRoles,
     ...(params.readRawAccountSettings ? { readRawAccountSettings: async () => {
       const startedAt = performance.now();

@@ -13,7 +13,6 @@ import type { ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps } f
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 
 import { createActionSettingsProvider, type RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
-import { createCliBrowserRuntimeActionExecutor } from '@/daemon/browser/actions/controlTransport';
 import { observeAccountChanges } from '@/api/observeAccountChanges';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
@@ -65,6 +64,7 @@ export function createCliActionExecutorHarness(
   observeRecordedApprovalExecution(args: RecordedApprovalExecutionObservationArgs): Promise<ActionExecuteResult>;
 }> {
   const coordinator = getSharedBlockingApprovalCoordinator();
+  const browserSessionId = params.sessionId;
   // Nested widget admission must see this host's final registry/transport
   // bindings, including the committed input-type dependencies installed below.
   const baseDeps = createCliActionDeps(params, () => rawDeps);
@@ -202,14 +202,12 @@ export function createCliActionExecutorHarness(
     },
     isActionEnabled,
     isActionApprovalRequired,
-    runtimeActionExecute: (() => {
-      const browser = createCliBrowserRuntimeActionExecutor({ sessionId: params.sessionId });
-      const execute: NonNullable<ActionExecutorDeps['runtimeActionExecute']> = async args =>
-        resolveRuntimeActionExecutionFamily(args.actionId) === 'localServices'
-        && baseDepsForRuntime.runtimeActionExecute
-        ? await baseDepsForRuntime.runtimeActionExecute(args) : await browser(args);
-      return execute;
-    })(),
+    runtimeActionExecute: async args => {
+      if (resolveRuntimeActionExecutionFamily(args.actionId) === 'localServices'
+        && baseDepsForRuntime.runtimeActionExecute) return await baseDepsForRuntime.runtimeActionExecute(args);
+      const { createCliBrowserRuntimeActionExecutor } = await import('@/daemon/browser/actions/controlTransport');
+      return await createCliBrowserRuntimeActionExecutor({ sessionId: browserSessionId })(args);
+    },
     ...createActionExecutionHookDeps(),
     ...(overrides ?? {}),
   };

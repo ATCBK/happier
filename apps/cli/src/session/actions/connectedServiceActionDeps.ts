@@ -13,24 +13,24 @@ import { CONNECTED_SERVICE_POOL_SELECTION_RPC_METHOD } from '@happier-dev/protoc
 import { qualifyPluginContributionReferenceV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { StoredCredentials } from '@/persistence';
-import { readAgentCatalogSnapshot, readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
-import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { resolveConnectedServicesServerApiTimeoutMs } from '@/api/client/connectedServicesServerApiTimeout';
-import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpointError';
+import type { readAgentCatalogSnapshot, readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
+import type { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import type { resolveConnectedServicesServerApiTimeoutMs } from '@/api/client/connectedServicesServerApiTimeout';
+import type { classifyActionTransportFailure } from '@/api/client/classifyServerEndpointError';
 import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { readDeclaredConnectedAccountPurposeV1, resolveConnectedAccountPurposeSelectedAccountV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import { DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { captureSavedSecretReferencesForOperation } from "@/settings/secrets/savedSecretCatalogRead";
-import { promoteSavedSecretsWithConnectedAccountCatalog } from "@/settings/secrets/hydrateSavedSecretCatalog";
-import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
-import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
-import { commitActiveConnectedAccountCatalog, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
-import { readAccountSettingsV2Raw } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
+import type { captureSavedSecretReferencesForOperation } from "@/settings/secrets/savedSecretCatalogRead";
+import type { promoteSavedSecretsWithConnectedAccountCatalog } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import type { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
+import type { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
+import type { commitActiveConnectedAccountCatalog, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import type { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
+import type { readAccountSettingsV2Raw } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 
 export function createCliConnectedServiceAction(params: Readonly<{
   credentials: StoredCredentials;
@@ -44,8 +44,10 @@ export function createCliConnectedServiceAction(params: Readonly<{
     context?: ActionExecutorContext; effectActionId?: string; exactMachine?: true }>): Promise<unknown>;
 }>): NonNullable<ActionExecutorDeps['connectedServiceAction']> {
   const invoke = async ({ actionId, input, context, signal }: Parameters<NonNullable<ActionExecutorDeps['connectedServiceAction']>>[0], prepare: boolean) => {
+    const { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } = await import("@/api/client/serverHttpBaseUrl");
     const serverHttpBaseUrl = params.operationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
     const run = async () => {
+      const [{ createCliConnectedAccountCatalogStore }, { getActiveAccountSettingsSnapshotLifetimeToken }] = await Promise.all([import("@/settings/connectedAccounts/connectedAccountCatalogStore"), import("@/settings/accountSettings/activeAccountSettingsSnapshot")]);
       const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
       const authorizeRequest = (request: Readonly<{ method: string; path: string; body?: unknown }>) => params.resolveHeaders(context, actionId, request);
       const catalogInput = { credentials: params.credentials, signal, operationContext: params.operationContext, authorizeRequest };
@@ -63,6 +65,7 @@ export function createCliConnectedServiceAction(params: Readonly<{
         if (params.isCredentialCurrent && !await params.isCredentialCurrent()) {
           throw Object.assign(new Error('Captured Connected Account retired'), { code: 'scope-retired' });
         }
+        const { getActiveAccountSettingsSnapshotLifetimeToken } = await import("@/settings/accountSettings/activeAccountSettingsSnapshot");
         if (operation ? operation.credentials.token !== params.credentials.token || !await operation.isCurrent()
           : getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) {
           throw Object.assign(new Error('Captured Connected Account retired'), { code: 'scope-retired' });
@@ -81,11 +84,13 @@ export function createCliConnectedServiceAction(params: Readonly<{
             ? catalogStore.readCatalog('configurations') : admitted;
         },
         resolveMode: async target => {
+          const { readCurrentContributionRegistry } = await import("@/agent/catalog/snapshot");
           const descriptor = [...readCurrentContributionRegistry().connectedAccountDescriptorsById.values()].find(candidate =>
             candidate.pluginId === target.service.pluginId && candidate.definition.id === target.service.localId);
           return descriptor?.definition.authentication.modes.find(mode => mode.id === target.modeId) ?? null;
         },
         hasSecret: async reference => {
+          const [{ captureSavedSecretReferencesForOperation }, { resolveAccountSettingsScopeKey }] = await Promise.all([import("@/settings/secrets/savedSecretCatalogRead"), import("@/settings/accountSettings/accountSettingsScopeKey")]);
           await captureSavedSecretReferencesForOperation({ expectedScopeKey: resolveAccountSettingsScopeKey(params.credentials),
             references: [reference], operationContext: params.operationContext, signal });
           await assertReadCurrent();
@@ -96,6 +101,7 @@ export function createCliConnectedServiceAction(params: Readonly<{
           await assertReadCurrent();
           if (write.newSecrets.length) {
             const timestamp = Date.now();
+            const { promoteSavedSecretsWithConnectedAccountCatalog } = await import("@/settings/secrets/hydrateSavedSecretCatalog");
             const result = await promoteSavedSecretsWithConnectedAccountCatalog({ ...catalogInput,
               preparedSavedSecrets: write.newSecrets.map(({ id, fieldId, value }) => ({ id,
                 record: SavedSecretSchema.parse({ id, name: `Connected Account ${fieldId}`.slice(0, 100), kind: 'other',
@@ -113,8 +119,11 @@ export function createCliConnectedServiceAction(params: Readonly<{
               await assertReadCurrent();
               const catalog = { status: 'ready' as const, revision: result.revision, record: write.record };
               if (params.operationContext) await params.operationContext.commitConnectedAccountCatalog({ key: 'configurations', catalog });
-              else commitActiveConnectedAccountCatalog({ scopeKey: resolveAccountSettingsScopeKey(params.credentials), lifetimeToken,
+              else {
+                const [{ commitActiveConnectedAccountCatalog }, { resolveAccountSettingsScopeKey }] = await Promise.all([import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/settings/accountSettings/accountSettingsScopeKey")]);
+                commitActiveConnectedAccountCatalog({ scopeKey: resolveAccountSettingsScopeKey(params.credentials), lifetimeToken,
                 key: 'configurations', catalog });
+              }
             } catch { /* A content-free durable ACK survives Account retirement. */ }
           }
           return result;
@@ -130,6 +139,7 @@ export function createCliConnectedServiceAction(params: Readonly<{
         const headers = params.resolveHeaders(context, actionId, request);
         if (!headers) throw Object.assign(new Error('action_authorization_unavailable'), { code: 'action_authorization_unavailable' });
         signal?.throwIfAborted();
+        const [{ resolveConnectedServicesServerApiTimeoutMs }, { classifyActionTransportFailure }] = await Promise.all([import("@/api/client/connectedServicesServerApiTimeout"), import("@/api/client/classifyServerEndpointError")]);
         const response = await axios.request<unknown>({
           url: `${serverHttpBaseUrl}${request.path}`,
           method: request.method, headers: { ...headers,
@@ -154,6 +164,7 @@ export function createCliConnectedServiceAction(params: Readonly<{
         return response.data;
       },
       mutatePurposeBindings: async (mutate) => {
+        const { readActiveConnectedAccountCatalog } = await import("@/settings/connectedAccounts/hydrateConnectedAccountCatalog");
         const current = await readActiveConnectedAccountCatalog({ ...catalogInput, key: 'purposes' });
         if (current.status !== 'ready' || current.record.key !== 'purposes') throw Object.assign(
           new Error('Connected Account purpose authority unavailable'), { code: 'connected_account_purpose_catalog_unavailable' });
@@ -183,8 +194,11 @@ export function createCliConnectedServiceAction(params: Readonly<{
             // Account state; publishing either half first resurrects defaults.
             await catalogStore.publishSource(raw, result.settingsVersion, catalog);
           } else if (params.operationContext) await params.operationContext.commitConnectedAccountCatalog({ key: 'purposes', catalog });
-          else commitActiveConnectedAccountCatalog({ scopeKey: resolveAccountSettingsScopeKey(params.credentials), lifetimeToken,
+          else {
+            const [{ commitActiveConnectedAccountCatalog }, { resolveAccountSettingsScopeKey }] = await Promise.all([import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/settings/accountSettings/accountSettingsScopeKey")]);
+            commitActiveConnectedAccountCatalog({ scopeKey: resolveAccountSettingsScopeKey(params.credentials), lifetimeToken,
             key: 'purposes', catalog });
+          }
         } catch {
           // An acknowledged effect is not a failed mutation when its private
           // projection is no longer publishable to the captured incumbent.
@@ -239,6 +253,7 @@ export function createCliConnectedServiceAction(params: Readonly<{
         return () => catalogStore.assertCurrent();
       },
       resolveAgent: async (agentId) => {
+        const { readAgentCatalogSnapshot } = await import("@/agent/catalog/snapshot");
         const agent = readAgentCatalogSnapshot().agentDefinitionsById.get(agentId);
         if (!agent?.pluginId) return null;
         const pluginId = agent.pluginId;
@@ -265,7 +280,9 @@ export function createCliConnectedServiceAction(params: Readonly<{
         const base = serverHttpBaseUrl;
         const headers = authorizeRequest({ method: 'GET', path: '/v1/account/encryption/currentness' });
         if (!headers) throw Object.assign(new Error('action_authorization_unavailable'), { code: 'action_authorization_unavailable' });
+        const { runWithServerHttpBaseUrl } = await import("@/api/client/serverHttpBaseUrl");
         const result = await runWithServerHttpBaseUrl(base, async () => {
+          const [{ resolveCliAccountStorageContext }, { readAccountSettingsV2Raw }] = await Promise.all([import("@/api/client/accountKvJsonTransport"), import("@/settings/accountSettings/updateAccountSettingsV2WithRetry")]);
           const storage = await resolveCliAccountStorageContext({ credentials: params.credentials, serverBaseUrl: base,
             authorizationHeaders: headers, ...(signal ? { signal } : {}) });
           await assertReadCurrent();
@@ -288,6 +305,7 @@ export function createCliConnectedServiceAction(params: Readonly<{
               ]);
               // A finite cold quota read owns its freshly admitted Account
               // baseline; it never borrows a daemon's publication or starts cleanup.
+              const { resolveAccountSettingsScopeKey } = await import("@/settings/accountSettings/accountSettingsScopeKey");
               const operationContext = createInvocationSavedSecretOperationContextV1({ credentials: params.credentials,
                 serverHttpBaseUrl: base, snapshot: { source: 'network', settings: accountSettingsParse(source.raw), rawSettings: source.raw,
                   settingsVersion: source.version, loadedAtMs: Date.now(), settingsSecretsReadKeys: [],

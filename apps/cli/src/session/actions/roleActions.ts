@@ -9,7 +9,6 @@ import type { AccountRoleOverridesReadV1, RoleOverrideMutationV1 } from '@happie
 import { createRoleSourceReader, type RoleSourceReader } from '@/session/roles/roleSources';
 import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import type { RegisteredSessionStateFieldMutationV1 } from '@/api/session/client/transport/mutations/sessionClientDurableMutationTypes';
-import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { logger } from '@/ui/logger';
 import { applySessionRoleEditToMetadata, SessionRoleEditSchema } from '@/session/roles/sessionRoleEdit';
 
@@ -49,6 +48,7 @@ export function createRoleActionExecutor(params: Readonly<{
       const error = Object.assign(new RoleActionRefusalV1('account_role_overrides_unavailable'), {
         reason: read.reason, contextSource: 'account_lifetime',
       });
+      const { readSessionPreparationFailureDiagnostic } = await import('@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue');
       logger.infoFile('[Session] Role Action refused', readSessionPreparationFailureDiagnostic(error));
       throw error;
     }

@@ -1,4 +1,4 @@
-import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
+import type { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { AccountProfileResponseSchema } from '@happier-dev/protocol/account/profile';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { buildBackendTargetKeyV2, convertBackendTargetRefV2ToV1, parseBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -6,46 +6,44 @@ import { isLegacyConfiguredAcpFlavorCarrier } from '@happier-dev/protocol/backen
 import type { AccountProfile, ActionExecutorContext, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
 import axios from 'axios';
 import type { z } from 'zod/mini';
-import { configuration } from '@/configuration';
-import { resolveSessionCreationAgentTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
+import type { configuration } from '@/configuration';
 import { DaemonProviderModelProjectionResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema,
   AgentConfigOptionsProbeObservationSchema, projectProbedConfigOptionDefinitions } from '@happier-dev/protocol/capabilities';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
-import { connectedServiceProfileKey, legacyCustomAcpCompat } from '@happier-dev/agents';
+import type { connectedServiceProfileKey, legacyCustomAcpCompat } from '@happier-dev/agents';
 
-import { resolveAccountSettingsHttpBaseUrl } from '@/settings/accountSettings/resolveAccountSettingsHttpBaseUrl';
+import type { resolveAccountSettingsHttpBaseUrl } from '@/settings/accountSettings/resolveAccountSettingsHttpBaseUrl';
 import { readSettings, type StoredCredentials } from '@/persistence';
 import type { ProbedAgentModelsResult } from '@/capabilities/probes/agentModelsProbe';
 import type { ProbedAgentModesResult } from '@/capabilities/probes/agentModesProbe';
 import type { ProbedAgentConfigOptionsResult } from '@/capabilities/probes/agentConfigOptionsProbe';
-import { resolveAvailableAccountSettings } from '@/settings/accountSettings/resolveAvailableAccountSettings';
+import type { resolveAvailableAccountSettings } from '@/settings/accountSettings/resolveAvailableAccountSettings';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
-import { AcpCatalogUnavailableError, requireReadyAcpCatalog } from '@/agent/acp/catalog/configured/resolveBackend';
-import { refreshActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
+import type { AcpCatalogUnavailableError, requireReadyAcpCatalog } from '@/agent/acp/catalog/configured/resolveBackend';
+import type { refreshActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
-import { createCliBoundSessionMetadataReader } from '../resolveCliActionCallerSession';
-import { listCurrentAccountMachines } from '@/api/machine/resolveCurrentAccountMachineTarget';
-import { listServerProfiles } from '@/server/serverProfiles';
-import { projectProfilesListForActions } from '@/settings/profiles/profileListProjection';
-import { readAccountLaunchProfiles, readProfilesFromAccountSettings } from '@/settings/profiles/readProfilesFromAccountSettings';
-import { ConnectedServicesDefaultUnavailableError, resolveSpawnConnectedServicesDefaults } from '@/session/services/spawnConnectedServicesDefaults';
-import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
-import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
-import { createCliConnectedMetadataStore } from '@/settings/connected/connectedMetadataStore';
-import { refreshActiveConnectedMetadataCatalog } from '@/settings/connected/hydrateConnectedMetadataCatalog';
+import type { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
+import type { createCliBoundSessionMetadataReader } from '../resolveCliActionCallerSession';
+import type { listCurrentAccountMachines } from '@/api/machine/resolveCurrentAccountMachineTarget';
+import type { listServerProfiles } from '@/server/serverProfiles';
+import type { projectProfilesListForActions } from '@/settings/profiles/profileListProjection';
+import type { readAccountLaunchProfiles, readProfilesFromAccountSettings } from '@/settings/profiles/readProfilesFromAccountSettings';
+import type { ConnectedServicesDefaultUnavailableError, resolveSpawnConnectedServicesDefaults } from '@/session/services/spawnConnectedServicesDefaults';
+import type { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
+import type { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
+import type { createCliConnectedMetadataStore } from '@/settings/connected/connectedMetadataStore';
+import type { refreshActiveConnectedMetadataCatalog } from '@/settings/connected/hydrateConnectedMetadataCatalog';
 import { connectedEntitySubjectKeyV1, projectConnectedPresentationLabelsV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
-import { fetchAccountProfile } from '@/api/accountProfile';
-import { resolveCatalogAgentConnectedAccountServiceIds } from '@/agent/catalog/registry';
+import type { fetchAccountProfile } from '@/api/accountProfile';
+import type { resolveCatalogAgentConnectedAccountServiceIds } from '@/agent/catalog/registry';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
-} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { projectSpawnMcpServersPreviewInventory } from './resolveSpawnMcpServersPreviewInventory';
-import { createCliSettingsCatalogServices } from '../settingsCatalogServices';
+import type { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import type { projectSpawnMcpServersPreviewInventory } from './resolveSpawnMcpServersPreviewInventory';
+import type { createCliSettingsCatalogServices } from '../settingsCatalogServices';
 import { encodeScmDiffSummaryModelOverride, ScmDiffSummaryModelCatalogObservationV1Schema } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import {
   type SessionStoredContentCryptoContext,
@@ -163,13 +161,15 @@ function readBackendTargetFromKey(backendTargetKey: string): BackendTargetRefV2 
   }
 }
 
-function resolveProbeAgentId(params: Readonly<{
+async function resolveProbeAgentId(params: Readonly<{
   agentId: string;
   backendTarget: BackendTargetRefV2 | null;
-}>): string {
+}>): Promise<string> {
   if (params.backendTarget && (params.backendTarget.sourceKind === 'configured' || Boolean(params.backendTarget.configuredBackendId))) {
     const target = parseBackendTargetKeyV2(buildBackendTargetKeyV2(params.backendTarget));
-    return target.kind === 'agent' ? resolveSessionCreationAgentTarget(target)?.agentId ?? '' : '';
+    if (target.kind !== 'agent') return '';
+    const { resolveSessionCreationAgentTarget } = await import('@/session/creation/resolveSessionCreationAgentTarget');
+    return resolveSessionCreationAgentTarget(target)?.agentId ?? '';
   }
   return params.agentId || normalizeStringValue(params.backendTarget?.backendId);
 }
@@ -206,7 +206,7 @@ async function probeActionModelsBestEffort(params: Readonly<{
   savedSecretOperationContext?: SavedSecretOperationContextV1;
   probeDeps?: AgentProbeInventoryDeps;
 }>): Promise<ProbedAgentModelsResult | null> {
-  const probeAgentId = resolveProbeAgentId({
+  const probeAgentId = await resolveProbeAgentId({
     agentId: params.agentId,
     backendTarget: params.backendTarget,
   });
@@ -236,6 +236,7 @@ async function probeActionModelsBestEffort(params: Readonly<{
       savedSecretOperationContext: params.savedSecretOperationContext,
     }) as ProbedAgentModelsResult;
   } catch (error) {
+    const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
     if (error instanceof AcpCatalogUnavailableError) throw error;
     return null;
   }
@@ -256,10 +257,11 @@ async function probeActionModesBestEffort(params: Readonly<{
   savedSecretOperationContext?: SavedSecretOperationContextV1;
   probeDeps?: AgentProbeInventoryDeps;
 }>): Promise<ProbedAgentModesResult | null> {
-  const probeAgentId = resolveProbeAgentId({
+  const probeAgentId = await resolveProbeAgentId({
     agentId: params.agentId,
     backendTarget: params.backendTarget,
   });
+  const { legacyCustomAcpCompat } = await import("@happier-dev/agents");
   if (!legacyCustomAcpCompat.isAgentLookupId(probeAgentId)) return null;
   if (!machineTargetCanUseLocalProbe({
     requestedMachineId: (params.args as { machineId?: unknown }).machineId,
@@ -285,6 +287,7 @@ async function probeActionModesBestEffort(params: Readonly<{
       savedSecretOperationContext: params.savedSecretOperationContext,
     }) as ProbedAgentModesResult;
   } catch (error) {
+    const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
     if (error instanceof AcpCatalogUnavailableError) throw error;
     return null;
   }
@@ -305,7 +308,7 @@ async function probeActionConfigOptionsBestEffort(params: Readonly<{
   savedSecretOperationContext?: SavedSecretOperationContextV1;
   probeDeps?: AgentProbeInventoryDeps;
 }>): Promise<ProbedAgentConfigOptionsResult | null> {
-  const probeAgentId = resolveProbeAgentId({
+  const probeAgentId = await resolveProbeAgentId({
     agentId: params.agentId,
     backendTarget: params.backendTarget,
   });
@@ -334,6 +337,7 @@ async function probeActionConfigOptionsBestEffort(params: Readonly<{
       savedSecretOperationContext: params.savedSecretOperationContext,
     }) as ProbedAgentConfigOptionsResult;
   } catch (error) {
+    const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
     if (error instanceof AcpCatalogUnavailableError) throw error;
     return null;
   }
@@ -397,13 +401,17 @@ export function createCliActionInventoryDeps(params: Readonly<{
 
     let read = metadataReaders.get(normalizedSessionId);
     if (!read) {
+      const { createCliBoundSessionMetadataReader } = await import("../resolveCliActionCallerSession");
       read = createCliBoundSessionMetadataReader({
         ...(normalizedSessionId === params.sessionId ? params : {
           token: params.token, credentials: params.credentials, mode: 'plain' as const, ctx: null,
         }),
         sessionId: normalizedSessionId,
-        resolveTransportForSession: params.resolveTransportForSession ?? (async (id) => params.credentials
-          ? resolveSessionTransportContext({ credentials: params.credentials, idOrPrefix: id }) : { ok: false }),
+        resolveTransportForSession: params.resolveTransportForSession ?? (async (id) => {
+          const { resolveSessionTransportContext } = await import("@/session/services/resolveSessionTransportContext");
+          return params.credentials
+          ? resolveSessionTransportContext({ credentials: params.credentials, idOrPrefix: id }) : { ok: false };
+        }),
       });
       metadataReaders.set(normalizedSessionId, read);
     }
@@ -412,10 +420,14 @@ export function createCliActionInventoryDeps(params: Readonly<{
 
   const readAccountSettings = async (): Promise<import('@happier-dev/protocol').AccountSettings | null> => {
     if (params.savedSecretOperationContext) {
-      if (!await params.savedSecretOperationContext.isCurrent()) throw new AcpCatalogUnavailableError('scope-retired');
+      if (!await params.savedSecretOperationContext.isCurrent()) {
+        const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
+        throw new AcpCatalogUnavailableError('scope-retired');
+      }
       const snapshot = params.savedSecretOperationContext.readSnapshot();
       return snapshot && snapshot.source !== 'none' ? snapshot.settings : null;
     }
+    const { resolveAvailableAccountSettings } = await import("@/settings/accountSettings/resolveAvailableAccountSettings");
     return await resolveAvailableAccountSettings({
       credentials: params.credentials ?? null,
     });
@@ -469,30 +481,43 @@ export function createCliActionInventoryDeps(params: Readonly<{
   const readAcpCatalogSnapshot = async (signal?: AbortSignal) => runWithServerHttpBaseUrl(acpServerHttpBaseUrl, async () => {
     const operation = params.savedSecretOperationContext;
     const credentials = params.credentials ?? operation?.credentials;
-    if (!credentials) throw new AcpCatalogUnavailableError('not-authenticated');
+    if (!credentials) {
+      const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
+      throw new AcpCatalogUnavailableError('not-authenticated');
+    }
     await readAccountSettings();
+    const [{ refreshActiveAcpCatalog }, { getActiveAccountSettingsSnapshotLifetimeToken, getActiveAccountSettingsSnapshot }, { resolveAccountSettingsScopeKey }] = await Promise.all([import("@/agent/acp/catalog/hydrateAcpCatalog"), import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/settings/accountSettings/accountSettingsScopeKey")]);
     const scopeKey = resolveAccountSettingsScopeKey(credentials);
     const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
     const snapshot = () => operation ? operation.readSnapshot() : getActiveAccountSettingsSnapshot();
     let observedCatalog: AcpCatalogSnapshotV1 | undefined;
     const assertCurrent = async () => {
       signal?.throwIfAborted();
+      const { getActiveAccountSettingsSnapshotLifetimeToken } = await import("@/settings/accountSettings/activeAccountSettingsSnapshot");
       if (operation && !await operation.isCurrent() || snapshot()?.scopeKey !== scopeKey
         || !operation && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) {
+        const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
         throw new AcpCatalogUnavailableError('scope-retired');
       }
-      if (observedCatalog && snapshot()?.acpCatalog !== observedCatalog) throw new AcpCatalogUnavailableError('source-stale');
+      if (observedCatalog && snapshot()?.acpCatalog !== observedCatalog) {
+        const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
+        throw new AcpCatalogUnavailableError('source-stale');
+      }
     };
     await assertCurrent();
     const catalog = await refreshActiveAcpCatalog({ credentials, signal, operationContext: operation });
     observedCatalog = catalog;
     await assertCurrent();
     const account = snapshot();
-    if (!account || account.source === 'none') throw new AcpCatalogUnavailableError('account-settings-unavailable');
+    if (!account || account.source === 'none') {
+      const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
+      throw new AcpCatalogUnavailableError('account-settings-unavailable');
+    }
     return { account, catalog, assertCurrent };
   });
   const readAcpInventorySnapshot = async (signal?: AbortSignal) => {
     const captured = await readAcpCatalogSnapshot(signal);
+    const { requireReadyAcpCatalog } = await import("@/agent/acp/catalog/configured/resolveBackend");
     return { ...captured, catalog: requireReadyAcpCatalog(captured.catalog) };
   };
 
@@ -504,6 +529,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
     if (!accountProfilePromise) {
       accountProfilePromise = (async () => {
         try {
+          const [{ buildCurrentAccountStoredContentCompatibilityHttpHeaders }, { resolveAccountSettingsHttpBaseUrl }] = await Promise.all([import("@/api/clientCompatibility/cliClientCompatibility"), import("@/settings/accountSettings/resolveAccountSettingsHttpBaseUrl")]);
           const response = await axios.get(`${resolveAccountSettingsHttpBaseUrl()}/v1/account/profile`, {
             headers: {
               ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
@@ -567,6 +593,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       };
     },
     machinesList: async (args) => {
+      const [{ configuration }, { listCurrentAccountMachines }] = await Promise.all([import("@/configuration"), import("@/api/machine/resolveCurrentAccountMachineTarget")]);
       const serverId = args.serverId ?? params.serverId ?? configuration.activeServerId;
       const items = (await listCurrentAccountMachines({ token: params.token, credentials: params.credentials,
         serverHttpBaseUrl: params.serverHttpBaseUrl })).map((machine) => ({
@@ -583,6 +610,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       };
     },
     serversList: async (args) => {
+      const { listServerProfiles } = await import("@/server/serverProfiles");
       const profiles = await listServerProfiles().catch(() => []);
       const items = profiles
         .map((profile) => ({
@@ -604,6 +632,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
         await captured.assertCurrent();
         return captured.catalog;
       } catch (error) {
+        const { AcpCatalogUnavailableError } = await import("@/agent/acp/catalog/configured/resolveBackend");
         if (error instanceof AcpCatalogUnavailableError) return { status: 'unavailable', reason: error.reason };
         throw error;
       }
@@ -635,6 +664,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
         if (!args.machineId || args.machineId !== params.localMachineId) return { items: [], source: 'unavailable' };
         const settings = await readAccountSettings();
         if (!settings) return { items: [], source: 'unavailable' };
+        const { createCliSettingsCatalogServices } = await import("../settingsCatalogServices");
         const services = createCliSettingsCatalogServices({ credentials: params.savedSecretOperationContext?.credentials ?? params.credentials,
           savedSecretOperationContext: params.savedSecretOperationContext,
           serverHttpBaseUrl: acpServerHttpBaseUrl,
@@ -689,7 +719,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const probeResult = usesMachineProbe ? await (async (): Promise<ProbedAgentModelsResult | ActionExecuteFailure | null> => {
         // Configured targets have no public runtime id. Match the native
         // observation using the same probe identity as the local catalog path.
-        const probeAgentId = resolveProbeAgentId({ agentId: normalizedAgentId, backendTarget });
+        const probeAgentId = await resolveProbeAgentId({ agentId: normalizedAgentId, backendTarget });
         if (!probeAgentId) return null;
         const unavailable: ProbedAgentModelsResult = {
           agentId: probeAgentId, availableModels: [], supportsFreeform: false, source: 'unavailable',
@@ -785,7 +815,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const usesMachineProbe = Boolean(args.machineId);
       const captured = !usesMachineProbe && (backendTarget?.sourceKind === 'configured' || backendTarget?.configuredBackendId)
         ? await readAcpInventorySnapshot(args.signal) : null;
-      const probeAgentId = resolveProbeAgentId({ agentId: normalizedAgentId, backendTarget });
+      const probeAgentId = await resolveProbeAgentId({ agentId: normalizedAgentId, backendTarget });
       if (usesMachineProbe && !probeAgentId) return { items: [], source: 'unavailable' };
       const probeContext = {
         agentId: normalizedAgentId,
@@ -827,6 +857,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
     spawnProfilesList: async (args) => {
       const accountSettings = await readAccountSettings();
       const credentials = params.savedSecretOperationContext?.credentials ?? params.credentials;
+      const [{ projectProfilesListForActions }, { readAccountLaunchProfiles, readProfilesFromAccountSettings }] = await Promise.all([import("@/settings/profiles/profileListProjection"), import("@/settings/profiles/readProfilesFromAccountSettings")]);
       const profileSnapshot = accountSettings && credentials
         ? await readAccountLaunchProfiles(accountSettings, credentials, undefined, undefined, params.savedSecretOperationContext)
         : accountSettings ? readProfilesFromAccountSettings(accountSettings)
@@ -843,6 +874,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
     },
     spawnConnectedServicesList: async (args, context) => {
       const normalizedAgentId = normalizeStringValue((args as { agentId?: unknown }).agentId);
+      const [{ connectedServiceProfileKey }, { resolveSpawnConnectedServicesDefaults }, { readActiveConnectedAccountCatalog }, { fetchAccountProfile }, { resolveCatalogAgentConnectedAccountServiceIds }] = await Promise.all([import("@happier-dev/agents"), import("@/session/services/spawnConnectedServicesDefaults"), import("@/settings/connectedAccounts/hydrateConnectedAccountCatalog"), import("@/api/accountProfile"), import("@/agent/catalog/registry")]);
       const supportedServiceIds = resolveCatalogAgentConnectedAccountServiceIds(normalizedAgentId);
       if (supportedServiceIds.length === 0) {
         return { ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}), supportedServiceIds: [], items: [] };
@@ -850,15 +882,22 @@ export function createCliActionInventoryDeps(params: Readonly<{
       const agentId = normalizedAgentId;
       const operationContext = params.savedSecretOperationContext;
       const credentials = operationContext?.credentials ?? params.credentials;
-      if (!credentials) throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
+      if (!credentials) {
+        const { ConnectedServicesDefaultUnavailableError } = await import("@/session/services/spawnConnectedServicesDefaults");
+        throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
+      }
       const authorize = params.authorizeConnectedAccountRequest;
       const authorizeRequest = authorize ? (request: Readonly<{ method: string; path: string; body?: unknown }>) =>
         authorize(context, request) : undefined;
       const storeInput = { credentials, operationContext, signal: context?.signal, authorizeRequest };
-      const store = await runWithServerHttpBaseUrl(acpServerHttpBaseUrl, async () => createCliConnectedAccountCatalogStore(storeInput));
+      const store = await runWithServerHttpBaseUrl(acpServerHttpBaseUrl, async () => {
+        const { createCliConnectedAccountCatalogStore } = await import("@/settings/connectedAccounts/connectedAccountCatalogStore");
+        return createCliConnectedAccountCatalogStore(storeInput);
+      });
       const assertCurrent = async () => {
         store.assertCurrent();
         if (operationContext && !await operationContext.isCurrent()) {
+          const { ConnectedServicesDefaultUnavailableError } = await import("@/session/services/spawnConnectedServicesDefaults");
           throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
         }
         store.assertCurrent();
@@ -869,6 +908,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       }));
       await assertCurrent();
       if (purposeCatalog.status !== 'ready' || purposeCatalog.record.key !== 'purposes') {
+        const { ConnectedServicesDefaultUnavailableError } = await import("@/session/services/spawnConnectedServicesDefaults");
         throw new ConnectedServicesDefaultUnavailableError('connected_account_purpose_catalog_unavailable');
       }
       const accountProfile = params.accountProfile !== undefined ? params.accountProfile
@@ -882,6 +922,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       let labelsByKey: Readonly<Record<string, string>> = {};
       try {
         const metadataInput = { ...storeInput, serverHttpBaseUrl: store.serverHttpBaseUrl };
+        const [{ createCliConnectedMetadataStore }, { refreshActiveConnectedMetadataCatalog }] = await Promise.all([import("@/settings/connected/connectedMetadataStore"), import("@/settings/connected/hydrateConnectedMetadataCatalog")]);
         const metadata = operationContext
           ? await createCliConnectedMetadataStore(metadataInput).readCatalog()
           : await refreshActiveConnectedMetadataCatalog(metadataInput);
@@ -972,6 +1013,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
         || await readCurrentSessionValue('path')
         || process.cwd();
       if (!params.callMachineAction || !machineId || !agentId) return { ok: false, items: [], preview: null };
+      const { projectSpawnMcpServersPreviewInventory } = await import("./resolveSpawnMcpServersPreviewInventory");
       return projectSpawnMcpServersPreviewInventory(await params.callMachineAction({ machineId, serverId: context?.serverId ?? params.serverId,
         method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, request: { machineId, directory, agentId,
           ...((args as { selection?: unknown }).selection !== undefined ? { selection: args.selection } : {}) },

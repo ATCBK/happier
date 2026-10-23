@@ -2,9 +2,6 @@ import { createSessionFollowActionDeps, createSessionTrackedTargetCompatibilityD
 import { measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { randomUUID } from 'node:crypto';
 import { createSessionReadStateActionDeps } from '@/api/sessionReadStateActionDeps';
-import { importHistoricalSessionTranscript } from '@/session/transport/http/sessionsHttp';
-import { createServerBackedSessionTranscriptStore } from '@/api/session/createServerBackedSessionTranscriptStore';
-import { fetchOpenedSessionStateFromServer } from '@/api/session/snapshotSync';
 import {
   DEFAULT_SESSION_TRANSCRIPT_FOLLOW_LEASE_IDLE_TTL_MS,
   createSessionTranscriptFollowLeaseRegistry,
@@ -52,7 +49,6 @@ import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { getActionSpec, resolveActionExecutionPlacementForInput, PublicActionIdSchema, SignedRootActionIdSchema, projectSessionSpawnNewApiRequest } from '@happier-dev/protocol/actions/actionSpecs';
 import { isPluginActionExecutionDispatchId } from './createDaemonPluginActionExecutor';
-import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ActionIdSchema, isPluginDevLoopActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { isSettingsDeclarationActionIdV1, SettingsDeclarationActionInputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
@@ -65,11 +61,9 @@ import { readActionSessionTargetField, replaceActionSessionTargetField } from '@
 import { normalizeSessionTargetV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import { SessionListResultSchema } from '@happier-dev/protocol/sessions/control/listResult';
 import type { ApprovalExecutionOriginV1, ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps, RuntimeActionExecute, TargetActionApprovalRequestV1 } from '@happier-dev/protocol';
-import {
-  connect,
-  HappierActionError,
-  type ActionTarget,
-  type PublicActionInputById,
+import type {
+  ActionTarget,
+  PublicActionInputById,
 } from '@happier-dev/sdk';
 import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import type {
@@ -124,11 +118,10 @@ import { createTargetedActionRpcRequestV1 } from '@happier-dev/protocol/actions/
 import { callExactMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { createCredentialedFilesystemTransferClient } from '@/machines/transfer/createCredentialedFilesystemTransferClient';
-import { createPreparedFilesystemTransferClient } from '@/machines/transfer/preparedFilesystemTransferClient';
+import type { createCredentialedFilesystemTransferClient } from '@/machines/transfer/createCredentialedFilesystemTransferClient';
+import type { createPreparedFilesystemTransferClient } from '@/machines/transfer/preparedFilesystemTransferClient';
 import { resolveActionCliCredentialTarget } from '@/cli/actions/actionServerTarget';
 import { getServerProfile } from '@/server/serverProfiles';
-import { createCliBoundSessionMetadataReader } from './resolveCliActionCallerSession';
 import { readSessionMemoryEnabledV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import type { dispatchRequesterSessionSpawnNewRpc } from '@/session/transport/rpc/machineRpc';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
@@ -295,6 +288,7 @@ async function resolvePatSessionTarget(params: Readonly<{
     idOrPrefix: params.idOrPrefix,
     ...(params.signal ? { signal: params.signal } : {}),
     listPage: async ({ limit, cursor, archivedOnly }) => {
+      const { connect } = await import('@happier-dev/sdk');
       const client = connect({
         endpoint: params.serverApiUrl,
         token: resolveCliApiTokenForSdk(params.credentials.token),
@@ -577,6 +571,7 @@ async function executePatPublicActionPlan(params: Readonly<{
   serverApiUrl: string;
 }>): Promise<ActionExecuteResult> {
   const publicActionId = PublicActionIdSchema.parse(params.actionId);
+  const { connect, HappierActionError } = await import('@happier-dev/sdk');
   const client = connect({ endpoint: params.serverApiUrl, token: resolveCliApiTokenForSdk(params.credentials.token) });
   const signal = combineInvocationSignals(params.invocationSignal, params.context?.signal);
   try {
@@ -1261,6 +1256,9 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           }
         : {}),
       resolveTranscriptStore: async (sessionId) => {
+        const [{ createServerBackedSessionTranscriptStore }, { fetchOpenedSessionStateFromServer }] = await Promise.all([
+          import('@/api/session/createServerBackedSessionTranscriptStore'), import('@/api/session/snapshotSync'),
+        ]);
         const serverFeaturesSnapshot = await resolveServerFeaturesSnapshotForCredentials(credentials);
         const transport = await resolveSessionTransportContext({
           credentials,
@@ -1288,7 +1286,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       },
       transcriptFollowLeaseRegistry,
       writeTranscriptItems: async (sessionId: string, items: readonly SessionTranscriptActionItem[]) =>
-        await importHistoricalSessionTranscript({
+        await (await import('@/session/transport/http/sessionsHttp')).importHistoricalSessionTranscript({
           token: credentials.token,
           sessionId,
           items,
@@ -1312,6 +1310,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         if (params.pluginActionExecutionOwner === 'current_process') {
           // Account plugin runtimes also own their local plugin invocation;
           // only a daemon-applied registry establishes Machine runtime custody.
+          const { tryAcquireAuthoritativePluginRuntimeRegistryLease } = await import('@/plugins/runtime/reload/runtimeLease');
           const lease = tryAcquireAuthoritativePluginRuntimeRegistryLease();
           if (lease) { await lease.release(); return null; }
         }
@@ -1783,6 +1782,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         const catalogSessionId = readNonEmptyString(context?.defaultSessionId);
         if (params.pluginActionExecutionOwner === 'current_process' && context?.surface === 'agent'
           && catalogSessionId && (actionId === 'action.spec.get' || actionId === 'action.spec.search')) {
+          const { createCliBoundSessionMetadataReader } = await import('./resolveCliActionCallerSession');
           // A reader belongs to one invocation: its preparation-local cache must
           // never turn a daemon's long-lived catalog into a stale Session policy.
           const ctx = resolveSessionEncryptionContextFromCredentials(credentials);
@@ -1975,6 +1975,10 @@ export function createCliActionExecutorFromCredentials(params: Parameters<typeof
           let preparedAdmission: Extract<ReturnType<typeof FilesystemUploadOutputSchema.parse>, { success: true; status: 'accepted' }> | undefined;
           try {
             await assertCurrent();
+            const [{ createCredentialedFilesystemTransferClient }, { createPreparedFilesystemTransferClient }] = await Promise.all([
+              import('@/machines/transfer/createCredentialedFilesystemTransferClient'),
+              import('@/machines/transfer/preparedFilesystemTransferClient'),
+            ]);
             const invoke = (home: typeof sourceHome, machineId: string): Parameters<typeof createPreparedFilesystemTransferClient>[0]['executeAction'] => async (id, value, targetContext) => {
               await assertCurrent();
               if (targetContext.serverId !== home.serverId || targetContext.externalActionTarget?.kind !== 'machine'

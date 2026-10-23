@@ -1,10 +1,10 @@
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { duplicateRemoteHostForActionV1, changeRemoteHostCredentialForActionV1 } from '@happier-dev/protocol/remoteHosts/remoteHostActionsV1';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import type { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { StoredCredentials } from '@/persistence';
-import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { createCliRemoteHostStore, createCliRemoteHostStoreForOperation } from '@/settings/remoteHosts/remoteHostStore';
+import type { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import type { createCliRemoteHostStore, createCliRemoteHostStoreForOperation } from '@/settings/remoteHosts/remoteHostStore';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
 /** Account catalog Actions use the invocation's issued Home, never the ambient Home. */
@@ -12,11 +12,15 @@ export function createCliRemoteHostActionExecuteV1(params: Readonly<{
   credentials: StoredCredentials; serverId: string; serverHttpBaseUrl: string;
   operationContext?: SavedSecretOperationContextV1;
 }>): NonNullable<ActionExecutorDeps['remoteHostActionExecute']> {
-  return async (request, context) => runWithServerHttpBaseUrl(params.serverHttpBaseUrl, async () => {
+  return async (request, context) => {
+    const { runWithServerHttpBaseUrl } = await import("@/api/client/serverHttpBaseUrl");
+    return runWithServerHttpBaseUrl(params.serverHttpBaseUrl, async () => {
     if (context.serverId && context.serverId !== params.serverId) {
       return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
     }
+    const [{ getActiveAccountSettingsSnapshot }, { createCliRemoteHostStoreForOperation, createCliRemoteHostStore }] = await Promise.all([import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/settings/remoteHosts/remoteHostStore")]);
     if (!params.operationContext && !getActiveAccountSettingsSnapshot()) {
+      const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
       await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking' });
     }
     const store = params.operationContext
@@ -64,4 +68,5 @@ export function createCliRemoteHostActionExecuteV1(params: Readonly<{
       ...(resource ? { referencedSavedSecretRevisions: [{ resourceId: resource.resourceId, revision: resource.expectedResourceRevision }] } : {}),
     }) };
   });
+  };
 }

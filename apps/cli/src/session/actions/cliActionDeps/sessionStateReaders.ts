@@ -4,7 +4,7 @@ import {
   SESSION_MODELS_STATE_KEY,
   SESSION_MODES_STATE_KEY,
   readMetadataAliasValue,
-} from '@happier-dev/agents';
+} from '@happier-dev/agents/session/controls/metadataKeys';
 
 import {
   decryptStoredSessionPayload,

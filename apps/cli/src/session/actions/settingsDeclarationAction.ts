@@ -20,16 +20,16 @@ import { readPortableCatalogAccountSettingBindingV1, PORTABLE_SETTING_VALUE_UNAV
 
 import type { StoredCredentials } from '@/persistence';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { readAccountSettingsV2Raw, updateAccountSettingsV2Once, updateAccountSettingsV2WithRetry } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
-import { executeCliSettingMutationReversal } from './settingMutationReversal';
-import { createCliSettingsCatalogServices, createCliVoiceSettingsBindingContext } from './settingsCatalogServices';
+import type { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import type { readAccountSettingsV2Raw, updateAccountSettingsV2Once, updateAccountSettingsV2WithRetry } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
+import type { executeCliSettingMutationReversal } from './settingMutationReversal';
+import type { createCliSettingsCatalogServices, createCliVoiceSettingsBindingContext } from './settingsCatalogServices';
 import { createVoiceSettingsPersistenceOwner } from '@happier-dev/protocol/voice/settings/voiceSettingsPersistence';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
-import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { readProviderSettingsForCli } from '@/providers/settings/read';
-import { createCliAutomationSettingsDeclarationAction } from './automationSettingsAction';
+import type { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import type { readProviderSettingsForCli } from '@/providers/settings/read';
+import type { createCliAutomationSettingsDeclarationAction } from './automationSettingsAction';
 import { readPortableAccountSettingBindingV1, machineDirectConnectionStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import { MachineTerminalHostSettingKeySchema, MachineTerminalHostSettingChangeSchema,
   readMachineTerminalHostSetting, buildMachineTerminalHostSettingMutation } from '@happier-dev/protocol/actions/settings/machineTerminalHostSetting';
@@ -72,6 +72,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
       if (actionId === 'actions.policy.get') {
         const requested = ActionPolicyInputSchemas[actionId].parse(input);
+        const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
         const current = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force', signal: context.signal });
         if (current.source === 'none' || !current.rawSettings) return refuse('account_settings_content_unavailable');
         return readActionAudiencePolicy(accountSettingsParse(current.rawSettings).actionsSettingsV1, requested.actionId, requested.audience);
@@ -80,6 +81,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
         : { ...ActionPolicyInputSchemas[actionId].parse(input), mode: 'default' as const };
       let applied: ActionPolicySetResult | undefined;
       try {
+        const { updateAccountSettingsV2WithRetry } = await import("@/settings/accountSettings/updateAccountSettingsV2WithRetry");
         const result = await updateAccountSettingsV2WithRetry({ credentials: params.credentials, signal: context.signal,
           prepareMutation: async raw => {
             context.signal?.throwIfAborted();
@@ -144,6 +146,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       if (!params.credentials) return refuse('not_authenticated');
       if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
       if (actionId === 'settings.get') {
+        const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
         const current = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force', signal: context.signal });
         if (current.source === 'none' || !current.rawSettings) return refuse('account_settings_content_unavailable');
         return { anchor: parsed.anchor, value: keyedOwner.read(accountSettingsParse(current.rawSettings), key.data) };
@@ -153,6 +156,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       const change = keyedOwner.value.safeParse(requested.value);
       if (!change.success) return refuse('invalid_setting_value');
       try {
+        const { updateAccountSettingsV2WithRetry } = await import("@/settings/accountSettings/updateAccountSettingsV2WithRetry");
         const result = await updateAccountSettingsV2WithRetry({ credentials: params.credentials, signal: context.signal,
           prepareMutation: async raw => {
             context.signal?.throwIfAborted();
@@ -226,6 +230,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     if (storage.kind === 'automationSettings') {
       if (resetExpected !== undefined || requested?.expectedSettingsVersion !== undefined || requested?.reversal || 'includeVersion' in parsed && parsed.includeVersion) return refuse('setting_conditional_mutation_unsupported');
       if (storage.field !== 'maxActiveRunsPerMachine' && storage.field !== 'runRetention') return refuse('setting_not_bound');
+      const { createCliAutomationSettingsDeclarationAction } = await import("./automationSettingsAction");
       return await createCliAutomationSettingsDeclarationAction({ credentials, serverId: params.serverId,
         serverHttpBaseUrl: params.serverHttpBaseUrl, isCredentialCurrent: params.isCredentialCurrent })({
         actionId: ownerActionId, anchor: declaration.anchor, field: storage.field, value: requested?.value, signal: context.signal,
@@ -235,6 +240,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     const portableBinding = readPortableAccountSettingBindingV1(declaration);
     const preparedBinding = portableBinding && 'prepare' in portableBinding ? portableBinding : undefined;
     const scalarCatalogBinding = readPortableCatalogAccountSettingBindingV1<AccountSettings>(declaration);
+    const [{ bootstrapAccountSettingsContext }, { readAccountSettingsV2Raw }, { createCliVoiceSettingsBindingContext }] = await Promise.all([import("@/settings/accountSettings/bootstrapAccountSettingsContext"), import("@/settings/accountSettings/updateAccountSettingsV2WithRetry"), import("./settingsCatalogServices")]);
     const voiceContext = !ordinaryBinding && !scalarCatalogBinding
       ? params.voiceBindingContext ?? createCliVoiceSettingsBindingContext() : undefined;
     const voicePersistence = voiceContext ? createVoiceSettingsPersistenceOwner({ voiceOwner: voiceContext.owner }) : undefined;
@@ -253,6 +259,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     if (requested) {
       const value = catalogBinding ? catalogBinding.parse(requested.value) : parseBuiltInAccountSettingValueV1(declaration, requested.value);
       if (!value.success) return refuse('invalid_setting_value');
+      const [{ bootstrapAccountSettingsContext }, { createCliSettingsCatalogServices }] = await Promise.all([import("@/settings/accountSettings/bootstrapAccountSettingsContext"), import("./settingsCatalogServices")]);
       const initial = catalogBinding?.prepare || preparedBinding ? await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', signal: context.signal }) : undefined;
       if (initial && (initial.source === 'none' || !initial.rawSettings)) return refuse('account_settings_content_unavailable');
       const catalogServices = createCliSettingsCatalogServices({ credentials, signal: context.signal, serverId: params.serverId,
@@ -290,6 +297,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
           : catalogBinding ? preparedCatalogMutation ? preparedCatalogMutation(settings)
           : catalogBinding.mutate(settings, value.value) : buildBuiltInAccountSettingMutationV1(declaration, settings, value.value);
         if (!delta) throw new RejectedSettingMutation('setting_value_unavailable');
+        const [{ getActiveAccountSettingsSnapshot }, { resolveAccountSettingsScopeKey }, { readProviderSettingsForCli }] = await Promise.all([import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/settings/accountSettings/accountSettingsScopeKey"), import("@/providers/settings/read")]);
         const snapshot = getActiveAccountSettingsSnapshot();
         const providerSettings = voicePersistence && snapshot?.scopeKey === resolveAccountSettingsScopeKey(credentials)
           && snapshot.providerConnectionsCatalog?.status === 'ready' ? readProviderSettingsForCli(snapshot).settings : null;
@@ -301,6 +309,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       };
       try {
         if (requested.reversal || resetExpected !== undefined) {
+          const { executeCliSettingMutationReversal } = await import("./settingMutationReversal");
           const reversed = await executeCliSettingMutationReversal({ declaration, requested, resetExpected,
             credentials, serverId: params.serverId, signal: context.signal, isCredentialCurrent: params.isCredentialCurrent,
             prepareMutation, readValue });
@@ -308,6 +317,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
           const { settingsVersion: _settingsVersion, ...response } = reversed;
           return response;
         }
+        const { updateAccountSettingsV2WithRetry, updateAccountSettingsV2Once } = await import("@/settings/accountSettings/updateAccountSettingsV2WithRetry");
         const result = requested.expectedSettingsVersion === undefined
           ? await updateAccountSettingsV2WithRetry({ credentials, prepareMutation, signal: context.signal })
           : await updateAccountSettingsV2Once({ credentials, expectedVersion: requested.expectedSettingsVersion,

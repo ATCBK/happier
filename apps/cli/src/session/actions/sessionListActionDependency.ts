@@ -1,31 +1,24 @@
 import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
 import type { AccountSettings, ActionExecutorDeps } from '@happier-dev/protocol';
 
-import {
-  resolveExternalActionServerRequestHeaders,
-  type ExternalActionHomeBinding,
-} from '@/api/externalActionExecutionAuthorization';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import type { resolveExternalActionServerRequestHeaders, ExternalActionHomeBinding } from '@/api/externalActionExecutionAuthorization';
+import type { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import type { StoredCredentials } from '@/persistence';
-import {
-  listSessions,
-  resolveAdmittedSessionListQueryAdmission,
-  SessionListAdmittedQueryUnsupportedError,
-} from '@/session/services/listSessions';
-import { fetchSessionById, fetchSessionRuntimeManagedSubtreeQueryPage } from '@/session/transport/http/sessionsHttp';
-import { buildCliSessionRowModel } from '@/cli/output/session/buildCliSessionRowModel';
-import { summarizeSessionRecord } from '@/cli/output/session/sessionSummary';
-import { projectCliSessionAwarenessFromMaterialV1, projectCliSessionAwarenessUnavailableMaterialV1 } from '@/cli/output/session/sessionAwareness';
+import type { listSessions, resolveAdmittedSessionListQueryAdmission, SessionListAdmittedQueryUnsupportedError } from '@/session/services/listSessions';
+import type { fetchSessionById, fetchSessionRuntimeManagedSubtreeQueryPage } from '@/session/transport/http/sessionsHttp';
+import type { buildCliSessionRowModel } from '@/cli/output/session/buildCliSessionRowModel';
+import type { summarizeSessionRecord } from '@/cli/output/session/sessionSummary';
+import type { projectCliSessionAwarenessFromMaterialV1, projectCliSessionAwarenessUnavailableMaterialV1 } from '@/cli/output/session/sessionAwareness';
 import type { SessionTransportEncryptionMaterial } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
 import { projectSessionListFilterAfterHomeQueryV1, projectSessionListFilterHomeQueriesV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterQueryV1';
 import { SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
-import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
-import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
-import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
-import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
+import type { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import type { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
+import type { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
+import type { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 
 /** The one typed answer for a query arm an admitted one-Session corpus cannot serve. */
 function unsupportedSessionListQueryArmsResult(arms: readonly string[]) {
@@ -55,6 +48,7 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
     if (input.query?.underSessionId !== undefined && !underSelf) {
       return unsupportedSessionListQueryArmsResult(['underSessionId']);
     }
+    const [{ runWithServerHttpBaseUrl }, { resolveAdmittedSessionListQueryAdmission }, { fetchSessionRuntimeManagedSubtreeQueryPage, fetchSessionById }, { buildCliSessionRowModel }, { summarizeSessionRecord }, { isServerProfileHomeIdentity }] = await Promise.all([import("@/api/client/serverHttpBaseUrl"), import("@/session/services/listSessions"), import("@/session/transport/http/sessionsHttp"), import("@/cli/output/session/buildCliSessionRowModel"), import("@/cli/output/session/sessionSummary"), import("@/server/serverProfiles")]);
     if (
       input.context.serverId != null
       && !await isServerProfileHomeIdentity(params.serverId, input.context.serverId)
@@ -133,6 +127,7 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
       : { nextCursor: null, hasNext: false };
 
     if (input.view === 'awareness') {
+      const { projectCliSessionAwarenessFromMaterialV1, projectCliSessionAwarenessUnavailableMaterialV1 } = await import("@/cli/output/session/sessionAwareness");
       const awarenessPage = {
         sessions: entries.map(({ rawSession }) => rawSession.encryptionMode === 'plain' || rawSession.id === params.sessionId
           ? projectCliSessionAwarenessFromMaterialV1({
@@ -200,6 +195,7 @@ export function createSessionListActionDeps(params: Readonly<{
   workspaceRefs?: readonly WorkspaceRefV1[], sourceSessionId?: string) => {
     const normalizedActiveOnly = activeOnly === true;
     const normalizedArchivedOnly = archivedOnly === true;
+    const [{ resolveExternalActionServerRequestHeaders }, { readRequesterAccountActionContext }, { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId }] = await Promise.all([import("@/api/externalActionExecutionAuthorization"), import("@/daemon/sessionEncryption/requesterAccountActionContext"), import("@/server/serverProfiles")]);
     if ((requestedServerId && !await isServerProfileHomeIdentity(serverId, requestedServerId))
       || (context?.serverId && !await isServerProfileHomeIdentity(serverId, context.serverId))) {
       return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
@@ -258,7 +254,9 @@ export function createSessionListActionDeps(params: Readonly<{
     if (filterCandidates && context.externalActionExecutionAuthorization && (!requester || !await requester.isCurrent())) {
       return { ok: false as const, errorCode: 'follow_rule_account_scope_unavailable', error: 'follow_rule_account_scope_unavailable' };
     }
-    const run = async () => await listSessions({
+    const run = async () => {
+      const { listSessions } = await import("@/session/services/listSessions");
+      return await listSessions({
       ...(qualifiedProject ? { project: qualifiedProject, workspaceRefs: await params.readWorkspaceRefs?.({ context, project: qualifiedProject, signal }) } : {}),
       ...(filterCandidates ? { filterCandidates, workspaceRefs, accountSettings: params.resolveAccountSettings?.() ?? null } : {}),
       credentials: requester?.credentials ?? params.credentials,
@@ -283,16 +281,19 @@ export function createSessionListActionDeps(params: Readonly<{
       ...(signal ? { signal } : {}),
       ...(allowedSessionIds ? { allowedSessionIds } : {}),
     });
+    };
     try {
       // Scope observation is a preparation read, not the Action effect. Retain
       // its admitted lifetime through transient Home failures before the scope
       // guard classifies an unavailable observation as an unsupported corpus.
+      const [{ runWithServerHttpBaseUrl }, { readRequesterHomeWithinActionLifetime }] = await Promise.all([import("@/api/client/serverHttpBaseUrl"), import("@/daemon/sessionEncryption/requesterCurrentness")]);
       return await readRequesterHomeWithinActionLifetime(() => params.serverHttpBaseUrl
         ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run)
         : run(), signal);
     } catch (error) {
       // The admitted one-Session corpus cannot answer every query arm; that is a
       // typed contract answer, not a transport failure.
+      const { SessionListAdmittedQueryUnsupportedError } = await import("@/session/services/listSessions");
       if (error instanceof SessionListAdmittedQueryUnsupportedError) {
         return unsupportedSessionListQueryArmsResult(error.arms);
       }
@@ -302,6 +303,7 @@ export function createSessionListActionDeps(params: Readonly<{
   return {
     sessionList: read,
     sessionFollowPreview: async ({ context, input, sourceSessionId, serverId: requestedServerId, signal }) => {
+      const [{ readAccountIdFromToken }, { readRequesterAccountActionContext }, { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId }] = await Promise.all([import("@/cloud/decodeJwtPayload"), import("@/daemon/sessionEncryption/requesterAccountActionContext"), import("@/server/serverProfiles")]);
       if ((requestedServerId && !await isServerProfileHomeIdentity(serverId, requestedServerId))
         || (context.serverId && !await isServerProfileHomeIdentity(serverId, context.serverId))) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       const homeServerId = await resolveServerProfileHomeIdentityId(serverId) ?? serverId;
@@ -312,7 +314,10 @@ export function createSessionListActionDeps(params: Readonly<{
         ...input.filter.tagIds.map(row => row.serverId),
         ...(input.filter.projects ? [...input.filter.projects.include, ...input.filter.projects.exclude].map(row => row.serverId) : [])]);
       const homes = new Map(await Promise.all([...identifiers].map(async identifier =>
-        [identifier, await resolveServerProfileHomeIdentityId(identifier) ?? identifier] as const)));
+        {
+          const { resolveServerProfileHomeIdentityId } = await import("@/server/serverProfiles");
+          return [identifier, await resolveServerProfileHomeIdentityId(identifier) ?? identifier] as const;
+        })));
       const filter = { ...input.filter,
         homeServerIds: input.filter.homeServerIds.map(id => homes.get(id)!),
         audiences: input.filter.audiences.map(row => ({ ...row, serverId: homes.get(row.serverId)! })),

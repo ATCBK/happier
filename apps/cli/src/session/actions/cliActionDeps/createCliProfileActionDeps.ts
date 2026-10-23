@@ -1,4 +1,4 @@
-import { AGENT_IDS } from '@happier-dev/agents';
+import { AGENT_IDS } from '@happier-dev/agents/agent-ids';
 import type { ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol';
 import type { z } from 'zod/mini';
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
@@ -8,7 +8,7 @@ import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendPr
 import { DEFAULT_BUILT_IN_BACKEND_PROFILES, getBuiltInBackendProfile } from '@happier-dev/protocol/profiles/builtInBackendProfiles';
 import { createProfileActionExecuteV1 } from '@happier-dev/protocol/profiles/profileActionsV1';
 import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
-import { readAccountPluginSkills } from '@/prompts/skills/library/readAccountPluginSkills';
+import type { readAccountPluginSkills } from '@/prompts/skills/library/readAccountPluginSkills';
 import { createProfileOperations, setBuiltinProfileEnabledPreferenceV1, setProfileFavoritePreferenceV1,
   type ProfileOperationResult, type ProfileOperations } from '@happier-dev/protocol/profiles/profileOperations';
 import { isLaunchProfileV2 } from '@happier-dev/protocol/profiles/read';
@@ -19,20 +19,19 @@ import { DaemonProviderProfileMigrationPreviewRequestV1Schema, DaemonProviderPro
   DaemonProviderProfileMigrationConfirmRequestV1Schema, DaemonProviderProfileMigrationConfirmResponseV1Schema,
   DaemonProviderProfileMigrationConflictConfirmRequestV1Schema, DaemonProviderProfileMigrationConflictConfirmResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import type { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { StoredCredentials } from '@/persistence';
-import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { requireAccountSettingsMutationSuccess, updateAccountSettingsV2Once,
-  updateAccountSettingsV2WithRetry } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
-import { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
-import { createCliProfileStore, createCliProfileStoreForOperation, type CliProfileStore } from '@/settings/profiles/profileStore';
+import type { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import type { requireAccountSettingsMutationSuccess, updateAccountSettingsV2Once, updateAccountSettingsV2WithRetry } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
+import type { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
+import type { createCliProfileStore, createCliProfileStoreForOperation, CliProfileStore } from '@/settings/profiles/profileStore';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { clearAuthoringMemoryLastUsedProfileIfEqual, readAuthoringMemoryLastUsedProfile } from '@/settings/profiles/readAuthoringMemoryLastUsedProfile';
-import { readProfilesFromAccountSettings } from '@/settings/profiles/readProfilesFromAccountSettings';
-import { createAuthoringMemoryClient } from '@/settings/authoringMemory/createAuthoringMemoryClient';
+import type { clearAuthoringMemoryLastUsedProfileIfEqual, readAuthoringMemoryLastUsedProfile } from '@/settings/profiles/readAuthoringMemoryLastUsedProfile';
+import type { readProfilesFromAccountSettings } from '@/settings/profiles/readProfilesFromAccountSettings';
+import type { createAuthoringMemoryClient } from '@/settings/authoringMemory/createAuthoringMemoryClient';
 
 function mutationResult(id: string, result: ProfileRowMutationResponseV1): ProfileOperationResult {
   if (result.status === 'updated' || result.status === 'conflict') return { status: result.status, id, revision: result.revision };
@@ -57,6 +56,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
       return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
     }
     let store: CliProfileStore | undefined;
+    const [{ getActiveAccountSettingsSnapshot }, { refreshActiveProfileCatalog }] = await Promise.all([import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/settings/profiles/hydrateProfileCatalog")]);
     const readSnapshot = () => params.operationContext ? params.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
     const assertCurrent = () => {
       context.signal?.throwIfAborted();
@@ -69,6 +69,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
       ...(params.operationContext ? { operationContext: params.operationContext } : {}) });
     const refreshPrivateSettings = async () => {
       if (!params.operationContext) return;
+      const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
       const snapshot = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force',
         publication: 'invocation', honorAccountSettingsModeEnv: false });
       if (snapshot.source !== 'network' || !await params.operationContext.replaceAccountSettings(snapshot)) {
@@ -102,7 +103,9 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
     let operations: Promise<ProfileOperations> | undefined;
     const resolveOperations = () => operations ??= (async () => {
       assertCurrent();
+      const [{ getActiveAccountSettingsSnapshot }, { createCliProfileStoreForOperation, createCliProfileStore }] = await Promise.all([import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/settings/profiles/profileStore")]);
       if (!params.operationContext && !getActiveAccountSettingsSnapshot()) {
+        const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
         await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking' });
       }
       assertCurrent();
@@ -119,6 +122,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
         || (addressedId !== undefined && getBuiltInBackendProfile(addressedId) !== null && projection.catalog.status === 'ready'
           && !projection.catalog.records.some(row => row.record.id === addressedId));
       if (requiresVisibility && projection.catalog.status === 'ready') {
+        const [{ readAuthoringMemoryLastUsedProfile }, { readProfilesFromAccountSettings }] = await Promise.all([import("@/settings/profiles/readAuthoringMemoryLastUsedProfile"), import("@/settings/profiles/readProfilesFromAccountSettings")]);
         const lastUsedProfile = await readAuthoringMemoryLastUsedProfile(params.credentials, context.signal);
         const source = await capturedStore.readSourceSnapshot();
         assertCurrent();
@@ -149,11 +153,13 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
         },
         clearRememberedProfile: async ({ id }) => {
           assertCurrent();
+          const { readAuthoringMemoryLastUsedProfile, clearAuthoringMemoryLastUsedProfileIfEqual } = await import("@/settings/profiles/readAuthoringMemoryLastUsedProfile");
           await readAuthoringMemoryLastUsedProfile(params.credentials, context.signal);
           assertCurrent();
           await clearAuthoringMemoryLastUsedProfileIfEqual(params.credentials, id, context.signal);
         },
         setBuiltinEnabled: async input => {
+          const { updateAccountSettingsV2Once, requireAccountSettingsMutationSuccess } = await import("@/settings/accountSettings/updateAccountSettingsV2WithRetry");
           const result = await updateAccountSettingsV2Once({ credentials: params.credentials,
             signal: context.signal, shouldSubmit: isCurrent, shouldCommit: () => !params.operationContext && isCurrent(),
             expectedVersion: input.expectedSettingsVersion,
@@ -176,6 +182,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
           const parsed = LaunchProfileArtifactV1Schema.safeParse({ ...content, profile: isLaunchProfileV2(profile)
             ? createStoredReadSchema(LaunchProfileV2Schema).parse(profile) : createStoredReadSchema(AIBackendProfileSchema).parse(profile) });
           if (!parsed.success) return { status: 'invalid', reason: 'invalid-definition', id: record.id };
+          const { createCredentialedAccountArtifactStore } = await import("@/api/artifacts/accountArtifactStore");
           const result = await createCredentialedAccountArtifactStore(params.credentials).update({ artifactId: resource.artifactId,
             expectedRevision: expectedArtifactRevision, header: { ...resource.header, ...buildLaunchProfileArtifactHeaderV1(parsed.data) },
             body: JSON.stringify(parsed.data), signal: context.signal });
@@ -191,6 +198,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
       operations: resolveOperations,
       readSkillLibrary: async signal => {
         assertCurrent();
+        const [{ readAccountPluginSkills }, { createCredentialedAccountArtifactStore }, { getActiveAccountSettingsSnapshot }] = await Promise.all([import("@/prompts/skills/library/readAccountPluginSkills"), import("@/api/artifacts/accountArtifactStore"), import("@/settings/accountSettings/activeAccountSettingsSnapshot")]);
         const items = await readSkillLibraryCatalog({ ...createCredentialedAccountArtifactStore(params.credentials),
           readPluginSkills: (readSignal, skillIds) => readAccountPluginSkills({ credentials: params.credentials,
             serverHttpBaseUrl: params.serverHttpBaseUrl, signal: readSignal, skillIds, isCurrent, availableOnly: true,
@@ -201,6 +209,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
       },
       favorite: async ({ id, favorite }) => {
         assertCurrent();
+        const { updateAccountSettingsV2WithRetry, requireAccountSettingsMutationSuccess } = await import("@/settings/accountSettings/updateAccountSettingsV2WithRetry");
         const result = await updateAccountSettingsV2WithRetry({ credentials: params.credentials,
           signal: context.signal, shouldSubmit: isCurrent, shouldCommit: () => !params.operationContext && isCurrent(),
           prepareMutation: raw => AccountSettingMutationV1Schema.parse({ operations: [{ op: 'set', key: 'favoriteProfiles',
@@ -215,6 +224,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
           const admitted = (await resolveOperations()).validateSelection({ id });
           if (admitted.status !== 'selected') return admitted;
         }
+        const [{ readAuthoringMemoryLastUsedProfile }, { createAuthoringMemoryClient }] = await Promise.all([import("@/settings/profiles/readAuthoringMemoryLastUsedProfile"), import("@/settings/authoringMemory/createAuthoringMemoryClient")]);
         await readAuthoringMemoryLastUsedProfile(params.credentials, context.signal);
         assertCurrent();
         const memory = await createAuthoringMemoryClient({ credentials: params.credentials, signal: context.signal });

@@ -3,10 +3,10 @@ import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 } from '@happier-dev/p
 import { isWorkflowRunExecutorStorageOperationV1 } from '@happier-dev/protocol/workflows/workflowRunStorageV1';
 import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { resolveWorkflowRunFollowEventV1 } from '@happier-dev/protocol/workflows/composeWorkflowRunWorkerUpdateV1';
-import { notifyDaemonSessionActivityChanged } from '@/daemon/controlClient';
-import { logger } from '@/ui/logger';
+import type { notifyDaemonSessionActivityChanged } from '@/daemon/controlClient';
+import type { logger } from '@/ui/logger';
 
-import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
+import type { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { observeAccountChanges } from '@/api/observeAccountChanges';
 import {
@@ -54,6 +54,7 @@ export function createWorkflowRunStorageClient(params: Readonly<{
           ? params.resolveAuthorizationHeaders({ method: 'POST', path: WORKFLOW_RUN_STORAGE_HTTP_PATH, body })
           : { Authorization: `Bearer ${params.token}` };
         if (!authorizationHeaders) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
+        const { buildCurrentAccountStoredContentCompatibilityHttpHeaders } = await import("@/api/clientCompatibility/cliClientCompatibility");
         const request = () => axios.post<unknown>(`${baseUrl}${WORKFLOW_RUN_STORAGE_HTTP_PATH}`, body, {
           headers: {
             ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
@@ -91,11 +92,13 @@ export function createWorkflowRunStorageClient(params: Readonly<{
               const projected = WorkflowRunSummaryV1Schema.safeParse(current && typeof current === 'object' && 'run' in current ? current.run : null);
               run = projected.success && projected.data.id === runId ? projected : WorkflowRunSummaryV1Schema.safeParse(null);
             } catch {
+              const { logger } = await import("@/ui/logger");
               logger.debug('[workflowRunStorage] Follow occurrence awaits current source projection');
             }
           }
           const event = run.success ? resolveWorkflowRunFollowEventV1(run.data) : null;
           if (run.success && run.data.revision > 0 && run.data.workflowCustodyState !== null && event) {
+            const [{ notifyDaemonSessionActivityChanged }, { logger }] = await Promise.all([import("@/daemon/controlClient"), import("@/ui/logger")]);
             void notifyDaemonSessionActivityChanged(run.data.origin.originSessionId ?? null, {
               original: { source: { kind: 'workflow_run', runId: run.data.id }, revision: run.data.revision },
               event,

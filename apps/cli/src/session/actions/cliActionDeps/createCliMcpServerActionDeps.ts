@@ -6,15 +6,15 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { StoredCredentials } from '@/persistence';
-import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
-import { createCliMcpServerStore, createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
+import type { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import type { createCliMcpServerStore, createCliMcpServerStoreForOperation } from '@/settings/mcp/mcpServerStore';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { listCurrentAccountMachines, resolveCurrentAccountAdministrationMachine } from '@/api/machine/resolveCurrentAccountMachineTarget';
+import type { listCurrentAccountMachines, resolveCurrentAccountAdministrationMachine } from '@/api/machine/resolveCurrentAccountMachineTarget';
 import { CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, ConnectedAccountControlCommandRequestSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
-import { readCatalogEntriesSnapshot } from '@/agent/catalog/registry';
-import { readPluginMcpServerMetadata } from '@/mcp/runtime/pluginMcpServerItems';
-import { resolveCliHomeTarget } from '@/server/homeTarget';
+import type { readCatalogEntriesSnapshot } from '@/agent/catalog/registry';
+import type { readPluginMcpServerMetadata } from '@/mcp/runtime/pluginMcpServerItems';
+import type { resolveCliHomeTarget } from '@/server/homeTarget';
 
 /** Catalog and Machine operations retain the exact CLI invocation's Home and Account. */
 export function createCliMcpServerActionExecuteV1(params: Readonly<{
@@ -38,9 +38,14 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
       context.signal?.throwIfAborted();
       if (params.operationContext) {
         if (!await params.operationContext.isCurrent()) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
-      } else if (!getActiveAccountSettingsSnapshot()) {
+      } else {
+        const { getActiveAccountSettingsSnapshot } = await import("@/settings/accountSettings/activeAccountSettingsSnapshot");
+        if (!getActiveAccountSettingsSnapshot()) {
+        const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
         await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking' });
       }
+      }
+      const { createCliMcpServerStoreForOperation, createCliMcpServerStore } = await import("@/settings/mcp/mcpServerStore");
       const store = params.operationContext
         ? createCliMcpServerStoreForOperation({ operationContext: params.operationContext, serverId: params.serverId, signal: context.signal })
         : createCliMcpServerStore({ credentials: params.credentials, serverId: params.serverId, signal: context.signal });
@@ -60,6 +65,7 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
       };
       return await createMcpServerActionExecuteV1({
         resolveWebappUrl: async () => {
+          const { resolveCliHomeTarget } = await import("@/server/homeTarget");
           const target = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: params.serverId }).catch(cause => {
             if (!cause || typeof cause !== 'object' || !('code' in cause) || cause.code !== 'profile_missing') throw cause;
             return resolveCliHomeTarget({ kind: 'https_url', url: params.serverHttpBaseUrl });
@@ -82,6 +88,7 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
           await assertCurrent();
           const requestedMachineId = context.externalActionTarget?.kind === 'machine'
             ? context.externalActionTarget.machineId : context.defaultSessionMachineId ?? undefined;
+          const { resolveCurrentAccountAdministrationMachine } = await import("@/api/machine/resolveCurrentAccountMachineTarget");
           const machineId = await resolveCurrentAccountAdministrationMachine({ token: params.credentials.token,
             authorization: context.externalActionExecutionAuthorization, effectActionId: request.actionId,
             serverHttpBaseUrl: params.serverHttpBaseUrl, signal: context.signal,
@@ -99,9 +106,12 @@ export function createCliMcpServerActionExecuteV1(params: Readonly<{
             authorization: context.rpcSessionAuthorization, effectActionId: request.actionId, exactMachine: true });
         },
         readCatalog,
-        readPluginItems: async () => { const items = await readPluginMcpServerMetadata(); await assertCurrent(); return items; },
+        readPluginItems: async () => { 
+        const { readPluginMcpServerMetadata } = await import("@/mcp/runtime/pluginMcpServerItems");
+        const items = await readPluginMcpServerMetadata(); await assertCurrent(); return items; },
         readToolAgentFacts: async () => {
           await assertCurrent();
+          const [{ listCurrentAccountMachines }, { readCatalogEntriesSnapshot }] = await Promise.all([import("@/api/machine/resolveCurrentAccountMachineTarget"), import("@/agent/catalog/registry")]);
           const machines = await listCurrentAccountMachines({ token: params.credentials.token, credentials: params.credentials,
             authorization: context.externalActionExecutionAuthorization, effectActionId: request.actionId,
             serverHttpBaseUrl: params.serverHttpBaseUrl, signal: context.signal }).catch((cause: unknown) => {
