@@ -3,7 +3,8 @@ import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { createMachineFixture, registerStandardCleanupTarget, renderScreen, renderHook, standardCleanup, type RenderScreenResult } from '@/dev/testkit';
+import { createMachineFixture, registerStandardCleanupTarget, renderScreen, renderHook, standardCleanup, waitForTestEvent, type RenderScreenResult } from '@/dev/testkit';
+import { createDiagnosticsTestEvents } from './diagnosticsTestEvents';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -44,6 +45,7 @@ const configure = vi.hoisted(() => vi.fn(async (machineId: string, settings: Rea
   if (configureState.failedCalls.has(key)) throw new Error(`configure_failed:${key}`);
   return { ok: true, settings };
 }));
+const diagnosticsEvents = createDiagnosticsTestEvents();
 vi.mock('socket.io-client', async (importOriginal) => (
   await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
@@ -53,12 +55,16 @@ const rpcRequests = installSessionActionRpcBoundary(async request => {
   const method = request.method.slice(separator + 1);
   if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_REVOKE_CAPTURE) {
     VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema.parse(request.params);
-    await revokeCaptureAuthorization();
+    const pending = revokeCaptureAuthorization();
+    diagnosticsEvents.notify();
+    try { await pending; } finally { diagnosticsEvents.notify(); }
     return { ok: true };
   }
   if (method !== RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE) throw new Error(`Unexpected daemon RPC: ${method}`);
   const requestSettings = VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params).settings;
-  await configure(machineId, requestSettings);
+  const pending = configure(machineId, requestSettings);
+  diagnosticsEvents.notify();
+  try { await pending; } finally { diagnosticsEvents.notify(); }
   return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({ ok: true, root: `/private/${machineId}`, settings: requestSettings,
     artifacts: [], health: { captureFailure: false, cleanup: { status: 'healthy', code: null, ownedEntryCount: 0 } },
     backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop') });
@@ -102,6 +108,7 @@ import {
   readVoiceDiagnosticsRuntimeStatus,
   resetVoiceDiagnosticsRuntimeStatusForTests,
   updateVoiceDiagnosticsRevocationObligation,
+  useVoiceDiagnosticsRuntimeStatus,
 } from './runtimeStatus';
 import {
   resetVoiceDiagnosticsSessionPolicyForTests,
@@ -136,6 +143,7 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 describe('VoiceDiagnosticsIndicator', () => {
   afterEach(async () => {
     standardCleanup();
+    diagnosticsEvents.clear();
     // Every Home credential fixture was written on the web SDK boundary.
     // Native presentation probes must not move its teardown to another store.
     platformState.OS = 'web';
@@ -177,8 +185,11 @@ describe('VoiceDiagnosticsIndicator', () => {
     storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceSettingsParse({ diagnostics,
       executionMachine: { mode: 'fixed', machineId: 'm1' } }) }, storage.getState().settings));
     const readiness = await renderHook(() => useMachineCliDetectionTarget('m1'));
-    await vi.waitFor(() => expect(readiness.getCurrent().isOnline).toBe(true));
+    await waitForTestEvent(readiness.subscribe, readiness.getCurrent, value => value.isOnline);
+    expect(readiness.getCurrent().isOnline).toBe(true);
     await readiness.unmount();
+    const runtimeStatus = await renderHook(useVoiceDiagnosticsRuntimeStatus);
+    registerStandardCleanupTarget({ unmount: runtimeStatus.subscribe(diagnosticsEvents.notify) });
   });
 
   it('uses persistent text plus color and is removed for a session opt-out', async () => {
@@ -298,7 +309,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       await Promise.resolve();
     });
     await respondToVisibleConfirmation();
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toContainEqual(
+    await diagnosticsEvents.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toContainEqual(
       expect.objectContaining({
         target: { kind: 'machine_policy', machineId: 'm-inline-retry' },
         status: 'failed',
@@ -409,7 +420,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       await Promise.resolve();
     });
     await respondToVisibleConfirmation();
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
+    await diagnosticsEvents.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({ status: 'failed' }),
     ]));
     expect(resolveCaptureContext()).toMatchObject({
@@ -425,7 +436,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       }));
     });
     await respondToVisibleConfirmation();
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]));
+    await diagnosticsEvents.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]));
 
     runtimeState.daemonStateVersion = 3;
     await act(async () => {
@@ -435,7 +446,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       }));
     });
     await respondToVisibleConfirmation();
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await diagnosticsEvents.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
     }));
@@ -525,7 +536,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       })); registerStandardCleanupTarget(tree);
     });
     await respondToVisibleConfirmation();
-    await vi.waitFor(() => expect(configure).toHaveBeenCalledWith('m1', expect.objectContaining({ enabled: true })));
+    await diagnosticsEvents.waitFor(() => expect(configure).toHaveBeenCalledWith('m1', expect.objectContaining({ enabled: true })));
 
     configureState.failedCalls.add('m1:disabled');
     configureState.failedCalls.add('m2:enabled');
@@ -538,7 +549,7 @@ describe('VoiceDiagnosticsIndicator', () => {
       }));
     });
     await respondToVisibleConfirmation();
-    await vi.waitFor(() => expect(configure).toHaveBeenCalledWith('m2', expect.objectContaining({ enabled: true })));
+    await diagnosticsEvents.waitFor(() => expect(configure).toHaveBeenCalledWith('m2', expect.objectContaining({ enabled: true })));
 
     expect(tree.toJSON()).not.toBeNull();
     const renderedFailureLabels = tree.root.findAllByType('Text' as any).filter(

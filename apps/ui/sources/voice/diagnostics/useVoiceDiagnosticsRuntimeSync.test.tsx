@@ -2,7 +2,7 @@ import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDeferred, createMachineFixture, registerStandardCleanupTarget, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, registerStandardCleanupTarget, renderHook, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -12,6 +12,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
 import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccountScope';
 import { addPersistedVoiceDiagnosticsMachineRevocation, readPersistedVoiceDiagnosticsMachineRevocations } from './revocationObligationPersistence';
+import { createDiagnosticsTestEvents } from './diagnosticsTestEvents';
 
 vi.mock('socket.io-client', async (importOriginal) => (
   await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -61,17 +62,26 @@ const revokeImpl = vi.hoisted(() => vi.fn(async (
 ) => {
   revokeCalls.push({ machineId, authorizationId });
 }));
+// Notifications come from real RPC admission/settlement/abort and the runtime
+// status hook's commits; asynchronous phases are owned by the enclosing test.
+const { notify: notifyDiagnosticsEvent, waitFor: waitForDiagnosticsEvent, clear: clearDiagnosticsEvents } = createDiagnosticsTestEvents();
 installSessionActionRpcBoundary(async (request, context) => {
+  context.signal.addEventListener('abort', notifyDiagnosticsEvent, { once: true });
   const machineId = request.method.slice(0, request.method.indexOf(':'));
   const method = request.method.slice(request.method.indexOf(':') + 1);
   if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_REVOKE_CAPTURE) {
     const payload = VoiceSpeechDiagnosticsRevokeCaptureRequestV1Schema.parse(request.params);
-    await revokeImpl(machineId, payload.authorizationId, context.signal);
+    const result = revokeImpl(machineId, payload.authorizationId, context.signal);
+    notifyDiagnosticsEvent();
+    try { await result; } finally { notifyDiagnosticsEvent(); }
     return { ok: true };
   }
   if (method !== RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE) throw new Error(`Unexpected daemon RPC: ${method}`);
   const payload = VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params);
-  const result = await configureImpl(machineId, payload.settings, context.signal);
+  const pending = configureImpl(machineId, payload.settings, context.signal);
+  notifyDiagnosticsEvent();
+  let result: Awaited<typeof pending>;
+  try { result = await pending; } finally { notifyDiagnosticsEvent(); }
   return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({ ...result, root: `/private/${machineId}`, artifacts: [],
     health: { captureFailure: false, cleanup: { status: 'healthy', code: null, ownedEntryCount: 0 } },
     backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop') });
@@ -87,6 +97,7 @@ import {
   publishVoiceDiagnosticsRuntimeStatus,
   readVoiceDiagnosticsRuntimeStatus,
   resetVoiceDiagnosticsRuntimeStatusForTests,
+  useVoiceDiagnosticsRuntimeStatus,
 } from './runtimeStatus';
 import {
   applyVoiceDiagnosticsMachinePolicy,
@@ -106,6 +117,8 @@ function readRequestedDiagnosticsEnabled(settings: unknown): boolean | undefined
 
 function RuntimeSync(props: { voice: unknown }) {
   useVoiceDiagnosticsRuntimeSync(props.voice);
+  const status = useVoiceDiagnosticsRuntimeStatus();
+  React.useLayoutEffect(notifyDiagnosticsEvent, [status]);
   return null;
 }
 
@@ -144,6 +157,7 @@ const diagnostics = VoiceSpeechDiagnosticsSettingsV1Schema.parse({
 describe('useVoiceDiagnosticsRuntimeSync', () => {
   afterEach(async () => {
     standardCleanup();
+    clearDiagnosticsEvents();
     clearPersistedFixtures();
     await disconnect?.();
     await home?.dispose();
@@ -158,7 +172,8 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     storage.setState({ machines: { m1: machine }, machineListByServerId: { [scope.serverId]: [machine] },
       settings: { ...storage.getState().settings, voice: voiceSettingsParse({ diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } }) } });
     const readiness = await renderHook(() => useMachineCliDetectionTarget('m1'));
-    await vi.waitFor(() => expect(readiness.getCurrent().isOnline).toBe(true));
+    await waitForTestEvent(readiness.subscribe, readiness.getCurrent, value => value.isOnline);
+    expect(readiness.getCurrent().isOnline).toBe(true);
     await readiness.unmount();
     machineState.machineId = 'm1';
     machineState.daemonStateVersion = 1;
@@ -226,7 +241,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     machineState.daemonStateVersion = 2;
     const second = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm2' } };
     await act(async () => { tree.update(createHarness({ voice: second })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm2', phase: 'active',
       revocationObligations: [expect.objectContaining({ target: { kind: 'machine_policy', machineId: 'm1' }, status: 'failed' })],
     }));
@@ -298,7 +313,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'status_unknown',
     }));
@@ -335,7 +350,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       sessionId: 'session-1',
       authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1'),
     });
-    await vi.waitFor(() => expect(revokeCalls).toEqual([
+    await waitForDiagnosticsEvent(() => expect(revokeCalls).toEqual([
       { machineId: 'm1', authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1') },
     ]));
 
@@ -344,7 +359,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     oldRuntimeRevoke.reject(new Error('old_daemon_runtime_lost'));
     await expect(oldRuntimeResult).resolves.toMatchObject({ ok: false });
 
-    await vi.waitFor(() => expect(revokeCalls).toEqual([
+    await waitForDiagnosticsEvent(() => expect(revokeCalls).toEqual([
       { machineId: 'm1', authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1') },
       { machineId: 'm1', authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1') },
     ]));
@@ -364,7 +379,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     });
 
     currentRuntimeRevoke.resolve();
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]));
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]));
     await act(async () => {
       tree.update(createHarness({ voice }));
       tree.update(createHarness({ voice }));
@@ -388,13 +403,13 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       sessionId: 'session-1',
       authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1'),
     });
-    await vi.waitFor(() => expect(revokeCalls).toHaveLength(1));
+    await waitForDiagnosticsEvent(() => expect(revokeCalls).toHaveLength(1));
 
     machineState.daemonStateVersion = 2;
     await act(async () => { tree.update(createHarness({ voice })); });
     oldRuntimeRevoke.resolve();
     await expect(oldRuntimeResult).resolves.toMatchObject({ ok: true });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
       revocationObligations: [],
@@ -428,7 +443,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     machineState.daemonStateVersion = 2;
     await act(async () => { tree.update(createHarness({ voice })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]));
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]));
     expect(revokeCalls).toHaveLength(2);
     await act(async () => { tree.update(createHarness({ voice })); });
     expect(revokeCalls).toHaveLength(2);
@@ -476,12 +491,12 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     machineState.daemonStateVersion = 2;
     await act(async () => { tree.update(createHarness({ voice: enabledVoice })); });
-    await vi.waitFor(() => expect(reconnectSignal).toBeInstanceOf(AbortSignal));
+    await waitForDiagnosticsEvent(() => expect(reconnectSignal).toBeInstanceOf(AbortSignal));
 
     machineState.daemonStateVersion = 3;
     await act(async () => { tree.update(createHarness({ voice: disabledVoice })); });
-    await vi.waitFor(() => expect(readReconnectSignal()?.aborted).toBe(true));
-    await vi.waitFor(() => expect(currentDisableSignal).toBeInstanceOf(AbortSignal));
+    await waitForDiagnosticsEvent(() => expect(readReconnectSignal()?.aborted).toBe(true));
+    await waitForDiagnosticsEvent(() => expect(currentDisableSignal).toBeInstanceOf(AbortSignal));
     expect(revokeCalls).toHaveLength(2);
 
     await act(async () => { tree.unmount(); });
@@ -514,7 +529,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       sessionId: 'session-1',
       authorizationId: resolveVoiceDiagnosticsCaptureAuthorizationId('session-1'),
     });
-    await vi.waitFor(() => expect(revokeCalls).toHaveLength(1));
+    await waitForDiagnosticsEvent(() => expect(revokeCalls).toHaveLength(1));
 
     machineState.daemonStateVersion = 2;
     await act(async () => { tree.update(createHarness({ voice: enabledVoice })); });
@@ -524,7 +539,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     await act(async () => { tree.update(createHarness({ voice: disabledVoice })); });
     let disabledConfigureStartedBeforeManualRelease = false;
     try {
-      await vi.waitFor(() => expect(disabledConfigureStarted).toBe(true));
+      await waitForDiagnosticsEvent(() => expect(disabledConfigureStarted).toBe(true));
       disabledConfigureStartedBeforeManualRelease = true;
     } catch {
       // Drain the held manual request before asserting the pre-release state.
@@ -532,7 +547,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     initialManualRevoke.resolve();
     await expect(manualRevocation).resolves.toMatchObject({ ok: true });
-    await vi.waitFor(() => expect(configureCalls.filter(
+    await waitForDiagnosticsEvent(() => expect(configureCalls.filter(
       ({ machineId, settings }) => machineId === 'm1' && readRequestedDiagnosticsEnabled(settings) === false,
     )).toHaveLength(1));
     await act(async () => { tree.unmount(); });
@@ -553,7 +568,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'inactive_confirmed',
       revocationObligations: [],
@@ -583,7 +598,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm2',
       phase: 'inactive_confirmed',
       revocationObligations: [
@@ -637,7 +652,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm2',
       phase: 'inactive_confirmed',
       revocationObligations: [
@@ -655,7 +670,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 2, isOnline: true });
     await act(async () => { tree.update(createHarness({ voice })); });
 
-    await vi.waitFor(() => expect(configureCalls.filter(
+    await waitForDiagnosticsEvent(() => expect(configureCalls.filter(
       ({ machineId, settings }) => machineId === 'm1'
         && readRequestedDiagnosticsEnabled(settings) === false,
     )).toHaveLength(1));
@@ -684,7 +699,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice });
 
-    await vi.waitFor(() => expect(configureCalls.filter(
+    await waitForDiagnosticsEvent(() => expect(configureCalls.filter(
       ({ machineId, settings }) => machineId === 'm3'
         && readRequestedDiagnosticsEnabled(settings) === false,
     )).toHaveLength(1));
@@ -726,7 +741,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({ target: { kind: 'machine_policy', machineId: 'm1' }, status: 'failed' }),
       expect.objectContaining({ target: { kind: 'machine_policy', machineId: 'm3' }, status: 'failed' }),
     ]));
@@ -764,7 +779,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: { kind: 'machine_policy', machineId: 'm1' },
         status: 'failed',
@@ -774,8 +789,8 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 2, isOnline: true });
     await act(async () => { tree.update(createHarness({ voice })); });
-    await vi.waitFor(() => expect(formerMachineShutdownAttempts).toBe(1));
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
+    await waitForDiagnosticsEvent(() => expect(formerMachineShutdownAttempts).toBe(1));
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: { kind: 'machine_policy', machineId: 'm1' },
         status: 'failed',
@@ -788,7 +803,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 3, isOnline: true });
     await act(async () => { tree.update(createHarness({ voice })); });
-    await vi.waitFor(() => expect(formerMachineShutdownAttempts).toBe(2));
+    await waitForDiagnosticsEvent(() => expect(formerMachineShutdownAttempts).toBe(2));
     expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual([]);
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]);
     await act(async () => { tree.unmount(); });
@@ -823,7 +838,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: { kind: 'machine_policy', machineId: 'm1' },
         status: 'failed',
@@ -832,12 +847,12 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 2, isOnline: true });
     await act(async () => { tree.update(createHarness({ voice })); });
-    await vi.waitFor(() => expect(firstReplaySignal).toBeDefined());
+    await waitForDiagnosticsEvent(() => expect(firstReplaySignal).toBeDefined());
 
     runtimeTargetsByMachineId.set('m1', { daemonStateVersion: 3, isOnline: true });
     await act(async () => { tree.update(createHarness({ voice })); });
-    await vi.waitFor(() => expect(firstReplaySignal?.aborted).toBe(true));
-    await vi.waitFor(() => expect(formerMachineShutdownAttempts).toBe(2));
+    await waitForDiagnosticsEvent(() => expect(firstReplaySignal?.aborted).toBe(true));
+    await waitForDiagnosticsEvent(() => expect(formerMachineShutdownAttempts).toBe(2));
     expect(readPersistedVoiceDiagnosticsMachineRevocations(scope)).toEqual([]);
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([]);
     await act(async () => { tree.unmount(); });
@@ -877,8 +892,8 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     // Let the pre-fix implementation drain so RED leaves no pending work.
     releaseFirst();
-    await vi.waitFor(() => expect(configureCalls).toHaveLength(2));
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(configureCalls).toHaveLength(2));
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'inactive_confirmed',
       revocationObligations: [],
@@ -923,7 +938,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     });
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice: { diagnostics, executionMachine: { mode: 'auto', machineId: null } } });
-    await vi.waitFor(() => expect(observedSignal?.aborted).toBe(false));
+    await waitForDiagnosticsEvent(() => expect(observedSignal?.aborted).toBe(false));
     await act(async () => { tree.unmount(); });
     expect(observedSignal?.aborted).toBe(true);
     response.resolve();
@@ -942,12 +957,12 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     const firstVoice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } };
     const secondVoice = { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm2' } };
     tree = await mountHarness({ voice: firstVoice });
-    await vi.waitFor(() => expect(configureCalls).toHaveLength(1));
+    await waitForDiagnosticsEvent(() => expect(configureCalls).toHaveLength(1));
 
     machineState.machineId = 'm2';
     await act(async () => { tree.update(createHarness({ voice: secondVoice })); });
     releaseFirst();
-    await vi.waitFor(() => expect(configureCalls).toHaveLength(3));
+    await waitForDiagnosticsEvent(() => expect(configureCalls).toHaveLength(3));
 
     expect(configureCalls.map(({ machineId, settings }) => [
       machineId,
@@ -991,11 +1006,11 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     machineState.machineId = 'm2';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
-    await vi.waitFor(() => expect(cleanupSignal).toBeDefined());
+    await waitForDiagnosticsEvent(() => expect(cleanupSignal).toBeDefined());
 
     machineState.daemonStateVersion = 2;
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm2',
       phase: 'active',
       revocationObligations: [
@@ -1034,7 +1049,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     machineState.machineId = 'm2';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: expect.objectContaining({ kind: 'machine_policy', machineId: 'm1' }),
         status: 'failed',
@@ -1045,7 +1060,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     failM1Disable = false;
     machineState.machineId = 'm1';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
       revocationObligations: [],
@@ -1077,7 +1092,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     tree = await mountHarness({ voice: voiceFor('m1') });
     machineState.machineId = 'm2';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toHaveLength(1));
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toHaveLength(1));
     const obligation = readVoiceDiagnosticsRuntimeStatus().revocationObligations[0]!;
 
     failInitialM1Disable = false;
@@ -1097,7 +1112,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
       ({ machineId, settings }) => machineId === 'm1' && readRequestedDiagnosticsEnabled(settings) === true,
     ).length;
     const retry = retryVoiceDiagnosticsRevocation({ obligation, settings: diagnostics });
-    await vi.waitFor(() => expect(retryStarted).toBe(true));
+    await waitForDiagnosticsEvent(() => expect(retryStarted).toBe(true));
 
     machineState.machineId = 'm1';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
@@ -1107,14 +1122,14 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     releaseRetry();
     await expect(retry).resolves.toMatchObject({ ok: false });
-    await vi.waitFor(() => expect(configureCalls.filter(
+    await waitForDiagnosticsEvent(() => expect(configureCalls.filter(
       ({ machineId, settings }) => machineId === 'm1' && readRequestedDiagnosticsEnabled(settings) === true,
     )).toHaveLength(enabledM1CallsBeforeRetry + 1));
-    expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
       revocationObligations: [],
-    });
+    }));
     await act(async () => { tree.unmount(); });
   });
 
@@ -1140,7 +1155,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     machineState.machineId = 'm2';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({
         target: expect.objectContaining({ kind: 'machine_policy', machineId: 'm1' }),
         status: 'failed',
@@ -1151,7 +1166,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     failM1Enable = true;
     machineState.machineId = 'm1';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'status_unknown',
       revocationObligations: [
@@ -1194,7 +1209,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     tree = await mountHarness({ voice: voiceFor('m1') });
     machineState.machineId = 'm2';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toHaveLength(1));
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toHaveLength(1));
     const staleObligation = readVoiceDiagnosticsRuntimeStatus().revocationObligations[0]!;
 
     failM1Disable = false;
@@ -1207,7 +1222,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     });
     machineState.machineId = 'm1';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
-    await vi.waitFor(() => expect(configureCalls.some(
+    await waitForDiagnosticsEvent(() => expect(configureCalls.some(
       ({ machineId, settings }) => machineId === 'm1' && readRequestedDiagnosticsEnabled(settings) === true,
     )).toBe(true));
     const disablesBeforeStaleRetry = configureCalls.filter(
@@ -1221,7 +1236,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
 
     releaseM1Enable();
     await expect(staleRetry).resolves.toEqual({ ok: true, acknowledged: false });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
       revocationObligations: [],
@@ -1254,16 +1269,16 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     // are genuinely queued intents, not a disable already sent before the user
     // changes their mind. The real Socket client otherwise aborts immediately.
     const firstEnable = applyVoiceDiagnosticsMachinePolicy({ machineId: 'm1', settings: diagnostics });
-    await vi.waitFor(() => expect(configureCalls).toHaveLength(1));
+    await waitForDiagnosticsEvent(() => expect(configureCalls).toHaveLength(1));
     tree = await mountHarness({ voice: voiceWith(diagnostics) });
-    await vi.waitFor(() => expect(configureCalls).toHaveLength(1));
+    await waitForDiagnosticsEvent(() => expect(configureCalls).toHaveLength(1));
 
     await act(async () => { tree.update(createHarness({ voice: voiceWith(disabledDiagnostics) })); });
     await act(async () => { tree.update(createHarness({ voice: voiceWith(diagnostics) })); });
     releaseFirstEnable();
     await firstEnable;
 
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
       revocationObligations: [],
@@ -1313,13 +1328,13 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     tree = await mountHarness({ voice: voiceFor('m1') });
     machineState.machineId = 'm2';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m2') })); });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toHaveLength(1));
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toHaveLength(1));
 
     failInitialM1Disable = false;
     blockM1Enable = true;
     machineState.machineId = 'm1';
     await act(async () => { tree.update(createHarness({ voice: voiceFor('m1') })); });
-    await vi.waitFor(() => expect(configureCalls.some(
+    await waitForDiagnosticsEvent(() => expect(configureCalls.some(
       ({ machineId, settings }) => machineId === 'm1' && readRequestedDiagnosticsEnabled(settings) === true,
     )).toBe(true));
 
@@ -1334,13 +1349,13 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     });
 
     releaseM1Enable();
-    await vi.waitFor(() => expect(finalM1DisableStarted).toBe(true));
+    await waitForDiagnosticsEvent(() => expect(finalM1DisableStarted).toBe(true));
     expect(readVoiceDiagnosticsRuntimeStatus().revocationObligations).toEqual([
       expect.objectContaining({ revision: newerDisableObligation.revision, status: 'pending' }),
     ]);
 
     releaseFinalM1Disable();
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'inactive_confirmed',
       revocationObligations: [],
@@ -1364,7 +1379,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
     });
     let tree!: renderer.ReactTestRenderer;
     tree = await mountHarness({ voice: { diagnostics, executionMachine: { mode: 'fixed', machineId: 'm1' } } });
-    await vi.waitFor(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
+    await waitForDiagnosticsEvent(() => expect(readVoiceDiagnosticsRuntimeStatus()).toMatchObject({
       machineId: 'm1',
       phase: 'active',
     }));
@@ -1376,7 +1391,7 @@ describe('useVoiceDiagnosticsRuntimeSync', () => {
         },
       }));
     });
-    await vi.waitFor(() => expect(disableCalls).toBe(1));
+    await waitForDiagnosticsEvent(() => expect(disableCalls).toBe(1));
     const obligation = readVoiceDiagnosticsRuntimeStatus().revocationObligations[0]!;
     const retry = retryVoiceDiagnosticsRevocation({ obligation, settings: disabledDiagnostics });
     releaseFirstDisable();

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { waitForTestEvent } from '@/dev/testkit';
 import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
 import { DaemonVoiceSpeechSynthesizeRequestSchema, DaemonVoiceSpeechTranscribeRequestSchema,
   DaemonVoiceSpeechTranscribeUploadChunkRequestSchema } from '@happier-dev/protocol/daemon/voiceSpeech';
@@ -171,10 +172,10 @@ describe('bundled speech selected-daemon client', () => {
     });
     // Admit the real HTTP baseline before publishing app-local target changes.
     // A still-pending bootstrap is allowed to replace that unacknowledged fixture input.
-    await vi.waitFor(() => {
-      expect(storage.getState().settingsScope).toEqual({ serverId: account!.home.id, accountId: 'account-a' });
-      expect(storage.getState().settingsVersion).toBe(1);
-    });
+    await waitForTestEvent(storage.subscribe, storage.getState, state => state.settingsScope?.serverId === account!.home.id
+      && state.settingsScope.accountId === 'account-a' && state.settingsVersion === 1);
+    expect(storage.getState().settingsScope).toEqual({ serverId: account!.home.id, accountId: 'account-a' });
+    expect(storage.getState().settingsVersion).toBe(1);
     storage.getState().applyMachines(machineIds.map(id => createMachineFixture({ id, activeAt: Date.now() })));
   });
   afterEach(async () => { await account?.dispose(); account = null; });

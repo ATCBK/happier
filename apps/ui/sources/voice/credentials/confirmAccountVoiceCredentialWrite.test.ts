@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
+import { createDeferred } from '@/dev/testkit';
 
 const nativeAlert = vi.hoisted(() => vi.fn<typeof import('react-native')['Alert']['alert']>());
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
@@ -23,10 +24,13 @@ describe('confirmAccountVoiceCredentialWrite', () => {
   beforeEach(() => nativeAlert.mockClear());
 
   it.each([false, true])('requires the actual user decision %s before saving to a plain Account', async accepted => {
+    const presented = createDeferred<void>();
+    nativeAlert.mockImplementationOnce(() => { presented.resolve(); });
     const pending = confirmAccountVoiceCredentialWrite({
       disclosePlainStorage: true, resolveAccountMode: resolveAccountMode('plain'), confirm,
     });
-    await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledOnce());
+    await presented.promise;
+    expect(nativeAlert).toHaveBeenCalledOnce();
     const buttons = nativeAlert.mock.calls[0]![2]!;
     const button = buttons.find(candidate => accepted ? candidate.style !== 'cancel' : candidate.style === 'cancel');
     expect(button?.onPress).toBeTypeOf('function');

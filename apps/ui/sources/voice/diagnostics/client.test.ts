@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMachineFixture } from '@/dev/testkit';
+import { createDeferred, createMachineFixture } from '@/dev/testkit';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -94,6 +94,7 @@ describe('voice diagnostics client', () => {
   });
 
   it('releases a cancelled export waiter while keeping its admitted cleanup alive', async () => {
+    const cleanupStarted = createDeferred<void>();
     let cleanupSignal: AbortSignal | undefined;
     let releaseCleanup!: () => void;
     const cleanup = new Promise<void>(resolve => { releaseCleanup = resolve; });
@@ -102,6 +103,7 @@ describe('voice diagnostics client', () => {
         chunkSizeBytes: 1024, sizeBytes: 0, name: 'diagnostics.wav' };
       if (method.endsWith('.abort')) {
         cleanupSignal = signal;
+        cleanupStarted.resolve();
         await cleanup;
         return { success: true };
       }
@@ -113,7 +115,8 @@ describe('voice diagnostics client', () => {
       destination: { writeBytes: async () => {}, close: async () => {}, cleanup: async () => {} },
       onInit: async () => { throw new Error('destination_unavailable'); },
     });
-    await vi.waitFor(() => expect(cleanupSignal).toBeDefined());
+    await cleanupStarted.promise;
+    expect(cleanupSignal).toBeDefined();
     controller.abort();
     await expect(pending).resolves.toMatchObject({ ok: false });
     expect(cleanupSignal?.aborted).toBe(false);

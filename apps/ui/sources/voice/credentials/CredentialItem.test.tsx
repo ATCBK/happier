@@ -8,7 +8,7 @@ import 'fake-indexeddb/auto';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createRecipientContractDigestV1, normalizeRecipientContractV1, VoiceProviderContributionSchema } from '@happier-dev/protocol';
 import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderScreen, standardCleanup, waitForTestEvent } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { Settings } from '@/sync/domains/settings/settings';
@@ -20,6 +20,7 @@ const boundary = vi.hoisted(() => ({
   nativeAlert: vi.fn<(title: string, message?: string, buttons?: AlertButton[]) => void>(),
   confirmDecisions: [] as boolean[],
 }));
+const nativeAlertObservers = new Set<() => void>();
 installDisconnectedServerSocketBoundary();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
   { platformOS: 'ios' }, { Alert: { alert: boundary.nativeAlert } },
@@ -158,6 +159,10 @@ const contribution = { pluginId: 'com.acme.voice', localId: 'conversation' } as 
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
 let selectedSecretRef: string | undefined;
 let pickerProps: React.ComponentProps<typeof SavedSecretPickerModal> | undefined;
+let credentialChanged = createDeferred<void>();
+let alertPresented = createDeferred<void>();
+let confirmPresented = createDeferred<void>();
+let recipientConfirmationPresented = createDeferred<void>();
 
 function register(declaration: typeof credentialSourceDeclaration | null = credentialSourceDeclaration) {
   removeExternalVoiceProviderRegistration(token);
@@ -191,7 +196,9 @@ async function setup(settings: Settings = settingsParse({}), connectedPurposes: 
   await refreshSavedSecretCatalog(account.scope);
   if (settings.secrets.length) {
     // The catalog publishes its foreground read before the real maintenance import finishes.
-    await vi.waitFor(() => expect(account!.resources).toHaveLength(settings.secrets.length));
+    await waitForTestEvent(account.subscribe, () => account!.resources.length,
+      count => count === settings.secrets.length);
+    expect(account!.resources).toHaveLength(settings.secrets.length);
     await refreshSavedSecretCatalog(account.scope);
   }
   account.settingsWrites.length = 0;
@@ -210,7 +217,8 @@ function choose(ref = storedRef()) {
 async function render(options: Partial<React.ComponentProps<typeof VoiceCredentialItem>> = {}) {
   return renderScreen(<InjectedAuthProvider credentials={account!.credentials}><ModalProvider><VoiceCredentialItem testID="credential" title="API key" promptTitle="Connect" promptDescription="Paste key"
     contribution={contribution} credentialSlotId="api-key" credentialSourcePurpose="voice.client-auth"
-    credentialSourceDeclaration={credentialSourceDeclaration} disclosePlainStorage={true} {...options} /></ModalProvider></InjectedAuthProvider>, {
+    credentialSourceDeclaration={credentialSourceDeclaration} disclosePlainStorage={true} {...options}
+    onChanged={() => { options.onChanged?.(); credentialChanged.resolve(); }} /></ModalProvider></InjectedAuthProvider>, {
     // Test Renderer has no native layout engine; keep the real Popover measurable and interactive.
     createNodeMock: element => element.props.testID === 'credential' ? {
       measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 100, 320, 48),
@@ -221,13 +229,14 @@ async function gesture(screen: Awaited<ReturnType<typeof render>>, id: 'enterNew
   const reviewing = screen.tree.findAll(node => node.props.title === 'API key' && typeof node.props.onPress === 'function')[0]?.props.subtitle
     === t('settingsVoice.externalCredentials.reviewRequired');
   const confirmationsBefore = boundary.confirm.mock.calls.length;
+  confirmPresented = createDeferred<void>();
   const menu = screen.tree.findAllByType(DropdownMenu)[0];
   if (menu) {
     const trigger = screen.tree.findAll(node => node.props.title === 'API key' && typeof node.props.onPress === 'function')[0];
     if (!trigger) throw new Error('Credential dropdown trigger missing');
     await act(async () => { trigger.props.onPress(); });
-    await vi.waitFor(() => expect(screen.tree.findAllByType(DropdownMenu)[0]?.props.open).toBe(true));
-    await vi.waitFor(() => {
+    await waitForTestEvent(screen.subscribe, () => expect(screen.tree.findAllByType(DropdownMenu)[0]?.props.open).toBe(true));
+    await waitForTestEvent(screen.subscribe, () => {
       const option = screen.tree.findByTestId(`dropdown-option-${id}`);
       expect(option).not.toBeNull();
       // Opening schedules native anchor measurement before the menu becomes tappable.
@@ -240,14 +249,19 @@ async function gesture(screen: Awaited<ReturnType<typeof render>>, id: 'enterNew
   }
   if (id === 'useSavedSecret') {
     const ref = selectedSecretRef ?? storedRef();
-    await vi.waitFor(() => expect(screen.tree.findByTestId(`saved-secret:${ref}`)).not.toBeNull());
+    await waitForTestEvent(screen.subscribe, () => expect(screen.tree.findByTestId(`saved-secret:${ref}`)).not.toBeNull());
     // React Test Renderer exposes props as an untyped SDK bag at this component boundary.
     pickerProps = screen.tree.findAllByType(SavedSecretPickerModal)[0]?.props as React.ComponentProps<typeof SavedSecretPickerModal> | undefined;
     await screen.tree.pressByTestIdAsync(`saved-secret:${ref}`);
   } else if (reviewing) {
-    await vi.waitFor(() => expect(boundary.confirm.mock.calls.length).toBeGreaterThan(confirmationsBefore));
+    await confirmPresented.promise;
+    expect(boundary.confirm.mock.calls.length).toBeGreaterThan(confirmationsBefore);
   } else {
-    await vi.waitFor(() => expect(Boolean(screen.tree.findByTestId('web-prompt-input')) || boundary.alert.mock.calls.length > 0).toBe(true));
+    await waitForTestEvent(notify => {
+      const stopScreen = screen.subscribe(notify);
+      nativeAlertObservers.add(notify);
+      return () => { stopScreen(); nativeAlertObservers.delete(notify); };
+    }, () => expect(Boolean(screen.tree.findByTestId('web-prompt-input')) || boundary.alert.mock.calls.length > 0).toBe(true));
     if (screen.tree.findByTestId('web-prompt-input')) {
       await act(async () => { screen.tree.changeTextByTestId('web-prompt-input', 'new-secret'); });
       await screen.tree.pressByTestIdAsync('web-prompt-confirm');
@@ -265,17 +279,25 @@ describe('VoiceCredentialItem', () => {
     log.clear();
     selectedSecretRef = undefined;
     pickerProps = undefined;
+    credentialChanged = createDeferred<void>();
+    alertPresented = createDeferred<void>();
+    confirmPresented = createDeferred<void>();
+    recipientConfirmationPresented = createDeferred<void>();
     boundary.confirmDecisions = [];
     // Native Alert is the OS presentation boundary. Press its real supplied
     // button callbacks; ModalManager still owns the confirmation promise.
     boundary.nativeAlert.mockImplementation((title, message, buttons) => {
       if (buttons?.length === 2) {
         boundary.confirm(title, message);
+        confirmPresented.resolve();
+        if (boundary.confirm.mock.calls.length === 2) recipientConfirmationPresented.resolve();
         buttons[boundary.confirmDecisions.shift() === false ? 0 : 1]?.onPress?.();
       } else {
         boundary.alert(title, message);
+        alertPresented.resolve();
         buttons?.[0]?.onPress?.();
       }
+      for (const notify of nativeAlertObservers) notify();
     });
   });
   afterEach(async () => {
@@ -305,8 +327,9 @@ describe('VoiceCredentialItem', () => {
     choose(ref);
     const screen = await render();
     await gesture(screen, 'useSavedSecret');
-    await vi.waitFor(() => expect(binding()).toMatchObject({ credentialSource: { kind: 'savedSecret' },
-      credentialBindings: { account: { 'api-key': ref } } }));
+    await credentialChanged.promise;
+    expect(binding()).toMatchObject({ credentialSource: { kind: 'savedSecret' },
+      credentialBindings: { account: { 'api-key': ref } } });
     expect(account!.resources).toEqual(before);
     expect(screen.tree.findByTestId('web-prompt-input')).toBeNull();
     expect(pickerProps).toMatchObject({ includeNoneRow: false, allowAdd: false, allowEdit: false });
@@ -327,7 +350,8 @@ describe('VoiceCredentialItem', () => {
     const changed = vi.fn();
     const screen = await render({ credentialSourcePurpose: undefined, credentialSourceDeclaration: declaration, onChanged: changed });
     await gesture(screen);
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await credentialChanged.promise;
+    expect(changed).toHaveBeenCalledOnce();
     expect(binding()).toMatchObject({ credentialSource: { kind: 'connectedAccount' } });
     if (!account) throw new Error('Expected the restored credential Account');
     expect(account.purposes!.value.bindings).toEqual([connectedPurpose]);
@@ -343,8 +367,9 @@ describe('VoiceCredentialItem', () => {
     choose(ref);
     const screen = await render();
     await gesture(screen, 'useSavedSecret');
-    await vi.waitFor(() => expect(binding()).toMatchObject({ credentialSource: { kind: 'savedSecret' },
-      credentialBindings: { account: { 'api-key': ref } } }));
+    await credentialChanged.promise;
+    expect(binding()).toMatchObject({ credentialSource: { kind: 'savedSecret' },
+      credentialBindings: { account: { 'api-key': ref } } });
     expect(account!.purposes!.writes).toHaveLength(1);
     expect(failures()).toEqual([]);
   });
@@ -355,7 +380,8 @@ describe('VoiceCredentialItem', () => {
     boundary.confirmDecisions = [false];
     const screen = await render({ recipientContract });
     await gesture(screen, 'useSavedSecret');
-    await vi.waitFor(() => expect(failures()).toHaveLength(1));
+    await waitForTestEvent(listener => log.onChange(listener), failures, values => values.length === 1);
+    expect(failures()).toHaveLength(1);
     expect(failures()[0]).toContain('recipient_contract_not_approved');
     expect(failures()[0]).not.toContain('retained-secret');
     expect(binding()).toBeUndefined();
@@ -368,7 +394,9 @@ describe('VoiceCredentialItem', () => {
     storage.setState({ settingsVersion: null });
     const screen = await render();
     await gesture(screen, 'useSavedSecret');
-    await vi.waitFor(() => expect(failures()[0]).toContain('voice_credential_source_declaration_unavailable'));
+    await waitForTestEvent(listener => log.onChange(listener), failures,
+      values => values[0]?.includes('voice_credential_source_declaration_unavailable') === true);
+    expect(failures()[0]).toContain('voice_credential_source_declaration_unavailable');
     expect(account!.purposes!.writes).toHaveLength(0);
   });
 
@@ -377,7 +405,8 @@ describe('VoiceCredentialItem', () => {
     const changed = vi.fn();
     const screen = await render({ onChanged: changed });
     await gesture(screen);
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    await credentialChanged.promise;
+    expect(changed).toHaveBeenCalledOnce();
     expect(binding()).toMatchObject({ credentialSource: { kind: 'savedSecret' } });
     expect(account!.resources).toHaveLength(1);
     expect(account!.persistedSettings.secrets).toEqual([]);
@@ -389,7 +418,8 @@ describe('VoiceCredentialItem', () => {
     register(null);
     const screen = await render({ credentialSourceDeclaration: undefined });
     await gesture(screen);
-    await vi.waitFor(() => expect(boundary.alert).toHaveBeenCalledWith(t('common.error'), t('settingsVoice.local.voiceCredential.operationFailed')));
+    await alertPresented.promise;
+    expect(boundary.alert).toHaveBeenCalledWith(t('common.error'), t('settingsVoice.local.voiceCredential.operationFailed'));
     expect(account!.resources).toHaveLength(0);
     expect(binding()).toBeUndefined();
   });
@@ -400,7 +430,8 @@ describe('VoiceCredentialItem', () => {
     const changed = vi.fn();
     const screen = await render({ onChanged: changed });
     await gesture(screen);
-    await vi.waitFor(() => expect(boundary.alert).toHaveBeenCalledWith(t('common.error'), t('settingsVoice.local.voiceCredential.operationFailed')));
+    await alertPresented.promise;
+    expect(boundary.alert).toHaveBeenCalledWith(t('common.error'), t('settingsVoice.local.voiceCredential.operationFailed'));
     expect(changed).not.toHaveBeenCalled();
     expect(account!.resources).toHaveLength(0);
     expect(binding()).toBeUndefined();
@@ -424,7 +455,8 @@ describe('VoiceCredentialItem', () => {
     const changed = vi.fn();
     const screen = await render({ onChanged: changed });
     await gesture(screen, kind);
-    await vi.waitFor(() => expect(boundary.alert).toHaveBeenCalledWith(t('common.error'), t('settingsProviders.errors.mutationOutcomeUnknownDescription')));
+    await alertPresented.promise;
+    expect(boundary.alert).toHaveBeenCalledWith(t('common.error'), t('settingsProviders.errors.mutationOutcomeUnknownDescription'));
     expect(changed).not.toHaveBeenCalled();
     expect(failures()[0]).toContain(kind === 'useSavedSecret' ? 'saved_secret_binding_outcome_unknown' : 'saved_secret_replacement_outcome_unknown');
   });
@@ -434,7 +466,8 @@ describe('VoiceCredentialItem', () => {
     boundary.confirmDecisions = [true, false];
     const screen = await render({ recipientContract });
     await gesture(screen);
-    await vi.waitFor(() => expect(boundary.confirm).toHaveBeenCalledTimes(2));
+    await recipientConfirmationPresented.promise;
+    expect(boundary.confirm).toHaveBeenCalledTimes(2);
     const body = String(boundary.confirm.mock.calls[1]?.[1]);
     for (const fact of ['com.acme.voice', '@acme/voice', 'verified', 'npm:https://registry.npmjs.org:@acme', 'conversation', 'voice.session-create',
       'mutation', 'POST', 'https://api.example.com', '/v1/sessions', 'authorization', 'bearer', '4096', '65536',
@@ -448,12 +481,19 @@ describe('VoiceCredentialItem', () => {
   it('requires review of a retained credential and stores approval without disclosing or replacing its material', async () => {
     await setup(secretSettings('savedSecret', 'stored-secret', `sha256:${'0'.repeat(64)}`));
     const before = structuredClone(account!.resources);
-    const onStatusChanged = vi.fn();
+    const reviewRequired = createDeferred<void>();
+    const ready = createDeferred<void>();
+    const onStatusChanged = vi.fn((status: { status: string }) => {
+      if (status.status === 'review_required') reviewRequired.resolve();
+      if (status.status === 'ready') ready.resolve();
+    });
     const screen = await render({ recipientContract, onStatusChanged });
-    await vi.waitFor(() => expect(onStatusChanged).toHaveBeenCalledWith(expect.objectContaining({ status: 'review_required', usable: false })));
+    await reviewRequired.promise;
+    expect(onStatusChanged).toHaveBeenCalledWith(expect.objectContaining({ status: 'review_required', usable: false }));
     expect(screen.tree.findAll(node => node.props.title === 'API key' && typeof node.props.onPress === 'function')[0]?.props.subtitle).toBe(t('settingsVoice.externalCredentials.reviewRequired'));
     await gesture(screen);
-    await vi.waitFor(() => expect(onStatusChanged).toHaveBeenCalledWith(expect.objectContaining({ status: 'ready', usable: true })));
+    await ready.promise;
+    expect(onStatusChanged).toHaveBeenCalledWith(expect.objectContaining({ status: 'ready', usable: true }));
     expect(screen.tree.findByTestId('web-prompt-input')).toBeNull();
     expect(account!.resources).toEqual(before);
     expect(JSON.stringify(boundary.confirm.mock.calls)).not.toContain('retained-secret');
@@ -474,6 +514,6 @@ describe('VoiceCredentialItem', () => {
     const onStatusChanged = vi.fn();
     const screen = await render({ onStatusChanged });
     expect(screen.tree.findAll(node => node.props.title === 'API key' && typeof node.props.onPress === 'function')[0]?.props.subtitle).toBe(t('voice.readiness.credential_unknown'));
-    await vi.waitFor(() => expect(onStatusChanged).toHaveBeenCalledWith({ status: 'unknown', exists: false, usable: false, source: null, credentialIdentity: null }));
+    await waitForTestEvent(screen.subscribe, () => expect(onStatusChanged).toHaveBeenCalledWith({ status: 'unknown', exists: false, usable: false, source: null, credentialIdentity: null }));
   });
 });

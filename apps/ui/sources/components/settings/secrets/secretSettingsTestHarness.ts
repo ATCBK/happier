@@ -60,6 +60,8 @@ export type SecretSettingsTestHarness = {
     catalogRows: Map<string, unknown>;
     artifacts: ArtifactStoreBoundary;
     purposes: ConnectedPurposeCatalogHttpBoundary | null;
+    /** Publications from the synthetic Home boundary after a request settles. */
+    subscribe(listener: () => void): () => void;
     setRejectSettingsWrites(next: boolean): void;
     setLosePromotionResponse(next: boolean): void;
     replaceSettings(next: Settings, options?: Readonly<{ version?: number; publish?: boolean }>): void;
@@ -134,7 +136,9 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
     const promotions: Array<ReturnType<typeof SharedSavedSecretPromoteInputV1Schema.parse>> = [];
     const catalogRows = new Map<string, unknown>();
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: mode });
-    const request = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const listeners = new Set<() => void>();
+    const notify = () => { for (const listener of listeners) listener(); };
+    const handleRequest = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         const url = new URL(String(input));
         const path = url.pathname;
         const purposeResponse = purposes ? await purposes.handle(input, init) : null;
@@ -278,6 +282,10 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
         }
         if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
         return new Response('{}', { status: 404 });
+    };
+    const request = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        try { return await handleRequest(input, init); }
+        finally { notify(); }
     });
     const purposes = options.connectedPurposes ? createConnectedPurposeCatalogHttpBoundary({
         initialValue: options.connectedPurposes, mode,
@@ -296,6 +304,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
     storage.setState({ settings, settingsScope: scope, settingsVersion });
     return {
         credentials, encryption, scope, request, resources, recipients, updates, creations, deletes, repairs, settingsWrites, promotions, catalogRows, artifacts, purposes,
+        subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
         setRejectSettingsWrites(next: boolean) { rejectSettingsWrites = next; },
         setLosePromotionResponse(next: boolean) { losePromotionResponse = next; },
         replaceSettings(next: Settings, options?: Readonly<{ version?: number; publish?: boolean }>) {
@@ -308,6 +317,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
                     payload: nextRaw, randomBytes: getRandomBytes }),
             } : { t: 'plain', v: nextRaw });
             if (options?.publish !== false) storage.setState({ settings: next, settingsVersion, settingsScope: scope });
+            notify();
         },
         get persistedSettings() {
             return settingsParse(openAccountSettingsStoredContent({ content: settingsContent, encryption, expectedMode: mode }).raw);
@@ -332,6 +342,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
                 capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true },
             });
             resources.push(SavedSecretResourceMaterialV1Schema.parse({ resourceId: 'resource-a', encryptionMode: resourceMode, entry, storedContent, recipientEnvelope }));
+            notify();
             return { entry, resourceDataKey };
         },
         dispose: connection.dispose,

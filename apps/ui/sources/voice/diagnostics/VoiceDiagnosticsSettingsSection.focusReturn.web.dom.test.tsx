@@ -13,7 +13,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
-import { createMachineFixture, createDeferred } from '@/dev/testkit';
+import { createMachineFixture, createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -106,6 +106,15 @@ function requireElement(selector: string): HTMLElement {
     throw new Error(`Missing element: ${selector}`);
   }
   return element;
+}
+
+async function waitForControlRemoval(selector: string): Promise<void> {
+  await waitForTestEvent((notify) => {
+    const observer = new MutationObserver(notify);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, () => container?.querySelector(selector), value => value === null);
+  expect(container?.querySelector(selector)).toBeNull();
 }
 
 function pressWithPointer(node: HTMLElement): void {
@@ -218,13 +227,14 @@ describe('VoiceDiagnosticsSettingsSection web focus return', () => {
     const confirm = document.querySelector('[data-testid="web-modal-confirm"]');
     if (!(confirm instanceof HTMLElement)) throw new Error('Missing real opt-out confirmation control');
     await act(async () => { pressWithPointer(confirm); });
-    await vi.waitFor(() => expect(container?.querySelector(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`)).toBeNull());
+    await waitForControlRemoval(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`);
     expect(document.activeElement).toBe(fallback.current);
   });
 
   it('keeps user focus elsewhere when the acknowledged opt-out settles after navigation within the page', async () => {
     const response = createDeferred<void>();
-    boundary.revokeCaptureAuthorization.mockImplementationOnce(async () => { await response.promise; });
+    const revokeStarted = createDeferred<void>();
+    boundary.revokeCaptureAuthorization.mockImplementationOnce(async () => { revokeStarted.resolve(); await response.promise; });
     const fallback = React.createRef<HTMLButtonElement>();
     const elsewhere = React.createRef<HTMLButtonElement>();
     await renderSettings(<>
@@ -238,10 +248,11 @@ describe('VoiceDiagnosticsSettingsSection web focus return', () => {
     const confirm = document.querySelector('[data-testid="web-modal-confirm"]');
     if (!(confirm instanceof HTMLElement)) throw new Error('Missing real opt-out confirmation control');
     await act(async () => { pressWithPointer(confirm); });
-    await vi.waitFor(() => expect(boundary.revokeCaptureAuthorization).toHaveBeenCalledOnce());
+    await revokeStarted.promise;
+    expect(boundary.revokeCaptureAuthorization).toHaveBeenCalledOnce();
     elsewhere.current!.focus();
     await act(async () => { response.resolve(); });
-    await vi.waitFor(() => expect(container?.querySelector(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`)).toBeNull());
+    await waitForControlRemoval(`[aria-label="${tLoose('settingsVoice.diagnostics.sessionOptOut')}"]`);
     expect(document.activeElement).toBe(elsewhere.current);
   });
 
@@ -255,7 +266,7 @@ describe('VoiceDiagnosticsSettingsSection web focus return', () => {
     const retry = requireElement(`[aria-label="${tLoose('settingsVoice.diagnostics.retryShutdown')}"]`);
     retry.focus();
     await act(async () => { pressWithPointer(retry); });
-    await vi.waitFor(() => expect(container?.querySelector(`[aria-label="${tLoose('settingsVoice.diagnostics.retryShutdown')}"]`)).toBeNull());
+    await waitForControlRemoval(`[aria-label="${tLoose('settingsVoice.diagnostics.retryShutdown')}"]`);
     expect(document.activeElement).toBe(fallback.current);
   });
 });

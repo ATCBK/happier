@@ -1,7 +1,8 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMachineFixture, registerStandardCleanupTarget, renderScreen, renderHook, standardCleanup, type RenderScreenResult } from '@/dev/testkit';
+import { createMachineFixture, registerStandardCleanupTarget, renderScreen, renderHook, standardCleanup, waitForTestEvent, type RenderScreenResult } from '@/dev/testkit';
+import { createDiagnosticsTestEvents } from './diagnosticsTestEvents';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainMachineReadHttpResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -74,17 +75,22 @@ vi.mock('socket.io-client', async (importOriginal) => (
   await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 const statusSignals: AbortSignal[] = [];
+const diagnosticsEvents = createDiagnosticsTestEvents();
 installSessionActionRpcBoundary(async (request, context) => {
   const separator = request.method.indexOf(':');
   const machineId = request.method.slice(0, separator);
   const method = request.method.slice(separator + 1);
   if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_CONFIGURE) {
     if (testState.configureError) throw testState.configureError;
-    return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse(await configure(machineId,
-      VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params).settings));
+    const pending = configure(machineId, VoiceSpeechDiagnosticsConfigureRequestV1Schema.parse(request.params).settings);
+    diagnosticsEvents.notify();
+    try { return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse(await pending); }
+    finally { diagnosticsEvents.notify(); }
   }
   if (method === RPC_METHODS.DAEMON_VOICE_DIAGNOSTICS_STATUS) {
     statusSignals.push(context.signal);
+    context.signal.addEventListener('abort', diagnosticsEvents.notify, { once: true });
+    diagnosticsEvents.notify();
     if (testState.statusError) throw testState.statusError;
     return VoiceSpeechDiagnosticsStatusResponseV1Schema.parse({ ...await status(machineId), settings: diagnostics,
       backupPolicy: resolveVoiceSpeechDiagnosticsStoragePolicy('daemon_desktop') });
@@ -172,7 +178,7 @@ const diagnostics = VoiceSpeechDiagnosticsSettingsV1Schema.parse({
 });
 
 describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
-  afterEach(async () => { standardCleanup(); await disconnect?.(); await home?.dispose(); vi.restoreAllMocks(); });
+  afterEach(async () => { standardCleanup(); diagnosticsEvents.clear(); await disconnect?.(); await home?.dispose(); vi.restoreAllMocks(); });
   beforeEach(async () => {
     home = await serveAccountHomes({ homes: [{ key: 'diagnostics', serverUrl: 'https://diagnostics-settings.test', accountId: 'account-a' }],
       route: ({ path, method, body }) => createPlainMachineReadHttpResponseFixture(path,
@@ -209,7 +215,8 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
     storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceSettingsParse({ diagnostics,
       executionMachine: { mode: 'fixed', machineId: 'm1' } }) }, storage.getState().settings));
     const readiness = await renderHook(() => useMachineCliDetectionTarget('m1'));
-    await vi.waitFor(() => expect(readiness.getCurrent().isOnline).toBe(true));
+    await waitForTestEvent(readiness.subscribe, readiness.getCurrent, value => value.isOnline);
+    expect(readiness.getCurrent().isOnline).toBe(true);
     await readiness.unmount();
   });
 
@@ -236,22 +243,26 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
   it('retires an unanswered diagnostics status read when the settings owner unmounts', async () => {
     status.mockImplementationOnce(async () => await new Promise(() => {}));
     const screen = await renderScreen(createSettingsSection({ voice: voiceSettingsParse({ diagnostics }), setVoice: commitVoiceSettings }));
-    await vi.waitFor(() => expect(statusSignals.length).toBeGreaterThan(0));
+    await diagnosticsEvents.waitFor(() => expect(statusSignals.length).toBeGreaterThan(0));
     await screen.unmount();
-    await vi.waitFor(() => expect(statusSignals.every(signal => signal.aborted)).toBe(true));
+    await diagnosticsEvents.waitFor(() => expect(statusSignals.every(signal => signal.aborted)).toBe(true));
     const retry = await renderScreen(createSettingsSection({ voice: voiceSettingsParse({ diagnostics }), setVoice: commitVoiceSettings }));
-    await vi.waitFor(() => expect(retry.tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.location') }).props.subtitle).toBe('/private/m1'));
+    await waitForTestEvent(retry.subscribe, () => retry.tree.root.findAllByProps({ title: tLoose('settingsVoice.diagnostics.location') })[0]?.props.subtitle,
+      value => value === '/private/m1');
+    expect(retry.tree.root.findByProps({ title: tLoose('settingsVoice.diagnostics.location') }).props.subtitle).toBe('/private/m1');
     await retry.unmount();
   });
 
   it('rebinds diagnostics after the Account runtime retires without changing its machine', async () => {
     const screen = await renderScreen(createSettingsSection({ voice: voiceSettingsParse({ diagnostics }), setVoice: commitVoiceSettings }));
     const location = () => screen.tree.root.findAllByProps({ title: tLoose('settingsVoice.diagnostics.location') });
-    await vi.waitFor(() => expect(location()[0]?.props.subtitle).toBe('/private/m1'));
+    await waitForTestEvent(screen.subscribe, () => location()[0]?.props.subtitle, value => value === '/private/m1');
+    expect(location()[0]?.props.subtitle).toBe('/private/m1');
     status.mockResolvedValueOnce({ ok: true, root: '/private/rebound', artifacts: [], health: testState.health });
     const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
     await act(async () => { retireActiveServerAccountScopeLifetime(); });
-    await vi.waitFor(() => expect(location()[0]?.props.subtitle).toBe('/private/rebound'));
+    await waitForTestEvent(screen.subscribe, () => location()[0]?.props.subtitle, value => value === '/private/rebound');
+    expect(location()[0]?.props.subtitle).toBe('/private/rebound');
     await screen.unmount();
   });
 
@@ -366,7 +377,7 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
       await Promise.resolve();
     });
     if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
-    await vi.waitFor(() => expect(configure.mock.calls.filter(
+    await diagnosticsEvents.waitFor(() => expect(configure.mock.calls.filter(
       ([machineId, settings]) => machineId === 'm1' && settings.enabled === true,
     )).toHaveLength(2));
 
@@ -378,7 +389,7 @@ describe('VoiceDiagnosticsSettingsSection selected-machine status', () => {
 
     await act(async () => {
       releaseCleanup();
-      await vi.waitFor(() => expect(testState.configureCompletions).toHaveLength(4));
+      await diagnosticsEvents.waitFor(() => expect(testState.configureCompletions).toHaveLength(4));
     });
     if (modalScreen.findByTestId('web-modal-confirm')) await modalScreen.pressByTestIdAsync('web-modal-confirm');
     expect(testState.configureCompletions.filter(([machineId]) => machineId === 'm1').at(-1))

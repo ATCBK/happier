@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -82,14 +83,16 @@ describe('selected Voice machine client', () => {
   });
 
   it('releases an unanswered bound request when its Account retires', async () => {
-    daemonReply = async () => await new Promise(() => {});
+    const entered = createDeferred<void>();
+    daemonReply = async () => { entered.resolve(); return await new Promise(() => {}); };
     let outcome = 'pending';
     const pending = createSelectedVoiceMachineClient().bindOperation().invoke('daemon.voice.probe', {})
       .then(() => { outcome = 'resolved'; }, () => { outcome = 'retired'; });
-    await vi.waitFor(() => expect(requests.length).toBe(1));
+    await entered.promise;
+    expect(requests.length).toBe(1);
     storage.setState({ profileScope: { serverId: account!.home.id, accountId: 'replacement-account' } });
-    await vi.waitFor(() => expect(outcome).toBe('retired'));
     await pending;
+    expect(outcome).toBe('retired');
   });
 
   it('retains the dispatched answer when automatic recent-machine ordering changes mid-call', async () => {

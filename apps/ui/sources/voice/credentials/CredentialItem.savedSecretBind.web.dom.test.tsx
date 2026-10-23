@@ -16,6 +16,7 @@ import * as React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
@@ -28,6 +29,7 @@ import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testH
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
+let credentialChanged = createDeferred<void>();
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
@@ -126,6 +128,16 @@ function voiceCredentialGestureRecords(): string[] {
         .filter((message) => message.includes('voice_credential:'));
 }
 
+async function waitForCredentialChange(): Promise<void> {
+    await act(async () => { await credentialChanged.promise; });
+}
+
+async function waitForCredentialFailure(): Promise<void> {
+    await act(async () => {
+        await waitForTestEvent(listener => log.onChange(listener), voiceCredentialGestureRecords, records => records.length > 0);
+    });
+}
+
 function appliedVoiceBinding(): Record<string, unknown> | null {
     const bindings = account?.persistedSettings.voiceSettingsV1.credentialBindings ?? [];
     return bindings.find((binding) => (
@@ -148,6 +160,12 @@ function query(testID: string): HTMLElement | null {
     return document.querySelector<HTMLElement>(`[data-testid="${testID}"]`);
 }
 
+function subscribeDomMutations(notify: () => void): () => void {
+    const observer = new MutationObserver(notify);
+    observer.observe(document.body, { attributes: true, childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+}
+
 function requireNode(testID: string): HTMLElement {
     const node = query(testID);
     if (!node) throw new Error(`missing node for testID "${testID}"`);
@@ -168,21 +186,19 @@ async function flush(): Promise<void> {
 }
 
 async function openSavedSecretPicker(): Promise<void> {
-    await vi.waitFor(() => expect(requireNode('voice-credential').querySelector<HTMLElement>('[tabindex="0"],[role="button"],button')).not.toBeNull());
+    await waitForTestEvent(subscribeDomMutations, () => query('voice-credential')?.querySelector<HTMLElement>('[tabindex="0"],[role="button"],button'), node => Boolean(node));
+    expect(requireNode('voice-credential').querySelector<HTMLElement>('[tabindex="0"],[role="button"],button')).not.toBeNull();
     const trigger = requireNode('voice-credential').querySelector<HTMLElement>('[tabindex="0"],[role="button"],button');
     if (!trigger) throw new Error('missing actual Voice credential dropdown trigger');
     await act(async () => { pressWithPointer(trigger); });
-    await vi.waitFor(async () => {
-        await flush();
-        expect(query('dropdown-option-useSavedSecret')).not.toBeNull();
-    });
+    await waitForTestEvent(subscribeDomMutations, () => query('dropdown-option-useSavedSecret'), node => node !== null);
+    expect(query('dropdown-option-useSavedSecret')).not.toBeNull();
     await act(async () => { pressWithPointer(requireNode('dropdown-option-useSavedSecret')); });
     // The real dropdown commits after teardown on a frame (or its owning
     // fallback). Await the picker, not an invented number of event-loop turns.
-    await vi.waitFor(async () => {
-        await flush();
-        expect(document.querySelector('[data-testid^="saved-secret:"]')).not.toBeNull();
-    });
+    await waitForTestEvent(subscribeDomMutations,
+        () => document.querySelector('[data-testid^="saved-secret:"]'), node => node !== null);
+    expect(document.querySelector('[data-testid^="saved-secret:"]')).not.toBeNull();
 }
 
 async function renderRow(options: Readonly<{
@@ -195,6 +211,7 @@ async function renderRow(options: Readonly<{
     approvalRequired?: boolean;
     onChanged?: () => void;
 }> = {}): Promise<string | null> {
+    credentialChanged = createDeferred<void>();
     const { ModalProvider } = await import('@/modal');
     const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
     const { VoiceCredentialItem } = await import('./CredentialItem');
@@ -343,7 +360,7 @@ async function renderRow(options: Readonly<{
                         recipientContract={recipientContract}
                         recipientContractDigest={recipientContractDigest}
                         disclosePlainStorage={false}
-                        onChanged={options.onChanged}
+                        onChanged={() => { options.onChanged?.(); credentialChanged.resolve(); }}
                     />
                 </ModalProvider>
             </InjectedAuthProvider>,
@@ -405,10 +422,12 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         const trigger = row.querySelector<HTMLElement>('[tabindex="0"],[role="button"],button');
         await act(async () => { pressWithPointer(trigger ?? row); });
         if (trigger) {
-            await vi.waitFor(() => expect(query('dropdown-option-enterNew')).not.toBeNull());
+            await waitForTestEvent(subscribeDomMutations, () => query('dropdown-option-enterNew'), node => node !== null);
+            expect(query('dropdown-option-enterNew')).not.toBeNull();
             await act(async () => { pressWithPointer(requireNode('dropdown-option-enterNew')); });
         }
-        await vi.waitFor(() => expect(query('web-prompt-input')).not.toBeNull());
+        await waitForTestEvent(subscribeDomMutations, () => query('web-prompt-input'), node => node !== null);
+        expect(query('web-prompt-input')).not.toBeNull();
         const input = requireNode('web-prompt-input') as HTMLInputElement;
         await act(async () => {
             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'fixture-new-dormant-key');
@@ -416,7 +435,10 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         });
         await act(async () => { pressWithPointer(requireNode('web-prompt-confirm')); });
         if (approvalRequired) {
-            await vi.waitFor(() => expect(account!.artifacts.list()).toHaveLength(1));
+            await act(async () => {
+                await waitForTestEvent(account!.subscribe, () => account!.artifacts.list(), artifacts => artifacts.length === 1);
+            });
+            expect(account!.artifacts.list()).toHaveLength(1);
             await flush();
             expect(voiceCredentialGestureRecords()).toEqual([]);
             expect(account!.promotions).toHaveLength(0);
@@ -460,23 +482,24 @@ describe('Voice credential row → saved-secret picker → account-settings writ
                 headerVersion: persistedArtifact.headerVersion, bodyVersion: persistedArtifact.bodyVersion,
                 seq: persistedArtifact.seq, createdAt: persistedArtifact.createdAt, updatedAt: persistedArtifact.updatedAt, isDecrypted: true }); });
             if (approval === 'canceled') {
-                await vi.waitFor(() => expect(voiceCredentialGestureRecords().length).toBeGreaterThan(0));
+                await waitForCredentialFailure();
+                expect(voiceCredentialGestureRecords().length).toBeGreaterThan(0);
                 expect(account!.promotions).toHaveLength(0);
                 expect(onChanged).not.toHaveBeenCalled();
                 expect(appliedVoiceBinding()).toMatchObject({ credentialSource: { kind: 'connectedAccount' }, credentialBindings: { account: {} } });
                 return;
             }
-            await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+            await waitForCredentialChange();
+            expect(onChanged).toHaveBeenCalledOnce();
             expect(account!.promotions).toHaveLength(1);
             expect(account!.promotions[0]!.resourceId).toBe(originalInput.resourceId);
         }
-        await vi.waitFor(() => {
-            const binding = appliedVoiceBinding();
-            expect(binding).toMatchObject({ credentialSource: { kind: 'connectedAccount' } });
-            const refs = binding?.credentialBindings as { account?: Record<string, string> } | undefined;
-            expect(refs?.account?.['api-key'], voiceCredentialGestureRecords().join('\n'))
-                .toEqual(expect.stringMatching(/^happier:shared-secret:v1:/));
-        }, { timeout: CASE_TIMEOUT_MS });
+        await waitForCredentialChange();
+        const binding = appliedVoiceBinding();
+        expect(binding).toMatchObject({ credentialSource: { kind: 'connectedAccount' } });
+        const refs = binding?.credentialBindings as { account?: Record<string, string> } | undefined;
+        expect(refs?.account?.['api-key'], voiceCredentialGestureRecords().join('\n'))
+            .toEqual(expect.stringMatching(/^happier:shared-secret:v1:/));
         expect(account!.settingsWrites).toHaveLength(0);
         expect(account!.purposes!.value).toEqual(purpose);
         expect(account!.purposes!.writes).toHaveLength(0);
@@ -488,17 +511,20 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         await renderRow({ mode: 'plain', onChanged, initialRawSettings: { secrets: [], voiceSettingsV1: { credentialBindings: [] } } });
         account!.setLosePromotionResponse(true);
         await act(async () => { pressWithPointer(requireNode('voice-credential')); });
-        await vi.waitFor(() => expect(query('web-prompt-input')).not.toBeNull());
+        await waitForTestEvent(subscribeDomMutations, () => query('web-prompt-input'), node => node !== null);
+        expect(query('web-prompt-input')).not.toBeNull();
         const input = requireNode('web-prompt-input') as HTMLInputElement;
         await act(async () => {
             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'original-uncertain-key');
             input.dispatchEvent(new Event('input', { bubbles: true }));
         });
         await act(async () => { pressWithPointer(requireNode('web-prompt-confirm')); });
-        await vi.waitFor(() => expect(account!.promotions).toHaveLength(1));
-        await vi.waitFor(() => expect(voiceCredentialGestureRecords().length).toBeGreaterThan(0));
+        await waitForCredentialFailure();
+        expect(account!.promotions).toHaveLength(1);
+        expect(voiceCredentialGestureRecords().length).toBeGreaterThan(0);
         // Dismiss the existing outcome alert, not the owning credential row.
-        await vi.waitFor(() => expect(query('web-modal-button-0')).not.toBeNull());
+        await waitForTestEvent(subscribeDomMutations, () => query('web-modal-button-0'), node => node !== null);
+        expect(query('web-modal-button-0')).not.toBeNull();
         await act(async () => { pressWithPointer(requireNode('web-modal-button-0')); });
         await flush();
         const originalId = account!.promotions[0]!.resourceId;
@@ -508,11 +534,13 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         const trigger = row.querySelector<HTMLElement>('[tabindex="0"],[role="button"],button');
         await act(async () => { pressWithPointer(trigger ?? row); });
         if (trigger) {
-            await vi.waitFor(() => expect(query('dropdown-option-enterNew')).not.toBeNull());
+            await waitForTestEvent(subscribeDomMutations, () => query('dropdown-option-enterNew'), node => node !== null);
+            expect(query('dropdown-option-enterNew')).not.toBeNull();
             await act(async () => { pressWithPointer(requireNode('dropdown-option-enterNew')); });
         }
         if (temporarilyUnavailable) {
-            await vi.waitFor(() => expect(Boolean(query('web-modal-button-0') ?? query('web-prompt-input'))).toBe(true));
+            await waitForTestEvent(subscribeDomMutations, () => Boolean(query('web-modal-button-0') ?? query('web-prompt-input')), shown => shown);
+            expect(Boolean(query('web-modal-button-0') ?? query('web-prompt-input'))).toBe(true);
             expect(onChanged).not.toHaveBeenCalled();
             expect(query('web-prompt-input')).toBeNull();
             expect(query('web-modal-button-0')).not.toBeNull();
@@ -526,11 +554,13 @@ describe('Voice credential row → saved-secret picker → account-settings writ
             const nextTrigger = nextRow.querySelector<HTMLElement>('[tabindex="0"],[role="button"],button');
             await act(async () => { pressWithPointer(nextTrigger ?? nextRow); });
             if (nextTrigger) {
-                await vi.waitFor(() => expect(query('dropdown-option-enterNew')).not.toBeNull());
+                await waitForTestEvent(subscribeDomMutations, () => query('dropdown-option-enterNew'), node => node !== null);
+                expect(query('dropdown-option-enterNew')).not.toBeNull();
                 await act(async () => { pressWithPointer(requireNode('dropdown-option-enterNew')); });
             }
         }
-        await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+        await waitForCredentialChange();
+        expect(onChanged).toHaveBeenCalledOnce();
         expect(query('web-prompt-input')).toBeNull();
         expect(account!.promotions).toHaveLength(1);
         expect(account!.resources.map(resource => 'resourceId' in resource ? resource.resourceId : null)).toEqual([originalId]);
@@ -546,7 +576,8 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         const row = requireNode(`saved-secret:${selectedRef}`);
 
         await act(async () => { pressWithPointer(row); });
-        await vi.waitFor(() => expect(appliedVoiceBinding(), JSON.stringify(voiceCredentialGestureRecords())).not.toBeNull());
+        await waitForCredentialChange();
+        expect(appliedVoiceBinding(), JSON.stringify(voiceCredentialGestureRecords())).not.toBeNull();
 
         // Asserting the call alone is what let three rounds of tests pass against
         // a feature that never worked: the contract is the CONTENT that reached
@@ -568,7 +599,8 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         await act(async () => {
             pressWithPointer(requireNode(`saved-secret:${importedSecretRef(SECRETS[0]!.id)}`));
         });
-        await vi.waitFor(() => expect(appliedVoiceBinding(), JSON.stringify(voiceCredentialGestureRecords())).not.toBeNull());
+        await waitForCredentialChange();
+        expect(appliedVoiceBinding(), JSON.stringify(voiceCredentialGestureRecords())).not.toBeNull();
 
         expect(appliedVoiceBinding()).toMatchObject({
             credentialBindings: { account: { 'api-key': importedSecretRef(SECRETS[0]!.id) } },
@@ -600,7 +632,8 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         await act(async () => {
             pressWithPointer(requireNode(`saved-secret:${importedSecretRef(SECRETS[1]!.id)}`));
         });
-        await vi.waitFor(() => expect(appliedVoiceBinding(), JSON.stringify(voiceCredentialGestureRecords())).not.toBeNull());
+        await waitForCredentialChange();
+        expect(appliedVoiceBinding(), JSON.stringify(voiceCredentialGestureRecords())).not.toBeNull();
 
         expect(account!.settingsWrites).toHaveLength(1);
         expect(appliedVoiceBinding()).toMatchObject({
@@ -627,7 +660,8 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         expect(account!.settingsWrites).toHaveLength(0);
         expect(appliedVoiceBinding()).toBeNull();
         await act(async () => { pressWithPointer(confirm!); });
-        await vi.waitFor(() => expect(appliedVoiceBinding(), JSON.stringify(voiceCredentialGestureRecords())).not.toBeNull());
+        await waitForCredentialChange();
+        expect(appliedVoiceBinding(), JSON.stringify(voiceCredentialGestureRecords())).not.toBeNull();
 
         expect(appliedVoiceBinding()).toMatchObject({
             credentialSource: { kind: 'savedSecret' },
@@ -647,7 +681,8 @@ describe('Voice credential row → saved-secret picker → account-settings writ
         await act(async () => {
             pressWithPointer(requireNode(`saved-secret:${importedSecretRef(SECRETS[1]!.id)}`));
         });
-        await vi.waitFor(() => expect(voiceCredentialGestureRecords()).toHaveLength(1));
+        await waitForCredentialFailure();
+        expect(voiceCredentialGestureRecords()).toHaveLength(1);
 
         expect(account!.settingsWrites).toHaveLength(1);
         expect(account!.persistedSettings.voiceSettingsV1).toEqual(before);

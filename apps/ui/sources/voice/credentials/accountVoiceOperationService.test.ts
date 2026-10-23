@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -1624,6 +1625,7 @@ describe('account Voice operation service', () => {
   });
 
   it('aborts the exact fetch signal when host authority retires despite a distinct live request signal', async () => {
+    const entered = createDeferred<void>();
     const authority = new AbortController();
     const request = new AbortController();
     const fetchSignals: AbortSignal[] = [];
@@ -1631,6 +1633,7 @@ describe('account Voice operation service', () => {
       const fetchSignal = init?.signal;
       if (!fetchSignal) throw new Error('missing_fetch_signal');
       fetchSignals.push(fetchSignal);
+      entered.resolve();
       return await new Promise<Response>((_resolve, reject) => {
         fetchSignal.addEventListener('abort', () => reject(
           Object.assign(new Error('fetch_aborted'), { name: 'AbortError' }),
@@ -1658,7 +1661,8 @@ describe('account Voice operation service', () => {
       },
       signal: request.signal,
     });
-    await vi.waitFor(() => expect(fetchSignals).toHaveLength(1));
+    await entered.promise;
+    expect(fetchSignals).toHaveLength(1);
     expect(fetchSignals[0]).not.toBe(authority.signal);
     expect(fetchSignals[0]).not.toBe(request.signal);
     authority.abort();

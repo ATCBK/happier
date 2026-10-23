@@ -206,7 +206,11 @@ describe('Voice client raw credential adapter', () => {
     it('rejects environment access before RPC and drops a result after generation retirement', async () => {
         let current = true;
         const pending = createDeferred<unknown>();
-        const invoke = vi.fn(async () => await pending.promise);
+        const invoked = createDeferred<void>();
+        const invoke = vi.fn(async () => {
+            invoked.resolve();
+            return await pending.promise;
+        });
         const raw = createRawAccess(invoke, {
             identity,
             phase: 'prepare',
@@ -221,7 +225,8 @@ describe('Voice client raw credential adapter', () => {
         expect(invoke).not.toHaveBeenCalled();
 
         const operation = raw.materialize(request);
-        await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+        await invoked.promise;
+        expect(invoke).toHaveBeenCalledOnce();
         current = false;
         pending.resolve({
             ok: true,
@@ -235,7 +240,11 @@ describe('Voice client raw credential adapter', () => {
     it('does not retain raw access after its host invocation settles or is aborted', async () => {
         const lifetime = new AbortController();
         const pending = createDeferred<unknown>();
-        const invoke = vi.fn(async () => await pending.promise);
+        const invoked = createDeferred<void>();
+        const invoke = vi.fn(async () => {
+            invoked.resolve();
+            return await pending.promise;
+        });
         const raw = createRawAccess(invoke, {
             identity,
             phase: 'connection',
@@ -247,7 +256,8 @@ describe('Voice client raw credential adapter', () => {
         });
 
         const inFlight = raw.materialize(request);
-        await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+        await invoked.promise;
+        expect(invoke).toHaveBeenCalledOnce();
         lifetime.abort();
         pending.resolve({
             ok: true,

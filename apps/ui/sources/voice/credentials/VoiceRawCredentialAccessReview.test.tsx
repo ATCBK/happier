@@ -1,3 +1,4 @@
+import { waitForTestEvent } from '@/dev/testkit';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -209,18 +210,22 @@ describe('VoiceRawCredentialAccessReview', () => {
   afterEach(async () => { standardCleanup(); await account.dispose(); });
 
   it('lists, requests, approves, and revokes the exact host-derived raw credential subject', async () => {
+    const listed = createDeferred<void>();
+    const requested = createDeferred<void>();
+    const granted = createDeferred<void>();
+    const revoked = createDeferred<void>();
     const client = {
       inspect: vi.fn(async () => ({ ok: true as const, authorization, review })),
-      request: vi.fn(async () => ({ ok: true as const, authorization, review, pendingRequest })),
+      request: vi.fn(async () => { requested.resolve(); return { ok: true as const, authorization, review, pendingRequest }; }),
     };
     const actions = {
-      list: vi.fn(async () => ({ grants: [], pendingRequests: [] })),
+      list: vi.fn(async () => { listed.resolve(); return { grants: [], pendingRequests: [] }; }),
       request: vi.fn(),
-      grant: vi.fn(async () => ({
+      grant: vi.fn(async () => { granted.resolve(); return {
         grant,
         pendingRequest: { ...pendingRequest, status: 'granted' as const, grantId: grant.id, decidedAt: 2 },
-      })),
-      revoke: vi.fn(async () => ({ grant: { ...grant, status: 'revoked' as const, revokedAt: 3 } })),
+      }; }),
+      revoke: vi.fn(async () => { revoked.resolve(); return { grant: { ...grant, status: 'revoked' as const, revokedAt: 3 } }; }),
       dismissRequest: vi.fn(async () => ({
         pendingRequest: { ...pendingRequest, status: 'dismissed' as const, decidedAt: 3 },
       })),
@@ -236,7 +241,8 @@ describe('VoiceRawCredentialAccessReview', () => {
       />,
     );
 
-    await vi.waitFor(() => expect(actions.list).toHaveBeenCalledWith({
+    await act(async () => { await listed.promise; });
+    expect(actions.list).toHaveBeenCalledWith({
       pluginId: contribution.pluginId,
       capability: 'credentials.materialize.raw',
       targetScope: { kind: 'account' },
@@ -244,12 +250,13 @@ describe('VoiceRawCredentialAccessReview', () => {
       includeRevoked: false,
       includeResolvedRequests: false,
       limit: 200,
-    }));
+    });
 
     await act(async () => {
       screen.tree.findByTestId('raw-access')?.props.onPress();
     });
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith(contribution, rawGrant));
+    await act(async () => { await requested.promise; });
+    expect(client.request).toHaveBeenCalledWith(contribution, rawGrant);
     const sheet = screen.tree.findAllByType(PluginPermissionGrantSheet)[0] ?? null;
     expect(sheet).not.toBeNull();
     expect(JSON.stringify(sheet?.props.detailRows)).toContain('@acme/voice');
@@ -270,23 +277,27 @@ describe('VoiceRawCredentialAccessReview', () => {
 
     await act(async () => {
       screen.tree.pressByTestId('raw-access-sheet-grant');
+      await granted.promise;
     });
-    await vi.waitFor(() => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.destructive).toBe(true));
+    await waitForTestEvent(screen.subscribe, () => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.destructive).toBe(true));
 
     await act(async () => {
       screen.tree.findByTestId('raw-access')?.props.onPress();
     });
-    await vi.waitFor(() => expect(actions.revoke).toHaveBeenCalledWith({ grantId: grant.id }));
+    await act(async () => { await revoked.promise; });
+    expect(actions.revoke).toHaveBeenCalledWith({ grantId: grant.id });
     expect(actions.request).not.toHaveBeenCalled();
   });
 
   it('never reads another machine installation approval as this machine being granted', async () => {
+    const listed = createDeferred<void>();
+    const requested = createDeferred<void>();
     const client = {
       inspect: vi.fn(async () => ({ ok: true as const, authorization, review })),
-      request: vi.fn(async () => ({ ok: true as const, authorization, review, pendingRequest })),
+      request: vi.fn(async () => { requested.resolve(); return { ok: true as const, authorization, review, pendingRequest }; }),
     };
     const actions = {
-      list: vi.fn(async () => ({
+      list: vi.fn(async () => { listed.resolve(); return {
         grants: [
           { ...grant, id: 'grant-other-machine', authoritySource: otherMachine },
           { ...grant, id: 'grant-replaced-installation', authoritySource: replacedInstallation },
@@ -294,7 +305,7 @@ describe('VoiceRawCredentialAccessReview', () => {
         pendingRequests: [
           { ...pendingRequest, id: 'request-other-machine', authoritySource: otherMachine },
         ],
-      })),
+      }; }),
       request: vi.fn(),
       grant: vi.fn(),
       revoke: vi.fn(),
@@ -311,8 +322,9 @@ describe('VoiceRawCredentialAccessReview', () => {
       />,
     );
 
-    await vi.waitFor(() => expect(actions.list).toHaveBeenCalled());
-    await vi.waitFor(() => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.loading).toBe(false));
+    await act(async () => { await listed.promise; });
+    expect(actions.list).toHaveBeenCalled();
+    await waitForTestEvent(screen.subscribe, () => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.loading).toBe(false));
     expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.destructive).toBe(false);
     expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.detail)
       .toBe(t('settingsVoice.externalCredentials.reviewRequired'));
@@ -323,11 +335,14 @@ describe('VoiceRawCredentialAccessReview', () => {
     await act(async () => {
       screen.tree.findByTestId('raw-access')?.props.onPress();
     });
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith(contribution, rawGrant));
+    await act(async () => { await requested.promise; });
+    expect(client.request).toHaveBeenCalledWith(contribution, rawGrant);
     expect(actions.revoke).not.toHaveBeenCalled();
   });
 
   it('revokes this installation grant rather than the first account-wide match', async () => {
+    const listed = createDeferred<void>();
+    const revoked = createDeferred<void>();
     const client = {
       inspect: vi.fn(async () => ({ ok: true as const, authorization, review })),
       request: vi.fn(async () => ({ ok: true as const, authorization, review, pendingRequest })),
@@ -335,16 +350,16 @@ describe('VoiceRawCredentialAccessReview', () => {
     const actions = {
       // The other machine's grant is listed first on purpose: taking the first
       // account-wide match would revoke a different device's approval.
-      list: vi.fn(async () => ({
+      list: vi.fn(async () => { listed.resolve(); return {
         grants: [
           { ...grant, id: 'grant-other-machine', authoritySource: otherMachine },
           grant,
         ],
         pendingRequests: [],
-      })),
+      }; }),
       request: vi.fn(),
       grant: vi.fn(),
-      revoke: vi.fn(async () => ({ grant: { ...grant, status: 'revoked' as const, revokedAt: 3 } })),
+      revoke: vi.fn(async () => { revoked.resolve(); return { grant: { ...grant, status: 'revoked' as const, revokedAt: 3 } }; }),
       dismissRequest: vi.fn(),
     };
     const { VoiceRawCredentialAccessReview } = await import('./VoiceRawCredentialAccessReview');
@@ -358,30 +373,34 @@ describe('VoiceRawCredentialAccessReview', () => {
       />,
     );
 
-    await vi.waitFor(() => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.destructive).toBe(true));
+    await act(async () => { await listed.promise; });
+    await waitForTestEvent(screen.subscribe, () => expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.destructive).toBe(true));
     await act(async () => {
       screen.tree.findByTestId('raw-access')?.props.onPress();
     });
-    await vi.waitFor(() => expect(actions.revoke).toHaveBeenCalledWith({ grantId: grant.id }));
+    await act(async () => { await revoked.promise; });
+    expect(actions.revoke).toHaveBeenCalledWith({ grantId: grant.id });
     expect(actions.revoke).not.toHaveBeenCalledWith({ grantId: 'grant-other-machine' });
   });
 
   it('re-inspects before deciding a captured request when account settings switch', async () => {
     let selectedAccount: 'A' | 'B' = 'A';
+    const requested = createDeferred<void>();
+    const listedB = createDeferred<void>();
+    let relistedA = createDeferred<void>();
     const inspectionForSelectedAccount = () => selectedAccount === 'A'
       ? { ok: true as const, authorization, review }
       : { ok: true as const, authorization: authorizationB, review: reviewB };
     const client = {
       inspect: vi.fn(async () => inspectionForSelectedAccount()),
-      request: vi.fn(async () => ({ ok: true as const, authorization, review, pendingRequest })),
+      request: vi.fn(async () => { requested.resolve(); return { ok: true as const, authorization, review, pendingRequest }; }),
     };
     const actions = {
-      list: vi.fn(async (input: Readonly<{ subject: unknown }>) => ({
-        grants: [],
-        pendingRequests: JSON.stringify(input.subject) === JSON.stringify(subjectB)
-          ? [pendingRequestB]
-          : [],
-      })),
+      list: vi.fn(async (input: Readonly<{ subject: unknown }>) => {
+        const accountB = JSON.stringify(input.subject) === JSON.stringify(subjectB);
+        if (accountB) listedB.resolve(); else relistedA.resolve();
+        return { grants: [], pendingRequests: accountB ? [pendingRequestB] : [] };
+      }),
       request: vi.fn(),
       grant: vi.fn(),
       revoke: vi.fn(),
@@ -404,7 +423,8 @@ describe('VoiceRawCredentialAccessReview', () => {
     await act(async () => {
       screen.tree.findByTestId('raw-access')?.props.onPress();
     });
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith(contribution, rawGrant));
+    await act(async () => { await requested.promise; });
+    expect(client.request).toHaveBeenCalledWith(contribution, rawGrant);
     const staleSheet = screen.tree.findAllByType(PluginPermissionGrantSheet)[0] ?? null;
     expect(staleSheet).not.toBeNull();
     const staleGrant = screen.tree.findByTestId('raw-access-sheet-grant')?.props.onPress;
@@ -419,7 +439,8 @@ describe('VoiceRawCredentialAccessReview', () => {
     await act(async () => {
       staleGrant?.();
     });
-    await vi.waitFor(() => {
+    await act(async () => { await listedB.promise; });
+    await waitForTestEvent(screen.subscribe, () => {
       expect(screen.tree.findAllByType(PluginPermissionGrantSheet)[0]?.props.pendingRequest.id).toBe(pendingRequestB.id);
     });
     expect(JSON.stringify(screen.tree.findAllByType(PluginPermissionGrantSheet)[0]?.props.detailRows)).toContain('Account B API key');
@@ -437,12 +458,14 @@ describe('VoiceRawCredentialAccessReview', () => {
     // A further settings switch must re-derive the authorization on its own,
     // without any decision driving it.
     selectedAccount = 'A';
+    relistedA = createDeferred<void>();
     storage.setState({ settingsVersion: 3 });
     await act(async () => {
       screen.tree.update(renderReview());
     });
-    await vi.waitFor(() => expect(actions.list).toHaveBeenLastCalledWith(expect.objectContaining({ subject })));
-    await vi.waitFor(() => expect(screen.tree.findByTestId('raw-access-sheet')).toBeNull());
+    await act(async () => { await relistedA.promise; });
+    expect(actions.list).toHaveBeenLastCalledWith(expect.objectContaining({ subject }));
+    await waitForTestEvent(screen.subscribe, () => expect(screen.tree.findByTestId('raw-access-sheet')).toBeNull());
     expect(screen.tree.findAll(node => node.props.testID === 'raw-access' && typeof node.props.title === 'string')[0]?.props.detail)
       .toBe(t('settingsVoice.externalCredentials.reviewRequired'));
   });
