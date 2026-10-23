@@ -6,8 +6,12 @@ export function observeStoragePerformance<T>(store: UseBoundStore<StoreApi<T>>, 
     const identity = (state: T) => state;
 
     // Observe actual Zustand notifications, including writes through the
-    // captured domain setter and the public setState API. Never read values.
-    store.subscribe(() => telemetry.count('sync.store.storage.notify'));
+    // captured domain setter and the public setState API. Never retain values.
+    telemetry.registerStorageNotificationSource();
+    store.subscribe((state, previous) => {
+        telemetry.count('sync.store.storage.notify');
+        telemetry.recordStoreNotification(state, previous);
+    });
 
     function useObservedStore(): T;
     function useObservedStore<U>(selector: (state: T) => U): U;

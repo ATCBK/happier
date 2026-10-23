@@ -12,7 +12,9 @@ import { worktreeVerdict } from '../worktrees/worktreeVerdicts';
 import { assertStoragePathIdentity, readStoragePathIdentity } from '../trash/removeStoragePath';
 import { physicalStoragePathWithoutFollowingLeaf } from '../storagePath';
 
-function roots(context: StorageCategoryContext) {
+type WorktreeContext = Pick<StorageCategoryContext, 'deps' | 'projects' | 'worktrees' | 'sessions' | 'inUse' | 'discoveryIssues'>;
+
+function roots(context: WorktreeContext) {
     const repos = [...context.projects.map(project => project.repositoryRoot), ...context.worktrees.map(worktree => worktree.repositoryRoot)];
     return [...new Set(repos)].map(root => join(root, WORKTREE_RELATIVE_PARENT_DIR));
 }
@@ -81,7 +83,7 @@ function adapter(raw: unknown, deps: StorageCategoryCatalogDeps): StorageCategor
         },
     };
 }
-async function resolveWorktree(path: string, context: StorageCategoryContext): Promise<StorageWorktree | undefined> {
+async function resolveWorktree(path: string, context: WorktreeContext): Promise<StorageWorktree | undefined> {
     const registered = context.worktrees.find(worktree => canonicalAbsolutePathsEqual(worktree.path, path));
     if (registered) return registered;
     const repository = context.worktrees.find(worktree => worktree.isMain && worktree.retentionKind !== 'common'
@@ -107,9 +109,8 @@ function mainLosses(worktree: StorageWorktree): StorageReasonV1[] | undefined {
             detail: { path: join(change.worktreePath, change.path), untracked: change.untracked } })),
         ...loss.dependentWorktrees.map(path => ({ code: 'contains' as const, detail: { kind: 'dependent_worktree', path } }))];
 }
-export const worktrees: StorageCategoryDefinition = {
-    id: 'worktrees', roots,
-    async items(context) {
+/** Both full catalog discovery and page-scoped SCM supplementation use this owner. */
+export async function readStorageWorktreeItems(context: WorktreeContext): Promise<readonly StorageCategoryItem[]> {
         const registered = new Map(context.worktrees.map(worktree => [worktree.path, worktree]));
         const paths = [...new Set([...registered.keys(), ...(await Promise.all(roots(context)
             .map(root => directoriesAtDepth(root, 1, unavailableDirectory(context, 'worktrees'))))).flat()])]
@@ -177,7 +178,9 @@ export const worktrees: StorageCategoryDefinition = {
                 ...(unsafe ? { loses: [...(parent.loses ?? []), ...nested.flatMap(child => child.loses ?? [child.reason])] } : {}),
                 evidence: [...parent.evidence, unsafe ? 'nested_worktree_kept' : 'nested_worktrees_children_first'] };
         });
-    },
+}
+export const worktrees: StorageCategoryDefinition = {
+    id: 'worktrees', roots, items: readStorageWorktreeItems,
     async bindAdapter(value, context) {
         const worktree = await resolveWorktree(value.path, context);
         if (!worktree) throw new StorageCategoryAdapterError('owner_unavailable');

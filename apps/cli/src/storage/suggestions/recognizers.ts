@@ -20,6 +20,15 @@ export type StorageRecognitionCandidate = Readonly<{
   repositoryInUse?: boolean;
   browserProfileRoot?: string;
 }>;
+/** Scan discovery and retained summary projection use the same live repository facts. */
+export function storageCandidateRepositoryFacts(path: string, repositoryRoots: readonly string[],
+  use: Readonly<{ reliable: boolean; paths: readonly string[] }> | undefined): Pick<StorageRecognitionCandidate, 'repositoryRoot' | 'repositoryInUse'> {
+  const repositoryRoot = repositoryRoots.filter(root => storagePathContains(root, path))
+    .sort((left, right) => right.length - left.length)[0];
+  const repositoryInUse = repositoryRoot && use?.reliable === true
+    ? use.paths.some(path => storagePathContains(repositoryRoot, path) || storagePathContains(path, repositoryRoot)) : undefined;
+  return { repositoryRoot, repositoryInUse };
+}
 export type StorageRecognitionFacts = Readonly<{
   protection: StorageProtectionFacts;
   now: number;
@@ -155,11 +164,14 @@ export async function isEmptyStorageFolder(path: string, verifiedEmptyFolders: R
   }
   return true;
 }
+function canRecognizeStorageCandidate(candidate: StorageRecognitionCandidate, facts: StorageRecognitionFacts): boolean {
+  if (candidate.size.atLeast || candidate.repositoryInUse === true) return false;
+  return candidate.kind === undefined || candidate.kind === 'folder'
+    || STORAGE_RECOGNIZERS.some(rule => rule.old && rule.paths?.(facts).some(path => rule.children
+      ? canonicalAbsolutePathsEqual(dirname(candidate.path), path) : canonicalAbsolutePathsEqual(candidate.path, path)));
+}
 export async function recognizeStorageCandidate(candidate: StorageRecognitionCandidate, facts: StorageRecognitionFacts): Promise<StorageRecognitionResult | null> {
-  if (candidate.size.atLeast || candidate.repositoryInUse === true) return null;
-  if (candidate.kind !== undefined && candidate.kind !== 'folder'
-    && !STORAGE_RECOGNIZERS.some(rule => rule.old && rule.paths?.(facts).some(path => rule.children
-      ? canonicalAbsolutePathsEqual(dirname(candidate.path), path) : canonicalAbsolutePathsEqual(candidate.path, path)))) return null;
+  if (!canRecognizeStorageCandidate(candidate, facts)) return null;
   let entry; try { entry = await lstat(storagePathToFs(candidate.path)); } catch (error) { if (absent(error)) return null; throw error; }
   if (entry.isSymbolicLink()) return null;
   const protection = await classifyPath(candidate.path, { ...facts.protection, browserProfileRoots: [
@@ -224,18 +236,41 @@ export type StorageSuggestionsDeps = Readonly<{
   now?: () => number;
   suggestUnusedAfterDays?: () => number;
 }>;
+type StorageSuggestionListOptions = Readonly<{ callerKind: 'person' | 'agent' | 'automation'; group?: StorageSuggestionGroup; quickestForVolume?: string }>;
+type Suggestion = Readonly<{ item: StorageItemV1; group: StorageSuggestionGroup }>;
 export function createStorageSuggestions(deps: StorageSuggestionsDeps) {
-  return { async list(options: Readonly<{ callerKind: 'person' | 'agent' | 'automation'; group?: StorageSuggestionGroup; quickestForVolume?: string }>) {
-    const [catalog, protection, scan] = await Promise.all([deps.readCatalogItems(), deps.readProtectionFacts(), deps.readCompletedScan?.() ?? null]);
-    const candidates: { item: StorageItemV1; group: StorageSuggestionGroup }[] = [];
-    const eligible = catalog.filter(item => item.collectable && !item.size.atLeast && (item.verdict === 'safe' || item.verdict === 'caution'));
-    const classifications = await classifyPaths(eligible.map(item => ({ path: item.path, managedItemPath: item.path })), protection);
+  async function project(items: readonly StorageItemV1[], protection: StorageProtectionFacts): Promise<Suggestion[]> {
+    const candidates: Suggestion[] = [];
+    const eligible = items.filter(item => item.collectable && !item.size.atLeast && (item.verdict === 'safe' || item.verdict === 'caution'));
+    const classifications = await classifyPaths(eligible.map(item => ({ path: item.path,
+      ...(item.categoryId === undefined ? {} : { managedItemPath: item.path }) })), protection);
     for (const [index, item] of eligible.entries()) {
       const classified = classifications[index];
       if (classified.tier === 'keep' || classified.tier === 'forbidden') continue;
       candidates.push({ item: { ...item, ...(classified.tier === 'caution' ? { verdict: 'caution', reason: classified.reason } : {}) },
-        group: ['rebuilds', 'reinstalls', 'downloads_again'].includes(item.reason.code) ? 'can-be-rebuilt' : 'old-and-unused' });
+        group: item.categoryId === undefined ? 'outside-happier'
+          : ['rebuilds', 'reinstalls', 'downloads_again'].includes(item.reason.code) ? 'can-be-rebuilt' : 'old-and-unused' });
     }
+    return candidates;
+  }
+  async function select(candidates: readonly Suggestion[], options: StorageSuggestionListOptions) {
+    const selected = candidates.filter(({ item, group }) => (!options.group || options.group === group)
+      && (!options.quickestForVolume || item.verdict === 'safe' && deps.volumeForPath?.(item.path) === options.quickestForVolume));
+    const items: StorageItemV1[] = []; let declinedCount = 0;
+    for (const { item } of selected) {
+      if (options.callerKind !== 'person' && await deps.isDeclined?.(item)) { declinedCount += 1; continue; }
+      items.push(item);
+    }
+    return { items: items.sort((left, right) => right.size.freesBytes - left.size.freesBytes || left.path.localeCompare(right.path)), declinedCount };
+  }
+  return {
+    /** Keep recognition as-of sizedAt while refreshing protection and Account declines. */
+    async projectSnapshot(items: readonly StorageItemV1[], options: StorageSuggestionListOptions) {
+      return select(await project(items, await deps.readProtectionFacts()), options);
+    },
+    async list(options: StorageSuggestionListOptions) {
+    const [catalog, protection, scan] = await Promise.all([deps.readCatalogItems(), deps.readProtectionFacts(), deps.readCompletedScan?.() ?? null]);
+    const candidates = await project(catalog, protection);
     // A completed whole-disk index is the only producer of outside-Happier candidates.
     if (scan?.status === 'complete' && scan.scope === 'whole-disk') {
       const ignoredByRepository = new Map<string, Promise<readonly string[] | null>>();
@@ -249,6 +284,7 @@ export function createStorageSuggestions(deps: StorageSuggestionsDeps) {
           return read;
         } : undefined };
       for (const candidate of scan.candidates) {
+        if (!canRecognizeStorageCandidate(candidate, facts)) continue;
         if (candidates.some(value => contained(value.item.path, candidate.path))) continue;
         const recognized = await recognizeStorageCandidate(candidate, facts);
         if (!recognized) continue;
@@ -267,13 +303,6 @@ export function createStorageSuggestions(deps: StorageSuggestionsDeps) {
         } });
       }
     }
-    const selected = candidates.filter(({ item, group }) => (!options.group || options.group === group)
-      && (!options.quickestForVolume || item.verdict === 'safe' && deps.volumeForPath?.(item.path) === options.quickestForVolume));
-    const items: StorageItemV1[] = []; let declinedCount = 0;
-    for (const { item } of selected) {
-      if (options.callerKind !== 'person' && await deps.isDeclined?.(item)) { declinedCount += 1; continue; }
-      items.push(item);
-    }
-    return { items: items.sort((left, right) => right.size.freesBytes - left.size.freesBytes || left.path.localeCompare(right.path)), declinedCount };
+    return select(candidates, options);
   } };
 }

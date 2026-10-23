@@ -1,8 +1,49 @@
 import { create } from 'zustand';
 import { expect, it } from 'vitest';
 import { act, renderHook } from '@/dev/testkit';
-import { createSyncPerformanceTelemetry } from '../runtime/syncPerformanceTelemetry';
+import { createSyncPerformanceTelemetry, installSyncPerformanceTelemetryGlobal } from '../runtime/syncPerformanceTelemetry';
 import { observeStoragePerformance } from './storagePerformance';
+
+it('reports actual changed root keys only to opt-in diagnostic listeners, including timing mode and cleanup', () => {
+    const target = globalThis as typeof globalThis & {
+        __HAPPIER_PERF_DIAGNOSTICS__?: boolean;
+        __HAPPIER_SYNC_PERFORMANCE__?: Pick<typeof telemetry, 'subscribeStoreNotifications' | 'storeNotificationsAvailable'>;
+    };
+    const previous = target.__HAPPIER_PERF_DIAGNOSTICS__;
+    const previousApi = target.__HAPPIER_SYNC_PERFORMANCE__;
+    const telemetry = createSyncPerformanceTelemetry({ enabled: false, now: () => 17 });
+    installSyncPerformanceTelemetryGlobal(telemetry);
+    const api = target.__HAPPIER_SYNC_PERFORMANCE__!;
+    expect(api.storeNotificationsAvailable()).toBe(false);
+    const original = create(() => ({ selected: 0, other: { secret: 'never exported' } }));
+    const store = observeStoragePerformance(original, telemetry);
+    expect(api.storeNotificationsAvailable()).toBe(true);
+    const notifications: unknown[] = [];
+    try {
+        const ignored = api.subscribeStoreNotifications(event => notifications.push(event));
+        original.setState({ selected: 1 });
+        expect(notifications).toEqual([]);
+        ignored();
+        target.__HAPPIER_PERF_DIAGNOSTICS__ = true;
+        const unsubscribe = api.subscribeStoreNotifications(event => notifications.push(event));
+        store.setState(state => state);
+        store.setState({ selected: 1 }); // Real root notification, even though all field references are equal.
+        store.setState({ selected: 2 });
+        original.setState(state => ({ other: { ...state.other } }));
+        expect(notifications).toEqual([
+            { atMs: 17, changedKeys: [] },
+            { atMs: 17, changedKeys: ['selected'] },
+            { atMs: 17, changedKeys: ['other'] },
+        ]);
+        unsubscribe();
+        original.setState({ selected: 3 });
+        expect(notifications).toHaveLength(3);
+        expect(telemetry.snapshot().events).toEqual([]);
+    } finally {
+        if (previous === undefined) delete target.__HAPPIER_PERF_DIAGNOSTICS__; else target.__HAPPIER_PERF_DIAGNOSTICS__ = previous;
+        if (previousApi === undefined) delete target.__HAPPIER_SYNC_PERFORMANCE__; else target.__HAPPIER_SYNC_PERFORMANCE__ = previousApi;
+    }
+});
 
 it('attributes real store notifications and selector evaluation without changing selected-result render suppression', async () => {
     const telemetry = createSyncPerformanceTelemetry({ enabled: true });

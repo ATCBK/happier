@@ -4,7 +4,7 @@ import { canonicalAbsolutePathsEqual, resolveCanonicalAbsolutePath } from '@/uti
 import { getHappierTempRoot } from '@happier-dev/cli-common/tempDirs';
 import { MachineStoragePolicyV1Schema, StorageItemV1Schema, type StorageItemV1, type StorageReasonV1 } from '@happier-dev/protocol/storage/storageV1';
 import { contains } from './categories/filesystem';
-import { worktrees } from './categories/worktrees';
+import { worktrees, readStorageWorktreeItems } from './categories/worktrees';
 import { caches, managedAcpCacheCleanupLimitation } from './categories/caches';
 import { modelPacks } from './categories/modelPacks';
 import { sessionFolders } from './categories/sessionFolders';
@@ -20,6 +20,7 @@ import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { HappierStorageCategoryIdV1 } from '@happier-dev/protocol/storage/storageV1';
 import { createStoragePathComparator, physicalStoragePathWithoutFollowingLeaf } from './storagePath';
 import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 export type { StorageCategoryAdapter, StorageCategoryCatalogDeps, StorageCategoryItem, StorageProjectFacts, StorageCategoryDiscoverySnapshot } from './categories/types';
 
 const categories: readonly StorageCategoryDefinition[] = [worktrees, caches, modelPacks, sessionFolders, logs,
@@ -55,15 +56,19 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
     const context = async (paths: readonly string[] = []): Promise<StorageCategoryContext> => {
         const now = deps.now?.() ?? Date.now();
         const [allocations, modelPacks, recordings, temporaryFacts, isolationFacts, inUse, projectFacts, worktrees] = await Promise.all([
-            deps.managedSessionDirectories?.listRecords() ?? [], (deps.readModelPackRuntime?.() ?? deps.modelPackRuntime)?.list() ?? deps.readModelPacks?.() ?? [],
-            deps.readRecordings?.() ?? [], deps.readTemporaryFacts?.() ?? [],
-            deps.readIsolationFacts?.() ?? [], deps.readInUsePaths?.() ?? { reliable: false, paths: [] },
-            deps.readProjects?.() ?? UNAVAILABLE_PROJECT_FACTS, deps.readWorktrees?.() ?? [],
+            timeWebLatencyPhase('storage.catalog.allocations', () => deps.managedSessionDirectories?.listRecords() ?? []),
+            timeWebLatencyPhase('storage.catalog.model-packs', () => (deps.readModelPackRuntime?.() ?? deps.modelPackRuntime)?.list() ?? deps.readModelPacks?.() ?? []),
+            timeWebLatencyPhase('storage.catalog.recordings', () => deps.readRecordings?.() ?? []),
+            timeWebLatencyPhase('storage.catalog.temporary', () => deps.readTemporaryFacts?.() ?? []),
+            timeWebLatencyPhase('storage.catalog.isolation', () => deps.readIsolationFacts?.() ?? []),
+            timeWebLatencyPhase('storage.catalog.in-use', () => deps.readInUsePaths?.() ?? { reliable: false, paths: [] }),
+            timeWebLatencyPhase('storage.catalog.projects', () => deps.readProjects?.() ?? UNAVAILABLE_PROJECT_FACTS),
+            timeWebLatencyPhase('storage.catalog.worktrees', () => deps.readWorktrees?.() ?? []),
         ]);
         const missingPaths = paths.filter(path => !worktrees.some(worktree => canonicalAbsolutePathsEqual(worktree.path, path)));
-        const scannedWorktrees = missingPaths.length ? await readStorageWorktrees({ cwds: [], candidatePaths: missingPaths,
+        const scannedWorktrees = missingPaths.length ? await timeWebLatencyPhase('storage.catalog.scanned-worktrees', () => readStorageWorktrees({ cwds: [], candidatePaths: missingPaths,
             knownRoots: worktrees.map(worktree => worktree.path),
-            happyHomeDir: deps.happyHomeDir, registry: deps.scmRegistry, trashRoots: deps.trashRoots?.() }) : [];
+            happyHomeDir: deps.happyHomeDir, registry: deps.scmRegistry, trashRoots: deps.trashRoots?.() })) : [];
         return { deps, now, pathComparator: createStoragePathComparator(),
             unusedBefore: now - (deps.readPolicy?.().suggestUnusedAfterDays ?? DEFAULT_UNUSED_AFTER_DAYS) * DAY_MS,
             sessions: deps.readTrackedSessions?.() ?? [], allocations, modelPacks, recordings, temporaryFacts,
@@ -74,7 +79,11 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
             worktrees: [...new Map([...worktrees, ...scannedWorktrees].map(worktree => [worktree.path, worktree])).values()], discoveryIssues: [] };
     };
     async function projectSnapshot(facts: StorageCategoryContext): Promise<StorageCategoryDiscoverySnapshot> {
-        const discovered = [...(await Promise.all(categories.map(category => category.items(facts)))).flat(), ...facts.discoveryIssues];
+        const discovered = [...(await Promise.all(categories.map(category => timeWebLatencyPhase(`storage.catalog.category.${category.id}`, () => category.items(facts))))).flat(), ...facts.discoveryIssues];
+        return { items: projectDiscoveredItems(discovered),
+            incompleteCategoryIds: facts.projectsAvailable ? [] : ['worktrees', 'sessionFolders'] };
+    }
+    function projectDiscoveredItems(discovered: readonly StorageCategoryItem[]): readonly StorageCategoryItem[] {
         // Recording files can also live in session uploads; the specialized owner wins exact duplicates.
         const byPath = new Map<string, StorageCategoryItem>();
         for (const item of discovered) {
@@ -110,11 +119,10 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
                 path = parent;
             }
         }
-        return { items: items.map(item => {
+        return items.map(item => {
             const children = descendants.get(item) ?? [];
             return children.length ? { ...item, ownVerdict: item.ownVerdict ?? item, ...foldStorageDescendantVerdicts(item, children) } : item;
-        }),
-            incompleteCategoryIds: facts.projectsAvailable ? [] : ['worktrees', 'sessionFolders'] };
+        });
     }
     const catalog = {
         categoryIds: STORAGE_CATEGORY_IDS,
@@ -136,9 +144,16 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
                 knownRoots: current.filter(item => item.categoryId === 'worktrees').map(item => item.path),
                 happyHomeDir: deps.happyHomeDir, registry: deps.scmRegistry, trashRoots: deps.trashRoots?.() });
             if (!scanned.length) return current;
-            const facts = await context();
-            return (await projectSnapshot({ ...facts,
-                worktrees: [...new Map([...facts.worktrees, ...scanned].map(worktree => [worktree.path, worktree])).values()] })).items;
+            // Only the encountered SCM roots need supplementation. Retained
+            // category facts belong to the service snapshot and its owner events.
+            const [projectFacts, inUse] = await Promise.all([deps.readProjects?.(), deps.readInUsePaths?.()]);
+            const discoveryIssues: StorageCategoryItem[] = [];
+            const supplemental = await readStorageWorktreeItems({ deps, worktrees: scanned,
+                projects: (projectFacts?.projects ?? []).filter(project => scanned.some(worktree =>
+                    canonicalAbsolutePathsEqual(project.repositoryRoot, worktree.repositoryRoot))),
+                inUse: inUse ?? { reliable: false, paths: [] }, sessions: deps.readTrackedSessions?.() ?? [], discoveryIssues });
+            const refreshed = [...supplemental, ...discoveryIssues];
+            return projectDiscoveredItems([...current.filter(item => !refreshed.some(value => canonicalAbsolutePathsEqual(value.path, item.path))), ...refreshed]);
         },
         descendantCleanupLimitation(path: string, discovered: readonly StorageCategoryItem[]): StorageReasonV1 | null {
             const owner = discovered.find(item => !canonicalAbsolutePathsEqual(item.path, path) && contains(item.path, path)

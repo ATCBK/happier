@@ -20,6 +20,7 @@ import {
 } from '@happier-dev/protocol/storage/storageV1';
 import { MachineResourcesPolicyMutationResultV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import { doesMachineRpcTargetMatchAdmission } from '@/api/machine/machineRpcAuthorization';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 export type DaemonStorageTarget = Readonly<{ serverId: string; machineId: string; installationId: string; custodianAccountId: string }>;
 export type DaemonStorageRoutes = Readonly<{
@@ -118,7 +119,7 @@ async function callStorageOwner<T>(invoke: () => Promise<T>, beforeDisclosure: (
         }
         throw error;
     }
-    finally { await beforeDisclosure(); }
+    finally { await timeWebLatencyPhase('storage.rpc.disclosure', beforeDisclosure); }
 }
 
 export function registerDaemonStorageRpcHandlers(rpc: RpcHandlerRegistrar, options: DaemonStorageRoutes): void {
@@ -194,25 +195,25 @@ export function registerDaemonStorageRpcHandlers(rpc: RpcHandlerRegistrar, optio
     rpc.registerHandler(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, async (raw: unknown, context) => {
         const request = MachineStorageSummaryGetInputV1Schema.parse(raw);
         const access = admission(request, context);
-        await access.assertCurrent();
+        await timeWebLatencyPhase('storage.rpc.admission', access.assertCurrent);
         const summary = await callStorageOwner(async () => {
-            const actor = await readActor(access, context);
-            const service = await options.getService(access.target!);
-            await access.assertCurrent();
-            return service.summary({ actor, signal: context?.signal });
+            const actor = await timeWebLatencyPhase('storage.rpc.actor', () => readActor(access, context));
+            const service = await timeWebLatencyPhase('storage.rpc.service', () => options.getService(access.target!));
+            await timeWebLatencyPhase('storage.rpc.current', access.assertCurrent);
+            return timeWebLatencyPhase('storage.service.summary', () => service.summary({ actor, signal: context?.signal }));
         }, access.verifyCurrent);
         return HappierStorageSummaryV1Schema.parse(projectSummary(summary, access.custodian));
     });
     rpc.registerHandler(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, async (raw: unknown, context) => {
         const request = MachineStorageCategoryListInputV1Schema.parse(raw);
         const access = admission(request, context, request.categoryId !== 'sessionFolders' && request.categoryId !== 'trash');
-        await access.assertCurrent();
+        await timeWebLatencyPhase('storage.rpc.admission', access.assertCurrent);
         const result = await callStorageOwner(async () => {
-            const actor = await readActor(access, context);
-            const service = await options.getService(access.target!);
-            await access.assertCurrent();
-            return service.categoryList(request.categoryId, { actor, signal: context?.signal, cursor: request.cursor,
-                assertCurrent: actor.assertCurrent, ...(actor.sessionIds ? { sessionIds: actor.sessionIds } : {}) });
+            const actor = await timeWebLatencyPhase('storage.rpc.actor', () => readActor(access, context));
+            const service = await timeWebLatencyPhase('storage.rpc.service', () => options.getService(access.target!));
+            await timeWebLatencyPhase('storage.rpc.current', access.assertCurrent);
+            return timeWebLatencyPhase('storage.service.category-list', () => service.categoryList(request.categoryId, { actor, signal: context?.signal, cursor: request.cursor,
+                assertCurrent: actor.assertCurrent, ...(actor.sessionIds ? { sessionIds: actor.sessionIds } : {}) }));
         }, access.verifyCurrent);
         return MachineStorageCategoryListResultV1Schema.parse(result);
     });
@@ -256,11 +257,11 @@ export function registerDaemonStorageRpcHandlers(rpc: RpcHandlerRegistrar, optio
         rpc.registerHandler(method, async (raw: unknown, context) => {
             const request = requestSchema.parse(raw);
             const access = admission(request, context, custodianOnly);
-            await access.assertCurrent();
+            await timeWebLatencyPhase('storage.rpc.admission', access.assertCurrent);
             const result = await callStorageOwner(async () => {
-                const actor = await readActor(access, context, effect);
-                const service = await options.getService(access.target!);
-                await access.assertCurrent();
+                const actor = await timeWebLatencyPhase('storage.rpc.actor', () => readActor(access, context, effect));
+                const service = await timeWebLatencyPhase('storage.rpc.service', () => options.getService(access.target!));
+                await timeWebLatencyPhase('storage.rpc.current', access.assertCurrent);
                 // This dispatch accepts the daemon operation. Closing a sheet or transport
                 // cannot cancel an accepted cleanup; live authority remains rechecked by its owner.
                 if (effect) await access.assertLocalAuthority();

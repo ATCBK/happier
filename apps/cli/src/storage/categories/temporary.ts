@@ -24,14 +24,18 @@ export async function temporaryCanGo(path: string, context: StorageCategoryConte
     }
     // Only direct legacy happier-* directories have the pre-boot cleanup contract. A modern
     // missing/broken marker is unavailable ownership, not evidence that its process exited.
-    if (!legacy || await exists(getHappierTempDirOwnerPath(path))) return check;
+    const bootedAt = context.deps.bootedAt;
+    if (!legacy || bootedAt === undefined || await exists(getHappierTempDirOwnerPath(path))) return check;
     const uid = process.getuid?.();
     const legacyStat = await listedEntryStat(path, unavailableDirectory(context, 'temporary'));
     // The OS prefix cannot prove another user's custody. Legacy Windows paths have no
     // marker/ACL ownership proof; new Windows paths use the canonical secure creator.
     if (!legacyStat || uid === undefined || legacyStat.uid !== uid || legacyStat.isSymbolicLink()) return check;
+    // The root is part of the newest-descendant proof. A post-boot root
+    // already rules out cleanup; walking its tree cannot change that verdict.
+    if (!(legacyStat.mtimeMs < bootedAt)) return check;
     const changedAt = await newestChange(path);
-    return context.deps.bootedAt !== undefined && changedAt !== null && changedAt < context.deps.bootedAt
+    return changedAt !== null && changedAt < bootedAt
         ? { ...safe, reason: { code: 'old' } } : check;
 }
 export const temporary: StorageCategoryDefinition = {
@@ -53,13 +57,15 @@ export const temporary: StorageCategoryDefinition = {
             candidates.push(...await entries(getHappierTempRoot(scratchRoot), denied),
                 ...(await entries(scratchRoot, denied)).filter(path => path !== getHappierTempRoot(scratchRoot)));
         }
-        for (const path of [...new Set(candidates)]) {
-            if (path.endsWith('.owner.json')) continue;
+        // Independent sibling metadata must not pay a scan-ingestion turn for
+        // every directory. Preserve listing order after the reads settle.
+        const listed = await Promise.all([...new Set(candidates)].filter(path => !path.endsWith('.owner.json')).map(async path => {
             const stat = await listedEntryStat(path, denied);
-            if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) continue;
-            result.push(item('temporary', path, await temporaryCanGo(path, context, legacy.includes(path)),
-                { title: opaqueItemTitle(path, 'Happier temporary files'), evidence: ['happier_temporary_directory'] }));
-        }
+            if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) return null;
+            return item('temporary', path, await temporaryCanGo(path, context, legacy.includes(path)),
+                { title: opaqueItemTitle(path, 'Happier temporary files'), evidence: ['happier_temporary_directory'] });
+        }));
+        result.push(...listed.filter(item => item !== null));
         const facts = new Map(context.temporaryFacts.map(fact => [fact.path, fact.state]));
         for (const root of scopedRoots(context)) {
             let paths = await entries(root, denied);

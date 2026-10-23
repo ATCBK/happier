@@ -11,6 +11,7 @@ import { check, entries, inUse, isInUse, item, safe, contains, unavailableDirect
 import type { StorageCategoryDefinition, StorageCategoryContext, StorageCategoryVerdict, StorageCategoryCatalogDeps, StorageCategoryAdapter } from './types';
 import { StorageCategoryAdapterError } from './types';
 import { bindFilesystemItem, filesystemAdapterForEntry } from './filesystemAdapters';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 const AcpOwnerSchema = z.strictObject({ kind: z.literal('managed_acp'), accountNamespace: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
     definitionId: z.string().check(z.minLength(1)), version: z.string().check(z.minLength(1)), installKind: z.enum(['archive', 'npm', 'uv']) });
@@ -84,7 +85,7 @@ export const caches: StorageCategoryDefinition = {
         const snapshots = join(context.deps.happyHomeDir, '.runner-snapshots');
         const liveSnapshots = context.deps.readLiveRunnerSnapshotPaths?.();
         const skillRoot = join(context.deps.happyHomeDir, 'skills');
-        const liveSkills = await context.deps.readLiveSkillCachePaths?.();
+        const liveSkills = await timeWebLatencyPhase('storage.catalog.skill-store', () => context.deps.readLiveSkillCachePaths?.());
         for (const { path: root, title } of cacheRoots(context)) for (const entry of await entries(root, unavailableDirectory(context, 'caches'))) {
           const leaves = root === skillRoot && entry === join(skillRoot, 'cache')
             ? await entries(entry, unavailableDirectory(context, 'caches')) : await cacheLeaves(entry, installs, context);

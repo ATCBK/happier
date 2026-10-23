@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS ${table('allocation_observations')}(owner INTEGER NOT
 CREATE INDEX IF NOT EXISTS ${table('observations_key')} ON ${local('allocation_observations')}(key,path,owner);
 ${prefix ? `CREATE UNIQUE INDEX IF NOT EXISTS ${table('paths_ref')} ON ${local('paths')}(ref);
 CREATE UNIQUE INDEX IF NOT EXISTS ${table('paths_path')} ON ${local('paths')}(path);
-CREATE UNIQUE INDEX IF NOT EXISTS ${table('entries_ref')} ON ${local('entries')}(ref);` : ''}
+CREATE UNIQUE INDEX IF NOT EXISTS ${table('entries_ref')} ON ${local('entries')}(ref);
+CREATE UNIQUE INDEX IF NOT EXISTS ${table('dirs_id')} ON ${local('dirs')}(id);
+CREATE UNIQUE INDEX IF NOT EXISTS ${table('coverage_path')} ON ${local('coverage')}(path);` : ''}
 CREATE VIEW IF NOT EXISTS ${table('nodes')} AS SELECT p.path AS id,parent.path AS parent,e.name,${kind} AS kind,e.allocated,e.changed,e.items,e.visible,
  CASE WHEN parent.path IS NULL THEN ${projected} ELSE json_set(${projected},'$.parentId',parent.path) END AS data,e.seen,e.retained
  FROM ${local('entries')} e JOIN ${local('paths')} p ON p.ref=e.ref LEFT JOIN ${local('paths')} parent ON parent.ref=e.parent;

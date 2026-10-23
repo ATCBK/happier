@@ -3,6 +3,7 @@ import { startNativeDiskScan, type NativeDiskScan, type NativeDiskScanRequest } 
 import { type StorageScanIndex, type StorageScanVolume } from './scanIndex';
 import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 import { physicalPathWithoutFollowingLeaf } from '@/utils/path/physicalAncestorPath';
+import { logger } from '@/ui/logger';
 
 export function createStorageScanRunner(deps: Readonly<{ index: StorageScanIndex; readVolumes: () => readonly StorageScanVolume[] | Promise<readonly StorageScanVolume[]>;
     readEnabled: () => boolean | undefined | Promise<boolean | undefined>; readLowPower?: () => boolean | Promise<boolean>;
@@ -53,8 +54,10 @@ export function createStorageScanRunner(deps: Readonly<{ index: StorageScanIndex
             if (input.resume && deps.index.root(volume.id) !== root) throw Object.assign(new Error('Resume target changed'), { code: 'invalid_resume_target' });
             if (!await deps.readEnabled()) throw Object.assign(new Error('Whole-disk scan disabled'), { code: 'disabled' });
             await options.beforeEffect?.();
-            const state = deps.index.begin({ ...input, relistOnly: options.relistOnly, volumeId: volume.id, root, usedBytes,
-                reservedBytes: volume.reservedBytes, apfsContainerId: volume.apfsContainerId, fullDiskAccess: deps.fullDiskAccess() });
+            const state = await deps.index.begin({ ...input, relistOnly: options.relistOnly, volumeId: volume.id, root, usedBytes,
+                reservedBytes: volume.reservedBytes, apfsContainerId: volume.apfsContainerId, fullDiskAccess: deps.fullDiskAccess() }, { throwIfCancelled: () => {
+                    if (disposed) throw Object.assign(new Error('Scan cancelled'), { name: 'AbortError' });
+                } });
             const run: { native?: NativeDiskScan; done: Promise<void>; volumeId: string; cancelled: boolean; skipped: Set<string> } =
                 { done: Promise.resolve(), volumeId: volume.id, cancelled: false, skipped: new Set(input.resume ? deps.index.skippedPaths(volume.id) : []) };
             const lowPower = await deps.readLowPower?.();
@@ -146,6 +149,7 @@ export function createStorageScanRunner(deps: Readonly<{ index: StorageScanIndex
         async waitScheduled(): Promise<void> { while (scheduled) await scheduled; },
         async cancel(scanId: string) {
             const run = runs.get(scanId);
+            logger.infoFile('[storage-scan] cancel-entry', { scanId, pid: run?.native?.pid, atMs: Date.now() });
             if (run) { run.cancelled = true; run.native?.cancel(); }
             await run?.done;
             return deps.index.state(scanId);

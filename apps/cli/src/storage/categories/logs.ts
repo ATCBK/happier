@@ -11,8 +11,12 @@ export const logs: StorageCategoryDefinition = {
         const result: StorageCategoryItem[] = [];
         const currentLogs = await context.deps.currentLogPaths?.() ?? [];
         async function visit(root: string): Promise<void> {
-            for (const path of await entries(root, unavailableDirectory(context, 'logs'))) {
-                const stat = await listedEntryStat(path, unavailableDirectory(context, 'logs'));
+            // These independent metadata reads share the directory's existing
+            // listing boundary. Serial awaits let active scan ingestion delay
+            // every log separately on each retained-page/catalog projection.
+            const listed = await Promise.all((await entries(root, unavailableDirectory(context, 'logs')))
+                .map(async path => ({ path, stat: await listedEntryStat(path, unavailableDirectory(context, 'logs')) })));
+            for (const { path, stat } of listed) {
                 if (!stat) continue;
                 if (stat.isDirectory() && !stat.isSymbolicLink()) { await visit(path); continue; }
                 const live = currentLogs.some(current => contains(path, current)) || isInUse(path, context);

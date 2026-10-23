@@ -38,6 +38,81 @@ async function fixture() {
 }
 
 describe('Happier storage category catalog', () => {
+    it('does not wait for legacy temporary descendants when the directory itself changed after boot', async () => {
+        const f = await fixture();
+        const legacy = await f.add(join(f.tempRoot, 'happier-running-scan'));
+        const descendant = join(legacy, 'bytes');
+        await utimes(legacy, 10, 10);
+        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+        let release!: () => void;
+        const parked = new Promise<void>(resolve => { release = resolve; });
+        let descendantEntered!: () => void;
+        const entered = new Promise<void>(resolve => { descendantEntered = resolve; });
+        const boundary = vi.mocked(filesystem.lstat).mockImplementation(async (...args) => {
+            const result = await actual.lstat(...args);
+            if (String(args[0]) === descendant) { descendantEntered(); await parked; }
+            return result;
+        });
+        const discovery = createStorageCategoryCatalog({ ...f, bootedAt: 5_000 }).discoverSnapshot();
+        try {
+            // A scan can keep this unrelated subtree's filesystem work busy. The
+            // root timestamp already disproves pre-boot cleanup eligibility.
+            const outcome = await Promise.race([
+                discovery.then(() => 'completed' as const),
+                entered.then(() => 'blocked-descendant' as const),
+            ]);
+            expect(outcome).toBe('completed');
+            expect((await discovery).items.find(item => item.path === legacy)).toMatchObject({ verdict: 'check', collectable: false });
+        } finally { release(); await discovery; boundary.mockImplementation(actual.lstat); }
+    });
+    it('reads independent temporary siblings before a parked metadata result settles', async () => {
+        const f = await fixture();
+        const first = createHappierTempDir({ root: f.tempRoot, purpose: 'a' });
+        const sibling = createHappierTempDir({ root: f.tempRoot, purpose: 'b' });
+        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+        let enter!: () => void; let release!: () => void;
+        const entered = new Promise<void>(resolve => { enter = resolve; });
+        const parked = new Promise<void>(resolve => { release = resolve; });
+        let siblingEntered = false;
+        const boundary = vi.mocked(filesystem.lstat).mockImplementation(async (...args) => {
+            if (String(args[0]) === sibling) siblingEntered = true;
+            const result = await actual.lstat(...args);
+            if (String(args[0]) === first) { enter(); await parked; }
+            return result;
+        });
+        const discovery = createStorageCategoryCatalog({ ...f }).discoverSnapshot();
+        try {
+            await entered;
+            expect(siblingEntered).toBe(true);
+            release();
+            expect((await discovery).items.filter(item => item.categoryId === 'temporary').map(item => item.path)).toEqual([first, sibling]);
+        } finally { release(); await discovery; boundary.mockImplementation(actual.lstat); }
+    });
+    it('reads sibling log metadata without waiting for a parked filesystem result', async () => {
+        const f = await fixture();
+        const root = join(f.happyHomeDir, 'logs'); await mkdir(root);
+        const first = join(root, 'a.log'); const sibling = join(root, 'b.log');
+        await Promise.all([writeFile(first, 'first'), writeFile(sibling, 'sibling')]);
+        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+        let enter!: () => void; let release!: () => void;
+        const entered = new Promise<void>(resolve => { enter = resolve; });
+        const parked = new Promise<void>(resolve => { release = resolve; });
+        let siblingEntered = false;
+        const boundary = vi.mocked(filesystem.lstat).mockImplementation(async (...args) => {
+            if (String(args[0]) === sibling) siblingEntered = true;
+            const result = await actual.lstat(...args);
+            if (String(args[0]) === first) { enter(); await parked; }
+            return result;
+        });
+        const discovery = createStorageCategoryCatalog({ ...f }).discoverSnapshot();
+        try {
+            await entered;
+            expect(siblingEntered).toBe(true);
+            release();
+            const result = await discovery;
+            expect(result.items.filter(item => item.categoryId === 'logs').map(item => item.path)).toEqual([first, sibling]);
+        } finally { release(); await discovery; boundary.mockImplementation(actual.lstat); }
+    });
     it('names opaque cache and allocation folders by their owning tool instead of displaying digests', async () => {
         const f = await fixture();
         const digest = 'a'.repeat(64);
@@ -356,11 +431,12 @@ describe('Happier storage category catalog', () => {
         const repo = await f.add(join(f.root, 'repo'));
         const cwd = await f.add(join(repo, 'src'));
         const worktree = join(repo, '.dev', 'worktree', 'registered');
-        for (const args of [['init'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'fixture'],
+        for (const args of [['init'], ['add', 'bytes'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'fixture'],
             ['worktree', 'add', '-b', 'registered', worktree]]) {
             const result = await runScmCommand({ bin: 'git', cwd: repo, args });
             expect(result.success, result.stderr).toBe(true);
         }
+        await writeFile(join(worktree, 'bytes'), 'tracked change');
         const registration = createGitScmBackendRuntimeRegistration();
         const registry = createScmBackendRegistry([createRegisteredScmBackendAdapter({ definition: { id: 'git', kind: 'git' },
             qualifiedId: 'happier.scm.git/git', executableDefinition: registration.runtime!, registration,
@@ -379,6 +455,18 @@ describe('Happier storage category catalog', () => {
         expect(items.find(item => item.path === worktree)).toMatchObject({ categoryId: 'worktrees',
             kind: 'worktree', verdict: 'keep', reason: { code: 'changed_files' }, collectable: true });
         expect(items.find(item => item.path === uploads)).toMatchObject({ categoryId: 'sessionFolders', verdict: 'check', collectable: false });
+        const logs = join(f.happyHomeDir, 'logs'); await mkdir(logs);
+        const log = join(logs, 'retained.log'); await writeFile(log, 'retained');
+        const unregistered = createStorageCategoryCatalog({ ...f, scmRegistry: registry,
+            readProjects: () => ({ status: 'ready', projects: [] }), readInUsePaths: () => ({ reliable: true, paths: [] }) });
+        const retained = await unregistered.discover();
+        vi.mocked(filesystem.lstat).mockClear();
+        const supplemented = await unregistered.discover([repo], retained);
+        expect(supplemented.find(item => item.path === repo)).toMatchObject({ categoryId: 'worktrees', verdict: 'keep' });
+        expect(supplemented.find(item => item.path === log)).toEqual(retained.find(item => item.path === log));
+        // Inspecting a page's newly encountered repository cannot rediscover
+        // unrelated categories from the retained service snapshot.
+        expect(vi.mocked(filesystem.lstat).mock.calls.filter(([path]) => String(path) === log)).toHaveLength(0);
     });
 
     it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('retains unreadable roots as Check while discovering accessible categories', async () => {

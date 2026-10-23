@@ -6,7 +6,7 @@ import type { HappierStorageCategoryIdV1 } from '@happier-dev/protocol/storage/s
 import type { StorageCategoryContext, StorageCategoryItem, StorageCategoryVerdict } from './types';
 
 type PermissionProjection = (path: string) => void;
-export function unavailableDirectory(context: StorageCategoryContext, categoryId: HappierStorageCategoryIdV1): PermissionProjection {
+export function unavailableDirectory(context: Pick<StorageCategoryContext, 'discoveryIssues'>, categoryId: HappierStorageCategoryIdV1): PermissionProjection {
     return path => {
         if (!context.discoveryIssues.some(value => value.categoryId === categoryId && value.path === path))
             context.discoveryIssues.push(item(categoryId, path, check, { evidence: ['directory_permission_unavailable'] }));

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { createStorageScanIndex } from '@/storage/scan/scanIndex';
 import { logger } from '@/ui/logger';
+import { DAEMON_EVENT_LOOP_STALL_WARNING_THRESHOLD_MS } from '@/daemon/diagnostics/daemonEventLoopStallMonitor';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { MachineStoragePolicyV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { createDaemonStorageRoutes, registerDaemonStorageRpcHandlers } from './storage';
@@ -33,7 +34,7 @@ async function fixture() {
     const target = { serverId: 'home', machineId: 'machine', installationId: 'installation', custodianAccountId: 'owner' };
     const index = createStorageScanIndex({ activeServerDir: home });
     await index.initialize([{ id: 'volume', mountPath: home, usedBytes: 0 }], true);
-    const state = index.begin({ volumeId: 'volume', root: home, target: { folderPath: home }, usedBytes: 0,
+    const state = await index.begin({ volumeId: 'volume', root: home, target: { folderPath: home }, usedBytes: 0,
         fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
     index.finish('volume', 'cancelled'); index.close();
     const authority = { valid: true, calls: 0 };
@@ -56,7 +57,7 @@ async function fixture() {
             return authority.valid ? { ok: true } : { ok: false, error: 'denied', errorCode: 'RPC_FORBIDDEN' };
         } });
     registerDaemonStorageRpcHandlers(manager, routes);
-    const call = (method: string, params: Record<string, unknown> = {}) => manager.handleRequest({ method: `${target.machineId}:${method}`,
+    const call = (method: string, params: Record<string, unknown> = {}, requestId?: string) => manager.handleRequest({ method: `${target.machineId}:${method}`, requestId,
         params: { machineId: target.machineId, ...params }, callerAuthority: 'present_user',
         machineAdmission: { machineId: target.machineId, installationId: target.installationId,
             custodianAccountId: target.custodianAccountId, actorAccountId: 'owner', role: 'manage', encryptionMode: 'plain' } });
@@ -69,6 +70,34 @@ async function fixture() {
 
 afterEach(() => { filesystemBoundary.beforeRead = undefined; vi.restoreAllMocks(); });
 describe('storage RPC verification boundaries', () => {
+    it('locates a slow read boundary under the dispatcher request identity without tracing enabled', async () => {
+        const f = await fixture(); f.holdDeps();
+        const requestId = 'rpc_23b2ed82-2ef7-4e4e-af0f-f64d599a08c6';
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '0');
+        vi.stubEnv('HAPPIER_LOG_LEVEL', 'info');
+        vi.stubEnv('DEBUG', '');
+        const sink = vi.spyOn(logger, 'infoFile').mockImplementation(() => undefined);
+        const debug = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
+        let now = 0;
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+        const pending = f.call(RPC_METHODS.DAEMON_STORAGE_SCAN_GET, { scanId: f.state.scanId }, requestId);
+        try {
+            await f.depsEntered.promise;
+            expect(sink.mock.calls.filter(([message]) => message === '[storage-read]')).toEqual([]);
+            now = DAEMON_EVENT_LOOP_STALL_WARNING_THRESHOLD_MS + 1; f.releaseDeps.resolve();
+            expect(await pending).toMatchObject({ state: { scanId: f.state.scanId } });
+            expect(sink).toHaveBeenCalledWith('[storage-read]', expect.objectContaining({
+                stage: 'storage.rpc.service', requestId, status: 'settled', elapsedMs: now, outcome: 'completed',
+            }));
+            expect(sink).toHaveBeenCalledWith('[storage-read]', expect.objectContaining({
+                stage: 'storage.rpc.service', requestId, status: 'started', elapsedMs: 0,
+            }));
+            expect(debug.mock.calls.filter(([message]) => message === '[storage-read]')).toEqual([]);
+            expect(f.authority.calls).toBe(2);
+        } finally {
+            f.releaseDeps.resolve(); await pending; clock.mockRestore(); vi.unstubAllEnvs(); await f.dispose();
+        }
+    });
     it('keeps the dispatcher denial ahead of lazy storage construction', async () => {
         const f = await fixture(); f.authority.valid = false;
         try {

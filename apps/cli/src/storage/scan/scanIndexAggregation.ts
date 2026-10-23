@@ -50,6 +50,8 @@ export function reaggregateScan(db: SqliteDatabaseSync, now: number): void {
     if (!db.prepare('SELECT 1 FROM dirty_scan_nodes LIMIT 1').get()) return;
     const hasFacts = Boolean(db.prepare('SELECT 1 FROM allocation_observations LIMIT 1').get());
     const threshold = (months: number) => { const date = new Date(now); date.setMonth(date.getMonth() - months); return date.getTime(); };
+    // Parent membership drives entries_parent seeks. Joining entries to the
+    // small rollup instead makes SQLite scan the entire retained table per batch.
     db.exec(`CREATE TEMP TABLE scan_rollup(ref INTEGER PRIMARY KEY,depth INTEGER);
         INSERT INTO scan_rollup WITH RECURSIVE ancestors(ref,depth) AS (
             SELECT ref,0 FROM dirty_scan_nodes UNION ALL
@@ -57,8 +59,8 @@ export function reaggregateScan(db: SqliteDatabaseSync, now: number): void {
             SELECT ref,MAX(depth) FROM ancestors GROUP BY ref;
         CREATE TEMP TABLE scan_charge_owners(ref INTEGER PRIMARY KEY);
         INSERT INTO scan_charge_owners SELECT ref FROM scan_rollup;
-        INSERT OR IGNORE INTO scan_charge_owners SELECT e.ref FROM entries e JOIN scan_rollup r ON r.ref=e.parent
-            WHERE e.kind NOT IN ('folder','small-items','hidden-space','reserved');
+        INSERT OR IGNORE INTO scan_charge_owners SELECT e.ref FROM entries e
+            WHERE e.parent IN (SELECT ref FROM scan_rollup) AND e.kind NOT IN ('folder','small-items','hidden-space','reserved');
         CREATE TEMP TABLE scan_charges(ref INTEGER PRIMARY KEY,allocated INTEGER,unknown INTEGER,months3 INTEGER,months6 INTEGER,months12 INTEGER);
         INSERT INTO scan_charges SELECT owner,SUM(allocated),
             SUM(CASE WHEN ageIncluded=1 AND mtime<=1000 THEN allocated ELSE 0 END),

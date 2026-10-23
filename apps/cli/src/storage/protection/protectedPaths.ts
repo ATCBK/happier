@@ -6,6 +6,7 @@ import { physicalStoragePathWithoutFollowingLeaf as physicalPathWithoutFollowing
   realStoragePathWithAbsentSuffix as realpathWithAbsentSuffix, storageAbsolutePath, storagePathToFs,
   storagePathDirname, storagePathLeaf } from '../storagePath';
 import { createStoragePathComparator, type StoragePathComparator } from '../storagePath';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 export type StorageProtectionFacts = Readonly<{
   homeDir: string;
@@ -197,7 +198,7 @@ export async function classifyPaths(candidates: readonly Readonly<{ path: string
     if (!absolute) throw Object.assign(new Error('Storage path must be absolute'), { code: 'invalid_storage_path' });
     return absolute.path;
   };
-  const physicalRules = (await Promise.all(storageProtectionRules(facts).map(async rule => {
+  const physicalRules = (await timeWebLatencyPhase('storage.classification.rules', () => Promise.all(storageProtectionRules(facts).map(async rule => {
     const path = expand(rule.path);
     const leaf = await physicalPathWithoutFollowingLeaf(path);
     let target: string;
@@ -213,27 +214,27 @@ export async function classifyPaths(candidates: readonly Readonly<{ path: string
     }
     const except = rule.except ? await realpathWithAbsentSuffix(expand(rule.except)) : undefined;
     return [...new Set([leaf, target])].map(path => ({ ...rule, path, except }));
-  }))).flat();
-  const resolved: StorageProtectionFacts = { ...facts, homeDir: await realpathWithAbsentSuffix(expand(facts.homeDir)),
-    dataHomes: await Promise.all((facts.dataHomes ?? []).map(path => realpathWithAbsentSuffix(expand(path)))) };
+  })))).flat();
+  const resolved: StorageProtectionFacts = { ...facts, homeDir: await timeWebLatencyPhase('storage.classification.home', () => realpathWithAbsentSuffix(expand(facts.homeDir))),
+    dataHomes: await timeWebLatencyPhase('storage.classification.data-homes', () => Promise.all((facts.dataHomes ?? []).map(path => realpathWithAbsentSuffix(expand(path))))) };
   const readKey = physicalComparisonKeys(platform);
   const comparison = createStoragePathComparator(platform);
-  return Promise.all(candidates.map(async (candidate): Promise<StoragePathClassification> => {
-    const physical = await physicalPathWithoutFollowingLeaf(expand(candidate.path));
+  return timeWebLatencyPhase('storage.classification.candidates', () => Promise.all(candidates.map(async (candidate): Promise<StoragePathClassification> => {
+    const physical = await timeWebLatencyPhase('storage.classification.candidate-path', () => physicalPathWithoutFollowingLeaf(expand(candidate.path)));
     const managedItemPath = candidate.managedItemPath ?? facts.managedItemPath;
     const candidateFacts = { ...resolved, managedItemPath: managedItemPath
-      ? await physicalPathWithoutFollowingLeaf(expand(managedItemPath)) : undefined };
+      ? await timeWebLatencyPhase('storage.classification.managed-path', () => physicalPathWithoutFollowingLeaf(expand(managedItemPath))) : undefined };
     const direct = classifyAgainstRules(physical, candidateFacts, physicalRules, readKey, comparison);
     if (direct.tier === 'forbidden' || direct.tier === 'keep') return direct;
     // Directory identity catches alternate Unicode/case spellings on APFS/NTFS.
     for (const protectedPath of facts.userProtectedFolders ?? []) {
-      let protectedStat; try { protectedStat = await stat(storagePathToFs(expand(protectedPath)), { bigint: true }); } catch (error) {
+      let protectedStat; try { protectedStat = await timeWebLatencyPhase('storage.classification.protected-identity', () => stat(storagePathToFs(expand(protectedPath)), { bigint: true })); } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error;
       }
       let ancestor = physical;
       while (true) {
         try {
-          const entry = await lstat(storagePathToFs(ancestor), { bigint: true });
+          const entry = await timeWebLatencyPhase('storage.classification.ancestor-identity', () => lstat(storagePathToFs(ancestor), { bigint: true }));
           if (!entry.isSymbolicLink() && entry.dev === protectedStat.dev && entry.ino === protectedStat.ino)
             return { tier: 'keep', reason: { code: 'user_protected', detail: { path: protectedPath } }, loses: [{ code: 'user_protected', detail: { path: protectedPath } }] };
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
@@ -242,5 +243,5 @@ export async function classifyPaths(candidates: readonly Readonly<{ path: string
       }
     }
     return direct;
-  }));
+  })));
 }

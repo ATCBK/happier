@@ -11,7 +11,7 @@ it('drops retired scan state and node fields when reopening the stored index', a
     let index = createStorageScanIndex({ activeServerDir: home });
     try {
         await index.initialize([volume], true);
-        const state = index.begin({ volumeId: volume.id, root: home, target: { volumeId: volume.id }, usedBytes: 0,
+        const state = await index.begin({ volumeId: volume.id, root: home, target: { volumeId: volume.id }, usedBytes: 0,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
         const path = join(home, 'file');
         index.ingest(volume.id, { v: 1, type: 'dir-entry', parent: home,
@@ -41,7 +41,7 @@ it('rejects changed malformed scan state before ingesting another entry, then ac
     const index = createStorageScanIndex({ activeServerDir: home });
     try {
         await index.initialize([volume], true);
-        const state = index.begin({ volumeId: volume.id, root: home, target: { volumeId: volume.id }, usedBytes: 0,
+        const state = await index.begin({ volumeId: volume.id, root: home, target: { volumeId: volume.id }, usedBytes: 0,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
         const entry = (name: string) => ({ v: 1 as const, type: 'dir-entry' as const, parent: home,
             node: { id: join(home, name), name, kind: 'file' as const, allocatedBytes: 0, logicalBytes: 0, items: 1,
@@ -67,7 +67,7 @@ it('reads a stopped legacy invocation counter as the retained target total befor
     let index = createStorageScanIndex({ activeServerDir: home });
     try {
         await index.initialize([volume], true);
-        const state = index.begin({ volumeId: volume.id, root: home, target: { folderPath: home }, usedBytes: 0,
+        const state = await index.begin({ volumeId: volume.id, root: home, target: { folderPath: home }, usedBytes: 0,
             fullDiskAccess: { state: 'not_applicable', binary: { name: 'fixture', path: process.execPath } } });
         index.ingest(volume.id, { v: 1, type: 'dir', id: home, name: 'root', allocatedBytes: 8192, logicalBytes: 8192,
             items: 2, mtimeMs: 1, flags: { atLeast: true }, children: [], files: [],

@@ -5,6 +5,7 @@ import { z } from 'zod/mini';
 import { createHappierTempDir, removeHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 
 import { resolveProcessCustodySupportExecutable } from '@/subprocess/supervision/processCustody';
+import { logger } from '@/ui/logger';
 
 const bytes = z.number().check(z.int(), z.nonnegative(), z.int());
 const flags = z.strictObject({ atLeast: z.boolean(), sharedExtentsUnmeasured: z.optional(z.boolean()) });
@@ -212,6 +213,7 @@ function runNativeDisk<T>(input: Readonly<{
         failure = error;
         if (!closed) {
             child.kill('SIGKILL');
+            if (input.command === 'disk-scan') logger.infoFile('[storage-scan] sigkill-sent', { pid: child.pid, atMs: Date.now() });
         }
     };
     const cancel = () => fail(aborted());
@@ -256,6 +258,7 @@ function runNativeDisk<T>(input: Readonly<{
         child.on('error', (error) => { failure ??= error; });
         child.on('close', (code, signal) => {
             closed = true;
+            if (input.command === 'disk-scan') logger.infoFile('[storage-scan] helper-close', { pid: child.pid, atMs: Date.now() });
             input.signal?.removeEventListener('abort', cancel);
             if (!failure) {
                 consumeBatch(() => { pending += decoder.end(); readLine(pending); });
