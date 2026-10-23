@@ -106,7 +106,8 @@ exec_in_jobs_slice() {
   # default scope name. Keep the jobs placement distinct from that control
   # scope, using the same PID/start-token identity as the admission owner.
   jobs_slice_token=$(heavyweight_process_token "$$")
-  exec systemd-run "--unit=happier-jobs-$$-$jobs_slice_token.scope" \
+  # Payloads include shell programs; only that shell may expand their operands.
+  exec systemd-run --expand-environment=no "--unit=happier-jobs-$$-$jobs_slice_token.scope" \
     --user --scope --quiet --slice=happier-jobs.slice "--nice=$jobs_slice_nice" -- "$@"
 }
 

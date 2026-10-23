@@ -76,7 +76,8 @@ run_control_command() {
         0|+0|-0) control_nice_argument=--nice=0 ;;
         *) control_nice_argument= ;;
       esac
-      exec systemd-run --user --scope --quiet \
+      # Transport command operands literally, including nested shell programs.
+      exec systemd-run --expand-environment=no --user --scope --quiet \
         ${control_nice_argument:+"$control_nice_argument"} \
         --slice=happier-critical.slice \
         --property=MemoryLow=268435456 \

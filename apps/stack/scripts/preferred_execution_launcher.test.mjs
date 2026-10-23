@@ -24,6 +24,17 @@ function payloadOutput(stdout) {
   return stdout.replace(/^pnpm \d+\.\d+\.\d+ ready; root archive integrity verified\r?\n/gm, '');
 }
 
+// OS boundary: systemd 259 expands command operands by default, including
+// shell programs. Count that extra interpretation rather than testing flags.
+const systemdOperandExpansionProbe = `if [ "\${TEST_LITERAL_SCOPE_PROBE-}" = 1 ]; then exec ${JSON.stringify(process.execPath)} --input-type=module -e '${[
+  'import { existsSync, writeFileSync } from "node:fs";',
+  'const [literal, ...args] = process.argv.slice(1); let expansions = 0;',
+  'const operands = literal === "1" ? args : args.map(arg => arg.replace(/\\$(?:\\{([^}]*)\\}|([A-Za-z_]\\w*))/g, (_, braced, plain) => { expansions++; return process.env[braced ?? plain] ?? ""; }));',
+  'writeFileSync(process.env.TEST_SCOPE_EXPANSIONS, String(expansions), { flag: "a" });',
+  'const command = operands[0].includes("/") ? operands[0] : process.env.PATH.split(":").map(dir => dir + "/" + operands[0]).find(existsSync) ?? operands[0];',
+  'process.execve(command, operands, process.env);',
+].join(' ')}' "$literal_arguments" "$@"; fi`;
+
 // Measured cksum fixture key for `probe-command  ` (empty build target/components).
 const probeCommandCacheKey = '1086556756';
 const repoToken = repoRoot.split('/').at(-1)
@@ -2100,11 +2111,13 @@ test('automatic dispatch protects control work while keeping a selected local pa
   await executable(join(binDir, 'systemd-run'), [
     '#!/bin/sh',
     'printf "%s\\n" "$*" >> "$SCOPE_LOG"',
+    'literal_arguments=0',
     'while [ "$#" -gt 0 ]; do',
-    '  case "$1" in --slice=*) export TEST_CURRENT_CGROUP=/user.slice/${1#--slice=}/fixture.scope ;; esac',
+    '  case "$1" in --expand-environment=no) literal_arguments=1 ;; --slice=*) export TEST_CURRENT_CGROUP=/user.slice/${1#--slice=}/fixture.scope ;; esac',
     '  [ "$1" = -- ] && { shift; break; }',
     '  shift',
     'done',
+    systemdOperandExpansionProbe,
     'exec "$@"',
     '',
   ].join('\n'));
@@ -2131,6 +2144,18 @@ test('automatic dispatch protects control work while keeping a selected local pa
   assert.match(scopes, /--slice=happier-critical\.slice .*hstack-exec.*probe-command ok/);
   // Routed tests may already inherit a lower background scheduling priority.
   assert.match(scopes, /--slice=happier-jobs\.slice --nice=1[0-9] -- probe-command ok/);
+
+  const literal = spawnSync('/bin/sh', [launcher, '--', 'probe-command', '${GOMAXPROCS+x}'], {
+    cwd: repoRoot,
+    env: { ...executionNeutralEnv, HOME: root, HAPPIER_EXEC_CONFIG_PATH: configPath,
+      HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'), DBUS_SESSION_BUS_ADDRESS: 'test-user-bus',
+      PATH: `${binDir}:/usr/bin:/bin`, SCOPE_LOG: scopeLog, TMPDIR: root,
+      TEST_LITERAL_SCOPE_PROBE: '1', TEST_SCOPE_EXPANSIONS: join(root, 'scope-expansions') },
+    encoding: 'utf8',
+  });
+  assert.equal(literal.status, 0, literal.stderr);
+  assert.equal(literal.stdout, 'payload:${GOMAXPROCS+x}\n');
+  assert.match(await readFile(join(root, 'scope-expansions'), 'utf8'), /^0+$/, 'control and jobs scopes must interpret zero operands');
 });
 
 test('Yarn workspace validation receives the remote workload governor', async (t) => {
@@ -7283,9 +7308,9 @@ test('native launcher scopes admitted Linux work only when the systemd user slic
   await executable(join(readyBin, 'systemd-run'), [
     '#!/bin/sh',
     'printf "%s\\n" "$*" > "$SYSTEMD_RUN_ARGUMENTS"',
-    'unit=; slice=',
+    'unit=; slice=; literal_arguments=0',
     'while [ "$#" -gt 0 ]; do',
-    '  case "$1" in --unit=*) unit=${1#--unit=} ;; --slice=*) slice=${1#--slice=} ;; --nice=*) if [ "${1#--nice=}" -lt "${TEST_INHERITED_NICE:-0}" ]; then printf "Failed to set nice level: Permission denied\\n" >&2; exit 1; fi ;; esac',
+    '  case "$1" in --expand-environment=no) literal_arguments=1 ;; --unit=*) unit=${1#--unit=} ;; --slice=*) slice=${1#--slice=} ;; --nice=*) if [ "${1#--nice=}" -lt "${TEST_INHERITED_NICE:-0}" ]; then printf "Failed to set nice level: Permission denied\\n" >&2; exit 1; fi ;; esac',
     '  [ "$1" = -- ] && { shift; break; }',
     '  shift',
     'done',
@@ -7296,6 +7321,7 @@ test('native launcher scopes admitted Linux work only when the systemd user slic
     'if ! mkdir "$SCOPE_UNITS/$unit"; then printf "Failed to start transient scope unit: Unit %s was already loaded or has a fragment file.\\n" "$unit" >&2; exit 42; fi',
     'printf "%s|%s\\n" "$unit" "$slice" >> "$SCOPE_INVOCATIONS"',
     'export TEST_CURRENT_CGROUP=/user.slice/user-1000.slice/user@1000.service/happier.slice/$slice/$unit',
+    systemdOperandExpansionProbe,
     'exec "$@"',
     '',
   ].join('\n'));
@@ -7321,7 +7347,7 @@ test('native launcher scopes admitted Linux work only when the systemd user slic
     '',
   ].join('\n'));
 
-  const run = (binDir, home, marker, { inheritedNice = 0, protectedLocal = false, command } = {}) => spawnSync('/bin/sh', [
+  const run = (binDir, home, marker, { inheritedNice = 0, protectedLocal = false, command, literalProbe = false } = {}) => spawnSync('/bin/sh', [
     launcher,
     ...(protectedLocal ? ['--local'] : [
       '--heavyweight-admission',
@@ -7336,6 +7362,7 @@ test('native launcher scopes admitted Linux work only when the systemd user slic
       ...executionNeutralEnv,
       HOME: home,
       TEST_INHERITED_NICE: String(inheritedNice),
+      ...(literalProbe ? { TEST_LITERAL_SCOPE_PROBE: '1', TEST_SCOPE_EXPANSIONS: join(root, 'scope-expansions'), GOMAXPROCS: '7' } : {}),
       ...(protectedLocal ? { HAPPIER_HSTACK_DISPATCH_CONTROL: '1' } : {}),
       SCOPED_MARKER: marker,
       SYSTEMD_RUN_ARGUMENTS: scopedArguments,
@@ -7361,6 +7388,14 @@ test('native launcher scopes admitted Linux work only when the systemd user slic
   assert.equal(fallback.status, 0, fallback.stderr);
   assert.equal(await readFile(fallbackMarker, 'utf8'), 'fallback\n');
   await assert.rejects(readFile(fallbackScopeAttempt), { code: 'ENOENT' });
+
+  const literal = run(readyBin, join(root, 'literal-home'), scopedMarker, {
+    literalProbe: true,
+    command: ['/bin/sh', '-c', 'if [ -z "${GOMAXPROCS+x}" ]; then export GOMAXPROCS=1; fi; printf "%s\\n" "$GOMAXPROCS" > "$SCOPED_MARKER"'],
+  });
+  assert.equal(literal.status, 0, literal.stderr);
+  assert.equal(await readFile(join(root, 'scope-expansions'), 'utf8'), '0', 'scope transport must interpret zero shell operands');
+  assert.equal(await readFile(scopedMarker, 'utf8'), '7\n', 'the worker override belongs to the shell, not systemd');
 
   for (const protectedLocal of [false, true]) {
     const inherited = run(readyBin, join(root, `inherited-home-${protectedLocal}`), scopedMarker, {
