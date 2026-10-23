@@ -46,6 +46,9 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { logger } from '@/ui/logger';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import * as sessionRpc from '@/session/transport/rpc/sessionRpc';
+import { DiscussionMachinePublicationV2Schema, type DiscussionAgentPostPublicationV1,
+  type DiscussionWorkflowPostPublicationV1 } from '@happier-dev/protocol/discussions/api';
 
 const credentials = { token: 'token-1', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) } };
 const keyless = { token: 'token-1', encryption: null };
@@ -105,7 +108,7 @@ function discussionExecutor(deps: Pick<ActionExecutorDeps, 'discussionAction'> &
 }
 
 describe('Home Discussion resource transport', () => {
-  it.each(['material_unavailable', 'session_not_found', 'identity_denied'] as const)(
+  it.each(['material_unavailable', 'session_not_found', 'identity_denied', 'retired_session', 'missing_machine_publisher', 'machine_unavailable', 'machine_ack_lost'] as const)(
     'retains terminal publication custody for unavailable Session material but settles proved refusal (%s)', async scenario => {
     const accountId = 'account-1';
     const machineId = 'machine-1';
@@ -117,6 +120,13 @@ describe('Home Discussion resource transport', () => {
     const inputLocalId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', runId, invocationRecordId: recordId });
     const origin = { discussion: { serverId: 'server-1', discussionId: 'discussion-1' }, messageId: 'message-1', throughSeq: 1 };
     const addressing = { discussionId: 'discussion-1', messageId: 'message-1', throughSeq: 1, participantSessionId: sessionId };
+    const retiredSession = ['retired_session', 'missing_machine_publisher', 'machine_unavailable', 'machine_ack_lost'].includes(scenario);
+    let machineAcknowledged = scenario !== 'machine_ack_lost';
+    // A retired receiver has no RPC handler. The installed Machine remains the
+    // transport owner for its already-accepted Workflow result.
+    const retiredRpc = vi.spyOn(sessionRpc, 'callSessionRpc').mockRejectedValue(new Error('Session publisher retired'));
+    onTestFinished(() => retiredRpc.mockRestore());
+    const machinePackets: unknown[] = [];
     const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: { version: 1, inputs: [], defaults: {
       agentTarget: { kind: 'agent', identity: { pluginId: 'external.agent', localId: 'test' } },
     }, blocks: [{ kind: 'step', id: 'answer', document: { text: 'Answer', references: [], attachments: [] },
@@ -146,13 +156,13 @@ describe('Home Discussion resource transport', () => {
     // Only the HTTP boundary reports absence; the canonical resolver must
     // prove it through the exact read and both accessible inventories.
     axiosPost.mockResolvedValue({ status: 200, data: { sessions: [] } });
-    const session = createCurrentSessionProjectionRecordFixture({ id: sessionId, encryptionMode: 'e2ee',
+    const session = createCurrentSessionProjectionRecordFixture({ id: sessionId, active: false, encryptionMode: retiredSession ? 'plain' : 'e2ee',
       metadata: 'unavailable', dataEncryptionKey: null, share: null,
       effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
         capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) } });
     axiosGet.mockImplementation(async (url: string) => {
       const path = new URL(url).pathname;
-      if (path === '/v1/account/encryption/currentness') return { status: 200, data: currentness('e2ee') };
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: currentness(retiredSession ? 'plain' : 'e2ee') };
       if (path === `/v2/sessions/${sessionId}`) return scenario === 'session_not_found'
         ? { status: 404, data: { error: 'Session not found' } } : { status: 200, data: { session } };
       if (path === '/v2/sessions' || path === '/v2/sessions/archived') {
@@ -178,13 +188,22 @@ describe('Home Discussion resource transport', () => {
     onTestFinished(() => fetch.mockRestore());
     await runWithServerHttpBaseUrl('https://home.example.test', async () => {
       expect(await resolveSessionTransportContext({ credentials: keyless, idOrPrefix: sessionId }))
-        .toMatchObject({ ok: false, code: scenario === 'session_not_found' ? 'session_not_found' : 'encryption_material_unavailable' });
+        .toMatchObject(retiredSession ? { ok: true, mode: 'plain' }
+          : { ok: false, code: scenario === 'session_not_found' ? 'session_not_found' : 'encryption_material_unavailable' });
       axiosGet.mockClear();
       const diagnostics = vi.spyOn(logger, 'warnLocalFile');
       onTestFinished(() => diagnostics.mockRestore());
       const publish = createDiscussionReplyReturnPublisher({ credentials: keyless, machineId,
         serverId: 'server-1', serverHttpBaseUrl: 'https://home.example.test', signal: new AbortController().signal,
         workflowAuthorization: accepted.snapshot.authorization, isCurrent: async () => scenario !== 'identity_denied',
+        ...(retiredSession && scenario !== 'missing_machine_publisher' ? { postWorkflowMessage: async (publication: DiscussionAgentPostPublicationV1 | DiscussionWorkflowPostPublicationV1) => {
+          machinePackets.push({ v: 2, operation: 'terminal_return', machineId, publication });
+          if (scenario === 'machine_unavailable') return { v: 1 as const, ok: false as const, error: 'discussions_unavailable' as const };
+          if (!machineAcknowledged) throw new Error('Committed Machine return acknowledgement lost');
+          return { v: 1 as const, ok: true as const, value: { messageSeq: 2, message: { ...wireMessage(),
+            id: 'accepted-reply', localId: publication.request.localId, seq: 2,
+            replyTarget: publication.request.replyTarget, content: publication.request.content } } };
+        } } : {}),
         actionsSettingsProvider: { getAccountSettings: () => accountSettingsParse({}),
           getActionsSettings: () => normalizeActionsSettingsV1({ v: 1 }) } });
       const recover = createWorkflowRunRecoveryReader({ accountId, machineId, storage: { execute: async (operation, options) =>
@@ -197,14 +216,27 @@ describe('Home Discussion resource transport', () => {
             isCurrent: async () => true, publish })({ runId, invocation });
         } });
       await recover('startup');
+      if (scenario === 'machine_ack_lost') {
+        expect(kit.run().workflowCustodyState).toBe('pending');
+        machineAcknowledged = true;
+        await recover('reconnect');
+      }
       expect(axiosGet.mock.calls.some(([url]) => new URL(String(url)).pathname === `/v2/sessions/${sessionId}`), JSON.stringify({
         reads: axiosGet.mock.calls.map(([url]) => new URL(String(url)).pathname),
         requests: axiosRequest.mock.calls.map(([request]) => ({ method: request.method, path: new URL(request.url).pathname })),
         diagnostics: diagnostics.mock.calls, custody: kit.run().workflowCustodyState,
       }))
         .toBe(scenario !== 'identity_denied');
-      expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: scenario === 'material_unavailable' ? 'pending' : 'settled' });
+      const pending = ['material_unavailable', 'missing_machine_publisher', 'machine_unavailable'].includes(scenario);
+      expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: pending ? 'pending' : 'settled' });
       expect(kit.rowById(recordId)?.index.lifecycle).toBe('completed');
+      if (retiredSession) {
+        expect(retiredRpc).not.toHaveBeenCalled();
+        expect(machinePackets).toHaveLength(scenario === 'missing_machine_publisher' ? 0 : scenario === 'machine_ack_lost' ? 2 : 1);
+        if (scenario === 'machine_ack_lost') expect(machinePackets[1]).toEqual(machinePackets[0]);
+        for (const packet of machinePackets) expect(DiscussionMachinePublicationV2Schema.safeParse(packet).success).toBe(true);
+        return;
+      }
       const result = await publish({ serverId: 'server-1', requestSessionId: sessionId, requestLocalId: inputLocalId,
         acceptedTurnId: 'turn', workflow, discussion: addressing,
         outcome: { kind: 'answer', result: { sessionId, messageId: 'native-final' } }, message: 'Accepted answer' });
@@ -235,7 +267,8 @@ describe('Home Discussion resource transport', () => {
       isCurrent: async () => true, actionsSettingsProvider: { getAccountSettings: () => accountSettingsParse({}),
         getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
           ...(outcome === 'action_disabled' ? { actions: { 'discussion.reply': { enabled: false } } } : {}) }) },
-      ...(outcome === 'missing_publisher' ? {} : { postWorkflowMessage: async (publication: import('@happier-dev/protocol/discussions/api').DiscussionWorkflowPostPublicationV1) => {
+      ...(outcome === 'missing_publisher' ? {} : { postWorkflowMessage: async (publication: DiscussionAgentPostPublicationV1 | DiscussionWorkflowPostPublicationV1) => {
+        if (!('producer' in publication)) throw new Error('Expected a non-Session Workflow result');
         if (outcome === 'post_denied') return { v: 1 as const, ok: false as const, error: 'discussion_post_denied' as const };
         if (outcome === 'post_unavailable') return { v: 1 as const, ok: false as const, error: 'discussions_unavailable' as const };
         if (outcome === 'lost_ack') throw new Error('committed_reply_ack_lost');

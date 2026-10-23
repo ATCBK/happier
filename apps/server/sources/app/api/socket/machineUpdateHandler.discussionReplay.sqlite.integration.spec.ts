@@ -35,6 +35,9 @@ import { createCommittedContributedActionSchemaReader } from '../../../../../cli
 import { createUnavailableActionTransportDeps } from '../../../../../cli/src/testkit/actionTransportDeps';
 import { buildWorkflowActionContext } from '../../../../../cli/src/daemon/workflows/daemonRuntime';
 import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
+import { createSessionInputReplyProgressInTx } from '@/app/session/messages/sessionMessageReply';
+import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
 const authentication = createPresentUserSessionAccessAuthentication();
 const options = { operationSocketBatchLimits: { ok: true as const, limits: { maxItems: 200, maxSerializedBytes: 524_288 } } };
@@ -181,6 +184,75 @@ describe('installed Machine reviewed Discussion publication (SQLite)', () => {
         })]) } });
         await db.machine.update({ where: { id: machine.id }, data: { revokedAt: new Date() } });
         await expect(publish({ runId: run.id, invocation: accepted })).rejects.toThrow('workflow_discussion_publication_unavailable');
+    });
+
+    it('publishes an accepted Workflow Session return through its owning Machine after the receiver exits', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, installationId: randomUUID(),
+            metadata: encodePlainMachineStoredContent({}), dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64') } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}', active: false } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: session.id, data: 'opaque' } });
+        const created = await createDiscussion({ actorAccountId: owner.id, authentication, request: { creationLocalId: randomUUID(),
+            titleContent: { t: 'plain', v: { v: 1, title: 'Retained Workflow return' } }, firstMessage: { localId: randomUUID(),
+                content: content('Question'), mentionedAccountIds: [] } } });
+        if (!created.ok) throw new Error(created.error);
+        const discussionId = created.value.discussion.id;
+        expect(await inviteDiscussionParticipant({ actorAccountId: owner.id, authentication, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id }, answerPolicy: 'when_addressed' } })).toMatchObject({ ok: true });
+        const run = await db.automationRun.create({ data: { accountId: owner.id, originKind: 'direct', causeKind: null,
+            scheduledAt: new Date(), dueAt: new Date(), state: 'cancelled', workflowCustodyState: 'pending',
+            workflowAcceptedSnapshotEnvelope: 'accepted-by-workflow-owner' } });
+        const invocation = await db.workflowRunInvocation.create({ data: { runId: run.id, sequence: 1n, memberOrdinal: 0n,
+            lifecycle: 'completed', contentEnvelope: 'accepted-result-owned-by-workflow' } });
+        const workflow = { purpose: 'invocation' as const, runId: run.id, invocationRecordId: invocation.id };
+        const discussion = { discussionId, messageId: created.value.firstMessage.id,
+            throughSeq: created.value.firstMessage.seq, participantSessionId: session.id };
+        const progress = await inTx(tx => createSessionInputReplyProgressInTx(tx, { accountId: owner.id, requestSessionId: session.id,
+            reply: { mode: 'wait', discussion, workflow } }));
+        if (!progress) throw new Error('Expected admitted Workflow original');
+        const requestLocalId = deriveWorkflowSessionInputLocalIdV2(workflow), acceptedTurnId = randomUUID();
+        await db.sessionMessage.create({ data: { sessionId: session.id, localId: requestLocalId, seq: 1,
+            messageRole: 'user', content: content('Admitted input'), replyDisposition: 'observing', replyProgress: { ...progress,
+                acceptedTurnId, outcome: { kind: 'answer', result: { sessionId: session.id, messageId: 'accepted-final' } } } } });
+        const replyReturn = { serverId: 'home', requestLocalId, acceptedTurnId,
+            workflow: { runId: run.id, invocationRecordId: invocation.id, invocationAttempt: '0' } };
+        const publication = { v: 1 as const, sessionId: session.id, discussionId, terminalReturn: true as const, replyReturn,
+            request: buildDiscussionMutationRequestBodyV1({ kind: 'post',
+                localId: deriveSessionMessageReplyReturnLocalIdV1({ sessionId: session.id, localId: requestLocalId, acceptedTurnId }),
+                content: content('Accepted answer'), authoredContent: { v: 1, parts: [{ t: 'text', text: 'Accepted answer' }] },
+                mentionedAccountIds: [], replyTarget: { kind: 'message', messageId: discussion.messageId } }) };
+        const token = await auth.createToken(owner.id, undefined, { kind: 'account', authority: 'present_user' });
+        const socket = Object.assign(createFakeSocket({ data: { clientType: 'machine-scoped', machineId: machine.id,
+            authAuthority: 'present_user', [VERIFIED_MACHINE_INSTALLATION_ID_SOCKET_DATA_KEY]: machine.installationId } }),
+            { handshake: { auth: { token } } });
+        machineUpdateHandler(owner.id, socket as never, options);
+        const publish = async (body: unknown = publication, machineId = machine.id) => {
+            let result: unknown;
+            await getSocketHandler(socket, DISCUSSION_AGENT_POST_EVENT_V1)({ v: 2, operation: 'terminal_return', machineId, publication: body },
+                (value: unknown) => { result = value; });
+            return DiscussionAgentApprovedReplayResponseV1Schema.parse(result);
+        };
+        const first = await publish();
+        expect(first).toMatchObject({ ok: true, value: { message: { producerV1: { kind: 'agent', sessionId: session.id,
+            replyReturn: { workflow: replyReturn.workflow } } } } });
+        expect(await publish()).toEqual(first);
+        expect(await db.discussionMessage.count({ where: { discussionId } })).toBe(2);
+        expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: session.id, localId: requestLocalId } } }))
+            .toMatchObject({ replyDisposition: 'returned' });
+        expect(await publish({ ...publication, replyReturn: { ...replyReturn, workflow: { ...replyReturn.workflow, invocationAttempt: '1' } } }))
+            .toMatchObject({ ok: false, error: 'discussion_post_denied' });
+        expect(await publish({ ...publication, replyReturn: { ...replyReturn, workflow: undefined } })).toMatchObject({ ok: false });
+        expect(await publish({ ...publication, replyReturn: { ...replyReturn, requestLocalId: 'missing-original' } }))
+            .toMatchObject({ ok: false, error: 'discussion_post_denied' });
+        expect(await publish(publication, randomUUID())).toMatchObject({ ok: false, error: 'discussion_post_denied' });
+        expect(await setDiscussionParticipantPolicy({ actorAccountId: owner.id, authentication, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id }, answerPolicy: 'drafts_for_approval' } })).toMatchObject({ ok: true });
+        expect(await publish()).toMatchObject({ ok: false, error: 'discussion_post_denied' });
+        expect(await setDiscussionParticipantPolicy({ actorAccountId: owner.id, authentication, discussionId,
+            request: { participant: { kind: 'session', sessionId: session.id }, answerPolicy: 'when_addressed' } })).toMatchObject({ ok: true });
+        expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ active: false, publisherGeneration: 0n });
+        await db.machine.update({ where: { id: machine.id }, data: { revokedAt: new Date() } });
+        expect(await publish()).toMatchObject({ ok: false, error: 'discussion_post_denied' });
     });
 
     it.each(['drafts_for_approval', 'when_addressed'] as const)('publishes one reviewed %s reply without a receiver process and rechecks its original authority', async answerPolicy => {

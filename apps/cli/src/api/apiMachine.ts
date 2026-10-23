@@ -11,7 +11,7 @@ import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/manage
 import { SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { isProjectWorkspaceSyncPreparationActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 import { createDiscussionReplyReturnPublisher } from '@/discussions/discussionReplyReturnPublisher';
-import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentApprovedReplayPublicationV1Schema,
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionMachinePublicationV2Schema,
     DiscussionAgentApprovedReplayResponseV1Schema, type DiscussionAgentPostPublicationV1,
     type DiscussionAgentPostResponseV1, type DiscussionWorkflowPostPublicationV1 } from '@happier-dev/protocol/discussions/api';
 import { SESSION_PENDING_RESET_START_RELEASE_EVENT_V1, PendingResetStartReleaseRequestV1Schema, PendingResetStartReleaseResponseV1Schema, type PendingResetStartBindingV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
@@ -3471,7 +3471,7 @@ export class ApiMachineClient {
         return handled;
     }
 
-    /** The same trusted publisher, for an already-reviewed body whose runner may have exited. */
+    /** The same trusted publisher for reviewed bodies and accepted Workflow returns after runner exit. */
     async postAgentDiscussionMessage(
         publication: DiscussionAgentPostPublicationV1 | DiscussionWorkflowPostPublicationV1,
         options?: Readonly<{ signal?: AbortSignal }>,
@@ -3481,8 +3481,11 @@ export class ApiMachineClient {
         if (!socket?.connected || this.projectionSchedulingClosed) {
             return { v: 1 as const, ok: false as const, error: 'discussions_unavailable' as const };
         }
-        const request = DiscussionAgentApprovedReplayPublicationV1Schema.safeParse({
-            v: 1, operation: 'producer' in publication ? 'workflow_result' : 'approved_replay', machineId: this.machine.id, publication,
+        const operation = 'producer' in publication ? 'workflow_result'
+            : publication.terminalReturn && publication.replyReturn?.workflow ? 'terminal_return' : 'approved_replay';
+        const request = DiscussionMachinePublicationV2Schema.safeParse({
+            v: operation === 'terminal_return' ? 2 : 1, operation,
+            machineId: this.machine.id, publication,
         });
         if (!request.success) return { v: 1 as const, ok: false as const, error: 'discussion_post_denied' as const };
         const raw = await emitSocketWithAck({ socket, event: DISCUSSION_AGENT_POST_EVENT_V1,

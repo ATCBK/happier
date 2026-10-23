@@ -13,7 +13,8 @@ import type { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { SESSION_SERVER_START_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/sessions/creation/sessionServerStartV1';
-import { DiscussionAgentPostRequestV1Schema } from '@happier-dev/protocol/discussions/api';
+import { DiscussionAgentPostRequestV1Schema, DiscussionMachinePublicationV2Schema,
+  DISCUSSION_AGENT_POST_EVENT_V1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { AccountSettingsSchema } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -74,6 +75,34 @@ function acknowledgeRegistration(event: string, args: unknown[], socket: ReturnT
     queueMicrotask(() => socket.trigger(SOCKET_RPC_EVENTS.REGISTERED, { method: raw.method }));
   }
 }
+
+it('carries an accepted Workflow terminal return through the Machine publication schema without a live Session', async () => {
+  const client = new ApiMachineClient('token', { id: 'machine', encryptionMode: 'plain', metadata: null,
+    metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+  onTestFinished(() => client.shutdown());
+  const packets: unknown[] = [];
+  const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (event, raw) => {
+    if (event !== DISCUSSION_AGENT_POST_EVENT_V1) throw new Error('Unexpected transport operation');
+    const packet = DiscussionMachinePublicationV2Schema.parse(raw);
+    packets.push(packet);
+    return { v: 1, ok: false, error: 'discussions_unavailable' };
+  } });
+  Reflect.set(client, 'socket', socket);
+  const reply = { v: 1 as const, sessionId: 'c123456789012345678901234', discussionId: 'discussion', terminalReturn: true as const,
+    replyReturn: { serverId: 'home', requestLocalId: 'original', acceptedTurnId: 'turn',
+      workflow: { runId: 'run', invocationRecordId: 'leaf', invocationAttempt: '0' } },
+    request: { localId: 'reply', content: { t: 'plain' as const, v: { v: 1, parts: [{ t: 'text', text: 'Accepted result' }] } },
+      mentionedAccountIds: [], replyTarget: { kind: 'message' as const, messageId: 'question' } } };
+  expect(await client.postAgentDiscussionMessage(reply)).toMatchObject({ ok: false, error: 'discussions_unavailable' });
+  expect(packets).toHaveLength(1);
+  expect(packets[0]).toMatchObject({ v: 2, operation: 'terminal_return', machineId: 'machine', publication: reply });
+  expect(await client.postAgentDiscussionMessage({ ...reply, replyReturn: { ...reply.replyReturn, workflow: undefined } }))
+    .toMatchObject({ ok: false, error: 'discussion_post_denied' });
+  expect(packets).toHaveLength(1);
+  expect(await client.postAgentDiscussionMessage({ ...reply, draftReview: { artifactId: 'approved', decidingAccountId: 'account' } }))
+    .toMatchObject({ ok: false, error: 'discussions_unavailable' });
+  expect(packets[1]).toMatchObject({ v: 1, operation: 'approved_replay' });
+});
 
 it('recovers a refused reply advertisement and delivers a fresh Workflow leaf through Session input admission', async () => {
   vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');

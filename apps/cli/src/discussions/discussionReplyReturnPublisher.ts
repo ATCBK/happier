@@ -11,7 +11,7 @@ import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { logger } from '@/ui/logger';
 import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
-import type { DiscussionWorkflowPostPublicationV1 } from '@happier-dev/protocol/discussions/api';
+import type { DiscussionAgentPostPublicationV1, DiscussionWorkflowPostPublicationV1 } from '@happier-dev/protocol/discussions/api';
 import { deriveWorkflowDiscussionReplyLocalIdV1 } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
@@ -27,7 +27,8 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
   isCurrent(): Promise<boolean>;
   actionsSettingsProvider?: RuntimeActionSettingsProvider;
   workflowAuthorization?: import('@happier-dev/protocol/workflows').WorkflowAcceptedSnapshotV1['authorization'];
-  postWorkflowMessage?: (publication: DiscussionWorkflowPostPublicationV1, options?: Readonly<{ signal?: AbortSignal }>) => Promise<DiscussionAgentPostResponseV1>;
+  postWorkflowMessage?: (publication: DiscussionWorkflowPostPublicationV1 | DiscussionAgentPostPublicationV1,
+    options?: Readonly<{ signal?: AbortSignal }>) => Promise<DiscussionAgentPostResponseV1>;
 }>): DiscussionReplyReturnPublisher {
   const resolveCurrentOrigin = createCurrentMachineExecutionOriginContextResolver({ serverUrl: params.serverHttpBaseUrl,
     resolveCurrentMachineId: () => params.machineId });
@@ -137,15 +138,24 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
         const replyReturn = { serverId: origin.serverIdentityId, requestLocalId: original.requestLocalId,
           ...(original.workflow ? { workflow: original.workflow } : {}),
           ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) };
-        phase = 'session_publisher';
         try {
-          receipt.value = DiscussionAgentPostResponseV1Schema.parse(await callSessionRpc({
-            token: params.credentials.token, sessionId: transport.sessionId,
-            method: SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1,
-            request: { request: { ...parsed.data, replyReturn } },
-            authorityCeiling: 'account_automation', timeoutMs: null, signal,
-            ...(transport.mode === 'plain' ? { mode: 'plain' } : { mode: 'e2ee', ctx: transport.ctx }),
-          }));
+          if (original.workflow) {
+            phase = 'machine_publisher';
+            // The accepted invocation owns this result after the native
+            // receiver exits. Reuse the installed Machine's original-return
+            // append; never resume or borrow a live Session publisher.
+            if (!params.postWorkflowMessage) return unavailable();
+            receipt.value = await params.postWorkflowMessage({ ...parsed.data, replyReturn, terminalReturn: true }, { signal });
+          } else {
+            phase = 'session_publisher';
+            receipt.value = DiscussionAgentPostResponseV1Schema.parse(await callSessionRpc({
+              token: params.credentials.token, sessionId: transport.sessionId,
+              method: SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1,
+              request: { request: { ...parsed.data, replyReturn } },
+              authorityCeiling: 'account_automation', timeoutMs: null, signal,
+              ...(transport.mode === 'plain' ? { mode: 'plain' } : { mode: 'e2ee', ctx: transport.ctx }),
+            }));
+          }
         } catch (error) {
           transportFailure.value = { error };
           throw error;

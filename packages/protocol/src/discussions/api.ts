@@ -323,6 +323,18 @@ export const DiscussionAgentApprovedReplayPublicationV1Schema = lazyZodSchema(()
     publication: DiscussionWorkflowPostPublicationV1Schema }),
 ]));
 export type DiscussionAgentApprovedReplayPublicationV1 = z.infer<typeof DiscussionAgentApprovedReplayPublicationV1Schema>;
+export const DiscussionMachinePublicationV2Schema = lazyZodSchema(() => z.union([
+  DiscussionAgentApprovedReplayPublicationV1Schema,
+  // An accepted Workflow original is durable authority after its Session
+  // publisher exits. The installed Machine uses the same original-return
+  // append checks; an ordinary unreviewed Session post cannot enter this arm.
+  z.strictObject({ v: z.literal(2), operation: z.literal('terminal_return'), machineId: DiscussionIdSchema,
+    publication: z.extend(DiscussionAgentPostPublicationV1Schema, {
+      terminalReturn: z.literal(true),
+      replyReturn: SessionMessageDiscussionReplyReturnV1Schema.check(z.refine(marker => marker.workflow !== undefined,
+        'Machine terminal return requires an accepted Workflow original')),
+    }) }),
+]));
 export const DiscussionAgentPublisherPublicationV1Schema = lazyZodSchema(() => z.union([
   DiscussionAgentPostPublicationV1Schema, DiscussionAgentCreateRequestV1Schema,
 ]));

@@ -61,7 +61,7 @@ import { getDbProviderFromEnv } from "@/storage/prisma";
 import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMachineMutationV1Schema, type SessionMessageReplyMutationResultV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { mutateSessionMessageReplyForMachineInTx } from '@/app/session/messages/sessionMessageReply';
 import { createServerRpcForwarder } from './serverRpcForwarder';
-import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentApprovedReplayPublicationV1Schema, DiscussionAgentApprovedReplayResponseV1Schema, isDiscussionRequestWithinTransportBudgetV1 } from '@happier-dev/protocol/discussions/api';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionMachinePublicationV2Schema, DiscussionAgentApprovedReplayResponseV1Schema, isDiscussionRequestWithinTransportBudgetV1 } from '@happier-dev/protocol/discussions/api';
 import { postPreparedDiscussionMessageInTx, prepareDiscussionPostMutationAccounts } from '@/app/discussions/mutations';
 import { isSessionInputSourceCurrentInTx } from '@/app/session/messages/sessionMessageReply';
 import { isServerFeatureEnabledForHome } from '@/app/features/catalog/serverFeatureGate';
@@ -214,7 +214,7 @@ export function machineUpdateHandler(
     // owner may acknowledge this shared publication event.
     if (readAuthenticatedMachineId(socket)) socket.on(DISCUSSION_AGENT_POST_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
         const respond = (response: unknown) => callback?.(DiscussionAgentApprovedReplayResponseV1Schema.parse(response));
-        const parsed = DiscussionAgentApprovedReplayPublicationV1Schema.safeParse(data);
+        const parsed = DiscussionMachinePublicationV2Schema.safeParse(data);
         try {
             if (!await isServerFeatureEnabledForHome('sessions.conversations')) {
                 respond({ v: 1, ok: false, error: 'discussions_unavailable' });
@@ -257,8 +257,8 @@ export function machineUpdateHandler(
                     ...(reviewedPublication.toolCallId ? { toolCallId: reviewedPublication.toolCallId } : {}) } };
             const result = await inTx(async tx => {
                 const admission = await resolveMachineAdmissionInTx(tx, { actorAccountId: userId, machineId });
-                // This is the installed owner's reviewed replay, not a second
-                // Session publisher or an ephemeral runner's raw draft channel.
+                // The installed owner replays a reviewed body or an accepted
+                // Workflow original; neither impersonates a live Session publisher.
                 if (admission.kind !== 'admitted' || admission.custodianAccountId !== userId
                     || admission.installationId !== installationId
                     || !await hasCurrentSessionActionRpcSourceBindingInTx(tx, { accountId: userId, machineId,
