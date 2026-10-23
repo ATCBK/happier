@@ -6,7 +6,8 @@ import { readMountedComposerPresentationSnapshot, subscribeComposerPresentationT
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { resolveWorkspaceRefById, resolveWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
-import { useMachine, useWorkspaceRefs } from '@/sync/store/hooks';
+import { useWorkspaceRefs } from '@/sync/store/hooks';
+import { useMachineDisplayById } from '@/sync/domains/state/storage';
 
 /** The addressed File supplies one link, composer and publication source to every header. */
 export function useFilePageShareContext(input: Readonly<{
@@ -37,7 +38,7 @@ export function useFilePageShareContext(input: Readonly<{
         && readMountedComposerPresentationSnapshot({ ref, scope })), [ref, scope]);
     const mounted = React.useSyncExternalStore(subscribe, readAvailable, readAvailable);
     const composer = mounted && scope && ref ? { scope, ref, workspace: input.scope } : null;
-    const machine = useMachine(input.scope.machineId);
+    const homeDir = useMachineDisplayById(machines => machines[input.scope.machineId]?.metadata?.homeDir ?? null);
     return { linkInput, composer, sourceSessionId: sessionSource, sourceProject: project,
-        homeDir: machine?.metadata?.homeDir ?? null };
+        homeDir };
 }
