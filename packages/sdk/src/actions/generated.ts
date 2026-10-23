@@ -355,6 +355,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "notifications.push.permission.request",
   "notifications.push.register",
   "notifications.push.tokens.remove",
+  "notifications.sounds.preview",
   "notifications.webhooks.add",
   "notifications.webhooks.remove",
   "notifications.webhooks.signingSecret.clear",
@@ -765,7 +766,9 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "ui.voice_global.reset",
   "ui.voice_global.set_muted",
   "ui.voice_global.setup.close",
+  "ui.voice_global.setup.microphone.permission.request",
   "ui.voice_global.setup.open",
+  "ui.voice_global.setup.system_settings.open",
   "ui.voice_global.start",
   "ui.voice_global.transcript.set_visible",
   "ui.voice_global.turn_control",
@@ -1874,6 +1877,9 @@ export type GeneratedActions = Readonly<{
         readonly list: (input: PublicActionInputById["notifications.push.tokens.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"notifications.push.tokens.list">>;
         readonly remove: (input: PublicActionInputById["notifications.push.tokens.remove"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"notifications.push.tokens.remove">>;
       }> ;
+    }> ;
+    readonly sounds: Readonly<{
+      readonly preview: (input: PublicActionInputById["notifications.sounds.preview"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"notifications.sounds.preview">>;
     }> ;
     readonly webhooks: Readonly<{
       readonly add: (input: PublicActionInputById["notifications.webhooks.add"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"notifications.webhooks.add">>;
@@ -3048,7 +3054,15 @@ export type GeneratedActions = Readonly<{
       readonly setMuted: (input: PublicActionInputById["ui.voice_global.set_muted"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.set_muted">>;
       readonly setup: Readonly<{
         readonly close: (input: PublicActionInputById["ui.voice_global.setup.close"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.setup.close">>;
+        readonly microphone: Readonly<{
+          readonly permission: Readonly<{
+            readonly request: (input: PublicActionInputById["ui.voice_global.setup.microphone.permission.request"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.setup.microphone.permission.request">>;
+          }> ;
+        }> ;
         readonly open: (input: PublicActionInputById["ui.voice_global.setup.open"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.setup.open">>;
+        readonly systemSettings: Readonly<{
+          readonly open: (input: PublicActionInputById["ui.voice_global.setup.system_settings.open"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.setup.system_settings.open">>;
+        }> ;
       }> ;
       readonly start: (input: PublicActionInputById["ui.voice_global.start"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"ui.voice_global.start">>;
       readonly transcript: Readonly<{
@@ -4326,6 +4340,9 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
           remove: (input: PublicActionInputById["notifications.push.tokens.remove"], options?: ActionExecutionOptions) => execute("notifications.push.tokens.remove", input, options),
         },
       },
+      sounds: {
+        preview: (input: PublicActionInputById["notifications.sounds.preview"], options?: ActionExecutionOptions) => execute("notifications.sounds.preview", input, options),
+      },
       webhooks: {
         add: (input: PublicActionInputById["notifications.webhooks.add"], options?: ActionExecutionOptions) => execute("notifications.webhooks.add", input, options),
         list: (input: PublicActionInputById["notifications.webhooks.list"], options?: ActionExecutionOptions) => execute("notifications.webhooks.list", input, options),
@@ -5499,7 +5516,15 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         setMuted: (input: PublicActionInputById["ui.voice_global.set_muted"], options?: ActionExecutionOptions) => execute("ui.voice_global.set_muted", input, options),
         setup: {
           close: (input: PublicActionInputById["ui.voice_global.setup.close"], options?: ActionExecutionOptions) => execute("ui.voice_global.setup.close", input, options),
+          microphone: {
+            permission: {
+              request: (input: PublicActionInputById["ui.voice_global.setup.microphone.permission.request"], options?: ActionExecutionOptions) => execute("ui.voice_global.setup.microphone.permission.request", input, options),
+            },
+          },
           open: (input: PublicActionInputById["ui.voice_global.setup.open"], options?: ActionExecutionOptions) => execute("ui.voice_global.setup.open", input, options),
+          systemSettings: {
+            open: (input: PublicActionInputById["ui.voice_global.setup.system_settings.open"], options?: ActionExecutionOptions) => execute("ui.voice_global.setup.system_settings.open", input, options),
+          },
         },
         start: (input: PublicActionInputById["ui.voice_global.start"], options?: ActionExecutionOptions) => execute("ui.voice_global.start", input, options),
         transcript: {
