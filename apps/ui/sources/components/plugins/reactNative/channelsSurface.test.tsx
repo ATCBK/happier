@@ -1004,6 +1004,29 @@ function findPressableByAccessibilityLabel(node: ReactTestRenderer, label: strin
   return pressable;
 }
 
+/** A field Select's menu as the shared Dropdown receives it; the test renderer has no menu layer to press. */
+function findFieldMenu(node: ReactTestRenderer, testID: string) {
+  const menu = findByTestId(node, testID).find((instance) => (
+    Array.isArray(instance.props?.items) && typeof instance.props?.onSelect === 'function'
+  ));
+  if (!menu) throw new Error(`Expected a field menu for ${testID}.`);
+  return menu;
+}
+
+function chooseFieldMenuOption(node: ReactTestRenderer, testID: string, label: string): void {
+  const menu = findFieldMenu(node, testID);
+  const item = (menu.props.items as ReadonlyArray<{ id: string; label: string }>).find((candidate) => candidate.label === label);
+  if (!item) throw new Error(`Expected a ${label} option in ${testID}.`);
+  menu.props.onSelect(item.id);
+}
+
+/** The option a closed single-choice field Select currently states. */
+function fieldMenuValue(node: ReactTestRenderer, testID: string): string | undefined {
+  const menu = findFieldMenu(node, testID);
+  const selectedId = (menu.props.radioGroups as ReadonlyArray<{ selectedId: string | null }> | undefined)?.[0]?.selectedId;
+  return (menu.props.items as ReadonlyArray<{ id: string; label: string }>).find((candidate) => candidate.id === selectedId)?.label;
+}
+
 function findTextFieldByTestId(node: ReactTestRenderer, testID: string) {
   const textField = findByTestId(node, testID).find(
     (instance) => typeof instance.props?.onChangeText === 'function',
@@ -1579,7 +1602,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     expect(findByTestId(renderer, 'channels-connection-delete')).toHaveLength(0);
     await act(async () => {
       findPressableByTestId(renderer!, 'channels-connection-enabled').props.onPress();
-      findPressableByAccessibilityLabel(renderer!, '5 minutes').props.onPress();
+      chooseFieldMenuOption(renderer!, 'channels-connection-observation-age', '5 minutes');
     });
     await act(async () => {
       await findPressableByTestId(renderer!, 'channels-connection-save').props.onPress();
@@ -2009,7 +2032,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     await flushHookEffects();
     await act(async () => {
       findPressableByTestId(renderer!, 'channels-connection-enabled').props.onPress();
-      findPressableByAccessibilityLabel(renderer!, '5 minutes').props.onPress();
+      chooseFieldMenuOption(renderer!, 'channels-connection-observation-age', '5 minutes');
     });
     await act(async () => {
       await findPressableByTestId(renderer!, 'channels-connection-save').props.onPress();
@@ -2040,7 +2063,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     expect(data.query.mock.calls.length).toBeGreaterThan(readsBeforeExplicitReread);
     expect(findByTestId(renderer, 'channels-save-outcome-unknown')).toHaveLength(0);
     expect(findPressableByTestId(renderer, 'channels-connection-enabled').props.checked).toBe(false);
-    expect(findPressableByAccessibilityLabel(renderer, '5 minutes').props.checked).toBe(true);
+    expect(fieldMenuValue(renderer, 'channels-connection-observation-age')).toBe('5 minutes');
     expect(host.readResource).not.toHaveBeenCalled();
   });
 
@@ -2437,7 +2460,7 @@ describe('Channels settings surface (real source, mounted)', () => {
 
     await act(async () => {
       findPressableByTestId(renderer!, 'channels-connection-enabled').props.onPress();
-      findPressableByAccessibilityLabel(renderer!, '5 minutes').props.onPress();
+      chooseFieldMenuOption(renderer!, 'channels-connection-observation-age', '5 minutes');
     });
     await act(async () => {
       await findPressableByTestId(renderer!, 'channels-connection-save').props.onPress();
@@ -2608,7 +2631,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     const save = () => findPressableByTestId(renderer!, 'channels-connection-save');
 
     await act(async () => {
-      findPressableByAccessibilityLabel(renderer!, '1 minute').props.onPress();
+      chooseFieldMenuOption(renderer!, 'channels-connection-observation-age', '1 minute');
     });
     await act(async () => {
       await save().props.onPress();
@@ -2622,7 +2645,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     });
 
     await act(async () => {
-      findPressableByAccessibilityLabel(renderer!, '30 days').props.onPress();
+      chooseFieldMenuOption(renderer!, 'channels-connection-observation-age', '30 days');
     });
     await act(async () => {
       await save().props.onPress();
@@ -2809,7 +2832,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     expect(findByTestId(renderer, 'channels-save-outcome-unknown').length).toBeGreaterThan(0);
     expect(findPressableByTestId(renderer, 'channels-connection-save').props.disabled).toBe(true);
     expect(findPressableByTestId(renderer, 'channels-connection-enabled').props.checked).toBe(true);
-    expect(findPressableByAccessibilityLabel(renderer, '4 minutes').props.checked).toBe(true);
+    expect(fieldMenuValue(renderer, 'channels-connection-observation-age')).toBe('4 minutes');
 
     deferReconciliationRead = true;
     await act(async () => {
@@ -2838,7 +2861,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     await flushHookEffects();
     await act(async () => {
       findPressableByTestId(renderer!, 'channels-connection-enabled').props.onPress();
-      findPressableByAccessibilityLabel(renderer!, '5 minutes').props.onPress();
+      chooseFieldMenuOption(renderer!, 'channels-connection-observation-age', '5 minutes');
     });
 
     await act(async () => {
@@ -2851,7 +2874,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     await flushHookEffects();
 
     expect(findPressableByTestId(renderer, 'channels-connection-enabled').props.checked).toBe(false);
-    expect(findPressableByAccessibilityLabel(renderer, '5 minutes').props.checked).toBe(true);
+    expect(fieldMenuValue(renderer, 'channels-connection-observation-age')).toBe('5 minutes');
   });
 
   it('preserves an unsaved connection draft and blocks it from overwriting a newer revision', async () => {
@@ -2868,7 +2891,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     await flushHookEffects();
     await act(async () => {
       findPressableByTestId(renderer!, 'channels-connection-enabled').props.onPress();
-      findPressableByAccessibilityLabel(renderer!, '5 minutes').props.onPress();
+      chooseFieldMenuOption(renderer!, 'channels-connection-observation-age', '5 minutes');
     });
 
     connection = connectionFixture({
@@ -2882,7 +2905,7 @@ describe('Channels settings surface (real source, mounted)', () => {
     await flushHookEffects();
 
     expect(findPressableByTestId(renderer, 'channels-connection-enabled').props.checked).toBe(false);
-    expect(findPressableByAccessibilityLabel(renderer, '5 minutes').props.checked).toBe(true);
+    expect(fieldMenuValue(renderer, 'channels-connection-observation-age')).toBe('5 minutes');
     expect(findByTestId(renderer, 'channels-connection-source-changed').length).toBeGreaterThan(0);
     expect(findPressableByTestId(renderer, 'channels-connection-save').props.disabled).toBe(true);
     await act(async () => {
