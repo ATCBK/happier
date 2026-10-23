@@ -49,6 +49,7 @@ Always make the smallest coherent systemic change at the correct canonical owner
    - `.agents/skills/happier-slopo` for advisory embedding-assisted duplicate discovery; similarity alone is never a defect, refactor order, completeness verdict, or CI gate.
    - `.agents/skills/happier-pr-steward` for user-requested 0.3 pull-request stewardship; it composes `happier-review` and the mutation authority in `happier-github-ops`.
    - `.agents/skills/happier-testing` for TDD, test quality, lane selection, and live validation.
+   - `.agents/skills/happier-performance` for any change on a per-arrival, per-request, per-render or idle path, and for profiling or optimization: performance invariants, anti-pattern checks, count-based cost contracts and live measurement.
    - `.agents/skills/happier-docs` for internal or published documentation.
    - `.agents/skills/happier-ui-craft` before designing, building, or reviewing user-facing UI (including plugin UI); it turns `DESIGN.md` into concrete decisions and the side-by-side validation loop.
    - `.agents/skills/happier-instruction-eval` only for an explicit instruction-variant evaluation or an approved evaluation boundary.

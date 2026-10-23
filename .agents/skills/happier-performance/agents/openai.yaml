@@ -1,0 +1,4 @@
+interface:
+  display_name: "Happier Performance"
+  short_description: "Keep Happier paths cheap: invariants, cost contracts, measurement"
+  default_prompt: "Use $happier-performance to check this change against the performance invariants and patterns, add count-based cost contracts, and measure before/after."

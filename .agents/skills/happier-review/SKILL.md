@@ -84,7 +84,7 @@ Activate conditional scopes only when reachable:
 - security, auth, authorization, privacy, and secret handling;
 - persistence, migrations, data integrity, transactions, idempotency, and concurrency;
 - API/wire/CLI/IPC contracts and compatibility/version skew;
-- performance, scalability, rendering, resource, or process lifecycle;
+- performance, scalability, rendering, resource, or process lifecycle. For these, apply `.agents/skills/happier-performance` (§2 patterns, §5 verdicts). A guard, cache, memo, yield, timer, retry or slower interval is a finding until the producer is shown to emit only real changes; include same-pattern leads;
 - UI/UX/accessibility and browser/device behavior;
 - provider/catalog ownership;
 - binary runtime, installers, packaging, services, and cross-platform behavior.

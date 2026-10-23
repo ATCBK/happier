@@ -60,6 +60,8 @@ Before adding a protocol, registry, table, state machine, gate, lease, generatio
 
 Treat every timeout, retry count, quota, request/body or collection-size cap, truncation threshold, and similar guard as an owner-level product decision. Search for the containing operation's canonical deadline or resource boundary first and reuse it; do not add a shorter phase-local cutoff or guessed "safe" number. If no real contract or measured resource failure requires a bound, add none. When one is required, keep its derivation beside the owner, preserve valid data when paging or explicit incompleteness can do so safely, make activation observable, and prove both the rejecting/timeout case and valid behavior beyond the previously tempting arbitrary cutoff.
 
+When the change adds or alters a read, publication, subscription, timer, poll, cache, guard, pool, batch or dynamic import on a per-arrival, per-request, per-render or idle path, apply `.agents/skills/happier-performance`. Work stays proportional to real change and reads to need. Fix the producer instead of guarding the consumer. Land with its count-based cost contract and the real-Postgres or compiled-bundle check it calls for.
+
 ## 5. Shape execution for throughput
 
 Use direct implementation for tightly coupled work and `.agents/skills/decompose-gates` for meaningful independent responsibilities. For repeated units with an unproven shared assumption, apply that skill's concurrency ramp: gate only dependent replication, keep independent work moving, and skip the ramp when prior evidence or a deterministic tool already proves the unit shape.

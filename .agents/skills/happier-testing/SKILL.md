@@ -62,6 +62,7 @@ Apply strict RED-GREEN-REFACTOR while following Happier-specific lane, fixture, 
 - One discriminating test is more valuable than many shallow permutations. Add cases only for materially different contracts, boundaries, or failure modes.
 - A useful test distinguishes the intended implementation from at least one plausible incorrect implementation. If it would pass both, passes too easily, or contradicts visible behavior, challenge the fixture, instrument, harness, and observed branch before trusting the system; strengthen or remove the check. Reuse meaningful original RED evidence; a separate mutation is needed only when that evidence is missing or no longer establishes sensitivity to the relevant defect.
 - Do not add runtime tests that merely restate TypeScript types, mirror implementation structure, assert pass-through wiring or incidental call counts, or police wording, formatting, raw styles, or example values.
+- Count-based **cost contracts** are not incidental call counts. Examples: renders per arrival, SQL statements per request, requests per idle minute, bodies fetched per open. They are observable performance contracts; write them as `.agents/skills/happier-performance` describes, with scale-shaped fixtures, real Postgres for query shapes, and compiled-bundle checks for dynamic imports.
 - Exercise real internal behavior through the canonical/public owner boundary whenever practical.
 - Remove or consolidate redundant tests introduced or exposed by the change.
 
