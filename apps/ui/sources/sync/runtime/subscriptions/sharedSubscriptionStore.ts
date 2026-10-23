@@ -56,8 +56,10 @@ export type SharedSubscriptionStoreConfig<
     normalizeInput: (input: TInput) => TInput;
     storeKey: (input: TInput) => string;
     defaultSnapshotClient: TSnapshotClient;
-    /** Keep last-known state for the app session after the last demand leaves. */
+    /** Keep last-known state after the last demand leaves, until its owner retires it. */
     retainState?: boolean;
+    /** Resource retirement is distinct from a consumer closing; retained entries own this listener. */
+    subscribeRetirement?: (input: TInput, retire: () => void) => () => void;
     shouldRefresh?: (state: TState) => boolean;
     shouldWatch?: (state: TState) => boolean;
     /** Seed the watch cursor from the immediate read before parking. */
@@ -140,6 +142,7 @@ type SharedSubscriptionStoreEntry<TInput, TState, TSnapshotClient, TWatchClient>
     watchRecoveryRequested: boolean;
     watchRecoveryNeedsRefresh: boolean;
     unsubscribeRecovery: (() => void) | null;
+    unsubscribeRetirement: (() => void) | null;
     nowMs: () => number;
 };
 
@@ -206,9 +209,14 @@ export function createSharedSubscriptionStore<
                 watchRecoveryRequested: false,
                 watchRecoveryNeedsRefresh: false,
                 unsubscribeRecovery: null,
+                unsubscribeRetirement: null,
                 nowMs: options?.nowMs ?? Date.now,
             };
             entries.set(key, entry);
+            const created = entry;
+            const unsubscribeRetirement = config.subscribeRetirement?.(created.input, () => retireEntry(key, created)) ?? null;
+            if (entries.get(key) === created) created.unsubscribeRetirement = unsubscribeRetirement;
+            else unsubscribeRetirement?.();
         } else {
             if (options?.snapshotClient) {
                 entry.snapshotClient = options.snapshotClient;
@@ -342,6 +350,24 @@ export function createSharedSubscriptionStore<
         entry.watching = false;
     };
 
+    const retireEntry = (key: string, entry: Entry): void => {
+        // A late callback belongs to the entry that registered it, never a replacement.
+        if (entries.get(key) !== entry) return;
+        entries.delete(key);
+        entry.refCount = 0;
+        entry.refreshRequested = false;
+        entry.unsubscribeRecovery?.();
+        entry.unsubscribeRecovery = null;
+        entry.unsubscribeRetirement?.();
+        entry.unsubscribeRetirement = null;
+        entry.abortController?.abort();
+        stopWatch(entry);
+        setState(entry, config.emptyState);
+        setRefreshing(entry, false);
+        entry.listeners.clear();
+        entry.refreshListeners.clear();
+    };
+
     return {
         getState(input) {
             const normalized = config.normalizeInput(input);
@@ -417,6 +443,7 @@ export function createSharedSubscriptionStore<
                 }
                 subscribed = false;
                 entry.listeners.delete(listener);
+                if (entries.get(key) !== entry) return;
                 entry.refCount -= 1;
                 if (entry.refCount <= 0) {
                     entry.unsubscribeRecovery?.();
@@ -424,7 +451,11 @@ export function createSharedSubscriptionStore<
                     entry.abortController?.abort();
                     setRefreshing(entry, false);
                     stopWatch(entry);
-                    if (!config.retainState) entries.delete(key);
+                    if (!config.retainState) {
+                        entry.unsubscribeRetirement?.();
+                        entry.unsubscribeRetirement = null;
+                        entries.delete(key);
+                    }
                 }
             };
         },
@@ -471,8 +502,11 @@ export function createSharedSubscriptionStore<
         },
         reset() {
             for (const entry of entries.values()) {
+                entry.refCount = 0;
                 entry.unsubscribeRecovery?.();
                 entry.unsubscribeRecovery = null;
+                entry.unsubscribeRetirement?.();
+                entry.unsubscribeRetirement = null;
                 entry.abortController?.abort();
                 setRefreshing(entry, false);
                 stopWatch(entry);

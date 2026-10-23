@@ -13,6 +13,7 @@ import {
 import type { LocalServiceLauncherSnapshot, LocalServiceLauncherState } from './types';
 import {
     getLocalServiceInventoryState,
+    subscribeLocalServiceCredentialRetirement,
     subscribeLocalServiceInventoryStore,
     type LocalServiceInventorySnapshotClient,
 } from '../inventory/sharedStore';
@@ -107,8 +108,17 @@ const store = createSharedSubscriptionStore<
     LocalServiceLauncherSnapshot,
     LocalServiceLauncherSnapshotClient
 >({
-    // Same app-session retention and qualified identity as the inventory freshness owner.
+    // Same credential-owned retention and qualified identity as the inventory freshness owner.
     retainState: true,
+    subscribeRetirement: (input, retire) => subscribeLocalServiceCredentialRetirement(input, () => {
+        const key = storeKey(normalizeInput(input));
+        const subscription = inventorySubscriptions.get(key);
+        if (subscription) {
+            inventorySubscriptions.delete(key);
+            subscription.dispose();
+        }
+        retire();
+    }),
     emptyState: EMPTY_LOCAL_SERVICE_LAUNCHER_STATE,
     createState: createLocalServiceLauncherState,
     normalizeInput,
@@ -207,7 +217,7 @@ export function subscribeLocalServiceLauncherStore(
         unsubscribe();
         if (--subscription.count === 0) {
             subscription.dispose();
-            inventorySubscriptions.delete(key);
+            if (inventorySubscriptions.get(key) === subscription) inventorySubscriptions.delete(key);
         }
     };
 }

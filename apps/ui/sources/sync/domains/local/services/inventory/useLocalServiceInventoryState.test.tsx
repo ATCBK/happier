@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
@@ -16,7 +17,7 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
-const { resetLocalServiceInventoryStoreForTests } = await import('./sharedStore');
+const { getLocalServiceInventoryState, resetLocalServiceInventoryStoreForTests } = await import('./sharedStore');
 const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
 
 const snapshot = {
@@ -54,6 +55,54 @@ describe('useLocalServiceInventoryState', () => {
         await standardCleanup();
         resetLocalServiceInventoryStoreForTests();
         vi.useRealTimers();
+    });
+
+    it.each(['hidden', 'unmounted'] as const)('drops retained inventory facts on actual credential retirement after becoming %s', async visibility => {
+        const { useLocalServiceInventoryStateController } = await import('./useLocalServiceInventoryState');
+        const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+        const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
+        const resolved = await resolveServerCredentialAccountScope(serverId);
+        const serverUrl = getServerProfileById(serverId)?.serverUrl;
+        if (resolved.kind !== 'bound' || !resolved.credentialKey || !serverUrl) throw new Error('Expected real credential-qualified Home');
+        const credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId });
+        if (!credentials) throw new Error('Expected stored Home credentials');
+        const key = { machineId: 'machine-a', serverId: resolved.scope.serverId,
+            accountId: resolved.scope.accountId, credentialKey: resolved.credentialKey };
+        const snapshotClient = vi.fn(async (): Promise<LocalServiceInventorySnapshotClientResult> => ({ ok: true, snapshot }));
+        const watchSignals: AbortSignal[] = [];
+        const watchClient = vi.fn(async (input: import('./api').LocalServiceInventoryWatchClientInput): Promise<LocalServiceInventoryWatchClientResult> => {
+            if (input.signal) watchSignals.push(input.signal);
+            return new Promise(() => {});
+        });
+        let presented = true;
+        const wrapper = ({ children }: React.PropsWithChildren) => React.createElement(PluginSurfaceFocusEligibilityProvider, { active: presented, children });
+        const hook = await renderHook(() => useLocalServiceInventoryStateController({ ...key, snapshotClient, watchClient }), { wrapper });
+        await vi.waitFor(() => expect(getLocalServiceInventoryState(key).generatedAt).toBe(1_000));
+        await vi.waitFor(() => expect(watchSignals).toHaveLength(1));
+        if (visibility === 'hidden') { presented = false; await hook.rerender(); }
+        else await hook.unmount();
+        expect(watchSignals[0]?.aborted).toBe(true);
+        expect(getLocalServiceInventoryState(key).rowsById.size).toBe(1);
+        const closedReads = snapshotClient.mock.calls.length;
+        const retained = getLocalServiceInventoryState(key);
+        const otherHome = await upsertServerProfileOnly({ serverUrl: `https://inventory-other-${visibility}.example.test`, name: 'Other Home' });
+        await act(async () => {
+            expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId }, credentials)).toBe(true);
+            expect(await TokenStorage.setCredentialsForServerUrl(otherHome.serverUrl, { serverId: otherHome.id }, credentials)).toBe(true);
+            expect(await TokenStorage.removeCredentialsForServerUrl(otherHome.serverUrl, { serverId: otherHome.id })).toBe(true);
+        });
+        expect(getLocalServiceInventoryState(key)).toBe(retained);
+        expect(snapshotClient).toHaveBeenCalledTimes(closedReads);
+        await act(async () => {
+            expect(await TokenStorage.removeCredentialsForServerUrl(serverUrl, { serverId })).toBe(true);
+        });
+        expect(getLocalServiceInventoryState(key).rowsById.size).toBe(0);
+        await flushHookEffects();
+        expect(snapshotClient).toHaveBeenCalledTimes(closedReads);
+        if (visibility === 'hidden') await hook.unmount();
     });
 
     it('surfaces machine-RPC snapshot rows through the controller state', async () => {

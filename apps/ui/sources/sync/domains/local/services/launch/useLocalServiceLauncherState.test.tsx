@@ -15,7 +15,7 @@ installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
 const machineRpc = await import('./machineRpc');
 const inventoryMachineRpc = await import('../inventory/machineRpc');
-const { resetLocalServiceLauncherStoreForTests } = await import('./sharedStore');
+const { getLocalServiceLauncherState, resetLocalServiceLauncherStoreForTests } = await import('./sharedStore');
 const { resetLocalServiceInventoryStoreForTests } = await import('../inventory/sharedStore');
 const { RetainedPanelSurface } = await import('@/components/ui/panels/RetainedPanelSurface');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
@@ -71,6 +71,54 @@ describe('useLocalServiceLauncherState', () => {
         resetLocalServiceLauncherStoreForTests();
         resetLocalServiceInventoryStoreForTests();
         vi.restoreAllMocks();
+    });
+
+    it.each(['hidden', 'unmounted'] as const)('drops retained launcher facts on actual credential retirement after becoming %s', async visibility => {
+        const serverUrl = `https://launcher-retirement-${visibility}.example.test`;
+        const connection = await restoreServerAccountForTest({ serverUrl, accountId: 'account-a' });
+        onTestFinished(() => connection.dispose());
+        const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+        const resolved = await resolveServerCredentialAccountScope(connection.serverId);
+        if (resolved.kind !== 'bound' || !resolved.credentialKey) throw new Error('Expected real credential-qualified Home');
+        const key = { machineId: 'machine-a', serverId: resolved.scope.serverId, sessionId: 'session-a',
+            accountId: resolved.scope.accountId, credentialKey: resolved.credentialKey };
+        const watchSignals: AbortSignal[] = [];
+        vi.spyOn(inventoryMachineRpc, 'watchLocalServiceInventorySnapshotViaMachineRpc').mockImplementation(async input => {
+            if (input.signal) watchSignals.push(input.signal);
+            return new Promise(() => {});
+        });
+        const snapshotClient = vi.fn<LocalServiceLauncherSnapshotClient>(async () => ({ ok: true, snapshot: initialSnapshot }));
+        function Probe() {
+            useLocalServiceLauncherStateController({ ...key, snapshotClient });
+            return null;
+        }
+        const frame = (active: boolean) => <RetainedPanelSurface isActive={active}><Probe /></RetainedPanelSurface>;
+        const screen = await renderScreen(frame(true));
+        await vi.waitFor(() => expect(getLocalServiceLauncherState(key).updatedAt).toBe(1_000));
+        await vi.waitFor(() => expect(watchSignals).toHaveLength(1));
+        await flushHookEffects();
+        if (visibility === 'hidden') await screen.update(frame(false));
+        else await screen.unmount();
+        expect(watchSignals[0]?.aborted).toBe(true);
+        expect(getLocalServiceLauncherState(key).targetsById.get('managed:preview')?.title).toBe('Preview');
+        const closedReads = snapshotClient.mock.calls.length;
+        const retained = getLocalServiceLauncherState(key);
+        const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
+        const otherHome = await upsertServerProfileOnly({ serverUrl: `https://launcher-other-${visibility}.example.test`, name: 'Other Home' });
+        await act(async () => {
+            expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId: connection.serverId }, connection.credentials)).toBe(true);
+            expect(await TokenStorage.setCredentialsForServerUrl(otherHome.serverUrl, { serverId: otherHome.id }, connection.credentials)).toBe(true);
+            expect(await TokenStorage.removeCredentialsForServerUrl(otherHome.serverUrl, { serverId: otherHome.id })).toBe(true);
+        });
+        expect(getLocalServiceLauncherState(key)).toBe(retained);
+        expect(snapshotClient).toHaveBeenCalledTimes(closedReads);
+        await act(async () => {
+            expect(await TokenStorage.removeCredentialsForServerUrl(serverUrl, { serverId: connection.serverId })).toBe(true);
+        });
+        expect(getLocalServiceLauncherState(key).targetsById.size).toBe(0);
+        await flushHookEffects();
+        expect(snapshotClient).toHaveBeenCalledTimes(closedReads);
+        if (visibility === 'hidden') await screen.unmount();
     });
 
     it('keeps qualified cached rows without hidden demand and retires real credential reads', async () => {

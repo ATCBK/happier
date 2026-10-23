@@ -15,6 +15,93 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it('forgets retained content on owner retirement without deleting another or replacement entry', async () => {
+        const retirements: Array<{ key: string; retire(): void; dispose: ReturnType<typeof vi.fn> }> = [];
+        let value = 0;
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            retainState: true, defaultSnapshotClient: async () => ++value,
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, snapshot: number) => snapshot,
+            subscribeRetirement: (key: string, retire: () => void) => {
+                const dispose = vi.fn();
+                retirements.push({ key, retire, dispose });
+                return dispose;
+            },
+        });
+        const release = store.subscribe('first', () => {});
+        await store.read('first');
+        release();
+        expect(store.getState('first')).toBe(1);
+        await store.read('other');
+        try {
+            retirements.find(entry => entry.key === 'first')?.retire();
+            expect(store.getState('first')).toBe(0);
+            expect(store.getState('other')).toBe(2);
+            expect(retirements[0]?.dispose).toHaveBeenCalledOnce();
+            store.publish('first', 99);
+            expect(store.getState('first')).toBe(0);
+            const replacement = store.subscribe('first', () => {});
+            try {
+                await store.read('first');
+                expect(store.getState('first')).toBe(3);
+                retirements[0]?.retire();
+                release();
+                expect(store.getState('first')).toBe(3);
+                expect(retirements[2]?.dispose).not.toHaveBeenCalled();
+            } finally { replacement(); }
+        } finally { release(); store.reset(); }
+        expect(retirements.every(entry => entry.dispose.mock.calls.length === 1)).toBe(true);
+    });
+
+    it.each(['read', 'watch'] as const)('empties active observers and cancels owned %s work on retirement without rewatching', async phase => {
+        let retire = () => {};
+        const requests: Array<{ signal?: AbortSignal; resolve(value: number): void }> = [];
+        const watches: Array<{ signal?: AbortSignal; resolve(value: SharedSubscriptionWatchOutcome<number>): void }> = [];
+        const listener = vi.fn();
+        const detachRecovery = vi.fn();
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            watchAfterRefresh: true,
+            defaultSnapshotClient: (signal?: AbortSignal) => new Promise<number>(resolve => requests.push({ signal, resolve })),
+            defaultWatchClient: (signal?: AbortSignal) => new Promise<SharedSubscriptionWatchOutcome<number>>(resolve => watches.push({ signal, resolve })),
+            beginRefresh: () => -1,
+            refresh: ({ snapshotClient, signal }) => snapshotClient(signal),
+            watch: ({ watchClient, signal }) => watchClient(signal),
+            applySnapshot: (_state: number, snapshot: number) => snapshot,
+            subscribeRecovery: () => detachRecovery,
+            subscribeRetirement: (_key: string, callback: () => void) => { retire = callback; return () => {}; },
+        });
+        const release = store.subscribe('resource', listener);
+        let releaseReplacement = () => {};
+        try {
+            if (phase === 'watch') {
+                requests[0]!.resolve(7);
+                await vi.waitFor(() => expect(watches).toHaveLength(1));
+            }
+            listener.mockClear();
+            retire();
+            expect(store.getState('resource')).toBe(0);
+            expect(listener).toHaveBeenCalledOnce();
+            expect(requests[0]!.signal?.aborted).toBe(phase === 'read');
+            expect(detachRecovery).toHaveBeenCalledOnce();
+            if (phase === 'watch') expect(watches[0]!.signal?.aborted).toBe(true);
+            requests[0]!.resolve(99);
+            watches[0]?.resolve({ status: 'changed', snapshot: 99 });
+            for (let turn = 0; turn < 8; turn++) await Promise.resolve();
+            expect(store.getState('resource')).toBe(0);
+            expect(watches).toHaveLength(phase === 'watch' ? 1 : 0);
+            releaseReplacement = store.subscribe('resource', () => {});
+            release();
+            requests[1]!.resolve(8);
+            await vi.waitFor(() => expect(store.getState('resource')).toBe(8));
+            expect(watches).toHaveLength(phase === 'watch' ? 2 : 1);
+        } finally {
+            releaseReplacement(); release(); store.reset();
+            for (const request of requests) request.resolve(0);
+            for (const watch of watches) watch.resolve({ status: 'unavailable' });
+        }
+    });
+
     it('refreshes a non-covering publication only while the retained projection is demanded', async () => {
         type Input = Readonly<{ machineId: string; projection: string }>;
         const input: Input = { machineId: 'machine', projection: 'workspace' };

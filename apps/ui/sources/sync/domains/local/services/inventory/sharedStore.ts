@@ -1,6 +1,9 @@
 import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
 import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
 import { subscribeMachineRpcRecovery } from '@/sync/runtime/orchestration/serverScopedRpc/subscribeMachineRpcRecovery';
+import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import {
     type LocalServiceInventorySnapshotClientInput,
     type LocalServiceInventorySnapshotClientResult,
@@ -69,6 +72,21 @@ function storeKey(input: LocalServiceInventoryStoreKeyInput): string {
     return JSON.stringify([input.serverId ?? '', input.machineId, input.accountId ?? '', input.credentialKey ?? '']);
 }
 
+/** Credential mutation outlives a surface's hook lifetime and ordinary close/unmount. */
+export function subscribeLocalServiceCredentialRetirement(
+    input: Pick<LocalServiceInventoryStoreKeyInput, 'serverId' | 'accountId' | 'credentialKey'>,
+    retire: () => void,
+): () => void {
+    if (!input.serverId || !input.accountId || !input.credentialKey) return () => {};
+    const { serverId, credentialKey } = input;
+    return subscribeHomeCredentialChange(event => {
+        if (!areServerProfileIdentifiersEquivalent(event.serverId, serverId)) return;
+        if (event.kind === 'credentials_set' && event.credentials
+            && resolveAuthCredentialsScopeKey(event.credentials) === credentialKey) return;
+        retire();
+    });
+}
+
 const store = createSharedSubscriptionStore<
     LocalServiceInventoryStoreKeyInput,
     LocalServiceInventoryState,
@@ -76,8 +94,9 @@ const store = createSharedSubscriptionStore<
     LocalServiceInventorySnapshotClient,
     LocalServiceInventoryWatchClient
 >({
-    // Retention is app-session only; consumers project through the current credential binding.
+    // Close retains display facts; actual credential replacement/removal drops them.
     retainState: true,
+    subscribeRetirement: subscribeLocalServiceCredentialRetirement,
     emptyState: EMPTY_LOCAL_SERVICE_INVENTORY_STATE,
     createState: createLocalServiceInventoryState,
     normalizeInput,
