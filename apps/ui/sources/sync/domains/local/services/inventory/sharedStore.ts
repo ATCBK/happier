@@ -32,12 +32,16 @@ export type LocalServiceInventoryStoreKeyInput = Readonly<{
     machineId: string;
     serverId?: string | null;
     sessionId?: string | null;
+    accountId?: string | null;
+    credentialKey?: string | null;
 }>;
 
 type NormalizedLocalServiceInventoryStoreKeyInput = Readonly<{
     machineId: string;
     serverId: string | null;
     sessionId: string | null;
+    accountId: string | null;
+    credentialKey: string | null;
 }>;
 
 export const EMPTY_LOCAL_SERVICE_INVENTORY_STATE: LocalServiceInventoryState = createLocalServiceInventoryState();
@@ -56,11 +60,13 @@ function normalizeInput(input: LocalServiceInventoryStoreKeyInput): NormalizedLo
         serverId: input.serverId ?? null,
         // Inventory RPCs are Machine-wide; Session surfaces share the same scan and watch.
         sessionId: null,
+        accountId: input.accountId ?? null,
+        credentialKey: input.credentialKey ?? null,
     };
 }
 
 function storeKey(input: LocalServiceInventoryStoreKeyInput): string {
-    return `${input.serverId ?? ''}::${input.machineId}`;
+    return JSON.stringify([input.serverId ?? '', input.machineId, input.accountId ?? '', input.credentialKey ?? '']);
 }
 
 const store = createSharedSubscriptionStore<
@@ -70,6 +76,8 @@ const store = createSharedSubscriptionStore<
     LocalServiceInventorySnapshotClient,
     LocalServiceInventoryWatchClient
 >({
+    // Retention is app-session only; consumers project through the current credential binding.
+    retainState: true,
     emptyState: EMPTY_LOCAL_SERVICE_INVENTORY_STATE,
     createState: createLocalServiceInventoryState,
     normalizeInput,
@@ -82,6 +90,7 @@ const store = createSharedSubscriptionStore<
         const result = await snapshotClient({
             machineId: input.machineId,
             serverId: input.serverId,
+            accountId: input.accountId,
             sessionId: input.sessionId,
             refresh: true,
             signal,
@@ -94,7 +103,7 @@ const store = createSharedSubscriptionStore<
         applyLocalServiceInventoryRefreshFailed(state, input.machineId)
     ),
     failWatch: (state, input) => applyLocalServiceInventoryRefreshFailed(state, input.machineId),
-    subscribeRecovery: subscribeMachineRpcRecovery,
+    subscribeRecovery: (input, recover) => subscribeMachineRpcRecovery({ ...input, expectedAccountId: input.accountId }, recover),
     applySnapshot: applyLocalServiceInventorySnapshot,
     defaultWatchClient,
     watchAfterRefresh: true,
@@ -105,6 +114,7 @@ const store = createSharedSubscriptionStore<
         const result = await watchClient({
             machineId: input.machineId,
             serverId: input.serverId,
+            accountId: input.accountId,
             sessionId: input.sessionId,
             sinceGeneratedAt: state.generatedAt,
             ...(signal ? { signal } : {}),

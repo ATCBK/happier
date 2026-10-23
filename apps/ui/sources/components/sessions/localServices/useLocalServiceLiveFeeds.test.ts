@@ -9,10 +9,11 @@ import { RpcError, RPC_ERROR_CODES, MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happ
 import { managedMachineActionEndpointPathV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { storage } from '@/sync/domains/state/storage';
 import { createLocalServiceInventoryState } from '@/sync/domains/local/services/inventory/store';
-import { publishLocalServiceLauncherSnapshot, resetLocalServiceLauncherStoreForTests } from '@/sync/domains/local/services/launch/sharedStore';
+import { invalidateLocalServiceLauncherStore, readLocalServiceLauncherStore, publishLocalServiceLauncherSnapshot, resetLocalServiceLauncherStoreForTests } from '@/sync/domains/local/services/launch/sharedStore';
 import { publishLocalServiceInventorySnapshot, resetLocalServiceInventoryStoreForTests } from '@/sync/domains/local/services/inventory/sharedStore';
 import { useLocalServiceLiveFeeds } from './useLocalServiceLiveFeeds';
 import { buildLocalServiceRows } from '@/sync/domains/local/services/serviceRow';
@@ -53,6 +54,9 @@ describe('Project Services source feed plus actual native binding', () => {
     const watches: Array<(value: unknown) => void> = [];
     const watchSignals: AbortSignal[] = [];
     let running = false;
+    let sourceGeneration = 1;
+    let holdReopen = false;
+    const reopenedLauncher = createDeferred<void>();
     remote.mockImplementation(async ({ method, machineId, payload, signal }: {
       method: string; machineId: string; payload: { projection?: 'managed_bindings' }; signal: AbortSignal;
     }) => {
@@ -60,8 +64,12 @@ describe('Project Services source feed plus actual native binding', () => {
         watchSignals.push(signal);
         return new Promise((resolve, reject) => watches.push(value => value instanceof Error ? reject(value) : resolve(value)));
       }
-      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) return { protocolVersion: 1,
-        snapshot: { v: 1, machineId, updatedAt: running ? 100 : 1, targets: payload.projection ? running ? [actual] : [] : [declaration] } };
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) {
+        if (holdReopen) await reopenedLauncher.promise;
+        return { protocolVersion: 1,
+          snapshot: { v: 1, machineId, updatedAt: running ? 100 : payload.projection ? 1 : sourceGeneration,
+            targets: payload.projection ? running ? [actual] : [] : [declaration] } };
+      }
       return { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } };
     });
     let presented = true;
@@ -80,20 +88,30 @@ describe('Project Services source feed plus actual native binding', () => {
       await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } }));
       await vi.waitFor(() => expect(watches).toHaveLength(1));
       if (recovery === 'watch') {
+        await flushHookEffects();
         const before = rowPublications;
-        const reads = remote.mock.calls.length;
-        // Seventy-five unchanged four-second scan generations represent five settled minutes.
-        // The watch cursor stays current; none of these observations changes a Service row.
+        const countReads = (bindings: boolean) => remote.mock.calls.filter(([request]) =>
+          request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT
+            && Boolean(request.payload.projection) === bindings).length;
+        const sourceReads = countReads(false);
+        const bindingReads = countReads(true);
+        const key = { machineId: source.machineId, serverId, scope: 'workspace' as const, workspaceRoot: source.rootPath };
+        // Replay 75 required source reads at the brief's four-second observation cadence.
+        // Unchanged facts must not republish rows or restart the admitted binding census.
         for (let generation = 2; generation <= 76; generation++) {
-          await act(async () => { publishLocalServiceLauncherSnapshot({ machineId: source.machineId, serverId,
-            scope: 'workspace', workspaceRoot: source.rootPath }, { v: 1, machineId: source.machineId,
-            updatedAt: generation, targets: [structuredClone(declaration)] }); });
+          await act(async () => {
+            sourceGeneration = generation;
+            invalidateLocalServiceLauncherStore(key);
+            await readLocalServiceLauncherStore(key);
+          });
         }
         expect(rowPublications - before).toBe(0);
-        expect(remote.mock.calls.length - reads).toBe(0);
+        expect(countReads(false) - sourceReads).toBe(75);
+        expect(countReads(true) - bindingReads).toBe(0);
         expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } });
       }
       if (recovery === 'visibility') {
+        const cachedRow = readRows()[0];
         presented = false;
         await hook.rerender();
         expect(watchSignals.every(signal => signal.aborted)).toBe(true);
@@ -101,8 +119,13 @@ describe('Project Services source feed plus actual native binding', () => {
         await act(async () => { publishHomeAccountChange(serverId, undefined, { source: 'connected' }); });
         expect(remote.mock.calls).toHaveLength(readsWhileClosed);
         running = true;
+        holdReopen = true;
         presented = true;
         await hook.rerender();
+        // SOURCE declaration plus its accepted native census stay visible while
+        // the same canonical stores revalidate; pending is not cached content.
+        expect(readRows()[0]).toEqual(cachedRow);
+        reopenedLauncher.resolve();
         await vi.waitFor(() => expect(watches).toHaveLength(2));
       } else if (recovery !== 'watch') {
         // Non-timeout transport failure or invalid reply, without navigating the Services page.
@@ -129,7 +152,7 @@ describe('Project Services source feed plus actual native binding', () => {
       await act(async () => { watches.at(-1)!({ protocolVersion: 1, changed: true,
         snapshot: { v: 1, machineId: source.machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] } }); });
       await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ id: declaration.id, status: 'running', target: actual }));
-    } finally { await hook.unmount(); }
+    } finally { reopenedLauncher.resolve(); await hook.unmount(); }
   });
   it.each([false, true])('isolates failed candidate reads from present SOURCE custody, while absence requires the full census (present=%s)', async hostPresent => {
     home = await createPlainArtifactHomeFixture('https://project-services-copy-binding.test', { handleRequest: async path =>

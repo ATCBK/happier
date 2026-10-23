@@ -1,3 +1,4 @@
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { SessionArchiveActionInputV1Schema } from '@happier-dev/protocol/sessions/control/contract';
 import { isSessionArchiveOperationCurrent, resolveSessionArchiveAddress, type SessionArchiveOperation } from '@/sync/domains/session/listing/sessionArchiveState';
@@ -840,7 +841,12 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   const promptLibraryStore = accountContext ? createUiPromptLibraryArtifactStore(accountContext.workflowArtifacts, accountContext) : null;
   const withPromptLibraryStore = <T>(run: (store: PromptLibraryArtifactStore) => Promise<T>, signal?: AbortSignal): Promise<T> =>
     promptLibraryStore ? run(promptLibraryStore) : withUiPromptLibraryArtifactStore(run, { signal });
-  const runtimeActionExecute = createDefaultRuntimeActionExecutor(opts?.runtimeActions, accountContext?.accountLifetime, async (args) => {
+  const runtimeActionExecute = createDefaultRuntimeActionExecutor({ ...opts?.runtimeActions,
+    localServices: { ...opts?.runtimeActions?.localServices,
+      ...(accountContext ? { catalogBinding: { lifetime: accountContext.accountLifetime,
+        credentialKey: resolveAuthCredentialsScopeKey(accountContext.credentials) } } : {}),
+    },
+  }, accountContext?.accountLifetime, async (args) => {
     const target = args.context.externalActionTarget;
     if (!accountContext || target?.kind !== 'machine' || !target.machineId.trim()) return { ok: false, errorCode: 'runtime_action_disabled', error: 'browser_automation_unavailable' };
     const result = await executeOriginalAccountMachineAction({ account: accountContext, actionId: args.actionId,

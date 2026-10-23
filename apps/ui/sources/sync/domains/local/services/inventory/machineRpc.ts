@@ -33,6 +33,7 @@ export async function fetchLocalServiceInventorySnapshotViaMachineRpc(
         const raw = await machineRpcWithServerScope<unknown, typeof payload>({
             machineId: input.machineId,
             serverId: input.serverId,
+            accountId: input.accountId,
             method: input.refresh
                 ? RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH
                 : RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
@@ -80,6 +81,7 @@ export async function watchLocalServiceInventorySnapshotViaMachineRpc(
         const raw = await machineRpcWithServerScope<unknown, typeof payload>({
             machineId: input.machineId,
             serverId: input.serverId,
+            accountId: input.accountId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH,
             payload,
             timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000,

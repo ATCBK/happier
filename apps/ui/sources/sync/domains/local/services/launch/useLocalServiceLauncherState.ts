@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { resolveMachineDaemonReadServerId } from '@/sync/domains/machines/useMachineDaemonReadTarget';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import type {
@@ -57,9 +59,11 @@ export function useLocalServiceLauncherStateController(
     input: UseLocalServiceLauncherStateInput,
 ): LocalServiceLauncherStateController {
     const presented = useLayoutPresentationActive();
-    const enabled = (input.enabled ?? true) && presented;
+    const eligible = input.enabled ?? true;
+    const enabled = eligible && presented;
     const machineId = normalizeId(input.machineId);
-    const serverId = normalizeId(input.serverId);
+    const serverId = resolveMachineDaemonReadServerId(input.serverId);
+    const { binding } = useServerCredentialAccountScopeBinding(serverId);
     const sessionId = normalizeId(input.sessionId);
     const scope = input.scope ?? null;
     const workspaceRoot = normalizeId(input.workspaceRoot);
@@ -69,17 +73,18 @@ export function useLocalServiceLauncherStateController(
     const inventorySnapshotClientRef = React.useRef(input.inventorySnapshotClient);
     const nowMsRef = React.useRef(nowMs);
     const storeKey = React.useMemo<LocalServiceLauncherStoreKeyInput | null>(() => (
-        enabled && machineId ? { machineId, serverId, sessionId, scope, workspaceRoot } : null
-    ), [enabled, machineId, scope, serverId, sessionId, workspaceRoot]);
+        eligible && machineId && binding?.isCurrent() && binding.credentialKey
+            ? { machineId, serverId, sessionId, scope, workspaceRoot, accountId: binding.accountId, credentialKey: binding.credentialKey } : null
+    ), [binding, eligible, machineId, scope, serverId, sessionId, workspaceRoot]);
     const applySnapshot = React.useCallback((snapshot: LocalServiceLauncherSnapshot) => {
-        if (!storeKey || snapshot.machineId !== storeKey.machineId) {
+        if (!storeKey || !binding?.isCurrent() || snapshot.machineId !== storeKey.machineId) {
             return;
         }
         if (storeKey.sessionId && snapshot.sessionId !== storeKey.sessionId) {
             return;
         }
         publishLocalServiceLauncherSnapshot(storeKey, snapshot);
-    }, [storeKey]);
+    }, [binding, storeKey]);
 
     React.useEffect(() => {
         snapshotClientRef.current = snapshotClient;
@@ -87,25 +92,27 @@ export function useLocalServiceLauncherStateController(
         nowMsRef.current = nowMs;
     }, [nowMs, snapshotClient, input.inventorySnapshotClient]);
 
-    const subscribe = React.useCallback((listener: () => void) => (
-        storeKey
-            ? subscribeLocalServiceLauncherStore(storeKey, listener, {
+    const subscribe = React.useCallback((listener: () => void) => {
+        if (!enabled || !storeKey || !binding?.isCurrent()) return () => {};
+        const release = subscribeLocalServiceLauncherStore(storeKey, listener, {
                 ...(snapshotClientRef.current ? { snapshotClient: (request) => snapshotClientRef.current!(request) } : {}),
                 ...(inventorySnapshotClientRef.current ? { inventorySnapshotClient: (request) => inventorySnapshotClientRef.current!(request) } : {}),
                 nowMs: () => nowMsRef.current(),
-            })
-            : () => {}
-    ), [storeKey]);
+        });
+        const retirement = binding.onRetire(() => { release(); listener(); });
+        return () => { retirement.dispose(); release(); };
+    }, [binding, enabled, storeKey]);
 
     const getSnapshot = React.useCallback(() => (
-        storeKey ? getLocalServiceLauncherState(storeKey) : EMPTY_LOCAL_SERVICE_LAUNCHER_STATE
-    ), [storeKey]);
+        storeKey && binding?.isCurrent() ? getLocalServiceLauncherState(storeKey) : EMPTY_LOCAL_SERVICE_LAUNCHER_STATE
+    ), [binding, storeKey]);
 
     const state = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
     const refresh = React.useMemo(() => (
-        storeKey ? () => invalidateLocalServiceLauncherStore(storeKey) : undefined
-    ), [storeKey]);
+        enabled && storeKey && binding?.isCurrent()
+            ? () => { if (binding.isCurrent()) invalidateLocalServiceLauncherStore(storeKey); } : undefined
+    ), [binding, enabled, storeKey]);
 
     return React.useMemo(() => ({
         state,

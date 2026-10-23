@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalServiceInventorySnapshotV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
 import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
-import { flushHookEffects } from '@/dev/testkit';
+import { createDeferred, flushHookEffects } from '@/dev/testkit';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn(), snapshot: vi.fn() }));
 // Snapshot/watch RPCs are the genuine daemon transport; internal clients and stores stay real.
@@ -62,6 +62,43 @@ describe('shared local-service inventory store', () => {
     });
     afterEach(() => {
         resetLocalServiceInventoryStoreForTests();
+    });
+
+    it('retains only qualified inventory content while closed and revalidates once on reopen', async () => {
+        const key = { machineId: 'machine-a', serverId: 'server-a', accountId: 'account-a', credentialKey: 'credential-a' };
+        const watchSignals: AbortSignal[] = [];
+        rpc.machine.mockImplementation(async (request: { method: string; signal: AbortSignal }) => {
+            if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
+                watchSignals.push(request.signal);
+                return new Promise(() => {});
+            }
+            return rpc.snapshot(request);
+        });
+        rpc.snapshot.mockResolvedValue({ protocolVersion: 1, snapshot });
+        const release = subscribeLocalServiceInventoryStore(key, () => {});
+        await vi.waitFor(() => expect(watchSignals).toHaveLength(1));
+        const heldRows = selectLocalServiceInventoryRows(getLocalServiceInventoryState(key));
+        release();
+        expect(watchSignals[0]?.aborted).toBe(true);
+        expect(selectLocalServiceInventoryRows(getLocalServiceInventoryState(key))).toEqual(heldRows);
+        expect(selectLocalServiceInventoryRows(getLocalServiceInventoryState({ ...key, accountId: 'account-b' }))).toEqual([]);
+        expect(selectLocalServiceInventoryRows(getLocalServiceInventoryState({ ...key, credentialKey: 'replacement-credential' }))).toEqual([]);
+        const closedCalls = rpc.machine.mock.calls.length;
+        await flushMicrotasks();
+        expect(rpc.machine).toHaveBeenCalledTimes(closedCalls);
+        const pending = createDeferred<unknown>();
+        rpc.snapshot.mockImplementation(() => pending.promise);
+        const reopen = subscribeLocalServiceInventoryStore(key, () => {});
+        expect(selectLocalServiceInventoryRows(getLocalServiceInventoryState(key))).toEqual(heldRows);
+        await vi.waitFor(() => expect(rpc.snapshot).toHaveBeenCalledTimes(2));
+        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'account-a',
+            method: RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH, payload: { machineId: 'machine-a' } }));
+        pending.resolve({ protocolVersion: 1, snapshot: { ...snapshot, generatedAt: 2_000, entries: [] } });
+        await vi.waitFor(() => expect(watchSignals).toHaveLength(2));
+        expect(getLocalServiceInventoryState(key).generatedAt).toBe(2_000);
+        expect(selectLocalServiceInventoryRows(getLocalServiceInventoryState(key))).toEqual([]);
+        reopen();
+        expect(watchSignals[1]?.aborted).toBe(true);
     });
 
     it('seeds the parked watch from the initial snapshot instead of racing the first scan', async () => {

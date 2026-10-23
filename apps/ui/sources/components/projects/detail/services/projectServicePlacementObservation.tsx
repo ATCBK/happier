@@ -87,13 +87,13 @@ function ServiceManagedMachineObserver(props: Readonly<{
 /** One canonical operation/Cancel observer for each accepted service, shared by both row bodies. */
 function ServiceOperationObserver(props: Readonly<{
   source: ProjectServiceSource;
-  accountId: string;
+  binding: ServerCredentialAccountScopeBinding;
   serviceName: string;
   attachment: ProjectServicePlacementOperationAttachment;
   publish: (serviceName: string, operationId: string, observation: OperationObservation) => void;
 }>) {
   const record = useActionOperation({ serverId: props.source.serverId, operationId: props.attachment.operationId });
-  const operation = record?.snapshot.scope.accountId === props.accountId
+  const operation = record?.snapshot.scope.accountId === props.binding.accountId
     && (record.snapshot.actionId === 'projects.service.relocate' || record.snapshot.actionId === 'localServices.launcher.start') ? record : null;
   const active = operation?.snapshot.state === 'accepted' || operation?.snapshot.state === 'running';
   const stop = useActionOperationStopControl(active ? operation : null);
@@ -105,14 +105,15 @@ function ServiceOperationObserver(props: Readonly<{
   }, [observation, props.attachment.operationId, props.publish, props.serviceName]);
   const state = operation?.snapshot.state;
   React.useEffect(() => {
-    if (state !== 'succeeded' && state !== 'failed' && state !== 'cancelled') return;
+    if (!props.binding.isCurrent() || (state !== 'succeeded' && state !== 'failed' && state !== 'cancelled')) return;
     // Settlement is independent of inventory scan generations. Re-read native facts,
     // including absence, rather than leaving a cached Running row until page reload.
     const machines = new Set([props.source.machineId, operation!.snapshot.scope.machineId]);
     const destination = props.attachment.destination;
     if (destination.kind === 'workers' && destination.destination.kind === 'machine') machines.add(destination.destination.machineId);
-    for (const machineId of machines) invalidateLocalServiceLauncherStores({ serverId: props.source.serverId, machineId });
-  }, [state, props.attachment, props.source.machineId, props.source.serverId]);
+    for (const machineId of machines) invalidateLocalServiceLauncherStores({ serverId: props.source.serverId, machineId,
+      accountId: props.binding.accountId, credentialKey: props.binding.credentialKey });
+  }, [state, props.attachment, props.binding, props.source.machineId, props.source.serverId]);
   return null;
 }
 
@@ -411,7 +412,7 @@ function ScopedObservationProvider(props: Readonly<{
     {[...managedSelections].map(([name, selection]) => <ServiceManagedMachineObserver key={name} source={props.source}
       binding={props.binding} runtimeActionExecute={props.runtimeActionExecute} name={name} selection={selection} publish={publishManaged} />)}
     {props.binding ? [...entries].map(([serviceName, entry]) => <ServiceOperationObserver
-      key={`${serviceName}:${entry.attachment.operationId}`} source={props.source} accountId={props.binding!.accountId}
+      key={`${serviceName}:${entry.attachment.operationId}`} source={props.source} binding={props.binding!}
       serviceName={serviceName} attachment={entry.attachment} publish={publish} />) : null}
     {props.children}
   </Context.Provider></StartContext.Provider>;

@@ -12,6 +12,7 @@ import { ProjectServiceRelocateInputV1Schema, ProjectServiceRelocateResultV1Sche
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { UiActionExecutorContext } from '@/sync/ops/actions/defaultActionExecutor';
 
 import {
@@ -80,6 +81,8 @@ import type {
 import { publishLocalServicePublicPreviewSnapshot } from '../publicPreview/sharedStore';
 
 export type CreateLocalServicesRuntimeActionExecutorInput = Readonly<{
+    /** Captured by the existing UI Action Account owner, never resolved from ambient state on reply. */
+    catalogBinding?: Readonly<{ lifetime: ServerAccountScopeLifetime; credentialKey: string }>;
     executeOnMachine?: RuntimeActionExecute;
     resolveMachineId?: (args: RuntimeActionExecuteArgs) => string | null | undefined;
     readWorkspaceRefs?: () => Readonly<{ serverId: string; accountId: string; refs: readonly WorkspaceRefV1[] }> | null;
@@ -318,28 +321,29 @@ export function createLocalServicesRuntimeActionExecutor(
     input: CreateLocalServicesRuntimeActionExecutorInput = {},
 ): RuntimeActionExecute {
     const fallback = input.fallback ?? createUnavailableRuntimeActionExecutor();
+    const catalogBinding = input.catalogBinding;
+    const catalogScope = catalogBinding ? { serverId: catalogBinding.lifetime.scope.serverId,
+        accountId: catalogBinding.lifetime.scope.accountId, credentialKey: catalogBinding.credentialKey } : {};
+    const mayPublishCatalog = (serverId: string | null | undefined) => !catalogBinding || (
+        catalogBinding.lifetime.isCurrent() && (!serverId
+            || areServerProfileIdentifiersEquivalent(serverId, catalogBinding.lifetime.scope.serverId)));
+    const invalidateInventory = (target: Parameters<typeof invalidateLocalServiceInventoryStore>[0]) => {
+        if (mayPublishCatalog(target.serverId)) invalidateLocalServiceInventoryStore({ ...target, ...catalogScope });
+    };
     const fetchInventorySnapshot = input.fetchInventorySnapshot ?? fetchLocalServiceInventorySnapshot;
-    const onInventorySnapshot = input.onInventorySnapshot
-        ?? ((published) => publishLocalServiceInventorySnapshot(
-            {
-                machineId: published.machineId,
-                serverId: published.serverId,
-                sessionId: published.sessionId,
-            },
-            published.snapshot,
-        ));
+    const onInventorySnapshot: NonNullable<CreateLocalServicesRuntimeActionExecutorInput['onInventorySnapshot']> = published => {
+        if (mayPublishCatalog(published.serverId)) {
+            if (input.onInventorySnapshot) input.onInventorySnapshot(published);
+            else publishLocalServiceInventorySnapshot({ ...published, ...catalogScope }, published.snapshot);
+        }
+    };
     const fetchLauncherSnapshot = input.fetchLauncherSnapshot ?? fetchLocalServiceLauncherSnapshot;
-    const onLauncherSnapshot = input.onLauncherSnapshot
-        ?? ((published) => publishLocalServiceLauncherSnapshot(
-            {
-                machineId: published.machineId,
-                serverId: published.serverId,
-                sessionId: published.sessionId,
-                scope: published.scope,
-                workspaceRoot: published.workspaceRoot,
-            },
-            published.snapshot,
-        ));
+    const onLauncherSnapshot: NonNullable<CreateLocalServicesRuntimeActionExecutorInput['onLauncherSnapshot']> = published => {
+        if (mayPublishCatalog(published.serverId)) {
+            if (input.onLauncherSnapshot) input.onLauncherSnapshot(published);
+            else publishLocalServiceLauncherSnapshot({ ...published, ...catalogScope }, published.snapshot);
+        }
+    };
     const startLauncherTarget = input.startLauncherTarget;
     const openLauncherPreview = input.openLauncherPreview ?? openLocalServiceLauncherPreviewViaMachineRpc;
     const registerLauncherPreview = input.registerLauncherPreview ?? registerLocalServiceLauncherPreviewViaMachineRpc;
@@ -406,7 +410,7 @@ export function createLocalServicesRuntimeActionExecutor(
             const outcome = ProjectServiceRelocateResultV1Schema.safeParse(result);
             if (outcome.success && ['accepted', 'moved', 'unchanged'].includes(outcome.data.status)) {
                 for (const machineId of new Set([source.ref.machineId, request.currentTarget.machineId, request.selectedTarget.machineId])) {
-                    invalidateLocalServiceInventoryStore({ machineId, serverId: request.workspace.serverId });
+                    invalidateInventory({ machineId, serverId: request.workspace.serverId });
                 }
             }
             return result;
@@ -426,6 +430,7 @@ export function createLocalServicesRuntimeActionExecutor(
             const result = await fetchInventorySnapshot({
                 machineId,
                 serverId,
+                ...(catalogBinding ? { accountId: catalogBinding.lifetime.scope.accountId } : {}),
                 sessionId,
                 refresh: args.actionId === 'localServices.inventory.refresh',
                 signal: args.context.signal,
@@ -433,7 +438,9 @@ export function createLocalServicesRuntimeActionExecutor(
             });
             if (!result.ok) return routeFailureResult('inventory', result.reason, result.reasonCode);
             onInventorySnapshot({ machineId, serverId, sessionId, snapshot: result.snapshot });
-            if (args.actionId === 'localServices.inventory.refresh') recoverLocalServiceLauncherStores({ machineId, serverId });
+            if (args.actionId === 'localServices.inventory.refresh' && mayPublishCatalog(serverId)) {
+                recoverLocalServiceLauncherStores({ machineId, serverId, ...catalogScope });
+            }
             return result.snapshot;
         }
 
@@ -448,6 +455,7 @@ export function createLocalServicesRuntimeActionExecutor(
             const result = await fetchLauncherSnapshot({
                 ...request.data,
                 serverId,
+                ...(catalogBinding ? { accountId: catalogBinding.lifetime.scope.accountId } : {}),
                 signal: args.context.signal,
                 request: input.request,
             });
@@ -480,7 +488,7 @@ export function createLocalServicesRuntimeActionExecutor(
             onLauncherSnapshot({ machineId, serverId, sessionId,
                 ...(request.workspace ? { scope: 'workspace' as const, workspaceRoot: request.workspace.rootPath } : {}),
                 snapshot: result.response.snapshot });
-            if (result.response.status === 'succeeded') invalidateLocalServiceInventoryStore({ machineId, serverId });
+            if (result.response.status === 'succeeded') invalidateInventory({ machineId, serverId });
             return result.response;
         }
 
@@ -693,7 +701,7 @@ export function createLocalServicesRuntimeActionExecutor(
             // also recovers a retired inventory watch; derived launcher projections follow it.
             if (result.ok && result.result.status === 'succeeded'
                 && request.data.action !== 'copy_url' && request.data.action !== 'open_preview') {
-                invalidateLocalServiceInventoryStore({ machineId: request.data.target.machineId, serverId });
+                invalidateInventory({ machineId: request.data.target.machineId, serverId });
             }
             return result.ok ? result.result : routeFailureResult('action', result.reason);
         }

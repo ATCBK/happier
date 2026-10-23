@@ -29,6 +29,7 @@ export type LocalServiceLauncherStoreKeyInput = Readonly<{
     workspaceRoot?: string | null;
     projection?: 'managed_bindings' | null;
     accountId?: string | null;
+    credentialKey?: string | null;
 }>;
 
 type NormalizedLocalServiceLauncherStoreKeyInput = Readonly<{
@@ -39,6 +40,7 @@ type NormalizedLocalServiceLauncherStoreKeyInput = Readonly<{
     workspaceRoot: string | null;
     projection: 'managed_bindings' | null;
     accountId: string | null;
+    credentialKey: string | null;
 }>;
 
 export const EMPTY_LOCAL_SERVICE_LAUNCHER_STATE: LocalServiceLauncherState = createLocalServiceLauncherState();
@@ -56,11 +58,12 @@ function normalizeInput(input: LocalServiceLauncherStoreKeyInput): NormalizedLoc
         workspaceRoot: input.workspaceRoot ?? null,
         projection: input.projection ?? null,
         accountId: input.accountId ?? null,
+        credentialKey: input.credentialKey ?? null,
     };
 }
 
 function storeKey(input: LocalServiceLauncherStoreKeyInput): string {
-    return [
+    return JSON.stringify([
         input.serverId ?? '',
         input.machineId,
         input.sessionId ?? '',
@@ -68,7 +71,8 @@ function storeKey(input: LocalServiceLauncherStoreKeyInput): string {
         input.workspaceRoot ?? '',
         input.projection ?? '',
         input.accountId ?? '',
-    ].join('::');
+        input.credentialKey ?? '',
+    ]);
 }
 
 function entryMatches(
@@ -77,6 +81,8 @@ function entryMatches(
 ): boolean {
     const entry = normalizeInput(entryInput);
     return entry.machineId === publishInput.machineId
+        && entry.accountId === (publishInput.accountId ?? null)
+        && entry.credentialKey === (publishInput.credentialKey ?? null)
         && (publishInput.serverId === undefined || entry.serverId === (publishInput.serverId ?? null))
         && (publishInput.sessionId === undefined || entry.sessionId === (publishInput.sessionId ?? null))
         && (publishInput.scope === undefined || entry.scope === (publishInput.scope ?? null))
@@ -101,6 +107,8 @@ const store = createSharedSubscriptionStore<
     LocalServiceLauncherSnapshot,
     LocalServiceLauncherSnapshotClient
 >({
+    // Same app-session retention and qualified identity as the inventory freshness owner.
+    retainState: true,
     emptyState: EMPTY_LOCAL_SERVICE_LAUNCHER_STATE,
     createState: createLocalServiceLauncherState,
     normalizeInput,
@@ -172,7 +180,8 @@ export function subscribeLocalServiceLauncherStore(
     const key = storeKey(normalizeInput(input));
     let subscription = inventorySubscriptions.get(key);
     if (!subscription) {
-        const inventoryKey = { machineId: input.machineId, serverId: input.serverId };
+        const inventoryKey = { machineId: input.machineId, serverId: input.serverId,
+            accountId: input.accountId, credentialKey: input.credentialKey };
         let generation = getLocalServiceInventoryState(inventoryKey).generatedAt;
         let unavailable = getLocalServiceInventoryState(inventoryKey).refreshState === 'error';
         const dispose = subscribeLocalServiceInventoryStore(inventoryKey, () => {
@@ -208,7 +217,7 @@ export function invalidateLocalServiceLauncherStore(input: LocalServiceLauncherS
 }
 
 /** External native operations change every subscribed scope/projection on the affected Machine. */
-export function invalidateLocalServiceLauncherStores(input: Pick<LocalServiceLauncherStoreKeyInput, 'machineId' | 'serverId'>): void {
+export function invalidateLocalServiceLauncherStores(input: Pick<LocalServiceLauncherStoreKeyInput, 'machineId' | 'serverId' | 'accountId' | 'credentialKey'>): void {
     const scope = { ...input, serverId: input.serverId ?? null };
     for (const subscription of inventorySubscriptions.values()) {
         if (entryMatches(subscription.input, scope)) store.invalidate(subscription.input);
@@ -217,7 +226,7 @@ export function invalidateLocalServiceLauncherStores(input: Pick<LocalServiceLau
 
 /** A successful explicit scan may return the same generation. Recover failed derived
  * reads without making healthy projections re-read unchanged inventory. */
-export function recoverLocalServiceLauncherStores(input: Pick<LocalServiceLauncherStoreKeyInput, 'machineId' | 'serverId'>): void {
+export function recoverLocalServiceLauncherStores(input: Pick<LocalServiceLauncherStoreKeyInput, 'machineId' | 'serverId' | 'accountId' | 'credentialKey'>): void {
     const scope = { ...input, serverId: input.serverId ?? null };
     for (const subscription of inventorySubscriptions.values()) {
         if (entryMatches(subscription.input, scope) && store.getState(subscription.input).refreshStatus === 'error') {

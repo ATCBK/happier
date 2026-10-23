@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { resolveMachineDaemonReadServerId } from '@/sync/domains/machines/useMachineDaemonReadTarget';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
@@ -59,9 +61,11 @@ export function useLocalServiceInventoryStateController(
     input: UseLocalServiceInventoryStateInput,
 ): LocalServiceInventoryStateController {
     const presented = useLayoutPresentationActive();
-    const enabled = (input.enabled ?? true) && presented;
+    const eligible = input.enabled ?? true;
+    const enabled = eligible && presented;
     const machineId = normalizeId(input.machineId);
-    const serverId = normalizeId(input.serverId);
+    const serverId = resolveMachineDaemonReadServerId(input.serverId);
+    const { binding } = useServerCredentialAccountScopeBinding(serverId);
     const sessionId = normalizeId(input.sessionId);
     const snapshotClient = input.snapshotClient;
     const watchClient = input.watchClient;
@@ -70,8 +74,9 @@ export function useLocalServiceInventoryStateController(
     const watchClientRef = React.useRef(watchClient);
     const nowMsRef = React.useRef(nowMs);
     const storeKey = React.useMemo<LocalServiceInventoryStoreKeyInput | null>(() => (
-        enabled && machineId ? { machineId, serverId, sessionId } : null
-    ), [enabled, machineId, serverId, sessionId]);
+        eligible && machineId && binding?.isCurrent() && binding.credentialKey
+            ? { machineId, serverId, sessionId, accountId: binding.accountId, credentialKey: binding.credentialKey } : null
+    ), [binding, eligible, machineId, serverId, sessionId]);
 
     React.useEffect(() => {
         snapshotClientRef.current = snapshotClient;
@@ -79,31 +84,33 @@ export function useLocalServiceInventoryStateController(
         nowMsRef.current = nowMs;
     }, [nowMs, snapshotClient, watchClient]);
 
-    const subscribe = React.useCallback((listener: () => void) => (
-        storeKey
-            ? subscribeLocalServiceInventoryStore(storeKey, listener, {
+    const subscribe = React.useCallback((listener: () => void) => {
+        if (!enabled || !storeKey || !binding?.isCurrent()) return () => {};
+        const release = subscribeLocalServiceInventoryStore(storeKey, listener, {
                 ...(snapshotClientRef.current ? { snapshotClient: (request) => snapshotClientRef.current!(request) } : {}),
                 ...(watchClientRef.current ? { watchClient: (request) => watchClientRef.current!(request) } : {}),
                 nowMs: () => nowMsRef.current(),
-            })
-            : () => {}
-    ), [storeKey]);
+        });
+        const retirement = binding.onRetire(() => { release(); listener(); });
+        return () => { retirement.dispose(); release(); };
+    }, [binding, enabled, storeKey]);
 
     const getSnapshot = React.useCallback(() => (
-        storeKey ? getLocalServiceInventoryState(storeKey) : EMPTY_LOCAL_SERVICE_INVENTORY_STATE
-    ), [storeKey]);
+        storeKey && binding?.isCurrent() ? getLocalServiceInventoryState(storeKey) : EMPTY_LOCAL_SERVICE_INVENTORY_STATE
+    ), [binding, storeKey]);
 
     const state = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
     const applySnapshot = React.useCallback((snapshot: LocalServiceInventorySnapshot) => {
-        if (storeKey) {
+        if (storeKey && binding?.isCurrent()) {
             publishLocalServiceInventorySnapshot(storeKey, snapshot);
         }
-    }, [storeKey]);
+    }, [binding, storeKey]);
 
     const refresh = React.useMemo(() => (
-        storeKey ? () => invalidateLocalServiceInventoryStore(storeKey) : undefined
-    ), [storeKey]);
+        enabled && storeKey && binding?.isCurrent()
+            ? () => { if (binding.isCurrent()) invalidateLocalServiceInventoryStore(storeKey); } : undefined
+    ), [binding, enabled, storeKey]);
 
     // The parked daemon watch is the primary freshness path, but it cannot survive a suspended app
     // or a dropped socket. Coming back into view is the one moment where the user can see stale

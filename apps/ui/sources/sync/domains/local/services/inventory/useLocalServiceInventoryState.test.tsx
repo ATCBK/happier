@@ -1,17 +1,23 @@
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import { flushHookEffects, renderHook } from '@/dev/testkit';
-import {
-    invalidateLocalServiceInventoryStore,
-    resetLocalServiceInventoryStoreForTests,
-} from './sharedStore';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { LocalServiceInventorySnapshot } from './store';
 import type {
     LocalServiceInventorySnapshotClientResult,
     LocalServiceInventoryWatchClientResult,
 } from './api';
 import type { LocalServiceInventorySnapshotClient } from './useLocalServiceInventoryState';
+
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { resetLocalServiceInventoryStoreForTests } = await import('./sharedStore');
+const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
 
 const snapshot = {
     v: 1,
@@ -38,7 +44,14 @@ const snapshot = {
 } satisfies LocalServiceInventorySnapshot;
 
 describe('useLocalServiceInventoryState', () => {
-    afterEach(() => {
+    let serverId: string;
+    beforeEach(async () => {
+        const home = await createPlainArtifactHomeFixture('https://inventory-state.example.test', { accountId: 'account-a' });
+        serverId = home.home.id;
+        onTestFinished(() => home.dispose());
+    });
+    afterEach(async () => {
+        await standardCleanup();
         resetLocalServiceInventoryStoreForTests();
         vi.useRealTimers();
     });
@@ -56,14 +69,14 @@ describe('useLocalServiceInventoryState', () => {
         }));
         const hook = await renderHook(() => mod.useLocalServiceInventoryStateController({
             machineId: 'machine-a',
-            serverId: 'server-a',
+            serverId,
             snapshotClient,
         }));
         await flushHookEffects({ cycles: 2, turns: 2 });
 
         expect(snapshotClient).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-a',
-            serverId: 'server-a',
+            serverId,
             refresh: true,
         }));
         expect(store.selectLocalServiceInventoryRows(hook.getCurrent().state)).toEqual(snapshot.entries);
@@ -82,7 +95,7 @@ describe('useLocalServiceInventoryState', () => {
         }));
         const hook = await renderHook(() => mod.useLocalServiceInventoryStateController({
             machineId: 'machine-a',
-            serverId: 'server-a',
+            serverId,
             snapshotClient,
         }));
         await flushHookEffects({ cycles: 2, turns: 2 });
@@ -103,7 +116,7 @@ describe('useLocalServiceInventoryState', () => {
             .mockResolvedValueOnce({ ok: false as const, reason: 'request_failed' as const });
         const hook = await renderHook(() => mod.useLocalServiceInventoryStateController({
             machineId: 'machine-a',
-            serverId: 'server-a',
+            serverId,
             snapshotClient,
         }));
 
@@ -111,7 +124,7 @@ describe('useLocalServiceInventoryState', () => {
         expect(store.selectLocalServiceInventoryRows(hook.getCurrent().state)).toEqual(snapshot.entries);
 
         await act(async () => {
-            invalidateLocalServiceInventoryStore({ machineId: 'machine-a', serverId: 'server-a' });
+            hook.getCurrent().refresh?.();
         });
         await flushHookEffects({ cycles: 2, turns: 2 });
 
@@ -132,7 +145,7 @@ describe('useLocalServiceInventoryState', () => {
             .mockResolvedValue({ ok: false, reason: 'unavailable' });
         await renderHook(() => mod.useLocalServiceInventoryStateController({
             machineId: 'machine-a',
-            serverId: 'server-a',
+            serverId,
         }));
         await flushHookEffects({ cycles: 2, turns: 2 });
 
@@ -155,7 +168,7 @@ describe('useLocalServiceInventoryState', () => {
 
         const hook = await renderHook(() => mod.useLocalServiceInventoryStateController({
             machineId: 'machine-a',
-            serverId: 'server-a',
+            serverId,
             snapshotClient,
             watchClient,
         }));
@@ -194,7 +207,7 @@ describe('useLocalServiceInventoryState', () => {
 
         await renderHook(() => mod.useLocalServiceInventoryStateController({
             machineId: 'machine-a',
-            serverId: 'server-a',
+            serverId,
             snapshotClient,
             watchClient,
         }));

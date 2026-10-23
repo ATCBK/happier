@@ -13,6 +13,7 @@ export type LocalServiceInventorySnapshotRequest = (
 export type LocalServiceInventorySnapshotClientInput = Readonly<{
     machineId: string;
     serverId?: string | null;
+    accountId?: string | null;
     sessionId?: string | null;
     refresh?: boolean;
     signal?: AbortSignal;
@@ -78,6 +79,7 @@ export async function fetchLocalServiceInventorySnapshot(
 export type LocalServiceInventoryWatchClientInput = Readonly<{
     machineId: string;
     serverId?: string | null;
+    accountId?: string | null;
     sessionId?: string | null;
     sinceGeneratedAt?: number | null;
     signal?: AbortSignal;

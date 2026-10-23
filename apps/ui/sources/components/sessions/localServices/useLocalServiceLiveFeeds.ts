@@ -130,7 +130,11 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
     const [change, observeAgain] = React.useReducer((value: number) => value + 1, 0);
     const subscriptions = React.useMemo(() => new Map<string, Readonly<{ key: LocalServiceLauncherStoreKeyInput; dispose: () => void }>>(),
         [binding, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows]);
-    React.useEffect(() => () => { for (const subscription of subscriptions.values()) subscription.dispose(); subscriptions.clear(); }, [subscriptions]);
+    React.useEffect(() => {
+        const release = () => { for (const subscription of subscriptions.values()) subscription.dispose(); subscriptions.clear(); };
+        const retirement = binding?.onRetire(release);
+        return () => { retirement?.dispose(); release(); };
+    }, [binding, subscriptions]);
     const [observation, setObservation] = React.useState<Readonly<{ subscriptions: typeof subscriptions; declarations: typeof declarations; values: ReadonlyMap<string, ServiceActual> }> | null>(null);
     React.useEffect(() => {
         let current = true;
@@ -151,8 +155,10 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
                 context: { normalizeServerId: resolveServerProfileScopeIdForIdentifier }, isCurrent,
                 readSnapshot: async request => {
                     const key: LocalServiceLauncherStoreKeyInput = { machineId: request.machineId, serverId: input.serverId,
-                        accountId: binding.accountId, scope: 'workspace', workspaceRoot: request.workspaceRoot, projection: 'managed_bindings' };
+                        accountId: binding.accountId, credentialKey: binding.credentialKey,
+                        scope: 'workspace', workspaceRoot: request.workspaceRoot, projection: 'managed_bindings' };
                     const id = JSON.stringify(key);
+                    if (!isCurrent()) throw new Error('Project Account changed');
                     if (!subscriptions.has(id)) {
                         let previous = getLocalServiceLauncherState(key);
                         const disposeLauncher = subscribeLocalServiceLauncherStore(key, () => {
