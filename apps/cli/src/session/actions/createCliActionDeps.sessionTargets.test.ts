@@ -450,6 +450,35 @@ describe('CLI Session target composition', () => {
     expect(get).not.toHaveBeenCalled();
   });
 
+  it('resolves 50 workers in a 1000-Session Account with two subtree pages and no worker detail reads', async () => {
+    const { deps, get, session } = setup();
+    const rows = Array.from({ length: 1000 }, (_, index) => {
+      const id = `c${String(index).padStart(23, '0')}`;
+      return { ...createSessionNotificationContextFixture(id), ...session, id,
+        manager: index < 50 ? { sessionId } : null };
+    });
+    const queries: SessionListQueryV1[] = [];
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      expect(String(url)).toBe(`${home}/v2/sessions/query`);
+      const query = SessionListQueryV1Schema.parse(body);
+      queries.push(query);
+      expect(query).toMatchObject({ underSessionId: sessionId, includeInactive: true, scope: 'all_accessible' });
+      return { status: 200, data: SessionListQueryResponseV1Schema.parse({
+        sessions: query.storage === 'active' ? rows.filter(row => row.manager?.sessionId === query.underSessionId) : [],
+        nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+      }) };
+    });
+    get.mockClear();
+    const result = await createActionExecutor(deps).execute('session.targets.resolve', {
+      actionId: 'session.goal.get', target: { selector: 'workers' },
+    }, { ...context, defaultSessionId: sessionId });
+    expect(result).toMatchObject({ ok: true, result: { coverage: 'complete',
+      addresses: rows.slice(0, 50).map(row => ({ serverId: context.serverId, sessionId: row.id })) } });
+    expect(queries.map(query => query.storage)).toEqual(['active', 'archived']);
+    expect(get.mock.calls.map(([url]) => new URL(String(url)).pathname)
+      .filter(path => path.startsWith('/v2/sessions/'))).toEqual([`/v2/sessions/${sessionId}`]);
+  });
+
   it('uses the real paged query and summary projection for direct and recursive workers', async () => {
     const { deps, get, session } = setup();
     const childId = 'c333333333333333333333333';

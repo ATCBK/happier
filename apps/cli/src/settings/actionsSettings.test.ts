@@ -7,6 +7,23 @@ import { readActionsSettingsFromEnv, listDisabledActionIdsForSurfaceFromEnv } fr
 import { createActionSettingsProvider } from './actionsSettingsProvider';
 
 describe('actionsSettings (env)', () => {
+  it('reuses admitted policy on repeated reads and exposes a replacement immediately', () => {
+    let settings: ReturnType<typeof accountSettingsParse> | null = accountSettingsParse({ actionsSettingsV1: { v: 1,
+      actions: Object.fromEntries(Array.from({ length: 1000 }, (_, index) => [`unknown.action.${index}`, { enabled: false }])),
+    } });
+    const provider = createActionSettingsProvider({ scopeKey: 'policy-owner', getAccountSettings: () => settings });
+    const projections = new Set(Array.from({ length: 1000 }, () => provider.getActionsSettings()));
+    expect(projections.size).toBe(1);
+    expect(provider.getActionsSettings()).toBe(settings.actionsSettingsV1);
+    settings = accountSettingsParse({ actionsSettingsV1: { v: 1,
+      actions: { 'session.message.send': { enabled: false, approvalRequiredSurfaces: ['agent'] } },
+    } });
+    expect(provider.getActionsSettings()).toBe(settings.actionsSettingsV1);
+    expect(isApprovalRequiredByActionsSettings('session.message.send', provider.getActionsSettings(), { surface: 'agent' })).toBe(true);
+    const previous = settings.actionsSettingsV1;
+    settings = null;
+    expect(provider.getActionsSettings()).not.toBe(previous);
+  });
   it('reads an admitted invocation getter for scoped policy without borrowing the focused Account', () => {
     resetActiveAccountSettingsSnapshotForTests();
     const focusedSettings = accountSettingsParse({
