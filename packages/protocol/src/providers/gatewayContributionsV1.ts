@@ -1,0 +1,62 @@
+import { z } from 'zod/mini';
+import { lazyZodSchema } from '../lazyZodSchema.js';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
+import { parseQualifiedPluginContributionKey, PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { resolveProviderManagedRuntimeDeclarationV1 } from './contributions/v1.js';
+import { areProviderContributionKeysEqualV1 } from './contributionIdentityV1.js';
+import { ProviderContributionKeySchema, ProviderMachineIdSchema } from './ids.js';
+import type { AccountProviderDeclarationV1 } from './catalog/accountModelProjectionV1.js';
+import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
+
+export const ProviderGatewayContributionV1Schema = lazyZodSchema(() => z.strictObject({
+    contributionKey: ProviderContributionKeySchema.check(z.refine(value => parseQualifiedPluginContributionKey(value) !== null)),
+    purposes: z.array(z.strictObject({ purpose: QualifiedConnectedAccountPurposeV1Schema.shape.purpose, service: asProtocolZod(PluginContributionIdentityV1Schema) })),
+}));
+export type ProviderGatewayContributionV1 = z.infer<typeof ProviderGatewayContributionV1Schema>;
+
+/** Resolve declaration-local vendor identities through the managed-runtime owner. */
+export function readProviderGatewayContributionPurposesV1(contributionKey: string, declarations: readonly AccountProviderDeclarationV1[]) {
+    const declaration = declarations.find(row => areProviderContributionKeysEqualV1(row.contributionKey, contributionKey));
+    const identity = parseQualifiedPluginContributionKey(contributionKey);
+    if (!declaration || !identity) return null;
+    if (!declaration.definition.managedRuntime) return [];
+    return resolveProviderManagedRuntimeDeclarationV1({ implementationIdentity: identity,
+        managedRuntime: declaration.definition.managedRuntime }).connectedAccounts
+        .map(({ endpointTemplateIds: _endpoints, ...purpose }) => ({ ...purpose, required: purpose.required === true }));
+}
+
+/** Descriptor-only enumeration: no saved-connection read or runtime activation. */
+export function listProviderGatewayContributionsV1(declarations: readonly AccountProviderDeclarationV1[]): readonly ProviderGatewayContributionV1[] {
+    return declarations.flatMap(declaration => {
+        const purposes = readProviderGatewayContributionPurposesV1(declaration.contributionKey, [declaration]) ?? [];
+        return purposes.length ? [{ contributionKey: declaration.contributionKey, purposes: purposes.map(({ purpose, service }) => ({ purpose, service })) }] : [];
+    });
+}
+
+export const ProviderGatewayChoiceInputV1Schema = lazyZodSchema(() => z.strictObject({
+    contributionKey: z.optional(ProviderGatewayContributionV1Schema.shape.contributionKey),
+    machineId: z.optional(ProviderMachineIdSchema),
+    service: z.optional(asProtocolZod(PluginContributionIdentityV1Schema)),
+    purpose: z.optional(QualifiedConnectedAccountPurposeV1Schema.shape.purpose),
+}));
+export const ProviderGatewayChoiceResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+    z.strictObject({ status: z.literal('selected'), contribution: ProviderGatewayContributionV1Schema }),
+    z.strictObject({ status: z.literal('choice_required'), choices: z.array(ProviderGatewayContributionV1Schema) }),
+    z.strictObject({ status: z.literal('unavailable'), choices: z.array(ProviderGatewayContributionV1Schema) }),
+]));
+export type ProviderGatewayChoiceResultV1 = z.infer<typeof ProviderGatewayChoiceResultV1Schema>;
+
+export function chooseProviderGatewayContributionV1(
+    declarations: readonly AccountProviderDeclarationV1[], input: z.infer<typeof ProviderGatewayChoiceInputV1Schema>,
+): ProviderGatewayChoiceResultV1 {
+    const choices = listProviderGatewayContributionsV1(declarations).filter(candidate => candidate.purposes.some(slot => (
+        (!input.service || slot.service.pluginId === input.service.pluginId && slot.service.localId === input.service.localId)
+        && (!input.purpose || slot.purpose === input.purpose)
+    )));
+    if (input.contributionKey) {
+        const contribution = choices.find(candidate => areProviderContributionKeysEqualV1(candidate.contributionKey, input.contributionKey!));
+        return contribution ? { status: 'selected', contribution } : { status: 'unavailable', choices };
+    }
+    if (choices.length === 1) return { status: 'selected', contribution: choices[0]! };
+    return choices.length ? { status: 'choice_required', choices } : { status: 'unavailable', choices };
+}

@@ -1265,6 +1265,11 @@
       "types": "./dist/connect/providerAccountUsagePageProjectionCrypto.d.ts",
       "default": "./dist/connect/providerAccountUsagePageProjectionCrypto.js"
     },
+    "./connect/accountHealth": {
+      "happier-source": "./src/connect/accountHealth.ts",
+      "types": "./dist/connect/accountHealth.d.ts",
+      "default": "./dist/connect/accountHealth.js"
+    },
     "./connect/deriveProviderAccountUsagePace": {
       "happier-source": "./src/connect/deriveProviderAccountUsagePace.ts",
       "types": "./dist/connect/deriveProviderAccountUsagePace.d.ts",
@@ -1284,6 +1289,11 @@
       "happier-source": "./src/providers/providerActionsV1.ts",
       "types": "./dist/providers/providerActionsV1.d.ts",
       "default": "./dist/providers/providerActionsV1.js"
+    },
+    "./providers/gatewayContributionsV1": {
+      "happier-source": "./src/providers/gatewayContributionsV1.ts",
+      "types": "./dist/providers/gatewayContributionsV1.d.ts",
+      "default": "./dist/providers/gatewayContributionsV1.js"
     },
     "./providers/executeProviderActionV1": {
       "happier-source": "./src/providers/executeProviderActionV1.ts",

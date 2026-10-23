@@ -5,11 +5,10 @@ import type { QualifiedConnectedAccountPurposeBindingTargetV1 } from '@happier-d
 import type { DaemonProviderConnectionViewV1 } from '@happier-dev/protocol/rpc';
 import { PROVIDER_ACTION_INPUT_SCHEMAS_V1, type ProviderActionInputByIdV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import type { AccountProviderDeclarationV1 } from '@happier-dev/protocol/providers/catalog/accountModelProjectionV1';
-import { resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
-import { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
+import { readProviderGatewayContributionPurposesV1,
+    type ProviderGatewayContributionV1 } from '@happier-dev/protocol/providers/gatewayContributionsV1';
+export { listProviderGatewayContributionsV1, chooseProviderGatewayContributionV1 } from '@happier-dev/protocol/providers/gatewayContributionsV1';
 import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
-import { parseQualifiedPluginContributionKey,
-    type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { useProviderConnectionMutation } from '@/providers/hooks/useProviderConnectionMutation';
 
 export type ProviderGatewayConfigurationPatch = Readonly<{
@@ -61,38 +60,13 @@ export function buildProviderGatewaySlotMutation(input: Readonly<{
     return request;
 }
 
-export type ProviderGatewayContribution = Readonly<{
-    contributionKey: string;
-    purposes: readonly Readonly<{ purpose: string; service: PluginContributionIdentityV1 }>[];
-}>;
+export type ProviderGatewayContribution = ProviderGatewayContributionV1;
 
 /** The caller supplies its admitted declarations; Account-only callers use bundled identity. */
 export function readProviderGatewayContributionPurposes(contributionKey: string,
     declarations: readonly AccountProviderDeclarationV1[] = readAccountProviderDeclarations({ kind: 'account' }),
 ): NonNullable<DaemonProviderConnectionViewV1['managedLocalOption']>['connectedAccountPurposes'] | null {
-    const declaration = declarations.find(row => areProviderContributionKeysEqualV1(row.contributionKey, contributionKey));
-    const identity = parseQualifiedPluginContributionKey(contributionKey);
-    if (!declaration || !identity) return null;
-    if (!declaration.definition.managedRuntime) return [];
-    return resolveProviderManagedRuntimeDeclarationV1({ implementationIdentity: identity,
-        managedRuntime: declaration.definition.managedRuntime }).connectedAccounts
-        .map(({ endpointTemplateIds: _endpoints, ...purpose }) => ({ ...purpose, required: purpose.required === true }));
-}
-
-/**
- * What a new gateway is made from: the admitted contribution whose managed runtime draws on
- * connected-account vendors (the same rule that marks a saved connection as a gateway). Today that
- * is one contribution; with several the user would have to choose, so none is picked implicitly.
- */
-export function readProviderGatewayContribution(
-    declarations: readonly AccountProviderDeclarationV1[],
-): ProviderGatewayContribution | null {
-    const gateways = declarations.flatMap(declaration => {
-        const purposes = readProviderGatewayContributionPurposes(declaration.contributionKey, declarations) ?? [];
-        return purposes.length > 0 ? [{ contributionKey: declaration.contributionKey,
-            purposes: purposes.map(({ purpose, service }) => ({ purpose, service })) }] : [];
-    });
-    return gateways.length === 1 ? gateways[0]! : null;
+    return readProviderGatewayContributionPurposesV1(contributionKey, declarations);
 }
 
 /**

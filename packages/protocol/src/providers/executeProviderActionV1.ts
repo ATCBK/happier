@@ -12,7 +12,7 @@ import type { ProviderConnectionsCatalogSnapshotV1 } from './connections/connect
 import type { DaemonProviderModelProjectionResponseV1 } from '../rpc/providers.js';
 import { projectAccountProviderModelConfirmationsV1 } from './catalog/accountModelProjectionV1.js';
 
-type AccountActionId = 'providers.defaults.set' | 'providers.models.source_visibility.set';
+type AccountActionId = 'providers.defaults.set' | 'providers.models.source_visibility.set' | 'providers.gateways.choose';
 type RpcActionId = Exclude<ProviderActionIdV1, AccountActionId>;
 type RpcRequest = Exclude<ProviderActionRequestV1, { actionId: AccountActionId }>;
 
@@ -54,6 +54,7 @@ export function resolveProviderActionRpcRouteV1(actionId: ProviderActionIdV1): P
 export function resolveProviderActionRpcRouteV1(actionId: ProviderActionIdV1): ProviderActionRpcRouteV1 | null {
   switch (actionId) {
     case 'providers.defaults.set':
+    case 'providers.gateways.choose':
     case 'providers.models.source_visibility.set': return null;
     case 'providers.connections.describe': return { method: RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, mutation: false };
     case 'providers.models.list': return { method: RPC_METHODS.DAEMON_PROVIDERS_MODELS, mutation: false };
@@ -97,7 +98,7 @@ export function createProviderActionExecuteV1(host: Readonly<{
     if (resolveProviderActionOwnerV1(request) === 'accountCatalog' && host.account) {
       return host.account(request, context);
     }
-    if (request.actionId === 'providers.models.source_visibility.set') {
+    if (request.actionId === 'providers.models.source_visibility.set' || request.actionId === 'providers.gateways.choose') {
       return { ok: false, errorCode: 'provider_account_action_unavailable', error: 'provider_account_action_unavailable' };
     }
     if (request.actionId === 'providers.defaults.set') {

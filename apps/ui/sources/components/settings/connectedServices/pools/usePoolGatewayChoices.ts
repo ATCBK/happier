@@ -8,7 +8,7 @@ import { getProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalo
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useProviderConnectionMutation } from '@/providers/hooks/useProviderConnectionMutation';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { createProviderGateway, readProviderGatewayContribution } from '@/providers/connection/gatewayConfiguration';
+import { createProviderGateway, chooseProviderGatewayContributionV1 } from '@/providers/connection/gatewayConfiguration';
 import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
@@ -33,18 +33,24 @@ export function usePoolGatewayChoices(input: Readonly<{
     const choices = React.useMemo(() => accountMatchesTarget && catalog?.data
         ? buildPoolGatewayChoices({ connections: catalog.data.connections, target: input.target })
         : NO_CHOICES, [accountMatchesTarget, catalog?.data, input.target]);
+    const gatewayContributionChoice = React.useMemo(() => chooseProviderGatewayContributionV1(
+        readAccountProviderDeclarations({ kind: 'account' }), { service: input.target.service }), [input.target.service]);
+    const newGatewayAvailable = React.useMemo(() => {
+        if (!accountMatchesTarget || !catalog?.data) return false;
+        const saved = { connections: catalog.data.connections, declarationContext: { kind: 'account' as const } };
+        return areProviderGatewayDeclarationsKnown(saved) && buildProviderGatewayCollection(saved).length === 0;
+    }, [accountMatchesTarget, catalog?.data]);
     // No gateway yet (D19): the switch stays, and turning it on creates the first one with this pool.
     const firstGateway = React.useMemo(() => {
         // Pool configuration is Account-only; it has no selected declaration Machine.
-        const contribution = readProviderGatewayContribution(readAccountProviderDeclarations({ kind: 'account' }));
-        if (!accountMatchesTarget || !contribution || !catalog?.data) return null;
-        const saved = { connections: catalog.data.connections, declarationContext: { kind: 'account' as const } };
-        if (!areProviderGatewayDeclarationsKnown(saved) || buildProviderGatewayCollection(saved).length > 0) return null;
+        const contribution = gatewayContributionChoice.status === 'selected' ? gatewayContributionChoice.contribution : null;
+        if (!newGatewayAvailable || !contribution) return null;
         const serviceKey = buildQualifiedPluginContributionKey(input.target.service);
         const slot = contribution.purposes.find(purpose => buildQualifiedPluginContributionKey(purpose.service) === serviceKey);
         return slot ? { purpose: slot.purpose } : null;
-    }, [catalog?.data, input.target]);
-    const allocatedConnectionId = React.useMemo(() => firstGateway ? `pc_${randomUUID()}` : null, [firstGateway, scope]);
+    }, [gatewayContributionChoice, input.target, newGatewayAvailable]);
+    const allocatedConnectionId = React.useMemo(() => newGatewayAvailable && gatewayContributionChoice.status !== 'unavailable'
+        ? `pc_${randomUUID()}` : null, [gatewayContributionChoice, newGatewayAvailable, scope]);
     const refresh = React.useCallback(async () => {
         if (scope) await refreshProviderCatalog(scope);
     }, [scope]);
@@ -68,17 +74,24 @@ export function usePoolGatewayChoices(input: Readonly<{
         const result = await mutation.run(request, `gateway:pool:${connectionId}`);
         return result?.status === 'success';
     }, [accountMatchesTarget, catalog?.stale, catalog?.status, choices, input.enabled, input.target, mutation.run]);
-    const createFirstGateway = React.useCallback(async (): Promise<boolean> => {
-        const contribution = readProviderGatewayContribution(readAccountProviderDeclarations({ kind: 'account' }));
-        if (!input.enabled || !accountMatchesTarget || catalog?.status !== 'ready' || catalog.stale || !firstGateway || !contribution || !allocatedConnectionId) {
+    const createFirstGateway = React.useCallback(async (contributionKey?: string): Promise<boolean> => {
+        const selected = chooseProviderGatewayContributionV1(readAccountProviderDeclarations({ kind: 'account' }), {
+            service: input.target.service, contributionKey,
+        });
+        if (selected.status !== 'selected') return false;
+        const contribution = selected.contribution;
+        const slot = contribution.purposes.find(purpose => purpose.service.pluginId === input.target.service.pluginId
+            && purpose.service.localId === input.target.service.localId);
+        if (!input.enabled || !accountMatchesTarget || catalog?.status !== 'ready' || catalog.stale
+            || !newGatewayAvailable || !slot || !allocatedConnectionId) {
             throw createProviderErrorV1('provider_authorization_changed');
         }
         const created = await createProviderGateway({ run: mutation.run, contribution, connectionId: allocatedConnectionId,
             displayName: t('settingsProvidersCollection.gateway.mainGatewayName'),
-            slot: { purpose: firstGateway.purpose, target: input.target }, key: FIRST_GATEWAY_KEY });
+            slot: { purpose: slot.purpose, target: input.target }, key: FIRST_GATEWAY_KEY });
         return created !== null;
-    }, [accountMatchesTarget, allocatedConnectionId, catalog?.stale, catalog?.status, firstGateway, input.enabled, input.target, mutation.run]);
-    return { choices, setEnabled, firstGateway, createFirstGateway, refresh, loading: catalog?.status === 'loading',
+    }, [accountMatchesTarget, allocatedConnectionId, catalog?.stale, catalog?.status, input.enabled, input.target, mutation.run, newGatewayAvailable]);
+    return { choices, setEnabled, firstGateway, gatewayContributionChoice, createFirstGateway, refresh, loading: catalog?.status === 'loading',
         ready: input.enabled && accountMatchesTarget && catalog?.status === 'ready' && !catalog.stale,
         error: mutation.error, retry: mutation.retry, reviewCurrentState, pendingApproval: mutation.pendingApproval,
         pending: mutation.isPending(FIRST_GATEWAY_KEY) || choices.some(choice => mutation.isPending(`gateway:pool:${choice.connectionId}`)) };

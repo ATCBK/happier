@@ -78,6 +78,12 @@ const templateFields = (prefix: string) => [
 ] satisfies readonly ActionInputFieldHint[];
 
 function providerFields(id: ProviderActionIdV1): readonly ActionInputFieldHint[] {
+  if (id === 'providers.gateways.choose') return [
+    { path: 'contributionKey', title: 'Qualified gateway contribution', widget: 'text' },
+    { path: 'service', title: 'Qualified connected service', widget: 'json' },
+    { path: 'purpose', title: 'Declared gateway purpose', widget: 'text' },
+    { path: 'machineId', title: 'Installed contribution Machine', widget: 'text' },
+  ];
   const target = [
     { path: 'connectionId', title: 'Provider connection', widget: 'text' },
     { path: 'machineId', title: 'Computer', widget: 'text' },
@@ -143,6 +149,8 @@ function providerSpec<Id extends ProviderActionIdV1>(id: Id, title: string, summ
   } satisfies ProviderActionSpec<Id>;
 }
 export const PROVIDER_ACTION_SPECS_V1 = [
+  providerSpec('providers.gateways.choose', 'Choose a gateway contribution',
+    'Choose an admitted gateway contribution without creating a connection. Several candidates require an explicit qualified contribution key.', { read: true }),
   providerSpec('providers.connections.describe', 'List Provider connections',
     'See saved Account Providers, with optional setup and readiness on a machine.', { read: true }),
   providerSpec('providers.connections.create_contribution', 'Add Provider from a plugin',

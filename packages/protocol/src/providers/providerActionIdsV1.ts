@@ -1,4 +1,5 @@
 export const PROVIDER_ACTION_IDS_V1 = [
+  'providers.gateways.choose',
   'providers.connections.describe',
   'providers.connections.create_contribution', 'providers.connections.create_custom',
   'providers.connections.enable_detected', 'providers.connections.start_local',

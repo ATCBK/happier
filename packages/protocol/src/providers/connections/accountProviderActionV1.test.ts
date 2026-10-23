@@ -10,18 +10,21 @@ import { createAccountProviderActionExecuteV1, type AccountProviderDeclarationV1
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, type ProviderConnectionsCatalogV1 } from './connectionRowsV1.js';
 import { serializeModelVisibilityRefV1 } from '../selection/v1.js';
 import { getProviderExperimentalConfirmationCatalogSourceKeyV1, parseProviderSettingsV1Narrow } from '../settings/v1.js';
+import { createActionExecutor } from '../../actions/actionExecutor.js';
+import { createProviderActionExecuteV1 } from '../executeProviderActionV1.js';
 
 // An in-memory Account-row transport boundary; all domain operations and output admission are real.
 function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1) {
   let current = catalog;
   let revision = 1;
   let writes = 0;
+  let reads = 0;
   let outcome: 'updated' | 'conflict' | 'outcome_unknown' = 'updated';
   let beforeWrite: (() => void) | null = null;
   let definitions: readonly AccountProviderDeclarationV1[] = [{ contributionKey: 'happier.provider.deepseek/deepseek',
     definition: ProviderContributionV1Schema.parse(DEEPSEEK_PROVIDER_CONTRIBUTION), provenance: 'first_party' as const }];
   const execute = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 10,
-    readCatalog: async () => ({ status: 'ready', revision, catalog: current }),
+    readCatalog: async () => { reads++; return { status: 'ready', revision, catalog: current }; },
     readDefinitions: async () => definitions,
     writeCatalog: async input => {
       expect(input.expectedRevision).toBe(revision);
@@ -35,13 +38,43 @@ function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CON
       return { status: outcome };
     },
   });
-  return { execute, get catalog() { return current; }, get revision() { return revision; }, get writes() { return writes; },
+  return { execute, get catalog() { return current; }, get revision() { return revision; }, get writes() { return writes; }, get reads() { return reads; },
     beforeNextWrite(callback: () => void) { beforeWrite = callback; },
     setOutcome(value: typeof outcome) { outcome = value; }, clearDefinitions() { definitions = []; },
     setDefinitions(value: readonly AccountProviderDeclarationV1[]) { definitions = value; } };
 }
 
 describe('shared Provider Account Action producer', () => {
+  it('requires explicit gateway contribution choice and never creates or reads a saved connection to choose', async () => {
+    const row = accountRow();
+    const definition = ProviderContributionV1Schema.parse(CLIPROXYAPI_PROVIDER_CONTRIBUTION);
+    const declarations = ['com.acme.gateway/local', 'com.example.gateway/local'].map(contributionKey => ({
+      contributionKey, definition, provenance: 'external' as const,
+    }));
+    row.setDefinitions(declarations);
+    const executor = createActionExecutor({ providerActionExecute: createProviderActionExecuteV1({
+      assertCurrent() {}, async rpc() { throw new Error('gateway_choice_must_not_execute'); },
+      async setDefault() { throw new Error('gateway_choice_must_not_write'); },
+      async readAccountCatalog() { throw new Error('gateway_choice_must_not_read_connections'); },
+      account: row.execute,
+    }) });
+    const request = parseProviderActionRequestV1('providers.gateways.choose', {});
+    expect(request).toMatchObject({ actionId: 'providers.gateways.choose', input: {} });
+    const choose = (input: unknown) => executor.execute('providers.gateways.choose', input, { surface: 'agent' });
+    const result = await choose({});
+    expect(result).toMatchObject({ ok: true, result: { status: 'choice_required', choices: declarations.map(({ contributionKey }) => ({ contributionKey })) } });
+    expect(await choose({ contributionKey: declarations[1]!.contributionKey }))
+      .toMatchObject({ ok: true, result: { status: 'selected', contribution: { contributionKey: declarations[1]!.contributionKey } } });
+    expect(await choose({ contributionKey: 'unknown.gateway/local' }))
+      .toMatchObject({ ok: true, result: { status: 'unavailable', choices: expect.any(Array) } });
+    expect(await choose({ service: { pluginId: 'wrong.vendor', localId: 'account' } }))
+      .toMatchObject({ ok: true, result: { status: 'unavailable', choices: [] } });
+    expect(await choose({ contributionKey: 'local' })).toMatchObject({ ok: false });
+    expect(row.reads).toBe(0);
+    expect(row.writes).toBe(0);
+    expect(row.catalog.connections).toEqual([]);
+  });
+
   it('records recipient consent for an opaque Team source without a saved connection or private source target', async () => {
     const row = accountRow();
     const result = await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', {

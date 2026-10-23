@@ -2,7 +2,8 @@ import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { PluginContributionLocalIdSchema } from '../plugins/contributionIdentity.js';
-import { PluginConnectedAccountAuthenticationV2Schema, PluginConnectedAccountDescriptorContributionV2Schema, ConnectedAccountBillingUrlSchema } from './pluginConnectedAccountAuthenticationV2.js';
+import { PluginConnectedAccountAuthenticationV2Schema, PluginConnectedAccountDescriptorContributionV2Schema, ConnectedAccountBillingUrlSchema,
+  type PluginConnectedAccountDescriptorContributionV2 } from './pluginConnectedAccountAuthenticationV2.js';
 import { PluginIdSchema } from '../plugins/pluginId.js';
 import { ConnectedServiceIdSchema } from './connectedServiceSchemas.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
@@ -41,3 +42,23 @@ export const ConnectedAccountUiProjectionEntryV1Schema = lazyZodSchema(() => z.s
 })));
 
 export type ConnectedAccountUiProjectionEntryV1 = z.infer<typeof ConnectedAccountUiProjectionEntryV1Schema>;
+
+/** Declaration presentation crosses into the read projection through this single projection owner. */
+export function projectConnectedAccountDescriptorV1(input: Readonly<{
+  descriptor: PluginConnectedAccountDescriptorContributionV2;
+  serviceId: string;
+  pluginId?: string;
+  provenance: ConnectedAccountUiProjectionEntryV1['provenance'];
+  sourceKind: string;
+  availability: ConnectedAccountUiProjectionEntryV1['availability'];
+  diagnostics: readonly string[];
+}>): ConnectedAccountUiProjectionEntryV1 {
+  const { descriptor, ...facts } = input;
+  return { ...facts, id: descriptor.id, title: descriptor.title,
+    ...(descriptor.description ? { description: descriptor.description } : {}),
+    authentication: descriptor.authentication, capabilities: descriptor.capabilities ?? [],
+    ...(descriptor.usageIdentity ? { usageIdentity: descriptor.usageIdentity } : {}),
+    ...(descriptor.recoveryCredits ? { recoveryCredits: descriptor.recoveryCredits } : {}),
+    ...(descriptor.billingUrl ? { billingUrl: descriptor.billingUrl } : {}), diagnostics: [...input.diagnostics],
+  };
+}

@@ -1,6 +1,8 @@
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
+import { ConnectedAccountUiProjectionEntryV1Schema, projectConnectedAccountDescriptorV1 } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
+import type { ConnectedAccountUiProjectionEntryV1 } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
+import type { ResolvedContributionRegistry } from './types';
 
 import { definePluginProjectionFamilyV2 } from '@/plugins/projection/families';
 import { hasUnusablePluginDeclarationDiagnostic } from '@/plugins/validation/diagnostics/declarationUsability';
@@ -26,13 +28,12 @@ function connectedAccountProjectionKey(pluginId: string | undefined, descriptorI
     : descriptorId;
 }
 
-export const connectedAccountProjectionFamily = definePluginProjectionFamilyV2({
-  family: 'connectedAccounts',
-  project({ registry, pluginDiagnosticsByPluginId }) {
+export function projectConnectedAccountDescriptors(
+  registry: ResolvedContributionRegistry,
+  pluginDiagnosticsByPluginId?: ResolvedContributionRegistry['pluginDiagnosticsByPluginId'],
+): Readonly<Record<string, ConnectedAccountUiProjectionEntryV1>> {
     const diagnosticsByPluginId = pluginDiagnosticsByPluginId ?? registry.pluginDiagnosticsByPluginId;
-    return {
-      family: 'connectedAccounts',
-      entriesById: Object.fromEntries((registry.connectedAccountDescriptors ?? []).flatMap((contribution) => {
+    return Object.fromEntries((registry.connectedAccountDescriptors ?? []).flatMap((contribution) => {
         const descriptor = contribution.definition;
         const hostingProvider = (registry.scmHostingProviders ?? []).find((provider) => referencesConnectedAccountDescriptor({
           reference: provider.definition.authService,
@@ -47,15 +48,9 @@ export const connectedAccountProjectionFamily = definePluginProjectionFamilyV2({
             ? (diagnosticsByPluginId?.[pluginId] ?? []).map((diagnostic) => diagnostic.code)
             : []),
         ];
-        const entry = ConnectedAccountUiProjectionEntryV1Schema.parse({
-          id: descriptor.id, serviceId, ...(pluginId ? { pluginId } : {}),
+        const entry = ConnectedAccountUiProjectionEntryV1Schema.parse(projectConnectedAccountDescriptorV1({
+          descriptor, serviceId, ...(pluginId ? { pluginId } : {}),
           provenance: contribution.provenance, sourceKind: contribution.source.kind,
-          title: descriptor.title, ...(descriptor.description ? { description: descriptor.description } : {}),
-          authentication: descriptor.authentication,
-          capabilities: descriptor.capabilities ?? [],
-          ...(descriptor.usageIdentity ? { usageIdentity: descriptor.usageIdentity } : {}),
-          ...(descriptor.recoveryCredits ? { recoveryCredits: descriptor.recoveryCredits } : {}),
-          ...(descriptor.billingUrl ? { billingUrl: descriptor.billingUrl } : {}),
           // UI-T28: Connected Account setup is host-rendered from the STATIC
           // descriptor, so it is blocked only when that declaration is itself
           // unusable (missing/invalid manifest or unapproved trust). A runtime
@@ -65,9 +60,14 @@ export const connectedAccountProjectionFamily = definePluginProjectionFamilyV2({
             ? { state: 'blocked', reason: 'plugin_declaration_unusable' }
             : { state: 'available', reason: 'resolved' },
           diagnostics,
-        });
+        }));
         return [[connectedAccountProjectionKey(pluginId, entry.id), entry] as const];
-      })),
-    };
-  },
+      }));
+}
+
+export const connectedAccountProjectionFamily = definePluginProjectionFamilyV2({
+  family: 'connectedAccounts',
+  project: ({ registry, pluginDiagnosticsByPluginId }) => ({
+    family: 'connectedAccounts', entriesById: projectConnectedAccountDescriptors(registry, pluginDiagnosticsByPluginId),
+  }),
 });

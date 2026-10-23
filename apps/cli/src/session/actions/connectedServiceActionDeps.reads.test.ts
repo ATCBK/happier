@@ -67,6 +67,33 @@ it.each(['current', 'retired', 'mode-denied', 'first-row'] as const)('writes ent
 const input = { machineId: 'work-machine', group: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'work' } };
 const context = { surface: 'cli' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
 
+it.each(['current', 'retired', 'old-server'] as const)('lists saved Account summaries through captured HTTP authority while %s', async lifetime => {
+  const requests: string[] = [];
+  let current = true;
+  vi.spyOn(axios, 'request').mockImplementation(async request => {
+    const path = new URL(String(request.url)).pathname;
+    requests.push(path);
+    expect(request.headers).toMatchObject({ 'X-Captured-Requester': 'summary-reader' });
+    expect(request.method).toBe('GET');
+    expect(path).toBe('/v1/account/profile');
+    if (lifetime === 'retired') current = false;
+    return { status: 200, data: { id: 'viewer', timestamp: 100,
+      ...(lifetime === 'old-server' ? {} : { connectedAccountsV4: [{ ref: { service: input.group.service, accountId: 'saved' },
+        status: 'needs_reauth', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
+        revisionSemantics: 'legacy_unfenced', credentialRevision: null }], connectedAccountGroupsV4: [] }),
+    } };
+  });
+  const action = createCliConnectedServiceAction({ credentials: { token: 'summary-requester', encryption: null }, serverHttpBaseUrl: 'https://summary.test',
+    isCredentialCurrent: async () => current, resolveHeaders: () => ({ 'X-Captured-Requester': 'summary-reader' }),
+    async callMachineAction() { throw new Error('Saved summaries do not need a Machine'); },
+  });
+  const result = action({ actionId: 'connectedServices.accounts.list', input: {}, context });
+  if (lifetime === 'retired') await expect(result).rejects.toMatchObject({ code: 'scope-retired' });
+  else if (lifetime === 'old-server') await expect(result).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+  else await expect(result).resolves.toMatchObject({ accounts: [{ account: { ref: { accountId: 'saved' } }, health: 'error' }], pools: [] });
+  expect(requests).toEqual(['/v1/account/profile']);
+});
+
 it('reads a cold quota subscription with its exact-account catalog price without borrowing daemon settings', async () => {
   const credentials = { token: 'cold-price-reader', encryption: null };
   const source = { bindingKind: 'account' as const, ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' } };

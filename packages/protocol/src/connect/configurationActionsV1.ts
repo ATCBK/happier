@@ -24,6 +24,9 @@ import { ProviderAccountSubscriptionMonthlyPriceV1Schema } from './accountSubscr
 import { CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_INPUT_SCHEMAS, CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_OUTPUT_SCHEMAS } from './authenticationActionsV1.js';
 import { QualifiedConnectedAccountPurposeV1Schema } from './connectedAccountPurposeIdentity.js';
 import { QualifiedConnectedAccountPurposeBindingTargetV1Schema } from './connectedAccountPurposeBindings.js';
+import { QualifiedConnectedAccountProfileV4Schema, QualifiedConnectedAccountGroupV4Schema } from './qualifiedConnectedAccountProjectionsV4.js';
+import { ConnectedAccountUiProjectionEntryV1Schema } from './connectedAccountUiProjectionV1.js';
+import { ProviderGatewayContributionV1Schema } from '../providers/gatewayContributionsV1.js';
 export { CONNECTED_SERVICE_CONFIGURATION_ACTION_IDS_V1 } from './configurationActionIdsV1.js';
 export { CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_ID_BY_OPERATION } from './configurationActionIdsV1.js';
 
@@ -49,6 +52,8 @@ const ConfigurationView = z.strictObject({ status: z.enum(['ready', 'configurati
   missingFieldIds: z.array(z.string()) });
 export const CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1 = {
   ...CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_INPUT_SCHEMAS,
+  'connectedServices.accounts.list': z.strictObject({ service: z.optional(QualifiedConnectedAccountGroupRefSchema.shape.service) }),
+  'connectedServices.catalog.list': z.strictObject({}),
   'connectedServices.configuration.get': lazyZodSchema(() => z.union([ConfigurationTarget, MachineConfigurationTarget])),
   'connectedServices.configuration.replace': lazyZodSchema(() => z.union([
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ConfigurationTarget, ConfigurationReplacement.shape)),
@@ -102,6 +107,19 @@ export const CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1 = {
 } as const;
 export const CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 = {
   ...CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_OUTPUT_SCHEMAS,
+  'connectedServices.accounts.list': lazyZodSchema(() => z.strictObject({
+    accounts: z.array(z.strictObject({ account: QualifiedConnectedAccountProfileV4Schema, health: z.enum(['healthy', 'attention', 'error']) })),
+    pools: z.array(z.strictObject({ pool: QualifiedConnectedAccountGroupV4Schema, health: z.nullable(z.enum(['healthy', 'attention', 'error'])) })),
+    source: z.strictObject({ completeness: z.literal('complete'), observedAtMs: z.nullable(z.number().check(z.int(), z.nonnegative())) }),
+    healthBasis: z.literal('credentials'),
+  })),
+  'connectedServices.catalog.list': lazyZodSchema(() => z.strictObject({
+    status: z.enum(['ready', 'partial', 'unavailable']),
+    services: z.array(z.strictObject({ service: QualifiedConnectedAccountGroupRefSchema.shape.service,
+      descriptor: z.nullable(ConnectedAccountUiProjectionEntryV1Schema), canAdd: z.boolean(), reason: z.nullable(z.string()),
+    })),
+    gateways: z.array(ProviderGatewayContributionV1Schema),
+  })),
   'connectedServices.configuration.get': z.strictObject({ target: ConnectedAccountConfigurationTargetSchema,
     mode: PluginConnectedAccountAuthenticationModeV2Schema, configuration: ConfigurationView }),
   'connectedServices.configuration.replace': z.extend(Success, { revision: z.string().check(z.minLength(1), z.maxLength(256)) }),

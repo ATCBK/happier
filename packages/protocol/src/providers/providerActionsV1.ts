@@ -14,6 +14,7 @@ import {
 import { ProviderDefaultModelSelectionMutationV1Schema } from './selection/v1.js';
 import { ProviderConnectionIdSchema, ProviderMachineIdSchema } from './ids.js';
 import type { ProviderActionIdV1 } from './providerActionIdsV1.js';
+import { ProviderGatewayChoiceInputV1Schema, ProviderGatewayChoiceResultV1Schema } from './gatewayContributionsV1.js';
 export { PROVIDER_ACTION_IDS_V1, isProviderActionIdV1, type ProviderActionIdV1 } from './providerActionIdsV1.js';
 
 type ConnectionAction = z.output<typeof DaemonProviderConnectionMutationRequestV1Schema>['action'];
@@ -77,6 +78,7 @@ export const PROVIDER_MODEL_SETTINGS_ACTION_ID_BY_OPERATION_V1 = {
 } as const satisfies Record<ModelSettingsAction, ProviderActionIdV1>;
 
 export const PROVIDER_ACTION_INPUT_SCHEMAS_V1 = {
+  'providers.gateways.choose': ProviderGatewayChoiceInputV1Schema,
   'providers.connections.describe': lazyZodSchema(() => accountInput(DaemonProviderConnectionsDescribeRequestV1Schema)),
   'providers.connections.create_contribution': lazyZodSchema(() => {
     const input = connectionInput('createContribution');
@@ -117,6 +119,7 @@ export const PROVIDER_ACTION_INPUT_SCHEMAS_V1 = {
 } as const satisfies Record<ProviderActionIdV1, z.ZodMiniType>;
 
 export const PROVIDER_ACTION_OUTPUT_SCHEMAS_V1 = {
+  'providers.gateways.choose': ProviderGatewayChoiceResultV1Schema,
   'providers.connections.describe': DaemonProviderConnectionsDescribeResponseV1Schema,
   'providers.connections.create_contribution': DaemonProviderConnectionMutationResponseV1Schema,
   'providers.connections.create_custom': DaemonProviderConnectionMutationResponseV1Schema,
@@ -191,6 +194,7 @@ export function isProviderActionMachineRequiredV1(
 export function parseProviderActionRequestV1(actionId: ProviderActionIdV1, input: unknown): ProviderActionRequestV1 {
   // Keep the ID and its parsed operand correlated without widening either contract.
   switch (actionId) {
+    case 'providers.gateways.choose': return { actionId, input: PROVIDER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'providers.connections.describe': return { actionId, input: PROVIDER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'providers.connections.create_contribution': return { actionId, input: PROVIDER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };
     case 'providers.connections.create_custom': return { actionId, input: PROVIDER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input) };

@@ -73,6 +73,23 @@ export function createCliConnectedServiceAction(params: Readonly<{
         signal?.throwIfAborted();
       };
       const host: ConnectedServiceConfigurationActionHostV1 = {
+      readSetupCatalog: async () => {
+        await assertReadCurrent();
+        const [{ readCurrentContributionRegistry }, { projectConnectedAccountDescriptors }, { listProviderGatewayContributionsV1 }] = await Promise.all([
+          import('@/agent/catalog/snapshot'), import('@/plugins/projection/registry/connectedAccounts'),
+          import('@happier-dev/protocol/providers/gatewayContributionsV1'),
+        ]);
+        const registry = readCurrentContributionRegistry();
+        const descriptors = Object.values(projectConnectedAccountDescriptors(registry));
+        await assertReadCurrent();
+        return { status: 'ready', services: descriptors.flatMap(descriptor => descriptor.pluginId ? [{
+          service: { pluginId: descriptor.pluginId, localId: descriptor.id }, descriptor,
+          canAdd: descriptor.availability.state === 'available',
+          reason: descriptor.availability.state === 'available' ? null : descriptor.availability.reason,
+        }] : []), gateways: listProviderGatewayContributionsV1([...registry.providersByContributionKey.entries()]
+          .map(([contributionKey, provider]) => ({ contributionKey, definition: provider.definition, provenance: provider.provenance }))),
+        };
+      },
       assertCurrent: () => {
         signal?.throwIfAborted();
         if (actionId === 'connectedServices.configuration.get' || actionId === 'connectedServices.configuration.replace') catalogStore.assertCurrent();
@@ -360,7 +377,11 @@ export function createCliConnectedServiceAction(params: Readonly<{
         return response;
       },
       };
-      return prepare ? prepareConnectedServiceRevokeInputV1(host, input) : executeConnectedServiceConfigurationActionV1(host, actionId, input);
+      const readOnlyCatalog = actionId === 'connectedServices.accounts.list' || actionId === 'connectedServices.catalog.list';
+      if (readOnlyCatalog) await assertReadCurrent();
+      const result = await (prepare ? prepareConnectedServiceRevokeInputV1(host, input) : executeConnectedServiceConfigurationActionV1(host, actionId, input));
+      if (readOnlyCatalog) await assertReadCurrent();
+      return result;
     };
     return runWithServerHttpBaseUrl(serverHttpBaseUrl, run);
   };

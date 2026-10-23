@@ -10,6 +10,11 @@ import type { PreparedConnectedMetadataCleanup } from '@/sync/api/account/apiCon
 import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 import { getAccountConnectedServiceConfigurationMode } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import type { ProviderAccountUsageQuotaReadOptions } from '@/sync/api/account/apiProviderAccountUsage';
+import { listProviderGatewayContributionsV1 } from '@happier-dev/protocol/providers/gatewayContributionsV1';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { getConnectedServiceRegistrySnapshot } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { projectConnectedAccountDescriptorV1 } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 
 export function createUiConnectedServiceAction(account: LazyActionAccountContext, quotaReadOptions?: Pick<ProviderAccountUsageQuotaReadOptions, 'readAllHistory' | 'projectionDocuments' | 'includePendingWork'>): NonNullable<ActionExecutorDeps['connectedServiceAction']> {
     const invoke = async ({ actionId, input, signal }: Parameters<NonNullable<ActionExecutorDeps['connectedServiceAction']>>[0], prepare: boolean) => {
@@ -22,6 +27,29 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
             const { createUiConnectedServiceConfigurationCatalogHost } = await import('@/sync/api/account/apiConnectedAccountCatalog');
             const host: ConnectedServiceConfigurationActionHostV1 = {
                 assertCurrent,
+                readSetupCatalog: async () => {
+                    assertCurrent();
+                    const registry = getConnectedServiceRegistrySnapshot(account.accountLifetime.scope);
+                    const entries = registry.entries.filter(entry => entry.service);
+                    const projected = new Set(entries.map(entry => `${entry.service!.pluginId}/${entry.service!.localId}`));
+                    const unavailableBundled = Object.entries(BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS).flatMap(([key, declaration]) => {
+                        const service = parseQualifiedPluginContributionKey(key);
+                        return !service || projected.has(key) ? [] : [{ service, canAdd: false, reason: 'descriptor-unavailable',
+                            descriptor: projectConnectedAccountDescriptorV1({ descriptor: declaration.descriptor, serviceId: service.localId,
+                                pluginId: service.pluginId, provenance: 'first_party', sourceKind: 'bundled',
+                                availability: { state: 'blocked', reason: 'descriptor-unavailable' }, diagnostics: [] }),
+                        }];
+                    });
+                    return {
+                        status: registry.status === 'ready' ? 'ready' : entries.length ? 'partial' : 'unavailable',
+                        services: [...entries.map(entry => ({ service: entry.service!, descriptor: entry.projectedDescriptor ?? null,
+                            canAdd: entry.executable === true, reason: entry.executable === true ? null
+                                : entry.availability?.state !== 'available' ? entry.availability?.reason ?? registry.errorReason ?? registry.status
+                                : entry.projectionStatus ?? registry.status,
+                        })), ...unavailableBundled],
+                        gateways: listProviderGatewayContributionsV1(readAccountProviderDeclarations({ kind: 'account' })),
+                    };
+                },
                 configurationCatalog: createUiConnectedServiceConfigurationCatalogHost(account, async target => {
                     const current = getAccountConnectedServiceConfigurationMode(target, account.accountLifetime.scope);
                     if (current) return current;

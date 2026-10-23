@@ -3045,6 +3045,28 @@ not daemon or server update engines.
 
 ### Connected Account configuration (development)
 
+`connectedServices.accounts.list` reads the captured Account's existing profile
+inventory, optionally restricted to one qualified service. It returns accounts
+and pools with credential-only health (`healthBasis: credentials`), not fresh
+provider usage. Missing member facts leave pool health unknown. The source
+observation is reported separately; an older profile without the V4 inventories
+returns the existing typed unsupported result instead of an empty collection.
+
+`connectedServices.catalog.list` reads held, admitted setup descriptors. Its
+ready/partial/unavailable result keeps known unavailable services and their
+reasons, without starting sign-in or probing a Machine. UI Account browsing uses
+its applied descriptor registry; CLI uses its admitted contribution registry.
+Gateway candidates come from the corresponding provider declaration owner.
+
+`providers.gateways.choose` is a non-mutating declaration choice. An exact
+qualified contribution key selects only a matching candidate; a service/purpose
+can narrow the candidates. Omission selects a sole candidate, while multiple
+candidates return `choice_required` with every choice. It neither reads saved
+connections nor creates or starts a gateway. An optional Machine uses the
+existing exact-Machine declaration path, including installed plugins. These
+three read Actions default to no approval; creating or editing a gateway still
+uses the existing mutation Actions and approval policy.
+
 `connectedServices.configuration.get/replace` reads or replaces one qualified
 service and authentication mode's service-scoped Account configuration through
 the existing Connected configuration catalog. No selected or online machine is

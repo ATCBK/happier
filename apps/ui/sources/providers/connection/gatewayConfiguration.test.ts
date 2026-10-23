@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createProviderConnectionViewFixture } from '@/dev/testkit/harness/providerSettingsHarness';
 import { ProviderConnectionV1Schema, type ProviderConnectionV1 } from '@happier-dev/protocol/providers/connections/v1';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
-import { buildProviderGatewayConfigurationMutation, buildProviderGatewaySlotMutation, readProviderGatewayContribution, readProviderGatewayContributionPurposes } from './gatewayConfiguration';
+import { buildProviderGatewayConfigurationMutation, buildProviderGatewaySlotMutation, chooseProviderGatewayContributionV1, readProviderGatewayContributionPurposes } from './gatewayConfiguration';
 import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 
 const gateway = () => createProviderConnectionViewFixture({ connectionId: 'pc_gateway', revision: 7,
@@ -26,16 +26,19 @@ describe('gateway configuration Action request', () => {
         })).toEqual({ action: 'update', connectionId: 'pc_gateway', expectedRevision: 0,
             deployment: { kind: 'managedLocal', purposeBindingDefaults: { 'anthropic-upstream': pool } } });
     });
-    it('creates new gateways from the one admitted contribution that draws on subscriptions', () => {
-        expect(readProviderGatewayContribution(readAccountProviderDeclarations({ kind: 'account' }))).toEqual({
+    it('selects a sole admitted gateway and preserves multiple explicit choices', () => {
+        expect(chooseProviderGatewayContributionV1(readAccountProviderDeclarations({ kind: 'account' }), {})).toEqual({ status: 'selected', contribution: {
             contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
             purposes: expect.arrayContaining([
                 { purpose: 'openai-upstream', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } },
                 { purpose: 'anthropic-upstream', service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' } },
             ]),
-        });
+        } });
         const [gateway] = readAccountProviderDeclarations({ kind: 'account' }).filter(declaration => declaration.definition.managedRuntime?.connectedAccounts?.length);
-        expect(readProviderGatewayContribution([gateway!, { ...gateway!, contributionKey: 'example.other/gateway' }])).toBeNull();
+        expect(chooseProviderGatewayContributionV1([gateway!, { ...gateway!, contributionKey: 'example.other/gateway' }], {}))
+            .toMatchObject({ status: 'choice_required', choices: [
+                { contributionKey: gateway!.contributionKey }, { contributionKey: 'example.other/gateway' },
+            ] });
     });
     it('qualifies declaration-local gateway services while preserving explicit vendor identities', () => {
         const [declaration] = readAccountProviderDeclarations({ kind: 'account' }).filter(entry => entry.definition.managedRuntime?.connectedAccounts?.length);
@@ -53,10 +56,10 @@ describe('gateway configuration Action request', () => {
                 ],
             } },
         }];
-        expect(readProviderGatewayContribution(declarations)).toEqual({ contributionKey: 'example.gateway/gateway', purposes: expect.arrayContaining([
+        expect(chooseProviderGatewayContributionV1(declarations, {})).toEqual({ status: 'selected', contribution: { contributionKey: 'example.gateway/gateway', purposes: expect.arrayContaining([
             { purpose: 'native-upstream', service: { pluginId: 'example.gateway', localId: 'subscription' } },
             { purpose: 'other-upstream', service: qualified },
-        ]) });
+        ]) } });
         expect(readProviderGatewayContributionPurposes('example.gateway/gateway', declarations)).toMatchObject([
             { purpose: 'native-upstream', service: { pluginId: 'example.gateway', localId: 'subscription' }, required: false },
             { purpose: 'other-upstream', service: qualified, required: false },

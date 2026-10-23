@@ -23,6 +23,7 @@ import { readProviderConnectionSourceFactsV1, projectAvailableProviderContributi
 import { normalizeProviderEndpointUrlSyntax } from '../safety/url.js';
 import { createProviderCustomCopyTemplateV1 } from './customCopyV1.js';
 import { compareProviderCanonicalStringsV1 } from '../canonicalOrderV1.js';
+import { chooseProviderGatewayContributionV1 } from '../gatewayContributionsV1.js';
 
 function refuse(code: ProviderErrorCodeV1, connectionId?: string): never {
   throw createProviderErrorV1(code, connectionId ? { connectionId } : {});
@@ -142,6 +143,12 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
     context.signal?.throwIfAborted(); host.assertCurrent();
     if (resolveProviderActionOwnerV1(request) !== 'accountCatalog') {
       return { ok: false, errorCode: 'provider_account_action_unavailable', error: 'provider_account_action_unavailable' };
+    }
+    if (request.actionId === 'providers.gateways.choose') {
+      const definitions = await host.readDefinitions();
+      context.signal?.throwIfAborted(); host.assertCurrent();
+      return { ok: true, result: PROVIDER_ACTION_OUTPUT_SCHEMAS_V1[request.actionId].parse(
+        chooseProviderGatewayContributionV1(definitions, request.input)) };
     }
     const captured = await host.readCatalog();
     host.assertCurrent();

@@ -34,6 +34,54 @@ function purposeCatalogBoundary(read: () => Record<string, unknown>, apply: (del
 }
 
 describe('connected-service configuration Action owner', () => {
+    it('lists saved accounts and credential health through the Action dispatcher without a Machine or provider refresh', async () => {
+        const id = 'connectedServices.accounts.list';
+        expect(ActionIdSchema.safeParse(id).success).toBe(true);
+        let current = true;
+        const reads: string[] = [];
+        const host: ConnectedServiceConfigurationActionHostV1 = {
+            assertCurrent() { if (!current) throw new Error('scope-retired'); },
+            async request(request) {
+                reads.push(request.path);
+                expect(request.method).toBe('GET');
+                return { id: 'viewer', timestamp: 100, connectedAccountsV4: [{ ref: { service, accountId: 'work' },
+                    status: 'needs_reauth', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
+                    revisionSemantics: 'legacy_unfenced', credentialRevision: null }], connectedAccountGroupsV4: [] };
+            },
+            async mutatePurposeBindings() { throw new Error('read_must_not_write'); },
+            async resolveAgent() { throw new Error('read_must_not_probe'); },
+            async resetQuota() { throw new Error('read_must_not_refresh'); },
+        };
+        const executor = createActionExecutor({ connectedServiceAction: ({ actionId, input }) => executeConnectedServiceConfigurationActionV1(host, actionId, input) });
+        const result = await executor.execute(id, {}, { surface: 'cli', authority: 'present_user' });
+        expect(result).toMatchObject({ ok: true, result: {
+            accounts: [{ account: { ref: { service, accountId: 'work' } }, health: 'error' }], pools: [],
+            source: { completeness: 'complete', observedAtMs: 100 }, healthBasis: 'credentials',
+        } });
+        if (!result.ok) throw new Error('expected_summary');
+        expect(CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1[id].safeParse(result.result).success).toBe(true);
+        expect(reads).toEqual(['/v1/account/profile']);
+        current = false;
+        expect(await executor.execute(id, {}, { surface: 'cli', authority: 'present_user' })).toMatchObject({ ok: false });
+        expect(reads).toHaveLength(1);
+    });
+
+    it('lists admitted setup descriptors with unavailable reasons and never starts authentication', async () => {
+        const id = 'connectedServices.catalog.list';
+        expect(ActionIdSchema.safeParse(id).success).toBe(true);
+        const host: ConnectedServiceConfigurationActionHostV1 = {
+            assertCurrent() {}, async request() { throw new Error('catalog_must_not_fetch'); },
+            async mutatePurposeBindings() { throw new Error('catalog_must_not_write'); },
+            async resolveAgent() { throw new Error('catalog_must_not_probe'); }, async resetQuota() {},
+            async readSetupCatalog() { return { status: 'partial', services: [{ service, canAdd: false,
+                reason: 'machine-unavailable', descriptor: null }], gateways: [] }; },
+        };
+        const executor = createActionExecutor({ connectedServiceAction: ({ actionId, input }) => executeConnectedServiceConfigurationActionV1(host, actionId, input) });
+        const result = await executor.execute(id, {}, { surface: 'agent' });
+        expect(result).toMatchObject({ ok: true, result: { status: 'partial', services: [{ service, canAdd: false, reason: 'machine-unavailable' }], gateways: [] } });
+        expect(getActionSpec(id).safety).toBe('safe');
+    });
+
     it('changes only the selected declared Agent purpose and preserves another purpose on the same service', async () => {
         const catalog = purposeCatalogBoundary(() => ({}), () => {});
         const scopedAgent = { ...agent, connectedAccounts: [{ purpose: 'model', service }, { purpose: 'review', service }] };

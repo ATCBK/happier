@@ -27,7 +27,7 @@ import { useProviderCatalog } from '@/sync/store/useProviderCatalog';
 import { buildProviderGatewayCollection, areProviderGatewayDeclarationsKnown, providerConnectionDetailRoute,
     type ProviderGatewayCollectionRow } from '../../providers/collection/providerCollectionModel';
 import { useProviderConnectionMutation } from '@/providers/hooks/useProviderConnectionMutation';
-import { createProviderGateway, readProviderGatewayContribution } from '@/providers/connection/gatewayConfiguration';
+import { createProviderGateway, chooseProviderGatewayContributionV1 } from '@/providers/connection/gatewayConfiguration';
 import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
 import { randomUUID } from '@/platform/randomUUID';
@@ -84,21 +84,25 @@ export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | '
         serverId: scope?.serverId ?? null, refresh: refreshGateways });
     const runGatewayMutation = gatewayMutation.run;
     const canAddGateway = gatewaysKnown && gatewayRows?.length === 0;
+    const gatewayContributionChoice = React.useMemo(() => chooseProviderGatewayContributionV1(
+        readAccountProviderDeclarations({ kind: 'account' }), {}), [gatewaysKnown]);
     // The group's place is known before its rows (D19): it holds a loading row while the catalog loads.
     const gatewaysLoading = options.gateways === true && (gatewayRows?.length ?? 0) === 0
         && (!gatewayCatalog || gatewayCatalog.status === 'loading');
     const addGateway = React.useMemo(() => {
         // Account gateway creation does not select an execution Machine.
-        const contribution = canAddGateway ? readProviderGatewayContribution(readAccountProviderDeclarations({ kind: 'account' })) : null;
-        if (!contribution) return null;
+        if (!canAddGateway || gatewayContributionChoice.status === 'unavailable') return null;
         const allocatedConnectionId = `pc_${randomUUID()}`;
-        return async (): Promise<string | null> => {
+        return async (contributionKey?: string): Promise<string | null> => {
+            const choice = chooseProviderGatewayContributionV1(readAccountProviderDeclarations({ kind: 'account' }), { contributionKey });
+            if (choice.status !== 'selected') return null;
+            const contribution = choice.contribution;
             const connectionId = await createProviderGateway({ run: runGatewayMutation, contribution,
                 connectionId: allocatedConnectionId, displayName: t('settingsProvidersCollection.gateway.mainGatewayName'),
                 slot: null, key: ADD_GATEWAY_KEY });
             return connectionId ? providerConnectionDetailRoute(connectionId) : null;
         };
-    }, [canAddGateway, runGatewayMutation]);
+    }, [canAddGateway, gatewayContributionChoice, runGatewayMutation]);
     // Feature-known place and catalog authority are separate facts. Refusal must
     // keep the place visible, without granting creation or replacing its reason.
     const gatewaySectionVisible = options.gateways === true;
@@ -239,6 +243,7 @@ export function useConnectedServicesIndex(options: Readonly<{ agents: 'load' | '
         gatewayUnavailable,
         retryGateways: refreshGateways,
         addGateway,
+        gatewayContributionChoice,
         addingGateway: gatewayMutation.isPending(ADD_GATEWAY_KEY),
         addGatewayError: gatewayMutation.error,
         gatewayApproval: gatewayMutation.pendingApproval,

@@ -28,6 +28,13 @@ const memberFields = [
   { path: 'expectedRuntimeStateRevision', title: 'Expected runtime revision', widget: 'text' },
 ] satisfies readonly ActionInputFieldHint[];
 export const CONNECTED_SERVICE_CONFIGURATION_ACTION_SPECS = [
+  { ...common, id: 'connectedServices.accounts.list', approval: { result: 'none' }, safety: 'safe', sideEffectClass: 'read',
+    title: 'List connected accounts and pools', description: 'Read saved qualified accounts, pools and credential health from this Account without contacting providers or requiring a Machine.',
+    bindings: { mcpToolName: 'connected_services_accounts_list' }, inputSchema: inputs['connectedServices.accounts.list'], outputSchema: outputs['connectedServices.accounts.list'],
+    inputHints: { fields: [{ path: 'service', title: 'Qualified service', widget: 'json' }] } },
+  { ...common, id: 'connectedServices.catalog.list', approval: { result: 'none' }, safety: 'safe', sideEffectClass: 'read',
+    title: 'List connected-service setup choices', description: 'Read admitted services, sign-in methods, gateway contributions and unavailable prerequisites without starting setup.',
+    bindings: { mcpToolName: 'connected_services_catalog_list' }, inputSchema: inputs['connectedServices.catalog.list'], outputSchema: outputs['connectedServices.catalog.list'], inputHints: { fields: [] } },
   { ...authentication, id: 'connectedServices.authentication.beginConnect', approval: {result: 'required'}, title: 'Connect account', description: 'Begin the exact service authentication mode on this machine. Human OAuth, device and credential steps stay on their live continuation.',
     bindings: { mcpToolName: 'connected_services_authentication_begin_connect' }, inputSchema: inputs['connectedServices.authentication.beginConnect'], outputSchema: outputs['connectedServices.authentication.beginConnect'], inputHints: { fields: [authenticationMachineField,
       { path: 'service', title: 'Qualified service', widget: 'json', required: true }, { path: 'modeId', title: 'Authentication mode', widget: 'text', required: true }, { path: 'expectedConfigurationRevision', title: 'Expected configuration revision', widget: 'text' }] } },

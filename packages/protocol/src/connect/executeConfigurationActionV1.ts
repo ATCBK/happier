@@ -11,6 +11,8 @@ import { QualifiedConnectedAccountGroupRefSchema, QualifiedConnectedAccountGroup
 import { assertConnectedAccountOperationTransportV1, ConnectedAccountDaemonCommandSchema, ConnectedAccountAttemptResponseSchema, ConnectedAccountDaemonControlResponseSchema, ConnectedAccountRevokeResponseV1Schema, type ConnectedAccountDaemonCommand, type ConnectedAccountDaemonControlCommand } from './connectedAccountDaemonRpcV1.js';
 import { CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_ID_BY_OPERATION } from './configurationActionIdsV1.js';
 import { PluginJsonValueV2Schema } from '../plugins/contributions/jsonSchema.js';
+import { AccountProfileSchema } from '../account/profile.js';
+import { deriveAccountHealth, worstAccountHealth } from './accountHealth.js';
 import {
   CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1 as inputs,
   CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1 as outputs,
@@ -32,6 +34,8 @@ export type ConnectedAccountPurposeMutationV1 = Readonly<{
 export type ConnectedAccountPurposeMutationIntentV1 = (purposeBindings: QualifiedConnectedAccountPurposeBindingsV1,
   legacySettings: AgentConnectedAccountDefaultSettings) => ConnectedAccountPurposeMutationV1 | null;
 export type ConnectedServiceConfigurationActionHostV1 = Readonly<{
+  /** Held, admitted descriptors only: never activate or probe a Machine to enumerate setup. */
+  readSetupCatalog?(): Promise<ReturnType<(typeof outputs)['connectedServices.catalog.list']['parse']>>;
   configurationCatalog?: ConnectedServiceConfigurationCatalogHostV1;
   /** Authenticated transport for the invocation's exact Home. */
   request(input: Readonly<{ method: 'GET' | 'POST' | 'PATCH' | 'DELETE'; path: string; body?: unknown;
@@ -135,6 +139,34 @@ export async function executeConnectedServiceConfigurationActionV1(
   }
   try {
   switch (actionId) {
+    case 'connectedServices.accounts.list': {
+      const args = inputs[actionId].parse(input);
+      const raw = await host.request({ method: 'GET', path: '/v1/account/profile' });
+      host.assertCurrent();
+      // An older profile's missing V4 projection is not an authoritative empty inventory.
+      if (!raw || typeof raw !== 'object' || !('connectedAccountsV4' in raw) || !('connectedAccountGroupsV4' in raw)) {
+        return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+      }
+      const profile = AccountProfileSchema.parse(raw);
+      const matches = (service: Readonly<{ pluginId: string; localId: string }>) => !args.service
+        || service.pluginId === args.service.pluginId && service.localId === args.service.localId;
+      const accounts = profile.connectedAccountsV4.filter(account => matches(account.ref.service))
+        .map(account => ({ account, health: deriveAccountHealth({ status: account.status, capacityPct: null }) }));
+      const healthByAccount = new Map(accounts.map(({ account, health }) => [JSON.stringify([account.ref.service.pluginId, account.ref.service.localId, account.ref.accountId]), health]));
+      const pools = profile.connectedAccountGroupsV4.filter(pool => matches(pool.ref.service)).map(pool => {
+        const health = pool.members.filter(member => member.enabled).map(member => healthByAccount.get(
+          JSON.stringify([pool.ref.service.pluginId, pool.ref.service.localId, member.connectedAccountId])));
+        return { pool, health: health.some(value => value === undefined) ? null : worstAccountHealth(health.filter(value => value !== undefined)) };
+      });
+      return outputs[actionId].parse({ accounts, pools, source: { completeness: 'complete', observedAtMs: 'timestamp' in raw ? profile.timestamp : null }, healthBasis: 'credentials' });
+    }
+    case 'connectedServices.catalog.list': {
+      inputs[actionId].parse(input);
+      if (!host.readSetupCatalog) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+      const result = await host.readSetupCatalog();
+      host.assertCurrent();
+      return outputs[actionId].parse(result);
+    }
     case 'connectedServices.authentication.pending.list': {
       const args = inputs[actionId].parse(input);
       if (!host.controlCommand) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
