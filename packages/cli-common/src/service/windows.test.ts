@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -99,7 +99,8 @@ describe('Windows scheduled task wrapper script', () => {
       });
 
       expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdoutLog)).toEqual({ cwd: dir, arg: 'argument$HOME', value: literal });
+      // Windows may expand an 8.3 alias from tmpdir() in the child process cwd.
+      expect(JSON.parse(result.stdoutLog)).toEqual({ cwd: realpathSync.native(dir), arg: 'argument$HOME', value: literal });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
