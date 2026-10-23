@@ -529,9 +529,14 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
                     const observed = new Proxy(tx, { get(owner, property, receiver) {
                         if (property !== "$queryRawUnsafe") return Reflect.get(owner, property, receiver);
                         return async (...values: Parameters<typeof query>) => {
+                            const rows = await query(...values);
+                            // PERFACCT reuses serializing/exclusive entry admission
+                            // for publication. Rendezvous on the held native fence,
+                            // whether acquired at entry or by terminal publication.
                             if (!scheduled && competition === "same-account-publication"
-                                && values[0].includes('FROM "Account"') && values[0].endsWith("FOR NO KEY UPDATE")) {
+                                && values[0].includes('FROM "Account"') && /FOR (?:NO KEY UPDATE|UPDATE)$/u.test(values[0])) {
                                 scheduled = true;
+                                const [{ pid: holderPid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
                                 let ready!: (pid: number) => void;
                                 const started = new Promise<number>(resolve => { ready = resolve; });
                                 let settled = false;
@@ -543,15 +548,20 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
                                 peers.push(peer);
                                 void peer.finally(() => { settled = true; }).catch(() => undefined);
                                 const pid = await Promise.race([started, peer.then(() => { throw new Error("Publication missed rendezvous"); })]);
+                                let competed = false;
                                 while (!settled) {
                                     const [{ blocked }] = await db.$queryRaw<Array<{ blocked: boolean }>>`
-                                        SELECT cardinality(pg_blocking_pids(${pid}::int)) > 0 AS blocked
+                                        SELECT ${holderPid}::int = ANY(pg_blocking_pids(${pid}::int)) AS blocked
                                     `;
-                                    if (blocked) break;
+                                    if (blocked) {
+                                        competed = true;
+                                        break;
+                                    }
                                 }
+                                expect(competed, "Peer publication must block on this route's held Account fence").toBe(true);
                                 competitions++;
                             }
-                            return query(...values);
+                            return rows;
                         };
                     } });
                     try {
