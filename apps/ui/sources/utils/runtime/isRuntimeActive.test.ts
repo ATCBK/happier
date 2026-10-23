@@ -92,15 +92,38 @@ describe('isRuntimeActive', () => {
 
         appState.currentState = 'background';
         appState.listeners.forEach((listener) => listener('background'));
+        expect(vi.getTimerCount()).toBe(0);
         await vi.advanceTimersByTimeAsync(500);
         expect(tick).toHaveBeenCalledTimes(1);
 
         appState.currentState = 'active';
         appState.listeners.forEach((listener) => listener('active'));
         expect(tick).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount()).toBe(1);
 
         stop();
         await vi.advanceTimersByTimeAsync(100);
         expect(tick).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not arm a timer until an initially inactive runtime becomes active', async () => {
+        vi.useFakeTimers();
+        const { startRuntimeActiveGatedInterval } = await import('./isRuntimeActive');
+        const tick = vi.fn();
+        appState.currentState = 'background';
+        const stop = startRuntimeActiveGatedInterval(tick, 100);
+        try {
+            expect(vi.getTimerCount()).toBe(0);
+            await vi.advanceTimersByTimeAsync(50);
+            appState.currentState = 'active';
+            appState.listeners.forEach((listener) => listener('active'));
+            expect(tick).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(50);
+            expect(tick).toHaveBeenCalledTimes(1);
+            expect(vi.getTimerCount()).toBe(1);
+        } finally {
+            stop();
+        }
+        expect(vi.getTimerCount()).toBe(0);
     });
 });

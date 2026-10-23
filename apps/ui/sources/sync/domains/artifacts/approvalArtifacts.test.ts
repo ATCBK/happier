@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as approvalAdmission from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { ApprovalRequestV1Schema, ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
 
 import type { DecryptedArtifact } from './artifactTypes';
@@ -9,12 +10,17 @@ import {
     readOpenApprovalDiscussionAttention,
     readOpenManagedMachineApprovalId,
     listOpenApprovalArtifactsForSession,
+    listApprovalArtifactIdsNeedingHydrationForSession,
     listTranscriptApprovalArtifactsForSession,
     resolveOpenApprovalSessionKeys,
 } from './approvalArtifacts';
 import { buildSessionListServerScopedRowKey } from '@/sync/domains/session/listing/sessionListKeyNormalization';
 import { setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { buildDiscussionListAttention } from '@/activity/attention/buildDiscussionListAttention';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { describeApprovalRequestFields } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { COMPOSER_SETTLED_APPROVAL_PRESENTATIONS, TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '@/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
+import { doesApprovalMatchToolCall } from '@/components/tools/shell/views/toolApprovalPromptMatching';
 
 function artifact(
     id: string,
@@ -101,6 +107,34 @@ function durableApprovalBody(sessionId: string) {
 }
 
 describe('listOpenApprovalArtifactsForSession', () => {
+    it('does not re-admit unchanged unrelated approvals for a Session or closed Inbox entries', () => {
+        const other = ApprovalRequestV1Schema.parse(approvalBody('other-session'));
+        const open = artifact('other', buildApprovalRequestArtifactHeaderV1(other, { legacyServerId: 'server-a' }), other);
+        const settled = ApprovalRequestV1Schema.parse({ ...other, status: 'rejected',
+            decision: { kind: 'reject', decidedAtMs: 2 } });
+        const closed = artifact('closed', buildApprovalRequestArtifactHeaderV1(settled, { legacyServerId: 'server-a' }), settled);
+        const document = artifact('document', { title: 'Note', kind: 'prompt_doc.v2' }, { markdown: 'Note' });
+        const admit = vi.spyOn(approvalAdmission, 'approvalArtifactBodyMatchesHeaderV1');
+        try {
+            for (let tick = 0; tick < 20; tick += 1) {
+                expect(listTranscriptApprovalArtifactsForSession([open, closed, document],
+                    { serverId: 'server-a', sessionId: 'session-1' }, {
+                        knownSessionAddresses: [{ serverId: 'server-a', sessionId: 'other-session' }],
+                        settledPresentations: [() => true],
+                    })).toEqual([]);
+                expect(isOpenApprovalInboxArtifact(closed)).toBe(false);
+                expect(isOpenApprovalInboxArtifact(document)).toBe(false);
+            }
+            expect(admit).not.toHaveBeenCalled();
+            // Header filtering is demand only: a matching row still requires strict body admission.
+            expect(listOpenApprovalArtifactsForSession([{ ...open, body: '{}' }],
+                { serverId: 'server-a', sessionId: 'other-session' }, {
+                    knownSessionAddresses: [{ serverId: 'server-a', sessionId: 'other-session' }],
+                })).toEqual([]);
+            expect(admit).toHaveBeenCalledTimes(1);
+        } finally { admit.mockRestore(); }
+    });
+
     it('distinguishes immutable pending draft-review purpose through the strict private Inbox reader', () => {
         const request = ApprovalRequestV2Schema.parse({
             ...durableApprovalBody('publisher'), actionId: 'discussion.reply',
@@ -311,6 +345,38 @@ describe('listOpenApprovalArtifactsForSession', () => {
         })).toHaveLength(1);
     });
 
+    it('keeps a legacy unscoped approval on its linked Session within one exact Home', () => {
+        const request = ApprovalRequestV1Schema.parse({ ...approvalBody('session-a'),
+            createdBy: { surface: 'cli', sessionId: 'session-a' }, requestedSurface: 'cli' });
+        // 0.2 cliApprovalsArtifactStore writes this Session binding without a Home.
+        const header = buildApprovalRequestArtifactHeaderV1(request);
+        const opened = artifact('legacy-session-a', header, request);
+        const head = artifact(opened.id, header);
+        const sessionA = { serverId: 'home-a', sessionId: 'session-a' };
+        const sessionB = { serverId: 'home-a', sessionId: 'session-b' };
+        const knownSessionAddresses = [sessionA, sessionB];
+        const options = { knownSessionAddresses };
+
+        expect(listOpenApprovalArtifactsForSession([opened], sessionA, options).map(entry => entry.artifact.id))
+            .toEqual([opened.id]);
+        expect(listOpenApprovalArtifactsForSession([opened], sessionB, options)).toEqual([]);
+        expect(listTranscriptApprovalArtifactsForSession([opened], sessionB, options)).toEqual([]);
+        expect(listApprovalArtifactIdsNeedingHydrationForSession([head], sessionA, knownSessionAddresses))
+            .toEqual([opened.id]);
+        expect(listApprovalArtifactIdsNeedingHydrationForSession([head], sessionB, knownSessionAddresses)).toEqual([]);
+        expect([...resolveOpenApprovalSessionKeys(collectOpenApprovalSessionReferences([opened]), knownSessionAddresses)])
+            .toEqual([buildSessionListServerScopedRowKey(sessionA.serverId, sessionA.sessionId)]);
+        expect(isOpenApprovalInboxArtifact(opened)).toBe(true);
+        expect(listOpenApprovalArtifactsForSession([opened], { ...sessionA, serverId: 'home-b' }, options)).toEqual([]);
+
+        const accountRequest = ApprovalRequestV1Schema.parse({ ...request, createdBy: { surface: 'cli' } });
+        const accountApproval = artifact('legacy-account', buildApprovalRequestArtifactHeaderV1(accountRequest), accountRequest);
+        expect(isOpenApprovalInboxArtifact(accountApproval)).toBe(true);
+        for (const target of knownSessionAddresses) {
+            expect(listOpenApprovalArtifactsForSession([accountApproval], target, options)).toEqual([]);
+        }
+    });
+
     it('admits a legacy unscoped approval only when canonical membership resolves one exact Home', () => {
         const legacy = artifact('legacy', {
             v: 1,
@@ -417,6 +483,87 @@ describe('listTranscriptApprovalArtifactsForSession', () => {
         ...(status === 'executed' ? { execution: { executedAtMs: 3, ok: true, result: {} } } : {}),
     });
     const target = buildSessionListServerScopedRowKey('server-a', 's1')!;
+
+    it.each(['rejected', 'canceled'] as const)('keeps a %s Skills Action review only at its originating call', status => {
+        const spec = getActionSpec('skills.rules.set');
+        const actionArgs = spec.inputSchema.parse({ items: [{ skillId: 'skill-1' }],
+            change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } } });
+        const request = ApprovalRequestV2Schema.parse({
+            ...durableApprovalBody('s1'), actionId: spec.id, actionArgs, status, updatedAtMs: 2,
+            executionOriginV1: { ...durableApprovalBody('s1').executionOriginV1, actionId: spec.id },
+            origin: { kind: 'transcript_tool_call', sessionId: 's1', toolCallId: 'skills-call' },
+            ...(status === 'rejected' ? { decision: { kind: 'reject', decidedAtMs: 2 } } : {}),
+        });
+        const stored = artifact('skills-review', buildApprovalRequestArtifactHeaderV1(request), request);
+        const options = { settledPresentations: TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS };
+        const selected = listTranscriptApprovalArtifactsForSession([stored], target, options);
+        expect(selected.map(entry => entry.artifact.id)).toEqual(['skills-review']);
+        const tool = { id: 'skills-call', name: 'mcp__happier__action_execute', input: {}, state: 'error',
+            createdAt: 1, startedAt: 1, completedAt: 2, description: null } as const;
+        expect(doesApprovalMatchToolCall({ request: selected[0]!, sessionId: 's1', messageId: 'message-1',
+            tool, normalizedToolName: 'MCP' })).toBe(true);
+        expect(doesApprovalMatchToolCall({ request: selected[0]!, sessionId: 's1', messageId: 'message-1',
+            tool: { ...tool, id: 'other-call' }, normalizedToolName: 'MCP' })).toBe(false);
+        const detached = ApprovalRequestV2Schema.parse({ ...request, origin: undefined });
+        expect(listTranscriptApprovalArtifactsForSession([
+            artifact('detached', buildApprovalRequestArtifactHeaderV1(detached), detached),
+        ], target, options)).toEqual([]);
+        expect(listOpenApprovalArtifactsForSession([stored], target)).toEqual([]);
+    });
+
+    it('keeps an execution failure with the composer attention owner rather than the declined transcript rule', () => {
+        const request = ApprovalRequestV2Schema.parse({ ...durableApprovalBody('s1'), status: 'failed', updatedAtMs: 3,
+            origin: { kind: 'transcript_tool_call', sessionId: 's1', toolCallId: 'failed-call' },
+            decision: { kind: 'approve', decidedAtMs: 2 },
+            execution: { executedAtMs: 3, effectAttempted: false, ok: false,
+                errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable' },
+        });
+        const stored = artifact('failed-review', buildApprovalRequestArtifactHeaderV1(request), request);
+        expect(listTranscriptApprovalArtifactsForSession([stored], target, {
+            settledPresentations: TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS,
+        })).toEqual([]);
+        expect(listTranscriptApprovalArtifactsForSession([stored], target, {
+            settledPresentations: COMPOSER_SETTLED_APPROVAL_PRESENTATIONS,
+        }).map(entry => entry.artifact.id)).toEqual(['failed-review']);
+    });
+
+    it.each([
+        { status: 'canceled', client: { clientId: 'public-client', clientSecret: 'private-fixture' }, operation: 'set' },
+        { status: 'rejected', client: null, operation: 'remove' },
+    ] as const)('keeps the $status MCP sign-in review at its originating tool call', ({ status, client, operation }) => {
+        const spec = getActionSpec('mcp.servers.signIn.start');
+        const input = { serverId: 'mcp-server', client };
+        // Live-only Actions persist observation operands and a separate safe review preview.
+        const actionArgs = spec.projectObservationInput!(input);
+        const preview = { actionId: spec.id, actionArgs: spec.approvalPresentation!.projectInput!(input) };
+        const request = ApprovalRequestV2Schema.parse({
+            ...durableApprovalBody('s1'), actionId: spec.id, actionArgs, preview, status, updatedAtMs: 2,
+            executionOriginV1: { ...durableApprovalBody('s1').executionOriginV1, actionId: spec.id },
+            origin: { kind: 'transcript_tool_call', sessionId: 's1', toolCallId: 'oauth-call' },
+            ...(status === 'rejected' ? { decision: { kind: 'reject', decidedAtMs: 2 } } : {}),
+        });
+        const stored = artifact('oauth-review', buildApprovalRequestArtifactHeaderV1(request), request);
+        const selected = listTranscriptApprovalArtifactsForSession([stored], target, {
+            settledPresentations: TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS,
+        });
+        expect(selected.map(entry => entry.artifact.id)).toEqual(['oauth-review']);
+        expect(doesApprovalMatchToolCall({ request: selected[0]!, sessionId: 's1', messageId: 'message-1',
+            tool: { id: 'oauth-call', name: 'mcp__happier__action_execute', input: {}, state: 'error',
+                createdAt: 1, startedAt: 1, completedAt: 2, description: null },
+            normalizedToolName: 'MCP',
+        })).toBe(true);
+        const fields = describeApprovalRequestFields(selected[0]!.approval);
+        expect(fields.rows).toContainEqual(expect.objectContaining({ path: 'oauthApp', selectedOptions: [expect.objectContaining({
+            labelKey: operation === 'set' ? 'capabilities.mcpSignIn.reviewSetApp' : 'capabilities.mcpSignIn.reviewRemoveApp',
+        })] }));
+        expect(fields.rows.filter(row => row.path === 'clientId')).toEqual(operation === 'set'
+            ? [expect.objectContaining({ value: 'public-client' })] : []);
+        expect(JSON.stringify(fields)).not.toContain('private-fixture');
+        expect(listOpenApprovalArtifactsForSession([stored], target)).toEqual([]);
+        expect(listTranscriptApprovalArtifactsForSession([stored], { serverId: 'server-b', sessionId: 's1' }, {
+            settledPresentations: TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS,
+        })).toEqual([]);
+    });
 
     it('keeps a settled approval in the transcript only when its body declares a settled presentation', () => {
         const declined = settled('rejected');

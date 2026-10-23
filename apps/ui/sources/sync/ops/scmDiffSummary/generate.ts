@@ -108,9 +108,12 @@ export type RefreshScmDiffSummaryRunParams = ScmDiffSummaryHost & Readonly<{
     waitForInputId?: string;
 }>;
 
-export type ScmDiffSummaryOperationResult =
+export type ScmDiffSummaryOperationResult = Readonly<{
+    /** Saved result identity from this operation's acknowledgement, without last-known display fallback. */
+    resultId?: string;
+}> & (
     | Readonly<{ ok: true; key: string; runId: string | null; state: ScmDiffSummaryState; viewModel: ScmDiffSummaryViewModel }>
-    | Readonly<{ ok: false; key: string; error: string; errorCode?: string; state: ScmDiffSummaryState; viewModel: ScmDiffSummaryViewModel }>;
+    | Readonly<{ ok: false; key: string; error: string; errorCode?: string; state: ScmDiffSummaryState; viewModel: ScmDiffSummaryViewModel }>);
 
 type OperationError = Readonly<{ ok: false; error: string; errorCode?: string }>;
 
@@ -386,7 +389,7 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
         if (!current()) {
             // The generator may have admitted a real Run before retirement. Its
             // receipt stays truthful; this retired binding publishes no state/cache.
-            if (output?.success) return { ok: true, key, runId: output.runId ?? null, state, viewModel: selectScmDiffSummaryViewModel(state, key) };
+            if (output?.success) return { ok: true, key, resultId: output.resultId, runId: output.runId ?? null, state, viewModel: selectScmDiffSummaryViewModel(state, key) };
             const error = readOperationError(generated) ?? { ok: false, error: 'Unsupported diff-summary generate response' };
             return { ok: false, key, error: error.error, ...(error.errorCode ? { errorCode: error.errorCode } : {}), state,
                 viewModel: selectScmDiffSummaryViewModel(state, key) };
@@ -445,11 +448,12 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             });
         }
         if (!output.success) {
-            return { ok: false, key, error: output.error, errorCode: output.errorCode, state, viewModel: selectScmDiffSummaryViewModel(state, key) };
+            return { ok: false, key, resultId: output.resultId, error: output.error, errorCode: output.errorCode, state, viewModel: selectScmDiffSummaryViewModel(state, key) };
         }
         return {
             ok: true,
             key,
+            resultId: output.resultId,
             runId: output.runId ?? null,
             state,
             viewModel: selectScmDiffSummaryViewModel(state, key),

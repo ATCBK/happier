@@ -11,6 +11,10 @@ export class LruMap<K, V> {
         return this.map.size;
     }
 
+    values(): IterableIterator<V> {
+        return this.map.values();
+    }
+
     has(key: K): boolean {
         return this.map.has(key);
     }

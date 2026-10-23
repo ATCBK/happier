@@ -32,7 +32,7 @@ function retainOpenedContent(previous: DecryptedArtifact | undefined, incoming: 
   // Omitted attribution was not demanded by this background index. An explicit
   // undefined from a reader that opened it still clears removed private metadata.
   const retainBody = incoming.body === undefined && previous.body !== undefined;
-  const retainProvenance = !Object.hasOwn(incoming, 'provenance') && previous.provenance !== undefined;
+  const retainProvenance = !Object.hasOwn(incoming, 'provenance') && Object.hasOwn(previous, 'provenance');
   if (!retainBody && !retainProvenance) return incoming;
   return { ...incoming, ...(retainBody ? { body: previous.body } : {}),
     ...(retainProvenance ? { provenance: previous.provenance } : {}) };

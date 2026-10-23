@@ -255,7 +255,7 @@ describe('AuthContext with the production connection manager', () => {
         }
     });
 
-    it('retires changed same-Home credentials before disclosure and recaptures Auth without retiring an identical write', async () => {
+    it('refreshes same-Account Auth transport while retaining captured Action authority', async () => {
         restoreStorage = installLocalStorageMock().restore;
         restoreLocks = installWebLockManagerMock().restore;
         vi.stubGlobal('window', { location: { origin: 'https://origin.example.test' } });
@@ -267,6 +267,7 @@ describe('AuthContext with the production connection manager', () => {
             const url = new URL(String(input));
             if (url.origin !== 'https://credential.example.test') throw new Error(`Unexpected Home: ${url.origin}`);
             if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return Response.json({ ok: true });
+            if (url.pathname === '/test/captured-action') return Response.json({ ok: true });
             if (url.pathname === '/v1/account/encryption') return holdMode ? mode.promise : Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (url.pathname === '/v2/account/settings') return Response.json({ content: null, version: 0 });
@@ -295,6 +296,10 @@ describe('AuthContext with the production connection manager', () => {
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: original, children: React.createElement(React.Fragment, null),
         }));
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const actionAccount = await captureLazyActionAccountContext(home.id);
+        const actionRetired = vi.fn();
+        actionAccount.accountLifetime.onRetire(actionRetired);
         const reapplied = createDeferred<void>();
         const release = connection.subscribeAppliedActiveServerRuntimeAvailability(available => {
             if (available) reapplied.resolve();
@@ -309,6 +314,8 @@ describe('AuthContext with the production connection manager', () => {
             expect(await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, refreshed)).toBe(true);
             expect(lifetime.isCurrent()).toBe(false);
             expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(false);
+            expect(actionAccount.accountLifetime.isCurrent()).toBe(true);
+            expect(actionRetired).not.toHaveBeenCalled();
             mode.resolve(Response.json({ mode: 'plain', updatedAt: 1 }));
             await act(async () => { await reapplied.promise; });
             await flushHookEffects({ cycles: 30 });
@@ -317,8 +324,10 @@ describe('AuthContext with the production connection manager', () => {
             expect(replacement).not.toBe(lifetime);
             expect(replacement?.isCurrent()).toBe(true);
             expect(replacement?.scope).toEqual(lifetime.scope);
+            await expect(actionAccount.runPrepared(async () => (await actionAccount.request('/test/captured-action')).json())).resolves.toEqual({ ok: true });
         } finally {
             mode.resolve(Response.json({ mode: 'plain', updatedAt: 1 }));
+            actionAccount.dispose();
             release();
             await screen.unmount();
         }

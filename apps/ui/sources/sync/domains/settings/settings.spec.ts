@@ -593,7 +593,7 @@ describe('settings', () => {
 
         it('defaults files diff syntax highlighting and editor settings', () => {
             const parsed = settingsParse({} as any);
-            expect((parsed as any).filesDiffSyntaxHighlightingMode).toBe('simple');
+            expect(parsed.filesDiffSyntaxHighlightingMode).toBe('advanced');
             expect((parsed as any).filesDiffRendererMode).toBe('pierre');
             expect((parsed as any).filesDiffPresentationStyle).toBe('unified');
             expect((parsed as any).filesDiffFileListVirtualizationMinFiles).toBeGreaterThan(0);
@@ -616,6 +616,10 @@ describe('settings', () => {
             expect((parsed as any).filesImagePreviewCacheMaxTotalBytes).toBe(96 * 1024 * 1024);
             expect((parsed as any).filesImagePreviewMaxBytes).toBe(16 * 1024 * 1024);
             expect((parsed as any).filesEditorChangeDebounceMs).toBeGreaterThan(0);
+        });
+
+        it.each(['off', 'simple', 'advanced'] as const)('preserves stored files syntax highlighting mode %s', (mode) => {
+            expect(settingsParse({ filesDiffSyntaxHighlightingMode: mode }).filesDiffSyntaxHighlightingMode).toBe(mode);
         });
 
         it('defaults permission mode apply timing to immediate', () => {

@@ -1,6 +1,6 @@
 export type HydrationApplyFlushReason = 'size' | 'timer' | 'required' | 'final' | 'manual';
 
-/** One publication scheduler for list hydration and concurrently completed exact reads. */
+/** Shared Session publication scheduler for list hydration and by-ID completions. */
 export function createHydrationApplyQueue<T>(params: {
     apply: (batch: T[], reason: HydrationApplyFlushReason) => void;
     batchSize?: number;

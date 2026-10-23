@@ -2,6 +2,7 @@ import { approvalArtifactBodyMatchesHeaderV1, type ParsedApprovalArtifactBodyV1 
 import type { ApprovalRequest, ApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { isDiscussionActionIdV1 } from '@happier-dev/protocol/discussions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { APPROVAL_ARTIFACT_KINDS_V1 } from '@happier-dev/protocol/approvals/approvalArtifactKindV1';
 
 import type { DecryptedArtifact } from './artifactTypes';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
@@ -52,7 +53,8 @@ function parseApprovalRequestArtifact(artifact: DecryptedArtifact): ApprovalRequ
 }
 
 function readOpenApprovalInboxArtifact(artifact: DecryptedArtifact) {
-    if (artifact.draft === true) return null;
+    if (artifact.draft === true || artifact.header?.approvalStatus !== 'open'
+        || !Object.values(APPROVAL_ARTIFACT_KINDS_V1).some(kind => kind === artifact.header?.kind)) return null;
     const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, typeof artifact.body === 'string' ? artifact.body : null);
     return parsed?.request.status === 'open' ? parsed : null;
 }
@@ -196,7 +198,7 @@ function referenceMatchesTarget(
             : reference.address.sessionId === target.sessionId
                 && areServerProfileIdentifiersEquivalent(reference.address.serverId, target.serverId);
     }
-    if (typeof target === 'string') return false;
+    if (typeof target === 'string' || reference.sessionId !== target.sessionId) return false;
     const candidates = new Map(
         knownSessionAddresses
             .filter((address) => address.sessionId === reference.sessionId)
@@ -260,6 +262,12 @@ function listSessionApprovalArtifacts(
     return artifacts.flatMap((artifact) => {
         if (artifact.header?.kind !== 'approval_request.v1') return [];
         if (artifact.header?.approvalStatus !== 'open' && !keepsSettled) return [];
+        // The strict reader requires the body's Session binding to match this
+        // index. Unrelated headers cannot admit a body for this Session; avoid
+        // reparsing every Account approval when its inventory changes.
+        if (!collectApprovalLinkedSessionReferences(artifact).some(reference => (
+            referenceMatchesTarget(reference, target, knownSessionAddresses)
+        ))) return [];
         const approval = parseApprovalRequestArtifact(artifact);
         if (!approval) return [];
         if (approval.status === 'open' ? artifact.header?.approvalStatus !== 'open' : !keepsSettled?.(approval)) return [];

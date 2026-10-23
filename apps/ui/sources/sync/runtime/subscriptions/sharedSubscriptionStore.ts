@@ -67,8 +67,8 @@ export type SharedSubscriptionStoreConfig<
     failRefresh?: (state: TState, input: TInput, nowMs: () => number, error: unknown) => TState;
     /** Retain useful content while exposing the loss of live observation. */
     failWatch?: (state: TState, input: TInput) => TState;
-    /** Existing transport recovery signal; bound once while this entry has live demand. */
-    subscribeRecovery?: (input: TInput, recover: () => void) => () => void;
+    /** Authenticated reconnect requests revalidation; ordinary reachability wakes only renew failed observation. */
+    subscribeRecovery?: (input: TInput, recover: (revalidate?: boolean) => void) => () => void;
     applySnapshot: (state: TState, snapshot: TSnapshot) => TState;
     /** Publish derived/sibling state only after the next watch has dispatched. */
     onWatchSnapshot?: (input: TInput, snapshot: TSnapshot, previous: TState) => void;
@@ -379,16 +379,17 @@ export function createSharedSubscriptionStore<
             entry.listeners.add(listener);
             entry.refCount += 1;
             if (entry.refCount === 1) {
-                entry.unsubscribeRecovery = config.subscribeRecovery?.(entry.input, () => {
+                entry.unsubscribeRecovery = config.subscribeRecovery?.(entry.input, revalidate => {
                     if (entry.refCount <= 0) return;
                     // Recovery may precede the old transport's final failed reply. Allow that
                     // reply to re-arm once without replacing a healthy outstanding watch.
                     if (entry.watching) {
                         entry.watchRecoveryRequested = true;
                         entry.watchRecoveryNeedsRefresh = true;
-                    } else if (entry.watchRetired || config.shouldWatch?.(entry.state) === false) {
-                        // An initial read can fail before any watch starts. It still needs
-                        // the same authenticated recovery wake as a retired parked watch.
+                    }
+                    if (revalidate === true || (!entry.watching && (entry.watchRetired || config.shouldWatch?.(entry.state) === false))) {
+                        // Authenticated reconnect revalidates even while an old watch is
+                        // parked/preparing. Ordinary request-success wakes only repair failure.
                         entry.watchRetired = false;
                         if (entry.inFlight) entry.refreshRequested = true;
                         const refresh = runRefresh(entry);

@@ -109,28 +109,44 @@ export function startRuntimeActiveGatedInterval(callback: () => void, intervalMs
     const delayMs = Math.max(1, Math.trunc(intervalMs));
     let stopped = false;
     let lastRunAt = Date.now();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const clearTimer = () => {
+        if (timer !== null) clearTimeout(timer);
+        timer = null;
+    };
+    const scheduleNext = () => {
+        clearTimer();
+        if (stopped || !isRuntimeActive()) return;
+        timer = setTimeout(runIfActive, Math.max(0, lastRunAt + delayMs - Date.now()));
+    };
     const runIfActive = () => {
+        clearTimer();
         if (stopped || !isRuntimeActive()) return;
         lastRunAt = Date.now();
-        callback();
+        try {
+            callback();
+        } finally {
+            scheduleNext();
+        }
     };
 
-    const interval = setInterval(runIfActive, delayMs);
     const onPotentiallyActive = () => {
-        if (stopped || !isRuntimeActive()) return;
-        if (Date.now() - lastRunAt >= delayMs) {
+        if (!stopped && isRuntimeActive() && Date.now() - lastRunAt >= delayMs) {
             runIfActive();
+        } else {
+            scheduleNext();
         }
     };
 
     // Consumes the single lifecycle-transition owner above rather than attaching
     // its own listeners, so the timer gate and any component gate agree.
     const stopListening = subscribeToRuntimeActiveChange(onPotentiallyActive);
+    scheduleNext();
 
     return () => {
         if (stopped) return;
         stopped = true;
-        clearInterval(interval);
+        clearTimer();
         stopListening();
     };
 }

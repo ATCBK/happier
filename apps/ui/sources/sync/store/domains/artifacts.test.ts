@@ -161,6 +161,10 @@ describe('createArtifactsDomain', () => {
         expect(store.getState()).toBe(before);
         store.getState().applyArtifacts([{ ...head, provenance: undefined }]);
         expect(store.getState().artifacts[opened.id]?.provenance).toBeUndefined();
+        expect(Object.hasOwn(store.getState().artifacts[opened.id], 'provenance')).toBe(true);
+        const cleared = store.getState();
+        store.getState().applyArtifacts([head]);
+        expect(store.getState()).toBe(cleared);
         store.getState().applyArtifacts([opened]);
         store.getState().applyArtifacts([{ ...head, storageIdentity: { ...head.storageIdentity!, provenanceKeyEnvelope: 'rotated' } }]);
         expect(store.getState().artifacts[opened.id]?.provenance).toBeUndefined();
@@ -202,12 +206,13 @@ describe('createArtifactsDomain', () => {
         expect(store.getState()).toBe(before);
         expect(notify).not.toHaveBeenCalled();
         expect(boardChanged).not.toHaveBeenCalled();
-        for (const change of [{ body: 'new body' }, { access: 'view' as const }, { headerVersion: 2 }]) {
+        for (const change of [{ body: 'new body' }, { access: 'view' as const }, { headerVersion: 2 },
+            { publicAudience: 'unknown' as const }, { publicAudience: 'none' as const }]) {
             const current = store.getState().artifacts[board.id];
             if (!current?.isDecrypted) throw new Error('Expected readable Board');
             store.getState().updateArtifact({ ...current, ...change });
         }
-        expect(notify).toHaveBeenCalledTimes(3);
+        expect(notify).toHaveBeenCalledTimes(5);
         const unrelated = artifact(2);
         store.getState().addArtifact(unrelated);
         store.getState().updateArtifact({ ...store.getState().artifacts[board.id]!, updatedAt: 5 });

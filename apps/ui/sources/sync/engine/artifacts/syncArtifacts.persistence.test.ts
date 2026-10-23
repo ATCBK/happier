@@ -8,6 +8,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { resetMmkvStoresForTests } from '@/dev/reactNativeMmkvStub';
 import { CurrentCursorResponseSchema, ChangesResponseSchema } from '@happier-dev/protocol/changes';
 import { ArtifactReadBatchResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { ApprovalRequestV1Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const currentCursor = (cursor: number) => json(CurrentCursorResponseSchema.parse({ cursor, changesFloor: 0 }));
@@ -50,6 +51,34 @@ describe('device-persisted Artifact inventory through the real writer and store'
         await first.completion;
         vi.resetModules(); // A new app process retains only device storage.
     }
+
+    it('acquires an approval absent from the device headers through the retained change cursor', async () => {
+        await seed();
+        const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
+            actionId: 'session.list', actionArgs: {}, summary: 'List sessions' });
+        const artifact = { ...head('new-approval'), kind: 'other' as const,
+            header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(approval)),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(approval) }) };
+        const paths: string[] = [];
+        const next = await load(async (path, init) => {
+            paths.push(path);
+            if (path === '/v2/cursor') return currentCursor(11);
+            if (path.startsWith('/v2/changes?after=10&')) return json(ChangesResponseSchema.parse({ changes: [
+                { kind: 'artifact', entityId: artifact.id, cursor: 11, changedAt: 1 },
+            ], nextCursor: 11 }));
+            expect(path).toBe('/v1/artifacts/read');
+            expect(JSON.parse(String(init?.body)).artifactIds).toEqual([artifact.id]);
+            return json(ArtifactReadBatchResponseV1Schema.parse({ items: [
+                { artifactId: artifact.id, ok: true, artifact, recipientCensus: null },
+            ] }));
+        });
+        await next.completion;
+        expect(next.store.getState().artifacts[artifact.id]?.header?.kind).toBe('approval_request.v1');
+        expect(next.store.getState().artifacts[artifact.id]?.body).toBe(JSON.stringify(approval));
+        expect(next.store.getState().artifactsLoaded).toBe(true);
+        expect(paths.some(path => path.startsWith('/v1/artifacts?'))).toBe(false);
+    });
 
     it('settles at the captured change frontier while unrelated Account writes continue', async () => {
         await seed();

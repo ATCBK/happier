@@ -40,15 +40,15 @@ async function execute() {
 }
 
 describe('captured Account Action response decoding', () => {
-    it('preserves Account page declaration correspondence through the real Machine Action envelope', async () => {
+    it('preserves Account page source and version through the real Machine Action envelope', async () => {
         homes.answer(serverId, '/v1/machines', { body: [ExternalActionMachineBootstrapV1Schema.parse({
             id: 'machine-1', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
             installationId: 'installation-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
             access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
         })] });
         const mountedBinding = { pluginId: 'com.acme.portable', contributionLocalId: 'page', occurrenceId: 'account-custody',
-            pluginVersion: '1.0.0', declarationDigest: `sha256:${'c'.repeat(64)}`,
-            sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'app' } } };
+            pluginVersion: '1.0.0', sourceCustody: { kind: 'bundled_first_party' as const,
+                packagedRuntime: { kind: 'source_declaration' as const, packageName: '@acme/portable' } } };
         homes.answer(serverId, path, { select: body => {
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
             expect(envelope.pluginInvocation).toEqual({ kind: 'mountedPluginSurface', mountedBinding });
@@ -71,8 +71,8 @@ describe('captured Account Action response decoding', () => {
             access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
         })] });
         const mountedBinding = { pluginId: 'com.acme.portable', contributionLocalId: 'page', occurrenceId: 'account-custody',
-            pluginVersion: '1.0.0', declarationDigest: `sha256:${'c'.repeat(64)}`,
-            sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'app_bundle' as const, bundleId: 'app' } } };
+            pluginVersion: '1.0.0', sourceCustody: { kind: 'bundled_first_party' as const,
+                packagedRuntime: { kind: 'source_declaration' as const, packageName: '@acme/portable' } } };
         let receivedInvocation: unknown;
         homes.answer(serverId, '/v1/actions/plugins.list', { select: body => {
             const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);

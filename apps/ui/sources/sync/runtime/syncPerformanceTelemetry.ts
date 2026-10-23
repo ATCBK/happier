@@ -28,6 +28,15 @@ export type SyncPerformanceTelemetrySummary = Readonly<{
     events: SyncPerformanceTelemetryEvent[];
 }>;
 
+export type SyncPerformanceStoreNotification = Readonly<{
+    atMs: number;
+    changedKeys: readonly string[];
+}>;
+
+function diagnosticsEnabled(): boolean {
+    return (globalThis as unknown as { __HAPPIER_PERF_DIAGNOSTICS__?: unknown }).__HAPPIER_PERF_DIAGNOSTICS__ === true;
+}
+
 type SyncPerformanceTelemetryOptions = Readonly<{
     enabled?: boolean;
     slowThresholdMs?: number;
@@ -173,6 +182,8 @@ export class SyncPerformanceTelemetry {
     private emitSummary: ((summary: SyncPerformanceTelemetrySummary) => void) | null;
     private readonly events = new Map<string, MutableTelemetryEvent>();
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
+    private storageObserved = false;
+    private readonly storeNotificationListeners = new Set<(event: SyncPerformanceStoreNotification) => void>();
 
     constructor(options?: SyncPerformanceTelemetryOptions) {
         this.enabled = resolveCaptureEnabled(options?.enabled);
@@ -197,6 +208,31 @@ export class SyncPerformanceTelemetry {
 
     isEnabled(): boolean {
         return this.enabled;
+    }
+
+    registerStorageNotificationSource(): void {
+        this.storageObserved = true;
+    }
+
+    storeNotificationsAvailable(): boolean {
+        return this.storageObserved;
+    }
+
+    subscribeStoreNotifications(listener: (event: SyncPerformanceStoreNotification) => void): () => void {
+        if (!diagnosticsEnabled()) return () => {};
+        this.storeNotificationListeners.add(listener);
+        return () => { this.storeNotificationListeners.delete(listener); };
+    }
+
+    recordStoreNotification<T>(state: T, previous: T): void {
+        if (this.storeNotificationListeners.size === 0 || !diagnosticsEnabled()) return;
+        if (typeof state !== 'object' || state === null || typeof previous !== 'object' || previous === null) return;
+        const nextFields = state as Readonly<Record<string, unknown>>;
+        const previousFields = previous as Readonly<Record<string, unknown>>;
+        const changedKeys = Array.from(new Set([...Object.keys(previousFields), ...Object.keys(nextFields)]))
+            .filter(key => !Object.is(previousFields[key], nextFields[key]));
+        const event = { atMs: this.now(), changedKeys };
+        for (const listener of this.storeNotificationListeners) listener(event);
     }
 
     measure<T>(name: string, fields: SyncPerformanceTelemetryFields | undefined, fn: () => T): T {
@@ -422,10 +458,15 @@ export function installSyncPerformanceTelemetryGlobal(
             flush: () => SyncPerformanceTelemetrySummary | null;
             reset: () => void;
             markScenario: (name: string, fields?: SyncPerformanceTelemetryFields) => void;
+            storeNotificationsAvailable: () => boolean;
+            subscribeStoreNotifications: (listener: (event: SyncPerformanceStoreNotification) => void) => () => void;
         };
+        dispatchEvent?: (event: Event) => boolean;
     };
     target.__HAPPIER_SYNC_PERFORMANCE__ = {
         isEnabled: () => telemetry.isEnabled(),
+        storeNotificationsAvailable: () => telemetry.storeNotificationsAvailable(),
+        subscribeStoreNotifications: (listener) => telemetry.subscribeStoreNotifications(listener),
         snapshot: () => {
             return telemetry.snapshot();
         },
@@ -443,6 +484,11 @@ export function installSyncPerformanceTelemetryGlobal(
         target.__HAPPIER_SYNC_PERFORMANCE__.configure = (options) => {
             telemetry.configure(options);
         };
+    }
+    // Pre-document profiling probes attach here even when this module loads
+    // later. No polling, state export, or development-only module access.
+    if (diagnosticsEnabled() && typeof target.dispatchEvent === 'function' && typeof Event !== 'undefined') {
+        target.dispatchEvent(new Event('happier:sync-performance-ready'));
     }
 }
 

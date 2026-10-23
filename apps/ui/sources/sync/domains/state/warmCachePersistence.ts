@@ -17,7 +17,7 @@ import { PluginUiTargetedContributionsV1Schema, type PluginUiTargetedContributio
 import { z } from 'zod/mini';
 import * as zMini from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { MachinePublishedAgentInventoryV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { SkillFoundListResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { DaemonMcpServersDetectResponseSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
@@ -572,10 +572,16 @@ const PluginUiProjectionCacheEntriesSchema = z.record(z.string(), PluginUiProjec
 // complete projection. Rebuild the pool on every replacement so retired revisions cannot accumulate.
 const CompactPluginUiProjectionCacheSchema = z.object({
     v: z.literal(2),
-    entries: PluginUiProjectionCacheEntriesSchema,
+    // This is the storage envelope, not a complete projection until pooled translations
+    // are restored. loadScopedRecord admits the reconstructed entries once, below.
+    entries: z.record(z.string(), z.unknown()),
     translationBundles: z.array(z.record(z.string(), z.unknown())),
     translationBundleRefs: z.record(z.string(), z.record(z.string(), z.number().check(z.int(), z.nonnegative()))),
 });
+
+// Encoding only receives this owner's immutable entry snapshots. A generation
+// replacement can keep the exact bundle; its pooling key is content, not freshness.
+const pluginUiTranslationBundleKeys = new WeakMap<object, string>();
 
 function serializePluginUiProjectionCache(entries: Record<string, PluginUiProjectionCacheEntryV1>): string {
     const translationBundles: Record<string, unknown>[] = [];
@@ -590,7 +596,11 @@ function serializePluginUiProjectionCache(entries: Record<string, PluginUiProjec
             if (row.contributionKind !== 'translations') return [id, row];
             const bundles = row.bundles;
             if (!bundles || typeof bundles !== 'object' || Array.isArray(bundles)) return [id, row];
-            const raw = JSON.stringify(bundles);
+            let raw = pluginUiTranslationBundleKeys.get(bundles);
+            if (raw === undefined) {
+                raw = JSON.stringify(bundles);
+                pluginUiTranslationBundleKeys.set(bundles, raw);
+            }
             let index = bundleIndexByRaw.get(raw);
             if (index === undefined) {
                 index = translationBundles.length;
@@ -612,24 +622,32 @@ function serializePluginUiProjectionCache(entries: Record<string, PluginUiProjec
         : entries);
 }
 
+function readCompactCacheObject(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('invalid_plugin_ui_warm_cache_reference');
+    }
+    return value as Record<string, unknown>;
+}
+
 function deserializePluginUiProjectionCache(raw: string): unknown {
     const value: unknown = JSON.parse(raw);
     // Existing flat V1 records remain readable. This is a device-local cache encoding, not a wire ABI.
     if (!value || typeof value !== 'object' || !('v' in value) || value.v !== 2) return value;
     const compact = createStoredReadSchema(CompactPluginUiProjectionCacheSchema).parse(value);
     for (const [key, refs] of Object.entries(compact.translationBundleRefs)) {
-        const entry = compact.entries[key];
-        const pluginUi = entry?.projection.familiesById.pluginUi;
-        if (!entry || !pluginUi) throw new Error('invalid_plugin_ui_warm_cache_reference');
-        const entriesById = { ...pluginUi.entriesById };
+        const entry = readCompactCacheObject(compact.entries[key]);
+        const projection = readCompactCacheObject(entry.projection);
+        const familiesById = readCompactCacheObject(projection.familiesById);
+        const pluginUi = readCompactCacheObject(familiesById.pluginUi);
+        const entriesById = { ...readCompactCacheObject(pluginUi.entriesById) };
         for (const [id, index] of Object.entries(refs)) {
-            const row = entriesById[id];
+            const row = readCompactCacheObject(entriesById[id]);
             const bundles = compact.translationBundles[index];
-            if (!row || row.contributionKind !== 'translations' || !bundles) throw new Error('invalid_plugin_ui_warm_cache_reference');
+            if (row.contributionKind !== 'translations' || !bundles) throw new Error('invalid_plugin_ui_warm_cache_reference');
             entriesById[id] = { ...row, bundles };
         }
-        compact.entries[key] = { ...entry, projection: { ...entry.projection,
-            familiesById: { ...entry.projection.familiesById, pluginUi: { ...pluginUi, entriesById } },
+        compact.entries[key] = { ...entry, projection: { ...projection,
+            familiesById: { ...familiesById, pluginUi: { ...pluginUi, entriesById } },
         } };
     }
     return compact.entries;
@@ -839,36 +857,54 @@ export function loadPluginUiProjectionWarmCacheEntries(
     return normalizeEmptyWarmCacheRecord(loaded);
 }
 
+// Only this owner's copied, frozen entries prove that *all* retained fields
+// are immutable. The exported presentation symbol alone is not admission.
+const publishedPluginUiProjectionEntries = new WeakSet<PluginUiProjectionCacheEntryV1>();
+
 function publishPluginUiProjectionPresentations(
     entries: Record<string, PluginUiProjectionCacheEntryV1>,
     previous?: Record<string, PluginUiProjectionCacheEntryV1> | null,
 ): Record<string, PluginUiProjectionCacheEntryV1> {
     const platform = resolvePluginUiProjectionPlatform();
-    let changed = false;
+    let samePrevious = previous !== null && previous !== undefined
+        && Object.keys(previous).length === Object.keys(entries).length;
     const published = Object.fromEntries(Object.entries(entries).map(([key, entry]) => {
         const existing = entry[PLUGIN_UI_PROJECTION_PRESENTATION];
-        if (existing?.projection === entry.projection && existing.platform === platform) return [key, entry];
-        changed = true;
-        const prior = previous?.[key]?.[PLUGIN_UI_PROJECTION_PRESENTATION];
+        if (publishedPluginUiProjectionEntries.has(entry) && existing?.platform === platform) {
+            if (previous?.[key] !== entry) samePrevious = false;
+            return [key, entry];
+        }
+        const priorEntry = previous?.[key];
+        const prior = priorEntry?.[PLUGIN_UI_PROJECTION_PRESENTATION];
         // Retained bytes keep the same wire shape, while this owner's ready
-        // presentation cannot retain mutable aliases supplied to save/hydrate.
-        const projectionSnapshot: unknown = projectNativeJsonValueForTransport(entry.projection);
-        // The storage schema admitted this V2 shape before its immutable copy.
-        const projection = projectionSnapshot as PluginProjectionV2;
+        // presentation cannot retain mutable aliases supplied to save/hydrate,
+        // including target admissions. Symbols are process-only, not JSON.
+        const { [PLUGIN_UI_PROJECTION_PRESENTATION]: _presentation, ...wireEntry } = entry;
+        const entrySnapshot: unknown = projectNativeJsonValueForTransport(wireEntry);
+        const snapshot = entrySnapshot as PluginUiProjectionCacheEntryV1;
+        if (priorEntry && publishedPluginUiProjectionEntries.has(priorEntry)
+            && prior?.platform === platform && sameStrictJsonValue(snapshot, priorEntry)) {
+            return [key, priorEntry];
+        }
+        samePrevious = false;
+        const projection = snapshot.projection;
         const normalized = preparePluginUiProjectionOrigins(normalizePluginUiProjection(projection, platform,
             prior?.platform === platform ? prior.model ?? undefined : undefined));
         const model = Object.values(normalized).some(value => value !== null && typeof value === 'object' && Object.keys(value).length > 0)
             ? normalized : null;
-        return [key, { ...entry, projection, [PLUGIN_UI_PROJECTION_PRESENTATION]: Object.freeze({ projection, platform, model }) }];
+        const publication = Object.freeze({ ...snapshot, [PLUGIN_UI_PROJECTION_PRESENTATION]: Object.freeze({ projection, platform, model }) });
+        publishedPluginUiProjectionEntries.add(publication);
+        return [key, publication];
     }));
-    return changed ? published : entries;
+    if (samePrevious && previous) return previous;
+    return Object.freeze(published);
 }
 
 /** Exact-scope hydration runs before the credential/Sync owner publishes consumers. */
 export function preparePluginUiProjectionWarmCacheEntries(serverId: string, accountId: string): void {
     const key = buildScopedKey(PLUGIN_UI_PROJECTION_WARM_CACHE_PREFIX, serverId, accountId);
     const entries = loadPluginUiProjectionWarmCacheEntries(serverId, accountId);
-    const published = publishPluginUiProjectionPresentations(entries);
+    const published = publishPluginUiProjectionPresentations(entries, entries);
     const cached = key ? warmCacheSavedValueByKey.get(key) : undefined;
     if (key && cached && published !== entries) warmCacheSavedValueByKey.set(key, { raw: cached.raw, value: published });
 }

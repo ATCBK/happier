@@ -5,7 +5,6 @@ import { ArtifactReadBatchInputV1Schema } from '@happier-dev/protocol/artifacts/
 import { createDeferred } from '@/dev/testkit';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createArtifactsDomain, type ArtifactsDomain } from '@/sync/store/domains/artifacts';
-import { loadSyncTuning } from '@/sync/runtime/syncTuning';
 import { fetchAndApplyArtifactBodies, type ArtifactDataKeyCache } from './syncArtifacts';
 
 afterEach(() => vi.useRealTimers());
@@ -34,13 +33,13 @@ function createHarness() {
 }
 
 describe('Artifact body hydration publications', () => {
-    it('publishes concurrently completed exact reads together and suppresses an equal replay', async () => {
+    it('publishes one completed body batch once and suppresses an equal replay', async () => {
         const { store, artifacts, params } = createHarness();
         let publications = 0;
         const off = store.subscribe((next, previous) => {
             if (next.artifacts !== previous.artifacts) publications++;
         });
-        const read = () => Promise.all(artifacts.map(row => fetchAndApplyArtifactBodies({ ...params, artifactIds: [row.id] })));
+        const read = () => fetchAndApplyArtifactBodies({ ...params, artifactIds: artifacts.map(row => row.id) });
         try {
             await read();
             expect(Object.values(store.getState().artifacts).map(row => row.body)).toEqual(artifacts.map((_, index) => `Receipt body ${index}`));
@@ -52,25 +51,24 @@ describe('Artifact body hydration publications', () => {
         } finally { off(); }
     });
 
-    it('coalesces body completions from separate response turns within the existing hydration window', async () => {
-        vi.useFakeTimers();
+    it('makes a ready body batch usable without advancing a publication timer', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         const { store, artifacts, params } = createHarness();
-        const windowMs = loadSyncTuning().sessionListBackgroundHydrationApplyFlushDelayMs;
         let publications = 0;
         const off = store.subscribe((next, previous) => {
             if (next.artifacts !== previous.artifacts) publications++;
         });
-        const pending = Promise.all(artifacts.map((row, index) => fetchAndApplyArtifactBodies({ ...params, artifactIds: [row.id],
-            request: async (path, init) => {
-                await new Promise(resolve => setTimeout(resolve, windowMs * (index + 1) / (artifacts.length + 1)));
-                return params.request(path, init);
-            } })));
+        const pending = fetchAndApplyArtifactBodies({ ...params, artifactIds: artifacts.map(row => row.id) });
         try {
-            await vi.runAllTimersAsync();
-            await pending;
+            // HTTP/body decoding drains its microtasks, while publication timers stay frozen.
+            await new Promise<void>(resolve => setImmediate(resolve));
             expect(Object.keys(store.getState().artifacts)).toHaveLength(6);
             expect(publications).toBe(1);
-        } finally { off(); }
+        } finally {
+            await vi.runAllTimersAsync();
+            await pending;
+            off();
+        }
     });
 
     it('does not hold ready bodies behind an unrelated unfinished read', async () => {
@@ -88,19 +86,18 @@ describe('Artifact body hydration publications', () => {
         expect(Object.keys(store.getState().artifacts)).toHaveLength(6);
     });
 
-    it('readmits cancellation and Account retirement immediately before a queued publication', async () => {
-        vi.useFakeTimers();
+    it('rejects cancellation and Account retirement before body publication', async () => {
         const { store, artifacts, params } = createHarness();
+        const response = createDeferred<Response>();
         const controller = new AbortController();
         let current = true;
         const pending = Promise.allSettled([
-            fetchAndApplyArtifactBodies({ ...params, artifactIds: [artifacts[0]!.id], signal: controller.signal }),
-            fetchAndApplyArtifactBodies({ ...params, artifactIds: [artifacts[1]!.id], shouldContinue: () => current }),
+            fetchAndApplyArtifactBodies({ ...params, artifactIds: [artifacts[0]!.id], request: () => response.promise, signal: controller.signal }),
+            fetchAndApplyArtifactBodies({ ...params, artifactIds: [artifacts[0]!.id], request: () => response.promise, shouldContinue: () => current }),
         ]);
-        await vi.advanceTimersByTimeAsync(0);
         controller.abort();
         current = false;
-        await vi.runAllTimersAsync();
+        response.resolve(await params.request('/v1/artifacts/read', { body: JSON.stringify({ artifactIds: [artifacts[0]!.id] }) }));
         await pending;
         expect(store.getState().artifacts).toEqual({});
     });

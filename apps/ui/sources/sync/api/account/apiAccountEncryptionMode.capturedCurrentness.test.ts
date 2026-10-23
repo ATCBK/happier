@@ -198,8 +198,14 @@ it.each(['unchanged', 'mode', 'fingerprint', 'update', 'malformed-update', 'scop
         } else {
             expect(result).toHaveProperty('error');
             if (['mode', 'fingerprint', 'update', 'malformed-update', 'scope-reset', 'holder-retired'].includes(outcome)) {
-                expect(result).toMatchObject({ error: { code: 'account_encryption_currentness_changed' } });
+                // A previously retired capture is refused by the Snapshot
+                // reader before hydration; a fresh-read mismatch reaches the
+                // finite currentness owner's more specific typed error.
+                expect(result).toMatchObject({ error: outcome === 'mode' || outcome === 'fingerprint'
+                    ? { code: 'account_encryption_currentness_changed' }
+                    : { name: 'SessionSnapshotReadError', errorCode: 'stale_response' } });
                 expect(source.isCurrent()).toBe(false);
+                expect(source.assertCurrent).toThrow(expect.objectContaining({ code: 'account_encryption_currentness_changed' }));
             }
         }
     } finally { release(); source.dispose(); context.dispose(); }

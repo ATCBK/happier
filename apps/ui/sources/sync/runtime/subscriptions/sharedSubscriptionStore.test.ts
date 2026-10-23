@@ -15,6 +15,46 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it.each(['parked', 'preparing'] as const)('revalidates a reconnected transport without waiting for its %s watch', async phase => {
+        let recover: ((revalidate?: boolean) => void) | undefined;
+        let reads = 0;
+        let watches = 0;
+        let finishWatch!: (value: SharedSubscriptionWatchOutcome<number>) => void;
+        let watchSignal: AbortSignal | undefined;
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            retainState: true, watchAfterRefresh: true,
+            defaultSnapshotClient: async () => ++reads, defaultWatchClient: {},
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, value: number) => value,
+            subscribeRecovery: (_input: string, listener: () => void) => { recover = listener; return () => {}; },
+            watch: ({ signal }) => {
+                watches++;
+                watchSignal = signal;
+                return {
+                    dispatched: phase === 'parked' ? Promise.resolve() : new Promise<void>(() => {}),
+                    outcome: new Promise<SharedSubscriptionWatchOutcome<number>>(resolve => { finishWatch = resolve; }),
+                };
+            },
+        });
+        const release = store.subscribe('machine', () => {});
+        try {
+            for (let turn = 0; turn < 8; turn++) await Promise.resolve();
+            expect(store.getState('machine')).toBe(1);
+            recover?.(true);
+            for (let turn = 0; turn < 8; turn++) await Promise.resolve();
+            expect(store.getState('machine')).toBe(2);
+            expect(reads).toBe(2);
+            // The explicit reconnect read does not replay or replace the held watch.
+            expect(watchSignal?.aborted).toBe(false);
+            finishWatch({ status: 'unavailable' });
+            for (let turn = 0; turn < 8; turn++) await Promise.resolve();
+            expect(watches).toBe(2);
+            expect(reads).toBe(2);
+        } finally {
+            release(); store.reset(); finishWatch({ status: 'unavailable' });
+        }
+    });
+
     it('reports shared revalidation separately while retaining the unchanged data snapshot', async () => {
         let finish!: (value: number) => void;
         let reads = 0;

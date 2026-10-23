@@ -60,7 +60,7 @@ import {
 } from './domains/state/storageTypes';
 import { MetadataSchema, type AgentState, type Metadata } from '@happier-dev/session-core/state';
 import { InvalidateSync } from '@/utils/sessions/sync';
-import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { createScopedBatchResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { PauseController } from '@/utils/timing/pauseController';
 import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
@@ -1459,7 +1459,7 @@ class Sync {
       private machineDataKeys = new Map<string, MachineDataKeyCacheEntry>(); // Unwrapped machine data keys + the envelope each came from, so an unchanged envelope is never re-opened
       private machineRecipientChangeCursors = new Map<string, number>();
       private artifactDataKeys: ArtifactDataKeyCache = new Map(); // Unwrapped artifact data keys + the envelope each came from, so an unchanged envelope is never re-opened
-      private artifactBodyHydrations = createScopedResolutionSingleFlight<void>();
+      private artifactBodyHydrations = createScopedBatchResolutionSingleFlight<PromiseSettledResult<void>>();
     private settingsSync: InvalidateSync;
     private profileSync: InvalidateSync;
     private purchasesSync: InvalidateSync;
@@ -7845,10 +7845,13 @@ class Sync {
                       || reason === 'server-reachable'
                       || reason === 'manual';
                   if (forceSessionSystemRecordRefresh || reason === 'app-foreground') {
-                      // A failed mode read leaves mounted subscribers closed until
-                      // the existing cache refresh signal wakes them. Foreground
-                      // also recovers intentional disconnects without a reconnect.
-                      invalidateAccountEncryptionModeCache({ serverId: this.getAppliedTransportTarget()?.serverId });
+                      // Resume withdraws stale observations, not the Account's
+                      // encryption identity. Finite operations re-read through
+                      // their currentness owner with their original credentials.
+                      invalidateAccountEncryptionModeCache({
+                          serverId: this.getAppliedTransportTarget()?.serverId,
+                          reason: 'transport-withdrawal',
+                      });
                   }
                   const sessionSystemRecordRefreshScope = getActiveServerAccountScope();
                   for (const repository of this.sessionSystemRecordRepositories.values()) {
@@ -8780,15 +8783,35 @@ class Sync {
         const pendingIds = artifactIds.filter(id => storage.getState().artifacts[id]?.body === undefined).sort();
         if (pendingIds.length === 0) return Promise.resolve();
         const credentialScope = resolveAuthCredentialsScopeKey(this.credentials);
-        return Promise.all(pendingIds.map(artifactId => this.artifactBodyHydrations.run(JSON.stringify([credentialScope, artifactId]), async sharedSignal => {
+        // Register the known demand before authority acquisition (including Web Locks)
+        // can spread its readers across separate tasks.
+        return this.artifactBodyHydrations.run(credentialScope, pendingIds, async (ids, sharedSignal, publish) => {
+            const pending = new Set(ids);
+            const results = new Map<string, PromiseSettledResult<void>>();
             const controller = new AbortController();
             const cancel = () => { controller.abort(); hydration.stop(); };
             const hydration = new InvalidateSync(async () => {
                 if (!lifetime.isCurrent()) return;
-                await this.withArtifactReadAuthority(controller.signal, params => fetchAndApplyArtifactBodies({
-                    ...params, artifactIds: [artifactId],
+                const selectedIds = [...pending];
+                const attempt = await this.withArtifactReadAuthority(controller.signal, params => fetchAndApplyArtifactBodies({
+                    ...params, artifactIds: selectedIds,
                     applyArtifacts: storage.getState().applyArtifacts,
                 }));
+                if (controller.signal.aborted || !lifetime.isCurrent()) return;
+                const completed = new Map<string, PromiseSettledResult<void>>();
+                let retry: PromiseRejectedResult | undefined;
+                for (const [index, result] of attempt.entries()) {
+                    if (result.status === 'rejected' && shouldRetrySyncInvalidation(result.reason)) {
+                        retry ??= result;
+                        continue;
+                    }
+                    const id = selectedIds[index]!;
+                    pending.delete(id);
+                    results.set(id, result);
+                    completed.set(id, result);
+                }
+                publish(completed);
+                if (retry) throw retry.reason;
             }, {
                 pause: this.pauseController,
                 backoff: {
@@ -8804,13 +8827,18 @@ class Sync {
             try {
                 if (sharedSignal.aborted) cancel();
                 await hydration.invalidateAndAwait();
+                // Retirement has always settled hydration without publishing stale rows.
+                for (const id of pending) results.set(id, { status: 'fulfilled', value: undefined });
+                return results;
             } finally {
                 retirement.dispose();
                 sharedSignal.removeEventListener('abort', cancel);
                 controller.abort();
                 hydration.stop();
             }
-        }, { scope: lifetime }))).then(() => undefined);
+        }, { scope: lifetime }).then(results => {
+            for (const result of results.values()) if (result.status === 'rejected') throw result.reason;
+        });
     }
 
     private async withArtifactReadAuthority<TResult>(signal: AbortSignal | undefined,
