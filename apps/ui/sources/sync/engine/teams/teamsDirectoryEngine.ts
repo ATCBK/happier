@@ -808,11 +808,7 @@ export async function refreshTeamCredentialResources(
     filter: TeamCredentialResourceListFilterV1 = 'all',
 ): Promise<void> {
     const target = credentialResourcesTargetFor(scope, address, search, filter);
-    const catalogTarget = credentialResourceCatalogTargetFor(scope, address);
-    await Promise.all([
-        target ? credentialResourcesLoader.refresh(target) : Promise.resolve(),
-        catalogTarget ? credentialResourceCatalogLoader.refresh(catalogTarget) : Promise.resolve(),
-    ]);
+    if (target) await credentialResourcesLoader.refresh(target);
 }
 
 /** Continues the resource sequence without discarding pages already shown. */

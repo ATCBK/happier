@@ -7,7 +7,7 @@ import { parseProviderContributionIdentityV1 } from '@happier-dev/protocol/provi
 import { teamsUnavailableReason, type TeamsDirectoryUnavailableHome } from '@/components/settings/teams/teamsDirectoryViewState';
 
 import { observeTeamCredentialResourceCatalog, refreshTeamCredentialResourceCatalog } from '@/sync/engine/teams/teamsDirectoryEngine';
-import { getTeamCredentialResourceCatalogSnapshot, subscribeTeamsSnapshots } from '@/sync/store/teams/teamsSnapshots';
+import { getTeamCredentialResourceCatalogSnapshot, getTeamCredentialResourceCatalogsSelectionKey, subscribeTeamsSnapshots } from '@/sync/store/teams/teamsSnapshots';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { providerDeclarationContext, resolveAccountAgentProviderRequirements, readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
@@ -74,6 +74,7 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
         })];
     }, [input.agentTargetKey, declarationContext, requirements]);
     const demands = React.useMemo(() => rows.flatMap(row => applications.map(application => ({ row, application }))), [rows, applications]);
+    const catalogSelections = React.useMemo(() => demands.map(({ row, application }) => ({ address: row.address, application })), [demands]);
     const demandsKey = JSON.stringify([rowsKey, applications]);
 
     React.useEffect(() => {
@@ -93,11 +94,7 @@ export function useHomeTeamCredentialModelCatalog(input: Readonly<{
 
     const snapshotVersion = React.useSyncExternalStore(
         subscribeTeamsSnapshots,
-        () => JSON.stringify(demands.map(({ row, application }) => {
-            const snapshot = getTeamCredentialResourceCatalogSnapshot(scope, row.address, application);
-            return [row.address.teamId, snapshot?.status ?? 'none', snapshot?.lastObservedAt ?? null, snapshot?.stale === true,
-                snapshot?.selectionCurrent === true, snapshot?.error?.kind ?? null];
-        })),
+        () => getTeamCredentialResourceCatalogsSelectionKey(scope, catalogSelections),
         () => '',
     );
 

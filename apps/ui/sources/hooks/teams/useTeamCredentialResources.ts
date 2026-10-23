@@ -54,22 +54,18 @@ import type { TeamCredentialProviderSourceOfferV1 } from './useTeamCredentialPro
 /**
  * One Team's shared credential resources, and what this viewer may do with them.
  *
- * Administration rows and viewer capabilities remain one Home answer, while
- * the recipient-safe catalog has its own filter-independent Home answer. The
- * surface never reconstructs either authority from a role, a custodian id or a
- * Team capability. `viewer` is `null` until the administration read answers,
+ * Administration rows and viewer capabilities remain one Home answer. Recipient
+ * choices load independently through useTeamCredentialResourceCatalog. Neither
+ * authority is reconstructed from a role, a custodian id or a Team capability.
+ * `viewer` is `null` until the administration read answers,
  * so management entry points stay hidden while that question is open.
  */
 export type TeamCredentialResourcesProjection = Readonly<{
     rows: readonly TeamCredentialResourceSummaryV1[];
-    /** Recipient-safe choices; never reconstructed from administration rows. */
-    catalog: readonly TeamCredentialResourceCatalogEntryV1[];
     viewer: TeamCredentialViewerCapabilitiesV1 | null;
     status: 'loading' | 'refreshing' | 'ready' | 'error';
     /** Retained rows cannot prove absence while their snapshot is stale. */
     isCurrent: boolean;
-    /** Stale recipient rows remain visible but cannot authorize selection. */
-    catalogCurrent: boolean;
     error: HomeDomainFailure | null;
     hasMore: boolean;
     loadMore: () => Promise<void>;
@@ -198,19 +194,9 @@ export function useTeamCredentialResources(params: Readonly<{
         return observeTeamCredentialResources(scope, address, search, filter);
     }, [active, scope, address, search, filter]);
 
-    React.useEffect(() => {
-        if (!active || !scope || !address) return;
-        return observeTeamCredentialResourceCatalog(scope, address);
-    }, [active, scope, address]);
-
     const snapshot = React.useSyncExternalStore(
         subscribeTeamsSnapshots,
         () => (active ? getTeamCredentialResourcesSnapshot(scope, address, queryKey) : null),
-        () => null,
-    );
-    const catalogSnapshot = React.useSyncExternalStore(
-        subscribeTeamsSnapshots,
-        () => (active ? getTeamCredentialResourceCatalogSnapshot(scope, address) : null),
         () => null,
     );
 
@@ -236,7 +222,6 @@ export function useTeamCredentialResources(params: Readonly<{
 
     return React.useMemo(() => Object.freeze({
         rows: snapshot?.data ?? NO_RESOURCES,
-        catalog: catalogSnapshot?.data ?? NO_CATALOG,
         viewer: snapshot?.viewer ?? null,
         // A refresh over rows already on screen is not a loading state: the
         // previous resources stay rendered and are marked stale.
@@ -246,13 +231,12 @@ export function useTeamCredentialResources(params: Readonly<{
             ? 'loading' as const
             : snapshot.status,
         isCurrent: snapshot?.status === 'ready' && snapshot.stale === false,
-        catalogCurrent: catalogSnapshot?.status === 'ready' && catalogSnapshot.stale === false,
         error: snapshot?.error ? toProjectionFailure(snapshot.error) : null,
         hasMore,
         loadMore,
         retry,
         reload,
-    }), [snapshot, catalogSnapshot, loadingMore, hasMore, loadMore, retry, reload]);
+    }), [snapshot, loadingMore, hasMore, loadMore, retry, reload]);
 }
 
 /**
