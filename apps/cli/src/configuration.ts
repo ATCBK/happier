@@ -7,6 +7,7 @@
 
 import { chmodSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { resolveCliHomeStoragePaths } from './configuration/homeStoragePaths'
 import { readCliProcessArgs } from './cli/parseArgs'
 import { applyRuntimeContextPrefixEnv, parseRuntimeContextPrefixArgs } from './utils/env/runtimeContextArgv'
 import {
@@ -283,9 +284,10 @@ class Configuration {
     // Directory configuration - Priority: HAPPIER_HOME_DIR env > default home dir
     this.happyHomeDir = resolveCliHappyHomeDir(process.env)
 
-    this.logsDir = join(this.happyHomeDir, 'logs')
-    this.settingsFile = join(this.happyHomeDir, 'settings.json')
-    this.serversDir = join(this.happyHomeDir, 'servers')
+    const homeStoragePaths = resolveCliHomeStoragePaths(this.happyHomeDir)
+    this.logsDir = homeStoragePaths.logsDir
+    this.settingsFile = homeStoragePaths.settingsFile
+    this.serversDir = homeStoragePaths.serversDir
 
     const envServerUrl = (process.env.HAPPIER_SERVER_URL ?? '').toString().trim();
     const envLocalServerUrl = (process.env.HAPPIER_LOCAL_SERVER_URL ?? '').toString().trim();
