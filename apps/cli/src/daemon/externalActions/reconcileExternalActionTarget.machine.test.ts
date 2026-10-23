@@ -1,5 +1,76 @@
 import { expect, it } from 'vitest';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { reconcileExternalActionTarget, resolveExternalActionMachineTarget } from './reconcileExternalActionTarget';
+
+it('selects a nested worker destination instead of SOURCE and refuses conflicting receiver custody', () => {
+  const status = { actionId: 'projects.worker.status' as const,
+    rawInput: { workspace: { serverId: 'home', refId: 'source-ref' },
+      destination: { kind: 'machine', machineId: 'worker' }, purpose: 'finite' }, fallbackMachineId: 'source' };
+  expect(resolveExternalActionMachineTarget(status)).toEqual({ kind: 'ready', machineId: 'worker' });
+  expect(resolveExternalActionMachineTarget({ ...status, target: { kind: 'machine', machineId: 'source' } }))
+    .toMatchObject({ kind: 'rejected', execution: { errorCode: 'target_not_local' } });
+  expect(reconcileExternalActionTarget({ ...status, target: { kind: 'machine', machineId: 'source' }, currentMachineId: 'source' }))
+    .toMatchObject({ kind: 'rejected', execution: { errorCode: 'target_not_local' } });
+  expect(reconcileExternalActionTarget({ ...status, target: { kind: 'machine', machineId: 'worker' }, currentMachineId: 'worker' }))
+    .toMatchObject({ kind: 'ready', target: { kind: 'machine', machineId: 'worker' } });
+});
+
+it.each(['projects.inspect', 'projects.manifest.update'] as const)('routes qualified %s to its checkout Machine instead of the ambient daemon', actionId => {
+  const inspect = { actionId,
+    rawInput: { workspace: { serverId: 'home', workspaceId: 'worker-ref', machineId: 'worker', rootPath: '/worker' },
+      ...(actionId === 'projects.manifest.update' ? { expectedBasis: { kind: 'absent' }, bytes: '{}' } : {}) },
+    fallbackMachineId: 'source' };
+  expect(resolveExternalActionMachineTarget(inspect)).toEqual({ kind: 'ready', machineId: 'worker' });
+  expect(reconcileExternalActionTarget({ ...inspect, target: { kind: 'machine', machineId: 'source' }, currentMachineId: 'source' }))
+    .toMatchObject({ kind: 'rejected', execution: { errorCode: 'target_not_local' } });
+});
+
+const controller = { machineId: 'controller', installationId: 'installation' };
+const contribution = { pluginId: 'acme.compute', localId: 'machine' };
+it.each([
+  ['machines.provisioners.check', { homeId: 'home', controller, contribution }],
+  ['machines.provisioners.options', { homeId: 'home', controller, contribution, selectors: {} }],
+  ['machines.managed.acquire', { selection: { kind: 'preset', homeId: 'home', id: 'preset', revision: 1 },
+    controller, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false }],
+  ['machines.managed.acquire', { selection: { kind: 'one-off', homeId: 'home', controller,
+    launch: { provider: contribution, schemaVersion: 1, name: 'worker', choices: {} },
+    retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false } }],
+] as const)('routes %s through its declared controller and refuses another envelope Machine', (actionId, rawInput) => {
+  const request = { actionId, rawInput, fallbackMachineId: 'ambient' };
+  expect(resolveExternalActionMachineTarget(request)).toEqual({ kind: 'ready', machineId: 'controller' });
+  expect(resolveExternalActionMachineTarget({ ...request, target: { kind: 'machine', machineId: 'ambient' } }))
+    .toMatchObject({ kind: 'rejected', execution: { errorCode: 'target_not_local' } });
+  expect(reconcileExternalActionTarget({ ...request, target: { kind: 'machine', machineId: 'ambient' }, currentMachineId: 'ambient' }))
+    .toMatchObject({ kind: 'rejected', execution: { errorCode: 'target_not_local' } });
+});
+
+it.each([
+  ['artifact.publish_from_file', { path: 'report.txt', workspace: { machineId: 'worker', rootPath: '/worker' } }],
+  ['projects.prepare', { phase: 'setup', workspace: {
+    serverId: 'home', workspaceId: 'worker-ref', machineId: 'worker', rootPath: '/worker' } }],
+  ['daemon.filesystem.copy', { kind: 'target_copy',
+    source: { serverId: 'home', machineId: 'source', rootPath: '/source', path: 'file' },
+    destination: { serverId: 'home', machineId: 'worker', rootPath: '/worker', path: 'file' },
+    overwrite: false, recursive: false }],
+  ['plugins.settings.get', { pluginId: 'acme.plugin', localId: 'enabled', scope: { kind: 'daemon' },
+    target: { kind: 'daemon', serverIdentityId: 'srv_home', machineId: 'worker' } }],
+  ['plugins.settings.secret.status', { pluginId: 'acme.plugin', localId: 'credential',
+    secretDaemonTarget: { kind: 'daemon', serverIdentityId: 'srv_home', machineId: 'worker' } }],
+  ['peerMediation.observability.subscribe', { scope: { kind: 'machine', accountId: 'account', machineId: 'worker' } }],
+  ['peerMediation.observability.unsubscribe', { scope: { kind: 'machine', accountId: 'account', machineId: 'worker' } }],
+] as const)('routes %s using its semantic nested Machine and refuses conflicting custody', (actionId, rawInput) => {
+  expect(getActionSpec(actionId).inputSchema.safeParse(rawInput).success).toBe(true);
+  const request = { actionId, rawInput, fallbackMachineId: 'source' };
+  expect(resolveExternalActionMachineTarget(request)).toEqual({ kind: 'ready', machineId: 'worker' });
+  expect(reconcileExternalActionTarget({ ...request, target: { kind: 'machine', machineId: 'source' }, currentMachineId: 'source' }))
+    .toMatchObject({ kind: 'rejected', execution: { errorCode: 'target_not_local' } });
+});
+
+it('ignores incidental nested Machine data retained by a permissive Action schema', () => {
+  expect(resolveExternalActionMachineTarget({ actionId: 'localServices.inventory.list',
+    rawInput: { machineId: 'source', destination: { machineId: 'worker' } }, fallbackMachineId: 'source' }))
+    .toEqual({ kind: 'ready', machineId: 'source' });
+});
 
 it('selects an inherited spawn Machine before creation choices are resolved while retaining explicit locality', () => {
   const spawn = { actionId: 'session.spawn_new' as const,

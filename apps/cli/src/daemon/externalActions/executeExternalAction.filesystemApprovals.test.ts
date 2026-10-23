@@ -531,7 +531,7 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
     try {
       service.finishStop();
       const terminal = await h.prepareSignedMove({ sourceCoordinator: true, executeMove: service.request });
-      expect(starts).toBe(1);
+      expect(starts, JSON.stringify({ terminal, outcomes: h.rpcOutcomes })).toBe(1);
       expect(service.snapshot().state).toBe('stopped');
       const instances = h.serviceInstances().filter(instance => instance.workspace.rootPath === h.workerRef.rootPath);
       expect(instances).toHaveLength(1);
@@ -1061,7 +1061,7 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
       } else {
         expect(result).toMatchObject({ ok: true });
         const operation = ProjectCommandActionOutputV1Schema.parse(result.ok ? result.result : null).operation;
-        await expect.poll(() => h.readOperation(operation.operationId)).toMatchObject({ kind: 'found', operation: { state: 'failed' } });
+        expect(await h.waitForTerminal(operation.operationId)).toMatchObject({ kind: 'found', operation: { state: 'failed' } });
         expect(h.copies(), JSON.stringify({ operation: await h.readOperation(operation.operationId), rpcOutcomes: h.rpcOutcomes,
           networkPaths: [...new Set(h.networkPaths)] })).toBe(1);
       }
@@ -1238,6 +1238,46 @@ describe('Machine filesystem approval continuity from UI and paired terminal', (
         result: { status: 'denied', reasonCode: 'project_service_effect_changed' } });
       expect(h.spawned).toEqual([]);
       expect(h.serviceInstances()).toEqual([]);
+    } finally { await h.close(); }
+  });
+  it('refuses a worker-status child delivered to a Machine conflicting with its semantic destination', async () => {
+    const h = await createHarness('projects.script.run', 'allowed', false, 'srv_n2', undefined, true);
+    try {
+      expect(await h.run({ workspace: { serverId: h.ref.serverId, refId: h.ref.id },
+        destination: { kind: 'machine', machineId: h.ref.machineId }, purpose: 'finite' },
+      'cli', false, 'present_user', 'projects.worker.status'))
+        .toMatchObject({ ok: false, errorCode: 'target_not_local' });
+      expect(h.hasApproval()).toBe(false);
+      expect(h.spawned).toEqual([]);
+      expect(h.copies()).toBe(0);
+    } finally { await h.close(); }
+  });
+  it('routes a standalone CLI Script worker-status child from SOURCE to its nested semantic Machine target', async () => {
+    const h = await createHarness('projects.script.run', 'ask', false, 'srv_n2', undefined, true);
+    try {
+      const input = { workspace: { serverId: h.ref.serverId, workspaceId: h.ref.id,
+        machineId: h.ref.machineId, rootPath: h.rootPath }, selection: { kind: 'named', name: 'lint' },
+        choice: { kind: 'workers', destination: { kind: 'machine', machineId: h.workerRef.machineId } } };
+      const proposal = await h.runStandaloneCli(input);
+      expect(h.rpcOutcomes).toContainEqual({ phase: 'original.hostChild', actionId: 'projects.worker.status',
+        machineId: h.workerRef.machineId, target: { kind: 'machine', machineId: h.workerRef.machineId } });
+      expect(proposal, JSON.stringify({ proposal, paths: h.networkPaths, outcomes: h.rpcOutcomes }))
+        .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      expect(h.networkPaths).toContain('POST /v1/actions/projects.worker.status');
+      expect(h.spawned).toEqual([]);
+      const approval = await h.approval();
+      expect(approval.actionArgs).toEqual(input);
+      expect(approval.executionOriginV1).toMatchObject({ machineId: h.workerRef.machineId });
+      expect(await h.decide('approve')).toMatchObject({ ok: true });
+      const settled = await h.approval();
+      expect(settled.execution).toMatchObject({ ok: true });
+      const output = ProjectCommandActionOutputV1Schema.parse(settled.execution?.ok ? settled.execution.result : null);
+      const launched = await Promise.race([h.waitForSpawn(0), h.waitForTerminal(output.operation.operationId).then(terminal => {
+        throw new Error('Standalone Script settled before native launch: ' + JSON.stringify(terminal));
+      })]);
+      expect(launched.cwd).toBe(h.workerRef.rootPath);
+      launched.exit(0);
+      expect(await h.waitForTerminal(output.operation.operationId)).toMatchObject({ kind: 'found', operation: { state: 'succeeded' } });
     } finally { await h.close(); }
   });
   it.each(['denied', 'Home admission unavailable'] as const)('refuses original CLI Project Run before Ask or native execution: %s', async refusal => {

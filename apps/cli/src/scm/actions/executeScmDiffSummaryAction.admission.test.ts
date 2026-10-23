@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -36,6 +36,9 @@ import { createEncryptedRpcTestClient } from '@/rpc/handlers/encryptedRpc.testki
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerScmHandlers } from '@/rpc/handlers/scm';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { logger } from '@/ui/logger';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { configuration, reloadConfiguration } from '@/configuration';
 import { updateSettings, writeDaemonState } from '@/persistence';
@@ -216,9 +219,12 @@ describe('SCM generation through real host admission', () => {
             { investigateSurroundingFiles: false, parentAvailable: false, automaticModel: false },
             { investigateSurroundingFiles: false, parentAvailable: true, automaticModel: true },
             { investigateSurroundingFiles: false, parentAvailable: false, automaticModel: true },
-        ].map(config => ({ ...config, disabledOnly: false })).concat([
-            { investigateSurroundingFiles: false, parentAvailable: true, automaticModel: false, disabledOnly: true },
-        ]))('admits UI commit generation with investigation $investigateSurroundingFiles, applied parent $parentAvailable, automatic model $automaticModel and disabled-only $disabledOnly through the registered Run RPC', async ({ investigateSurroundingFiles, parentAvailable, automaticModel, disabledOnly }) => {
+        ].map(config => ({ ...config, disabledOnly: false, credentialedMachine: false })).concat([
+            { investigateSurroundingFiles: false, parentAvailable: true, automaticModel: false, disabledOnly: true, credentialedMachine: false },
+            { investigateSurroundingFiles: false, parentAvailable: true, automaticModel: false, disabledOnly: false, credentialedMachine: true },
+        ]))('admits UI commit generation with investigation $investigateSurroundingFiles, applied parent $parentAvailable, automatic model $automaticModel, disabled-only $disabledOnly and credentialed Machine $credentialedMachine through the registered Run RPC', async ({ investigateSurroundingFiles, parentAvailable, automaticModel, disabledOnly, credentialedMachine }) => {
+            const logObservation = vi.spyOn(logger, 'infoFile');
+            onTestFinished(() => logObservation.mockRestore());
             const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-session-rpc-' });
             directories.push(fixture.rootPath);
             await writeFile(join(fixture.rootPath, 'surrounding.txt'), 'Captured surrounding context\n');
@@ -291,16 +297,21 @@ describe('SCM generation through real host admission', () => {
                     startedWithCliVersion: 'test' });
                 await updateSettings(settings => ({ ...settings,
                     machineIdByServerId: { ...settings.machineIdByServerId, [configuration.activeServerId]: machineId } }));
-                const machineExecutor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
+                const machineDependencies = { token, credentials: { token, encryption: null },
                     sessionId: '', mode: 'plain', ctx: null, serverId: configuration.activeServerId, serverHttpBaseUrl: serverUrl,
                     scmFilesystemAccessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] },
-                    machineActionDirectTargetTransport: { machineId, invoke: async method => {
+                    machineActionDirectTargetTransport: { machineId, invoke: async (method: string) => {
                         if (method !== 'capabilities.detect') throw new Error(`Unexpected Machine transport method: ${method}`);
                         return { protocolVersion: 1, results: { 'tool.executionRuns': { ok: true, data: {
                         available: true, protocolVersion: 2, features: { startAndWait: true, exactInputResults: true, runScopedAgentBindings: true },
                         } } } };
                     } },
-                }));
+                } satisfies Parameters<typeof createCliActionDeps>[0];
+                const machineExecutor = credentialedMachine
+                    ? createCliActionExecutorFromCredentials({ ...machineDependencies, serverApiUrl: serverUrl,
+                        serverIdentityId: 'scm-fixture-home',
+                        actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({}) }) })
+                    : createActionExecutor(createCliActionDeps(machineDependencies));
                 const machine = createEncryptedRpcTestClient({ scopePrefix: machineId, callerAuthority: 'account_automation',
                     registerHandlers: rpc => registerScmHandlers(rpc, fixture.rootPath, { machineId,
                         accessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] }, actionExecutor: machineExecutor }) });
@@ -633,7 +644,9 @@ describe('SCM generation through real host admission', () => {
                     expect(generation.success, JSON.stringify({ generationResponse, responses, transportFailures })).toBe(true);
                     if (!generation.success) throw generation.error;
                     const output = generation.data;
-                    expect(output, JSON.stringify({ responses, transportFailures, outputs: output.outputs })).toMatchObject({ success: true, runId: expect.any(String) });
+                    expect(output, JSON.stringify({ responses, transportFailures, outputs: output.outputs,
+                        nestedStarts: logObservation.mock.calls.filter(([label]) => label === '[scm.diffSummary] nested Start').map(([, event]) => event),
+                    })).toMatchObject({ success: true, runId: expect.any(String) });
                     expect(output.comparison).toEqual(capture.comparison);
                     if (!output.success || !output.runId || !output.inputId || !output.resultId || !manager) {
                         throw new Error('Generation did not return exact retained Run input custody');

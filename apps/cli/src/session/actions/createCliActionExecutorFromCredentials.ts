@@ -97,7 +97,7 @@ import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettin
 import { resolveFilesystemTransferCustodyFailure } from './filesystemTransferCustody';
 import { ensureCliActionPolicySettings } from './ensureCliActionPolicySettings';
 import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
-import { reconcileExternalActionTarget, resolveExternalActionMachineTarget } from '@/daemon/externalActions/reconcileExternalActionTarget';
+import { readMachineSelectorIds, reconcileExternalActionTarget, resolveExternalActionMachineTarget } from '@/daemon/externalActions/reconcileExternalActionTarget';
 import { dispatchOriginalAccountAction, readExternalActionInstalledMachine, requiresOriginalAccountMachineActionProof, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import { MachineEnvironmentApplyInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import {
@@ -1429,7 +1429,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         && resolveActionExecutionPlacementForInput(spec, admittedInput) === 'machine' || isMachineTerminalActionId(actionId)) && originalCliCaller
         ? spec.inputSchema.safeParse(admittedInput) : null;
       const selectedOriginalMachine = originalMachineAction?.success
-        && (typeof readRecord(originalMachineAction.data)?.machineId === 'string'
+        && (readMachineSelectorIds(spec.id, readRecord(originalMachineAction.data) ?? {}).length > 0
           || params.machineId || context.externalActionTarget)
         ? resolveExternalActionMachineTarget({ actionId: spec.id, rawInput: originalMachineAction.data,
           target: context.externalActionTarget, fallbackMachineId: params.machineId }) : null;

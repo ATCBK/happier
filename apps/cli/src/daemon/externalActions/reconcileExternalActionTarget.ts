@@ -5,6 +5,7 @@ import { SessionSpawnNewAgentAuthoringInputV2Schema } from '@happier-dev/protoco
 import type { ActionExecuteResult, ActionExecutorContext, ExternalActionTargetV1, ActionId } from '@happier-dev/protocol/actions';
 import { readActionSessionTargetField } from '@happier-dev/protocol/actions/executor/sessionTargets';
 import { normalizeSessionTargetV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
+import { PluginSettingsAdministrationActionIdV1Schema, resolvePluginSettingsAdministrationTargetV1 } from '@happier-dev/protocol/plugins/settingsAdministration';
 
 /**
  * The external ingress has one deliberately bounded selector vocabulary. It
@@ -16,6 +17,20 @@ import { normalizeSessionTargetV1 } from '@happier-dev/protocol/actions/sessionT
 const NESTED_SESSION_SELECTOR_ACTION_IDS = new Set<ActionId>([
   'session.continue_with_replay',
 ]);
+
+// Only declared execution targets participate. Other nested Machine ids can
+// describe SOURCE data, reviewed evidence, or a resource on another Machine.
+const NESTED_MACHINE_SELECTOR_FIELDS: Readonly<Partial<Record<ActionId, string>>> = {
+  'session.spawn_new': 'executionTarget',
+  'projects.worker.status': 'destination',
+  'daemon.filesystem.copy': 'destination',
+  'projects.inspect': 'workspace',
+  'projects.manifest.update': 'workspace',
+  'projects.prepare': 'workspace',
+  'artifact.publish_from_file': 'workspace',
+  'peerMediation.observability.subscribe': 'scope',
+  'peerMediation.observability.unsubscribe': 'scope',
+};
 
 function readNonEmptyString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -51,17 +66,23 @@ function readSessionSelectorIds(
   return selectors.filter((selector): selector is string => selector !== null);
 }
 
-function readMachineSelectorIds(actionId: ActionId, input: Readonly<Record<string, unknown>>): readonly string[] {
+/** Reads semantic routing selectors from schema-admitted Action input only. */
+export function readMachineSelectorIds(actionId: ActionId, input: Readonly<Record<string, unknown>>): readonly string[] {
   const acquire = actionId === 'machines.managed.acquire' ? ManagedAcquireInputV1Schema.safeParse(input) : null;
   const controllerMachineId = acquire?.success ? resolveManagedAcquireReviewV1(acquire.data).controller.machineId
     : actionId === 'machines.provisioners.check' || actionId === 'machines.provisioners.options'
       ? readNonEmptyString(asRecord(input.controller)?.machineId) : null;
+  const nestedField = NESTED_MACHINE_SELECTOR_FIELDS[actionId];
+  const settingsActionId = PluginSettingsAdministrationActionIdV1Schema.safeParse(actionId);
+  const settingsTarget = settingsActionId.success
+    ? resolvePluginSettingsAdministrationTargetV1(settingsActionId.data, input) : null;
   const selectors = [
     controllerMachineId,
     // Key preparation executes on the explicitly selected trusted key holder.
     // Its qualified machineId addresses the managed Resource, not that holder.
     actionId === 'machines.access.prepareKeys' ? null : readNonEmptyString(input.machineId),
-    readNonEmptyString(asRecord(input.executionTarget)?.machineId),
+    nestedField ? readNonEmptyString(asRecord(input[nestedField])?.machineId) : null,
+    settingsTarget?.kind === 'daemon' ? settingsTarget.machineId : null,
     readLocalServiceControlActionRequest(actionId, input)?.target.machineId ?? null,
   ];
   return selectors.filter((selector): selector is string => selector !== null);

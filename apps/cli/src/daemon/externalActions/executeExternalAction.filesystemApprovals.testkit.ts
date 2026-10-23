@@ -373,6 +373,8 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
         return ExternalActionExecutionAuthorizationRequestV1Schema.parse({ v: 1, machineId: target.machineId, envelope, executionAuthorization });
       })() : ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
       const authorization = request.executionAuthorization;
+      rpcOutcomes.push({ phase: 'original.hostChild', actionId: requestedActionId,
+        machineId: request.machineId, target: request.envelope.target });
       if (!authorization || !('authentication' in authorization.binding)) throw new Error('Missing inspection Account admission');
       if (requestedActionId === 'projects.service.relocate' && originalMoveIngress) {
         return { status: 200, data: await originalMoveIngress(request) };
@@ -686,7 +688,8 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
           const result = await rpcInstallation.run(receiverInstallation, () => receiver.handleRequest({
             method: packet.method, params: packet.params, requestId: packet.requestId,
             callerAuthority: resolveExternalActionRootInvocationAuthority(execution.authorization), machineAdmission: receiverAdmission,
-            callerInputAuthorization: execution.authorization, originalActionEnvelope: packet.originalActionEnvelope,
+            callerInputAuthorization: execution.authorization,
+            ...(packet.originalActionEnvelope ? { originalActionEnvelope: ExternalActionRequestEnvelopeSchema.parse(packet.originalActionEnvelope) } : {}),
             workspaceSyncSourceExecution: WorkspaceSyncSourceExecutionV1Schema.parse({ method: packet.method,
               params: packet.params, requestId: packet.requestId, externalActionExecution: execution,
               originalActionEnvelope: packet.originalActionEnvelope }),
@@ -930,9 +933,9 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
   const issuerParams = { ...params, ...(features ? { resolveServerFeaturesSnapshot: () => features } : {}) };
   const deciding = createCliActionExecutorHarness(issuerParams, { isApprovalExecutionOriginCurrent: originCurrent,
     approvalRequestApprovedReplay: async ({ artifactId, request }): Promise<ActionExecuteResult | null> => {
-      if (!requiresExactDaemonApprovalReplay(request)) return null;
+      if (request.v !== 2 || !requiresExactDaemonApprovalReplay(request)) return null;
       return await harness.run({ artifactId, decision: 'approve', serverIdentityId: homeId,
-        originServerId: request.v === 2 ? request.executionOriginV1.serverId : 'srv_n2' }, 'ui', false, 'present_user', 'approval.request.decide', 'reviewer-request');
+        originServerId: request.executionOriginV1.serverId }, 'ui', false, 'present_user', 'approval.request.decide', 'reviewer-request');
     } }).executor;
   // The production CLI composer supplies Account Actions used by placement,
   // including worker preferences; the low-level harness omits those ports.
@@ -982,6 +985,30 @@ export async function createHarness(actionId: ActionId, approval: 'ask' | 'allow
         destination, selectedTarget: { machineId: workerRef.machineId }, desiredPlacement: { workspace, serviceName: 'web',
           expectedRevision: 'absent', expected: { kind: 'absent' }, value: { runsOn: destination, unavailable: 'fail' } } });
       return { request, finishStop, snapshot: handle.snapshot };
+    },
+    async runStandaloneCli(input: unknown) {
+      // A standalone CLI discovers SOURCE locally, while Script placement must
+      // deliver its nested worker-status child to the separately installed worker.
+      const sourceExecutor = createActionExecutor(createCliActionDeps({ ...params,
+        projectDefinitionAction: sourceDefinitionAction,
+        machineActionDirectTargetTransport: { machineId: ref.machineId,
+          invoke: (method, request, options) => sourceRpc!.invokeLocal(method, request, options) } }));
+      const app = createDaemonControlApp({ machineId: ref.machineId, controlToken: 'source-control',
+        getChildren: () => [], stopSession: async () => ({ status: 'not_found' }),
+        spawnSession: async () => { throw new Error('Unexpected Session spawn'); }, requestShutdown() {}, onHappySessionWebhook() {},
+        externalActionApi: { currentServerId: 'srv_n2', currentAccountId: 'account', executor: sourceExecutor,
+          resolveTarget, verifyPat: async () => { throw new Error('Unexpected PAT'); } } });
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      try {
+        const address = app.server.address();
+        if (!address || typeof address === 'string') throw new Error('Missing SOURCE control address');
+        writeDaemonState({ pid: process.pid, startedAt: Date.now(), startedWithCliVersion: 'test',
+          httpPort: address.port, controlToken: 'source-control', machineId: ref.machineId, accountId: 'account' });
+        return await createCliActionExecutorFromCredentials({ credentials: cliCredentials,
+          serverId: 'srv_n2', serverApiUrl: params.serverHttpBaseUrl, serverIdentityId: homeId,
+          actionsSettingsProvider: originalCliSettings, readCredentials: async () => cliCredentials,
+        }).execute(actionId, input, { surface: 'cli', authority: 'account_automation', actionRequestId: 'standalone-script' });
+      } finally { await app.close(); }
     },
     async runOriginalCli(input: unknown, requestedActionId: ActionId = 'projects.worker.copy.inspect') {
       writeDaemonState({ pid: process.pid, startedAt: Date.now(), startedWithCliVersion: 'test',
