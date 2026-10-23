@@ -129,6 +129,7 @@ function settlePendingTargetRenderForOperation(
 type RouteJumpOperation = Readonly<{
     seq: number;
     sessionId: string;
+    routeMessageId: string | null;
 }>;
 const TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_MAX = 4;
 
@@ -276,6 +277,7 @@ export type TranscriptJumpHostDeps = Readonly<{
     isLoaded: boolean;
     isPinnedRef: MutableRef<boolean>;
     jumpToSeq: number | null | undefined;
+    jumpToMessageId?: string | null;
     lastPinOffsetForIntentRef: MutableRef<number | null>;
     lastRouteJumpProtectionClearingWebMovementAtMsRef: MutableRef<number>;
     lastScrollOffsetForIntentRef: MutableRef<number | null>;
@@ -404,6 +406,7 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         isLoaded,
         isPinnedRef,
         jumpToSeq,
+        jumpToMessageId,
         lastPinOffsetForIntentRef,
         lastNativeRestoreIndexCommandRef,
         lastRouteJumpProtectionClearingWebMovementAtMsRef,
@@ -1383,16 +1386,17 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
     React.useEffect(() => {
         const consumedRouteJump = consumedRouteJumpRef.current;
         const inFlightRouteJump = inFlightRouteJumpRef.current;
+        const routeMessageId = jumpToMessageId?.trim() || null;
         const normalizedTarget = resolveTranscriptRouteJumpSeqPlan({
             committedMessagesCount,
-            consumedJumpSeq: consumedRouteJump?.sessionId === sessionId
+            consumedJumpSeq: consumedRouteJump?.sessionId === sessionId && consumedRouteJump.routeMessageId === routeMessageId
                 ? consumedRouteJump.seq
                 : null,
             hasUsableWebMetrics: () => {
                 const metrics = resolveWebScrollMetrics();
                 return !!metrics && metrics.clientHeight > 0 && metrics.scrollHeight > 0;
             },
-            inFlightJumpSeq: inFlightRouteJump?.sessionId === sessionId
+            inFlightJumpSeq: inFlightRouteJump?.sessionId === sessionId && inFlightRouteJump.routeMessageId === routeMessageId
                 ? inFlightRouteJump.seq
                 : null,
             isLoaded,
@@ -1406,12 +1410,15 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         const routeJumpOperation: RouteJumpOperation = {
             seq: normalizedTarget,
             sessionId,
+            routeMessageId,
         };
         inFlightRouteJumpRef.current = routeJumpOperation;
         fireAndForget((async () => {
             try {
                 const result = await jumpToTranscriptTarget(
-                    { kind: 'seq', seq: normalizedTarget },
+                    routeMessageId
+                        ? { kind: 'route-message-id', routeMessageId, seqHint: normalizedTarget }
+                        : { kind: 'seq', seq: normalizedTarget },
                     { preferTargetWindow: true },
                 );
                 if (
@@ -1430,6 +1437,7 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         committedMessagesCount,
         isLoaded,
         jumpToSeq,
+        jumpToMessageId,
         jumpToTranscriptTarget,
         listContentHeight,
         listLayoutHeight,

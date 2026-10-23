@@ -1,8 +1,65 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as workspaceDisplay from '@/sync/domains/workspaces/workspaceDisplayPresentation';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { t } from '@/text';
+import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 
 import { buildSessionListProjectHeaderViewModels } from './sessionListProjectHeaderViewModels';
 
 describe('buildSessionListProjectHeaderViewModels', () => {
+    it('does not retain a full Session list in the bounded header projection cache', async () => {
+        const { Session: InspectorSession } = await import('node:inspector');
+        const list = (() => {
+            const listItems: SessionListIndexItem[] = [
+                { type: 'session', serverId: 'header-retention-home', sessionId: 'header-retention-row' },
+                { type: 'header', headerKind: 'project', groupKey: 'header-retention-group', title: '/retention' },
+            ];
+            buildSessionListProjectHeaderViewModels({ listItems, workspaceRefs: [], workspaceLabels: {} });
+            return new WeakRef(listItems);
+        })();
+        const inspector = new InspectorSession();
+        inspector.connect();
+        try {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            await new Promise<void>((resolve, reject) => inspector.post('HeapProfiler.collectGarbage', error => error ? reject(error) : resolve()));
+            expect(list.deref(), 'header labels must not retain the full Session list').toBeUndefined();
+        } finally { inspector.disconnect(); }
+    });
+    it('updates the affected name-collision group and preserves locked and unlisted naming', () => {
+        const machines = ['a', 'b', 'c'].map(id => createMachineFixture({ id,
+            metadata: { ...createMachineFixture().metadata!, host: `build-${id}`, displayName: id === 'c' ? 'Other' : 'Build' } }));
+        const input = { listItems: machines.map(machine => ({ type: 'header' as const, headerKind: 'project' as const,
+            groupKey: machine.id, title: '/repo', workspaceScopeHint: { serverId: 'collision-home', machineId: machine.id, rootPath: '/repo' } })),
+            machinesById: new Map(machines.map(machine => [machine.id, machine])), workspaceRefs: [], workspaceLabels: {} };
+        const first = buildSessionListProjectHeaderViewModels(input);
+        expect(first.projectHeaderViewModelByGroupKey.get('b')?.machineSubtitle).toBe('Build · build-b');
+        input.machinesById.set('a', { ...machines[0]!, metadata: { ...machines[0]!.metadata!, displayName: 'Renamed' } });
+        const renamed = buildSessionListProjectHeaderViewModels(input);
+        expect(renamed.projectHeaderViewModelByGroupKey.get('b')?.machineSubtitle).toBe('Build');
+        expect(renamed.projectHeaderViewModelByGroupKey.get('c')).toBe(first.projectHeaderViewModelByGroupKey.get('c'));
+        input.machinesById.set('a', { ...machines[0]!, metadata: null, availability: { kind: 'locked', reason: 'decryption_failed' } });
+        expect(buildSessionListProjectHeaderViewModels(input).projectHeaderViewModelByGroupKey.get('a')?.machineSubtitle)
+            .toBe(t('machine.lockedMachine'));
+        input.machinesById.delete('a');
+        expect(buildSessionListProjectHeaderViewModels(input).projectHeaderViewModelByGroupKey.get('a')?.machineSubtitle)
+            .toBe(t('machine.unlistedMachine'));
+    });
+    it('changes only the addressed header subtitle without rederiving workspace presentations', () => {
+        const machines = Array.from({ length: 20 }, (_, i) => createMachineFixture({ id: `header-machine-${i}`,
+            metadata: { ...createMachineFixture().metadata!, displayName: `Machine ${i}` } }));
+        const input = { listItems: machines.map(machine => ({ type: 'header' as const, headerKind: 'project' as const,
+            groupKey: machine.id, title: '/repo', workspaceScopeHint: { serverId: 'header-home', machineId: machine.id, rootPath: '/repo' } })),
+            machinesById: new Map(machines.map(machine => [machine.id, machine])), workspaceRefs: [], workspaceLabels: {} };
+        const before = buildSessionListProjectHeaderViewModels(input);
+        const derive = vi.spyOn(workspaceDisplay, 'resolveWorkspaceDisplayPresentation');
+        try {
+            input.machinesById.set(machines[0]!.id, { ...machines[0]!, metadata: { ...machines[0]!.metadata!, displayName: 'Renamed' } });
+            const after = buildSessionListProjectHeaderViewModels(input);
+            expect(after.projectHeaderViewModelByGroupKey.get(machines[0]!.id)?.machineSubtitle).toBe('Renamed');
+            expect(derive).not.toHaveBeenCalled();
+            expect(after.projectHeaderViewModelByGroupKey.get(machines[1]!.id)).toBe(before.projectHeaderViewModelByGroupKey.get(machines[1]!.id));
+        } finally { derive.mockRestore(); }
+    });
     it('keeps the project path when hydration omits the redundant scope hint', () => {
         const project = { t: 'workspaceScope' as const, serverId: 'stable-home', machineId: 'stable-machine', rootPath: '/home/ubuntu/release' };
         const input = { listItems: [{ type: 'header' as const, headerKind: 'project' as const,

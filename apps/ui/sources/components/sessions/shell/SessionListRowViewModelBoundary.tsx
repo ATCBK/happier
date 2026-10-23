@@ -86,8 +86,7 @@ export type SessionListRowViewModelBoundaryProps = Readonly<{
     onUnregisterTreeRowBounds: UnregisterSessionListTreeRowBounds;
     overlayShared: TreeDropOverlaySharedValues;
     pinnedSessionKeys: ReadonlySet<string>;
-    reachableSessionDisplayById: ReadonlyMap<string, SessionReachableDisplay>;
-    reachableSessionDisplayByKey: ReadonlyMap<string, SessionReachableDisplay>;
+    reachableSessionDisplay: SessionReachableDisplay | undefined;
     resolveDropResult: (event: UseSessionInlineDragResolveDropResultEvent) => UseSessionInlineDragResolvedDrop;
     rowAttentionAnimationEnabled: boolean;
     rowHeight: number;
@@ -169,8 +168,7 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
         item: props.item,
         adjacency,
         unscopedSelectionIsUnique,
-        reachableSessionDisplayById: props.reachableSessionDisplayById,
-        reachableSessionDisplayByKey: props.reachableSessionDisplayByKey,
+        reachableSessionDisplay: props.reachableSessionDisplay,
         rowRenderableByKey,
         relativeNowMs,
         runtimeNowMs,
@@ -204,8 +202,7 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
         draft,
         props.item,
         props.pinnedSessionKeys,
-        props.reachableSessionDisplayById,
-        props.reachableSessionDisplayByKey,
+        props.reachableSessionDisplay,
         props.selectedSessionId,
         props.selectedSessionServerId,
         props.sessionTags,

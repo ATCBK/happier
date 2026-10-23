@@ -489,6 +489,7 @@ export function useChatListRootState(props: ChatListProps) {
             approvalRequests: props.approvalRequests,
             interaction,
             jumpToSeq: props.jumpToSeq ?? null,
+            jumpToMessageId: props.jumpToMessageId ?? null,
             followBottomIntentKey: props.followBottomIntentKey ?? null,
             onJumpLanded: props.onJumpLanded,
             onViewportChange: props.onViewportChange,

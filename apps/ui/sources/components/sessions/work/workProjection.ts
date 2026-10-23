@@ -250,7 +250,7 @@ function normalizeId(value: string | null | undefined): string | null {
 }
 
 function classifyAgentActivity(entry: AgentActivityEntry, word: string): WorkStatus {
-    return resolveWorkStatusTone({ kind: 'agent_activity', facts: { status: entry.status, word } });
+    return resolveWorkStatusTone({ kind: 'agent_activity', facts: { status: entry.status, isActive: entry.isActive, word } });
 }
 
 function classifyManagedRun(source: WorkManagedRunSource): WorkStatus {

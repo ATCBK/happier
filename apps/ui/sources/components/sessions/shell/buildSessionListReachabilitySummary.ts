@@ -10,8 +10,12 @@ import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { readSessionListProjectHeaderMachineId } from './sessionListProjectHeaderViewModels';
+import { machineCollectionValues, findMachineInCollection, type MachineCollection } from '@/sync/domains/machines/identity/machineCollection';
+import { normalizeMachineHost } from '@happier-dev/protocol/machines/host/normalizeMachineHost';
+import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 
-type ReachabilityMachineDisplay = Readonly<Pick<MachineDisplayRenderable, 'id' | 'metadata' | 'replacedByMachineId'>>;
+type ReachabilityMachineDisplay = Readonly<Pick<MachineDisplayRenderable, 'id' | 'metadata' | 'replacedByMachineId'>
+    & Partial<Pick<MachineDisplayRenderable, 'availability' | 'active' | 'revokedAt'>>>;
 
 type ReachableSessionDisplay = Readonly<{
     machineId: string | null;
@@ -29,7 +33,10 @@ type SessionDisplayRow = Readonly<{
 }>;
 
 type SessionListReachabilitySummaryCacheEntry = Readonly<{
-    machineDisplaySignature: string;
+    item: Extract<SessionListIndexItem, { type: 'session' }>;
+    position: number;
+    machineIds: ReadonlySet<string>;
+    host: string;
     renderable: SessionListReachabilityRenderable | null;
     row: SessionDisplayRow;
     serverId?: string | null;
@@ -42,6 +49,15 @@ export type SessionListReachabilitySummaryCache = {
     entriesByKey: Map<string, SessionListReachabilitySummaryCacheEntry>;
     previousRows: readonly SessionDisplayRow[];
     previousSummary: SessionListReachabilitySummary | null;
+    machinesById: Map<string, ReachabilityMachineDisplay>;
+    rowKeysByMachineId: Map<string, Set<string>>;
+    rowKeysByHost: Map<string, Set<string>>;
+    machineKeyCounts: Map<string, number>;
+    headerMachineIds: Set<string>;
+    listItems?: ReadonlyArray<SessionListIndexItem>;
+    workspaceRefs?: ReadonlyArray<WorkspaceRefV1>;
+    workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
+    renderablesByKey?: ReadonlyMap<string, SessionListReachabilityRenderable>;
 };
 
 export type SessionListReachabilitySummary = Readonly<{
@@ -61,6 +77,8 @@ export function createSessionListReachabilitySummaryCache(): SessionListReachabi
         entriesByKey: new Map<string, SessionListReachabilitySummaryCacheEntry>(),
         previousRows: [],
         previousSummary: null,
+        machinesById: new Map(), rowKeysByMachineId: new Map(), rowKeysByHost: new Map(),
+        machineKeyCounts: new Map(), headerMachineIds: new Set(),
     };
 }
 
@@ -79,6 +97,7 @@ export function retireSessionListReachabilitySummaryCacheServerScope(
     // The summary maps aggregate all rows. Rebuild them on the next render while
     // retaining unaffected per-row cache entries from the same valid lifetimes.
     cache.previousSummary = null;
+    cache.listItems = undefined;
 }
 
 function resolveRowCacheKey(item: Extract<SessionListIndexItem, { type: 'session' }>, sessionId: string): string {
@@ -88,7 +107,7 @@ function resolveRowCacheKey(item: Extract<SessionListIndexItem, { type: 'session
 
 function buildSessionDisplayRow(input: Readonly<{
     item: Extract<SessionListIndexItem, { type: 'session' }>;
-    machinesById: ReadonlyMap<string, ReachabilityMachineDisplay>;
+    machinesById: MachineCollection<ReachabilityMachineDisplay>;
     renderable: SessionListReachabilityRenderable | null;
     sessionId: string;
     workspaceRefs: ReadonlyArray<WorkspaceRefV1>;
@@ -103,7 +122,7 @@ function buildSessionDisplayRow(input: Readonly<{
     });
     const machineId = machineTarget?.machineId ?? (String(metadata?.machineId ?? '').trim() || null);
     const machineLabel = machineId
-        ? getMachineDisplayName(input.machinesById.get(machineId))
+        ? getMachineDisplayName(findMachineInCollection(input.machinesById, machineId))
             ?? String(metadata?.host ?? '').trim()
         : String(metadata?.host ?? '').trim();
     const workspaceDisplay = resolveSessionWorkspaceDisplayPresentation({
@@ -131,104 +150,137 @@ function buildSessionDisplayRow(input: Readonly<{
     };
 }
 
-function canReuseCacheEntry(input: Readonly<{
-    cached: SessionListReachabilitySummaryCacheEntry | undefined;
-    item: Extract<SessionListIndexItem, { type: 'session' }>;
-    machineDisplaySignature: string;
-    renderable: SessionListReachabilityRenderable | null;
-    sessionId: string;
-    workspaceRefs: ReadonlyArray<WorkspaceRefV1>;
-    workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
-}>): input is Readonly<{
-    cached: SessionListReachabilitySummaryCacheEntry;
-    item: Extract<SessionListIndexItem, { type: 'session' }>;
-    machineDisplaySignature: string;
-    renderable: SessionListReachabilityRenderable | null;
-    sessionId: string;
-    workspaceRefs: ReadonlyArray<WorkspaceRefV1>;
-    workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
-}> {
-    return input.cached != null
-        && input.cached.sessionId === input.sessionId
-        && input.cached.serverId === input.item.serverId
-        && input.cached.renderable === input.renderable
-        && input.cached.machineDisplaySignature === input.machineDisplaySignature
-        && input.cached.workspaceRefs === input.workspaceRefs
-        && input.cached.workspacePathDisplayModeV1 === input.workspacePathDisplayModeV1;
+function sameMachineDisplayInput(left: ReachabilityMachineDisplay | undefined, right: ReachabilityMachineDisplay): boolean {
+    return left === right || Boolean(left && left.id === right.id
+        && left.replacedByMachineId === right.replacedByMachineId
+        && left.active === right.active && left.revokedAt === right.revokedAt
+        && (left.metadata === null) === (right.metadata === null)
+        && left.availability?.kind === right.availability?.kind
+        && left.metadata?.displayName === right.metadata?.displayName
+        && left.metadata?.host === right.metadata?.host && left.metadata?.homeDir === right.metadata?.homeDir);
 }
 
-function buildReachabilityMachineDisplaySignature(machines: ReadonlyMap<string, ReachabilityMachineDisplay>): string {
-    // Display target resolution follows replacement links; labels use names and hosts.
-    // Presence and heartbeat timestamps belong to the live status projection. Workspace
-    // paths and home directories come from the separately cached session metadata.
-    return JSON.stringify([...machines.keys()].sort().map((key) => {
-        const machine = machines.get(key)!;
-        return [key, machine.id, machine.replacedByMachineId ?? null,
-            machine.metadata?.displayName ?? null, machine.metadata?.host ?? null];
-    }));
+function indexRow(index: Map<string, Set<string>>, dependency: string, rowKey: string, add: boolean): void {
+    if (!dependency) return;
+    const rows = index.get(dependency) ?? new Set<string>();
+    if (add) rows.add(rowKey); else rows.delete(rowKey);
+    if (rows.size) index.set(dependency, rows); else index.delete(dependency);
 }
 
 function buildSessionDisplayRows(input: Readonly<{
     cache?: SessionListReachabilitySummaryCache;
     listItems: ReadonlyArray<SessionListIndexItem>;
-    machinesById: ReadonlyMap<string, ReachabilityMachineDisplay>;
+    machinesById: MachineCollection<ReachabilityMachineDisplay>;
     workspaceRefs: ReadonlyArray<WorkspaceRefV1>;
     workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
     resolveSessionRenderable: (item: Extract<SessionListIndexItem, { type: 'session' }>) => SessionListReachabilityRenderable | null;
+    renderablesByKey?: ReadonlyMap<string, SessionListReachabilityRenderable>;
 }>): readonly SessionDisplayRow[] {
-    const machineDisplaySignature = buildReachabilityMachineDisplaySignature(input.machinesById);
-    const rows: SessionDisplayRow[] = [];
-    const nextCacheEntriesByKey = input.cache ? new Map<string, SessionListReachabilitySummaryCacheEntry>() : null;
-
-    for (const item of input.listItems) {
-        if (!item || item.type !== 'session') {
-            continue;
+    const cache = input.cache ?? createSessionListReachabilitySummaryCache();
+    const structuralChange = cache.listItems !== input.listItems || cache.workspaceRefs !== input.workspaceRefs
+        || cache.workspacePathDisplayModeV1 !== input.workspacePathDisplayModeV1;
+    const dirty = new Set<string>();
+    const invalidateMachine = (id: string) => {
+        for (const key of cache.rowKeysByMachineId.get(id) ?? []) dirty.add(key);
+    };
+    const invalidateHost = (machine?: ReachabilityMachineDisplay) => {
+        for (const key of cache.rowKeysByHost.get(normalizeMachineHost(machine?.metadata?.host)) ?? []) dirty.add(key);
+    };
+    const removedMachineIds = new Set(cache.machinesById.keys());
+    for (const machine of machineCollectionValues(input.machinesById)) {
+        removedMachineIds.delete(machine.id);
+        const previous = cache.machinesById.get(machine.id);
+        if (!sameMachineDisplayInput(previous, machine)) {
+            invalidateMachine(machine.id);
+            if (!previous || previous.active !== machine.active || previous.revokedAt !== machine.revokedAt
+                || previous.replacedByMachineId !== machine.replacedByMachineId
+                || previous.metadata?.host !== machine.metadata?.host || previous.metadata?.homeDir !== machine.metadata?.homeDir) {
+                invalidateHost(previous); invalidateHost(machine);
+            }
         }
-
-        const sessionId = String(item.sessionId ?? '').trim();
-        if (!sessionId) continue;
-        const renderable = input.resolveSessionRenderable(item);
-        const rowCacheKey = resolveRowCacheKey(item, sessionId);
-        const cached = input.cache?.entriesByKey.get(rowCacheKey);
-        const canReuse = canReuseCacheEntry({
-            cached,
-            item,
-            machineDisplaySignature,
-            renderable,
-            sessionId,
-            workspaceRefs: input.workspaceRefs,
-            workspacePathDisplayModeV1: input.workspacePathDisplayModeV1,
-        });
-        const row = canReuse && cached
-            ? cached.row
-            : buildSessionDisplayRow({
-                item,
-                machinesById: input.machinesById,
-                renderable,
-                sessionId,
-                workspaceRefs: input.workspaceRefs,
-                workspacePathDisplayModeV1: input.workspacePathDisplayModeV1,
-            });
-        rows.push(row);
-        nextCacheEntriesByKey?.set(rowCacheKey, {
-            machineDisplaySignature,
-            renderable,
-            row,
-            serverId: item.serverId,
-            sessionId,
-            workspacePathDisplayModeV1: input.workspacePathDisplayModeV1,
-            workspaceRefs: input.workspaceRefs,
-        });
+        cache.machinesById.set(machine.id, machine);
     }
-
-    if (input.cache && nextCacheEntriesByKey) {
-        input.cache.entriesByKey = nextCacheEntriesByKey;
+    for (const id of removedMachineIds) {
+        invalidateMachine(id); invalidateHost(cache.machinesById.get(id));
+        cache.machinesById.delete(id);
     }
-
+    let rows: SessionDisplayRow[] | readonly SessionDisplayRow[] = cache.previousRows;
+    const itemsByKey = new Map<string, Extract<SessionListIndexItem, { type: 'session' }>>();
+    if (structuralChange) {
+        rows = [];
+        dirty.clear(); cache.machineKeyCounts.clear(); cache.headerMachineIds.clear();
+        for (const item of input.listItems) {
+            if (item.type === 'header' && item.headerKind === 'project') {
+                const machineId = readSessionListProjectHeaderMachineId(item, input.workspaceRefs);
+                if (machineId) cache.headerMachineIds.add(machineId);
+            }
+            if (item.type !== 'session' || !item.sessionId.trim()) continue;
+            const key = resolveRowCacheKey(item, item.sessionId.trim());
+            itemsByKey.set(key, item);
+            dirty.add(key);
+        }
+        for (const key of cache.entriesByKey.keys()) if (!itemsByKey.has(key)) cache.entriesByKey.delete(key);
+        cache.rowKeysByMachineId.clear(); cache.rowKeysByHost.clear();
+    } else if (!input.renderablesByKey || cache.renderablesByKey !== input.renderablesByKey) {
+        // Only Session input changes inspect Session references. Machine changes use the
+        // dependency index above and never resolve every Session's metadata/target again.
+        for (const [key, entry] of cache.entriesByKey) {
+            const next = input.renderablesByKey ? input.renderablesByKey.get(key) ?? null : input.resolveSessionRenderable(entry.item);
+            if (entry.renderable !== next) dirty.add(key);
+        }
+    }
+    let position = 0;
+    for (const rowCacheKey of dirty) {
+        const cached = cache.entriesByKey.get(rowCacheKey);
+        const item = itemsByKey.get(rowCacheKey) ?? cached?.item;
+        if (!item) continue;
+        const sessionId = item.sessionId.trim();
+        const renderable = input.renderablesByKey ? input.renderablesByKey.get(rowCacheKey) ?? null : input.resolveSessionRenderable(item);
+        const nextRow = buildSessionDisplayRow({ ...input, item, sessionId, renderable });
+        const previous = cached?.row;
+        const row = previous && previous.machineKey === nextRow.machineKey
+            && previous.display.machineId === nextRow.display.machineId
+            && previous.display.machineLabel === nextRow.display.machineLabel
+            && previous.display.workspaceSubtitle === nextRow.display.workspaceSubtitle
+            && previous.display.workspaceSubtitleEllipsizeMode === nextRow.display.workspaceSubtitleEllipsizeMode
+            ? previous : nextRow;
+        const rowPosition = structuralChange ? position++ : cached!.position;
+        if (!structuralChange && previous?.machineKey) {
+            const count = (cache.machineKeyCounts.get(previous.machineKey) ?? 1) - 1;
+            if (count) cache.machineKeyCounts.set(previous.machineKey, count); else cache.machineKeyCounts.delete(previous.machineKey);
+        }
+        if (row.machineKey) cache.machineKeyCounts.set(row.machineKey, (cache.machineKeyCounts.get(row.machineKey) ?? 0) + 1);
+        if (rows === cache.previousRows && row !== previous) rows = [...rows];
+        if (rows !== cache.previousRows) (rows as SessionDisplayRow[])[rowPosition] = row;
+        if (cached && !structuralChange) {
+            for (const id of cached.machineIds) indexRow(cache.rowKeysByMachineId, id, rowCacheKey, false);
+            indexRow(cache.rowKeysByHost, cached.host, rowCacheKey, false);
+        }
+        // Dependency tracking observes the canonical target's inputs/result; it does
+        // not choose a target or a replacement. Host fallback/locality rows also track
+        // Machine additions, removals and ambiguity changes through the canonical host key.
+        const machineIds = new Set<string>();
+        for (const seed of [resolveSessionMachineId(renderable?.metadata), row.display.machineId]) {
+            let id = seed;
+            while (id && !machineIds.has(id)) {
+                machineIds.add(id);
+                id = findMachineInCollection(input.machinesById, id)?.replacedByMachineId ?? null;
+            }
+        }
+        const host = normalizeMachineHost(renderable?.metadata?.host);
+        for (const id of machineIds) indexRow(cache.rowKeysByMachineId, id, rowCacheKey, true);
+        indexRow(cache.rowKeysByHost, host, rowCacheKey, true);
+        cache.entriesByKey.set(rowCacheKey, { item, position: rowPosition, machineIds, host, renderable, row,
+            serverId: item.serverId, sessionId, workspacePathDisplayModeV1: input.workspacePathDisplayModeV1, workspaceRefs: input.workspaceRefs });
+    }
+    cache.listItems = input.listItems; cache.workspaceRefs = input.workspaceRefs;
+    cache.workspacePathDisplayModeV1 = input.workspacePathDisplayModeV1;
+    cache.renderablesByKey = input.renderablesByKey;
     return rows;
 }
 
 function areDisplayRowsReferenceEqual(left: readonly SessionDisplayRow[], right: readonly SessionDisplayRow[]): boolean {
+    if (left === right) return true;
     if (left.length !== right.length) return false;
     return left.every((row, index) => row === right[index]);
 }
@@ -256,19 +308,16 @@ function buildSummaryFromDisplayRows(rows: readonly SessionDisplayRow[], hasMult
 
 export function buildSessionListReachabilitySummary(input: Readonly<{
     listItems: ReadonlyArray<SessionListIndexItem>;
-    machinesById: ReadonlyMap<string, ReachabilityMachineDisplay>;
+    machinesById: MachineCollection<ReachabilityMachineDisplay>;
     workspaceRefs: ReadonlyArray<WorkspaceRefV1>;
     workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
     resolveSessionRenderable: (item: Extract<SessionListIndexItem, { type: 'session' }>) => SessionListReachabilityRenderable | null;
     cache?: SessionListReachabilitySummaryCache;
+    renderablesByKey?: ReadonlyMap<string, SessionListReachabilityRenderable>;
 }>): SessionListReachabilitySummary {
-    const rows = buildSessionDisplayRows(input);
-    const machineKeys = new Set(rows.map(row => row.machineKey).filter(Boolean));
-    for (const item of input.listItems) {
-        if (item.type !== 'header' || item.headerKind !== 'project') continue;
-        const machineId = readSessionListProjectHeaderMachineId(item, input.workspaceRefs);
-        if (machineId) machineKeys.add(machineId);
-    }
+    const cache = input.cache ?? createSessionListReachabilitySummaryCache();
+    const rows = buildSessionDisplayRows({ ...input, cache });
+    const machineKeys = new Set([...cache.machineKeyCounts.keys(), ...cache.headerMachineIds]);
     const hasMultipleMachines = machineKeys.size > 1;
 
     if (rows.length === 0 && !hasMultipleMachines) {

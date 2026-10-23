@@ -3,7 +3,8 @@ import * as React from 'react';
 import { useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { View } from 'react-native';
 import type { StyleProp, ViewStyle } from 'react-native';
-import { useMessage, useResolvedSessionMessageRouteId, useSession, useSessionTranscriptIds } from "@/sync/domains/state/storage";
+import { storage, useMessage, useResolvedSessionMessageRouteId, useSession, useSessionTranscriptIds } from "@/sync/domains/state/storage";
+import { resolveSessionMessageRouteId } from '@happier-dev/session-core/messages';
 import { sync } from '@/sync/sync';
 import { Deferred } from "@/components/ui/forms/Deferred";
 import { resolveToolHeaderTextPresentation } from '@/components/tools/shell/presentation/resolveToolHeaderTextPresentation';
@@ -31,6 +32,12 @@ import {
 } from '@/components/sessions/transcript/details/SessionMessageDetailsView';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
+import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
+
+const SessionDestinationBody = retryableLazy<NonNullable<React.ComponentProps<typeof import('@/components/sessions/shell/SessionDestinationBody')['SessionDestinationBody']>>>(
+    () => import('@/components/sessions/shell/SessionDestinationBody').then(module => ({ default: module.SessionDestinationBody })),
+);
 
 type SessionMessageRouteTheme = Parameters<typeof createSessionMessageDetailsStyles>[0];
 
@@ -54,8 +61,6 @@ type MessageRouteParams = Readonly<{
     jumpChildId?: string | string[];
 }>;
 
-const MESSAGE_ROUTE_BACKFILL_MAX_PROGRESS_PAGES = 25;
-const MESSAGE_ROUTE_BACKFILL_WAIT_FOR_PAGINATION_MS = 5000;
 const MESSAGE_ROUTE_BACKFILL_RETRY_DELAY_MS = 100;
 
 function normalizeRouteParam(value: unknown): string {
@@ -90,6 +95,10 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
     const resolvedJumpChildId = useResolvedSessionMessageRouteId(props.sessionId, props.jumpChildId ?? '');
     const jumpChildId = props.jumpChildId ? (resolvedJumpChildId ?? props.jumpChildId) : null;
     const message = useMessage(props.sessionId, resolvedMessageId ?? props.messageId);
+    const messageTarget = React.useMemo(() => message && message.kind !== 'tool-call'
+        && typeof message.seq === 'number' && Number.isFinite(message.seq)
+        ? { routeMessageId: props.messageId, seq: message.seq }
+        : undefined, [message, props.messageId]);
     const { theme } = useUnistyles();
     const styles = React.useMemo(() => createSessionMessageRouteStyles(theme), [theme]);
     const [messageBackfillComplete, setMessageBackfillComplete] = React.useState(false);
@@ -145,7 +154,7 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         'MessageRoute.ensureSessionVisible',
         props.routeScope.hydrationOptions,
     );
-    const sessionMissingAfterHydration = isSessionRouteHydrationMissing(routeHydrationState) && !session;
+    const sessionMissingAfterHydration = isSessionRouteHydrationMissing(routeHydrationState);
 
     // Message deep links may target messages older than the initial `/messages` page. If we can't find
     // the message after the initial load, try paging older messages until we either find it or run out.
@@ -154,39 +163,39 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         if (sessionMissingAfterHydration || !messagesLoaded || message || messageBackfillComplete) return;
 
         fireAndForget((async () => {
+            let exhausted = false;
             try {
                 try {
                     await sync.ensureSessionVisibleForMessageRoute(props.sessionId, props.routeScope.hydrationOptions);
                 } catch {
                     // best-effort only
                 }
-                const startedAtMs = Date.now();
-                let progressedPages = 0;
-                while (progressedPages < MESSAGE_ROUTE_BACKFILL_MAX_PROGRESS_PAGES) {
+                while (!canceled) {
+                    const transcript = storage.getState().sessionMessages[props.sessionId];
+                    const currentId = transcript ? resolveSessionMessageRouteId({
+                        routeMessageId: props.messageId, messagesById: transcript.messagesById, reducerState: transcript.reducerState,
+                    }) : null;
+                    if (currentId && transcript?.messagesById[currentId]) return;
                     const result = await sync.loadOlderMessages(props.sessionId);
                     if (canceled) return;
 
                     if (result.status === 'not_ready' || result.status === 'in_flight') {
-                        if (Date.now() - startedAtMs >= MESSAGE_ROUTE_BACKFILL_WAIT_FOR_PAGINATION_MS) {
-                            break;
-                        }
                         await new Promise((r) => setTimeout(r, MESSAGE_ROUTE_BACKFILL_RETRY_DELAY_MS));
                         continue;
                     }
 
-                    progressedPages += 1;
-
                     if (result.status === 'no_more' || result.hasMore === false) {
+                        exhausted = true;
                         break;
                     }
 
                     if (result.loaded <= 0) {
-                        // Avoid tight loops if the paging cursor doesn't advance.
-                        break;
+                        // A page with no display rows is not proof of absence.
+                        await new Promise((r) => setTimeout(r, MESSAGE_ROUTE_BACKFILL_RETRY_DELAY_MS));
                     }
                 }
             } finally {
-                if (!canceled) {
+                if (!canceled && exhausted) {
                     setMessageBackfillComplete(true);
                 }
             }
@@ -197,18 +206,6 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         };
     }, [message, messageBackfillComplete, messagesLoaded, props.messageId, props.routeScope.hydrationOptions, props.sessionId, resolvedMessageId, sessionMissingAfterHydration]);
 
-    React.useEffect(() => {
-        if (messageBackfillComplete && messagesLoaded && !message) {
-            const canGoBack = typeof (router as any)?.canGoBack === 'function' ? (router as any).canGoBack() : false;
-            if (canGoBack) {
-                router.back();
-                return;
-            }
-            router.replace(props.routeScope.buildHref(props.sessionId));
-            return;
-        }
-    }, [messageBackfillComplete, messagesLoaded, message, props.routeScope, props.sessionId, router]);
-    
     // Show loader while waiting for session and messages to load
     if (sessionMissingAfterHydration) {
         return <SessionInvalidLinkFallback />;
@@ -222,14 +219,21 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         );
     }
     
-    // If messages are loaded but specific message not found, show loader briefly
-    // The useEffect above will navigate back
+    // Only the exhausted history frontier establishes a missing message. Keep
+    // that result on this route; a timed Back must not discard a source open.
     if (!message) {
+        if (messageBackfillComplete) return <SessionInvalidLinkFallback />;
         return (
             <View style={styles.loadingContainer}>
                 <ActivitySpinner size="small" color={theme.colors.text.secondary} />
             </View>
         );
+    }
+
+    // An ordinary committed-message link is a location in its Session, not an
+    // isolated text preview. Keep tool details on their existing detail surface.
+    if (messageTarget) {
+        return <React.Suspense fallback={<PaneLoadingFallback />}><SessionDestinationBody messageTarget={messageTarget} /></React.Suspense>;
     }
     
     return (

@@ -415,7 +415,12 @@ const ServerScopedNewSessionDraftsSection = React.memo(function ServerScopedNewS
             : allDrafts.filter(isNewSessionDraftListed)
     ), [allDrafts, props.temporaryComputerOnly]);
     const actionOperations = useAllActionOperations();
-    const pluginProjection = useAppShellPluginUiProjection();
+    const pluginInputs = useAppShellPluginUiProjection(value => drafts.length === 0 ? null : {
+        phase: value.phase,
+        attachments: value.pluginUiProjection?.composerAttachmentsById,
+    });
+    const installedIds = useAppShellPluginUiProjection(value => drafts.length === 0 ? []
+        : Object.keys(value.pluginUiProjection?.installedPackagesById ?? {}).sort());
     const serverProfilesGeneration = useServerProfilesGeneration();
     const deleteDisabledDraftIds = React.useMemo(() => new Set(drafts.flatMap((draft) => (
             isNewSessionDraftDeletionBlocked({
@@ -426,16 +431,14 @@ const ServerScopedNewSessionDraftsSection = React.memo(function ServerScopedNewS
     ))), [actionOperations, drafts, props.scope.accountId]);
     const onlineMachineIds = React.useMemo(() => new Set(machineMembership.selectableMachineIds), [machineMembership.selectableMachineIds]);
     const availabilityByDraftId = React.useMemo(() => {
-        const currentPluginProjection = pluginProjection.phase === 'current'
-            ? pluginProjection.pluginUiProjection
-            : null;
-        const installedPluginIds = new Set(Object.keys(currentPluginProjection?.installedPackagesById ?? {}));
+        const attachments = pluginInputs?.phase === 'current' ? pluginInputs.attachments : undefined;
+        const installedPluginIds = new Set(installedIds);
         return Object.fromEntries(drafts.map((draft) => {
             const machineId = resolveNewSessionDraftMachineId(draft);
-            const attachmentSummary = currentPluginProjection && draft.readView
+            const attachmentSummary = attachments && draft.readView
                 ? summarizeComposerAttachmentDraftAvailability({
                     values: draft.readView.composer.attachments.value,
-                    catalog: { entriesById: currentPluginProjection.composerAttachmentsById },
+                    catalog: { entriesById: attachments },
                     installedPluginIds,
                 })
                 : { pluginUnavailable: false, attachmentNeedsAttention: false };
@@ -452,8 +455,8 @@ const ServerScopedNewSessionDraftsSection = React.memo(function ServerScopedNewS
         drafts,
         machineListStatusByServerId,
         onlineMachineIds,
-        pluginProjection.phase,
-        pluginProjection.pluginUiProjection,
+        pluginInputs,
+        installedIds,
         props.scope.serverId,
     ]);
     const handleContinue = React.useCallback((draftId: string, scope?: ServerAccountScope) => {

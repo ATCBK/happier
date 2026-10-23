@@ -160,7 +160,8 @@ export type BuildSessionListRowViewModelInput = Readonly<{
     item: Extract<SessionListIndexItem, { type: 'session' }>;
     adjacency: SessionListRowViewModelAdjacency;
     unscopedSelectionIsUnique: boolean;
-    reachableSessionDisplayById: ReadonlyMap<string, SessionReachableDisplay>;
+    reachableSessionDisplay?: SessionReachableDisplay;
+    reachableSessionDisplayById?: ReadonlyMap<string, SessionReachableDisplay>;
     reachableSessionDisplayByKey?: ReadonlyMap<string, SessionReachableDisplay>;
     rowRenderableByKey?: ReadonlyMap<string, SessionListRenderableSession>;
     audienceScopes?: ReadonlyMap<string, ServerAccountScope>;
@@ -193,8 +194,9 @@ export function buildSessionListRowViewModel(input: BuildSessionListRowViewModel
     const sessionKey = serverId && sessionId ? sessionTagKey(serverId, sessionId) : null;
     const rowKey = buildSessionListServerScopedRowKey(serverId, sessionId);
     const pinned = item.pinned === true || (sessionKey ? input.pinnedSessionKeys.has(sessionKey) : false);
-    const reachableDisplay = (sessionKey ? input.reachableSessionDisplayByKey?.get(sessionKey) : undefined)
-        ?? input.reachableSessionDisplayById.get(sessionId);
+    const reachableDisplay = input.reachableSessionDisplay
+        ?? (sessionKey ? input.reachableSessionDisplayByKey?.get(sessionKey) : undefined)
+        ?? input.reachableSessionDisplayById?.get(sessionId);
     const workspaceSubtitle = reachableDisplay?.workspaceSubtitle ?? '';
     const subtitleEllipsizeMode = reachableDisplay?.workspaceSubtitleEllipsizeMode ?? 'head';
     const machineLabel = reachableDisplay?.machineLabel ?? '';

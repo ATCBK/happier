@@ -5,7 +5,8 @@ import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { LruMap } from '@/utils/cache/lruMap';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
-import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { machineCollectionValues, type MachineCollection } from '@/sync/domains/machines/identity/machineCollection';
 
 import { readSessionListShellCacheMaxEntriesFromEnv } from './sessionListShellCacheConfig';
 
@@ -30,7 +31,7 @@ const EMPTY_SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE: SessionListProjectHead
     scopeHintByLegacyWorkspaceKey: new Map<string, WorkspaceScopeBase>(),
 };
 
-const SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE_CACHE = new LruMap<string, SessionListProjectHeaderViewModelState>({
+const SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE_CACHE = new LruMap<string, ProjectHeaderCache>({
     maxEntries: readSessionListShellCacheMaxEntriesFromEnv(),
 });
 
@@ -43,8 +44,89 @@ type ProjectHeaderProjectionInput = Readonly<{
     workspaceLabels: Readonly<Record<string, string> | null | undefined>;
     workspaceRefs: ReadonlyArray<WorkspaceRefV1>;
     workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
-    machinesById?: ReadonlyMap<string, Pick<MachineDisplayRenderable, 'id' | 'metadata' | 'availability'>>;
+    machinesById?: MachineCollection<Pick<MachineDisplayRenderable, 'id' | 'metadata' | 'availability'>>;
 }>;
+
+type MachineNameSource = Parameters<typeof resolveMachineDisplayNames>[0][number];
+type ProjectHeaderCache = {
+    input: Omit<ProjectHeaderProjectionInput, 'machinesById' | 'listItems'>;
+    listInputs: WeakSet<ReadonlyArray<SessionListIndexItem>>;
+    state: SessionListProjectHeaderViewModelState;
+    machines: Map<string, MachineNameSource>;
+    names: Map<string, string>;
+    idsByName: Map<string, Set<string>>;
+    headersByMachine: Map<string, Map<string, string | undefined>>;
+    fallbackMachines: Map<string, MachineNameSource>;
+    hasMachineInventory: boolean;
+};
+
+function sameMachineNameInput(left: MachineNameSource | undefined, right: MachineNameSource | undefined): boolean {
+    return left === right || Boolean(left && right
+        && left.absence === right.absence
+        && left.availability?.kind === right.availability?.kind
+        && (left.metadata === null) === (right.metadata === null)
+        && left.metadata?.displayName === right.metadata?.displayName
+        && left.metadata?.host === right.metadata?.host);
+}
+
+function captureMachineNameInput(source: MachineNameSource): MachineNameSource {
+    return { id: source.id, absence: source.absence,
+        metadata: source.metadata ? { displayName: source.metadata.displayName, host: source.metadata.host } : source.metadata,
+        availability: source.availability ? { kind: source.availability.kind } : source.availability };
+}
+
+/** Update only changed name collision groups, then only headers naming those Machines. */
+function refreshMachineNames(cache: ProjectHeaderCache, input: ProjectHeaderProjectionInput): SessionListProjectHeaderViewModelState {
+    const changedGroups = new Set<string>();
+    const removedIds = new Set(cache.machines.keys());
+    const update = (id: string, next: MachineNameSource | undefined) => {
+        removedIds.delete(id);
+        const previous = cache.machines.get(id);
+        if (sameMachineNameInput(previous, next)) return;
+        if (previous) {
+            const group = getMachineDisplayName(previous).toLocaleLowerCase();
+            cache.idsByName.get(group)?.delete(id);
+            changedGroups.add(group);
+        }
+        if (next) {
+            const group = getMachineDisplayName(next).toLocaleLowerCase();
+            const ids = cache.idsByName.get(group) ?? new Set<string>();
+            ids.add(id);
+            cache.idsByName.set(group, ids);
+            changedGroups.add(group);
+            // This cache owns labels, not retained fleet/inventory payloads.
+            cache.machines.set(id, captureMachineNameInput(next));
+        } else cache.machines.delete(id);
+    };
+    for (const machine of machineCollectionValues(input.machinesById)) update(machine.id, machine);
+    for (const id of removedIds) update(id, cache.fallbackMachines.get(id));
+    // Fallbacks are added only once, including groups which never held an inventory record.
+    for (const [id, machine] of cache.fallbackMachines) if (!cache.machines.has(id)) update(id, machine);
+    const changedIds = new Set<string>();
+    for (const group of changedGroups) {
+        const ids = cache.idsByName.get(group);
+        if (!ids?.size) { cache.idsByName.delete(group); continue; }
+        const names = resolveMachineDisplayNames([...ids].map(id => cache.machines.get(id)!));
+        for (const [id, name] of names) if (cache.names.get(id) !== name) {
+            cache.names.set(id, name);
+            changedIds.add(id);
+        }
+    }
+    for (const id of [...cache.names.keys()]) if (!cache.machines.has(id)) { cache.names.delete(id); changedIds.add(id); }
+    let headers = cache.state.projectHeaderViewModelByGroupKey;
+    for (const id of changedIds) for (const [key, fallbackSubtitle] of cache.headersByMachine.get(id) ?? []) {
+        const previous = headers.get(key);
+        const machineSubtitle = cache.names.get(id) ?? fallbackSubtitle;
+        if (!previous || previous.machineSubtitle === machineSubtitle) continue;
+        if (headers === cache.state.projectHeaderViewModelByGroupKey) headers = new Map(headers);
+        headers.set(key, { ...previous, machineSubtitle });
+    }
+    if (headers !== cache.state.projectHeaderViewModelByGroupKey) cache.state = { ...cache.state, projectHeaderViewModelByGroupKey: headers };
+    const { machinesById: _machines, listItems, ...structuralInput } = input;
+    cache.listInputs.add(listItems);
+    cache.input = structuralInput;
+    return cache.state;
+}
 
 export function readSessionListProjectHeaderMachineId(item: Extract<SessionListIndexItem, { type: 'header' }>, workspaceRefs: readonly WorkspaceRefV1[]): string | null {
     const workspace = item.workspace;
@@ -54,9 +136,9 @@ export function readSessionListProjectHeaderMachineId(item: Extract<SessionListI
             : workspace?.machineId) ?? null;
 }
 
-function buildSessionListProjectHeaderViewModelStateCacheKey(input: ProjectHeaderProjectionInput, machineNames: ReadonlyMap<string, string>): string {
+function buildSessionListProjectHeaderViewModelStateCacheKey(input: ProjectHeaderProjectionInput): string {
     const parts: string[] = ['session-list-project-header-view-model-state'];
-    appendCachePart(parts, JSON.stringify([...machineNames].sort(([left], [right]) => left.localeCompare(right))));
+    appendCachePart(parts, `machineInventory:${input.machinesById !== undefined}`);
 
     for (const [workspaceKey, workspaceLabel] of Object.entries(input.workspaceLabels ?? {}).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))) {
         appendCachePart(parts, `workspaceLabel:${workspaceKey}:${workspaceLabel}`);
@@ -93,6 +175,7 @@ function buildSessionListProjectHeaderViewModelStateCacheKey(input: ProjectHeade
             String(item.serverName ?? ''),
             String(item.subtitle ?? ''),
             String(readSessionListProjectHeaderMachineId(item, input.workspaceRefs) ?? ''),
+            JSON.stringify(item.machine ?? null),
         ].join('|'));
     }
 
@@ -102,22 +185,36 @@ function buildSessionListProjectHeaderViewModelStateCacheKey(input: ProjectHeade
 }
 
 export function buildSessionListProjectHeaderViewModels(input: ProjectHeaderProjectionInput): SessionListProjectHeaderViewModelState {
-    const machines = new Map(input.machinesById);
-    const unlistedMachineIds = new Set<string>();
+    // The same bounded cache owns structural projection and keyed Machine invalidation.
+    // Serialize structural inputs only after they change, never on a Machine receipt.
+    for (const cached of SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE_CACHE.values()) {
+        if (cached.listInputs.has(input.listItems) && cached.input.workspaceRefs === input.workspaceRefs
+            && cached.input.workspaceLabels === input.workspaceLabels
+            && cached.hasMachineInventory === (input.machinesById !== undefined)
+            && cached.input.workspacePathDisplayModeV1 === input.workspacePathDisplayModeV1) return refreshMachineNames(cached, input);
+    }
+    const cacheKey = buildSessionListProjectHeaderViewModelStateCacheKey(input);
+    const cached = SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE_CACHE.get(cacheKey);
+    if (cached) return refreshMachineNames(cached, input);
+    const headersByMachine: ProjectHeaderCache['headersByMachine'] = new Map();
+    const fallbackMachines: ProjectHeaderCache['fallbackMachines'] = new Map();
     for (const item of input.listItems) {
         if (item.type !== 'header' || item.headerKind !== 'project') continue;
         const machineId = readSessionListProjectHeaderMachineId(item, input.workspaceRefs);
-        if (!machineId || machines.has(machineId)) continue;
-        if (item.machine) machines.set(machineId, item.machine);
-        else if (input.machinesById) unlistedMachineIds.add(machineId);
+        if (!machineId) continue;
+        const headers = headersByMachine.get(machineId) ?? new Map();
+        headers.set(item.groupKey ?? '', item.subtitle);
+        headersByMachine.set(machineId, headers);
+        if (item.machine) fallbackMachines.set(machineId, captureMachineNameInput(item.machine));
+        else if (input.machinesById) fallbackMachines.set(machineId, { id: machineId, absence: 'unlisted' });
     }
-    const machineNames = resolveMachineDisplayNames([...machines.values(),
-        ...[...unlistedMachineIds].filter(id => !machines.has(id)).map(id => ({ id, absence: 'unlisted' as const }))]);
-    const cacheKey = buildSessionListProjectHeaderViewModelStateCacheKey(input, machineNames);
-    const cachedState = SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE_CACHE.get(cacheKey);
-    if (cachedState) {
-        return cachedState;
-    }
+    const { machinesById: _machines, listItems, ...structuralInput } = input;
+    const cache: ProjectHeaderCache = { input: structuralInput, state: EMPTY_SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE,
+        listInputs: new WeakSet([listItems]),
+        machines: new Map(), names: new Map(), idsByName: new Map(), headersByMachine, fallbackMachines,
+        hasMachineInventory: input.machinesById !== undefined };
+    refreshMachineNames(cache, input);
+    const machineNames = cache.names;
 
     let projectHeaderViewModelByGroupKey: Map<string, SessionListProjectHeaderViewModel> | null = null;
     let scopeHintByLegacyWorkspaceKey: Map<string, WorkspaceScopeBase> | null = null;
@@ -175,6 +272,7 @@ export function buildSessionListProjectHeaderViewModels(input: ProjectHeaderProj
     }
 
     if (!projectHeaderViewModelByGroupKey || !scopeHintByLegacyWorkspaceKey) {
+        SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE_CACHE.set(cacheKey, cache);
         return EMPTY_SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE;
     }
 
@@ -183,6 +281,7 @@ export function buildSessionListProjectHeaderViewModels(input: ProjectHeaderProj
         scopeHintByLegacyWorkspaceKey,
     };
 
-    SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE_CACHE.set(cacheKey, nextState);
+    cache.state = nextState;
+    SESSION_LIST_PROJECT_HEADER_VIEW_MODEL_STATE_CACHE.set(cacheKey, cache);
     return nextState;
 }

@@ -98,9 +98,6 @@ installSessionShellCommonModuleMocks({
                     connectedAccountGroupsV4: [],
                 }), []),
                 useAllMachines: () => mockMachinesState.current,
-                useMachineDisplayById: () => React.useMemo(() => Object.fromEntries(
-                    mockMachinesState.current.map((machine) => [machine.id, machine]),
-                ), [mockMachinesState.current]),
                 useSettingMutable: createUseSettingMutableMockFromReader((key) => {
                     return mutableSetting;
                 }),
@@ -383,6 +380,7 @@ async function renderSessionsList() {
     }
     storage.setState({
         sessionListRowsByServerId: rowsByServerId,
+        machineDisplayById: Object.fromEntries(mockMachinesState.current.map(machine => [machine.id, machine])),
         ordinarySessionListMembershipByServerId: Object.fromEntries(
             Object.entries(rowsByServerId).map(([serverId, rows]) => [serverId, Object.keys(rows)]),
         ),

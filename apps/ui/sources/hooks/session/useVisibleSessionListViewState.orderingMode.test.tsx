@@ -186,7 +186,9 @@ vi.mock('@/sync/domains/state/storage', async () => {
     return createStorageModuleStub({
             storage: store,
             getStorage: () => store,
-            useSessionListRowsByServerId: () => viewState.rowsByServerId,
+            useSessionListRowsByServerId: (_serverIds: readonly string[] | undefined,
+                select?: (rows: typeof viewState.rowsByServerId) => unknown) => select
+                ? select(viewState.rowsByServerId) : viewState.rowsByServerId,
             useArtifacts: () => {
                 throw new Error('session list view state must use canonical row state instead of full artifacts');
             },

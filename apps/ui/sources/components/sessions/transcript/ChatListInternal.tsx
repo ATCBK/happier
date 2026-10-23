@@ -1792,6 +1792,7 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         isPinnedRef,
         itemsRef,
         jumpToSeq: props.jumpToSeq,
+        jumpToMessageId: props.jumpToMessageId,
         lastPinOffsetForIntentRef,
         lastNativeRestoreIndexCommandRef,
         lastRouteJumpProtectionClearingWebMovementAtMsRef,

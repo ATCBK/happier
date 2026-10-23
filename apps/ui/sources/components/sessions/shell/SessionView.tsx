@@ -191,6 +191,7 @@ type SessionViewProps = Readonly<{
     id: string;
     routeServerId?: string | null;
     jumpToSeq?: number | null;
+    jumpToMessageId?: string | null;
     paneUrlState?: SessionPaneUrlState | null;
     initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
     surfaceFocusedOverride?: boolean | null;
@@ -434,6 +435,7 @@ type SessionTranscriptContentProps = Readonly<{
     externalControlFooter: ChatListProps['externalControlFooter'];
     approvalRequests: ChatListProps['approvalRequests'];
     jumpToSeq: ChatListProps['jumpToSeq'];
+    jumpToMessageId: ChatListProps['jumpToMessageId'];
     followBottomIntentKey: ChatListProps['followBottomIntentKey'];
     onViewportChange: ChatListProps['onViewportChange'];
     onEditPendingMessage: ChatListProps['onEditPendingMessage'];
@@ -455,6 +457,7 @@ const SessionTranscriptContent = React.memo(function SessionTranscriptContent({
     externalControlFooter,
     approvalRequests,
     jumpToSeq,
+    jumpToMessageId,
     followBottomIntentKey,
     onViewportChange,
     onEditPendingMessage,
@@ -557,6 +560,7 @@ const SessionTranscriptContent = React.memo(function SessionTranscriptContent({
                     onRequestSwitchToRemote={onRequestSwitchToRemote}
                     externalControlFooter={externalControlFooter}
                     jumpToSeq={jumpToSeq}
+                    jumpToMessageId={jumpToMessageId}
                     followBottomIntentKey={followBottomIntentKey}
                     approvalRequests={approvalRequests}
                     onViewportChange={onViewportChange}
@@ -1888,6 +1892,7 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
                            isEncryptedSessionLocked={isEncryptedSessionLocked}
                            executionRunsEnabled={executionRunsEnabled}
                            jumpToSeq={props.jumpToSeq ?? null}
+                           jumpToMessageId={props.jumpToMessageId ?? null}
                            participantTargets={participantTargets}
                            approvalRequests={approvalRequests}
                            transcriptApprovalRequests={transcriptApprovalRequests}
@@ -1985,6 +1990,7 @@ function SessionViewLoadedContent({
     isEncryptedSessionLocked,
     executionRunsEnabled,
     jumpToSeq,
+    jumpToMessageId,
     participantTargets,
     approvalRequests,
     transcriptApprovalRequests,
@@ -2043,6 +2049,7 @@ function SessionViewLoadedContent({
     isEncryptedSessionLocked: boolean;
     executionRunsEnabled: boolean;
     jumpToSeq: number | null;
+    jumpToMessageId: string | null;
     participantTargets: readonly SessionParticipantTarget[];
     approvalRequests: ReadonlyArray<OpenApprovalArtifactForSession>;
     /** Open approvals plus decided ones whose body keeps a settled presentation (the transcript's list). */
@@ -2499,6 +2506,7 @@ function SessionViewLoadedContent({
                   onRequestSwitchToRemote={isHiddenSystemSessionSession || !canReleaseLocalControl ? undefined : handleRequestSwitchToRemote}
                   externalControlFooter={externalControlFooter}
                   jumpToSeq={jumpToSeq}
+                  jumpToMessageId={jumpToMessageId}
                   followBottomIntentKey={followBottomIntentSeq}
                   approvalRequests={transcriptApprovalRequests}
                   onViewportChange={handleTranscriptViewportChange}

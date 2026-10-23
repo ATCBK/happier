@@ -111,7 +111,7 @@ export type WorkStatusInput =
         word: string; needsYouCount: number; hasActiveRun: boolean;
     }> }>
     /** An execution run, sub-agent or teammate, in the agent-activity vocabulary. */
-    | Readonly<{ kind: 'agent_activity'; facts: Readonly<{ status: AgentActivityStatusV1; word: string }> }>;
+    | Readonly<{ kind: 'agent_activity'; facts: Readonly<{ status: AgentActivityStatusV1; isActive?: boolean; word: string }> }>;
 
 type StatusShape = Readonly<{ bucket: WorkStatusBucket; tone: WorkStatusTone }>;
 
@@ -305,8 +305,9 @@ export function resolveWorkStatusTone(input: WorkStatusInput): WorkStatusPresent
             // `waiting` is the one status that says a person is the blocker; a terminal status is
             // finished, a failure is danger and a timeout (interrupted, not chosen) is attention, as a
             // worker update's timeout reads; `unknown` claims neither working nor finished.
-            const { status, word } = input.facts;
+            const { status, isActive, word } = input.facts;
             if (status === 'waiting') return { bucket: 'needs_you', tone: 'attention', word };
+            if (status === 'running' && isActive === false) return { bucket: 'idle', tone: 'neutral', word };
             if (isInProgressAgentActivityStatus(status)) return { bucket: 'working', tone: 'neutral', word };
             if (isTerminalAgentActivityStatus(status)) {
                 return { bucket: 'finished', tone: status === 'failed' ? 'danger' : status === 'timedOut' ? 'attention' : 'neutral', word };

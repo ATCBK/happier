@@ -12,6 +12,7 @@ import {
     type SessionListReachabilityRenderable,
     useSessionListReachabilityRenderablesForItems,
     useSessionListRowRenderablesForItems,
+    useMachineDisplayById,
 } from '@/sync/domains/state/storage';
 
 import { filterCollapsedSessionListItems } from './filterCollapsedSessionListItems';
@@ -62,7 +63,6 @@ type SessionReachableDisplay = Readonly<{
 }>;
 
 const EMPTY_PINNED_KEY_SET: ReadonlySet<string> = new Set();
-const EMPTY_MACHINE_DISPLAY_BY_ID_MAP = new Map<string, MachineDisplayRenderable>();
 const EMPTY_SESSION_LIST_ROW_RENDERABLES_BY_KEY = new Map<string, SessionListRenderableSession>() as ReadonlyMap<string, SessionListRenderableSession>;
 
 const EMPTY_SESSION_LIST_RENDER_MODELS = {
@@ -284,7 +284,7 @@ export type SessionListSearchOtherMatches = Readonly<{
 export function useSessionListRenderModels(input: Readonly<{
     paneState: VisibleSessionListPaneState;
     collapsedGroupKeys: Readonly<Record<string, boolean>>;
-    machineDisplayById: Readonly<Record<string, MachineDisplayRenderable>>;
+    machineDisplayById?: Readonly<Record<string, MachineDisplayRenderable>>;
     workspaceLabels: Readonly<Record<string, string>>;
     workspaceRefs: ReadonlyArray<WorkspaceRefV1>;
     workspacePathDisplayModeV1?: WorkspacePathDisplayModeV1 | null;
@@ -323,13 +323,6 @@ export function useSessionListRenderModels(input: Readonly<{
             workspaceRefs: input.workspaceRefs,
         });
     }, [input.collapsedGroupKeys, input.sessionTags, input.workspaceLabels, input.workspaceRefs]);
-
-    const machinesById = React.useMemo(() => {
-        const entries = Object.entries(input.machineDisplayById);
-        return entries.length === 0
-            ? EMPTY_MACHINE_DISPLAY_BY_ID_MAP
-            : new Map(entries);
-    }, [input.machineDisplayById]);
 
     const headerFiltersActive = hasActiveSessionListHeaderFilters(input.headerFilters);
 
@@ -472,37 +465,49 @@ export function useSessionListRenderModels(input: Readonly<{
     // freshly built row view models.
     const runtimeNowMs = useSessionListRuntimeNowMs(clocksActive);
 
-    const sessionReachabilitySummary = React.useMemo(() => {
-        return measureSessionListRenderDerivation(
-            'ui.sessionsList.render.reachabilityDisplayMap',
-            () => ({
-                items: listItems.length,
-                machines: machinesById.size,
-                displayRows: countSessionListItems(listItems),
-            }),
-            () => buildSessionListReachabilitySummary({
-                cache: sessionReachabilitySummaryCacheRef.current,
+    const selectMachinePresentation = React.useMemo(() => {
+        let previousMachines: Readonly<Record<string, MachineDisplayRenderable>> | undefined;
+        let previousPresentation: Readonly<{
+            sessionReachabilitySummary: ReturnType<typeof buildSessionListReachabilitySummary>;
+            projectHeaderViewModelState: SessionListProjectHeaderViewModelState;
+        }> | undefined;
+        return (storeMachines: Record<string, MachineDisplayRenderable>) => {
+            const machines = input.machineDisplayById ?? storeMachines;
+            if (machines === previousMachines && previousPresentation) return previousPresentation;
+            const sessionReachabilitySummary = measureSessionListRenderDerivation(
+                'ui.sessionsList.render.reachabilityDisplayMap',
+                () => ({
+                    items: listItems.length,
+                    machines: Object.keys(machines).length,
+                    displayRows: countSessionListItems(listItems),
+                }),
+                () => buildSessionListReachabilitySummary({
+                    cache: sessionReachabilitySummaryCacheRef.current,
+                    listItems,
+                    machinesById: machines,
+                    renderablesByKey: reachabilityRenderablesByKey,
+                    workspaceRefs: normalizedShellState.workspaceRefs,
+                    workspacePathDisplayModeV1: input.workspacePathDisplayModeV1,
+                    resolveSessionRenderable: (item) => {
+                        const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId, item.keyParts);
+                        return key ? reachabilityRenderablesByKey.get(key) ?? null : null;
+                    },
+                }),
+            );
+            const projectHeaderViewModelState = buildSessionListProjectHeaderViewModels({
                 listItems,
-                machinesById,
+                machinesById: machines,
+                workspaceLabels: normalizedShellState.workspaceLabels,
                 workspaceRefs: normalizedShellState.workspaceRefs,
                 workspacePathDisplayModeV1: input.workspacePathDisplayModeV1,
-                resolveSessionRenderable: (item) => {
-                    const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId, item.keyParts);
-                    return key ? reachabilityRenderablesByKey.get(key) ?? null : null;
-                },
-            }),
-        );
-    }, [input.workspacePathDisplayModeV1, listItems, machinesById, normalizedShellState.workspaceRefs, reachabilityRenderablesByKey]);
-
-    const projectHeaderViewModelState = React.useMemo(() => {
-        return buildSessionListProjectHeaderViewModels({
-            listItems,
-            machinesById,
-            workspaceLabels: normalizedShellState.workspaceLabels,
-            workspaceRefs: normalizedShellState.workspaceRefs,
-            workspacePathDisplayModeV1: input.workspacePathDisplayModeV1,
-        });
-    }, [input.workspacePathDisplayModeV1, listItems, machinesById, normalizedShellState.workspaceLabels, normalizedShellState.workspaceRefs]);
+            });
+            previousMachines = machines;
+            previousPresentation = { sessionReachabilitySummary, projectHeaderViewModelState };
+            return previousPresentation;
+        };
+    }, [input.machineDisplayById, input.workspacePathDisplayModeV1, listItems, normalizedShellState.workspaceLabels,
+        normalizedShellState.workspaceRefs, reachabilityRenderablesByKey]);
+    const { sessionReachabilitySummary, projectHeaderViewModelState } = useMachineDisplayById(selectMachinePresentation);
 
     const rowViewModels = React.useMemo(() => {
         if (!deriveRowViewModels) {

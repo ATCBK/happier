@@ -217,6 +217,8 @@ type VisibleSessionListProjectionInputs = Omit<Parameters<typeof buildVisibleSes
 type RetainedVisibleSessionListProjection = Readonly<{
     inputs: VisibleSessionListProjectionInputs;
     validUntilMs: number | null;
+    dataActive: boolean;
+    hasHiddenInactiveSessions: boolean;
 }>;
 
 // The retained pane already owns the last rendered projection while the phone list is hidden.
@@ -576,7 +578,6 @@ export function useVisibleSessionListViewState(
         if (!workflowRunsEnabled || !runServerId) return [];
         return workflowWindow.rows.flatMap((row) => row.summary ? [{ serverId: runServerId, summary: row.summary }] : []);
     }, [runServerId, workflowRunsEnabled, workflowWindow.rows]);
-    const sessionRowStateByServerId = useSessionListRowsByServerId();
     const accountHideInactiveSessions = useSetting('hideInactiveSessions');
     const hideInactiveSessions = options.botsRoster === true ? false : accountHideInactiveSessions === true;
     // Every Home whose membership was applied by the strict query already answered
@@ -715,7 +716,7 @@ export function useVisibleSessionListViewState(
     // without a store update.
     const runtimeNowMs = useSessionListRuntimeNowMs(surfaceDataActive);
 
-    const projectionInputs = React.useMemo<VisibleSessionListProjectionInputs>(() => ({
+    const projectionInputs = React.useMemo<Omit<VisibleSessionListProjectionInputs, 'sessionRowStateByServerId'>>(() => ({
         source: source ?? [],
         workFilter,
         workspaceRefs,
@@ -723,7 +724,6 @@ export function useVisibleSessionListViewState(
         workflowRuns,
         workflowRunUnderSessionId: workflowRunsEnabled ? workFilter.underSessionId : undefined,
         activeSessionId,
-        sessionRowStateByServerId,
         hideInactiveSessions: hideInactiveSessions === true,
         serverFilteredInactiveServerIds,
         corpusStorage: options.corpusStorage ?? 'active',
@@ -780,7 +780,6 @@ export function useVisibleSessionListViewState(
         sessionListSectionModeV1,
         sessionListWorkingPlacementModeV1,
         backgroundWorkAttentionMode,
-        sessionRowStateByServerId,
         sessionWorkspaceOrderV1,
         source,
         storageFilter,
@@ -790,89 +789,79 @@ export function useVisibleSessionListViewState(
         workflowRuns,
     ]);
 
-    const visibleSessionListIndex = React.useMemo(() => {
-        if (!source && (!workflowRunWindow || workflowRunWindow.status === 'loading')) return source;
-        const cachedProjection = previousVisibleSessionListIndexForRetention
-            ? retainedVisibleSessionListProjections.get(previousVisibleSessionListIndexForRetention)
-            : undefined;
-        if (
-            previousVisibleSessionListIndexForRetention
-            && cachedProjection
-            && (cachedProjection.validUntilMs === null || runtimeNowMs < cachedProjection.validUntilMs)
-            && areVisibleSessionListProjectionInputsEqual(cachedProjection.inputs, projectionInputs)
-        ) {
-            syncPerformanceTelemetry.count('sync.sessions.list.visible.retainedProjectionReused', {
-                items: previousVisibleSessionListIndexForRetention.length,
-            });
-            return previousVisibleSessionListIndexForRetention;
-        }
-        return reuseStableVisibleSessionListIndex(
-            previousVisibleSessionListIndexForRetention,
-            buildVisibleSessionListIndex({ ...projectionInputs, nowMs: runtimeNowMs }),
-        );
-    }, [previousVisibleSessionListIndexForRetention, projectionInputs, runtimeNowMs, source, workflowRunWindow?.status]);
-
+    // Select the ordered structure and its wake horizon before notifying React.
+    // Row content belongs to the keyed row boundaries; an unchanged list must
+    // not execute the list/sidebar subtree merely to discover it is unchanged.
+    const selectProjection = React.useMemo(() => {
+        let previousIndex = previousVisibleSessionListIndexForRetention;
+        return (sessionRowStateByServerId: ReturnType<typeof useSessionListRowsByServerId>) => {
+            const inputs = { ...projectionInputs, sessionRowStateByServerId };
+            const cachedProjection = previousIndex
+                ? retainedVisibleSessionListProjections.get(previousIndex)
+                : undefined;
+            if (
+                previousIndex
+                && cachedProjection
+                && cachedProjection.dataActive === surfaceDataActive
+                && (cachedProjection.validUntilMs === null || runtimeNowMs < cachedProjection.validUntilMs)
+                && areVisibleSessionListProjectionInputsEqual(cachedProjection.inputs, inputs)
+            ) {
+                syncPerformanceTelemetry.count('sync.sessions.list.visible.retainedProjectionReused', {
+                    items: previousIndex.length,
+                });
+                return {
+                    visibleSessionListIndex: previousIndex,
+                    nextRuntimeFreshnessAtMs: cachedProjection.validUntilMs,
+                    hasHiddenInactiveSessions: cachedProjection.hasHiddenInactiveSessions,
+                };
+            }
+            const visibleSessionListIndex = !source && (!workflowRunWindow || workflowRunWindow.status === 'loading')
+                ? source
+                : reuseStableVisibleSessionListIndex(previousIndex,
+                    buildVisibleSessionListIndex({ ...inputs, nowMs: runtimeNowMs }));
+            const resolveScopeId = captureServerProfileScopeResolver();
+            let nextAtMs = surfaceDataActive && visibleSessionListIndex
+                ? resolveNextSessionAttentionReminderWakeAtMs(sessionAttentionStandingPolicy, runtimeNowMs) : null;
+            for (const item of surfaceDataActive ? visibleSessionListIndex ?? [] : []) {
+                if (item.type !== 'session') continue;
+                const row = readSessionListRowForServerId(sessionRowStateByServerId, item.serverId, item.sessionId, resolveScopeId);
+                if (!row) continue;
+                for (const expiresAtMs of readSessionRuntimePresentationFreshnessExpirations(row, runtimeNowMs)) {
+                    nextAtMs = nextAtMs === null ? expiresAtMs : Math.min(nextAtMs, expiresAtMs);
+                }
+                if (readExternalSessionLink(row.metadata)) {
+                    const externalAgentExpiryAtMs = resolveExternalAgentPresentationState(
+                        readExternalAgentObservationPresentationInput(row.metadata),
+                        runtimeNowMs,
+                    ).nextExpiryAtMs;
+                    if (externalAgentExpiryAtMs !== null) {
+                        nextAtMs = nextAtMs === null
+                            ? externalAgentExpiryAtMs
+                            : Math.min(nextAtMs, externalAgentExpiryAtMs);
+                    }
+                }
+            }
+            const hasHiddenInactiveSessions = Boolean(source && hideInactiveSessions
+                && countSessionItems(visibleSessionListIndex) === 0
+                && countSessionItems(buildVisibleSessionListIndex({ ...inputs, hideInactiveSessions: false, nowMs: runtimeNowMs })) > 0);
+            if (visibleSessionListIndex) {
+                retainedVisibleSessionListProjections.set(visibleSessionListIndex, {
+                    inputs,
+                    validUntilMs: nextAtMs,
+                    dataActive: surfaceDataActive,
+                    hasHiddenInactiveSessions,
+                });
+            }
+            previousIndex = visibleSessionListIndex;
+            return { visibleSessionListIndex, nextRuntimeFreshnessAtMs: nextAtMs, hasHiddenInactiveSessions };
+        };
+    }, [previousVisibleSessionListIndexForRetention, projectionInputs, runtimeNowMs, source, workflowRunWindow?.status,
+        surfaceDataActive, sessionAttentionStandingPolicy, hideInactiveSessions]);
+    const { visibleSessionListIndex, nextRuntimeFreshnessAtMs, hasHiddenInactiveSessions } = useSessionListRowsByServerId(undefined, selectProjection);
     React.useEffect(() => {
         previousVisibleSessionListIndexRef.current = visibleSessionListIndex;
     }, [visibleSessionListIndex]);
-
-    const nextRuntimeFreshnessAtMs = React.useMemo(() => {
-        if (!surfaceDataActive || !visibleSessionListIndex) return null;
-        const resolveScopeId = captureServerProfileScopeResolver();
-        let nextAtMs = resolveNextSessionAttentionReminderWakeAtMs(sessionAttentionStandingPolicy, runtimeNowMs);
-        for (const item of visibleSessionListIndex) {
-            if (item.type !== 'session') continue;
-            const row = readSessionListRowForServerId(sessionRowStateByServerId, item.serverId, item.sessionId, resolveScopeId);
-            if (!row) continue;
-            for (const expiresAtMs of readSessionRuntimePresentationFreshnessExpirations(row, runtimeNowMs)) {
-                nextAtMs = nextAtMs === null ? expiresAtMs : Math.min(nextAtMs, expiresAtMs);
-            }
-            if (readExternalSessionLink(row.metadata)) {
-                const externalAgentExpiryAtMs = resolveExternalAgentPresentationState(
-                    readExternalAgentObservationPresentationInput(row.metadata),
-                    runtimeNowMs,
-                ).nextExpiryAtMs;
-                if (externalAgentExpiryAtMs !== null) {
-                    nextAtMs = nextAtMs === null
-                        ? externalAgentExpiryAtMs
-                        : Math.min(nextAtMs, externalAgentExpiryAtMs);
-                }
-            }
-        }
-        return nextAtMs;
-    }, [runtimeNowMs, sessionAttentionStandingPolicy, sessionRowStateByServerId, surfaceDataActive, visibleSessionListIndex]);
     useSessionListRuntimeWake(nextRuntimeFreshnessAtMs, surfaceDataActive);
-
-    React.useEffect(() => {
-        if (!visibleSessionListIndex) return;
-        retainedVisibleSessionListProjections.set(visibleSessionListIndex, {
-            inputs: projectionInputs,
-            validUntilMs: nextRuntimeFreshnessAtMs,
-        });
-    }, [nextRuntimeFreshnessAtMs, projectionInputs, visibleSessionListIndex]);
-
-    const hasHiddenInactiveSessions = React.useMemo(() => {
-        if (!source || !hideInactiveSessions) {
-            return false;
-        }
-
-        if (countSessionItems(visibleSessionListIndex) > 0) {
-            return false;
-        }
-
-        const visibleWithoutInactiveFilter = buildVisibleSessionListIndex({
-            ...projectionInputs,
-            hideInactiveSessions: false,
-            nowMs: runtimeNowMs,
-        });
-
-        return countSessionItems(visibleWithoutInactiveFilter) > 0;
-    }, [
-        runtimeNowMs,
-        hideInactiveSessions,
-        projectionInputs,
-        visibleSessionListIndex,
-    ]);
 
     // The focus scope stays visible in every layout so the reader can always see and
     // clear the narrowing that is hiding rows, including in Recent activity where the

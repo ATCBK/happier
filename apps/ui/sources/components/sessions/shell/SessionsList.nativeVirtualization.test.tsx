@@ -24,6 +24,7 @@ import { createUseSettingMock, createUseSettingMutableMockFromReader } from '@/d
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { buildMachineDisplayRenderableFromMachine } from '@/sync/domains/machines/machineDisplayRenderable';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -391,7 +392,6 @@ vi.mock('@/modal', async () => {
 // membership, organization projection and writers use the real imported owner.
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
         const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        const { buildMachineDisplayRenderableFromMachine } = await import('@/sync/domains/machines/machineDisplayRenderable');
         const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
         return createStorageModuleMock({
             importOriginal,
@@ -405,9 +405,6 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
                     return null;
                 } }),
                 useHasUnreadMessages: () => false,
-                useMachineDisplayById: () => Object.fromEntries(
-                    allMachines.map((machine) => [machine.id, buildMachineDisplayRenderableFromMachine(machine as any)]),
-                ),
                 useSettingMutable: createUseSettingMutableMockFromReader((key) => {
                     if (key === 'sessionListOrderingModeV1') return [sessionListOrderingModeV1, setSessionListOrderingModeV1];
                     return [null, vi.fn()];
@@ -415,6 +412,7 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
                 useLocalSetting: <K extends keyof LocalSettings>(key: K): LocalSettings[K] => ({
                     ...localSettingsDefaults,
                     sessionMruOrderV1,
+                    collapsedGroupKeysV1,
                 })[key],
                 useLocalSettingMutable: <K extends keyof LocalSettings>(key: K): [LocalSettings[K], (value: LocalSettings[K]) => void] => {
                     const value = key === 'sessionMruOrderV1'
@@ -735,7 +733,10 @@ describe('SessionsList (native virtualization)', () => {
         await realStorage.getState().activateSettingsScope(scope, []);
         realStorage.getState().activateProfileScope(scope, []);
         realStorage.getState().activateSessionLocalStateScope(scope);
-        realStorage.setState({ sessionListRowsByServerId: storageState.sessionListRowsByServerId });
+        realStorage.setState({ sessionListRowsByServerId: storageState.sessionListRowsByServerId,
+            machineDisplayById: Object.fromEntries(allMachines.map(machine =>
+                [machine.id, buildMachineDisplayRenderableFromMachine(machine)])),
+        });
         realStorage.getState().clearProjectAccountRowsScope();
         resetServerFeaturesClientForTests();
         const ordinaryFeatures = createRootLayoutFeaturesResponse({

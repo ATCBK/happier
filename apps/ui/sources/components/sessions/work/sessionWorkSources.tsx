@@ -180,7 +180,7 @@ export function useSessionWorkSourcesOwner(params: Readonly<{
             workflowHeadlineRuns: workflowActivity.activeRuns,
             managedRuns: toManagedRunSources(managedRuns),
             ownTriggerRunIds,
-            describeAgentStatus: (entry) => resolveAgentActivityStatusPresentation(entry.status).label,
+            describeAgentStatus: (entry) => resolveAgentActivityStatusPresentation(entry.status, entry.isActive).label,
             describeProgress,
         }, previous?.sessionId === params.sessionId && previous.serverId === operationServerId && previous.accountId === operationAccountId
             ? previous.projection : null);

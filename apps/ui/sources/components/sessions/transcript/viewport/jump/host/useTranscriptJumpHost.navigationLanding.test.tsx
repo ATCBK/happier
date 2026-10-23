@@ -55,6 +55,25 @@ describe('transcript jump landing owns the navigation anchor', () => {
         standardCleanup();
     });
 
+    it('lands a route message on the exact answer rather than the first row at the same sequence', async () => {
+        getStorage().getState().sessionMessages[SESSION_ID]!.reducerState.messageIds.set('source-answer', 'a2');
+        getStorage().getState().sessionMessages[SESSION_ID]!.reducerState.messageIds.set('second-answer', 'a3');
+        const harness = createTranscriptJumpHostTestHarness({ sessionId: SESSION_ID, rows: ROWS, messages: MESSAGES });
+        const landed: unknown[] = [];
+        const route = { jumpToSeq: 7, jumpToMessageId: 'server:source-answer', onJumpLanded: (result: unknown) => { landed.push(result); } };
+        const hook = await harness.render(route);
+        try {
+            await flushHookEffects();
+            expect(harness.native.indexWrites.at(-1)).toMatchObject({ index: 2, viewPosition: 0.5 });
+            expect(landed).toContainEqual({ status: 'scrolled', target: { kind: 'route-message-id', routeMessageId: 'server:source-answer', seqHint: 7 } });
+            await hook.rerender(harness.props({ ...route, jumpToMessageId: 'server:second-answer' }));
+            await flushHookEffects();
+            expect(harness.native.indexWrites.at(-1)).toMatchObject({ index: 3, viewPosition: 0.5 });
+        } finally {
+            await hook.unmount();
+        }
+    });
+
     it('publishes the landed turn until genuine reader movement releases it', async () => {
         const store = getTranscriptNavigationVisibilityStore(SESSION_ID);
         const harness = createTranscriptJumpHostTestHarness({ sessionId: SESSION_ID, rows: ROWS, messages: MESSAGES, isPinned: false });

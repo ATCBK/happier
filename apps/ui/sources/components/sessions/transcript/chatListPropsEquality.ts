@@ -14,6 +14,7 @@ function areChatListNonSessionPropsEqual(left: ChatListProps, right: ChatListPro
         && left.externalControlFooter === right.externalControlFooter
         && left.approvalRequests === right.approvalRequests
         && left.jumpToSeq === right.jumpToSeq
+        && left.jumpToMessageId === right.jumpToMessageId
         && left.followBottomIntentKey === right.followBottomIntentKey
         && left.onJumpLanded === right.onJumpLanded
         && left.onViewportChange === right.onViewportChange

@@ -101,15 +101,27 @@ const tempDataMap = new Map<string, TempDataEntry>();
 const CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const MAX_AGE = 10 * 60 * 1000; // 10 minutes
 
-// Auto-cleanup old entries
-setInterval(() => {
-    const now = Date.now();
-    for (const [key, entry] of tempDataMap.entries()) {
-        if (now - entry.timestamp > MAX_AGE) {
-            tempDataMap.delete(key);
-        }
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopCleanupWhenEmpty(): void {
+    if (tempDataMap.size === 0 && cleanupTimer !== null) {
+        clearInterval(cleanupTimer);
+        cleanupTimer = null;
     }
-}, CLEANUP_INTERVAL);
+}
+
+function startCleanup(): void {
+    if (cleanupTimer !== null) return;
+    cleanupTimer = setInterval(() => {
+        const now = Date.now();
+        for (const [key, entry] of tempDataMap.entries()) {
+            if (now - entry.timestamp > MAX_AGE) {
+                tempDataMap.delete(key);
+            }
+        }
+        stopCleanupWhenEmpty();
+    }, CLEANUP_INTERVAL);
+}
 
 /**
  * Store temporary data and return a UUID key
@@ -120,6 +132,7 @@ export function storeTempData(data: any): string {
         data,
         timestamp: Date.now()
     });
+    startCleanup();
     return key;
 }
 
@@ -131,6 +144,7 @@ export function getTempData<T = any>(key: string): T | null {
     const entry = tempDataMap.get(key);
     if (entry) {
         tempDataMap.delete(key); // Remove after retrieval
+        stopCleanupWhenEmpty();
         return entry.data as T;
     }
     return null;
@@ -149,4 +163,5 @@ export function peekTempData<T = any>(key: string): T | null {
  */
 export function clearTempData(): void {
     tempDataMap.clear();
+    stopCleanupWhenEmpty();
 }

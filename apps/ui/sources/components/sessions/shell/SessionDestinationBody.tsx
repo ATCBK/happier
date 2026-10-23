@@ -78,7 +78,9 @@ function useInitialMobileSurfaceHint(
     return cacheRef.current?.persistedSurface ?? null;
 }
 
-export function SessionDestinationBody() {
+export function SessionDestinationBody(props: Readonly<{
+    messageTarget?: Readonly<{ routeMessageId: string; seq: number }>;
+}> = {}) {
     const instanceKey = useDestinationInstanceKey();
     const focused = useDestinationFocus();
     const visible = useDestinationVisibility();
@@ -114,7 +116,7 @@ export function SessionDestinationBody() {
             : null;
     const jumpSeqTrimmed = typeof jumpSeqRaw === 'string' ? jumpSeqRaw.trim() : '';
     const jumpSeqNum = jumpSeqTrimmed.length > 0 ? Number(jumpSeqTrimmed) : NaN;
-    const jumpToSeq = Number.isFinite(jumpSeqNum) && jumpSeqNum >= 0 ? Math.trunc(jumpSeqNum) : null;
+    const jumpToSeq = props.messageTarget?.seq ?? (Number.isFinite(jumpSeqNum) && jumpSeqNum >= 0 ? Math.trunc(jumpSeqNum) : null);
     const routeServerId = routeScope.serverId ?? '';
     const recoveryDataId = typeof recoveryDataIdParam === 'string'
         ? recoveryDataIdParam
@@ -224,10 +226,11 @@ export function SessionDestinationBody() {
                             routeKind: 'index',
                             activeRightTabId: pane.scopeState?.right?.activeTabId,
                             detailsTargetPresent: (pane.scopeState?.details?.tabs?.length ?? 0) > 0,
-                            persistedSurface: initialMobileSurfaceHint,
+                            persistedSurface: props.messageTarget ? 'chat' : initialMobileSurfaceHint,
                             terminalTabAvailable,
                         })}
                         jumpToSeq={jumpToSeq}
+                        jumpToMessageId={props.messageTarget?.routeMessageId}
                         paneUrlState={paneUrlState ?? undefined}
                         initialAttachmentDrafts={recoverableAttachmentDrafts}
                         terminalTabAvailable={terminalTabAvailable}

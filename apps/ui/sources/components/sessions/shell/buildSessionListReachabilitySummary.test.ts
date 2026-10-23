@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as workspaceDisplay from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
 
 import {
     buildSessionListReachabilitySummary,
@@ -24,8 +25,39 @@ describe('buildSessionListReachabilitySummary', () => {
         projectManager.clear();
     });
     afterEach(() => {
+        vi.restoreAllMocks();
         storage.setState(previousState, true);
         projectManager.clear();
+    });
+
+    it('derives only the dependent Session rows for one changed Machine', () => {
+        const machines = Array.from({ length: 10 }, (_, i) => createMachineFixture({ id: `keyed-${i}` }));
+        const rows = Array.from({ length: 50 }, (_, i) => buildSessionListRenderableFromSession(createSessionFixture({
+            id: `keyed-row-${i}`, serverId: 'keyed-home', metadata: { machineId: machines[i % 10]!.id, path: `/repo-${i}`, host: `host-${i % 10}` },
+        })));
+        storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+            sessionListRowsByServerId: { 'keyed-home': Object.fromEntries(rows.map(row => [row.id, row])) } });
+        const input = { cache: createSessionListReachabilitySummaryCache(),
+            listItems: rows.map(row => ({ type: 'session' as const, serverId: 'keyed-home', sessionId: row.id })),
+            machinesById: new Map(machines.map(machine => [machine.id, machine])), workspaceRefs: [],
+            resolveSessionRenderable: (item: { sessionId: string }) => rows.find(row => row.id === item.sessionId) ?? null };
+        buildSessionListReachabilitySummary(input);
+        // Observe the real workspace/target derivation; do not replace internal logic.
+        const derive = vi.spyOn(workspaceDisplay, 'resolveSessionWorkspaceDisplayPresentation');
+        const changed = { ...machines[0]!, metadata: { ...machines[0]!.metadata!, displayName: 'Changed' } };
+        storage.setState(state => ({ machines: { ...state.machines, [changed.id]: changed } }));
+        input.machinesById.set(changed.id, changed);
+        const result = buildSessionListReachabilitySummary(input);
+        expect(result.displayById.get(rows[0]!.id)?.machineLabel).toBe('Changed');
+        expect(derive).toHaveBeenCalledTimes(5);
+        derive.mockClear();
+        rows[1] = { ...rows[1]!, metadata: { ...rows[1]!.metadata!, path: '/changed-workspace' } };
+        storage.setState(state => ({ sessionListRowsByServerId: { 'keyed-home': {
+            ...state.sessionListRowsByServerId['keyed-home'], [rows[1]!.id]: rows[1]!,
+        } } }));
+        const moved = buildSessionListReachabilitySummary(input);
+        expect(moved.displayById.get(rows[1]!.id)?.workspaceSubtitle).toBe('changed-workspace');
+        expect(derive).toHaveBeenCalledTimes(1);
     });
 
     it('keeps a foreign Home workspace instead of the hydrated same-ID Session project', async () => {
@@ -113,6 +145,44 @@ describe('buildSessionListReachabilitySummary', () => {
         expect(first.displayById).toBe(second.displayById);
         expect(first.displayById.size).toBe(0);
         expect(first.hasMultipleMachines).toBe(false);
+    });
+
+    it('retains other rows when one Machine display name changes', () => {
+        const rows = ['a', 'b'].map(id => buildSessionListRenderableFromSession(createSessionFixture({
+            id, serverId: 'display-home', metadata: { machineId: `machine-${id}`, path: `/repo-${id}`, host: `${id}.local` },
+        })));
+        const machines = rows.map(row => createMachineFixture({ id: row.metadata!.machineId!,
+            metadata: { ...createMachineFixture().metadata!, host: row.metadata!.host!, displayName: row.id } }));
+        const input = {
+            cache: createSessionListReachabilitySummaryCache(),
+            listItems: rows.map(row => ({ type: 'session' as const, serverId: 'display-home', sessionId: row.id })),
+            machinesById: new Map(machines.map(machine => [machine.id, machine])),
+            workspaceRefs: [],
+            resolveSessionRenderable: (item: { sessionId: string }) => rows.find(row => row.id === item.sessionId) ?? null,
+        };
+        const before = buildSessionListReachabilitySummary(input);
+        input.machinesById.set(machines[0]!.id, { ...machines[0]!,
+            metadata: { ...machines[0]!.metadata!, displayName: 'Changed machine' } });
+        const after = buildSessionListReachabilitySummary(input);
+        expect(after.displayById.get('a')?.machineLabel).toBe('Changed machine');
+        expect(after.displayById.get('b')).toBe(before.displayById.get('b'));
+    });
+
+    it('refreshes the Machine label when admitted metadata is withdrawn', () => {
+        const row = buildSessionListRenderableFromSession(createSessionFixture({ id: 'locked-row', serverId: 'display-home',
+            metadata: { machineId: 'machine-a', path: '/repo', host: 'a.local' } }));
+        const machine = createMachineFixture({ id: 'machine-a', metadata: { ...createMachineFixture().metadata!, host: 'a.local', displayName: 'Readable' } });
+        const input = {
+            cache: createSessionListReachabilitySummaryCache(),
+            listItems: [{ type: 'session' as const, serverId: 'display-home', sessionId: row.id }],
+            machinesById: new Map([[machine.id, machine]]), workspaceRefs: [], resolveSessionRenderable: () => row,
+        };
+        const before = buildSessionListReachabilitySummary(input);
+        const locked = { ...machine, availability: { kind: 'locked' as const, reason: 'encryption_material_unavailable' as const } };
+        input.machinesById.set(machine.id, locked);
+        const after = buildSessionListReachabilitySummary(input);
+        expect(after.displayById.get(row.id)?.machineLabel).toBe(t('machine.lockedMachine'));
+        expect(after).not.toBe(before);
     });
 
     it('reuses the same non-empty summary for identical inputs', () => {
@@ -223,7 +293,7 @@ describe('buildSessionListReachabilitySummary', () => {
                 : renderablesById[item.sessionId] ?? null,
         });
 
-        expect(second).not.toBe(first);
+        expect(second).toBe(first);
         expect(second.displayByKey.get(unchangedKey)).toBe(unchangedDisplay);
         expect(second.displayByKey.get(refreshedKey)).toMatchObject({
             machineId: 'machine-a',

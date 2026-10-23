@@ -101,9 +101,6 @@ vi.mock('@/components/ui/lists/Item', async () => {
         },
     };
 });
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useAppShellPluginUiProjection: () => ({ phase: 'unavailable', pluginUiProjection: null }),
-}));
 vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children) }));
 vi.mock('@/components/ui/icons/Icon', () => ({
     Icon: (props: any) => React.createElement('Icon', props),

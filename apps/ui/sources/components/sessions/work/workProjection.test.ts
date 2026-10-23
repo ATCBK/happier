@@ -102,6 +102,18 @@ function input(overrides: Partial<WorkProjectionInput>): WorkProjectionInput {
 }
 
 describe('projectWork', () => {
+    it('keeps an idle retained Run inspectable without counting it as outstanding work', () => {
+        const idle = agentEntry({ id: 'run:writer', kind: 'execution_run', status: 'running', runId: 'writer', isActive: false });
+        const settled = projectWork(input({ agentEntries: [idle] }));
+        expect(settled.backgroundRuns).toHaveLength(1);
+        expect(settled.backgroundRuns[0]?.status.bucket).toBe('idle');
+        expect(settled.summary).toMatchObject({ outstanding: 0, needsYou: 0, runs: 1 });
+        const busy = projectWork(input({ agentEntries: [{ ...idle, isActive: true }] }));
+        expect(busy.summary.outstanding).toBe(1);
+        const awaitingPerson = projectWork(input({ agentEntries: [{ ...idle, status: 'waiting' }] }));
+        expect(awaitingPerson.summary).toMatchObject({ outstanding: 1, needsYou: 1 });
+    });
+
     it.each([
         { active: false, latestTurnStatus: 'failed' as const, needsYou: 0, stalled: 0, outstanding: 0, group: 'recent' as const },
         { active: true, latestTurnStatus: 'failed' as const, needsYou: 1, stalled: 0, outstanding: 1, group: 'needsYou' as const },

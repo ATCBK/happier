@@ -77,6 +77,7 @@ export type ChatListProps = Readonly<{
     externalControlFooter?: ChatFooterExternalControlState;
     approvalRequests?: readonly OpenApprovalArtifactForSession[];
     jumpToSeq?: number | null;
+    jumpToMessageId?: string | null;
     followBottomIntentKey?: string | number | null;
     onJumpLanded?: (result: Extract<TranscriptJumpResult, { status: 'scrolled' | 'window-rendered' }>) => void;
     onViewportChange?: (state: TranscriptViewportChangeState) => void;
@@ -118,6 +119,7 @@ export type ChatListInternalProps = Readonly<{
     approvalRequests?: readonly OpenApprovalArtifactForSession[];
     interaction: TranscriptInteraction;
     jumpToSeq?: number | null;
+    jumpToMessageId?: string | null;
     followBottomIntentKey?: string | number | null;
     onJumpLanded?: (result: Extract<TranscriptJumpResult, { status: 'scrolled' | 'window-rendered' }>) => void;
     onViewportChange?: (state: TranscriptViewportChangeState) => void;

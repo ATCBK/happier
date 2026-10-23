@@ -10,7 +10,7 @@ import { usePathname } from '@/components/appShell/workspace/destinationRoute';
 import { EXTERNAL_SESSION_STATUS_DEMAND_MAX_ENTRIES_V1 } from '@happier-dev/protocol/sessions/external/statusDemandV1';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { resolveWorkflowRunParentSessionId } from '@/sync/domains/session/listing/nestSessionListReports';
-import { useWorkspaceRefs, useSetting, useSettingMutable, useMachineDisplayById, useProfile, useLocalSetting, useSessionListRowRenderablesForItems, useSessionOrganizationProjections } from '@/sync/domains/state/storage';
+import { useWorkspaceRefs, useSetting, useSettingMutable, useProfile, useLocalSetting, useSessionListRowRenderablesForItems, useSessionOrganizationProjections } from '@/sync/domains/state/storage';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { useSessionListSelectionState } from '@/hooks/session/useSessionListSelectionState';
@@ -695,8 +695,6 @@ export function useSessionListViewStateFromPaneState(
             ? sessionWorkspaceOrderV1 as Record<string, string[]>
             : {}
     ), [sessionWorkspaceOrderV1]);
-    const machineDisplayById = useMachineDisplayById();
-    const renderMachineDisplayById = machineDisplayById;
     const normalizedShellState = normalizeSessionListShellState({
         collapsedGroupKeys: collapsedGroupKeysV1,
         sessionTags: sessionTagsV1,
@@ -1142,7 +1140,6 @@ export function useSessionListViewStateFromPaneState(
     const renderModels = useSessionListRenderModels({
         paneState: renderPaneState,
         collapsedGroupKeys: normalizedShellState.collapsedGroupKeys,
-        machineDisplayById: renderMachineDisplayById,
         workspaceLabels: normalizedShellState.workspaceLabels,
         workspaceRefs: normalizedShellState.workspaceRefs,
         workspacePathDisplayModeV1,
@@ -2117,8 +2114,9 @@ export function useSessionListViewStateFromPaneState(
                     : 'avatar'}
                 draftScope={draftScope}
                 pinnedSessionKeys={orderingPersistenceState.pinnedKeySet}
-                reachableSessionDisplayById={renderModels.reachableSessionDisplayById}
-                reachableSessionDisplayByKey={renderModels.reachableSessionDisplayByKey}
+                reachableSessionDisplay={(item.serverId ? renderModels.reachableSessionDisplayByKey.get(
+                    audienceSessionAddressKey({ serverId: item.serverId, sessionId: item.sessionId }),
+                ) : undefined) ?? renderModels.reachableSessionDisplayById.get(item.sessionId)}
                 rowAttentionAnimationEnabled={rowAttentionAnimationEnabled}
                 selectedSessionId={selectedSessionId}
                 selectedSessionServerId={selectedSessionServerId}
