@@ -1031,7 +1031,7 @@ Optional plugin augmentation retains the notice above; an unavailable selected
 document remains pending. These source contracts require a rebuilt CLI
 closure and fresh runner for loaded-runtime verification.
 
-In current 0.3 development source, the daemon's [admission drain](../apps/cli/src/daemon/lifecycle/admissionDrain.ts) owns fresh-work quiescence. Temporary drain preserves accepted custody, native request-auth and daemon publications; reopening wakes the incumbent Automation claim loop and parked Workflow admission. Fresh turn and managed-process authorization remain closed during drain. Plugin handoff retains its own exclusion and publication custody. Final shutdown closes admission irreversibly and awaits the existing finite-operation owner's actual settlement before disposing native plugin leases, terminals or roots. Unconfirmed Stop retains that custody and keeps observation and explicit repeated Stop reachable; it does not prove settlement. Session-hosted Execution Runs ask that current daemon owner over the scoped control transport before creating a Run; an unavailable admission reply refuses the new start. Retained Run state stays with the [execution registry](../apps/cli/src/daemon/executionRunRegistry.ts), rather than becoming another drain decision or start registry. These source contracts are distinct from loaded-daemon certification.
+In current 0.3 development source, the daemon's [admission drain](../apps/cli/src/daemon/lifecycle/admissionDrain.ts) owns fresh-work quiescence. Temporary drain preserves accepted custody, native request-auth and daemon publications; reopening wakes the incumbent Automation claim loop and parked Workflow admission. Fresh turn and managed-process authorization remain closed during drain. An authorized opening or opened Session's fresh-work daemon-service request waits on that same drain under its request cancellation lifetime, then rechecks runner authority before dispatch. A reversible managed activity probe therefore cannot turn its overlap with a first turn into a terminal input refusal. No service effect enters before admission reopens. Plugin handoff retains its own exclusion and publication custody: fresh-work service requests wait for reopening, while refused publication ingress reports `daemon_draining`. Final shutdown uses `daemon_shutting_down`, including for a parked request. Final shutdown closes admission irreversibly and awaits the existing finite-operation owner's actual settlement before disposing native plugin leases, terminals or roots. Unconfirmed Stop retains that custody and keeps observation and explicit repeated Stop reachable; it does not prove settlement. Session-hosted Execution Runs ask that current daemon owner over the scoped control transport before creating a Run; an unavailable admission reply refuses the new start. Retained Run state stays with the [execution registry](../apps/cli/src/daemon/executionRunRegistry.ts), rather than becoming another drain decision or start registry. These source contracts are distinct from loaded-daemon certification.
 
 Finite Windows PTY work now consumes the existing [native process-custody owner](../apps/cli/src/subprocess/supervision/processCustody.ts), not ConPTY's root-exit notification as a descendant-settlement fact. Its finite helper mode assigns the actual target to the same Job before execution, retains the Job until positive kernel membership absence, and returns the recorded root exit code. Ordinary managed-service helper semantics remain separate and unchanged. Completion-port notifications may be lost; explicit Stop queries/terminates that same established Job and a positive zero-membership result wakes the retained helper. A Get/Wait or output EOF alone is not this recovery. Consumer, native-platform and loaded-runtime validation remain open in development source.
 
@@ -2084,15 +2084,20 @@ execution.
 
 Active Session RPC checks and CLI/MCP checks use the same exact daemon-owned
 attempt and resume-prompt mode. A failed daemon check cannot fall through to a
-competing provider-local recovery path; attempts without daemon ownership retain
-their existing local controls. Explicit ordinary user input goes through Pending
+competing provider-local recovery path; ordinary live attempts use the shared
+Session controller. Explicit ordinary user input goes through Pending
 rather than waking an automatic continuation during pre-admission revalidation;
 the dispatcher suppresses obsolete continuation when newer input is queued.
 Automatic continuation revalidates the current issue and recovery intent before
 admission. Cancellation, a replaced issue, newer user input
 and disabled automatic resume take precedence; the original interrupted input is
-never replayed. This development-source integration still requires composed
-loaded-runtime validation.
+never replayed. Readiness, account-switch and runtime-launch acknowledgements
+alone do not dismiss a usage-limit warning. Accepted Pending admission hands
+continuation custody to the existing queue and activation presentation; it does
+not prove provider quota recovery. Explicit cancellation or subsequent Agent
+activity can also end the wait presentation. A failed reset request releases its
+checking state for retry. This development-source integration
+still requires composed loaded-runtime validation.
 
 Protocol's `buildUsageLimitIssueFingerprint` owns issue identity across reporting,
 controls, and presentation. Runtime-auth classification captures the accepted
