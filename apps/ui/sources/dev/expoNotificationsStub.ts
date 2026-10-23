@@ -62,6 +62,10 @@ export async function getLastNotificationResponseAsync(): Promise<unknown> {
     return null;
 }
 
+export async function getPresentedNotificationsAsync(): Promise<[]> {
+    return [];
+}
+
 export async function setBadgeCountAsync(_count: number): Promise<boolean> {
     return true;
 }
@@ -75,5 +79,9 @@ export function addNotificationResponseReceivedListener(_listener: unknown) {
 }
 
 export async function dismissAllNotificationsAsync(): Promise<void> {
+    // no-op
+}
+
+export async function dismissNotificationAsync(_identifier: string): Promise<void> {
     // no-op
 }

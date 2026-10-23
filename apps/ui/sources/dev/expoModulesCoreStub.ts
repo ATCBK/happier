@@ -1,5 +1,6 @@
 import { createHash, getHashes } from 'node:crypto';
 import * as React from 'react';
+import type { NativeComposerInputHandle } from '@/components/ui/forms/nativeComposerInput';
 
 // Vitest runs in a Node environment; `expo-modules-core` is designed for Expo/Metro and
 // imports `react-native` (Flow) via its TS source entrypoint. For unit tests we only need
@@ -74,6 +75,24 @@ export function requireNativeModule<T = never>(moduleName: string): T {
 
 /** Native view registration is an OS boundary; renderer tests keep its public host props and ref. */
 export function requireNativeViewManager<P extends object>(moduleName: string): React.ComponentType<P> {
+    if (moduleName === 'HappierComposerInput') {
+        return React.forwardRef<NativeComposerInputHandle, P>((props, ref) => {
+            const hostRef = React.useRef<Partial<NativeComposerInputHandle> | null>(null);
+            // Expo adds the module's commands to the native view ref. Generic renderer
+            // node mocks supply only host methods; explicit native command doubles win.
+            React.useImperativeHandle(ref, () => ({
+                focus: () => undefined,
+                blur: () => undefined,
+                setTextAndSelection: () => undefined,
+                setSelection: () => undefined,
+                offsetAtPoint: async () => null,
+                setDropCaret: () => undefined,
+                measureInWindow: callback => callback(0, 0, 0, 0),
+                ...hostRef.current,
+            }));
+            return React.createElement(moduleName, { ...props, ref: hostRef });
+        }) as unknown as React.ComponentType<P>;
+    }
     return moduleName as unknown as React.ComponentType<P>;
 }
 
