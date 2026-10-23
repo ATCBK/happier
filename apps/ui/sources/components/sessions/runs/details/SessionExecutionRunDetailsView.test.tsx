@@ -16,6 +16,7 @@ import { SOCKET_RPC_EVENTS, SocketRpcRequestIdSchema } from '@happier-dev/protoc
 import { StopSessionResultSchema } from '@happier-dev/protocol/sessionStop';
 import { MachineReadBatchRequestV1Schema, MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import type { NormalizedMessage } from '@happier-dev/session-core/raw';
+import type { Message } from '@happier-dev/session-core/messages';
 
 import { createMachineFixture, createPendingMessageFixture, createSessionFixture, flattenTestStyle,
     renderScreen, standardCleanup } from '@/dev/testkit';
@@ -594,6 +595,24 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         expect(screen.getTextContent()).not.toContain('status.awaitingUpdates');
         expect(composer()).toHaveLength(0);
     });
+    it.each([false, true])('shows the person’s committed question in the Run transcript with a tool marker=%s', async (withMarker) => {
+        runState = liveRun();
+        if (withMarker) publishMarker();
+        getStorage().getState().applyMessages('s1', [{ id: 'run-question', localId: 'question-input', createdAt: 2, seq: 23,
+            role: 'user', isSidechain: false, content: { type: 'text', text: 'Why keep the selection?' },
+            meta: { happier: { kind: 'participant_message.v1', payload: { recipient: { kind: 'execution_run', runId: 'run_1' } } } },
+        }, { id: 'run-answer', localId: null, createdAt: 3, seq: 25, role: 'agent', isSidechain: true, sidechainId: 'toolu_1',
+            content: [{ type: 'text', text: 'It survives refresh.', uuid: 'answer-text', parentUUID: null }],
+        }]);
+        getStorage().getState().applyMessagesLoaded('s1');
+        await mount(); await loaded();
+        await vi.waitFor(() => {
+            const list = screen.findByType(ChainTranscriptList);
+            expect(list.props.messages.map((message: Message) => message.kind)).toEqual(['user-text', 'agent-text']);
+            expect(list.props.messages[0]).toMatchObject({ kind: 'user-text', localId: 'question-input', text: 'Why keep the selection?' });
+        });
+    });
+
     it('renders committed direct-start sidechain rows and the exact Run pending queue with one mounted composer', async () => {
         runState = liveRun();
         const child: NormalizedMessage = { id: 'sc-agent', localId: null, createdAt: 2, seq: 2, role: 'agent',

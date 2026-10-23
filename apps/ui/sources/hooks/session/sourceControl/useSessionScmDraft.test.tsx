@@ -10,6 +10,20 @@ const { useSessionScmDraft } = await import('./useSessionScmDraft');
 afterEach(async () => { standardCleanup(); await homes.reset(); });
 
 describe('mounted Session SCM drafts', () => {
+    it('publishes an admitted description result identity change while preserving equal draft projections', async () => {
+        const serverId = await homes.addHome({ name: 'Draft Home', serverUrl: 'https://scm-draft-identity.example.test', accountId: 'draft-account' });
+        const hook = await renderHook(() => useSessionScmDraft({ sessionId: 'draft-session', serverId }));
+        await act(async () => hook.getCurrent().setPullRequest({ title: '', body: '', draft: false, base: 'dev',
+            bodyDraft: { key: 'same-comparison', attempt: { bodyAtRequest: '', baselineResultId: null,
+                baselineRevision: null, started: true, resultId: 'admitted-description' }, candidate: null } }));
+        const previous = hook.getCurrent().draft;
+        await act(async () => hook.getCurrent().setPullRequest(current => current?.bodyDraft?.attempt ? { ...current,
+            bodyDraft: { ...current.bodyDraft, attempt: { ...current.bodyDraft.attempt } } } : current));
+        expect(hook.getCurrent().draft).toBe(previous);
+        await act(async () => hook.getCurrent().setPullRequest(current => current?.bodyDraft?.attempt ? { ...current,
+            bodyDraft: { ...current.bodyDraft, attempt: { ...current.bodyDraft.attempt, resultId: 'reconciled-description' } } } : current));
+        expect(hook.getCurrent().draft.pullRequest?.bodyDraft?.attempt?.resultId).toBe('reconciled-description');
+    });
     it('keeps the pending description and late arrival across placements without losing intervening text', async () => {
         const serverId = await homes.addHome({ name: 'Draft Home', serverUrl: 'https://scm-draft.example.test', accountId: 'draft-account' });
         const input = { sessionId: 'draft-session', serverId };

@@ -1,6 +1,7 @@
 import type { PersistedBackendTargetRefV2 } from '@happier-dev/protocol';
 import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
+import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 import { backendTargetKeysMatch } from '@/agents/backendCatalog/backendTargetKeyV2';
 import type { resolveSessionRoutePresentation } from '@/providers/session/resolveSessionRoutePresentation';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
@@ -48,6 +49,7 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
     machineAgents?: readonly MachineAgent[] | null;
     /** Applied parent selection for draft presentation only; host admission still resolves omission. */
     inheritedModelSelection?: ProviderBoundModelRef | null;
+    inheritedTeamCredentialModel?: TeamCredentialProviderModelSelectionV1 | null;
     inheritedRoutePresentation?: ReturnType<typeof resolveSessionRoutePresentation>;
     inheritedConnectedServicesSelection?: ConnectedServiceBindingsV2 | null;
 }>) {
@@ -254,7 +256,8 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
         initialBackendChoice,
         selectedBackendChoice,
         targetMatchesParent,
-        inheritedDraftSelection: inheritsModel ? params.inheritedModelSelection ?? null : null,
+        inheritedDraftSelection: inheritsModel && !params.inheritedTeamCredentialModel ? params.inheritedModelSelection ?? null : null,
+        inheritedDraftTeamCredentialModel: inheritsModel ? params.inheritedTeamCredentialModel ?? null : null,
         inheritedDraftRoutePresentation: inheritsRoute ? params.inheritedRoutePresentation ?? null : null,
         inheritedDraftConnectedServicesSelection: inheritsRoute ? params.inheritedConnectedServicesSelection ?? null : null,
         selectedBackendTargetKeys: selectedBackendChoices.map((choice) => choice.targetKey),

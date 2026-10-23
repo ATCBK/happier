@@ -44,6 +44,22 @@ describe('resolveExecutionRunRouteChoice', () => {
             });
     });
 
+    it('names an applied Team model without representing it as a native Provider tuple', () => {
+        const teamCredentialModel = { kind: 'team_credential_provider_model' as const,
+            teamId: 'team-a', resourceId: 'resource-a', expectedResourceRevision: 0,
+            deliveryMode: 'brokered' as const, agentTargetKey: AGENT, modelId: 'shared-model' };
+        const { kind: _kind, ...ref } = teamCredentialModel;
+        const teamPresentation = resolveSessionRoutePresentation({ phase: 'running', selection: null,
+            appliedSelection: { source: 'team_resource', ...ref },
+            native: { label: 'Native', authSource: 'native', connectedCount: 0 },
+            teamSources: [{ teamId: 'team-a', resourceId: 'resource-a', displayName: 'Coding pool · Engineering' }],
+        });
+        expect(resolveExecutionRunRouteChoice({ inherits: true, inheritedSelection: null,
+            inheritedTeamCredentialModel: teamCredentialModel, inheritedRoutePresentation: teamPresentation }))
+            .toEqual({ label: `${t('runPage.menu.selectionInherited')} · Coding pool · Engineering · shared-model`,
+                inheritDetail: 'Coding pool · Engineering · shared-model' });
+    });
+
     it('says the Run has its own choice, and still shows what inheriting would mean', () => {
         expect(resolveExecutionRunRouteChoice({ inherits: false, inheritedSelection: applied, inheritedRoutePresentation: presentation }))
             .toEqual({ label: t('runPage.menu.selectionExplicit'), inheritDetail: 'Main gateway · fable-5.1' });

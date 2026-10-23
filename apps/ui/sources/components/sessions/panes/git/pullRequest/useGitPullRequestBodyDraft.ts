@@ -55,22 +55,24 @@ export function useGitPullRequestBodyDraft(params: Readonly<{
     React.useEffect(() => {
         if (!attempt) return;
         const status = viewModel?.status;
-        const updated = viewModel && (viewModel.resultId !== attempt.baselineResultId || viewModel.revision !== attempt.baselineRevision);
-        if (attempt.started === null && !updated) return;
+        if (attempt.started === null) return;
         const settle = (next: Report | null, candidate: string | null = null) => {
-            setBodyDraft(previous => previous.attempt ? { ...previous, attempt: null, candidate } : previous);
+            setBodyDraft(previous => previous.attempt && previous.attempt.resultId === attempt.resultId ? { ...previous, attempt: null, candidate } : previous);
             setReport(next);
         };
-        if (bound.error) { settle({ failure: null, message: bound.error }); return; }
-        if (status === 'failed' || status === 'unknown') { settle({ failure: bound.generationFailure ?? SCM_DIFF_SUMMARY_GENERIC_FAILURE, message: null }); return; }
-        if (status === 'succeeded' && updated) {
+        if (!attempt.resultId) {
+            if (!attempt.started) settle({ failure: bound.generationFailure, message: bound.error ?? scmDiffSummaryPrerequisiteOf(bound) ?? t('walkthroughStart.unavailable') });
+            return;
+        }
+        if (viewModel?.resultId !== attempt.resultId) return;
+        if (status === 'failed') { settle({ failure: bound.generationFailure ?? SCM_DIFF_SUMMARY_GENERIC_FAILURE, message: null }); return; }
+        if (status === 'succeeded') {
             const text = viewModel?.suggestedPrBody ?? null;
             if (!text) { settle({ failure: SCM_DIFF_SUMMARY_GENERIC_FAILURE, message: null }); return; }
             scmDraft.setPullRequest(current => {
                 const pending = current?.bodyDraft;
                 if (!current || pending?.key !== key || !pending.attempt
-                    || pending.attempt.baselineResultId !== attempt.baselineResultId
-                    || pending.attempt.baselineRevision !== attempt.baselineRevision) return current;
+                    || pending.attempt.resultId !== attempt.resultId) return current;
                 const arrival = resolveGitPullRequestBodyArrival({ bodyAtRequest: pending.attempt.bodyAtRequest,
                     currentBody: current.body, candidate: text });
                 return { ...current, body: arrival === 'fill' ? text : current.body,
@@ -79,8 +81,6 @@ export function useGitPullRequestBodyDraft(params: Readonly<{
             setReport(null);
             return;
         }
-        // Started nothing and failed nothing: the host would not take the request.
-        if (!attempt.started && status !== 'starting' && status !== 'running') settle({ failure: null, message: scmDiffSummaryPrerequisiteOf(bound) ?? t('walkthroughStart.unavailable') });
     }, [attempt, viewModel, bound.error, setBodyDraft, key, scmDraft.setPullRequest]);
 
     const prerequisite = scmDiffSummaryPrerequisiteOf(bound);
@@ -102,23 +102,40 @@ export function useGitPullRequestBodyDraft(params: Readonly<{
             return { ...previous, candidate: null, attempt: { ...next, started: null } };
         });
         if (!admitted) return;
-        const started = await bound.onStart(['summary'], { pullRequestDraft: {} });
+        const response = await bound.onStart(['summary'], { pullRequestDraft: {} });
+        const resultId = response?.resultId ?? null;
+        const started = Boolean(response?.ok || resultId);
         // The request belongs to the Session draft even if its originating form unmounted.
         setBodyDraft(previous => previous.attempt?.started === null
             && previous.attempt.baselineResultId === next.baselineResultId && previous.attempt.baselineRevision === next.baselineRevision
-            && previous.attempt.bodyAtRequest === next.bodyAtRequest ? { ...previous, attempt: { ...next, started } } : previous);
+            && previous.attempt.bodyAtRequest === next.bodyAtRequest ? { ...previous, attempt: { ...next, started, resultId } } : previous);
     }, [bound, canDraft, comparison, drafting, viewModel?.resultId, viewModel?.revision, setBodyDraft]);
+
+    const admitted = Boolean(attempt?.resultId && viewModel?.resultId === attempt.resultId);
+    const runId = admitted ? viewModel?.executionRunId ?? null : null;
+    const checkAdmission = React.useCallback(() => bound.checkAdmission(attempt?.resultId ?? undefined), [bound.checkAdmission, attempt?.resultId]);
+    const cancel = React.useCallback(async () => {
+        if (!attempt?.resultId || !runId || !await bound.cancelGeneration()) return;
+        setBodyDraft(previous => previous.attempt?.resultId === attempt.resultId ? { ...previous, attempt: null } : previous);
+        setReport(null);
+    }, [attempt?.resultId, runId, bound.cancelGeneration, setBodyDraft]);
 
     return {
         drafting,
         canDraft,
+        admission: admitted ? bound.admission : null,
+        checkAdmission,
+        runId,
+        cancel: runId ? cancel : undefined,
         /** Why drafting cannot run right now (Machine away, no usable model), when it cannot. */
-        prerequisite: drafting ? null : prerequisite,
+        // The saved-read owner supplies loading/failure and Retry. An unreadable prerequisite
+        // is not evidence that the Machine is offline or that a different model is needed.
+        prerequisite: drafting || (!ready && bound.machineReachability !== 'unreachable') ? null : prerequisite,
         /** A saved draft of this comparison could not be looked up; asking again would risk a duplicate. */
         restoreFailed: !viewModel && bound.restoreState === 'unavailable',
         retryRestore: bound.retryRestore,
         failure: report?.failure ?? null,
-        message: report?.message ?? null,
+        message: report?.message ?? (drafting ? bound.error : null),
         /** A drafted description held beside a body the person had already written or changed. */
         candidate,
         draft,

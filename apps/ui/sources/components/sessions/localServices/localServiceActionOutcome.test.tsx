@@ -58,6 +58,14 @@ describe('readLocalServiceActionOutcome', () => {
         expect(readLocalServiceActionOutcome(new RpcError('private transport detail', RPC_ERROR_CODES.FORBIDDEN)))
             .toEqual({ kind: 'failed', reasonCode: RPC_ERROR_CODES.FORBIDDEN });
     });
+    it('retains only a code-shaped Browser refusal detail, never arbitrary transport prose', () => {
+        expect(readLocalServiceActionOutcome({ ok: false, errorCode: 'runtime_action_disabled',
+            error: 'runtime_action_disabled:browser:browser_adapter_unavailable' }))
+            .toEqual({ kind: 'failed', reasonCode: 'browser_adapter_unavailable' });
+        expect(readLocalServiceActionOutcome({ ok: false, errorCode: 'runtime_action_disabled',
+            error: 'runtime_action_disabled:browser:private transport detail' }))
+            .toEqual({ kind: 'failed', reasonCode: 'runtime_action_disabled' });
+    });
     it('keeps a real Ask-first receipt pending rather than reporting a successful mutation', () => {
         const receipt = ActionApprovalRequestCreatedResultSchema.parse({ kind: 'approval_request_created',
             artifactId: 'service-approval', actionId: 'localServices.launcher.start' });

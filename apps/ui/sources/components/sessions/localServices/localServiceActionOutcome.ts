@@ -58,6 +58,8 @@ export function readLocalServiceActionFailureReason(result: unknown): string | n
     if (code === 'runtime_action_disabled' && typeof record?.error === 'string') {
         const prefix = 'runtime_action_disabled:localServices:';
         if (record.error.startsWith(prefix)) return readNonEmptyString(record.error.slice(prefix.length)) ?? code;
+        const browserReason = /^runtime_action_disabled:browser:([a-z][a-z0-9_]*)$/u.exec(record.error);
+        if (browserReason) return browserReason[1];
     }
     return code;
 }

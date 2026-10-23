@@ -1,21 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { ScmComparisonSchema, ScmDiffSummaryResultSchema, type ScmDiffSummaryOutputKind } from '@happier-dev/protocol/scm';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 const boundary = vi.hoisted(() => ({ inventory: null as unknown, results: {} as Record<string, unknown>, reads: [] as string[], methods: [] as string[],
-    draft: null as (() => Promise<unknown>) | null }));
+    draft: null as (() => Promise<unknown>) | null, stopped: [] as string[], stopResult: { ok: true } as unknown }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
-// Only authenticated Machine RPC leaves the process; restoration and result state stay real.
+// Authenticated Machine/Session RPCs are external boundaries; restoration and result state stay real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
     const rpc = async (request: { method: string; payload: unknown }) => {
         boundary.methods.push(request.method);
+        if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
+            'tool.executionRuns': { ok: true, checkedAt: 1, data: { backends: { codex: { available: true, intents: ['scm_diff_summary'] } } } },
+        } };
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_DRAFT_PULL_REQUEST && boundary.draft) return boundary.draft();
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST) return boundary.inventory;
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ) {
@@ -27,11 +30,25 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     };
     return createServerScopedMachineRpcBoundaryMock(rpc as typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope);
 });
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', async importOriginal => {
+    const { createServerScopedSessionRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    const rpc = async <R,>(request: { method: string; payload: unknown }): Promise<R> => {
+        if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) return { runs: [] } as R;
+        if (request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) {
+            boundary.stopped.push((request.payload as { runId: string }).runId);
+            return boundary.stopResult as R;
+        }
+        return { ok: false, error: 'Run observation unavailable', errorCode: 'execution_run_not_found' } as R;
+    };
+    return createServerScopedSessionRpcModuleMock({ importOriginal, overrides: { sessionRpcWithServerScope: rpc, sessionRpcWithServerAccountScope: rpc } });
+});
 const { renderHook, standardCleanup, createSessionFixture, createMachineFixture, createDeferred } = await import('@/dev/testkit');
 const { getStorage } = await import('@/sync/domains/state/storage');
 await import('@/sync/syncEngine');
 const { useSessionScmWalkthrough, useScmWalkthroughState } = await import('./useSessionScmWalkthrough');
 const { useScmDiffSummaryBinding } = await import('../comparison/useScmDiffSummaryBinding');
+const { useSessionScmDraft } = await import('@/hooks/session/sourceControl/useSessionScmDraft');
+const { useGitPullRequestBodyDraft } = await import('@/components/sessions/panes/git/pullRequest/useGitPullRequestBodyDraft');
 const { useMachinePresenceSummary } = await import('@/components/sessions/model/useMachinePresenceSummary');
 const { retireScmDiffSummaryScope, getScmDiffSummaryState } = await import('@/sync/ops/scmDiffSummary/generate');
 let serverId: string;
@@ -50,7 +67,7 @@ function saved(resultId: string, outputs: unknown, requestedOutputs: ScmDiffSumm
 function inventory(results: ReturnType<typeof saved>[], sessionScoped = true) {
     boundary.results = Object.fromEntries(results.map(result => [result.resultId, { success: true, result }]));
     boundary.inventory = { success: true, results: results.map((result, index) => ({ cwd: '/repo/exact', ...(sessionScoped ? { sessionId } : {}),
-        resultId: result.resultId, revision: result.revision, comparisonId: comparison.id, source: comparison.source,
+        resultId: result.resultId, revision: result.revision, comparisonId: result.output.comparison!.id, source: result.output.comparison!.source,
         bytes: 1, updatedAtMs: results.length - index })), count: results.length, bytes: results.length,
         sevenDayCost: { status: 'unavailable', pricedRunCount: 0, unpricedRunCount: 0, sinceMs: 0, untilMs: results.length } };
 }
@@ -58,6 +75,8 @@ beforeEach(async () => {
     boundary.reads = [];
     boundary.methods = [];
     boundary.draft = null;
+    boundary.stopped = [];
+    boundary.stopResult = { ok: true };
     installHomeGovernanceBoundaries(homes);
     serverId = await homes.addHome({ name: 'Restore', serverUrl: 'https://restore.example.test', accountId });
     const machine = createMachineFixture({ id: 'restore-machine', activeAt: Date.now() });
@@ -72,6 +91,113 @@ afterEach(async () => {
 });
 
 describe('saved output restoration', () => {
+    it('exposes a failed PR saved-result read with Retry instead of a machine/model prerequisite', async () => {
+        await (await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage')).prepareSessionDraftPersistenceStorage();
+        boundary.inventory = { success: false, errorCode: 'BACKEND_UNAVAILABLE', error: 'Read unavailable' };
+        const form = await renderHook(() => useGitPullRequestBodyDraft({ sessionId, serverId, head: 'feature', base: 'main', body: '', setBody: () => {} }));
+        await vi.waitFor(() => expect(form.getCurrent().restoreFailed).toBe(true));
+        expect(form.getCurrent()).toMatchObject({ canDraft: false, prerequisite: null });
+        inventory([]);
+        await act(async () => form.getCurrent().retryRestore());
+        await vi.waitFor(() => expect(form.getCurrent().restoreFailed).toBe(false));
+        expect(boundary.methods).not.toContain(RPC_METHODS.SCM_DIFF_SUMMARY_DRAFT_PULL_REQUEST);
+    });
+
+    const draftComparison = ScmComparisonSchema.parse({ ...comparison, source: { kind: 'branch', head: 'feature', base: 'main' } });
+    function draftResult(resultId: string, complete = false, unknown = false) {
+        const original = saved(resultId, { summary: complete
+            ? { state: 'complete', value: { summaryMarkdown: 'Changes', suggestedPrBody: 'Admitted description' } }
+            : { state: 'pending' } }, ['summary']);
+        return ScmDiffSummaryResultSchema.parse({ ...original, output: {
+            ...original.output,
+            comparison: draftComparison, metadata: { sourceKey: comparison.id, source: draftComparison.source },
+            ...(unknown ? { admission: 'outcomeUnknown' } : { runId: 'draft-run' }),
+        } });
+    }
+    async function mountPendingDraft(resultId: string | null) {
+        await (await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage')).prepareSessionDraftPersistenceStorage();
+        const owner = await renderHook(() => useSessionScmDraft({ sessionId, serverId }));
+        const key = JSON.stringify(['restore-machine', '/repo/exact', 'feature', 'main']);
+        await act(async () => owner.getCurrent().setPullRequest({ title: 'Changes', body: '', draft: false, base: 'main',
+            bodyDraft: { key, attempt: resultId ? { bodyAtRequest: '', baselineResultId: null, baselineRevision: null, started: true, resultId } : null, candidate: null } }));
+        const form = await renderHook(() => useGitPullRequestBodyDraft({ sessionId, serverId, head: 'feature', base: 'main', body: '', setBody: () => {} }));
+        return { owner, form };
+    }
+    it('keeps an unknown PR draft pending and rereads its exact receipt to apply once without another Start', async () => {
+        const uncertain = draftResult('draft-uncertain', false, true);
+        inventory([draftResult('before-draft', true)]);
+        getStorage().setState({ settings: { ...getStorage().getState().settings, experiments: true, featureToggles: { 'execution.runs': true } } });
+        (await import('@/dev/testkit/harness/machinePresence')).observeMachinePresenceForTest({ serverId, accountId }, ['restore-machine']);
+        const response = createDeferred<unknown>();
+        boundary.draft = () => response.promise;
+        const mounted = await mountPendingDraft(null);
+        const { owner } = mounted;
+        await vi.waitFor(() => expect(mounted.form.getCurrent().canDraft, mounted.form.getCurrent().prerequisite ?? undefined).toBe(true));
+        let pending: Promise<void> | undefined;
+        await act(async () => { pending = mounted.form.getCurrent().draft(); });
+        await vi.waitFor(() => expect(boundary.methods).toContain(RPC_METHODS.SCM_DIFF_SUMMARY_DRAFT_PULL_REQUEST));
+        await mounted.form.unmount();
+        const form = await renderHook(() => useGitPullRequestBodyDraft({ sessionId, serverId, head: 'feature', base: 'main', body: '', setBody: () => {} }));
+        boundary.results[uncertain.resultId] = { success: true, result: uncertain };
+        await act(async () => { response.resolve(uncertain.output); await pending; });
+        expect(owner.getCurrent().draft.pullRequest?.bodyDraft?.attempt).toMatchObject({ resultId: uncertain.resultId });
+        expect(form.getCurrent().admission).toBe('outcomeUnknown');
+        expect(form.getCurrent()).toMatchObject({ drafting: true, canDraft: false, failure: null, runId: null });
+        await act(async () => { await form.getCurrent().draft(); });
+        expect(boundary.methods.filter(method => method === RPC_METHODS.SCM_DIFF_SUMMARY_DRAFT_PULL_REQUEST)).toHaveLength(1);
+        const complete = draftResult(uncertain.resultId, true);
+        boundary.results[uncertain.resultId] = { success: true, result: complete };
+        boundary.methods = [];
+        await act(async () => { await form.getCurrent().checkAdmission(); });
+        await vi.waitFor(() => expect(owner.getCurrent().draft.pullRequest?.body).toBe('Admitted description'));
+        expect(form.getCurrent().drafting).toBe(false);
+        await act(async () => owner.getCurrent().setPullRequest(current => current ? { ...current, body: 'My later edit' } : current));
+        await act(async () => { await form.getCurrent().checkAdmission(); });
+        expect(owner.getCurrent().draft.pullRequest?.body).toBe('My later edit');
+        expect(boundary.methods.every(method => method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ)).toBe(true);
+    });
+    it('ignores an unrelated restored result and checks the admitted PR draft identity', async () => {
+        inventory([draftResult('unrelated-summary', true)]);
+        boundary.results['admitted-draft'] = { success: true, result: draftResult('admitted-draft', false, true) };
+        const { owner, form } = await mountPendingDraft('admitted-draft');
+        await vi.waitFor(() => expect(boundary.reads).toContain('unrelated-summary'));
+        expect(owner.getCurrent().draft.pullRequest?.body).toBe('');
+        expect(owner.getCurrent().draft.pullRequest?.bodyDraft?.attempt).not.toBeNull();
+        boundary.reads = [];
+        await act(async () => { await form.getCurrent().checkAdmission(); });
+        expect(boundary.reads).toContain('admitted-draft');
+        expect(owner.getCurrent().draft.pullRequest?.body).toBe('');
+    });
+    it('cancels the admitted PR Run through the shared stop owner and clears only its pending attempt', async () => {
+        inventory([draftResult('draft-to-cancel')]);
+        const { owner, form } = await mountPendingDraft('draft-to-cancel');
+        await vi.waitFor(() => expect(boundary.reads).toContain('draft-to-cancel'));
+        expect(form.getCurrent().runId).toBe('draft-run');
+        await act(async () => owner.getCurrent().setPullRequest(current => current?.bodyDraft ? { ...current, body: 'Keep my notes',
+            bodyDraft: { ...current.bodyDraft, candidate: 'Earlier candidate' } } : current));
+        const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
+        const settings = getStorage().getState().settings;
+        const setStopPolicy = (enabled: boolean) => {
+            const next = { ...settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                actions: { 'execution.run.stop': { enabled } } }) };
+            getStorage().setState({ settings: next });
+            homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: next }, version: enabled ? 3 : 2 } });
+        };
+        await act(async () => setStopPolicy(false));
+        await act(async () => { await form.getCurrent().cancel!(); });
+        expect(boundary.stopped).toEqual([]);
+        expect(form.getCurrent().drafting).toBe(true);
+        await act(async () => setStopPolicy(true));
+        boundary.stopResult = { ok: false, error: 'Stop refused', errorCode: 'execution_run_stop_failed' };
+        await act(async () => { await form.getCurrent().cancel!(); });
+        expect(form.getCurrent()).toMatchObject({ drafting: true, canDraft: false });
+        boundary.stopResult = { ok: true };
+        await act(async () => { await form.getCurrent().cancel!(); });
+        expect(boundary.stopped).toEqual(['draft-run', 'draft-run']);
+        expect(form.getCurrent().drafting).toBe(false);
+        expect(owner.getCurrent().draft.pullRequest?.body).toBe('Keep my notes');
+        expect(owner.getCurrent().draft.pullRequest?.bodyDraft?.candidate).toBe('Earlier candidate');
+    });
     it.each([false, true])('retains a PR draft acknowledgement across remount only while its Account is current (retired: %s)', async retired => {
         const original = saved('before-description', { summary: { state: 'complete', value: {
             summaryMarkdown: 'Previous summary', suggestedPrBody: 'Previous description',
@@ -85,7 +211,7 @@ describe('saved output restoration', () => {
             comparison: { kind: 'workingTree' }, output: 'summary' }));
         const sidebar = await mount();
         await vi.waitFor(() => expect(sidebar.getCurrent().viewModel?.resultId).toBe(original.resultId));
-        let pending: Promise<boolean> | undefined;
+        let pending: ReturnType<ReturnType<typeof useScmDiffSummaryBinding>['onStart']> | undefined;
         await act(async () => { pending = sidebar.getCurrent().onStart(['summary'], { pullRequestDraft: {} }); });
         await vi.waitFor(() => expect(boundary.methods).toContain(RPC_METHODS.SCM_DIFF_SUMMARY_DRAFT_PULL_REQUEST));
         await sidebar.unmount();
@@ -98,11 +224,13 @@ describe('saved output restoration', () => {
             summaryMarkdown: 'New summary', suggestedPrBody: 'New description',
         } } }, ['summary']);
         if (!retired) inventory([arrived]);
-        await act(async () => { request.resolve(arrived.output); await pending; });
+        let acknowledged: unknown;
+        await act(async () => { request.resolve(arrived.output); acknowledged = await pending; });
         if (retired) {
             expect(details.getCurrent().viewModel).toBeNull();
             expect(Object.values(getScmDiffSummaryState().entriesByKey).some(entry => entry.latestOutput?.resultId === arrived.resultId)).toBe(false);
         } else {
+            expect(acknowledged).toMatchObject({ ok: true, resultId: arrived.resultId, viewModel: { resultId: arrived.resultId } });
             await vi.waitFor(() => expect(details.getCurrent().viewModel).toMatchObject({
                 status: 'succeeded', resultId: arrived.resultId, suggestedPrBody: 'New description',
             }));

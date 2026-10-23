@@ -826,45 +826,39 @@ function readAttachmentTypeLabel(
 }
 
 function createAttachmentAuthorityResolver(input: ComposerPresentationAttachmentComposition): ComposerPresentationAttachmentAuthorityResolver {
-    const authoritiesByQualifiedId = new Map<string, ComposerPresentationAttachmentAuthority>();
-    for (const [mapKey, entry] of Object.entries(input.composerAttachmentsById)) {
+    // A transaction admits one current composition before any asynchronous
+    // media custody work. Address only the declarations its operations use.
+    const composerAttachmentsById = input.composerAttachmentsById;
+    const localize = input.localize;
+    return ({ attachmentLocalId, admittedContributor }) => {
+        if (!admittedContributor) return null;
+        const qualifiedId = buildQualifiedPluginContributionKey({
+            pluginId: admittedContributor.identity.pluginId,
+            localId: attachmentLocalId,
+        });
+        const entry = composerAttachmentsById[qualifiedId];
+        if (!entry) return null;
         const identity = entry.identity;
-        const qualifiedId = buildQualifiedPluginContributionKey(identity);
-        const typeLabel = readAttachmentTypeLabel(entry, input.localize);
+        const typeLabel = readAttachmentTypeLabel(entry, localize);
         if (
-            mapKey !== entry.id
-            || entry.id !== qualifiedId
+            entry.id !== qualifiedId
+            || buildQualifiedPluginContributionKey(identity) !== qualifiedId
             || entry.pluginId !== identity.pluginId
             || entry.definition.id !== identity.localId
             || typeof entry.occurrenceId !== 'string'
             || entry.occurrenceId.trim().length === 0
             || !typeLabel
+            || entry.occurrenceId !== admittedContributor.occurrenceId
         ) {
-            continue;
+            return null;
         }
-        authoritiesByQualifiedId.set(qualifiedId, Object.freeze({
+        return Object.freeze({
             identity: Object.freeze({ ...identity }),
             occurrenceId: entry.occurrenceId,
             typeLabel,
             cardinality: entry.definition.cardinality,
             valueValidator: entry.valueValidator,
-        }));
-    }
-
-    return ({ attachmentLocalId, admittedContributor }) => {
-        if (!admittedContributor) return null;
-        const authority = authoritiesByQualifiedId.get(buildQualifiedPluginContributionKey({
-            pluginId: admittedContributor.identity.pluginId,
-            localId: attachmentLocalId,
-        }));
-        if (
-            !authority
-            || authority.identity.pluginId !== admittedContributor.identity.pluginId
-            || authority.occurrenceId !== admittedContributor.occurrenceId
-        ) {
-            return null;
-        }
-        return authority;
+        });
     };
 }
 
@@ -1526,7 +1520,7 @@ async function applyComposerPresentationTransactionWithAttachmentCustody(input: 
 /**
  * Creates the one attachment-capable document applier for a mounted Composer
  * composition. The composition owner supplies its current daemon-admitted
- * attachment projection once; individual control calls carry only their own
+ * attachment projection at admission; individual control calls carry only their own
  * exact admitted contributor and an intact transaction.
  */
 export function createComposerPresentationTransactionApplier(input: Readonly<{
@@ -1546,7 +1540,6 @@ export function createComposerPresentationTransactionApplier(input: Readonly<{
      */
     localize?: PluginLocalizedTextResolver;
 }>): ComposerPresentationTransactionApplier {
-    const attachmentAuthorityResolver = createAttachmentAuthorityResolver(input);
     const address = input.sessionAddress
         ? normalizeSessionAddress(input.sessionAddress.serverId, input.sessionAddress.sessionId)
         : null;
@@ -1584,7 +1577,7 @@ export function createComposerPresentationTransactionApplier(input: Readonly<{
             const exactOwner = resolveExactOwner(request.ref);
             return applyComposerPresentationTransactionAtOwner({
                 request,
-                attachmentAuthorityResolver,
+                attachmentAuthorityResolver: createAttachmentAuthorityResolver(input),
                 admittedContributor: request.admittedContributor,
                 ...(request.executionTarget ? { executionTarget: request.executionTarget } : {}),
                 ...(exactOwner === undefined
@@ -1599,7 +1592,7 @@ export function createComposerPresentationTransactionApplier(input: Readonly<{
             const exactOwner = resolveExactOwner(request.ref);
             return applyComposerPresentationTransactionWithAttachmentCustody({
                 request,
-                attachmentAuthorityResolver,
+                attachmentAuthorityResolver: createAttachmentAuthorityResolver(input),
                 admittedContributor: request.admittedContributor,
                 ...(request.executionTarget ? { executionTarget: request.executionTarget } : {}),
                 ...(request.signal ? { signal: request.signal } : {}),
@@ -1613,7 +1606,7 @@ export function createComposerPresentationTransactionApplier(input: Readonly<{
             });
         },
         resolveAttachmentIdentity: (request) => (
-            attachmentAuthorityResolver(request)?.identity ?? null
+            createAttachmentAuthorityResolver(input)(request)?.identity ?? null
         ),
     });
 }

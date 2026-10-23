@@ -365,6 +365,23 @@ describe('SessionAuthoringControls', () => {
     account = undefined;
   });
 
+  it('names the input that supplies the participant instead of an unchosen Agent', async () => {
+    const { useSessionAuthoringEngineSummary } =
+      await import('./SessionAuthoringControls');
+    let summary = '';
+    function Host() {
+      summary = useSessionAuthoringEngineSummary({
+        values: {},
+        engine: { kind: 'input', name: 'participant_1' },
+      });
+      return null;
+    }
+    const screen = await renderScreen(<Host />);
+    expect(summary).not.toBe('agentInput.agent.unselected');
+    expect(summary).toBe('workflows.page.blocks.fromInput');
+    await screen.unmount();
+  });
+
   it("names the agent alone while it uses the CLI's own model (DESIGN-13 card footer)", async () => {
     const { useSessionAuthoringEngineSummary } =
       await import('./SessionAuthoringControls');

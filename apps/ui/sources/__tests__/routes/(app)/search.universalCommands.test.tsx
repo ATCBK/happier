@@ -61,7 +61,7 @@ describe('/search Universal Search command context', () => {
         expect(buildCommands).toHaveBeenCalledWith('captured-session', expect.objectContaining({
             sessionId: 'captured-session',
             serverId: 'home-a',
-        }));
+        }), undefined);
         expect(harness.controllerProps?.commands).toEqual(expect.arrayContaining([
             expect.objectContaining({ id: 'session-only-command' }),
         ]));

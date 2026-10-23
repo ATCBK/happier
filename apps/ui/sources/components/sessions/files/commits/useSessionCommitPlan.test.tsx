@@ -340,7 +340,7 @@ describe('exact workspace commit plans', () => {
         await vi.waitFor(() => expect(latest.current?.binding.launch.canLaunchExecutionRuns).toBe(true));
         await act(async () => { await latest.current!.binding.onStart(['commitPlan']); });
         await vi.waitFor(() => expect(latest.current?.binding.viewModel?.savedResult?.resultId).toBe(saved.resultId));
-        let start!: Promise<boolean>;
+        let start!: ReturnType<ReturnType<typeof useSessionCommitPlan>['binding']['onStart']>;
         await act(async () => { start = latest.current!.binding.onStart(['commitPlan']); });
         await vi.waitFor(() => expect(generations).toBe(2));
         expect(latest.current?.binding.viewModel?.status, proposalDiagnostic(latest.current)).toBe('starting');
@@ -386,7 +386,7 @@ describe('exact workspace commit plans', () => {
         await vi.waitFor(() => expect(latest.current?.binding.modelAvailable, proposalDiagnostic(latest.current)).toBe(true));
         await vi.waitFor(() => expect(latest.current?.binding.launch.canLaunchExecutionRuns).toBe(true));
         expect(latest.current?.phase).toBe('none');
-        let start!: Promise<boolean>;
+        let start!: ReturnType<ReturnType<typeof useSessionCommitPlan>['binding']['onStart']>;
         await act(async () => { start = latest.current!.binding.onStart(['commitPlan']); });
         await vi.waitFor(() => expect(boundary.requests.some(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE)).toBe(true));
         expect(latest.current?.binding.viewModel?.status, proposalDiagnostic(latest.current)).toBe('starting');

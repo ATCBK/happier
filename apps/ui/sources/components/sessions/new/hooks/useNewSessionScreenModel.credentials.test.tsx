@@ -42,11 +42,15 @@ import { readAccountAgentProviderRequirements } from '@/providers/catalog/accoun
 import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture } from '@/dev/testkit/harness/providerSettingsHarness';
 import { resolveProviderBindingCompatibilityWithFingerprintV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import { ProviderContributionV1Schema } from '@happier-dev/protocol/providers/contributions';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { resolveActiveSuggestionsHandler } from '@/components/autocomplete/useActiveSuggestions';
 import { LMSTUDIO_PROVIDER_CONTRIBUTION } from '../../../../../../../packages/plugins/lmstudio/src/provider/contribution';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { randomUUID } from '@/platform/randomUUID';
+import { observeMachinePresenceForTest } from '@/dev/testkit/harness/machinePresence';
+import { createManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
+import { resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -55,6 +59,7 @@ vi.mock('socket.io-client', async (importOriginal) => (
 // Only platform/navigation, secure storage, HTTP, Socket.IO and machine RPC
 // boundaries are replaced. The complete launcher and all domain owners stay real.
 const authoringRoute = vi.hoisted(() => ({
+    machineId: 'credential-devbox' as string | undefined,
     agentType: 'claude' as string | undefined,
     directory: '/repo' as string | undefined,
     backendTarget: undefined as string | undefined,
@@ -62,7 +67,7 @@ const authoringRoute = vi.hoisted(() => ({
 }));
 installNewSessionScreenModelCommonModuleMocks({ storage: async (importOriginal) => importOriginal(),
     text: async () => vi.importActual<typeof import('@/text')>('@/text'),
-    routerConfig: { pathname: '/new', params: () => ({ machineId: 'credential-devbox', prompt: 'hello', ...authoringRoute }) } });
+    routerConfig: { pathname: '/new', params: () => ({ prompt: 'hello', ...authoringRoute }) } });
 installDisconnectedServerSocketBoundary();
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc }));
@@ -102,7 +107,7 @@ function nativeFacts(status: 'signedIn' | 'signedOut') {
 
 afterEach(async () => { await standardCleanup(); await mountedConnection?.dispose(); mountedConnection = null;
     mountedBridge?.dispose(); mountedBridge = null;
-    rpc.mockReset(); storage.setState(initialState, true); authoringRoute.directory = '/repo'; });
+    rpc.mockReset(); storage.setState(initialState, true); authoringRoute.directory = '/repo'; authoringRoute.machineId = 'credential-devbox'; });
 
 describe('New Session selected credential launch gate', () => {
     it('does not probe native suggestions after inherited purpose authority withdraws', async () => {
@@ -565,6 +570,8 @@ describe('New Session ACP catalog authority and retained authoring', () => {
         seedDraft?: boolean;
         rememberedProfile?: 'missing' | 'available';
         definitionInventory?: boolean;
+        includeCodex?: boolean;
+        serverIdentityId?: string;
     }>) {
         await prepareSessionDraftPersistenceStorage();
         mountedBridge = await loadSyncSingletonForTests();
@@ -614,6 +621,7 @@ describe('New Session ACP catalog authority and retained authoring', () => {
             complete: true, nextCursor: null, referenceGuardRevision: 1, transferControl: transfer, diagnostics: [],
         });
         const connection = await restoreServerAccountForTest({ serverUrl: `https://${accountId}.test`, accountId,
+            serverIdentityId: input.serverIdentityId,
             request: async (request, init) => {
                 const memoryResponse = await authoringMemory.handle(request, init);
                 if (memoryResponse) return memoryResponse;
@@ -635,16 +643,20 @@ describe('New Session ACP catalog authority and retained authoring', () => {
                 return http.request(request, init);
             } });
         mountedConnection = connection;
-        const scope = { serverId: connection.home.id, accountId };
+        const scope = { serverId: resolveServerProfileScopeId(connection.home), accountId };
         storage.setState({ settingsScope: scope, profileScope: scope, profile: AccountProfileSchema.parse({ id: accountId }),
             settings: { ...settingsDefaults, useEnhancedSessionWizard: false, useProfiles: Boolean(input.profile || input.rememberedProfile),
                 lastUsedAgent: 'claude', lastUsedBackendTarget: input.target } });
         const machine = createMachineFixture({ id: 'credential-devbox', activeAt: Date.now() });
         storage.getState().applyMachines([machine], false, { sourceServerId: scope.serverId });
+        observeMachinePresenceForTest(scope, [machine.id]);
         const agentCapabilities = { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } };
         const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {
             claude: { id: 'claude', identity: { pluginId: 'happier.agent.claude', localId: 'claude' }, isBuiltIn: true,
                 title: 'Claude', capabilities: agentCapabilities },
+            ...(input.includeCodex ? { codex: { id: 'codex',
+                identity: { pluginId: 'happier.agent.codex', localId: 'codex' }, isBuiltIn: true,
+                title: 'Codex', capabilities: agentCapabilities } } : {}),
             kiro: { id: 'kiro', identity: { pluginId: 'happier.agent.kiro', localId: 'kiro' }, isBuiltIn: true,
                 title: 'Kiro', capabilities: agentCapabilities },
             'acme.review/provider': { id: 'acme.review/provider', identity: pluginTarget.identity,
@@ -694,7 +706,7 @@ describe('New Session ACP catalog authority and retained authoring', () => {
             selectedProfileId: input.profile ? profileId : null, selectedSecretId: null,
             permissionMode: 'default', updatedAt: 1 } });
         return {
-            scope, draftId, profileId,
+            scope, draftId, profileId, home: connection.home,
             async refreshDefinitions(selected: 'kiro' | 'review', status: 'signedOut' | 'missing') {
                 acpRecord.definitions.reverse();
                 definitionFacts = acpRecord.definitions.map(definition => MachineAgentInventoryItemSchema.parse({
@@ -724,6 +736,39 @@ describe('New Session ACP catalog authority and retained authoring', () => {
             },
         };
     }
+
+    it('recovers a managed draft and its authored folder through a local Home profile alias', async () => {
+        const fixture = await restoreCatalogAuthoringFixture({ name: 'managed-home-alias', target: bundledTarget,
+            seedDraft: false, serverIdentityId: 'srv_managed_draft_recovery' });
+        authoringRoute.machineId = undefined;
+        authoringRoute.directory = undefined;
+        const managedMachineSelection = createManagedMachineSelectionDraft({
+            selection: { kind: 'preset', homeId: fixture.scope.serverId, id: 'reviewed-preset', revision: 3 },
+            receipt: { launch: { provider: { pluginId: 'happier.machine.lima', localId: 'lima' }, schemaVersion: 1,
+                name: 'Guest', choices: {} },
+                controller: { machineId: 'credential-devbox', installationId: 'installation' }, optionStatus: 'current',
+                prerequisites: [], billing: { location: 'local', stoppedBilling: 'not-billed' },
+                retentionCapabilities: { supportedIntents: ['start', 'stop', 'delete'] },
+                retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false },
+        });
+        const managedMachineAcquisition = { requestId: 'retained-acquire', selection: managedMachineSelection.selection };
+        writeNewSessionDraftToRepository({ ...fixture, draft: {
+            input: 'retained prompt', targetServerId: fixture.home.id, selectedMachineId: null, selectedPath: '/authored/retained',
+            agentType: 'claude', backendTarget: bundledTarget, acpSessionModeId: null, selectedProfileId: null, selectedSecretId: null,
+            permissionMode: 'default', updatedAt: 1, managedMachineSelection, managedMachineAcquisition,
+        } });
+        expect(fixture.home.id).not.toBe(fixture.scope.serverId);
+        const hook = await renderHook(() => useNewSessionScreenModel({ draftId: fixture.draftId }));
+        try {
+            await vi.waitFor(() => {
+                const model = hook.getCurrent();
+                expect(model.managedMachineDraft?.selection).toEqual(managedMachineSelection);
+                expect(model.managedMachineDraft?.acquisition).toEqual(managedMachineAcquisition);
+                if (model.variant !== 'simple') throw new Error('Expected real simple launcher');
+                expect(model.simpleProps.selectedPath).toBe('/authored/retained');
+            });
+        } finally { await hook.unmount(); }
+    });
 
     it.each([false, true])('keeps a retained launcher local across ticks, heartbeats and resource publications (presented=%s)', async (initiallyPresented) => {
         const fixture = await restoreCatalogAuthoringFixture({ name: `retained-ticks-${initiallyPresented ? 'visible' : 'hidden'}`, target: bundledTarget });
@@ -968,6 +1013,66 @@ describe('New Session ACP catalog authority and retained authoring', () => {
             if (phase === 'late') expect(readNewSessionDraftFromRepository(fixture)?.backendNewSessionOptionStateByTargetKey)
                 .toMatchObject({ [pluginKey]: { reasoningEffort: 'low' } });
         } finally { vi.useRealTimers(); await hook.unmount(); }
+    });
+
+    it.each(['deferred', 'missed'] as const)('updates the rendered Agent picker after a %s Machine answer and browses Codex', async (outcome) => {
+        const fixture = await restoreCatalogAuthoringFixture({ name: `machine-answer-${outcome}`,
+            target: bundledTarget, includeCodex: true });
+        const original = rpc.getMockImplementation();
+        if (!original) throw new Error('Expected Machine RPC fixture');
+        const readyAnswer = await original({ method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE });
+        let answer = createDeferred<unknown>();
+        rpc.mockImplementation((request: { method: string }) => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+            ? answer.promise : original(request));
+        rpc.mockClear();
+        const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
+        await act(async () => { publishMachineContributionRegistryProjectionInvalidation({
+            serverId: fixture.scope.serverId, machineId: 'credential-devbox',
+        }); });
+        const { AgentInputChipPickerPanel } = await import('@/components/sessions/agentInput/components/AgentInputChipPickerPanel');
+        const { SessionModelPicker } = await import('@/components/sessions/modelPicker/SessionModelPicker');
+        let current!: ReturnType<typeof useNewSessionScreenModel>;
+        const close = () => {};
+        function PickerHarness() {
+            current = useNewSessionScreenModel({ draftId: fixture.draftId });
+            if (current.variant !== 'simple') throw new Error('Expected simple launcher');
+            return <AgentInputChipPickerPanel title="Agent" options={current.simpleProps.agentPickerOptions ?? []}
+                selectedOptionId={current.simpleProps.agentPickerSelectedOptionId}
+                onSelect={current.simpleProps.onAgentPickerSelect ?? close} onRequestClose={close} />;
+        }
+        const screen = await renderScreen(<PickerHarness />);
+        try {
+            if (current.variant !== 'simple') throw new Error('Expected simple launcher');
+            await act(async () => { current.variant === 'simple' && current.simpleProps.onAgentPickerVisibilityChange?.(true); });
+            await vi.waitFor(() => expect(rpc.mock.calls.some(([request]) =>
+                request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toBe(true));
+            const codexKey = 'agent:happier.agent.codex/codex';
+            await screen.pressByTestIdAsync(`agent-input-chip-picker.option:${codexKey}`);
+            await vi.waitFor(() => expect(screen.findByType(SessionModelPicker).props.agentTargetKey).toBe(codexKey));
+            if (outcome === 'missed') {
+                await act(async () => { answer.reject(new RpcError('Machine transport unavailable', RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE)); });
+                await flushHookEffects();
+                answer = createDeferred<unknown>();
+                rpc.mockClear();
+                await vi.waitFor(() => {
+                    expect(screen.findByTestId('model-picker-overlay-refresh')).not.toBeNull();
+                    expect(screen.findByTestId('model-picker-overlay-refresh')?.props.disabled).not.toBe(true);
+                });
+                await screen.pressByTestIdAsync('model-picker-overlay-refresh');
+                await vi.waitFor(() => expect(rpc.mock.calls.some(([request]) =>
+                    request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toBe(true));
+            }
+            await act(async () => { answer.resolve(readyAnswer); });
+            await vi.waitFor(() => {
+                if (current.variant !== 'simple') throw new Error('Expected simple launcher');
+                expect(current.simpleProps.agentPickerOptions?.find(option => option.id === codexKey)?.disabled).toBe(false);
+            });
+            await screen.pressByTestIdAsync(`agent-input-chip-picker.option:${codexKey}`);
+            await vi.waitFor(() => expect(screen.findByType(SessionModelPicker).props.agentTargetKey).toBe(codexKey));
+            expect(screen.findAll(node => typeof node.props.testID === 'string'
+                && node.props.testID.startsWith('model-picker-overlay-option:')
+                && node.props.testID.includes('agent:happier.agent.claude/claude'))).toEqual([]);
+        } finally { answer.resolve(readyAnswer); await screen.unmount(); }
     });
 
     it.each(['loading', 'unavailable'] as const)('retains the configured target and configured-only Profile while ACP is %s', async (phase) => {

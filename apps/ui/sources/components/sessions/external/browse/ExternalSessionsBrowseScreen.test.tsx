@@ -27,6 +27,7 @@ import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { MachineMetadataSchema } from '@/sync/domains/state/storageTypes';
+import { CONNECTED_PRESENTATION_ROWS_ROUTE_V1, ConnectedPresentationRowReadResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import type {
     MergedBackendProjectionEntry,
     MergedProviderProjectionEntry,
@@ -220,6 +221,7 @@ function createExternalSessionsBrowsePluginProjection(): PluginProjectionV2 {
 let machinesState: Array<{
     id: string;
     active: boolean;
+    activeAt?: number;
     metadata: {
         displayName: string;
         host: string;
@@ -237,7 +239,7 @@ async function publishMachinesState(): Promise<void> {
     if (!metadata) throw new Error('The canonical unlocked machine fixture must supply metadata');
     const machines = machinesState.map((machine) => createMachineFixture({
         ...machine,
-        activeAt: Date.now(),
+        activeAt: machine.activeAt ?? Date.now(),
         metadata: MachineMetadataSchema.parse({ ...metadata, ...machine.metadata }),
     }));
     const activeServerId = getActiveServerSnapshot().serverId;
@@ -260,7 +262,8 @@ async function publishMachinesState(): Promise<void> {
 function machineCensusRow(machineId: string, accountId: string) {
     const row = createPlainMachineRowFixture({ id: machineId, accountId });
     const machine = machinesState.find(machine => machine.id === machineId);
-    return machine ? { ...row, metadata: encodePlainMachineStoredContent(MachineMetadataSchema.parse({
+    return machine ? { ...row, active: machine.active, activeAt: machine.activeAt ?? row.activeAt,
+        metadata: encodePlainMachineStoredContent(MachineMetadataSchema.parse({
         ...createMachineFixture().metadata, ...machine.metadata,
     })) } : row;
 }
@@ -661,7 +664,18 @@ describe('ExternalSessionsBrowseScreen', () => {
         expect(candidatesListSpy).toHaveBeenCalledTimes(1);
     });
 
-    it('offers one default-off source consent only from the successful scope and mutates no link side effect', async () => {
+    it.each(['unlocked', 'same-home-profile', 'foreign-home-profile'] as const)('offers source consent only for the successful Account Home (%s)', async (placement) => {
+        httpHomes.answer(home.homes.focused!.id, CONNECTED_PRESENTATION_ROWS_ROUTE_V1, {
+            body: ConnectedPresentationRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+                content: { t: 'plain', v: { v: 1, entries: [{ v: 1, label: 'Work Profile', subject: { kind: 'account',
+                    account: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' },
+                } }] } } }),
+        });
+        const { getStorage } = await import('@/sync/domains/state/storageStore');
+        const { refreshConnectedMetadataCatalog } = await import('@/sync/engine/settings/connectedMetadataCatalogEngine');
+        const settingsScope = getStorage().getState().settingsScope;
+        if (!settingsScope) throw new Error('Expected the active test Account settings scope');
+        await refreshConnectedMetadataCatalog(settingsScope);
         const scope = {
             qualifiedIdentity: {
                 v: 1 as const,
@@ -680,17 +694,37 @@ describe('ExternalSessionsBrowseScreen', () => {
             autoLinkPolicyScopeV1: scope,
         });
         const { ExternalSessionsBrowseScreen } = await externalSessionsBrowseScreenModulePromise;
-        const screen = await renderScreen(<ExternalSessionsBrowseScreen />);
+        const lockedHome = placement === 'foreign-home-profile' ? home.homes.other : home.homes.focused;
+        const screen = await renderScreen(<ExternalSessionsBrowseScreen
+            {...(placement === 'unlocked' ? {} : { lockScope: {
+                serverId: lockedHome!.id, machineId: placement === 'foreign-home-profile' ? 'machine-2' : 'machine-1',
+                providerId: 'codex' as const, source: { kind: 'codexHome' as const, home: 'connectedService' as const,
+                    connectedServiceId: 'openai-codex', connectedServiceProfileId: 'work' },
+            } })}
+        />);
         await waitForHomeGovernance(async () => {
             await flushHookEffects();
-            expect(findDropdownMenuByTriggerTestId(screen, 'external-sessions-browse-menu')?.props?.items
-                ?.some(item => item.id === 'auto-link')).toBe(true);
+            expect(candidatesListSpy).toHaveBeenCalled();
+            expect(screen.findByTestId('direct-session-candidates:empty')).not.toBeNull();
         });
+
+        if (placement === 'foreign-home-profile') {
+            const menu = findDropdownMenuByTriggerTestId(screen, 'external-sessions-browse-menu');
+            const consent = menu?.props?.items?.find(item => item.id === 'auto-link');
+            await act(async () => { await menu?.props?.onSelect?.('auto-link'); });
+            expect(consent === undefined || consent.disabled === true).toBe(true);
+            expect(settingsPostSpy).not.toHaveBeenCalled();
+            return;
+        }
 
         // Auto-link is a policy, so it lives in the ⋯ menu as a checked item rather than a switch
         // pushing the results down.
         const menu = findDropdownMenuByTriggerTestId(screen, 'external-sessions-browse-menu') as any;
         const autoLink = menu?.props?.items?.find((item: { id: string }) => item.id === 'auto-link');
+        expect(autoLink).toBeDefined();
+        if (placement === 'same-home-profile') {
+            expect(findBrowseFilter(screen, 'external-sessions.browse.locked.agent')?.valueLabel).toContain('Work Profile');
+        }
         expect(autoLink?.title).toBe('externalSessions.browseAutoLinkTitle');
         expect(autoLink?.checked).toBe(false);
 
@@ -1755,8 +1789,8 @@ describe('ExternalSessionsBrowseScreen', () => {
         // The machine goes away while its rows stay on screen.
         await act(async () => {
             machinesState = [
-                { id: 'machine-1', active: false, metadata: { displayName: 'MacBook Pro', host: 'mbp.local' } },
-                { id: 'machine-2', active: false, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
+                { id: 'machine-1', active: false, activeAt: 0, metadata: { displayName: 'MacBook Pro', host: 'mbp.local' } },
+                { id: 'machine-2', active: false, activeAt: 0, metadata: { displayName: 'Linux Box', host: 'linux.local' } },
             ];
             await publishMachinesState();
             screen.tree.update(<ExternalSessionsBrowseScreen />);

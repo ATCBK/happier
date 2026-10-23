@@ -29,6 +29,7 @@ import type { SecretRequirementModalResult } from '@/components/secrets/requirem
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
+import { BUNDLED_CANONICAL_AGENT_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import { createAccountTokenForTests, createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -115,6 +116,7 @@ function capabilityResponse(features: Readonly<{ secretReferenceOverlay: boolean
 
 const reviewAgentProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, installedPackagesById: {},
     agentsById: { claude: { id: 'claude', title: 'Claude', identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES.claude,
+        providerRequirements: BUNDLED_CANONICAL_AGENT_DECLARATIONS.claude?.providerRequirements,
         capabilities: { surfaces: [], sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } },
     } }, actionsById: {}, familiesById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [] });
 
@@ -355,6 +357,35 @@ describe('real execution Run launch admission', () => {
         expect(hook.getCurrent().inheritedRoutePresentation?.applied).toEqual({ kind: 'unknown' });
     });
 
+    it('projects the applied browser Team model without a Connected Service binding or pending-intent substitution', async () => {
+        const { input, session } = await launchFixture();
+        const agentTargetKey = 'agent:happier.agent.claude/claude';
+        const teamCredentialModel = TeamCredentialProviderModelSelectionV1Schema.parse({
+            kind: 'team_credential_provider_model', teamId: 'team-applied', resourceId: 'resource-applied',
+            expectedResourceRevision: 0, deliveryMode: 'brokered', agentTargetKey, modelId: 'applied-model',
+        });
+        storage.setState({ settingsScope: input.accountLifetime.scope, settings: settingsDefaults,
+            sessions: { [session.id]: { ...session, active: true, metadataLayoutVersion: 1, ownerMetadataView: {
+                ...session.metadata!, connectedServices: undefined,
+                modelSelectionIntentV2: { v: 2, updatedAt: 3, ref: {
+                    source: 'native', agentTargetKey, modelId: 'pending-model',
+                } },
+                sessionModelsV1: { v: 1, agentId: 'claude', updatedAt: 2, currentModelId: 'applied-model',
+                    availableModels: [{ id: 'applied-model', name: 'Applied model' }],
+                    activeSelectionV1: { v: 2, source: 'runtime_apply', runner: { pid: 42, processStartTimeMs: 1 },
+                        selection: { agentTargetKey, providerConnectionId: null, modelId: 'applied-model' }, teamCredentialModel },
+                },
+            } } },
+        });
+        const hook = await renderHook(() => useExecutionRunLaunchContext(session.id, input.serverId));
+        expect(hook.getCurrent().inheritedRoutePresentation?.applied).toMatchObject({
+            kind: 'team', teamId: teamCredentialModel.teamId, resourceId: teamCredentialModel.resourceId,
+            deliveryMode: 'brokered', modelId: 'applied-model',
+        });
+        expect(hook.getCurrent().inheritedTeamCredentialModel).toEqual(teamCredentialModel);
+        expect(hook.getCurrent().inheritedConnectedServicesSelection).toBeNull();
+    });
+
     it('admits the exact configured ACP target from a ready Account row', async () => {
         const { input } = await launchFixture();
         const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
@@ -511,8 +542,8 @@ describe('real execution Run launch admission', () => {
                 return { type: 'success', sessionIdStatus: 'pending', spawnNonce: payload.spawnNonce };
             }
             if (request.method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE) return readiness.promise;
-            // Catalog/feature availability remains absent rather than borrowing a
-            // generated Agent projection. Bundled native Session resume is still real.
+            // Undeclared methods remain unavailable; the Socket boundary above supplies
+            // this Machine's Agent requirements, and native Session resume stays real.
             return { error: 'Method not found', errorCode: 'METHOD_NOT_FOUND' };
         });
         const shown = createDeferred<Parameters<typeof Modal.show>[0]>();
@@ -572,7 +603,9 @@ describe('real execution Run launch admission', () => {
                 screen.getTextContent()).not.toBeNull();
         });
         const submitTestId = selecting ? 'review-execution-run-launch-continue' : 'start-review-start';
-        await vi.waitFor(async () => { await act(async () => {}); expect(screen.findByTestId(submitTestId)?.props.disabled).toBe(false); });
+        await vi.waitFor(async () => { await act(async () => {});
+            expect(screen.findByTestId(submitTestId)?.props.disabled, screen.getTextContent()).toBe(false);
+        });
         await screen.pressByTestIdAsync(submitTestId);
         await vi.waitFor(() => expect(boundary.rpc.mock.calls.some(([request]) =>
             request.method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE)).toBe(true));

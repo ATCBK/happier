@@ -40,6 +40,8 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
     selectedBackendChoice: ExecutionRunLauncherBackendChoice | null;
     hasBackendChoices: boolean;
     actionInput: Record<string, unknown>;
+    /** Applied parent choice for picker display only; never copied to this Run's Action input. */
+    inheritedSelection?: TeamCredentialProviderModelSelectionV1 | null;
     setActionInput: React.Dispatch<React.SetStateAction<Record<string, unknown>>>;
     onSelectionChange?: () => void;
 }>): ExecutionRunTeamCredentialModel {
@@ -92,8 +94,9 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
 
     const onSelectTeamCredentialModel = React.useCallback(async (selection: TeamCredentialProviderModelSelectionV1) => {
         const resourceKey = `${selection.teamId}:${selection.resourceId}`;
-        const isStillOffered = () => catalogRef.current.current
-            && catalogRef.current.currentResourceKeys.has(resourceKey)
+        // The catalog owns picker eligibility separately from launch freshness.
+        // An advisory reread must not discard an already offered model choice.
+        const isStillOffered = () => catalogRef.current.currentResourceKeys.has(resourceKey)
             && catalogRef.current.resources.some((resource) => (
                 resource.teamId === selection.teamId
                 && resource.id === selection.resourceId
@@ -105,7 +108,6 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
             && resource.resourceRevision === selection.expectedResourceRevision
         ));
         if (!selectedResource
-            || !catalog.current
             || !catalog.currentResourceKeys.has(resourceKey)
             || !resourceHasAvailableTeamCredentialProviderModel(selectedResource, selection)) return;
         const outcome = await coordinate({
@@ -154,7 +156,7 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
                 return next;
             });
         });
-    }, [catalog.current, catalog.currentResourceKeys, catalog.resources, confirmation, coordinate, onSelectionChange, sessionId, setActionInput]);
+    }, [catalog.currentResourceKeys, catalog.resources, confirmation, coordinate, onSelectionChange, sessionId, setActionInput]);
 
     const onSelectNonTeamModel = React.useCallback((selection: unknown) => {
         if (selection !== null) return;
@@ -168,15 +170,16 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
         });
     }, [onSelectionChange, setActionInput]);
 
+    const displayedSelection = selected ?? params.inheritedSelection ?? null;
     const pickerProps = React.useMemo<ExecutionRunTeamCredentialModel['pickerProps']>(() => ({
         teamCredentialResources: catalog.resources,
         teamNameById: catalog.teamNameById,
         homeNameByTeamId: catalog.homeNameByTeamId,
         currentTeamCredentialResourceKeys: catalog.currentResourceKeys,
-        selectedTeamCredentialModel: selected,
+        selectedTeamCredentialModel: displayedSelection,
         onSelectTeamCredentialModel,
         experimentalConfirmation: confirmation,
-    }), [catalog.resources, catalog.teamNameById, catalog.homeNameByTeamId, catalog.currentResourceKeys, selected, onSelectTeamCredentialModel, confirmation]);
+    }), [catalog.resources, catalog.teamNameById, catalog.homeNameByTeamId, catalog.currentResourceKeys, displayedSelection, onSelectTeamCredentialModel, confirmation]);
     const picker = selectedAgentTargetKey && (catalog.resources.length > 0 || selected) ? (
         <SessionModelPicker
             agentTargetKey={selectedAgentTargetKey}

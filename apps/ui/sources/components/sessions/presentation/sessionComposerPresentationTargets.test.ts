@@ -1424,6 +1424,26 @@ describe('composer presentation targets', () => {
         expect(target.readCurrent().references).toHaveLength(1);
     });
 
+    it('reads added and withdrawn attachment authority at each transaction admission', () => {
+        const target = createDocumentTarget(createSnapshot());
+        const ref = { kind: 'session' as const, sessionId: 'session-1' };
+        cleanups.push(registerComposerPresentationTarget(ref, target));
+        const entry = createAttachmentProjectionEntry({ pluginId: 'acme.issues', localId: 'issue', typeLabel: 'Issue' });
+        let composerAttachmentsById: Readonly<Record<string, PluginUiComposerAttachmentProjection>> = {};
+        const applier = createComposerPresentationTransactionApplier({ get composerAttachmentsById() { return composerAttachmentsById; } });
+        const apply = (expectedRevision: number) => applier.apply({ ref,
+            admittedContributor: admittedContributor({ pluginId: 'acme.issues' }),
+            transaction: { expectedRevision, operations: [{ kind: 'attachment.add', attachmentLocalId: 'issue',
+                value: { key: '42', value: { issueId: 42 }, presentation: { label: 'Issue #42' } } }] },
+        });
+        expect(apply(1)).toMatchObject({ status: 'invalidOperation', reason: 'attachment_authority_mismatch' });
+        composerAttachmentsById = { [entry.id]: entry };
+        expect(apply(1)).toMatchObject({ status: 'applied', revision: 2 });
+        composerAttachmentsById = {};
+        expect(apply(2)).toMatchObject({ status: 'invalidOperation', reason: 'attachment_authority_mismatch' });
+        expect(readComposerPresentationSnapshot(ref)).toMatchObject({ revision: 2, attachments: [{ key: '42' }] });
+    });
+
     it('freezes the CURRENT locale into an admitted attachment type label, not the declaration fallback', () => {
         const target = createDocumentTarget(createSnapshot());
         cleanups.push(registerComposerPresentationTarget(

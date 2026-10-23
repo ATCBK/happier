@@ -37,6 +37,8 @@ const socketBoundary = vi.hoisted(() => ({
     fetches: vi.fn(),
     result: null as SessionSpawnNewResultV1 | null,
     providerProjection: null as import('@happier-dev/protocol/rpc').DaemonProviderModelProjectionResponseV1 | null,
+    teamModelProjectionGate: null as Promise<void> | null,
+    teamModelProjectionRequested: false,
     nativeSignInStatus: 'signedIn' as 'signedIn' | 'signedOut',
     controls: new Map<string, Readonly<{ disconnect: () => void; reconnect: () => void }>>(),
 }));
@@ -146,6 +148,10 @@ vi.mock('socket.io-client', async () => {
                         return { ok: true, result: createExistingSessionDirectoryPreflightResult(payload.params) };
                     }
                     if (payload.method.endsWith(`:${RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION}`) && socketBoundary.providerProjection) {
+                        if (typeof payload.params === 'object' && payload.params !== null && 'teamCredentialModel' in payload.params) {
+                            socketBoundary.teamModelProjectionRequested = true;
+                            await socketBoundary.teamModelProjectionGate;
+                        }
                         return { ok: true, result: socketBoundary.providerProjection };
                     }
                     if (payload.method.includes('contributionRegistryProjection.describe')) {
@@ -154,6 +160,9 @@ vi.mock('socket.io-client', async () => {
                             v: 2, generation: 1, installedPackagesById: {},
                             agentsById: Object.fromEntries(Object.entries(BUNDLED_AGENT_CONTRIBUTION_IDENTITIES).map(([id, identity]) => [id, {
                                 id, identity, title: id,
+                                // The real daemon projects the Agent's binding requirements.
+                                // Omitting them makes Team readiness unknown even after consent.
+                                providerRequirements: BUNDLED_CANONICAL_AGENT_DECLARATIONS[id as keyof typeof BUNDLED_CANONICAL_AGENT_DECLARATIONS]?.providerRequirements ?? undefined,
                                 // Match projection/v2.ts: manifest-local services become qualified on the wire.
                                 connectedAccounts: (BUNDLED_CANONICAL_AGENT_DECLARATIONS[id as keyof typeof BUNDLED_CANONICAL_AGENT_DECLARATIONS]?.connectedAccounts ?? [])
                                     .map(declaration => ({ ...declaration, service: typeof declaration.service === 'string'
@@ -281,6 +290,8 @@ describe('multi-Home Session creation composition', () => {
         machineHttpSnapshots.clear();
         socketBoundary.result = null;
         socketBoundary.providerProjection = null;
+        socketBoundary.teamModelProjectionGate = null;
+        socketBoundary.teamModelProjectionRequested = false;
         socketBoundary.nativeSignInStatus = 'signedIn';
         routeBoundary.replace.mockClear();
         routeBoundary.push.mockClear();
@@ -1419,11 +1430,12 @@ describe('multi-Home Session creation composition', () => {
         } finally { await hook.unmount(); }
     });
 
-    async function runTemporaryTeamModelJourney(journey: 'acquisition' | 'switch-agent' | 'remembered-control' | 'launch' | 'reopen') {
+    async function runTemporaryTeamModelJourney(journey: 'acquisition' | 'switch-agent' | 'remembered-control' | 'launch' | 'reopen' | 'resume' | 'refresh-selection' | 'run-refresh-selection') {
         const sourceCase = journey !== 'acquisition';
         const launchCase = journey === 'launch' || journey === 'reopen';
         const retainedTeamSelection = journey === 'reopen' || !sourceCase;
-        if (launchCase) socketBoundary.nativeSignInStatus = 'signedOut';
+        const resourceRevision = journey === 'resume' ? 0 : 7;
+        if (launchCase || journey === 'resume') socketBoundary.nativeSignInStatus = 'signedOut';
         // The first genuine Home baseline owns this preference. Re-publishing
         // changed bytes at the same Settings revision would correctly be ignored.
         accountHttpSettings = { useEnhancedSessionWizard: true };
@@ -1481,10 +1493,10 @@ describe('multi-Home Session creation composition', () => {
             policy: { v: 1, sessionCreationPolicy: 'private_default', externalSharingPolicy: 'allowed',
                 defaultSessionHistoryAccess: 'from_membership', admissionMode: 'invite_only', authenticationPolicy: null } }], nextCursor: null });
         const entitled = TeamCredentialResourceEntitledPageV1Schema.parse({ resources: [{ id: 'runner-resource', teamId: 'runner-team',
-            displayName: 'Runner model', resourceRevision: 7, readiness: { kind: 'available' }, recoveryAction: null,
+            displayName: 'Runner model', resourceRevision, readiness: { kind: 'available' }, recoveryAction: null,
             mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed',
             providerModels: [{ selection: { kind: 'team_credential_provider_model', resourceId: 'runner-resource', teamId: 'runner-team',
-                expectedResourceRevision: 7, agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5', deliveryMode: 'brokered' },
+                expectedResourceRevision: resourceRevision, agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5', deliveryMode: 'brokered' },
                 descriptor: { id: 'gpt-5', name: 'GPT-5', ...(sourceCase ? { modelOptions: [{ id: 'reasoning_effort', name: 'Thinking',
                     type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] }] } : {}) },
                 application: { agentTargetKey: 'agent:happier.agent.codex/codex',
@@ -1519,6 +1531,8 @@ describe('multi-Home Session creation composition', () => {
         const initiatingAccountReads: string[] = [];
         const activationEffects: string[] = [];
         const observedHomePaths = new Set<string>();
+        let catalogRefreshGate: Promise<void> | null = null;
+        let releaseSelectionGates: (() => void) | null = null;
         sessionHttpBoundary = (url, init) => {
             const parsed = new URL(url);
             observedHomePaths.add(`${parsed.pathname}${parsed.search}`);
@@ -1528,7 +1542,8 @@ describe('multi-Home Session creation composition', () => {
                     currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
                     declarationTransport: 'http-header-and-socket-auth-v1' } } });
             if (`${parsed.pathname}${parsed.search}` === teamPath) return Response.json(teams);
-            if (`${parsed.pathname}${parsed.search}` === resourcesPath) return Response.json(entitled);
+            if (`${parsed.pathname}${parsed.search}` === resourcesPath) return catalogRefreshGate
+                ? catalogRefreshGate.then(() => Response.json(entitled)) : Response.json(entitled);
             if (parsed.pathname === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 && (!init?.method || init.method === 'GET')) {
                 return Response.json(ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
                     content: { t: 'plain', v: providerCatalog } }));
@@ -1587,9 +1602,76 @@ describe('multi-Home Session creation composition', () => {
                 if (model.variant !== 'wizard') throw new Error('Expected the production Agent selector');
                 expect(model.wizardProps.agent.agentPickerSelectedOptionId).toBe(entitled.resources[0]!.providerModels[0]!.selection.agentTargetKey);
             });
+            if (journey === 'resume') {
+                for (const reason of ['manual', 'server-reachable', 'server-reachable'] as const) {
+                    await act(async () => { await sync.resumeSync(reason); });
+                    await vi.waitFor(() => {
+                        const model = hook.getCurrent();
+                        if (model.variant !== 'wizard') throw new Error('Expected the production model selector');
+                        expect(model.wizardProps.agent.currentTeamCredentialResourceKeys?.has('runner-team:runner-resource')).toBe(true);
+                    });
+                }
+            }
             // First-use acquisition has no worker to confirm a new Team
             // choice. Reopen its retained choice through the ordinary draft
             // reader; worker-backed source selection is covered below.
+            if (journey === 'refresh-selection' || journey === 'run-refresh-selection') {
+                const worker = createDeferred<void>();
+                const catalog = createDeferred<void>();
+                releaseSelectionGates = () => { catalogRefreshGate = null; worker.resolve(); catalog.resolve(); };
+                socketBoundary.teamModelProjectionGate = worker.promise;
+                const model = hook.getCurrent();
+                if (model.variant !== 'wizard') throw new Error('Expected the production model selector');
+                expect(model.wizardProps.agent.currentTeamCredentialResourceKeys?.has('runner-team:runner-resource')).toBe(true);
+                const { useExecutionRunTeamCredentialModel } = await import('@/components/sessions/runs/launcher/useExecutionRunTeamCredentialModel');
+                const run = journey === 'run-refresh-selection' ? await renderHook(() => {
+                    const [actionInput, setActionInput] = React.useState<Record<string, unknown>>({});
+                    return useExecutionRunTeamCredentialModel({ sessionId: null, serverId: homeBScopeId, machineId: 'machine-b',
+                        hasBackendChoices: true, selectedBackendChoice: {
+                            backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+                            targetKey: 'agent:happier.agent.codex/codex', backendId: 'codex', agentId: 'codex', title: 'Codex', disabled: false,
+                        }, actionInput, setActionInput });
+                }) : null;
+                try {
+                    if (run) await vi.waitFor(() => expect(run.getCurrent().pickerProps.currentTeamCredentialResourceKeys?.has('runner-team:runner-resource')).toBe(true));
+                    let selecting!: Promise<void>;
+                    await act(async () => {
+                        selecting = Promise.resolve((run?.getCurrent().pickerProps.onSelectTeamCredentialModel
+                            ?? model.wizardProps.agent.onSelectTeamCredentialModel)(entitled.resources[0]!.providerModels[0]!.selection));
+                    });
+                    await vi.waitFor(() => expect(socketBoundary.teamModelProjectionRequested).toBe(true));
+                    catalogRefreshGate = catalog.promise;
+                    const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+                    await act(async () => { publishHomeAccountChange(homeBScopeId); });
+                    const refreshing = hook.getCurrent();
+                    if (refreshing.variant !== 'wizard') throw new Error('Expected the production model selector');
+                    expect(refreshing.wizardProps.agent.currentTeamCredentialResourceKeys?.has('runner-team:runner-resource')).toBe(true);
+                    await act(async () => { worker.resolve(); await selecting; });
+                    const selected = hook.getCurrent();
+                    if (selected.variant !== 'wizard') throw new Error('Expected the production model selector');
+                    expect(run ? run.getCurrent().selected : selected.wizardProps.agent.selectedTeamCredentialModel)
+                        .toEqual(entitled.resources[0]!.providerModels[0]!.selection);
+                    if (run) expect(run.getCurrent().available).toBe(false); // Selection is retained; launch still needs a current catalog.
+                    catalogRefreshGate = null;
+                    await act(async () => { catalog.resolve(); });
+                    await vi.waitFor(() => {
+                        if (run) expect(run.getCurrent().available).toBe(true);
+                        const refreshed = hook.getCurrent();
+                        if (refreshed.variant !== 'wizard') throw new Error('Expected the production model selector');
+                        expect(refreshed.wizardProps.agent.currentTeamCredentialResourceKeys?.has('runner-team:runner-resource')).toBe(true);
+                    });
+                } finally { await run?.unmount(); }
+                if (!run) {
+                    await hook.unmount();
+                    hookMounted = false;
+                    const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+                    expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
+                        modelSelection: { ref: { modelId: 'gpt-5' } },
+                        teamCredentialBindings: [{ teamId: 'runner-team', resourceId: 'runner-resource', expectedResourceRevision: 7 }],
+                    });
+                }
+                return;
+            }
             if (!retainedTeamSelection) await act(async () => {
                 const model = hook.getCurrent();
                 if (model.variant !== 'wizard') throw new Error('Expected the production model selector');
@@ -1602,6 +1684,7 @@ describe('multi-Home Session creation composition', () => {
                 const selected = hook.getCurrent();
                 if (selected.variant !== 'wizard') throw new Error('Expected the production Agent selector');
                 expect(selected.wizardProps.agent.selectedTeamCredentialModel).toEqual(entitled.resources[0]!.providerModels[0]!.selection);
+                if (journey === 'resume') return;
                 if (launchCase) {
                     const { machineAgentInventoryStore } = await import('@/agents/machineAgents/machineAgentInventoryStore');
                     const { serverAccountScopedResourceKey } = await import('@/sync/domains/scope/serverAccountScope');
@@ -1711,6 +1794,7 @@ describe('multi-Home Session creation composition', () => {
             });
             throw error;
         } finally {
+            releaseSelectionGates?.();
             checksums.resolve(new Response('Unavailable publication', { status: 503 }));
             await sending?.catch(() => undefined);
             if (hookMounted) await hook.unmount();
@@ -1734,8 +1818,20 @@ describe('multi-Home Session creation composition', () => {
         await runTemporaryTeamModelJourney('launch');
     });
 
+    it('keeps the Team catalog selectable after repeated same-Home resume refreshes', async () => {
+        await runTemporaryTeamModelJourney('resume');
+    });
+
     it('keeps a reopened Team source in the New Session submit instead of its native backing model', async () => {
         await runTemporaryTeamModelJourney('reopen');
+    });
+
+    it('applies a current Team row when a Home catalog refresh overlaps worker confirmation', async () => {
+        await runTemporaryTeamModelJourney('refresh-selection');
+    });
+
+    it('retains a Run Team model selected during catalog revalidation without admitting launch early', async () => {
+        await runTemporaryTeamModelJourney('run-refresh-selection');
     });
 
     it('reopens a Temporary computer draft without selecting or dispatching to an available Machine', async () => {

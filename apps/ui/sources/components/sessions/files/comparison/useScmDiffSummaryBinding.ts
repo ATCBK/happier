@@ -12,6 +12,7 @@ import {
     applySavedScmDiffSummaryResult,
     generateScmDiffSummaryFromUserAction,
     refreshScmDiffSummaryRun,
+    type ScmDiffSummaryOperationResult,
 } from '@/sync/ops/scmDiffSummary/generate';
 import { createScmDiffSummaryResultOperations, type ScmDiffSummaryHost } from '@/sync/ops/scmDiffSummary/results';
 import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
@@ -82,19 +83,19 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         [isCurrent, onRunAdmitted, sessionId, host.machineId, scope?.serverId, scope?.accountId]);
 
     /** `pullRequestDraft` asks the host to write the summary's pull request description from the repository template and recorded Session outcomes. */
-    const onStart = React.useCallback(async (outputs: readonly ScmDiffSummaryOutputKind[] = [output], options: Readonly<{ pullRequestDraft?: Readonly<{ providerId?: string }> }> = {}): Promise<boolean> => {
-        if (!isCurrent() || !scope || !cwd || !comparison || (!viewModel && restoreState !== 'ready') || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return false;
+    const onStart = React.useCallback(async (outputs: readonly ScmDiffSummaryOutputKind[] = [output], options: Readonly<{ pullRequestDraft?: Readonly<{ providerId?: string }> }> = {}): Promise<ScmDiffSummaryOperationResult | null> => {
+        if (!isCurrent() || !scope || !cwd || !comparison || (!viewModel && restoreState !== 'ready') || !modelAvailable || !canSend || !launch.canLaunchExecutionRuns || starting) return null;
         setStarting(true); setError(null);
         let draftAccount: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | null = null;
         try {
-            if (!sessionId && (comparison.kind === 'session' || comparison.kind === 'turnCheckpoint')) return false;
+            if (!sessionId && (comparison.kind === 'session' || comparison.kind === 'turnCheckpoint')) return null;
             if (options.pullRequestDraft) {
                 // A form can move while its request is pending. Publication belongs to its captured Account, not that placement.
                 draftAccount = await captureLazyActionAccountContext(scope.serverId);
                 if (!areServerAccountScopesEqual(draftAccount.accountOnlyLifetime.scope, scope)) throw new Error(t('walkthroughStart.unavailable'));
             }
             const source = scmComparisonSourceOf(comparison, sessionId ?? '');
-            await generateScmDiffSummaryFromUserAction({ ...host, serverId: scope.serverId, scope,
+            return await generateScmDiffSummaryFromUserAction({ ...host, serverId: scope.serverId, scope,
                 shouldContinue: draftAccount?.accountOnlyLifetime.isCurrent ?? isCurrent,
                 ...(model.trim() && selected.success ? { backendTarget: selected.backendTarget } : {}),
                 input: { cwd, source, ...(comparison.comparisonId ? { comparisonId: comparison.comparisonId } : {}),
@@ -102,11 +103,9 @@ export function useScmDiffSummaryBinding(params: Readonly<{
                     ...(model.trim() && selected.success ? { modelSelector: selected.modelSelector } : {}) },
                 settings: { ...getStorage().getState().settings, [SCM_DIFF_SUMMARY_SETTING_KEYS.modelProfileOverride]: model },
                 intent: viewModel ? 'regenerate' : 'generate' });
-            // A refused generation is retained by the diff-summary store; its typed presentation is `generationFailure`.
-            return true;
         } catch (failure) {
             if (isCurrent()) setError(failure instanceof Error ? failure.message : t('walkthroughStart.unavailable'));
-            return false;
+            return null;
         } finally { draftAccount?.dispose(); if (isCurrent()) setStarting(false); }
     }, [binding, isCurrent, scope?.serverId, scope?.accountId, cwd, comparison, sessionId, host.machineId, output, selected, modelAvailable, canSend, launch.canLaunchExecutionRuns, starting, model, Boolean(viewModel), restoreState]);
 
@@ -114,11 +113,30 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     const resultId = viewModel?.resultId;
     const runId = viewModel?.executionRunId ?? null;
     const initialInputId = viewModel?.inputId ?? null;
-    // Recheck the same saved receipt. A missing acknowledgement never authorizes another Start.
-    const checkAdmission = React.useCallback(async () => {
-        if (!operations || !cwd || !key || !resultId || !isCurrent()) return;
+    const cancelGeneration = React.useCallback(async () => {
+        if (!sessionId || !scope || !runId || !isCurrent()) return false;
         try {
-            const response = await operations.read({ cwd, resultId });
+            const actions: typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor') = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+            if (!isCurrent()) return false;
+            const response = await actions.createFrontDoorActionExecute()('execution.run.stop', { sessionId, runId }, {
+                surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+                serverId: scope.serverId, expectedAccountId: scope.accountId, defaultSessionId: sessionId,
+                externalActionTarget: { kind: 'session', sessionId },
+            });
+            if (!isCurrent()) return false;
+            actions.requireActionSuccess(response);
+            setError(null);
+            return true;
+        } catch (failure) {
+            if (isCurrent()) setError(failure instanceof Error ? failure.message : t('walkthroughStart.unavailable'));
+            return false;
+        }
+    }, [sessionId, scope, runId, isCurrent]);
+    // Recheck the same saved receipt. A missing acknowledgement never authorizes another Start.
+    const checkAdmission = React.useCallback(async (admittedResultId = resultId) => {
+        if (!operations || !cwd || !key || !admittedResultId || !isCurrent()) return;
+        try {
+            const response = await operations.read({ cwd, resultId: admittedResultId });
             if (!isCurrent()) return;
             if (response.success) { applySavedScmDiffSummaryResult(key, response.result); setError(null); }
             else setError(response.error);
@@ -184,7 +202,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         host, serverId, comparison,
         binding, isCurrent, scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
         restoreState, retryRestore, machineReachability,
-        admission: viewModel?.admission ?? null, checkAdmission,
+        admission: viewModel?.admission ?? null, checkAdmission, cancelGeneration,
         error, setError,
         /** The typed refusal or failure of the comparison's generation; never its diagnostic code or message. */
         generationFailure: viewModel?.error && !(viewModel.error.reason === 'disabled' && explainEnabled) ? viewModel.error : null,

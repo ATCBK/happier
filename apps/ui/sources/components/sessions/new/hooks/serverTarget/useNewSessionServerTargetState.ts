@@ -13,6 +13,7 @@ import { toServerSelectionSettings } from '@/sync/domains/server/selection/serve
 import {
     listServerProfileScopeIds,
     normalizeServerSelectionSettingsForProfileScopeIds,
+    resolveServerProfileScopeIdForSelectionIdentifier,
 } from '@/sync/domains/server/selection/serverSelectionProfileScopeIds';
 import type { ResolvedActiveServerSelection, ServerSelectionTarget } from '@/sync/domains/server/selection/serverSelectionTypes';
 import type { Settings } from '@/sync/domains/settings/settings';
@@ -162,10 +163,12 @@ export function useNewSessionServerTargetState(params: Readonly<{
     }, [explicitSettingsServerRejected, params.hostTargetServerId, resolvedSettingsTarget.allowedServerIds, selectedServerTarget]);
 
     const routeRequestedServerId = typeof params.request.spawnServerIdParam === 'string'
-        ? params.request.spawnServerIdParam.trim() || null
+        ? resolveServerProfileScopeIdForSelectionIdentifier(serverProfiles, params.request.spawnServerIdParam)
+            ?? (params.request.spawnServerIdParam.trim() || null)
         : null;
     const persistedRequestedServerId = typeof params.request.persistedTargetServerId === 'string'
-        ? params.request.persistedTargetServerId.trim() || null
+        ? resolveServerProfileScopeIdForSelectionIdentifier(serverProfiles, params.request.persistedTargetServerId)
+            ?? (params.request.persistedTargetServerId.trim() || null)
         : null;
     const capturedAuthoringServerIdRef = React.useRef<string | null>(null);
     const requestedServerId = params.hostTargetServerId ?? routeRequestedServerId

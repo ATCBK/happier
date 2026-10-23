@@ -24,12 +24,15 @@ import { useMountedActionExecution } from '@/components/approvals/useMountedActi
 import { admitExecutionRunLaunchTarget, isExecutionRunSessionProfileReady } from './executionRunLaunchAdmission';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readAppliedModelSelection } from '@/sync/domains/models/describeEffectiveModelMode';
+import { resolveSessionModelSelectionDisposition } from '@/sync/domains/models/resolveSessionModelSelectionDisposition';
+import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 import { resolveSessionModelLabel } from '@/sync/domains/models/modelOptions';
 import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import { readSessionConnectedServiceBindings } from '@/sync/domains/connectedServices/readSessionConnectedServiceBindings';
 import { readSessionProviderBindingMetadataV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { resolveSessionRoutePresentation } from '@/providers/session/resolveSessionRoutePresentation';
 import { useExecutionRunSourceLabel } from '@/components/sessions/runs/useExecutionRunSourceLabel';
+import { projectExecutionRunResolvedSelection } from '@happier-dev/protocol/execution/runs/requestedConfiguration';
 import { resolveConnectedServicesAuthLabel } from '@/components/settings/connectedServices/model/resolveConnectedServicesAuthLabel';
 import { t } from '@/text';
 
@@ -59,22 +62,43 @@ export function useExecutionRunLaunchContext(sessionId: string | null, serverId:
     const defaultBackend = React.useMemo(() => session ? resolveSessionActionDefaultBackend({ session, enabledAgentIds,
         fallbackAgentId: resolveAgentIdFromSessionMetadata(session.metadata) ?? undefined }) : null, [enabledAgentIds, session]);
     const backendTarget = React.useMemo(() => resolveSessionActionDefaultTarget(defaultBackend), [defaultBackend]);
-    const inheritedModelSelection = React.useMemo(() => session && backendTarget && defaultBackend?.defaultAgentId
-        ? readAppliedModelSelection({ agentId: defaultBackend.defaultAgentId,
-            agentTargetKey: buildBackendTargetKeyV2(backendTarget), metadata: readSessionOwnerMetadataView(session) })
-        : null, [session, backendTarget, defaultBackend?.defaultAgentId]);
+    const inheritedAppliedSelection = React.useMemo(() => {
+        if (!session || !backendTarget || !defaultBackend?.defaultAgentId) return null;
+        const metadata = readSessionOwnerMetadataView(session);
+        const target = { agentId: defaultBackend.defaultAgentId, agentTargetKey: buildBackendTargetKeyV2(backendTarget), metadata };
+        // This is retained applied presentation, not current-runner authority. The host still admits
+        // inheritance. Use the same strict Protocol fact as the Session chip and runtime publisher.
+        const disposition = resolveSessionModelSelectionDisposition({ ...target,
+            sessionActive: session.active === true, currentRunnerProcessIdentity: null });
+        if (metadata?.sessionModelsV1?.activeSelectionV1 !== undefined) return {
+            model: disposition.lastAppliedSelection, route: disposition.lastAppliedRouteSelection,
+        };
+        // Older metadata carries only the last accepted turn's model; it cannot assert a Team source.
+        const model = readAppliedModelSelection(target);
+        return { model, route: model };
+    }, [session, backendTarget, defaultBackend?.defaultAgentId]);
+    const inheritedModelSelection = inheritedAppliedSelection?.model ?? null;
+    const inheritedRouteSelection = inheritedAppliedSelection?.route ?? null;
+    const inheritedTeamCredentialModel = React.useMemo<TeamCredentialProviderModelSelectionV1 | null>(() =>
+        inheritedRouteSelection && 'source' in inheritedRouteSelection && inheritedRouteSelection.source === 'team_resource'
+            ? { kind: 'team_credential_provider_model', teamId: inheritedRouteSelection.teamId,
+                resourceId: inheritedRouteSelection.resourceId, expectedResourceRevision: inheritedRouteSelection.expectedResourceRevision,
+                deliveryMode: inheritedRouteSelection.deliveryMode, agentTargetKey: inheritedRouteSelection.agentTargetKey,
+                modelId: inheritedRouteSelection.modelId }
+        : null, [inheritedRouteSelection]);
     /** The parent's catalog title for one of its native models; a Provider model's id is already its name. */
     const resolveInheritedModelLabel = React.useCallback((selection: ProviderBoundModelRef | null) =>
-        session && defaultBackend?.defaultAgentId && selection && selection.providerConnectionId === null
+        session && defaultBackend?.defaultAgentId && selection && selection.providerConnectionId === null && !inheritedTeamCredentialModel
             ? resolveSessionModelLabel(defaultBackend.defaultAgentId, readSessionOwnerMetadataView(session), selection.modelId)
-            : null, [session, defaultBackend?.defaultAgentId]);
+            : null, [session, defaultBackend?.defaultAgentId, inheritedTeamCredentialModel]);
     const inheritedConnectedServicesSelection = React.useMemo(() => session && defaultBackend?.defaultAgentId
         ? readSessionConnectedServiceBindings({ agentId: defaultBackend.defaultAgentId, metadata: readSessionOwnerMetadataView(session) })
         : null, [session, defaultBackend?.defaultAgentId]);
-    const inheritedDisplaySelection = React.useMemo(() => ({ source: 'inherited' as const,
-        ...(inheritedModelSelection ? { modelSelection: inheritedModelSelection } : {}),
+    const inheritedDisplaySelection = React.useMemo(() => projectExecutionRunResolvedSelection({ source: 'inherited',
+        ...(inheritedTeamCredentialModel ? { teamCredentialModel: inheritedTeamCredentialModel }
+            : inheritedModelSelection ? { modelSelection: inheritedModelSelection } : {}),
         connectedServices: inheritedConnectedServicesSelection,
-    }), [inheritedModelSelection, inheritedConnectedServicesSelection]);
+    }), [inheritedModelSelection, inheritedTeamCredentialModel, inheritedConnectedServicesSelection]);
     const inheritedSourceLabel = useExecutionRunSourceLabel(inheritedDisplaySelection, serverId);
     const inheritedRoutePresentation = React.useMemo(() => {
         const bindingsByServiceId = inheritedConnectedServicesSelection?.bindingsByServiceId ?? {};
@@ -83,11 +107,15 @@ export function useExecutionRunLaunchContext(sessionId: string | null, serverId:
             nativeLabel: t('connectedServices.authChip.nativeLabel'),
             formatConnectedCountLabel: (count) => t('connectedServices.authChip.connectedCountLabel', { count }) });
         const provider = session ? readSessionProviderBindingMetadataV1(readSessionOwnerMetadataView(session)) : null;
-        return resolveSessionRoutePresentation({ phase: 'running', selection: null, appliedSelection: inheritedModelSelection,
+        return resolveSessionRoutePresentation({ phase: 'running', selection: null, appliedSelection: inheritedRouteSelection,
             native: { label: inheritedSourceLabel ?? (auth.connectedCount > 0 ? t('common.unavailable') : auth.label), connectedCount: auth.connectedCount,
                 authSource: inheritedConnectedServicesSelection === null ? 'unknown' : auth.connectedCount > 0 ? 'connected' : 'native' },
+            ...(inheritedTeamCredentialModel && inheritedSourceLabel ? { teamSources: [{
+                teamId: inheritedTeamCredentialModel.teamId, resourceId: inheritedTeamCredentialModel.resourceId,
+                displayName: inheritedSourceLabel,
+            }] } : {}),
             ...(provider ? { appliedProviderSource: { connectionId: provider.connectionId, ...provider.displaySnapshot } } : {}) });
-    }, [session, inheritedModelSelection, inheritedConnectedServicesSelection, inheritedSourceLabel]);
+    }, [session, inheritedRouteSelection, inheritedTeamCredentialModel, inheritedConnectedServicesSelection, inheritedSourceLabel]);
     const sessionMachineTarget = useSessionMachineTarget(sessionId, serverId);
     const workspaceMachine = useMachinePresenceSummary(serverId, sessionId ? null : workspace?.machineId);
     const workspaceMachineKnown = workspaceMachine.reachability !== 'unknown';
@@ -144,7 +172,7 @@ export function useExecutionRunLaunchContext(sessionId: string | null, serverId:
                 ...(!sessionId && workspace ? { externalActionTarget: { kind: 'machine' as const, machineId: workspace.machineId } } : {}) });
     }, [admitExactTarget, executor.execute, machineId, sessionId, workspace?.machineId, workspace?.cwd]);
     return { session, accountBinding, accountLifetime, exactSettings, settings, profileCatalogReady, acpCatalogReady, acpCatalogSnapshot, enabledAgentIds, defaultBackend,
-        backendTarget, inheritedModelSelection, resolveInheritedModelLabel, inheritedConnectedServicesSelection, inheritedRoutePresentation, machineTarget, machineId, machineReachable, admitExactTarget, startAction,
+        backendTarget, inheritedModelSelection, inheritedTeamCredentialModel, resolveInheritedModelLabel, inheritedConnectedServicesSelection, inheritedRoutePresentation, machineTarget, machineId, machineReachable, admitExactTarget, startAction,
         executeAction: executor.execute,
         isStartCurrent: executor.isCurrent, cancelStart: executor.cancel };
 }

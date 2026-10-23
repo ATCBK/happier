@@ -38,6 +38,7 @@ import {
     machineExternalSessionCandidateDelete,
 } from '@/sync/ops/machineExternalSessions';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useProfile, useSettingsVersion, useActiveServerAccountScope } from '@/sync/store/hooks';
 import { requireOneShotAccountSettingsMutationApplied } from '@/sync/engine/settings/syncSettings';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -177,10 +178,10 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
     const machines = useMachineListForServer(effectiveSelectedServerId ?? activeServerId);
     const lockedSettingsScopeMatches = props.accountLifetime
         ? areServerAccountScopesEqual(expectedSettingsScope, props.accountLifetime.scope)
-        : !lockScope?.serverId || lockScope.serverId === expectedSettingsScope?.serverId;
+        : !lockScope?.serverId || areServerProfileIdentifiersEquivalent(lockScope.serverId, expectedSettingsScope?.serverId);
     const lockedProfileScopeMatches = props.accountLifetime
         ? areServerAccountScopesEqual(profileScope, props.accountLifetime.scope)
-        : !lockScope?.serverId || lockScope.serverId === activeServerId;
+        : !lockScope?.serverId || areServerProfileIdentifiersEquivalent(lockScope.serverId, activeServerId);
     const accountSettingsTargetAvailable = lockScope
         ? lockedSettingsScopeMatches
         : administrationTargetSelection.selectedTargetServerMatchesActiveAccount;

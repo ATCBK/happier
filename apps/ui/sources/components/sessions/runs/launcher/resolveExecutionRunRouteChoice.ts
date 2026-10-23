@@ -1,4 +1,5 @@
 import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
+import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 
 import { resolveExecutionRunSelectionLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
 import type { resolveSessionRoutePresentation } from '@/providers/session/resolveSessionRoutePresentation';
@@ -13,19 +14,22 @@ export function resolveExecutionRunRouteChoice(input: Readonly<{
     /** The draft has no model or route of its own and targets the parent's Agent. */
     inherits: boolean;
     inheritedSelection: ProviderBoundModelRef | null;
+    inheritedTeamCredentialModel?: TeamCredentialProviderModelSelectionV1 | null;
     inheritedRoutePresentation: ReturnType<typeof resolveSessionRoutePresentation> | null;
     /** The parent model's catalog title, when the caller knows one; `inheritDetail` says it instead of the id. */
     inheritedModelLabel?: string | null;
 }>): Readonly<{ label: string; inheritDetail: string | null }> {
     const applied = input.inheritedRoutePresentation?.applied ?? null;
     const source = applied && applied.kind !== 'unknown' ? applied.sourceLabel : null;
-    const model = input.inheritedSelection?.modelId ?? null;
-    const inheritDetail = [source, input.inheritedModelLabel ?? model].filter((part): part is string => Boolean(part)).join(' · ') || null;
+    const teamModel = input.inheritedTeamCredentialModel;
+    const model = teamModel?.modelId ?? input.inheritedModelLabel ?? input.inheritedSelection?.modelId ?? null;
+    const inheritDetail = [source, model].filter((part): part is string => Boolean(part)).join(' · ') || null;
     if (!input.inherits) return { label: t('runPage.menu.selectionExplicit'), inheritDetail };
     // The same words the started Run's header uses, from the same label owner and model title.
-    const label = input.inheritedSelection
+    const label = teamModel || input.inheritedSelection
         ? resolveExecutionRunSelectionLabel(
-            { source: 'inherited', modelSelection: input.inheritedSelection },
+            teamModel ? { source: 'inherited', teamCredentialModel: teamModel }
+                : { source: 'inherited', modelSelection: input.inheritedSelection! },
             (connectionId) => applied?.kind === 'provider' && applied.connectionId === connectionId ? applied.sourceLabel : null,
             source,
             () => input.inheritedModelLabel ?? null,

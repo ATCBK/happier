@@ -26,6 +26,7 @@ import { t } from '@/text';
 import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 import { createSessionGitPullRequest } from './createSessionGitPullRequest';
+import { GitPullRequestBodyDraftAction } from './GitPullRequestBodyDraftAction';
 import { useGitPullRequestBodyDraft } from './useGitPullRequestBodyDraft';
 import { GitPullRequestProviderMark, resolveGitPullRequestProvider } from './GitPullRequestProviderMark';
 import {
@@ -94,6 +95,9 @@ export const GitPullRequestForm = React.memo(function GitPullRequestForm(props: 
         sessionId: props.sessionId, serverId: props.serverId, head, base, body: draft.body,
         setBody: (body) => update({ body }),
     });
+
+    // The request may never have reached the Machine: the action shows that one notice, so no second message.
+    const uncertainDraft = bodyDraft.drafting && bodyDraft.admission === 'outcomeUnknown';
 
     const create = React.useCallback(() => {
         if (busy || !head || !base) return;
@@ -216,20 +220,16 @@ export const GitPullRequestForm = React.memo(function GitPullRequestForm(props: 
                 multiline
                 minLines={props.placement === 'details' ? 10 : 4}
             />
-            <View style={styles.bodyDraftRow}>
-                <ToolbarButton
-                    testID="git-pull-request-form-draft-body"
-                    label={bodyDraft.drafting ? t('sessionGitPullRequest.form.writingBody') : t('sessionGitPullRequest.form.writeBody')}
-                    icon={<Icon name="sparkle" size={14} color={theme.colors.text.secondary} />}
-                    size="sm"
-                    busy={bodyDraft.drafting}
-                    disabled={!bodyDraft.canDraft}
-                    onPress={() => { setResult(null); void bodyDraft.draft(); }}
-                />
-                {bodyDraft.prerequisite ? (
-                    <Text testID="git-pull-request-form-draft-body-unavailable" style={styles.bodyDraftNote} numberOfLines={2}>{bodyDraft.prerequisite}</Text>
-                ) : null}
-            </View>
+            <GitPullRequestBodyDraftAction
+                drafting={bodyDraft.drafting}
+                canDraft={bodyDraft.canDraft}
+                prerequisite={bodyDraft.prerequisite}
+                uncertain={uncertainDraft}
+                message={bodyDraft.message}
+                onDraft={() => { setResult(null); void bodyDraft.draft(); }}
+                onCheckAdmission={bodyDraft.checkAdmission}
+                onCancel={bodyDraft.cancel}
+            />
             {bodyDraft.candidate !== null ? (
                 <AttentionBanner
                     presentation="strip"
@@ -256,7 +256,7 @@ export const GitPullRequestForm = React.memo(function GitPullRequestForm(props: 
                     title={t('common.requestFailed')}
                     action={{ testID: 'git-pull-request-form-draft-body-restore-retry', label: t('common.retry'), onPress: bodyDraft.retryRestore }}
                 />
-            ) : bodyDraft.message ? (
+            ) : bodyDraft.message && !uncertainDraft ? (
                 <AttentionBanner presentation="strip" tone="warning" testID="git-pull-request-form-draft-body-notice" title={bodyDraft.message} />
             ) : null}
             {bodyDraft.modelChoice.choosing ? (
@@ -371,8 +371,6 @@ const styles = StyleSheet.create((theme) => ({
         maxWidth: 180,
     },
     branchText: { fontSize: 12, color: theme.colors.text.primary, ...Typography.mono() },
-    bodyDraftRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
-    bodyDraftNote: { flex: 1, minWidth: 0, ...Typography.variant('meta'), color: theme.colors.text.secondary },
     failure: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8 },
     failureText: { flex: 1, minWidth: 0, gap: theme.space.s2 },
     failureTitle: { ...Typography.variant('body', 'semiBold'), color: theme.colors.text.primary,  },

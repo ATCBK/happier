@@ -72,5 +72,6 @@ function samePullRequest(left: SessionScmPullRequestDraftV1 | null, right: Sessi
     return left.title === right.title && left.body === right.body && left.draft === right.draft && left.base === right.base
         && left.bodyDraft?.key === right.bodyDraft?.key && left.bodyDraft?.candidate === right.bodyDraft?.candidate
         && leftAttempt?.bodyAtRequest === rightAttempt?.bodyAtRequest && leftAttempt?.baselineResultId === rightAttempt?.baselineResultId
-        && leftAttempt?.baselineRevision === rightAttempt?.baselineRevision && leftAttempt?.started === rightAttempt?.started;
+        && leftAttempt?.baselineRevision === rightAttempt?.baselineRevision && leftAttempt?.started === rightAttempt?.started
+        && leftAttempt?.resultId === rightAttempt?.resultId;
 }

@@ -221,6 +221,16 @@ describe('useNewSessionServerTargetState', () => {
         expect(latest.targetServerName).toBe('Server C');
     });
 
+    it.each(['deleted-profile', 'server-a'])('keeps an unavailable persisted Home fail-closed (%s)', async (persistedTargetServerId) => {
+        const hook = await renderHook(() => useNewSessionServerTargetState({
+            settings: buildSettings(), activeServerId: 'server-b', request: { persistedTargetServerId },
+        }));
+        expect(hook.getCurrent().allowedTargetServerIds).toEqual(['server-b', 'server-c']);
+        expect(hook.getCurrent().targetServerId).toBeNull();
+        expect(hook.getCurrent().rejectedRequestedServerId).toBe(persistedTargetServerId);
+        await hook.unmount();
+    });
+
     it('lets the route server target override the persisted target server', async () => {
         const captured: Array<ReturnType<typeof useNewSessionServerTargetState>> = [];
 
@@ -308,7 +318,7 @@ describe('useNewSessionServerTargetState', () => {
                         serverSelectionActiveTargetKind: 'server',
                         serverSelectionActiveTargetId: 'localhost-18829',
                     }}
-                    request={{}}
+                    request={{ persistedTargetServerId: 'localhost-18829' }}
                     onState={(state) => captured.push(state)}
                 />);
 
@@ -317,5 +327,26 @@ describe('useNewSessionServerTargetState', () => {
         expect(latest.targetServerId).toBe('srv_identity_a');
         expect(latest.targetServerProfile?.id).toBe('localhost-18829');
         expect(latest.targetServerName).toBe('Server A');
+    });
+
+    it('resolves a route profile alias inside a group before choosing the active Home fallback', async () => {
+        serverProfilesState.value = [
+            { id: 'server-b', name: 'Server B', serverUrl: 'https://b.example.test', lastUsedAt: 900 },
+            { id: 'local-c', serverIdentityId: 'srv_identity_c', name: 'Server C', serverUrl: 'https://c.example.test', lastUsedAt: 800 },
+        ];
+        await publishServerProfiles();
+        const hook = await renderHook(() => useNewSessionServerTargetState({
+            settings: buildSettings({
+                ...defaultServerSelectionSettings,
+                serverSelectionGroups: [{ id: 'grp-dev', name: 'Dev', serverIds: ['server-b', 'local-c'], presentation: 'grouped' }],
+            }),
+            activeServerId: 'server-b',
+            request: { spawnServerIdParam: 'local-c' },
+        }));
+
+        expect(hook.getCurrent().allowedTargetServerIds).toEqual(['server-b', 'srv_identity_c']);
+        expect(hook.getCurrent().targetServerId).toBe('srv_identity_c');
+        expect(hook.getCurrent().rejectedRequestedServerId).toBeNull();
+        await hook.unmount();
     });
 });

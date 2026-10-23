@@ -129,9 +129,9 @@ export const WalkthroughContents = React.memo(function WalkthroughContents(props
             </ScrollView>
             {Platform.OS === 'web' ? (
                 <ScmComparisonRailKeys testID="walkthrough-contents-keys" keys={[
-                    { keys: ['J', 'K'], label: t('walkthrough.keys.move') },
-                    { keys: ['R'], label: t('walkthrough.keys.reviewed') },
-                    { keys: ['/'], label: t('walkthrough.keys.ask') },
+                    { commands: ['review.change.next', 'review.change.previous'], label: t('walkthrough.keys.move') },
+                    { commands: ['review.change.keep'], label: t('walkthrough.keys.reviewed') },
+                    { commands: ['review.change.ask'], label: t('walkthrough.keys.ask') },
                 ]} />
             ) : null}
         </View>

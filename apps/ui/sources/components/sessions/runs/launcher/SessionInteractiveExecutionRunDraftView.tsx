@@ -12,6 +12,7 @@ import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayout
 import { backendTargetKeysMatch } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
+import type { TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol/teams';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { buildRolesRailPickerOption, ROLES_RAIL_PICKER_OPTION_ID } from '@/components/roles/rail/buildRolesRailPickerOption';
 import type { RoleRailItem } from '@/components/roles/rail/rolesRailTypes';
@@ -110,6 +111,7 @@ function ExecutionRunAgentModelPicker(props: Readonly<{
     machineId: string | null;
     actionInput: Record<string, unknown>;
     selected: ProviderBoundModelRef | null;
+    inheritedTeamCredentialModel: TeamCredentialProviderModelSelectionV1 | null;
     selectBackend: (targetKey: string) => void;
     setActionInput: React.Dispatch<React.SetStateAction<Record<string, unknown>>>;
 }>) {
@@ -118,6 +120,7 @@ function ExecutionRunAgentModelPicker(props: Readonly<{
         props.setActionInput(update);
     }, [props.choice.targetKey, props.selectBackend, props.setActionInput]);
     const team = useExecutionRunTeamCredentialModel({ ...props, selectedBackendChoice: props.choice,
+        inheritedSelection: props.inheritedTeamCredentialModel,
         // Browsing another Agent does not normalize or commit the draft.
         hasBackendChoices: false, setActionInput: setSelection });
     return <ExactModelChoicePicker
@@ -251,7 +254,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     });
     const serverId = props.sessionId === null ? explicitServerId : preferredServerId;
     const { session, accountBinding, accountLifetime, exactSettings, settings, profileCatalogReady, acpCatalogSnapshot, enabledAgentIds, defaultBackend,
-        backendTarget, inheritedModelSelection, resolveInheritedModelLabel, inheritedRoutePresentation, inheritedConnectedServicesSelection, machineId, machineReachable, startAction, executeAction } = useExecutionRunLaunchContext(props.sessionId, serverId, props.workspace);
+        backendTarget, inheritedModelSelection, inheritedTeamCredentialModel, resolveInheritedModelLabel, inheritedRoutePresentation, inheritedConnectedServicesSelection, machineId, machineReachable, startAction, executeAction } = useExecutionRunLaunchContext(props.sessionId, serverId, props.workspace);
     const [mountedComposerRef, setMountedComposerRef] = React.useState<Extract<ComposerRefV1, { kind: 'participantMessage' | 'newSession' }> | null>(null);
     const initialComposerFocusApplied = React.useRef(false);
     const sharedSavedSecretsEnabled = useFeatureEnabled('teams', {
@@ -346,6 +349,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         acpCatalogSnapshot,
         initialBackendTarget: backendTarget,
         inheritedModelSelection,
+        inheritedTeamCredentialModel,
         inheritedRoutePresentation,
         inheritedConnectedServicesSelection,
         fallbackAgentId: defaultBackend?.defaultAgentId ?? null,
@@ -362,6 +366,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         hasBackendChoices: options.backendChoices.length > 0,
         actionInput,
         setActionInput,
+        inheritedSelection: options.inheritedDraftTeamCredentialModel,
         onSelectionChange: () => setError(null),
     });
     const machine = useExecutionRunMachineName(session?.metadata ?? (props.workspace ? { machineId: props.workspace.machineId } : null));
@@ -836,11 +841,14 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 actionInput={actionInput}
                 selected={[draftModelSelection, options.inheritedDraftSelection].find(ref => ref
                     && choiceRunsAgent(choice, ref.agentTargetKey)) ?? null}
+                inheritedTeamCredentialModel={options.inheritedDraftTeamCredentialModel
+                    && choiceRunsAgent(choice, options.inheritedDraftTeamCredentialModel.agentTargetKey)
+                    ? options.inheritedDraftTeamCredentialModel : null}
                 selectBackend={selectBackend}
                 setActionInput={setActionInput}
             />,
         } : {}),
-    })), [actionInput, draftModelSelection, machine.name, machineId, options.backendChoices, options.inheritedDraftSelection, props.sessionId, selectBackend, serverId, setActionInput]);
+    })), [actionInput, draftModelSelection, machine.name, machineId, options.backendChoices, options.inheritedDraftSelection, options.inheritedDraftTeamCredentialModel, props.sessionId, selectBackend, serverId, setActionInput]);
     const roleName = chosenRoleId ? roleItem?.name ?? (rolesStatus === 'loading' ? null : chosenRoleId) : null;
     // One exact-model chooser serves both asks: D9's after a refusal (the refused Agent's default or an
     // exact model), and the Run's own model from the route chip. The route's list loads once asked for.
@@ -943,11 +951,12 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         ? resolveExecutionRunRouteChoice({
             inherits: routeFollowed,
             inheritedSelection: options.targetMatchesParent ? inheritedModelSelection ?? null : null,
+            inheritedTeamCredentialModel: options.targetMatchesParent ? inheritedTeamCredentialModel : null,
             inheritedRoutePresentation: options.targetMatchesParent ? inheritedRoutePresentation ?? null : null,
             inheritedModelLabel: options.targetMatchesParent ? resolveInheritedModelLabel(inheritedModelSelection ?? null) : null,
         })
         : null,
-    [hasSelectedBackend, inheritedModelSelection, inheritedRoutePresentation, intent, options.targetMatchesParent, resolveInheritedModelLabel, routeFollowed]);
+    [hasSelectedBackend, inheritedModelSelection, inheritedTeamCredentialModel, inheritedRoutePresentation, intent, options.targetMatchesParent, resolveInheritedModelLabel, routeFollowed]);
 
     const startChips = React.useMemo<ReadonlyArray<AgentInputExtraActionChip>>(() => {
         const chips: AgentInputExtraActionChip[] = [];
@@ -1113,6 +1122,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         ? resolveExecutionRunRouteChoice({
             inherits: true,
             inheritedSelection: childParentSelection,
+            inheritedTeamCredentialModel,
             inheritedRoutePresentation: inheritedRoutePresentation ?? null,
             inheritedModelLabel: resolveInheritedModelLabel(childParentSelection),
         }).inheritDetail

@@ -13,6 +13,8 @@ import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import { KeyboardShortcutLabelsContext, splitKeybindingLabel } from '@/keyboard/shortcutLabels';
+import type { KeyboardCommandId } from '@/keyboard/types';
 
 /**
  * The one bar over a comparison (Walkthrough lab WT1/WT8): the view switch and scope on the left, the
@@ -131,18 +133,37 @@ export function ScmComparisonRailCaption(props: Readonly<{
     );
 }
 
-/** The rail's foot: the keys this view binds (web only; the caller decides availability). */
-export function ScmComparisonRailKeys(props: Readonly<{ testID?: string; keys: readonly Readonly<{ keys: readonly string[]; label: string }>[] }>) {
+/**
+ * The rail's foot: the keys this view binds (web only; the caller decides availability). Each hint names
+ * the commands it advertises and shows their keys as bound here; a command nothing runs (keyboard
+ * shortcuts or single-key shortcuts off) draws no hint.
+ */
+export function ScmComparisonRailKeys(props: Readonly<{ testID?: string; keys: readonly Readonly<{ commands: readonly KeyboardCommandId[]; label: string }>[] }>) {
+    const labels = React.useContext(KeyboardShortcutLabelsContext);
+    const entries = props.keys.flatMap((entry) => {
+        const keycaps = railKeycaps(entry.commands.map((command) => labels[command]));
+        return keycaps ? [{ label: entry.label, keycaps }] : [];
+    });
+    if (entries.length === 0) return null;
     return (
         <View testID={props.testID} style={styles.railKeys}>
-            {props.keys.map((entry) => (
+            {entries.map((entry) => (
                 <View key={entry.label} style={styles.railKey}>
-                    {entry.keys.map((key) => <KeyHint key={key} label={key} />)}
+                    {entry.keycaps.map((key, index) => <KeyHint key={index} label={key} />)}
                     <Text style={styles.railKeyLabel}>{entry.label}</Text>
                 </View>
             ))}
         </View>
     );
+}
+
+/** "Shift+J" and "Shift+K" read as Shift J K; null when any command has no key. */
+function railKeycaps(bound: readonly (string | undefined)[]): readonly string[] | null {
+    if (bound.length === 0 || bound.some((label) => label === undefined)) return null;
+    const parts = bound.map((label) => splitKeybindingLabel(label!));
+    const modifiers = parts[0]!.slice(0, -1);
+    const shared = parts.every((keys) => keys.slice(0, -1).join('+') === modifiers.join('+'));
+    return shared ? [...modifiers, ...parts.map((keys) => keys[keys.length - 1]!)] : parts.flat();
 }
 
 const styles = StyleSheet.create((theme) => ({

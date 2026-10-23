@@ -3,7 +3,7 @@ import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
-import type { WorkflowEngineSelectionV1, WorkflowSessionAuthoringSelection } from '@happier-dev/protocol/workflows/workflowV1';
+import type { WorkflowEngineSelectionV1, WorkflowSessionAuthoringSelection, WorkflowStepSelectionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 import type { WorkflowRoleV1 } from '@happier-dev/protocol';
 
 import { DEFAULT_AGENT_ID, hasAgentIconMark } from '@/agents/catalog/catalog';
@@ -561,12 +561,15 @@ export function useSessionAuthoringFieldSummary(params: Readonly<{
 
 const EMPTY_FACTS: SessionAuthoringControlFacts = {};
 
+/** What a step's engine chip reads: its own engine, or the participant a Run supplies for it. */
+type SessionAuthoringEngine = WorkflowEngineSelectionV1 | NonNullable<WorkflowStepSelectionV1['participant']>;
+
 /**
  * What the Agent & model control says: a role by its name, or the Agent and its model ("Claude ·
  * Opus 5.5"). The chip and a phone's value row read it here, so they never word it two ways.
  */
 function formatSessionAuthoringEngineLabel(params: Readonly<{
-    engine: WorkflowEngineSelectionV1 | undefined;
+    engine: SessionAuthoringEngine | undefined;
     workflowRoles: readonly WorkflowRoleV1[] | undefined;
     agentLabel: string;
     values: WorkflowSessionAuthoringSelection;
@@ -575,6 +578,10 @@ function formatSessionAuthoringEngineLabel(params: Readonly<{
     agentId: ReturnType<typeof resolveSessionAuthoringAgentId>;
 }>): string {
     if (params.engine && 'role' in params.engine) return resolveRoleDisplayName(params.engine.role, params.workflowRoles);
+    // An identity the Run supplies from a named input is that input's, not an unchosen Agent.
+    if (params.engine && 'kind' in params.engine && params.engine.kind === 'input') {
+        return t('workflows.page.blocks.fromInput', { name: params.engine.name });
+    }
     if (!params.values.agentTarget) return t('agentInput.agent.unselected');
     const modelControl = resolveSessionAuthoringFieldControl({ field: 'modelSelection', values: params.values,
         controls: params.controls, facts: params.facts, agentId: params.agentId });
@@ -590,7 +597,7 @@ function formatSessionAuthoringEngineLabel(params: Readonly<{
 /** The Agent & model summary for a host that shows it as a value row rather than the chip. */
 export function useSessionAuthoringEngineSummary(params: Readonly<{
     values: WorkflowSessionAuthoringSelection;
-    engine?: WorkflowEngineSelectionV1;
+    engine?: SessionAuthoringEngine;
     workflowRoles?: readonly WorkflowRoleV1[];
     facts?: SessionAuthoringControlFacts;
     metadata?: Metadata | null;

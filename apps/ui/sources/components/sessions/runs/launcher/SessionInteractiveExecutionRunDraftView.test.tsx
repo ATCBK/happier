@@ -986,14 +986,21 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(startedTargetKey(emittedStarts[2]!)).toBe(startedTargetKey(emittedStarts[1]!));
     });
     describe('choosing a model for this Run from the route chip', () => {
-        async function mountTeamParent() {
+        async function mountTeamParent(browserShape = false) {
             teamModelsEnabled = true;
             getStorage().setState(state => ({ sessions: { ...state.sessions, session_1: { ...state.sessions.session_1!, metadata: {
                 ...state.sessions.session_1!.metadata!, flavor: 'codex',
                 sessionAppliedModelV1: { v: 1, provider: 'codex', modelId: 'gpt-5.5', updatedAt: 1 },
-                connectedServices: ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId: { 'happier.agent.codex/openai-codex': {
+                ...(browserShape ? { connectedServices: undefined, sessionModelsV1: {
+                    v: 1 as const, agentId: 'codex', updatedAt: 2, currentModelId: teamModel.modelId,
+                    availableModels: [{ id: teamModel.modelId, name: teamModel.modelId }], activeSelectionV1: {
+                        v: 2 as const, source: 'runtime_apply' as const, runner: { pid: 42, processStartTimeMs: 1 },
+                        selection: { agentTargetKey: teamModel.agentTargetKey, providerConnectionId: null, modelId: teamModel.modelId },
+                        teamCredentialModel: { ...teamModel, expectedResourceRevision: 0 },
+                    },
+                } } : { connectedServices: ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId: { 'happier.agent.codex/openai-codex': {
                     source: 'team_resource', resourceId: teamModel.resourceId, deliveryMode: 'brokered',
-                } } }),
+                } } }) }),
             } } } }));
             await mount();
         }
@@ -1001,6 +1008,35 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
             await mountTeamParent();
             await waitFor(() => expect(screen.getTextContent()).toContain('Shared coding pool'));
             expect(screen.getTextContent()).toContain('Engineering');
+        });
+        it.each([1440, 390])('names the browser parent applied Team route without a Connected Service binding at width %s', async (width) => {
+            windowState.width = width;
+            try {
+                await mountTeamParent(true);
+                await waitFor(() => expect(screen.getTextContent()).toContain('Shared coding pool'));
+                expect(screen.getTextContent()).toContain('Engineering');
+                const route = await renderChip('execution-run-start-route');
+                const label = route.findByTestId('execution-run-start-route-chip')?.props.accessibilityLabel;
+                expect(label).toContain('Shared coding pool');
+                expect(label).toContain('Engineering');
+                expect(label).toContain(teamModel.modelId);
+                expect(label).not.toContain(t('connectedServices.authChip.nativeLabel'));
+                if (width === 390) {
+                    expect(screen.findByTestId('execution-run-start-foot')?.props.children).toContain('Shared coding pool');
+                } else {
+                    expect(route.getTextContent()).toContain('Shared coding pool');
+                    expect(screen.findByTestId('execution-run-start-foot')?.props.children)
+                        .toBe(t('agentStart.startsWhenYouSend', { count: 1 }));
+                }
+                await send();
+                expect(emittedStarts).toHaveLength(1);
+                expect(emittedStarts[0]).not.toHaveProperty('teamCredentialModel');
+                expect(emittedStarts[0]).not.toHaveProperty('modelSelection');
+                expect(emittedStarts[0]).not.toHaveProperty('modelId');
+                expect(emittedStarts[0]).not.toHaveProperty('connectedServices');
+            } finally {
+                windowState.width = 1024;
+            }
         });
         it.each(['Agent chip', 'route chip'] as const)('offers the Team model through the %s shared picker', async entry => {
             await mountTeamParent();

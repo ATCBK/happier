@@ -11,12 +11,9 @@ const focusObservation = vi.hoisted(() => ({
 }));
 installAgentInputCommonModuleMocks({
     reactNative: async () => {
-        const { createReactNativeNativeMock, createFocusableTextInputMock } = await import('@/dev/testkit/mocks/reactNative');
+        const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeNativeMock({ platformOS: 'ios' }, {
             useWindowDimensions: () => ({ width: 1200, height: 900, scale: 1, fontScale: 1 }),
-            TextInput: createFocusableTextInputMock(() => {
-                focusObservation.focusedWhileHidden.push(focusObservation.readMainHidden());
-            }),
         });
     },
 });
@@ -74,7 +71,14 @@ describe('review composer handoff', () => {
         const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}><AppPaneScopeHost scopeId={scopeId} arrangement="honour"
             mainColumn={{ hideLabel: 'Hide session', showLabel: 'Show session', identity: { name: 'Session' } }}
             main={<Session />} emptyEditorPane={<div />} />
-        </KeyboardShortcutProvider>, { wrapper: runtime.Wrapper });
+        </KeyboardShortcutProvider>, { wrapper: runtime.Wrapper,
+            // The native composer view owns its imperative focus handle.
+            createNodeMock: element => element.type === 'HappierComposerInput' ? {
+                focus: () => { focusObservation.focusedWhileHidden.push(focusObservation.readMainHidden()); },
+                blur: () => {}, setSelection: () => {}, setTextAndSelection: () => {},
+                offsetAtPoint: async () => null, setDropCaret: () => {}, measureInWindow: () => {},
+            } : null,
+        });
         const retainedInput = screen.root.findByType(AgentInput);
         await act(async () => { refs.main?.setHidden(true); });
         expect(refs.main?.hidden).toBe(true);
