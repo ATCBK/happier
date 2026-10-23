@@ -11,9 +11,109 @@ import { executeManagedMachinePolicyAction } from './managedMachinePolicyAction'
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { UpdateBodySchema, type Update } from '@happier-dev/protocol';
+import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { ApiMachineClient } from '@/api/apiMachine';
 
 afterEach(() => vi.restoreAllMocks());
 describe('daemon managed policy census transport', () => {
+    it('schedules from classified Machine invalidations rather than raw Account, Pending or Automation traffic', async () => {
+        let censuses = 0;
+        const signing = nacl.sign.keyPair();
+        vi.spyOn(axios, 'post').mockImplementation(async () => {
+            censuses += 1;
+            return { status: 200, data: { machines: [], targets: [] } };
+        });
+        const apiMachine = new ApiMachineClient('token', { id: 'controller', encryptionMode: 'plain',
+            metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+        const transport = apiMachine as unknown as {
+            dispatchUpdate(update: Update): boolean;
+            notifyManagedMachinePolicyInvalidated(): Promise<void>;
+        };
+        const runtime = createDaemonManagedMachinePolicyRuntime({ apiMachine,
+            readCensus: signal => readManagedMachinePolicyCensus({ homeId: 'home',
+                controller: { machineId: 'controller', installationId: 'installation' }, custodianAccountId: 'owner',
+                privateKey: signing.secretKey, token: 'token', serverUrl: 'https://policy.example', signal }),
+            executePolicy: async () => { throw new Error('No policy work'); } });
+        const drain = () => new Promise<void>(resolve => setImmediate(resolve));
+        try {
+            for (const raw of [
+                { t: 'account-change' },
+                { t: 'pending-changed', sid: 'unrelated', pendingCount: 0, pendingVersion: 1 },
+                { t: 'automation-run-updated', runId: 'unrelated', automationId: null, state: 'queued', scheduledAt: 1, updatedAt: 1 },
+            ]) transport.dispatchUpdate({ id: 'wake', seq: 1, createdAt: 1, body: UpdateBodySchema.parse(raw) });
+            await drain();
+            expect(censuses).toBe(0);
+            await transport.notifyManagedMachinePolicyInvalidated();
+            await drain();
+            expect(censuses).toBe(1);
+        } finally {
+            await runtime.stop();
+            await apiMachine.shutdown();
+        }
+        await transport.notifyManagedMachinePolicyInvalidated();
+        await drain();
+        expect(censuses).toBe(1);
+    });
+    it.each([
+        ['session-input', false], ['workflow-assignment', false], ['context-delivery', false],
+        ['session-input', true], ['workflow-assignment', true],
+    ] as const)(
+        'retires held accepted work after its own %s origin changes (retargeted: %s), ignoring other origins', async (kind, retargeted) => {
+        const signing = nacl.sign.keyPair();
+        const machine = ManagedMachineV1Schema.parse({ id: 'managed', homeId: 'home', custodianAccountId: 'owner',
+            controller: { machineId: 'controller', installationId: 'installation' }, enrolledMachineId: 'guest',
+            launch: { provider: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
+            allocation: 'bound', resource: { contributionRef: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
+            creationState: 'active', desired: 'start', desiredWhen: 'now', intentRevision: 0,
+            retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: true });
+        const target = ManagedWakeTargetV1Schema.parse({ homeId: 'home', managedId: machine.id,
+            enrolledMachineId: 'guest', expectedIntentRevision: 0, controller: machine.controller, reason: 'admitted-work',
+            origin: kind === 'session-input' ? { kind, session: { homeId: 'home', sessionId: 'session' }, pendingRequestId: 'pending', requestedAt: 1 }
+                : kind === 'workflow-assignment' ? { kind, runId: 'run', revision: 1, assignment: { machineId: 'guest' } }
+                : { kind, session: { homeId: 'home', sessionId: 'session' }, delivery: { runId: 'run', revision: 1 } } });
+        let targets = [target];
+        let reads = 0;
+        vi.spyOn(axios, 'post').mockImplementation(async () => {
+            reads += 1;
+            return { status: 200, data: { machines: [machine], targets } };
+        });
+        const apiMachine = new ApiMachineClient('token', { id: 'controller', encryptionMode: 'plain',
+            metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+        const transport = apiMachine as unknown as { dispatchUpdate(update: Update): boolean };
+        let held: AbortSignal | undefined;
+        const runtime = createDaemonManagedMachinePolicyRuntime({ apiMachine,
+            readCensus: signal => readManagedMachinePolicyCensus({ homeId: 'home', controller: machine.controller,
+                custodianAccountId: 'owner', privateKey: signing.secretKey, token: 'token', serverUrl: 'https://policy.example', signal }),
+            // The native operation's outstanding lifetime is the boundary observed by the scheduler.
+            executePolicy: async input => {
+                const signal = input.signal;
+                if (!signal) throw new Error('A policy driver must receive its lifetime');
+                held = signal;
+                await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+                return { ok: true, result: {} };
+            } });
+        const changed = async (id: string) => {
+            const body = UpdateBodySchema.parse({ ...(kind === 'session-input'
+                ? { t: 'pending-changed', sid: id, pendingCount: 0, pendingVersion: 2 }
+                : { t: 'automation-run-updated', runId: id, automationId: null, state: 'cancelled', scheduledAt: 1, updatedAt: 2 }),
+                ...(retargeted ? { managedWakeTargetV1: { ...target, controller: { ...target.controller, machineId: 'replacement-controller' } } } : {}),
+            });
+            transport.dispatchUpdate({ id: 'origin-change', seq: 1, createdAt: 1, body });
+            await new Promise<void>(resolve => setImmediate(resolve));
+        };
+        try {
+            runtime.notifyChanged();
+            await vi.waitFor(() => expect(held).toBeDefined());
+            targets = [];
+            await changed('unrelated');
+            expect(reads).toBe(1);
+            expect(held?.aborted).toBe(false);
+            await changed(kind === 'session-input' ? 'session' : 'run');
+            expect(reads).toBe(2);
+            expect(held?.aborted).toBe(true);
+        } finally { await runtime.stop(); await apiMachine.shutdown(); }
+    });
     it('defers unused retention until enrollment without deferring a reviewed deadline or canceled creation cleanup', async () => {
         const key = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(8));
         let machine = ManagedMachineV1Schema.parse({ id: 'managed', homeId: 'home', custodianAccountId: 'owner',
