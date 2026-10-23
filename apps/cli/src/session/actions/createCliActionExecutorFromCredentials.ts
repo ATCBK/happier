@@ -6,7 +6,7 @@ import {
   DEFAULT_SESSION_TRANSCRIPT_FOLLOW_LEASE_IDLE_TTL_MS,
   createSessionTranscriptFollowLeaseRegistry,
   type SessionTranscriptFollowLeaseRegistry,
-} from '@/api/session/transcriptQueries';
+} from '@/api/session/followSessionTranscript';
 import type { SessionTranscriptActionItem } from '@/api/session/sessionTranscriptActionInput';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { resolveCurrentAccountAdministrationMachine, resolveCurrentAccountMachineTarget } from '@/api/machine/resolveCurrentAccountMachineTarget';
@@ -18,12 +18,7 @@ import {
   normalizeServerHttpBaseUrl,
   runWithServerHttpBaseUrl,
 } from '@/api/client/serverHttpBaseUrl';
-import { requestDaemonSignedRootActionExecution } from '@/daemon/controlClient';
 import { buildTerminalAuthorityCeiling, resolveEffectiveTerminalPresentUserPolicy } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
-import {
-  resolveLiveDaemonControlTargetForServer,
-  resolveLiveDaemonExternalActionEndpoint,
-} from '@/daemon/multiDaemon';
 import {
   hasStoredSessionCredentialProvenance,
   readSettings,
@@ -91,7 +86,6 @@ import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveFilesystemTransferCustodyFailure } from './filesystemTransferCustody';
 import { ensureCliActionPolicySettings } from './ensureCliActionPolicySettings';
-import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 import { readMachineSelectorIds, reconcileExternalActionTarget, resolveExternalActionMachineTarget } from '@/daemon/externalActions/reconcileExternalActionTarget';
 import { dispatchOriginalAccountAction, readExternalActionInstalledMachine, requiresOriginalAccountMachineActionProof, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import { MachineEnvironmentApplyInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
@@ -212,6 +206,7 @@ async function resolveConfiguredMachineTarget(): Promise<ActionTarget | null> {
 }
 
 async function resolveDaemonLocalActionMachineId(serverApiUrl: string): Promise<string | null> {
+  const { resolveLiveDaemonExternalActionEndpoint } = await import('@/daemon/multiDaemon');
   const endpoint = await resolveLiveDaemonExternalActionEndpoint(serverApiUrl);
   return endpoint?.machineId ?? null;
 }
@@ -939,6 +934,9 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           ? readNonEmptyString((await readSettings().catch(() => null))?.machineId)
           : null);
       if (!currentMachineId) return false;
+      const { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } = await import(
+        '@/daemon/externalActions/daemonExternalActionTargetResolver'
+      );
       const checker = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({
         credentials,
         machineId: currentMachineId,
@@ -1519,7 +1517,9 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       const usesDaemonIngress = params.externalActionClient || requiresSessionDaemonAdmission
         || selectedOriginalMachine?.kind === 'ready' || liveResultCustody || requireDaemonIngress;
       const originalDaemonTarget = usesDaemonIngress && originalCliCaller
-        ? await resolveLiveDaemonControlTargetForServer(fixedServerId ?? approvalServerId).catch(() => null)
+        ? await (await import('@/daemon/multiDaemon')).resolveLiveDaemonControlTargetForServer(
+          fixedServerId ?? approvalServerId,
+        ).catch(() => null)
         : undefined;
       const ownDaemon = originalDaemonTarget?.accountId
         && originalDaemonTarget.accountId === readAccountIdFromToken(credentials.token);
@@ -1607,6 +1607,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           if (target?.kind === 'machine') {
             // Home's API URL need not be the daemon's control URL. Preserve
             // the fixed-Home publication's own Account/Machine offline dispatcher.
+            const { resolveLiveDaemonExternalActionEndpoint } = await import('@/daemon/multiDaemon');
             const localEndpoint = await resolveLiveDaemonExternalActionEndpoint(resolveActionServerApiUrl()).catch(() => null);
             const accountId = readAccountIdFromToken(credentials.token);
             const localPublication = daemonControlTarget ?? localEndpoint;
@@ -1646,6 +1647,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
             }
           }
           if (fixedServerId && !daemonControlTarget) return actionFailure('daemon_unavailable');
+          const { requestDaemonSignedRootActionExecution } = await import('@/daemon/controlClient');
           // Endpoint discovery may outlive the captured caller's credential scope.
           // Keep that scope current at the local dispatch boundary as well.
           if (signal?.aborted) return actionFailure('cancelled');

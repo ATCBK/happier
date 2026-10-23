@@ -14,7 +14,6 @@ import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTrans
 import { runWithServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { getRandomBytes } from '@/api/encryption';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { captureSavedSecretSourcePreparationForOperation, prepareSavedSecretResourceCreateForOperation } from "./hydrateSavedSecretCatalog";
 import { readSavedSecretCatalogForOperation } from "@/settings/secrets/savedSecretCatalogRead";
 import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 
@@ -67,6 +66,7 @@ export function createCliPersonalSavedSecretActionExecute(params: Readonly<{
             list: async () => (await read()).flatMap(resource => resource.ownerAccountId === accountId && resource.relationship !== 'recipient'
                 && resource.displayName ? [{ secretId: resource.resourceId, name: resource.displayName, kind: resource.kind, revision: resource.revision }] : []),
             create: async args => {
+                const { prepareSavedSecretResourceCreateForOperation } = await import('./hydrateSavedSecretCatalog');
                 const storage = await resolveCliAccountStorageContext({ credentials: params.credentials, signal: context.signal });
                 await assertCurrent();
                 const secretId = randomUUID();
@@ -96,6 +96,7 @@ export function createCliPersonalSavedSecretActionExecute(params: Readonly<{
             },
             delete: async args => {
                 await findOwned(args.secretId, args.expectedUpdatedAt);
+                const { captureSavedSecretSourcePreparationForOperation } = await import('./hydrateSavedSecretCatalog');
                 const captured = await captureSavedSecretSourcePreparationForOperation({ credentials: params.credentials,
                     expectedScopeKey: scopeKey, operationContext: params.operationContext, signal: context.signal });
                 const references = listAccountSettingsSavedSecretReferences(captured.rawSettings, formatSharedSavedSecretRefV1(args.secretId), captured.referenceCatalogs);

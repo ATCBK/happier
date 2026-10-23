@@ -1,4 +1,3 @@
-import { AGENT_IDS } from '@happier-dev/agents/agent-ids';
 import type { ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol';
 import type { z } from 'zod/mini';
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
@@ -103,7 +102,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
     let operations: Promise<ProfileOperations> | undefined;
     const resolveOperations = () => operations ??= (async () => {
       assertCurrent();
-      const [{ getActiveAccountSettingsSnapshot }, { createCliProfileStoreForOperation, createCliProfileStore }] = await Promise.all([import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/settings/profiles/profileStore")]);
+      const [{ getActiveAccountSettingsSnapshot }, { createCliProfileStoreForOperation, createCliProfileStore }, { AGENT_IDS }] = await Promise.all([import("@/settings/accountSettings/activeAccountSettingsSnapshot"), import("@/settings/profiles/profileStore"), import('@happier-dev/agents/agent-ids')]);
       if (!params.operationContext && !getActiveAccountSettingsSnapshot()) {
         const { bootstrapAccountSettingsContext } = await import("@/settings/accountSettings/bootstrapAccountSettingsContext");
         await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking' });

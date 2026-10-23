@@ -111,8 +111,7 @@ import { admitScmCommitPolicy, admitScmCommitUndoLast } from '@happier-dev/proto
 import { ScmBackendDescribeResponseSchema, ScmRemoteRequestSchema, ScmCommitCreateRequestSchema } from '@happier-dev/protocol/scm';
 import type { ScmCapabilities } from '@happier-dev/protocol/scm';
 import { ScmPullRequestOpenOrReuseResponseSchema } from '@happier-dev/protocol/scm/pullRequests';
-import { SESSION_PULL_REQUEST_BINDING_ACTION_ID_V1, SessionPullRequestBindingResultV1Schema,
-  type SessionPullRequestBindingInputV1 } from '@happier-dev/channels-protocol/v1';
+import type { SessionPullRequestBindingInputV1 } from '@happier-dev/channels-protocol/v1';
 import { createTargetedActionRpcRequestV1 } from '@happier-dev/protocol/actions/actionRpcTransport';
 import { createUnavailableRuntimeActionExecutor } from '@happier-dev/protocol/actions/executor/dispatch';
 import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -232,7 +231,6 @@ import type { SpawnSessionTerminalSchema } from '@/rpc/handlers/spawnSessionOpti
 import type { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import type { createStableSpawnNonce } from '@/session/shared/spawnNonce';
 import type { AGENT_IDS, DEFAULT_AGENT_ID, parsePermissionIntentAlias, resolvePermissionIntentFromSessionMetadata, resolveCanonicalAgentIdFromFlavor, resolveAgentIdFromSessionMetadata, isBundledAgentId, AgentId, PermissionIntent } from '@happier-dev/agents';
-import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { configuration } from '@/configuration';
 import { resolveServerHttpBaseUrl, normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { AdmittedRequesterSessionBootstrap } from '@/daemon/sessionEncryption/requesterSessionCredentials';
@@ -1479,13 +1477,16 @@ export function createCliActionDeps(params: Readonly<{
     catch { signal?.throwIfAborted(); return null; }
   };
   const resolveSessionAgentIdentity = async (metadata: Record<string, unknown> | null | undefined, backendTarget?: BackendTargetRefV2 | null) => {
-    const [{ resolveAgentIdFromSessionMetadata, isBundledAgentId }, { readAgentCatalogSnapshot }] = await Promise.all([import("@happier-dev/agents"), import("@/agent/catalog/snapshot")]);
+    const [{ resolveAgentIdFromSessionMetadata, isBundledAgentId }, { readAgentCatalogSnapshot }, { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES }] = await Promise.all([import("@happier-dev/agents"), import("@/agent/catalog/snapshot"), import('@happier-dev/agents/agent-ids')]);
     const agentId = backendTarget?.sourceKind === 'built_in'
       ? backendTarget.backendId : resolveAgentIdFromSessionMetadata(metadata);
     return agentId ? (backendTarget?.sourceKind === 'built_in' && isBundledAgentId(agentId) ? BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[agentId]
       : readAgentCatalogSnapshot().agentDefinitionsById.get(agentId)?.identity) : undefined;
   };
   const invokeSessionPullRequestBinding = async (input: SessionPullRequestBindingInputV1, caller?: ActionExecutorContext) => {
+    const { SESSION_PULL_REQUEST_BINDING_ACTION_ID_V1, SessionPullRequestBindingResultV1Schema } = await import(
+      '@happier-dev/channels-protocol/v1'
+    );
     caller?.signal?.throwIfAborted();
     const transport = await resolveTransportForSession(input.sessionId, caller?.signal);
     if (!transport.ok) throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });

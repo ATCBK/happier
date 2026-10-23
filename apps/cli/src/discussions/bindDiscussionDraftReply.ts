@@ -5,7 +5,6 @@ import { DiscussionPostInputV1Schema, DiscussionReplyInputV1Schema } from '@happ
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { SessionInputSourceSessionV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
-import { readSessionMessageReply } from '@/session/services/sessionMessageReply';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 /** Bind explicit and terminal drafts before the existing approval owner captures their operands. */
@@ -64,6 +63,7 @@ export async function bindDiscussionDraftReply(params: Readonly<{
     const credentials = params.credentials;
     if (!credentials) return unavailable();
     try {
+      const { readSessionMessageReply } = await import('@/session/services/sessionMessageReply');
       const read = () => readSessionMessageReply({ credentials, sessionId: publisherSessionId,
         localId: sourceInputId, ...(context.signal ? { signal: context.signal } : {}) });
       const original = params.serverHttpBaseUrl ? await runWithServerHttpBaseUrl(params.serverHttpBaseUrl, read) : await read();
