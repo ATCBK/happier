@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
     HappierPageHeader,
     happierPageTextMetrics,
+    type HappierPageHeaderProps,
     type HappierPageHeaderTextRender,
 } from '@happier-dev/plugin-ui/presentation';
 
@@ -115,6 +116,8 @@ export type PageHeaderProps = Readonly<{
     titleEditor?: PageHeaderTextEditor;
     /** Edit the description in place as a multiline field under the title. */
     descriptionEditor?: PageHeaderTextEditor;
+    /** An entrance that moves the identity and fades what supports it, in place (`HappierPageHeader`). */
+    wrapPart?: HappierPageHeaderProps['wrapPart'];
     testID?: string;
 }>;
 
@@ -233,6 +236,7 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
             renderBack={renderBack}
             columnMaxWidthPx={props.columnWidth === 'pane' ? undefined : maxWidth}
             renderText={renderText}
+            wrapPart={props.wrapPart}
             testID={props.testID}
         />
         </>

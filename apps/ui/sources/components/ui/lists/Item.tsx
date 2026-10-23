@@ -109,6 +109,8 @@ export interface ItemProps {
     dataSet?: Readonly<Record<string, unknown>>;
     /** Imperative focus target for list owners that restore focus after row removal. */
     pressableRef?: React.Ref<React.ComponentRef<typeof Pressable>>;
+    /** Where a string title is drawn, for a caller that measures it (the row a page header grows from). */
+    titleRef?: React.Ref<React.ComponentRef<typeof Text>>;
     title: React.ReactNode;
     subtitle?: React.ReactNode;
     subtitleTestID?: string;
@@ -643,6 +645,7 @@ export const Item = React.memo<ItemProps>((props) => {
         testID,
         dataSet,
         pressableRef,
+        titleRef,
         title,
         subtitle,
         subtitleTestID,
@@ -1069,7 +1072,9 @@ export const Item = React.memo<ItemProps>((props) => {
         if (titleMeasuredForFacts.current && Number.isNaN(measure.titleNatural)) return;
         // The name needs its whole width up to the floor a title meta keeps. Shown facts yield once the name's
         // column falls short of that; yielded facts return once the column holds them, and the name.
-        const titleNeeds = Math.min(Number.isNaN(measure.titleNatural) ? Number.POSITIVE_INFINITY : measure.titleNatural, ITEM_TITLE_META_TITLE_MIN_PX);
+        // Layout reports whole pixels, so a column equal to the measured name can still clip a fraction of it
+        // into an ellipsis: the name needs one pixel more than its measured width.
+        const titleNeeds = Math.min(Number.isNaN(measure.titleNatural) ? Number.POSITIVE_INFINITY : measure.titleNatural + 1, ITEM_TITLE_META_TITLE_MIN_PX);
         // The facts' laid-out box already carries the gap the right slot keeps before them.
         const yielded = measure.yielded ? measure.title - measure.facts < titleNeeds : measure.title < titleNeeds;
         measure.yielded = yielded;
@@ -1318,6 +1323,7 @@ export const Item = React.memo<ItemProps>((props) => {
         ellipsizeMode?: ItemTextEllipsizeMode;
         testID?: string;
         highlightQuery?: string;
+        ref?: React.Ref<React.ComponentRef<typeof Text>>;
     }>) => {
         const value = String(params.value);
         const highlightRanges = params.highlightQuery ? queryRanges(value, params.highlightQuery) : undefined;
@@ -1330,6 +1336,7 @@ export const Item = React.memo<ItemProps>((props) => {
         if (webMiddle) return <MiddleEllipsisText testID={params.testID} style={params.style} value={value} />;
         return (
             <Text
+                ref={params.ref}
                 testID={params.testID}
                 style={[
                     params.style,
@@ -1379,6 +1386,7 @@ export const Item = React.memo<ItemProps>((props) => {
                             <View style={styles.inlineMarkText}>
                                 {renderPrimitiveText({
                                     value: title,
+                                    ref: titleRef,
                                     style: [styles.title, titleSizeStyle, titleColor, titleStyle],
                                     numberOfLines: 1,
                                     ellipsizeMode: titleEllipsizeMode,
@@ -1395,6 +1403,7 @@ export const Item = React.memo<ItemProps>((props) => {
                         <View style={styles.inlineMarkText}>
                             {renderPrimitiveText({
                                 value: title,
+                                ref: titleRef,
                                 style: [styles.title, titleSizeStyle, titleColor, titleStyle],
                                 numberOfLines: titleLines ?? (titleHighlightQuery ? HIGHLIGHTED_TITLE_MAX_LINES : resolveItemTitleMaxLines(Boolean(subtitle), { page: isPageRow, hasAccessory: true })) ?? undefined,
                                 ellipsizeMode: titleEllipsizeMode,
@@ -1406,6 +1415,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 ) : typeof title === 'string' || typeof title === 'number' ? (
                     renderPrimitiveText({
                         value: title,
+                        ref: titleRef,
                         style: [styles.title, titleSizeStyle, titleColor, titleStyle],
                         numberOfLines: titleLines ?? (titleHighlightQuery ? HIGHLIGHTED_TITLE_MAX_LINES : resolveItemTitleMaxLines(Boolean(subtitle), { page: isPageRow })) ?? undefined,
                         ellipsizeMode: titleEllipsizeMode,
