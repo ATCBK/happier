@@ -2991,12 +2991,21 @@ export function createNativeAgentSessionOperations(
             const acceptedNativeSource = suppliedSource?.connectedAccount && directFacets?.connectedAccounts.some(selection =>
                 selection.account.service.pluginId === suppliedSource.connectedAccount?.service.pluginId
                 && selection.account.service.localId === suppliedSource.connectedAccount?.service.localId);
-            const attribution = event.scope === 'turn_delta'
+            let attribution = event.scope === 'turn_delta'
                 ? requestProof?.source.kind === 'provider' ? requestProof
                     : acceptedNativeSource && nativeProof.success ? nativeProof.data
                         : requestProof?.source.kind === 'native'
                             && (requestProof.source.connectedAccount === null || event.attribution === undefined) ? requestProof : undefined
                 : undefined;
+            // A native identity without a plan cannot erase dispatch's known
+            // workspace scope. Preserve the native identity when accepted, but
+            // never substitute a contradicted launch Account.
+            if (event.scope === 'turn_delta' && requestProof?.source.kind === 'native'
+                && requestProof.source.accountScope === 'workspace' && attribution?.source.kind !== 'provider'
+                && !(attribution?.source.kind === 'native' && attribution.source.accountScope !== undefined)) {
+                attribution = { v: 1, turnId: requestProof.turnId, source: { kind: 'native', accountScope: 'workspace',
+                    connectedAccount: attribution?.source.kind === 'native' ? attribution.source.connectedAccount : null } };
+            }
             const publishUsage = (witness: NativeAgentSessionUsagePublisher['accountingWitness']): void => {
               if (disposeStarted) return;
               try {
@@ -3904,6 +3913,12 @@ export function createNativeAgentSessionOperations(
                         kind: 'native', connectedAccount: { service: { ...selection.account.service }, accountId: selection.account.accountId },
                         ...(selection.usageAccountScope === 'unknown' ? {} : { accountScope: selection.usageAccountScope }),
                     } };
+                } else if (!requestAttribution && !directFacets?.readAppliedTeamCredentialModel?.()
+                    && selections.some(candidate => candidate.usageAccountScope === 'workspace')) {
+                    // Unknown selection among workspace candidates must remain
+                    // excluded; it cannot become unknown/countable public usage.
+                    requestAttribution = { v: 1, turnId: correlation.turnId,
+                        source: { kind: 'native', connectedAccount: null, accountScope: 'workspace' } };
                 }
                 inputCorrelations.set(correlation.inputId, { ...correlation, requestAttribution });
                 activeTurnAdmissionWitness = createNativeAgentTurnAdmissionWitness(

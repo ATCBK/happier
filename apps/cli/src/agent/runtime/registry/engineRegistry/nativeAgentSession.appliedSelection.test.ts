@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
-import type { SessionTeamCredentialBindingIntentV1 } from '@happier-dev/protocol';
+import { UsageEventIngestRequestSchema, type SessionTeamCredentialBindingIntentV1 } from '@happier-dev/protocol';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { HostSessionRuntimeHookRuntime } from '@/agent/runtime/session/loop/runHostSessionRuntime';
 import { resolveHostSessionRuntimeFactoryResult } from '@/agent/runtime/session/loop/factoryResult';
 import { buildPluginSessionBindingInput } from '@/plugins/runtime/runtimeCore/plugin/sessionLaunch';
 import { createNativeAgentRuntimeSessionPlanFixture as createNativeAgentRuntimeSessionPlan } from './nativeAgentSession.testkit';
 import { createNativeSessionClientTestPort, createExternalContributionFixtures, createLease, createSessionHostServiceOwners } from './nativeAgentSession.testkit';
+import { buildUsageEventIngestRequest } from '@/usage/buildUsageEventIngestRequest';
 
 async function openSession(binding?: SessionTeamCredentialBindingIntentV1, connectedAccounts: NonNullable<AgentSessionOpenRequest['connectedAccounts']> = [], runtimeAuth?: AgentSessionRuntime['runtimeAuth'], attached = false) {
     const agentId = 'acme-applied-reader';
@@ -47,7 +48,7 @@ async function openSession(binding?: SessionTeamCredentialBindingIntentV1, conne
         }),
     });
     if (!plan.config.createSessionRuntime) throw new Error('expected a session runtime factory');
-    const published: unknown[] = [];
+    const published: Array<Parameters<ApiSessionClient['publishUsageObservation']>[0]> = [];
     const session = createNativeSessionClientTestPort('applied-reader', {
         publishUsageObservation: (input: Parameters<ApiSessionClient['publishUsageObservation']>[0]) => { published.push(input); },
     });
@@ -64,6 +65,42 @@ async function openSession(binding?: SessionTeamCredentialBindingIntentV1, conne
 }
 
 describe('native accepted-open applied selection', () => {
+    it.each([
+        { scopes: ['workspace'], nativeScope: false, expectedScope: 'workspace' },
+        { scopes: ['personal', 'workspace'], nativeScope: false, expectedScope: 'workspace' },
+        { scopes: ['unknown', 'workspace'], nativeScope: false, expectedScope: 'workspace' },
+        { scopes: ['personal'], nativeScope: false, expectedScope: 'personal' },
+        { scopes: ['unknown'], nativeScope: false, expectedScope: undefined },
+        { scopes: ['workspace'], nativeScope: true, expectedScope: 'workspace' },
+        { scopes: ['workspace'], nativeScope: 'personal', expectedScope: 'personal' },
+    ] as const)('captures service scope at dispatch, retaining ambiguous workspace candidates ($scopes, native=$nativeScope)', async ({ scopes, nativeScope, expectedScope }) => {
+        const service = { pluginId: 'acme.connected-account', localId: 'credential' };
+        const { created, published, emit } = await openSession(undefined, scopes.map((usageAccountScope, index) => ({
+            purpose: 'primary', usageAccountScope, account: { service, accountId: `account-${index}` },
+        })));
+        const unsubscribe = created.operations.subscribeRuntimeEvents(() => undefined);
+        try {
+            await created.operations.sendTurnPrompt('request', { turnId: 'scope-turn', localId: 'scope-input' });
+            emit({ kind: 'turn-start', sequence: 1, sessionId: 'applied-reader', emittedAtMs: 99,
+                turnId: 'scope-turn', startedBy: 'provider' });
+            emit({ kind: 'usage-observed', sequence: 2, sessionId: 'applied-reader', emittedAtMs: 100,
+                turnId: 'scope-turn', observationId: 'scope-observation', source: 'native', scope: 'turn_delta', modelId: 'model',
+                ...(nativeScope ? { attribution: { v: 1, turnId: 'scope-turn', source: { kind: 'native',
+                    connectedAccount: { service, accountId: 'account-0' },
+                    ...(nativeScope === 'personal' ? { accountScope: 'personal' } : {}) } } } : {}),
+                tokens: { input: 1, output: 1, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 2 } });
+            await vi.waitFor(() => expect(published).toHaveLength(1));
+            const ingested = UsageEventIngestRequestSchema.parse(buildUsageEventIngestRequest({
+                ...published[0]!, observedAt: published[0]!.observedAt ?? 100, sessionId: 'applied-reader',
+            }));
+            expect(ingested).toMatchObject({ attribution: { turnId: 'scope-turn', source: {
+                kind: 'native', connectedAccount: scopes.length === 1 ? { service, accountId: 'account-0' } : null,
+                ...(expectedScope ? { accountScope: expectedScope } : {}),
+            } } });
+            if (!expectedScope) expect(published[0]).not.toHaveProperty('attribution.source.accountScope');
+        } finally { unsubscribe(); await created.operations.resetOrDisposeRuntime(); }
+    });
+
     it('opens the accepted Team binding from a committed attach for an external Agent', async () => {
         const { created, hookRuntime } = await openSession({ v: 1, slot: { kind: 'provider_model' },
             resourceId: 'opened-resource', expectedResourceRevision: 3, deliveryMode: 'brokered', teamId: 'opened-team' }, [], undefined, true);
