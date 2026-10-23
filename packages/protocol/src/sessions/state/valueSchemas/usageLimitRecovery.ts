@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { z } from 'zod/mini';
-import type { SessionRuntimeIssueV1 } from '../../control/runtimeIssueV1.js';
+import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '../../control/runtimeIssueV1.js';
 
 import {
   ConnectedServiceAuthGroupIdSchema,
@@ -81,7 +81,10 @@ export function isSessionUsageLimitRecoveryForIssue(
   recovery: Pick<SessionUsageLimitRecoveryV1, 'issueFingerprint'>,
   fallbackAgentId?: string,
 ): boolean {
-  return recovery.issueFingerprint === buildUsageLimitIssueFingerprint(issue, fallbackAgentId);
+  return recovery.issueFingerprint === buildUsageLimitIssueFingerprint(issue, fallbackAgentId)
+    // 0.2 used this sentinel when the issue carried no provider identity. The issue ingress
+    // already translates provider/providerTurnId; this preserves only the absent-id spelling.
+    || (!issue.agentId && recovery.issueFingerprint === buildUsageLimitIssueFingerprint(issue, 'unknown-provider'));
 }
 
 /** A different observed failure cannot inherit an earlier recovery's authority. */
@@ -98,3 +101,24 @@ export function readSessionUsageLimitRecoveryForIssue(
 }
 
 export const SessionStateUsageLimitRecoveryValueSchema = SessionUsageLimitRecoveryV1Schema;
+
+/** Metadata is admitted once at the boundary, then the typed value is carried by its readers. */
+export function readSessionUsageLimitRecoveryFromMetadata(metadata: unknown): SessionUsageLimitRecoveryV1 | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const value = Reflect.get(metadata, SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY);
+  return value == null ? null : readSessionUsageLimitRecoveryForIssue(value);
+}
+
+/** The blocking issue is independent of whether automatic recovery is enabled or acknowledged. */
+export function isSessionUsageLimitIssueCurrentV1(input: Readonly<{
+  issue: SessionRuntimeIssueV1 | null | undefined;
+  recovery?: SessionUsageLimitRecoveryV1 | null;
+  latestTurnStatus?: PrimaryTurnStatusV1 | null;
+  hasActivityAfterRuntimeIssue?: boolean;
+}>): boolean {
+  const issue = input.issue;
+  if (!issue || (issue.source !== 'usage_limit' && issue.code !== 'usage_limit')) return false;
+  if (input.recovery?.status === 'cancelled' && isSessionUsageLimitRecoveryForIssue(issue, input.recovery)) return false;
+  if (input.latestTurnStatus === 'completed' || input.latestTurnStatus === 'waiting') return false;
+  return !(input.latestTurnStatus === 'in_progress' && input.hasActivityAfterRuntimeIssue === true);
+}

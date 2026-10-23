@@ -107,6 +107,7 @@ export function resolveAwarenessCurrentnessV1(params: Readonly<{
   observedAtMs?: number | null;
 }>): SessionAwarenessCurrentnessInputV1 {
   const hasLifecycleEvidence = normalizeAwarenessTimestampV1(params.lifecycle.archivedAtMs) !== null
+    || params.lifecycle.processTerminalState === 'stopped'
     || params.lifecycle.latestTurnStatus !== undefined
     || normalizeAwarenessSequenceV1(params.lifecycle.latestReadyEventSeq) !== null;
   const hasRuntimeEvidence = params.runtime.presence !== 'unknown'

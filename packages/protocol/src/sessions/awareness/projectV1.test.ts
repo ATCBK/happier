@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SessionUsageLimitRecoveryV1Schema } from '../state/valueSchemas/usageLimitRecovery.js';
 
 import {
   SESSION_AWARENESS_OPTIMISTIC_PENDING_INPUT_MS,
@@ -6,6 +7,7 @@ import {
   SessionAwarenessProjectionV1Schema,
   SessionAwarenessLineageV1Schema,
   projectSessionAwarenessV1,
+  readSessionAwarenessPresentationV1,
   type ProjectSessionAwarenessV1Input,
 } from './index.js';
 
@@ -27,6 +29,40 @@ function input(
 }
 
 describe('projectSessionAwarenessV1 — operational semantics', () => {
+  it('presents a blocking usage issue specifically even after its turn failed, without automatic recovery', () => {
+    const projection = projectSessionAwarenessV1(input({
+      lifecycle: { latestTurnStatus: 'failed' },
+      runtimeIssue: { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit', occurredAt: NOW },
+    }));
+    expect(projection.operational).toMatchObject({ primary: 'usage_limited' });
+    expect(projection.operational.reasons).not.toContain('failed');
+    expect(readSessionAwarenessPresentationV1({ ...projection, viewer: { attention: { reasons: ['failed'] } } })).toBe('usage_limited');
+    expect(SessionAwarenessProjectionV1Schema.safeParse(projection).success).toBe(true);
+    expect(projectSessionAwarenessV1(input({
+      lifecycle: { latestTurnStatus: 'in_progress', latestTurnStatusObservedAtMs: NOW + 1, meaningfulActivityAtMs: NOW + 1 },
+      runtimeIssue: { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit', occurredAt: NOW },
+    })).operational.primary).toBe('working');
+  });
+  it('binds cancellation to the current issue and never treats reset time or a control acknowledgement as recovery', () => {
+    const issue = { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit', code: 'usage_limit', occurredAt: NOW } as const;
+    const recovery = SessionUsageLimitRecoveryV1Schema.parse({ v: 1, status: 'waiting',
+      issueFingerprint: `usage-limit:unknown-agent:unknown-turn:${NOW}:no-reset`, armedAtMs: NOW,
+      resetAtMs: NOW - 1, nextCheckAtMs: null, attemptCount: 1, maxAttempts: 3, lastProbeError: null,
+      selectedAuth: { kind: 'native' } });
+    const base = input({ runtimeIssue: issue, usageLimitRecovery: recovery, lifecycle: { latestTurnStatus: 'failed' } });
+    for (const status of ['waiting', 'checking', 'paused', 'exhausted'] as const) {
+      expect(projectSessionAwarenessV1({ ...base, usageLimitRecovery: { ...recovery, status } }).operational.primary).toBe('usage_limited');
+    }
+    expect(projectSessionAwarenessV1({ ...base, lifecycle: { latestTurnStatus: 'in_progress' } }).operational.primary).toBe('usage_limited');
+    for (const runtime of [{ ...base.runtime, resumingAtMs: NOW }, { ...base.runtime, controlServiceability: 'recoverable_unservable' as const }]) {
+      expect(readSessionAwarenessPresentationV1(projectSessionAwarenessV1({ ...base, runtime }))).toBe('usage_limited');
+    }
+    expect(projectSessionAwarenessV1({ ...base, usageLimitRecovery: { ...recovery, status: 'cancelled' } }).operational.primary).toBe('failed');
+    expect(projectSessionAwarenessV1({ ...base, usageLimitRecovery: { ...recovery, status: 'cancelled', issueFingerprint: 'other' } }).operational.primary).toBe('usage_limited');
+    expect(projectSessionAwarenessV1({ ...base, runtimeIssue: null }).operational.primary).toBe('failed');
+    expect(projectSessionAwarenessV1({ ...base, runtimeIssue: { ...issue, source: 'agent_status_error', code: 'provider_temporary_throttle',
+      temporaryThrottle: { v: 1, retryAfterMs: 1_000, recoverability: 'retry' } } }).operational.primary).toBe('failed');
+  });
   it('keeps a yielded question waiting without private request counts or a ready signal', () => {
     const projection = projectSessionAwarenessV1(input({
       lifecycle: { latestTurnStatus: 'waiting', latestReadyEventSeq: 9 },
@@ -73,7 +109,7 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
   });
   it('preserves authorized relation ids and counts even when encrypted content is locked', () => {
     const manager = { sessionId: 'lead' };
-    const managedSessions = { total: 3, working: 1, needsYou: 1, stalled: 1 };
+    const managedSessions = { total: 3, working: 1, needsYou: 1, stalled: 1, finished: 0, attentionPrimary: 'permission_required' as const };
     const projection = projectSessionAwarenessV1(input({
       content: { mode: 'e2ee', keyState: 'missing' },
       manager,

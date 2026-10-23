@@ -63,6 +63,7 @@ export const SESSION_AWARENESS_OPERATIONAL_PRIMARY_PRECEDENCE_V1 = [
   'failed',
   'permission_required',
   'action_required',
+  'usage_limited',
   'working',
   'ready',
   'pending_input',
@@ -89,6 +90,7 @@ export function readSessionAwarenessOperationalPrimaryRankV1(
  */
 export const SessionOperationalReasonV1Schema = lazyZodSchema(() => z.enum([
   'failed',
+  'usage_limited',
   'permission_required',
   'action_required',
   'blocked_input',
@@ -183,6 +185,7 @@ export const SessionAwarenessProjectionV1Schema = lazyZodSchema(() => z.strictOb
     title: z.optional(z.string().check(z.minLength(1))),
     statusReason: z.optional(z.string()),
     lifecycle: SessionAwarenessLifecycleV1Schema,
+    processTerminalState: z.optional(z.literal('stopped')),
     runtime: SessionAwarenessRuntimeV1Schema,
     freshness: SessionAwarenessFreshnessV1Schema,
     operational: SessionAwarenessOperationalV1Schema,

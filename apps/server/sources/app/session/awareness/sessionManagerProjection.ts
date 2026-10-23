@@ -3,8 +3,9 @@ import { readCurrentSessionIdsInTx } from '@/app/session/access/sessionReadAdmis
 import { isProjectedSessionStalledV1, projectSessionAwarenessRuntimeV1, resolveSessionAwarenessLifecycleV1 } from '@happier-dev/protocol/sessions/awareness/runtime';
 import { parseSessionRuntimeActivityProjectionFields } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import { projectSessionAwarenessOperationalV1 } from '@happier-dev/protocol/sessions/awareness/projectV1';
-import { readSessionAwarenessWorkStatusV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import { readSessionAwarenessWorkStatusV1, readSessionAwarenessPresentationRankV1, type SessionAwarenessPresentationStateV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import { type SessionManagedSessionsV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
+import { resolveInboxItemAttentionV1, resolveSessionInboxAttentionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { type V2SessionRecord } from '@happier-dev/protocol/sessions/control/contract';
 import type { Tx } from '@/storage/inTx';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
@@ -22,6 +23,8 @@ import { parseStoredSessionLatestTurnStatus, readLatestTurnStatusObservedAt } fr
 import { AUTOMATION_RUN_TERMINAL_STATES } from '@/app/automations/automationTypes';
 import { readAccountFollowRuleReceiverCountsInTx } from '@/app/session/follow/accountFollowRuleService';
 import { hasSessionFollowSessionSource } from '@/app/session/follow/sessionFollowSourceIdentity';
+import { createSessionPersonalAttentionProjectionSelect, loadSessionLatestFailureSequencesInTx, projectSessionViewerAttention } from '@/app/session/personal/projection';
+import { QUIET_SESSION_PERSONAL_DISCUSSION_FACTS } from '@/app/session/personal/discussionFacts';
 
 /** Content-free turn-end review barrier; FIN owns the run lifecycle and terminal vocabulary. */
 export async function readSessionPendingReviewRunCountsInTx(tx: Tx, sessionIds: readonly string[]): Promise<ReadonlyMap<string, number>> {
@@ -60,9 +63,16 @@ const REPORT_SESSION_SELECT = {
     pendingBlockedCount: true,
 } as const satisfies Prisma.SessionSelect;
 
-type ReportSessionRow = Prisma.SessionGetPayload<{ select: typeof REPORT_SESSION_SELECT }>;
+function createReportSessionSelect(accountId: string) {
+    return { ...REPORT_SESSION_SELECT, ...createSessionPersonalAttentionProjectionSelect(accountId) } as const satisfies Prisma.SessionSelect;
+}
 
-function projectReportWorkStatus(row: ReportSessionRow, nowMs: number) {
+type ReportSessionRow = Prisma.SessionGetPayload<{ select: ReturnType<typeof createReportSessionSelect> }>;
+
+function projectReportWorkStatus(row: ReportSessionRow, input: Readonly<{
+    accountId: string; nowMs: number; latestFailureSeq: number | null; qualifiedTeamIds?: ReadonlySet<string>;
+}>) {
+    const { nowMs } = input;
     const liveFacts = hasSessionTranscriptPublicationLiveFacts(row);
     const lifecycle = {
         archivedAtMs: row.archivedAt?.getTime() ?? null,
@@ -92,22 +102,32 @@ function projectReportWorkStatus(row: ReportSessionRow, nowMs: number) {
             activityActiveCount: activity?.activeCount ?? null,
         },
         pending: liveFacts ? {
-            hasPendingPermissionRequests: row.pendingPermissionRequestCount > 0,
+            hasPendingPermissionRequests: row.pendingPermissionRequestCount + row.pendingSharedActionConfirmationCount > 0,
             hasPendingUserActionRequests: row.pendingUserActionRequestCount > 0,
             pendingRequestObservedAtMs: row.pendingRequestObservedAt?.getTime() ?? null,
             queuedInputCount: row.pendingCount,
             blockedInputCount: row.pendingBlockedCount,
         } : {},
     });
+    const attention = projectSessionViewerAttention({ row, latestFailureSeq: input.latestFailureSeq,
+        viewerAccountId: input.accountId, discussion: QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
+        qualifiedTeamIds: input.qualifiedTeamIds, now: nowMs });
+    const status = readSessionAwarenessWorkStatusV1({ awareness: {
+        runtime: runtime.runtime,
+        freshness: runtime.freshness,
+        lifecycle: resolveSessionAwarenessLifecycleV1(lifecycle, false),
+        operational: projectSessionAwarenessOperationalV1({ runtime, lifecycle }),
+        viewer: { attention },
+    } });
+    const inboxAttention = resolveSessionInboxAttentionV1({ personalAttention: attention,
+        hasBlockedPendingDelivery: liveFacts && row.pendingBlockedCount > 0,
+        working: status.bucket === 'working', ready: lifecycle.latestTurnStatus === 'completed' });
     return {
         // Public runtime/lifecycle facts share Work's Protocol precedence. Content availability
         // remains a client verdict; no encryption/readability assertion is made by this count.
-        status: readSessionAwarenessWorkStatusV1({ awareness: {
-            runtime: runtime.runtime,
-            freshness: runtime.freshness,
-            lifecycle: resolveSessionAwarenessLifecycleV1(lifecycle, false),
-            operational: projectSessionAwarenessOperationalV1({ runtime, lifecycle }),
-        } }),
+        status,
+        finished: lifecycle.latestTurnStatus === 'completed',
+        needsYou: inboxAttention.section !== null && inboxAttention.type !== null && resolveInboxItemAttentionV1(inboxAttention.type).interrupt,
         // The existing presence publisher/timeout owns Session.active; only its own turn can stall it.
         stalled: liveFacts && !runtime.archived && isProjectedSessionStalledV1({ active: row.active, latestTurnStatus: lifecycle.latestTurnStatus }),
     };
@@ -115,6 +135,7 @@ function projectReportWorkStatus(row: ReportSessionRow, nowMs: number) {
 
 export type SessionManagerContribution = Readonly<{
     sessionId: string; managerSessionId: string; working: boolean; needsYou: boolean; stalled: boolean; archived: boolean;
+    finished: boolean; attentionPrimary: SessionAwarenessPresentationStateV1;
 }>;
 
 type SessionManagerProjectionRow = {
@@ -128,12 +149,17 @@ function projectCapturedReports<T extends SessionManagerProjectionRow>(sessions:
     const reports = new Map<string, Required<SessionManagedSessionsV1>>();
     for (const contribution of contributions) {
         leads.set(contribution.sessionId, contribution.managerSessionId);
-        const counts = reports.get(contribution.managerSessionId) ?? { total: 0, working: 0, needsYou: 0, stalled: 0, archived: 0 };
+        const counts = reports.get(contribution.managerSessionId) ?? { total: 0, working: 0, needsYou: 0, stalled: 0, archived: 0, finished: 0, attentionPrimary: null };
         counts.total += 1;
         if (contribution.archived) counts.archived += 1;
-        if (contribution.working) counts.working += 1;
-        if (contribution.needsYou) counts.needsYou += 1;
-        if (contribution.stalled) counts.stalled += 1;
+        else {
+            if (contribution.working) counts.working += 1;
+            if (contribution.needsYou) counts.needsYou += 1;
+            if (contribution.stalled) counts.stalled += 1;
+            if (contribution.finished) counts.finished += 1;
+            if (counts.attentionPrimary === null || readSessionAwarenessPresentationRankV1(contribution.attentionPrimary)
+                > readSessionAwarenessPresentationRankV1(counts.attentionPrimary)) counts.attentionPrimary = contribution.attentionPrimary;
+        }
         reports.set(contribution.managerSessionId, counts);
     }
     return sessions.map(session => {
@@ -141,7 +167,7 @@ function projectCapturedReports<T extends SessionManagerProjectionRow>(sessions:
         delete projected.manager;
         const lead = leads.get(session.id);
         if (lead) projected.manager = { sessionId: lead };
-        projected.managedSessions = reports.get(session.id) ?? { total: 0, working: 0, needsYou: 0, stalled: 0, archived: 0 };
+        projected.managedSessions = reports.get(session.id) ?? { total: 0, working: 0, needsYou: 0, stalled: 0, archived: 0, finished: 0, attentionPrimary: null };
         return projected;
     });
 }
@@ -191,19 +217,24 @@ export async function projectSessionManagerForRowsInTx<T extends SessionManagerP
             })).where;
         related = await tx.session.findMany({
             where: { AND: [accessWhere, { id: { in: relatedIds } }] },
-            select: REPORT_SESSION_SELECT,
+            select: createReportSessionSelect(input.accountId),
         });
     }
     const readable = new Map(related.filter((row) => row.accountId === input.accountId || isSessionTranscriptShareable(row))
         .map((row) => [row.id, row]));
+    // Neither an unreadable parent nor an unreadable child leaks via counts or IDs.
+    const admittedEdges = sessionEdges.filter(edge => readable.has(edge.sourceSessionId) && readable.has(edge.destinationSessionId));
+    const latestFailureSequences = await loadSessionLatestFailureSequencesInTx(tx,
+        admittedEdges.map(edge => readable.get(edge.sourceSessionId)!));
     const contributions: SessionManagerContribution[] = [];
-    for (const edge of sessionEdges) {
-        // Neither an unreadable parent nor an unreadable child leaks via counts or IDs.
-        if (!readable.has(edge.sourceSessionId) || !readable.has(edge.destinationSessionId)) continue;
+    for (const edge of admittedEdges) {
         const child = readable.get(edge.sourceSessionId)!;
-        const { status, stalled } = projectReportWorkStatus(child, input.nowMs);
+        const { status, stalled, finished, needsYou } = projectReportWorkStatus(child, {
+            accountId: input.accountId, nowMs: input.nowMs, latestFailureSeq: latestFailureSequences.get(child.id) ?? null,
+            qualifiedTeamIds: input.collectiveAccessSnapshot?.qualifiedTeamIds,
+        });
         contributions.push({ sessionId: edge.sourceSessionId, managerSessionId: edge.destinationSessionId, working: status.bucket === 'working' && !stalled,
-            needsYou: status.bucket === 'needs_you', stalled, archived: child.archivedAt != null });
+            needsYou, stalled, finished, attentionPrimary: status.state, archived: child.archivedAt != null });
     }
     input.captureContributions?.(contributions);
     return projectCapturedReports(input.sessions.map(session => {

@@ -23,6 +23,7 @@ import {
   type SessionAwarenessRuntimeFactsV1,
 } from './runtime.js';
 import { projectSessionAwarenessWorkHeadlineV1 } from './work.js';
+import { isSessionUsageLimitIssueCurrentV1 } from '../state/valueSchemas/usageLimitRecovery.js';
 
 /**
  * The one pure Session-awareness projector (AWR-01).
@@ -72,6 +73,8 @@ export function projectSessionAwarenessV1(
     runtime: runtimeFacts,
     lifecycle,
     lifecycleEvidenceUnavailable: lifecycleUnavailable,
+    runtimeIssue: input.runtimeIssue,
+    usageLimitRecovery: input.usageLimitRecovery,
   });
   if (!contentReadable) operational.reasons.push('content_locked');
 
@@ -96,6 +99,7 @@ export function projectSessionAwarenessV1(
     ...(title ? { title } : {}),
     ...(statusReason ? { statusReason } : {}),
     lifecycle: resolveSessionAwarenessLifecycleV1(lifecycle, lifecycleUnavailable),
+    ...(contentReadable && lifecycle.processTerminalState === 'stopped' ? { processTerminalState: 'stopped' as const } : {}),
     runtime: runtimeFacts.runtime,
     freshness: runtimeFacts.freshness,
     operational,
@@ -129,11 +133,20 @@ export function projectSessionAwarenessOperationalV1(input: Readonly<{
   runtime: SessionAwarenessRuntimeFactsV1;
   lifecycle: SessionLifecycleAwarenessInputV1;
   lifecycleEvidenceUnavailable?: boolean;
+  runtimeIssue?: ProjectSessionAwarenessV1Input['runtimeIssue'];
+  usageLimitRecovery?: ProjectSessionAwarenessV1Input['usageLimitRecovery'];
 }>): SessionAwarenessOperationalV1 {
   const { runtime } = input;
   const lifecycleEvidenceUnavailable = input.lifecycleEvidenceUnavailable === true;
   const lifecycle = lifecycleEvidenceUnavailable ? {} : input.lifecycle;
-  const failed = lifecycle.latestTurnStatus === 'failed';
+  const usageLimited = isSessionUsageLimitIssueCurrentV1({
+    issue: input.runtimeIssue,
+    recovery: input.usageLimitRecovery,
+    latestTurnStatus: lifecycle.latestTurnStatus,
+    hasActivityAfterRuntimeIssue: input.runtimeIssue != null
+      && (lifecycle.meaningfulActivityAtMs ?? 0) > input.runtimeIssue.occurredAt,
+  });
+  const failed = lifecycle.latestTurnStatus === 'failed' && !usageLimited;
   const actionRequired = runtime.freshActionRequired || runtime.blockedInput;
   const permissionRequired = runtime.freshPermissionRequired;
   // A completed foreground turn is not finished work while reported background activity continues.
@@ -143,6 +156,7 @@ export function projectSessionAwarenessOperationalV1(input: Readonly<{
     if (failed) return 'failed';
     if (permissionRequired) return 'permission_required';
     if (actionRequired) return 'action_required';
+    if (usageLimited) return 'usage_limited';
     if (runtime.working) return 'working';
     if (ready) return 'ready';
     if (runtime.queuedInput) return 'pending_input';
@@ -154,6 +168,7 @@ export function projectSessionAwarenessOperationalV1(input: Readonly<{
   // row has to choose.
   const reasons: SessionOperationalReasonV1[] = [];
   if (failed) reasons.push('failed');
+  if (usageLimited) reasons.push('usage_limited');
   if (permissionRequired) reasons.push('permission_required');
   if (runtime.freshActionRequired) reasons.push('action_required');
   if (runtime.blockedInput) reasons.push('blocked_input');

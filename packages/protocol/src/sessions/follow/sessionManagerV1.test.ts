@@ -41,9 +41,13 @@ describe('Session manager wire contract', () => {
   });
 
   it('counts live sub-sessions as total without the archived reports, and reads a count with no archived field', () => {
-    const counts = { total: 3, working: 1, needsYou: 0, stalled: 0 };
+    const counts = { total: 3, working: 1, needsYou: 0, stalled: 0, finished: 2, attentionPrimary: 'thinking' };
     expect(SessionManagedSessionsV1Schema.safeParse(counts).success).toBe(true);
     expect(SessionManagedSessionsV1Schema.safeParse({ ...counts, archived: 1 }).success).toBe(true);
+    expect(SessionManagedSessionsV1Schema.safeParse({ total: 3, working: 1, needsYou: 0, stalled: 0 }).success).toBe(false);
+    expect(SessionManagedSessionsV1Schema.safeParse({ total: 3, working: 1, needsYou: 0, stalled: 0, finished: 2 }).success).toBe(false);
+    expect(SessionManagedSessionsV1Schema.safeParse({ total: 3, working: 1, needsYou: 0, stalled: 0, attentionPrimary: null }).success).toBe(false);
+    expect(SessionManagedSessionsV1Schema.safeParse({ ...counts, attentionPrimary: null }).success).toBe(true);
     expect(readSessionLiveManagedSessionCountV1(counts)).toBe(3);
     expect(readSessionLiveManagedSessionCountV1({ ...counts, archived: 1 })).toBe(2);
     expect(readSessionLiveManagedSessionCountV1({ ...counts, total: 1, archived: 1 })).toBe(0);

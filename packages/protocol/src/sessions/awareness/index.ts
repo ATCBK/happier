@@ -72,7 +72,8 @@ export {
 } from './availability.js';
 
 export { projectSessionAwarenessWorkHeadlineV1 } from './work.js';
-export { readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1 } from './presentationV1.js';
+export { readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1, readSessionAwarenessPresentationV1, readSessionAwarenessPresentationRankV1,
+  type SessionAwarenessPresentationFactsV1, type SessionAwarenessPresentationStateV1 } from './presentationV1.js';
 
 export { projectSessionAwarenessV1, projectSessionAwarenessOperationalV1 } from './projectV1.js';
 

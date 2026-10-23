@@ -6,10 +6,24 @@ import {
   resolveWorkerUpdateFollowDeliveryV1,
   resolveRequestFollowEventV1,
   isFollowPolicyEqualV1,
+  resolveSessionInboxAttentionV1,
   type FollowEventV1, type FollowPolicyV1,
 } from './sessionFollowPolicyV1.js';
 
 describe('Follow policy receiver projections', () => {
+  it('publishes only admitted C1 types, keeping failure news separate from concurrent requests', () => {
+    const classify = (reasons: readonly import('../personal/attention.js').SessionPersonalAttentionReasonV1[],
+      needsAttention = true) => resolveSessionInboxAttentionV1({
+      personalAttention: { needsAttention, reasons }, hasBlockedPendingDelivery: reasons.includes('pending_blocked'),
+      working: false, ready: false,
+    });
+    expect(classify(['permission_required'], false)).toEqual({ section: null, type: null });
+    expect(classify(['unread'])).toEqual({ section: null, type: null });
+    expect(classify(['failed'])).toEqual({ section: 'needs_attention', type: 'update' });
+    expect(classify(['failed', 'permission_required'])).toEqual({ section: 'needs_attention', type: 'approval' });
+    expect(classify(['mentioned'])).toEqual({ section: 'needs_attention', type: 'mention' });
+    expect(classify(['pending_blocked'])).toEqual({ section: 'needs_attention', type: 'blocked' });
+  });
   it('keeps Voice-only interest independent of Inbox and Session delivery', () => {
     const policy: FollowPolicyV1 = { preset: 'custom', events: { message: { delivery: 'off', voice: true } } };
     expect(resolveFollowDeliveryV1({ policies: [policy], event: { kind: 'message' } })).toEqual({

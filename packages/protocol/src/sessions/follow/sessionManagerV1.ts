@@ -4,6 +4,7 @@ import { z } from 'zod/mini';
 import { SessionIdSchema } from '../idsV1.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionFollowSourceKeyPreparationResultV1Schema, type SessionFollowSourceKeyPreparationResultV1 } from './sessionFollowSourceKeyPreparationV1.js';
+import { SessionAwarenessPresentationStateV1Schema } from '../awareness/presentationV1.js';
 
 const SessionIdV1Schema = asProtocolZod(SessionIdSchema);
 
@@ -16,6 +17,10 @@ export const SessionManagedSessionsV1Schema = lazyZodSchema(() => z.strictObject
   working: z.number().check(z.int(), z.nonnegative()),
   needsYou: z.number().check(z.int(), z.nonnegative()),
   stalled: z.number().check(z.int(), z.nonnegative()),
+  /** Completed settlements among live authorized direct reports; never completion by subtraction. */
+  finished: z.number().check(z.int(), z.nonnegative()),
+  /** Strongest live report display state; failure attention is independent of the Needs-you count. */
+  attentionPrimary: z.nullable(SessionAwarenessPresentationStateV1Schema),
   /** How many of `total` are archived: still the lead's record, no longer sub-sessions anyone is running. */
   archived: zMini.optional(z.number().check(z.int(), z.nonnegative())),
 }));

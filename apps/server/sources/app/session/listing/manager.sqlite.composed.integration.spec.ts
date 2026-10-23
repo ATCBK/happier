@@ -5,6 +5,8 @@ import {
     readSessionAwarenessWorkStatusV1,
     SessionAwarenessProjectionV1Schema,
     readSessionManagerSessionIdV1,
+    readSessionLiveManagedSessionCountV1,
+    SessionManagedSessionsV1Schema,
 } from '@happier-dev/protocol';
 
 import { db } from "@/storage/db";
@@ -18,6 +20,10 @@ import { registerSessionListingRoutes } from "@/app/api/routes/session/registerS
 import { withSqliteReadSnapshot } from "@/storage/prisma";
 import { setAccountFollowRule, removeAccountFollowRule } from '@/app/session/follow/accountFollowRuleService';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { applySessionTurnMutation } from '@/app/session/sessionWriteService';
+import { writeSessionTranscriptMessageInTx } from '@/app/session/sessionTranscriptWrite';
+import { inTx } from '@/storage/inTx';
+import { applyViewerReadCursorOperation } from '@/app/session/personal/readState';
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -281,11 +287,17 @@ describe("Manager listing (SQLite)", () => {
         expect(page?.sessions.find((row) => row.id === readableBehindForeign.id)).not.toHaveProperty("manager");
     });
 
-    it("counts direct reports from canonical awareness and omits unreadable lead facts", async () => {
+    it("counts three completed of five live direct reports and their strongest state without unreadable lead facts", async () => {
         const { owner, lead, create } = await fixture();
         const working = await create();
         const needsYou = await create();
         const grandchild = await create();
+        const completed = await Promise.all([create(), create(), create()]);
+        const archived = await create();
+        await db.session.updateMany({ where: { id: { in: [...completed.map(child => child.id), archived.id] } }, data: {
+            active: true, latestTurnStatus: "completed", latestTurnStatusObservedAt: BigInt(Date.now()),
+        } });
+        await db.session.update({ where: { id: archived.id }, data: { archivedAt: new Date() } });
         await db.session.update({ where: { id: working.id }, data: { active: true, latestTurnStatus: "in_progress" } });
         await db.session.update({ where: { id: needsYou.id }, data: {
             active: true, pendingPermissionRequestCount: 1, pendingRequestObservedAt: new Date(),
@@ -294,13 +306,61 @@ describe("Manager listing (SQLite)", () => {
             managerEdgeData(working.id, lead.id),
             managerEdgeData(needsYou.id, lead.id),
             managerEdgeData(grandchild.id, working.id),
+            ...completed.map(child => managerEdgeData(child.id, lead.id)),
+            managerEdgeData(archived.id, lead.id),
         ] });
         const page = await list(owner.id, lead.id);
-        expect(page?.sessions.find((row) => row.id === lead.id)).toMatchObject({ managedSessions: { total: 2, working: 1, needsYou: 1, stalled: 0 } });
+        const reports = page?.sessions.find((row) => row.id === lead.id)?.managedSessions;
+        expect(reports).toEqual({ total: 6, archived: 1, finished: 3, working: 1, needsYou: 1,
+            stalled: 0, attentionPrimary: "permission_required" });
+        expect(SessionManagedSessionsV1Schema.safeParse(reports).success).toBe(true);
+        expect(readSessionLiveManagedSessionCountV1(reports)).toBe(5);
         const foreign = await fixture();
         await db.sessionFollowEdge.create({ data: managerEdgeData(foreign.lead.id, lead.id) });
         const foreignPage = await list(foreign.owner.id, foreign.lead.id);
         expect(foreignPage?.sessions[0]).not.toHaveProperty("manager");
+    });
+
+    it('rolls unseen primary failure above permission without adding it to Needs you, then clears it through the existing cursor', async () => {
+        const { owner, lead, create } = await fixture();
+        const failed = await create();
+        const permission = await create();
+        await db.session.update({ where: { id: failed.id }, data: { active: true } });
+        await db.session.update({ where: { id: permission.id }, data: { active: true,
+            pendingPermissionRequestCount: 1, pendingRequestObservedAt: new Date() } });
+        await db.sessionFollowEdge.createMany({ data: [managerEdgeData(failed.id, lead.id), managerEdgeData(permission.id, lead.id)] });
+        const turnId = randomUUID();
+        const base = { v: 1 as const, sessionId: failed.id, turnId };
+        const observedAt = Date.now();
+        expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation: {
+            ...base, action: 'begin', mutationId: randomUUID(), observedAt,
+        } })).toMatchObject({ ok: true });
+        const marker = await inTx(tx => writeSessionTranscriptMessageInTx(tx, {
+            sessionId: failed.id, writeAuthority: 'hosted', sessionEncryptionMode: 'plain', storagePolicy: 'optional',
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'acp', agentId: 'codex', data: { type: 'turn_failed', id: turnId } } } },
+            localId: `${turnId}:turn_failed`, sidechainId: null, messageRole: 'event', createdAt: new Date(observedAt + 1),
+        }));
+        if (!marker.ok) throw new Error('failure marker did not commit');
+        expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation: {
+            ...base, action: 'append_transcript_anchors', mutationId: randomUUID(), observedAt: observedAt + 2,
+            transcriptAnchors: { startSeqInclusive: marker.message.seq, endSeqInclusive: marker.message.seq, finalAssistantMessageSeq: null },
+        } })).toMatchObject({ ok: true });
+        expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication, mutation: {
+            ...base, action: 'fail', mutationId: randomUUID(), observedAt: observedAt + 3,
+            issue: { v: 1, scope: 'primary_session', status: 'failed', code: 'test_failure', source: 'unknown', occurredAt: observedAt + 3 },
+        } })).toMatchObject({ ok: true });
+        await db.session.update({ where: { id: failed.id }, data: { active: false } });
+        const reports = () => list(owner.id, lead.id).then(page => page?.sessions.find(row => row.id === lead.id)?.managedSessions);
+        expect(await reports()).toMatchObject({ total: 2, finished: 0, needsYou: 1, attentionPrimary: 'failed' });
+        await db.session.update({ where: { id: failed.id }, data: { archivedAt: new Date() } });
+        expect(await reports()).toMatchObject({ total: 2, archived: 1, finished: 0, needsYou: 1, attentionPrimary: 'permission_required' });
+        await db.session.update({ where: { id: failed.id }, data: { archivedAt: null } });
+        expect(await reports()).toMatchObject({ archived: 0, needsYou: 1, attentionPrimary: 'failed' });
+        expect(await applyViewerReadCursorOperation({ accountId: owner.id, sessionId: failed.id,
+            operation: { kind: 'mark-read' }, authentication })).toMatchObject({ ok: true });
+        expect(await reports()).toMatchObject({ total: 2, finished: 0, needsYou: 1, attentionPrimary: 'permission_required' });
+        await db.session.update({ where: { id: failed.id }, data: { seq: marker.message.seq + 2 } });
+        expect(await reports()).toMatchObject({ needsYou: 1, attentionPrimary: 'permission_required' });
     });
 
     it("projects the same direct-report facts through HTTP detail without widening cross-owner reads", async () => {
@@ -367,7 +427,18 @@ describe("Manager listing (SQLite)", () => {
         await db.sessionFollowEdge.create({ data: managerEdgeData(child.id, lead.id) });
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.find((row) => row.id === lead.id)?.managedSessions)
-            .toEqual({ total: 1, working: 0, needsYou: 0, stalled: 0, archived: 0 });
+            .toMatchObject({ total: 1, working: 0, needsYou: 0, stalled: 0, archived: 0, finished: 1 });
+    });
+
+    it('does not infer completed settlement from idle, detached, cancelled or failed reports', async () => {
+        const { owner, lead, create } = await fixture();
+        for (const latestTurnStatus of [null, 'waiting', 'cancelled', 'failed'] as const) {
+            const child = await create();
+            await db.session.update({ where: { id: child.id }, data: { active: false, latestTurnStatus } });
+            await db.sessionFollowEdge.create({ data: managerEdgeData(child.id, lead.id) });
+        }
+        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions)
+            .toMatchObject({ total: 4, archived: 0, working: 0, needsYou: 0, finished: 0 });
     });
 
     it("keeps an inactive failed report in Recent instead of counting Needs you", async () => {
@@ -377,21 +448,21 @@ describe("Manager listing (SQLite)", () => {
             active: false, latestTurnStatus: "failed", latestTurnStatusObservedAt: BigInt(Date.now()),
         } });
         await db.sessionFollowEdge.create({ data: managerEdgeData(child.id, lead.id) });
-        const expected = { total: 1, working: 0, needsYou: 0, stalled: 0, archived: 0 };
-        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions).toEqual(expected);
+        const expected = { total: 1, working: 0, needsYou: 0, stalled: 0, archived: 0, finished: 0 };
+        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions).toMatchObject(expected);
         await withAuthenticatedTestApp(registerSessionListingRoutes, async app => {
             const response = await app.inject({ method: "GET", url: `/v2/sessions/${lead.id}?accessProjectionVersion=1`,
                 headers: { "x-test-user-id": owner.id, "x-happier-account-stored-content-protocol": "4" } });
             expect(response.statusCode, response.body).toBe(200);
-            expect(response.json().session.managedSessions).toEqual(expected);
+            expect(response.json().session.managedSessions).toMatchObject(expected);
         });
         // Runtime detachment changes display classification, never the failed turn evidence.
         expect((await db.session.findUniqueOrThrow({ where: { id: child.id } })).latestTurnStatus).toBe('failed');
         await db.session.update({ where: { id: child.id }, data: { active: true, lastActiveAt: new Date() } });
         expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions)
-            .toEqual({ ...expected, needsYou: 1 });
+            .toMatchObject(expected);
         await db.session.update({ where: { id: child.id }, data: { archivedAt: new Date() } });
-        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions).toEqual({ ...expected, archived: 1 });
+        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.managedSessions).toMatchObject({ ...expected, archived: 1, attentionPrimary: null });
     });
 
     it("counts an active mid-turn report as working rather than stalled", async () => {
@@ -404,7 +475,7 @@ describe("Manager listing (SQLite)", () => {
         await db.sessionFollowEdge.create({ data: managerEdgeData(child.id, lead.id) });
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.find((row) => row.id === lead.id)?.managedSessions)
-            .toEqual({ total: 1, working: 1, needsYou: 0, stalled: 0, archived: 0 });
+            .toMatchObject({ total: 1, working: 1, needsYou: 0, stalled: 0, archived: 0, finished: 0, attentionPrimary: 'thinking' });
     });
 
     it("omits a hidden stalled report from list and detail counts and ids", async () => {
@@ -418,12 +489,12 @@ describe("Manager listing (SQLite)", () => {
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.map((row) => row.id).sort()).toEqual([lead.id, child.id].sort());
         expect(page?.sessions.find((row) => row.id === lead.id)?.managedSessions)
-            .toEqual({ total: 1, working: 0, needsYou: 0, stalled: 1, archived: 0 });
+            .toMatchObject({ total: 1, working: 0, needsYou: 0, stalled: 1, archived: 0, finished: 0 });
         await withAuthenticatedTestApp(registerSessionListingRoutes, async (app) => {
             const headers = { "x-test-user-id": owner.id, "x-happier-account-stored-content-protocol": "2" };
             const detail = await app.inject({ method: "GET", url: `/v2/sessions/${lead.id}?accessProjectionVersion=1`, headers });
             expect(detail.statusCode, detail.body).toBe(200);
-            expect(detail.json().session.managedSessions).toEqual({ total: 1, working: 0, needsYou: 0, stalled: 1, archived: 0 });
+            expect(detail.json().session.managedSessions).toMatchObject({ total: 1, working: 0, needsYou: 0, stalled: 1, archived: 0, finished: 0 });
             const denied = await app.inject({ method: "GET", url: `/v2/sessions/${foreign.lead.id}?accessProjectionVersion=1`, headers });
             expect(denied.statusCode).toBe(404);
         });
@@ -447,7 +518,7 @@ describe("Manager listing (SQLite)", () => {
         const foreign = await fixture();
         await db.session.update({ where: { id: foreign.lead.id }, data: { active: true, latestTurnStatus: "failed" } });
         await db.sessionFollowEdge.create({ data: managerEdgeData(foreign.lead.id, lead.id) });
-        const expected = { total: primaries.length, working: 1, needsYou: 3, stalled: 0, archived: 0 };
+        const expected = { total: primaries.length, working: 1, needsYou: 2, stalled: 0, archived: 0, finished: 3, attentionPrimary: 'permission_required' };
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.find((row) => row.id === lead.id)?.managedSessions)
             .toEqual(expected);
@@ -468,7 +539,8 @@ describe("Manager listing (SQLite)", () => {
         expect(awareness.find(row => row.sessionId === lead.id)?.managedSessions).toEqual(expected);
         const reports = awareness.filter(row => readSessionManagerSessionIdV1(row) === lead.id);
         expect(reports).toHaveLength(expected.total);
-        const statuses = reports.map(row => readSessionAwarenessWorkStatusV1({ awareness: row }));
+        const statuses = reports.map(row => readSessionAwarenessWorkStatusV1({ awareness: { ...row,
+            viewer: page!.sessions.find(session => session.id === row.sessionId)?.viewer } }));
         expect(statuses.filter(status => status.bucket === "working")).toHaveLength(expected.working);
         expect(statuses.filter(status => status.bucket === "needs_you")).toHaveLength(expected.needsYou);
     });

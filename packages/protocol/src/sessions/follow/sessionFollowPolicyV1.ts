@@ -7,6 +7,8 @@ import { classifyWorkerUpdateEventV1, type WorkerUpdateV1 } from '../relations/w
 import type { DiscussionAddressingV1 } from '../../discussions/references.js';
 import type { DiscussionMessageV1 } from '../../discussions/models.js';
 import type { SessionMessageReplyAdmissionV1 } from '../messages/sessionMessageReplyV1.js';
+import type { SessionPersonalAttentionProjectionV1, SessionPersonalAttentionReasonV1 } from '../personal/attention.js';
+import type { PersonalFollowOnceOccurrenceV1 } from './accountFollow.js';
 
 export const FOLLOW_EVENT_KINDS_V1 = [
   'needs_you', 'finished', 'failed_or_stopped', 'stalled', 'update_posted', 'person_wrote', 'goal_changed', 'message',
@@ -183,7 +185,64 @@ export function resolveWorkerUpdateFollowDeliveryV1(params: Readonly<{
   });
 }
 
-export type InboxItemAttentionTypeV1 = 'decision' | 'approval' | 'blocked' | 'update' | 'mention';
+export const InboxItemAttentionTypeV1Schema = lazyZodSchema(() => z.union([
+  FollowNeedsYouTypeV1Schema, z.literal('update'), z.literal('mention'),
+]));
+export type InboxItemAttentionTypeV1 = z.infer<typeof InboxItemAttentionTypeV1Schema>;
+
+export type SessionInboxAttentionClassificationV1 = Readonly<{
+  section: 'needs_attention' | 'ready' | null;
+  type: InboxItemAttentionTypeV1 | null;
+  onceDelivery?: PersonalFollowOnceOccurrenceV1;
+}>;
+
+/** C1 admission over normalized owner facts; never loads requests or derives delivery policy. */
+export function resolveSessionInboxAttentionV1(input: Readonly<{
+  personalAttention: Pick<SessionPersonalAttentionProjectionV1, 'needsAttention' | 'reasons'>;
+  hasBlockedPendingDelivery: boolean;
+  working: boolean;
+  ready: boolean;
+  questionType?: SessionQuestionContextV1['type'];
+  onceDelivery?: PersonalFollowOnceOccurrenceV1;
+  onceAttentionReason?: SessionPersonalAttentionReasonV1 | null;
+}>): SessionInboxAttentionClassificationV1 {
+  const reasons = input.personalAttention.reasons;
+  const type = reasons.includes('permission_required') ? 'approval'
+    : reasons.includes('user_action_required') ? input.questionType ?? 'decision'
+    : input.hasBlockedPendingDelivery ? 'blocked'
+    : reasons.includes('mentioned') ? 'mention' : 'update';
+  if (!input.personalAttention.needsAttention) return { section: null, type: null };
+
+  const onceReason = input.onceAttentionReason;
+  const onceDelivery = type === 'update' && onceReason && reasons.includes(onceReason) ? input.onceDelivery : undefined;
+  const hasSessionReadAttention = reasons.some(isClearedBySessionManualRead);
+  const hasOtherAttention = reasons.some(reason => !isClearedBySessionManualRead(reason));
+  // Accepted completion custody remains attached to its original turn while newer work runs.
+  const hasReadyForReviewAttention = hasSessionReadAttention
+    && (onceDelivery !== undefined && onceReason === 'ready_after_read'
+      || !input.working && (input.ready || reasons.includes('ready_after_read')));
+  const section = hasOtherAttention ? 'needs_attention' : hasReadyForReviewAttention ? 'ready' : null;
+  return { section, type: section === null ? null : type,
+    ...(onceDelivery ? { onceDelivery } : {}) };
+}
+
+/** Discussion-owned news survives a Session cursor; only transcript progress is cleared there. */
+function isClearedBySessionManualRead(reason: SessionPersonalAttentionReasonV1): boolean {
+  switch (reason) {
+    case 'unread':
+    case 'ready_after_read':
+      return true;
+    case 'failed':
+    case 'permission_required':
+    case 'user_action_required':
+    case 'pending_blocked':
+    case 'mentioned':
+    case 'unread_discussion':
+    case 'reminder_due':
+    case 'manual':
+      return false;
+  }
+}
 
 export function resolveInboxItemAttentionV1(type: InboxItemAttentionTypeV1) {
   return resolveFollowDeliveryV1({

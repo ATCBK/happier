@@ -3,29 +3,56 @@ import { describe, expect, it } from 'vitest';
 import { listSessionPresentationStatesForWorkStatusFilterV1, readSessionAwarenessPresentationV1, readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1, readSessionManagedSessionsPresentationV1 } from './presentationV1.js';
 
 describe('readSessionAwarenessWorkStatusV1', () => {
+  it('keeps the admitted archive operation working without inventing runtime activity', () => {
+    const awareness = { runtime: 'idle', encryption: 'plain', archiving: true, operational: { primary: 'none' } } as const;
+    expect(readSessionAwarenessWorkStatusV1({ awareness })).toMatchObject({ state: 'archiving', bucket: 'working', tone: 'neutral' });
+  });
+  it('keeps unseen failure rose across disconnect and retains independent current request evidence', () => {
+    const awareness = { runtime: 'offline', encryption: 'plain', operational: { primary: 'failed', reasons: ['failed', 'permission_required'] },
+      viewer: { attention: { reasons: ['failed'] } } } as const;
+    expect(readSessionAwarenessWorkStatusV1({ awareness })).toMatchObject({ state: 'failed', bucket: 'idle', tone: 'danger' });
+    expect(readSessionAwarenessPresentationV1({ ...awareness, viewer: { attention: { reasons: [] } } })).toBe('permission_required');
+  });
+  it('admits stopped only from the process lifecycle fact and composes personal news quietly', () => {
+    const awareness = { runtime: 'offline', encryption: 'plain', operational: { primary: 'none' } } as const;
+    expect(readSessionAwarenessPresentationV1({ ...awareness, processTerminalState: 'stopped' })).toBe('stopped');
+    expect(readSessionAwarenessPresentationV1(awareness)).toBe('disconnected');
+    const idle = { ...awareness, runtime: 'idle' } as const;
+    expect(readSessionAwarenessPresentationV1({ ...idle, viewer: { attention: { reasons: ['ready_after_read', 'unread'] } } })).toBe('finished_unseen');
+    expect(readSessionAwarenessPresentationV1({ ...idle, viewer: { attention: { reasons: ['mentioned', 'unread'] } } })).toBe('mentioned');
+  });
   it('keeps background activity in Working and its status filter until it settles', () => {
     const awareness = { runtime: 'background_active', encryption: 'plain', operational: { primary: 'none' } } as const;
     const status = readSessionAwarenessWorkStatusV1({ awareness, settled: true });
-    expect(status).toEqual({ bucket: 'working', tone: 'neutral' });
+    expect(status).toMatchObject({ bucket: 'working', tone: 'neutral' });
     expect(readSessionWorkStateGroupV1(status.bucket)).toBe('working');
     expect(listSessionPresentationStatesForWorkStatusFilterV1('working')).toContain('background_active');
     expect(readSessionAwarenessWorkStatusV1({ awareness: { ...awareness, runtime: 'idle' }, settled: true }))
-      .toEqual({ bucket: 'finished', tone: 'neutral' });
+      .toMatchObject({ bucket: 'finished', tone: 'neutral' });
   });
   it('does not turn offline in-flight reports into working reports in a summary', () => {
-    expect(readSessionManagedSessionsPresentationV1({ working: 0, needsYou: 0, stalled: 4 }))
-      .toEqual({ bucket: 'offline', count: 4 });
-    expect(readSessionManagedSessionsPresentationV1({ working: 1, needsYou: 0, stalled: 3 }))
-      .toEqual({ bucket: 'working', count: 1 });
-    expect(readSessionManagedSessionsPresentationV1({ working: 1, needsYou: 2, stalled: 3 }))
-      .toEqual({ bucket: 'needs_you', count: 2 });
-    expect(readSessionManagedSessionsPresentationV1({ working: 0, needsYou: 0, stalled: 0 }))
-      .toEqual({ bucket: 'idle', count: 0 });
+    expect(readSessionManagedSessionsPresentationV1({ working: 0, needsYou: 0, stalled: 4, finished: 0, attentionPrimary: 'disconnected' }))
+      .toMatchObject({ bucket: 'offline', count: 4 });
+    expect(readSessionManagedSessionsPresentationV1({ working: 1, needsYou: 0, stalled: 3, finished: 0, attentionPrimary: 'thinking' }))
+      .toMatchObject({ bucket: 'working', count: 1 });
+    expect(readSessionManagedSessionsPresentationV1({ working: 1, needsYou: 2, stalled: 3, finished: 0, attentionPrimary: 'permission_required' }))
+      .toMatchObject({ bucket: 'needs_you', count: 2 });
+    expect(readSessionManagedSessionsPresentationV1({ working: 0, needsYou: 0, stalled: 0, finished: 0, attentionPrimary: null }))
+      .toMatchObject({ bucket: 'idle', count: 0 });
+  });
+
+  it('preserves strongest report failure independently of request and finished progress counts', () => {
+    for (const needsYou of [0, 1]) {
+      expect(readSessionManagedSessionsPresentationV1({ working: 1, needsYou, stalled: 1, finished: 3, attentionPrimary: 'failed' }))
+        .toEqual({ state: 'failed', bucket: 'idle', tone: 'danger', count: 0, finished: 3 });
+    }
+    expect(readSessionManagedSessionsPresentationV1({ working: 0, needsYou: 0, stalled: 0, finished: 3, attentionPrimary: 'finished_unseen' }))
+      .toEqual({ state: 'finished_unseen', bucket: 'finished', tone: 'neutral', count: 3, finished: 3 });
   });
   it('preserves public offline status while content hydration is undecided', () => {
     const awareness = { runtime: 'offline', encryption: 'unknown', operational: { primary: 'working' } } as const;
     expect(readSessionAwarenessPresentationV1(awareness)).toBe('disconnected');
-    expect(readSessionAwarenessWorkStatusV1({ awareness })).toEqual({ bucket: 'offline', tone: 'neutral' });
+    expect(readSessionAwarenessWorkStatusV1({ awareness })).toMatchObject({ bucket: 'offline', tone: 'neutral' });
     // A settled content failure still explains its own recovery, rather than reading as hydrated.
     expect(readSessionAwarenessPresentationV1({ ...awareness, encryption: 'repair_needed' })).toBe('repair_needed');
   });
@@ -35,29 +62,33 @@ describe('readSessionAwarenessWorkStatusV1', () => {
       const status = readSessionAwarenessWorkStatusV1({
         awareness: { runtime: 'offline', operational: { primary: 'none' } }, settled,
       });
-      expect(status).toEqual({ bucket: 'offline', tone: 'neutral' });
+      expect(status).toMatchObject({ bucket: 'offline', tone: 'neutral' });
       expect(readSessionWorkStateGroupV1(status.bucket)).toBe('recent');
     }
   });
 
-  it('does not claim actionable work when its runtime cannot serve it', () => {
-    for (const primary of ['permission_required', 'action_required', 'failed'] as const) {
+  it('retains the current request over disconnected presence', () => {
+    for (const primary of ['permission_required', 'action_required'] as const) {
       expect(readSessionAwarenessWorkStatusV1({
         awareness: { runtime: 'offline', operational: { primary } }, settled: true,
-      })).toEqual({ bucket: 'offline', tone: 'neutral' });
+      })).toMatchObject({ bucket: 'needs_you', tone: 'attention' });
     }
+    expect(readSessionAwarenessPresentationV1({ runtime: 'offline', encryption: 'plain',
+      operational: { primary: 'none' }, viewer: { attention: { reasons: ['permission_required'] } } })).toBe('permission_required');
   });
 
-  it('keeps unreadable content and offline or stale runtimes out of Needs you', () => {
+  it('withholds private state when unreadable and preserves admitted requests across presence loss', () => {
     for (const primary of ['failed', 'permission_required', 'action_required', 'working'] as const) {
       for (const encryption of ['locked', 'preparing', 'repair_needed', 'access_pending', 'setup_required', 'content_unavailable', 'unknown'] as const) {
         expect(readSessionAwarenessWorkStatusV1({ awareness: { runtime: 'working', encryption,
-          operational: { primary } } })).toEqual({ bucket: 'idle', tone: 'neutral' });
+          operational: { primary } } })).toMatchObject({ bucket: 'idle', tone: 'neutral' });
       }
       expect(readSessionAwarenessWorkStatusV1({ awareness: { runtime: 'offline', encryption: 'ready',
-        operational: { primary } } })).toEqual({ bucket: 'offline', tone: 'neutral' });
+        operational: { primary } } })).toMatchObject(primary === 'permission_required' || primary === 'action_required'
+          ? { bucket: 'needs_you', tone: 'attention' } : { bucket: 'offline', tone: 'neutral' });
       expect(readSessionAwarenessWorkStatusV1({ awareness: { runtime: 'working', freshness: 'stale',
-        encryption: 'plain', operational: { primary } } })).toEqual({ bucket: 'idle', tone: 'neutral' });
+        encryption: 'plain', operational: { primary } } })).toMatchObject(primary === 'permission_required' || primary === 'action_required'
+          ? { bucket: 'needs_you', tone: 'attention' } : { bucket: 'idle', tone: 'neutral' });
     }
   });
 
@@ -65,31 +96,32 @@ describe('readSessionAwarenessWorkStatusV1', () => {
     for (const primary of ['failed', 'permission_required', 'action_required', 'working', 'ready', 'pending_input', 'none'] as const) {
       const awareness = { runtime: 'unknown', freshness: 'unknown', encryption: 'plain', operational: { primary } } as const;
       const status = readSessionAwarenessWorkStatusV1({ awareness });
-      expect(readSessionAwarenessPresentationV1(awareness)).toBe(primary === 'working' ? 'thinking' : primary === 'none' ? 'unknown' : primary);
-      expect(status).toEqual(primary === 'working' ? { bucket: 'working', tone: 'neutral' }
-        : primary === 'failed' ? { bucket: 'needs_you', tone: 'danger' }
+      expect(readSessionAwarenessPresentationV1(awareness)).toBe(primary === 'working' ? 'thinking' : primary === 'none' || primary === 'failed' ? 'unknown' : primary);
+      expect(status).toMatchObject(primary === 'working' ? { bucket: 'working', tone: 'neutral' }
+        : primary === 'failed' ? { bucket: 'idle', tone: 'neutral' }
           : primary === 'permission_required' || primary === 'action_required' ? { bucket: 'needs_you', tone: 'attention' }
             : { bucket: 'idle', tone: 'neutral' });
       expect(readSessionAwarenessWorkStatusV1({ awareness: { ...awareness, freshness: 'stale' } }))
-        .toEqual({ bucket: 'idle', tone: 'neutral' });
+        .toMatchObject(primary === 'permission_required' || primary === 'action_required'
+          ? { bucket: 'needs_you', tone: 'attention' } : { bucket: 'idle', tone: 'neutral' });
     }
     for (const reason of ['runtime_unservable', 'resuming'] as const) {
       expect(readSessionAwarenessWorkStatusV1({ awareness: { runtime: 'unknown', encryption: 'ready',
-        operational: { primary: 'permission_required', reasons: [reason] } } }))
-        .toEqual({ bucket: reason === 'runtime_unservable' ? 'offline' : 'idle', tone: 'neutral' });
+        operational: { primary: 'none', reasons: [reason] } } }))
+        .toMatchObject({ bucket: reason === 'runtime_unservable' ? 'offline' : 'idle', tone: 'neutral' });
     }
   });
 
   it('preserves live actionable facts and quiet settlement', () => {
-    for (const primary of ['failed', 'permission_required', 'action_required'] as const) {
+    for (const primary of ['permission_required', 'action_required'] as const) {
       expect(readSessionAwarenessWorkStatusV1({ awareness: { runtime: 'waiting', encryption: 'ready',
-        operational: { primary } } })).toEqual({ bucket: 'needs_you', tone: primary === 'failed' ? 'danger' : 'attention' });
+        operational: { primary } } })).toMatchObject({ bucket: 'needs_you', tone: 'attention' });
     }
     expect(readSessionAwarenessWorkStatusV1({ awareness: { runtime: 'idle', encryption: 'plain',
-      operational: { primary: 'ready' } }, settled: true })).toEqual({ bucket: 'finished', tone: 'neutral' });
+      operational: { primary: 'ready' } }, settled: true })).toMatchObject({ bucket: 'finished', tone: 'neutral' });
     expect(readSessionAwarenessWorkStatusV1({ awareness: { runtime: 'offline', lifecycle: 'archived',
-      encryption: 'locked', operational: { primary: 'failed' } } })).toEqual({ bucket: 'idle', tone: 'neutral' });
+      encryption: 'locked', operational: { primary: 'failed' } } })).toMatchObject({ bucket: 'idle', tone: 'neutral' });
     expect(readSessionAwarenessWorkStatusV1({ awareness: { runtime: 'offline', encryption: 'plain',
-      operational: { primary: 'working', reasons: ['resuming'] } } })).toEqual({ bucket: 'idle', tone: 'neutral' });
+      operational: { primary: 'working', reasons: ['resuming'] } } })).toMatchObject({ bucket: 'idle', tone: 'neutral' });
   });
 });

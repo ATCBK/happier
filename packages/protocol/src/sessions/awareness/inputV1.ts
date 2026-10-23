@@ -1,4 +1,5 @@
-import type { PrimaryTurnStatusV1 } from '../control/runtimeIssueV1.js';
+import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '../control/runtimeIssueV1.js';
+import type { SessionUsageLimitRecoveryV1 } from '../state/valueSchemas/usageLimitRecovery.js';
 import type { SessionManagerV1, SessionManagedSessionsV1 } from '../follow/sessionManagerV1.js';
 import type { SessionRuntimeActivityState } from '../runtime/activity/sessionRuntimeActivity.js';
 import type { SessionWorkStateV1 } from '../work/state/sessionWorkStateV1.js';
@@ -38,6 +39,8 @@ export type SessionAwarenessCurrentnessInputV1 = Readonly<{
 }>;
 
 export type SessionLifecycleAwarenessInputV1 = Readonly<{
+  /** Observed process termination, never inferred from absence or a cancelled turn. */
+  processTerminalState?: 'stopped' | null;
   archivedAtMs?: number | null;
   latestTurnStatus?: PrimaryTurnStatusV1 | null;
   latestTurnStatusObservedAtMs?: number | null;
@@ -98,6 +101,8 @@ export type ProjectSessionAwarenessV1Input = Readonly<{
   title?: string | null;
   /** Authored explanation only; never evidence for lifecycle or operational state. */
   statusReason?: string | null;
+  runtimeIssue?: SessionRuntimeIssueV1 | null;
+  usageLimitRecovery?: SessionUsageLimitRecoveryV1 | null;
   lifecycle: SessionLifecycleAwarenessInputV1;
   runtime: SessionRuntimeAwarenessInputV1;
   pending: SessionPendingAwarenessInputV1;
