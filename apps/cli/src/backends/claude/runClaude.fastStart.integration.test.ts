@@ -195,7 +195,7 @@ vi.mock('@/backends/claude/loop', () => ({
 
 let initResolved = false;
 let backendInitDelayMs = 200;
-const getOrCreateSessionSpy = vi.fn(async () => ({ id: 'sess_1', metadataVersion: 1 }));
+const getOrCreateSessionSpy = vi.fn<() => Promise<{ id: string; metadataVersion: number } | null>>(async () => ({ id: 'sess_1', metadataVersion: 1 }));
 const sendSessionEventSpy = vi.fn();
 let lastRuntimeSessionClient: {
   rpcHandlerManager: { registerHandler: ReturnType<typeof vi.fn>; invokeLocal: ReturnType<typeof vi.fn> };
@@ -1514,7 +1514,7 @@ describe('runClaude fast-start', () => {
     }
   });
 
-  it('does not send the tmux fallback message when the unified terminal runtime owns the terminal host', async () => {
+  it.each(['online', 'initially unavailable', 'reconnected'])('does not send the tmux fallback message when the unified terminal runtime owns the terminal host (%s)', async (connection) => {
     vi.resetModules();
     loopStarted = createDeferred<void>();
     loopExit = createDeferred<number>();
@@ -1523,7 +1523,12 @@ describe('runClaude fast-start', () => {
     initResolved = false;
     backendInitDelayMs = 0;
     sendSessionEventSpy.mockClear();
+    lastRuntimeSessionClient = null;
+    lastOfflineReconnectionConfig = null;
     getOrCreateSessionSpy.mockImplementation(async () => ({ id: 'sess_1', metadataVersion: 1 }));
+
+    if (connection !== 'online') getOrCreateSessionSpy.mockResolvedValueOnce(null);
+    if (connection === 'reconnected') getOrCreateSessionSpy.mockResolvedValueOnce(null);
 
     const { runClaude } = await import('./runClaude');
     let testError: unknown = null;
@@ -1540,6 +1545,13 @@ describe('runClaude fast-start', () => {
     try {
       await expect(waitFor(loopStarted.promise, loopStartWaitMs)).resolves.toBeUndefined();
       if (testError) throw testError;
+      if (connection === 'reconnected') {
+        await expect.poll(() => lastOfflineReconnectionConfig, { timeout: loopStartWaitMs }).not.toBeNull();
+        const reconnection = lastOfflineReconnectionConfig as OfflineReconnectionConfig<unknown> | null;
+        if (!reconnection) throw new Error('Offline reconnection was not scheduled');
+        await reconnection.onReconnected();
+      }
+      await expect.poll(() => lastRuntimeSessionClient?.onUserMessage.mock.calls.length ?? 0, { timeout: loopStartWaitMs }).toBeGreaterThan(0);
       expect(sendSessionEventSpy).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: 'message', message: expect.stringContaining('tmux') }),
       );

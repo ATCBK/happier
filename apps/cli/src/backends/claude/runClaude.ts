@@ -2074,6 +2074,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                     }),
                     allowOfflineStub: true,
                     startupSideEffectsOrder: 'persist-first',
+                    terminalHostOwner: unifiedTerminalRuntimeActive ? 'runtime' : 'startup',
                     runtimeActivityLifecycle: runtimeActivity.lifecycle,
                     deferPendingFirstInputCommitUntilRuntimeReady: true,
                     onSessionSwap: (newSession) => {
