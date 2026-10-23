@@ -3,6 +3,9 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installTimerCensus } from '@/dev/testkit/performance/timerCensus';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -34,6 +37,37 @@ const draft = {
 };
 
 describe('WorkflowSaveStatus', () => {
+    it('installs no saved-age clock while its retained editor is hidden, then resumes current age on presentation', async () => {
+        const { WorkflowSaveStatus } = await import('./WorkflowSaveStatus');
+        vi.useFakeTimers();
+        const now = Date.UTC(2026, 9, 23, 12);
+        vi.setSystemTime(now);
+        const census = installTimerCensus(stack => stack.includes('WorkflowSaveStatus.tsx') ? 'save-age' : null);
+        const content = <WorkflowSaveStatus state={{ kind: 'saved', savedAtMs: now - 120_000 }} localDraft={draft}
+            onSave={() => {}} onSaveAsCopy={() => {}} testIDPrefix="clock" />;
+        const screen = await renderScreen(<PluginSurfaceFocusEligibilityProvider active={false}>{content}</PluginSurfaceFocusEligibilityProvider>);
+        try {
+            expect(census.read().filter(timer => timer.consumer === 'save-age')).toEqual([]);
+            expect(vi.getTimerCount()).toBe(0);
+            await act(async () => { vi.advanceTimersByTime(60_000); });
+            // A visible second pane still ages even when it does not own keyboard focus.
+            await screen.update(<PluginSurfaceFocusEligibilityProvider active={false} presentationActive>{content}</PluginSurfaceFocusEligibilityProvider>);
+            expect(census.read().filter(timer => timer.consumer === 'save-age')).toEqual([
+                { kind: 'interval', delayMs: 60_000, consumer: 'save-age' },
+            ]);
+            expect(screen.getTextContent()).toContain('workflows.page.saveStatus.savedAge');
+            expect(screen.getTextContent()).toContain(JSON.stringify({ age: formatRelativeTimeShort(now - 120_000, now + 60_000) }));
+            await act(async () => { vi.advanceTimersByTime(60_000); });
+            await screen.update(<PluginSurfaceFocusEligibilityProvider active={false}>{content}</PluginSurfaceFocusEligibilityProvider>);
+            expect(census.read().filter(timer => timer.consumer === 'save-age')).toEqual([]);
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            await screen.unmount();
+            census.stop();
+            vi.useRealTimers();
+        }
+    });
+
     it('is its own receipt: one element reads Unsaved changes with Save, then Saving…, then Saved just now', async () => {
         const { WorkflowSaveStatus } = await import('./WorkflowSaveStatus');
         const onSave = vi.fn();

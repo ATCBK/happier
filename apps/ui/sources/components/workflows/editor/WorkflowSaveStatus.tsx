@@ -6,6 +6,7 @@ import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin
 
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { Text } from '@/components/ui/text/Text';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { Typography } from '@/constants/Typography';
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { t } from '@/text';
@@ -229,7 +230,8 @@ export function WorkflowSaveStatus(props: Readonly<{
     const [comparing, setComparing] = React.useState(false);
     const saveKeyHint = useKeyboardShortcutLabel('workflow.save');
     const savedAtMs = state.kind === 'saved' ? state.savedAtMs : null;
-    const nowMs = useMinuteClock(savedAtMs !== null, props.nowMs);
+    const presented = useLayoutPresentationActive();
+    const nowMs = useMinuteClock(presented && savedAtMs !== null, props.nowMs);
 
     if (state.kind === 'conflict') {
         const { conflict } = state;
