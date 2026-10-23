@@ -3,6 +3,7 @@ import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpo
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
 import { sanitizeConnectedServiceDiagnosticString } from './connectedServices/runtimeAuth/sanitizeConnectedServiceDiagnosticString';
+import { loadUndici } from '@/utils/loadUndici';
 
 export type DaemonControlRequestOptions = {
   timeoutMs?: number | null;
@@ -26,7 +27,7 @@ export async function readDaemonControlHttpResponse(params: Readonly<{
   signal?: AbortSignal;
 }>): Promise<Readonly<{ ok: boolean; status: number; body: string }>> {
   params.signal?.throwIfAborted();
-  const { Agent } = await import('undici');
+  const { Agent } = await loadUndici();
   params.signal?.throwIfAborted();
   const dispatcher = new Agent({ connect: { timeout: 0 }, headersTimeout: 0, bodyTimeout: 0 });
   try {

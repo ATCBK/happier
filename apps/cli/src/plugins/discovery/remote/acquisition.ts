@@ -4,6 +4,7 @@ import { isIP, type LookupFunction } from 'node:net';
 import { resolveUrlConnectionIdentity } from '@/network/urlConnectionIdentity';
 import { areNetworkAddressesPublic } from '@/plugins/distribution/npm/networkPolicy';
 import { awaitPluginAcquisition, createPluginAcquisitionLifetime } from '@/plugins/distribution/acquisitionLifetime';
+import { loadUndici } from '@/utils/loadUndici';
 
 /**
  * The one destination-assessed acquisition path for remote plugin material.
@@ -183,7 +184,7 @@ export async function openRemoteAcquisition(params: Readonly<{
         }), signal);
       } else {
         signal?.throwIfAborted();
-        const { Agent, fetch: undiciFetch } = await awaitPluginAcquisition(import('undici'), signal);
+        const { Agent, fetch: undiciFetch } = await awaitPluginAcquisition(loadUndici(), signal);
         signal?.throwIfAborted();
         const dispatcher = new Agent({
           connect: { lookup: createPinnedLookup(hostname, addresses, errorLabel), timeout: 0 },

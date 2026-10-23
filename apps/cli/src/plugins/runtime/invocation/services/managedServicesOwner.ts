@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Agent } from 'undici';
+import { loadUndici } from '@/utils/loadUndici';
 import { logger } from '@/ui/logger';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import { assertManagedServiceRequestBodySize, failManagedServiceRequestSize } from './managedServiceRequestSize';
@@ -3004,7 +3005,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
     const platformFetch = globalThis.fetch.bind(globalThis);
     const hostFetch: typeof globalThis.fetch = input.fetch ?? (async (target, init) => {
         init?.signal?.throwIfAborted();
-        const { Agent } = await import('undici');
+        const { Agent } = await loadUndici();
         init?.signal?.throwIfAborted();
         const dispatcher = managedServiceHttpDispatcher ??= new Agent({ headersTimeout: 0, bodyTimeout: 0 });
         // Node consumes the dispatcher; Bun consumes timeout:false. Both keep
