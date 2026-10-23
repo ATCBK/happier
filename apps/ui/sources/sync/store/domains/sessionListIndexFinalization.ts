@@ -8,7 +8,7 @@ import {
     saveSessionListWarmCacheEntries,
     type SessionListCacheEntryV1,
 } from '../../domains/state/warmCachePersistence';
-import { buildSessionListCacheEntriesFromRenderables } from '../../domains/state/warmCacheAdapters';
+import { buildPersistedSessionListCacheEntriesFromRenderables } from '../../domains/state/warmCacheAdapters';
 import { getActiveServerSnapshot } from '../../domains/server/serverRuntime';
 import { syncPerformanceTelemetry } from '../../runtime/syncPerformanceTelemetry';
 import { buildActiveServerSessionListIndex } from '../sessionListIndex/buildSessionListIndexWithServerScope';
@@ -78,7 +78,7 @@ export function saveWarmSessionCacheForState(
     const accountId = resolveWarmCacheAccountScope(state.profile?.id);
     if (!activeServerId || !accountId) return;
     const previousWarmCacheEntries = previousEntries ?? peekSessionListWarmCacheEntries(activeServerId, accountId) ?? undefined;
-    const nextEntries = buildSessionListCacheEntriesFromRenderables(
+    const nextEntries = buildPersistedSessionListCacheEntriesFromRenderables(
         readOrdinaryRowsForServer(state, activeServerId),
         previousWarmCacheEntries,
     );

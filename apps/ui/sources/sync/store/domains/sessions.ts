@@ -52,15 +52,12 @@ import {
 import { prepareSessionLocalStateScopeForActivation } from '../../domains/state/persistence';
 import {
     resolveWarmCacheAccountScope,
-    peekSessionListWarmCacheEntries,
     type SessionListCacheEntryV1,
     type SessionListQueryMembershipCacheEntryV1,
     loadSessionListQueryMembershipWarmCacheEntries,
     saveSessionListQueryMembershipWarmCacheEntries,
-    saveSessionListWarmCacheEntries,
 } from '../../domains/state/warmCachePersistence';
 import {
-    buildPersistedSessionListCacheEntriesFromRenderables,
     SESSION_LIST_WARM_CACHE_MAX_ENTRIES,
 } from '../../domains/state/warmCacheAdapters';
 import { projectManager } from '../../runtime/orchestration/projectManager';
@@ -100,6 +97,7 @@ import {
     doesActiveSessionListProjectionNeedRepair,
     finalizeSessionListIndexUpdate,
     finalizeSessionListRenderablePublication,
+    saveWarmSessionCacheForState,
 } from './sessionListIndexFinalization';
 import { resolveSessionListRenderableChangeImpact } from './sessionListRenderableChange';
 import { persistSessionModelData } from './sessionModelPersistence';
@@ -668,29 +666,6 @@ function didPreserveRenderablePendingFlags(
                 && next.pendingBlockedCount === previous.pendingBlockedCount
             )
         );
-}
-
-function saveWarmSessionCacheForState(
-    state: SessionsDomain & SessionsDomainDependencies,
-    previousEntries?: Record<string, SessionListCacheEntryV1>,
-): void {
-    const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
-    const accountId = resolveWarmCacheAccountScope(state.profile?.id);
-    if (!activeServerId || !accountId) return;
-    const activeRows = state.sessionListRowsByServerId[activeServerId] ?? {};
-    const ordinaryMembership = state.ordinarySessionListMembershipByServerId[activeServerId] ?? [];
-    const ordinaryRows = Object.fromEntries(ordinaryMembership.flatMap((sessionId) => {
-        const row = activeRows[sessionId];
-        return row ? [[sessionId, row] as const] : [];
-    }));
-    const previousWarmCacheEntries = previousEntries ?? peekSessionListWarmCacheEntries(activeServerId, accountId) ?? undefined;
-    const nextEntries = buildPersistedSessionListCacheEntriesFromRenderables(ordinaryRows, previousWarmCacheEntries);
-    if (previousWarmCacheEntries && nextEntries === previousWarmCacheEntries) return;
-    saveSessionListWarmCacheEntries(
-        activeServerId,
-        accountId,
-        nextEntries,
-    );
 }
 
 /**

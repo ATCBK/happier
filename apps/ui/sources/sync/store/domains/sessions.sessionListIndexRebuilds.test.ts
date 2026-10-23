@@ -15,6 +15,8 @@ import { projectManager } from '@/sync/runtime/orchestration/projectManager';
 import * as reachableTargets from '@/sync/domains/session/resolveSessionReachableMachineId';
 import * as warmCachePersistence from '@/sync/domains/state/warmCachePersistence';
 import * as warmCacheAdaptersModule from '@/sync/domains/state/warmCacheAdapters';
+import { SESSION_LIST_WARM_CACHE_MAX_ENTRIES } from '@/sync/domains/state/warmCacheAdapters';
+import { saveWarmSessionCacheForState } from './sessionListIndexFinalization';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { adoptHomeProfile, resolveServerProfileScopeIdForIdentifier, setServerProfileIdentityForUrl, setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
@@ -125,6 +127,21 @@ function readSessionListIndexSessionIds(
 }
 
 describe('sessions domain: unchanged writes', () => {
+    it('uses the same retained persistence window for ordinary hydration and fallback finalization', () => {
+        observeSessionListWarmCacheWrites();
+        const { domain, get } = createHarness();
+        const arrivals = Array.from({ length: SESSION_LIST_WARM_CACHE_MAX_ENTRIES + 1 }, (_, index) => (
+            currentSession({ id: `window-${index}`, createdAt: index + 1, updatedAt: index + 1 })
+        ));
+        applyOrdinarySnapshot(domain, arrivals);
+        saveWarmSessionCacheForState(get());
+        const cached = warmCachePersistence.loadSessionListWarmCacheEntries(getActiveServerSnapshot().serverId, 'account_a');
+        expect(Object.keys(cached)).toHaveLength(SESSION_LIST_WARM_CACHE_MAX_ENTRIES);
+        expect(cached['window-0']).toBeUndefined();
+        expect(Object.keys(get().sessionListRowsByServerId[getActiveServerSnapshot().serverId]))
+            .toHaveLength(arrivals.length);
+    });
+
     it.each(['apply', 'merge'] as const)('keeps the newest tuple when one %s publication contains out-of-order observations of the same row', writer => {
         const { domain, get } = createHarness();
         const serverId = getActiveServerSnapshot().serverId;
