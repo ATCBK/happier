@@ -5,7 +5,6 @@ import { expect, it, vi } from 'vitest';
 import { ProviderConnectionIdSchema, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { logger } from '@/ui/logger';
-import { MACHINE_CONTROL_TIMEOUT_MS } from '@happier-dev/iroh-native';
 
 import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 import { createMachineSharedProviderGatewayResolver } from '@/daemon/machine/bootstrapMachineSyncRuntime';
@@ -17,6 +16,7 @@ import { createSpawnPluginRuntimeLease } from '@/daemon/spawn/spawnPluginRuntime
 import { createProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
 import { createProviderRedactionLease } from '@/providers/spawn/redaction';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
+import { createDeferred } from '@/testkit/async/deferred';
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
 import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
@@ -42,6 +42,13 @@ import { createTeamCredentialBrokerSourceOwner } from '@/providers/broker/teamCr
 import { createRuntimeProviderServices } from './runtimeServices';
 
 it('admits signed-out Agent Sessions through the probed local gateway and chosen hub', async () => {
+  let phase = 'fixture setup';
+  const startedAt = performance.now();
+  const phases: Array<Readonly<{ phase: string; elapsedMs: number }>> = [];
+  const markPhase = (next: string) => {
+    phase = next;
+    phases.push({ phase, elapsedMs: Math.round(performance.now() - startedAt) });
+  };
   await withConfiguredDaemonTestHome({ prefix: 'shared-gateway-spawn-' }, async ({ homeDir }) => {
     let pauseTarget = false;
     let enterTarget = () => {};
@@ -51,7 +58,10 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
     let targetSignal: AbortSignal | undefined;
     let carrierAdmissionPending = false;
     let sourceReadDuringCarrierAdmission = false;
-    let delayNextPeerSourceRead = false;
+    let pauseNextPeerSourceRead = false;
+    const peerSourceEntered = createDeferred();
+    const peerSourceReleased = createDeferred();
+    let peerSourceSignal: AbortSignal | undefined;
     const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'),
       happyHomeDir: homeDir,
       controller: pluginReloadController, physicalGateway: true, probeCatalog: true,
@@ -59,14 +69,11 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
       // Only the Home target transport stalls; purpose admission remains real.
       resolveAccountTarget: async (target, signal) => {
         sourceReadDuringCarrierAdmission ||= carrierAdmissionPending;
-        if (delayNextPeerSourceRead) {
-          delayNextPeerSourceRead = false;
-          // The real native control clock must expire while a valid private
-          // Home read is still pending, without retiring the admitted stream.
-          expect(MACHINE_CONTROL_TIMEOUT_MS).toBeGreaterThan(0);
-          const startedAt = performance.now();
-          await new Promise(resolve => setTimeout(resolve, MACHINE_CONTROL_TIMEOUT_MS + 1));
-          expect(performance.now() - startedAt).toBeGreaterThanOrEqual(MACHINE_CONTROL_TIMEOUT_MS);
+        if (pauseNextPeerSourceRead) {
+          pauseNextPeerSourceRead = false;
+          peerSourceSignal = signal;
+          peerSourceEntered.resolve();
+          await peerSourceReleased.promise;
         }
         if (pauseTarget) { targetSignal = signal; enterTarget(); await released; }
         signal.throwIfAborted();
@@ -117,6 +124,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
           readAccountId: () => 'account', readOrigin: async () => ({ serverIdentityId: 'home', machineId: hubMachineId }) }),
         resolveManagedPurposeBindingIntent: fixture.gateway!.purposeBindingOwner.resolveBindingIntent,
       });
+      markPhase('catalog probe');
       const probed = await services.probe({ connectionId: 'run-gateway', machineId: hubMachineId });
       expect(probed, JSON.stringify(probed)).toMatchObject({ status: 'success', models: [{ id: 'example',
         connectedAccountPurposes: [{ consumer: fixture.gateway!.identity, purpose: 'upstream' }],
@@ -132,6 +140,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
         modelSettingsMutation: async (): Promise<never> => { throw new Error('No model mutations in launch admission'); },
       });
       for (const sessionMachineId of [hubMachineId, peerMachineId]) {
+        markPhase(`launch admission ${sessionMachineId}`);
         const admitted = await prepareDaemonProviderLaunch({
           options: { ...options, machineId: sessionMachineId }, effectiveBackendTarget: options.backendTarget, catalogAgentId: fixture.agentId, modelSelection,
           profileEnvironmentVariables: {}, daemonSpawnHooks: null, persistedProviderBinding: null, normalizedExistingSessionId: '',
@@ -184,6 +193,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
           const consumerScope = createProviderLaunchResourceScope();
           const consumerLogs = vi.spyOn(logger, 'infoFile');
           try {
+            markPhase('native session plan');
             const plan = await createNativeAgentRuntimeSessionPlanFixture({
               identity: registration, createRuntime: input => registration.createRuntime(input),
               backend: projectEngineRuntimeContributionFromAgent(agent, fixture.agentId), agent,
@@ -214,12 +224,14 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                   consumerScope.register(consumer.cleanup);
                   return { ...consumer, retire: () => opened.retire() };
                 };
+                markPhase('local consumer');
                 const consumer = await openConsumer(sessionId, hubMachineId);
                 const processFile = join(fixture.gateway!.directory, 'gateway-started');
                 const localPid = await readFile(processFile, 'utf8');
                 expect(Number(localPid)).toBeGreaterThan(0);
                 // Exercise the actual peer carrier and hub application, not a
                 // second local consumer that bypasses broker endpoint discovery.
+                markPhase('native peer endpoints');
                 const worker = await createDaemonMachineIrohRuntime({ happyHomeDir: homeDir, identity: 'ephemeral',
                   relayConfig: { relayPolicy: 'disabled', relayUrls: [] } });
                 const hub = await createDaemonMachineIrohRuntime({ happyHomeDir: homeDir, identity: 'ephemeral',
@@ -287,13 +299,14 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                         endpointId: hub.endpoint.endpointId, endpointRevision: 1, endpoint: hub.endpoint },
                     } satisfies ProviderBrokerAccountOpenResponseV2;
                   },
-                  admitConsumer: async () => true,
+                  admitConsumer: async () => ({ ok: true }),
                   openTunnel: createProviderBrokerMachineCarrierTunnelOpen({ homeId: 'home', accountId: 'account',
                     localMachineId: peerMachineId, runtime: worker, resolveTrustRoots: () => trustRoots }),
                 });
                 const brokerWarnings = vi.spyOn(logger, 'warnLocalFile');
                 try {
                   refreshAllowed = false;
+                  markPhase('peer refresh refusal');
                   const refreshRefusal = await openPeer().then(() => { throw new Error('Expected refresh refusal'); }, (error: unknown) => error);
                   expect(readAccountConnectionProviderBrokerFailureDiagnostic(refreshRefusal)).toEqual({
                     reason: 'endpoint_discovery_failed', discoveryCause: 'broker_refresh_refused',
@@ -301,6 +314,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                   expect(brokerWarnings.mock.calls.filter(([label]) => label === '[ProviderBroker] Machine stream admission refused')).toEqual([]);
                   refreshAllowed = true;
                   forwarding = false;
+                  markPhase('peer target refusal');
                   const refusal = await openPeer().then(() => { throw new Error('Expected peer refusal'); }, (error: unknown) => error);
                   expect(readAccountConnectionProviderBrokerFailureDiagnostic(refusal)).toEqual({
                     reason: 'endpoint_discovery_failed', discoveryCause: 'socket_closed',
@@ -313,11 +327,27 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                   forwarding = true;
                   refreshAllowed = true;
                 }
-                delayNextPeerSourceRead = true;
-                const remote = await openPeer();
-                consumerScope.register(remote.cleanup);
-                // Real private Home reads and gateway acquisition belong to
-                // HTTP endpoint discovery, beyond native's control deadline.
+                pauseNextPeerSourceRead = true;
+                markPhase('deferred peer Home source read');
+                let peerOpenSettled = false;
+                const pendingRemote = openPeer().then(remote => {
+                  consumerScope.register(remote.cleanup);
+                  return remote;
+                }).finally(() => { peerOpenSettled = true; });
+                try {
+                  await Promise.race([peerSourceEntered.promise, pendingRemote]);
+                  // Home source work starts after carrier admission and keeps
+                  // endpoint discovery pending until the boundary is released.
+                  // Rust's machine_http_tunnel_keeps_http_source_reads_alive_beyond_control_window
+                  // separately proves the real HTTP-source/native-window contract.
+                  expect(sourceReadDuringCarrierAdmission).toBe(false);
+                  expect(peerOpenSettled).toBe(false);
+                  expect(peerSourceSignal?.aborted).toBe(false);
+                } finally {
+                  peerSourceReleased.resolve();
+                  await pendingRemote;
+                }
+                const remote = await pendingRemote;
                 expect(sourceReadDuringCarrierAdmission).toBe(false);
                 const remoteBinding = await remote.readHttpBinding();
                 expect(new URL(remoteBinding.endpointUrl).port).not.toBe(new URL(consumer.endpointUrl).port);
@@ -340,6 +370,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                   });
                   return { status: response.status, body: await response.text() };
                 };
+                markPhase('consumer isolation');
                 const localModels = await readModels(consumer);
                 expect(localModels.status).toBe(200);
                 expect(JSON.parse(localModels.body)).toMatchObject({ data: [{ id: 'example' }] });
@@ -348,8 +379,11 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                 expect((await readModels(consumer, peer.credential)).status).toBe(403);
                 // Retiring the peer cannot revoke the local Session or stop its
                 // physical gateway while that Session still holds its claim.
+                markPhase('peer retirement');
                 await peer.cleanup();
+                markPhase('peer transport retirement');
                 await peer.retire();
+                markPhase('peer release observation');
                 // Peer retirement crosses the real carrier; its hub cleanup
                 // is observed asynchronously after the local tunnel closes.
                 await vi.waitFor(() => expect(consumerLogs.mock.calls).toContainEqual(['[managed-provider-consumer-claim]', {
@@ -358,6 +392,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                 }]));
                 expect(await readModels(consumer)).toEqual(localModels);
                 expect(await readFile(processFile, 'utf8')).toBe(localPid);
+                markPhase('managed endpoint materialization');
                 const materialized = await attempt.materializeManagedEndpoint({ normalizedUrl: consumer.endpointUrl,
                   downstreamBearer: consumer.credential });
                 if (!materialized.ok) throw new Error(materialized.error.code);
@@ -373,6 +408,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
             await expect(runHostSessionRuntime(plan.opts, plan.config, {
               readProcessIdentityByPidFn: async () => { throw osBoundary; },
             })).rejects.toBe(osBoundary);
+            markPhase('native runtime binding');
             const session = createNativeSessionClientTestPort(sessionId);
             const created = await plan.config.createSessionRuntime({ directory: homeDir,
               metadata: {}, machineId: hubMachineId, session,
@@ -383,11 +419,15 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
             expect(created.admittedProviderBindingHandoff?.sessionBindingMetadata).toEqual(metadata);
             expect(created.admittedProviderBindingHandoff?.materialization.kind).toBe('spawnEnv');
             await created.operations.resetOrDisposeRuntime();
-          } finally { try { await consumerScope.release(); } finally { consumerLogs.mockRestore(); } }
+          } finally {
+            markPhase('consumer scope cleanup');
+            try { await consumerScope.release(); } finally { consumerLogs.mockRestore(); }
+          }
         }
       }
       const logs = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
       try {
+        markPhase('paused Home admission cancellation');
         pauseTarget = true;
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
         const caller = new AbortController();
@@ -414,6 +454,14 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
           phase: 'purpose_bindings', status: 'failed', reason: 'cancelled', connectionId: 'run-gateway', machineId: peerMachineId,
         })]);
       } finally { releaseTarget(); vi.useRealTimers(); logs.mockRestore(); }
-    } finally { redaction.close(); await launchResourceScope.release(); await fixture.cleanup(); }
+    } finally {
+      peerSourceReleased.resolve();
+      markPhase('launch resource cleanup');
+      redaction.close();
+      await launchResourceScope.release();
+      markPhase('fixture cleanup');
+      await fixture.cleanup();
+      markPhase('complete');
+    }
   });
 });
