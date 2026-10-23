@@ -12,9 +12,8 @@ import { auth } from '@/app/auth/auth';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
 import { classifyMachineDaemonPresence, type MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import { inTx, type Tx } from '@/storage/inTx';
-import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
 import { signRouteGrantPayload } from '@/app/machines/peer/mediation/mintDirectRouteGrantV1';
-import { admitProviderBrokerConsumerInTx, admitProviderBrokerTopology, readProviderBrokerInitiatorEndpointInTx, type ProviderBrokerConsumerCurrentness } from './brokerConsumerAdmission';
+import { acquireProviderBrokerConsumerAdmissionInTx, admitProviderBrokerConsumerInTx, admitProviderBrokerTopology, readProviderBrokerInitiatorEndpointInTx, type ProviderBrokerConsumerCurrentness } from './brokerConsumerAdmission';
 
 type ConsumerResolver = (input: Readonly<{
     executionRunId: string; requestingAccountId: string; workerMachineId: string; expectedOccurrenceId: string | null;
@@ -105,11 +104,12 @@ async function withCurrentMachines<T extends Readonly<{ ok: boolean }>>(
     const currentRun = await resolveRun(prepared.executionRunOccurrenceId);
     if (currentRun && !currentRun.ok) return currentRun;
     return await inTx(async tx => {
-        // Grant withdrawal publishes to the requester through this same Account
-        // fence. Hold its serializing intent through signing/terminal admission,
-        // so withdrawal cannot complete between the final grant read and effect.
-        await acquireAccountChangePublicationLocksInTx(tx, [input.actorAccountId], {
-            includeSingleAccount: true, intent: 'serializing',
+        // The prepared custodian is a cohort hint, never current authority.
+        // Recheck it and both Machines after admission, then hold the complete
+        // cohort through signing/terminal admission, including foreign custody.
+        await acquireProviderBrokerConsumerAdmissionInTx(tx, {
+            accountIds: [input.actorAccountId],
+            custodianAccountIds: [prepared.initiator.custodianAccountId],
         });
         const current = await authorizeMachinesInTx(tx, input, currentRun);
         if (!current.ok) return current;
@@ -124,7 +124,7 @@ async function withCurrentMachines<T extends Readonly<{ ok: boolean }>>(
             return { ok: false, reasonCode: 'broker_unavailable' } as const;
         }
         return finalize(current);
-    });
+    }, { isolationLevel: 'ReadCommitted' });
 }
 
 /** Home admits transport identity and consumer currentness only. An encrypted

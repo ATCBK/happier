@@ -30,7 +30,7 @@ import type { MachinePoolCandidateSnapshot } from '@/app/machines/pools/machineP
 import { verifyRunnerBrokerOpenSelectionInTx } from '@/app/ephemeralRunner/runnerBrokerOpenSelection';
 import { readRunnerActivationAuthentication } from '@/app/ephemeralRunner/activationAuthentication';
 import { readRunnerCreatorCurrentnessInTx } from '@/app/ephemeralRunner/activationCurrentness';
-import { admitProviderBrokerConsumerInTx, admitProviderBrokerTopology, readProviderBrokerInitiatorEndpointInTx } from '@/app/providers/brokerConsumerAdmission';
+import { acquireProviderBrokerConsumerAdmissionInTx, admitProviderBrokerConsumerInTx, admitProviderBrokerTopology, readProviderBrokerInitiatorEndpointInTx } from '@/app/providers/brokerConsumerAdmission';
 
 type ProviderProjectionReader = (input: Readonly<{
     custodianAccountId: string;
@@ -583,6 +583,7 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
     }>,
     request: ProviderBrokerOpenRequestV1,
     executionRun: CurrentExecutionRun | null,
+    finalInitiatorCustodianAccountId?: string,
 ): Promise<BrokerOpenDurableAuthorization | Failure> {
     const resourceIdentity = await tx.teamCredentialResource.findUnique({
         where: { id: request.resourceId }, select: { custodianAccountId: true },
@@ -590,7 +591,17 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
     const admissionSessionId = request.consumer.kind === 'session' ? request.consumer.sessionId : executionRun?.parentSessionId;
     const admissionAudience = await readSessionAccountCursorAudienceInTx(tx, admissionSessionId ? [admissionSessionId] : [],
         [input.actorAccountId, ...(resourceIdentity ? [resourceIdentity.custodianAccountId] : [])]);
-    await acquireAccountChangePublicationLocksInTx(tx, admissionAudience.accountIds, { includeSingleAccount: true });
+    if (finalInitiatorCustodianAccountId !== undefined) {
+        // Preparation supplies custody only as a cohort hint. The final
+        // endpoint/consumer reads and preparation comparison recheck it;
+        // acquire the whole cohort together, never extend a held requester lock.
+        await acquireProviderBrokerConsumerAdmissionInTx(tx, {
+            accountIds: admissionAudience.accountIds,
+            custodianAccountIds: [finalInitiatorCustodianAccountId],
+        });
+    } else {
+        await acquireAccountChangePublicationLocksInTx(tx, admissionAudience.accountIds, { includeSingleAccount: true });
+    }
     if (!await auth.isSignedCredentialCurrent(tx, input.actorAccountId, input.authentication.tokenEpoch)) {
         return failure('operation_not_current');
     }
@@ -771,12 +782,14 @@ async function prepareTeamCredentialProviderBrokerOpenInTx(
     executionRun: CurrentExecutionRun | null,
     selectedPoolMachineId: string | null,
     poolEligibleMachineIds: ReadonlySet<string> | null,
+    finalInitiatorCustodianAccountId?: string,
 ): Promise<BrokerOpenPreparationResult> {
     const authorized = await authorizeTeamCredentialProviderBrokerOpenDurableInTx(
         tx,
         input,
         request,
         executionRun,
+        finalInitiatorCustodianAccountId,
     );
     if (isFailure(authorized)) return authorized;
     const { request: parsedRequest, resource, pinnedMachineId } = authorized;
@@ -1081,12 +1094,15 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
             finalRun,
             selectedPoolMachineId,
             poolEligibleMachineIds,
+            preProjection.initiatorEndpoint.custodianAccountId,
         );
         if (isFailure(current)) return current;
         const changed = preparationChangeFailure(preProjection, current);
         if (changed) return changed;
+        // Full serializing Account admission precedes deciding reads; after a
+        // lock wait ReadCommitted observes the winning withdrawal before signing.
         return finalizePreparedBrokerOpen(input, current, projectionResponse);
-    }, { isolationLevel: "Serializable" /* Broker signing must observe one current entitlement, source and resource snapshot. */ });
+    }, { isolationLevel: 'ReadCommitted' });
 }
 
 /** Ordinary Session/Run opens select Pool placement at this Home boundary. */

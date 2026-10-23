@@ -4,11 +4,25 @@ import type { Tx } from '@/storage/inTx';
 import { readMachineIrohEndpointAuthorityV1, type MachineIrohEndpointAuthorityV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
 import { resolveMachineAdmissionInTx } from '@/app/machines/machineAccess';
+import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
 
 export type ProviderBrokerConsumerCurrentness = Readonly<{
     parentSessionId: string | null;
     occurrenceId: string;
 }>;
+
+/** Capture custody during preparation, then admit the complete Account cohort
+ * before final deciding reads. Serializing admission excludes grant/lifecycle
+ * publication (NO KEY UPDATE) and physical erasure (UPDATE), while reusing the
+ * existing sorted Account owner. Callers recheck custody under these locks. */
+export async function acquireProviderBrokerConsumerAdmissionInTx(tx: Tx, input: Readonly<{
+    accountIds: readonly string[];
+    custodianAccountIds: readonly string[];
+}>): Promise<void> {
+    await acquireAccountChangePublicationLocksInTx(tx, [...input.accountIds, ...input.custodianAccountIds], {
+        includeSingleAccount: true, intent: 'serializing',
+    });
+}
 
 /** The peer carrier requires distinct resolved Machine and endpoint identities. */
 export function admitProviderBrokerTopology(
