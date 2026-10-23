@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { db, getDbProviderFromEnv, initDbPostgres } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -10,8 +10,48 @@ import { createOrRejoinLayout1SessionByTag } from "./createOrRejoinLayout1Sessio
 import { createFreshBoundLayout1SessionInTx } from "./createFreshBoundLayout1Session";
 import { prepareLayout1SessionCreate } from "./prepareLayout1SessionCreate";
 import { deleteSessionOrganizationFolder, deleteSessionOrganizationTag } from "@/app/session/organization/organizationMutations";
+import { setTeamMembershipStatusInTx } from "@/app/teams/memberships/membershipService";
+import { publishTeamChangedInTx } from "@/app/teams/teamChanges";
+import { createQualifiedConnectedAccountGroupDigest, createQualifiedConnectedAccountServiceDigest } from "@/app/api/routes/connect/qualifiedConnectedAccounts/identity";
+import { updateTeamCredentialResourceInTx } from "@/app/teams/credentials/resourceUpdate";
+import { revokeMachineInTx } from "@/app/machines/machineMutations";
+import { applyMachineReplacement } from "@/app/machines/applyMachineReplacement";
+import { AutomationTriggerIdSchema, type SessionInitialTriggerAdmissionV1 } from "@happier-dev/protocol";
+import { replaceAutomationAssignmentsTx } from "@/app/automations/automationAssignmentService";
 
 const authentication = createPresentUserSessionAccessAuthentication({ env: {} });
+
+function initialTrigger(machineId: string): SessionInitialTriggerAdmissionV1 {
+    const automationId = randomUUID();
+    return { automationId, name: "Session birth preparation", enabled: true,
+        assignments: [{ machineId, enabled: true, priority: 0 }],
+        executionRecipe: { v: 2, templateVersion: 1, triggerEvidence: null,
+            workflow: { t: "plain", v: { workspace: { directory: "/repo" }, executionTarget: { kind: "session" },
+                inlineDefinition: { version: 1, inputs: [], defaults: { agentTarget: {
+                    kind: "agent", identity: { pluginId: "happier.agent.test", localId: "test" } } },
+                    blocks: [{ kind: "step", id: "prepare", document: { text: "Prepare", references: [], attachments: [] },
+                        input: [], result: { kind: "text" } }] } } } },
+        triggers: [{ triggerId: AutomationTriggerIdSchema.parse(`${automationId}-start`),
+            trigger: { kind: "sessionLifecycle", enabled: true, events: ["sessionStarted"], policy: { kind: "everyMatch" } } }],
+    };
+}
+
+async function credentialFixture(accountId: string, teamId: string) {
+    const service = { pluginId: "example.session-binding", localId: "source" };
+    const groupId = randomUUID();
+    const pool = await db.connectedServiceAuthGroup.create({ data: {
+        accountId, groupId, servicePluginId: service.pluginId, serviceLocalId: service.localId,
+        qualifiedServiceDigest: createQualifiedConnectedAccountServiceDigest(service),
+        qualifiedGroupDigest: createQualifiedConnectedAccountGroupDigest({ service, groupId }), policyJson: "{}",
+    } });
+    const resource = await db.teamCredentialResource.create({ data: {
+        teamId, custodianAccountId: accountId, displayName: "Session birth credential",
+        disclosureCeiling: "direct_allowed", sessionUsePolicy: "personal_allowed", allMembersDeliveryMode: "direct",
+        sourceBindingJson: JSON.stringify({ v: 1, kind: "connected_pool", target: { kind: "group", service, groupId }, poolIncarnation: pool.id }),
+    } });
+    return { resource, binding: { v: 1 as const, slot: { kind: "provider_model" as const }, resourceId: resource.id,
+        expectedResourceRevision: resource.revision, deliveryMode: "direct" as const, teamId } };
+}
 
 function prepared(accountId: string, managerSessionId: string, tag = randomUUID()) {
     const result = prepareLayout1SessionCreate({
@@ -34,6 +74,363 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("t
         await db.$connect();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it.each(["grant", "primary-team", "credential-binding", "initial-trigger"] as const)("creates with %s admission while an independent publisher advances the Account cursor on every attempt", async admission => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const recipient = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const team = await db.team.create({ data: { name: "Session birth cursor contention" } });
+        await db.teamMembership.createMany({ data: [
+            { teamId: team.id, accountId: account.id, role: "owner" },
+            { teamId: team.id, accountId: recipient.id, role: "member" },
+        ] });
+        const credential = admission === "credential-binding" ? await credentialFixture(account.id, team.id) : undefined;
+        const machine = admission === "initial-trigger" ? await db.machine.create({ data: {
+            id: randomUUID(), accountId: account.id, metadata: "{}",
+        } }) : undefined;
+        if (credential) vi.stubEnv("HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES__ENABLED", "1");
+        const input = {
+            ...prepared(account.id, "unused"), originKind: "none" as const, originSessionId: undefined, manager: undefined,
+            ...(admission === "grant" ? { initialAccess: { grants: [{ subject: { kind: "account" as const, accountId: recipient.id },
+                accessLevel: "view" as const, canApprovePermissions: false }] } }
+                : credential ? { teamCredentialBindings: [credential.binding] }
+                    : machine ? { initialTriggers: [initialTrigger(machine.id)] } : { primaryTeamId: team.id }),
+        };
+        const transaction = db.$transaction;
+        let peer = false;
+        let publications = 0;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (peer || typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                let interleaved = false;
+                return callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                    if (property !== "$queryRawUnsafe") return Reflect.get(inner, property, innerReceiver);
+                    return async (query: string, ...values: unknown[]) => {
+                        if (!interleaved && query.includes('FROM "Account"') && query.includes("FOR ")) {
+                            interleaved = true;
+                            await inner.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+                            peer = true;
+                            try {
+                                await inTx(peerTx => markAccountChanged(peerTx, { accountId: account.id, kind: "account", entityId: "peer" }));
+                                publications++;
+                            } finally { peer = false; }
+                        }
+                        return inner.$queryRawUnsafe(query, ...values);
+                    };
+                } }));
+            }, ...args.slice(1)]);
+        } });
+        try {
+            const result = await createOrRejoinLayout1SessionByTag(input, authentication);
+            expect(publications).toBeGreaterThan(0);
+            expect(result.kind).toBe("created");
+            if (result.kind !== "created") throw new Error("Expected Session birth");
+            expect(await db.session.count({ where: { accountId: account.id, tag: input.tag } })).toBe(1);
+            if (admission === "grant") expect(await db.sessionShare.findUnique({ where: {
+                sessionId_sharedWithUserId: { sessionId: result.session.id, sharedWithUserId: recipient.id },
+            } })).toMatchObject({ accessLevel: "view" });
+            else if (credential) expect(await db.sessionTeamCredentialBinding.findFirst({ where: { sessionId: result.session.id } }))
+                .toMatchObject({ resourceId: credential.resource.id, resourceRevision: credential.resource.revision });
+            else if (machine) {
+                expect(await db.automation.count({ where: { accountId: account.id, scopeSessionId: result.session.id } })).toBe(1);
+                expect(await db.automationRun.count({ where: { accountId: account.id, causeSourceSessionId: result.session.id } })).toBe(1);
+            }
+            else expect(result.session.primaryTeamId).toBe(team.id);
+        } finally {
+            db.$transaction = transaction;
+            vi.unstubAllEnvs();
+            if (machine) {
+                await db.automationRun.deleteMany({ where: { accountId: account.id } });
+                await db.automation.deleteMany({ where: { accountId: account.id } });
+                await db.machine.delete({ where: { id: machine.id } });
+            }
+            await db.session.deleteMany({ where: { accountId: account.id } });
+            await db.team.delete({ where: { id: team.id } });
+            await db.account.deleteMany({ where: { id: { in: [account.id, recipient.id] } } });
+        }
+    });
+
+    it("rejects initial trigger assignments when Machine revocation commits after assignment admission", async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: "{}" } });
+        const trigger = { ...initialTrigger(machine.id), enabled: false };
+        const input = { ...prepared(account.id, "unused"), originKind: "none" as const, originSessionId: undefined,
+            manager: undefined, initialTriggers: [trigger] };
+        const transaction = db.$transaction;
+        let withdrawal: Promise<unknown> | undefined;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(client, property, clientReceiver) {
+                const delegate = Reflect.get(client, property, clientReceiver);
+                if (property !== "automationAssignment") return delegate;
+                return new Proxy(delegate, { get(model, method, modelReceiver) {
+                    const operation = Reflect.get(model, method, modelReceiver);
+                    if (method !== "deleteMany") return operation;
+                    return async (...values: unknown[]) => {
+                        if (!withdrawal) {
+                            withdrawal = inTx(peer => revokeMachineInTx(peer, { accountId: account.id, machineId: machine.id }));
+                            await expect(withdrawal).resolves.toMatchObject({ ok: true });
+                        }
+                        return Reflect.apply(operation, model, values);
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            expect(await createOrRejoinLayout1SessionByTag(input, authentication)).toMatchObject({ kind: "rejected",
+                rejection: { reason: "session-initial-trigger-invalid", code: "invalid_input" } });
+            expect(withdrawal).toBeDefined();
+            expect(await db.session.count({ where: { accountId: account.id } })).toBe(0);
+            expect(await db.automation.count({ where: { accountId: account.id } })).toBe(0);
+            expect(await db.automationRun.count({ where: { accountId: account.id } })).toBe(0);
+            expect(await db.accountChange.count({ where: { accountId: account.id, kind: "session" } })).toBe(0);
+        } finally {
+            db.$transaction = transaction;
+            await withdrawal;
+            await db.automationRun.deleteMany({ where: { accountId: account.id } });
+            await db.automation.deleteMany({ where: { accountId: account.id } });
+            await db.session.deleteMany({ where: { accountId: account.id } });
+            await db.machine.delete({ where: { id: machine.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it.each(["revocation", "replacement-new", "replacement-incumbent"] as const)("rechecks the canonical assignment owner against Machine %s before publication", async operation => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: "{}" } });
+        const automation = await db.automation.create({ data: { accountId: account.id, name: "Assignment admission",
+            enabled: false, templateCiphertext: "{}" } });
+        const replacement = operation.startsWith("replacement") ? await db.machine.create({ data: {
+            id: randomUUID(), accountId: account.id, metadata: "{}",
+        } }) : undefined;
+        const incumbent = operation === "replacement-incumbent";
+        if (incumbent) await db.automationAssignment.create({ data: { automationId: automation.id, machineId: machine.id, enabled: true, priority: 0 } });
+        const transaction = db.$transaction;
+        let withdrawal: Promise<unknown> | undefined;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(client, property, clientReceiver) {
+                const delegate = Reflect.get(client, property, clientReceiver);
+                if (property !== "automationAssignment") return delegate;
+                return new Proxy(delegate, { get(model, method, modelReceiver) {
+                    const operation = Reflect.get(model, method, modelReceiver);
+                    if (method !== "deleteMany") return operation;
+                    return async (...values: unknown[]) => {
+                        if (!withdrawal) {
+                            withdrawal = inTx(async peer => {
+                                if (replacement) {
+                                    await applyMachineReplacement({ tx: peer, accountId: account.id, oldMachineId: machine.id,
+                                        replacementMachineId: replacement.id, reason: "assignment admission", source: "manual", actorUserId: account.id,
+                                        confirmActiveOldMachine: true });
+                                    return { ok: true };
+                                }
+                                return revokeMachineInTx(peer, { accountId: account.id, machineId: machine.id });
+                            });
+                            await expect(withdrawal).resolves.toMatchObject({ ok: true });
+                        }
+                        return Reflect.apply(operation, model, values);
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            const write = inTx(async tx => {
+                await acquireAccountChangePublicationLocksInTx(tx, [account.id], { includeSingleAccount: true });
+                await replaceAutomationAssignmentsTx({ tx, accountId: account.id, automationId: automation.id,
+                    assignments: [{ machineId: machine.id, enabled: true, priority: 0 }] });
+                await markAccountChanged(tx, { accountId: account.id, kind: "automation", entityId: automation.id });
+            }, { isolationLevel: "ReadCommitted" });
+            if (incumbent) await expect(write).resolves.toBeUndefined();
+            else await expect(write).rejects.toMatchObject({ name: "AutomationValidationError" });
+            expect(withdrawal).toBeDefined();
+            expect(await db.automationAssignment.count({ where: { automationId: automation.id } })).toBe(incumbent ? 1 : 0);
+            expect(await db.accountChange.count({ where: { accountId: account.id, kind: "automation", entityId: automation.id } })).toBe(incumbent ? 1 : 0);
+        } finally {
+            db.$transaction = transaction;
+            await withdrawal;
+            await db.automation.delete({ where: { id: automation.id } });
+            await db.machine.delete({ where: { id: machine.id } });
+            if (replacement) await db.machine.delete({ where: { id: replacement.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it("replays Machine withdrawal when a new assignment commits before withdrawal publication", async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: "{}" } });
+        const automation = await db.automation.create({ data: { accountId: account.id, name: "Assignment withdrawal order",
+            enabled: false, templateCiphertext: "{}" } });
+        const transaction = db.$transaction;
+        let withdrawal: Promise<unknown> | undefined;
+        let launchingWithdrawal = false;
+        let paused = false;
+        let signalReady!: () => void;
+        const ready = new Promise<void>(resolve => { signalReady = resolve; });
+        let releasePeer!: () => void;
+        const release = new Promise<void>(resolve => { releasePeer = resolve; });
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            const peer = launchingWithdrawal;
+            if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(client, property, clientReceiver) {
+                const delegate = Reflect.get(client, property, clientReceiver);
+                if (peer && property === "$queryRawUnsafe") return async (query: string, ...values: unknown[]) => {
+                    if (!paused && query.includes('FROM "Account"') && query.includes("FOR NO KEY UPDATE")) {
+                        paused = true;
+                        signalReady();
+                        await release;
+                    }
+                    return client.$queryRawUnsafe(query, ...values);
+                };
+                if (peer || property !== "automationAssignment") return delegate;
+                return new Proxy(delegate, { get(model, method, modelReceiver) {
+                    const operation = Reflect.get(model, method, modelReceiver);
+                    if (method !== "deleteMany") return operation;
+                    return async (...values: unknown[]) => {
+                        if (!withdrawal) {
+                            launchingWithdrawal = true;
+                            withdrawal = inTx(peerTx => revokeMachineInTx(peerTx, { accountId: account.id, machineId: machine.id }))
+                                .finally(() => { launchingWithdrawal = false; signalReady(); });
+                            await ready;
+                        }
+                        return Reflect.apply(operation, model, values);
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            await inTx(async tx => {
+                await acquireAccountChangePublicationLocksInTx(tx, [account.id], { includeSingleAccount: true });
+                await replaceAutomationAssignmentsTx({ tx, accountId: account.id, automationId: automation.id,
+                    assignments: [{ machineId: machine.id, enabled: true, priority: 0 }] });
+                await markAccountChanged(tx, { accountId: account.id, kind: "automation", entityId: automation.id });
+            }, { isolationLevel: "ReadCommitted" });
+            expect(paused).toBe(true);
+            releasePeer();
+            await expect(withdrawal).resolves.toMatchObject({ ok: true });
+            expect(await db.machine.findUniqueOrThrow({ where: { id: machine.id } })).toMatchObject({ revokedAt: expect.any(Date) });
+            expect(await db.automationAssignment.count({ where: { automationId: automation.id, machineId: machine.id } })).toBe(0);
+        } finally {
+            releasePeer();
+            await withdrawal;
+            db.$transaction = transaction;
+            await db.automation.delete({ where: { id: automation.id } });
+            await db.machine.delete({ where: { id: machine.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it("rejects a credential binding if its source authority changes after admission", async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const team = await db.team.create({ data: { name: "Session birth credential currentness" } });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: account.id, role: "owner" } });
+        const credential = await credentialFixture(account.id, team.id);
+        const input = { ...prepared(account.id, "unused"), originKind: "none" as const, originSessionId: undefined,
+            manager: undefined, teamCredentialBindings: [credential.binding] };
+        const transaction = db.$transaction;
+        let withdrawal: Promise<unknown> | undefined;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(client, property, clientReceiver) {
+                const delegate = Reflect.get(client, property, clientReceiver);
+                if (property !== "sessionTeamCredentialBinding") return delegate;
+                return new Proxy(delegate, { get(model, method, modelReceiver) {
+                    const operation = Reflect.get(model, method, modelReceiver);
+                    if (method !== "upsert") return operation;
+                    return async (...values: unknown[]) => {
+                        if (!withdrawal) {
+                            withdrawal = inTx(peer => updateTeamCredentialResourceInTx(peer, { actorAccountId: account.id,
+                                authentication: { authenticationAuthority: "present_user", env: {} },
+                                patch: { resourceId: credential.resource.id, expectedRevision: credential.resource.revision, enabled: false } }));
+                            await expect(withdrawal).resolves.toMatchObject({ ok: true });
+                        }
+                        return Reflect.apply(operation, model, values);
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        vi.stubEnv("HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES__ENABLED", "1");
+        try {
+            expect(await createOrRejoinLayout1SessionByTag(input, authentication)).toMatchObject({ kind: "rejected",
+                rejection: { reason: "team-credential-binding-invalid", code: "resource_changed" } });
+            expect(withdrawal).toBeDefined();
+            expect(await db.session.count({ where: { accountId: account.id } })).toBe(0);
+            expect(await db.sessionTeamCredentialBinding.count({ where: { resourceId: credential.resource.id } })).toBe(0);
+            expect(await db.accountChange.count({ where: { accountId: account.id, kind: "session" } })).toBe(0);
+        } finally {
+            db.$transaction = transaction;
+            vi.unstubAllEnvs();
+            await withdrawal;
+            await db.session.deleteMany({ where: { accountId: account.id } });
+            await db.team.delete({ where: { id: team.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it.each(["grant", "primary-team"] as const)("rejects %s birth atomically when its admitted membership is withdrawn before publication", async admission => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const recipient = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const team = await db.team.create({ data: { name: "Session birth membership currentness",
+            ...(admission === "primary-team" ? { sessionCreationPolicy: "team_required" as const } : {}) } });
+        await db.teamMembership.createMany({ data: [
+            { teamId: team.id, accountId: owner.id, role: "owner" },
+            { teamId: team.id, accountId: recipient.id, role: "member" },
+        ] });
+        const withdrawnAccountId = admission === "grant" ? recipient.id : owner.id;
+        const membership = await db.teamMembership.findUniqueOrThrow({ where: { teamId_accountId: { teamId: team.id, accountId: withdrawnAccountId } } });
+        const input = {
+            ...prepared(owner.id, "unused"), originKind: "none" as const, originSessionId: undefined, manager: undefined,
+            ...(admission === "grant" ? { initialAccess: { grants: [{ subject: { kind: "account" as const, accountId: recipient.id },
+                accessLevel: "view" as const, canApprovePermissions: false }] } } : { primaryTeamId: team.id }),
+        };
+        const transaction = db.$transaction;
+        let withdrawal: Promise<void> | undefined;
+        let peer = false;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (peer || typeof callback !== "function") return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                const delegate = Reflect.get(inner, property, innerReceiver);
+                // The Session row exists, and grant admission has finished. Pause
+                // at the native persistence boundary before a grant is visible.
+                const boundary = admission === "grant" ? "sessionShare" : "sessionTeamGrant";
+                if (property !== boundary) return delegate;
+                return new Proxy(delegate, { get(model, method, modelReceiver) {
+                    const operation = Reflect.get(model, method, modelReceiver);
+                    if (method !== "create") return operation;
+                    return async (...values: unknown[]) => {
+                        if (!withdrawal) {
+                            peer = true;
+                            withdrawal = inTx(async peerTx => {
+                                await setTeamMembershipStatusInTx(peerTx, { teamId: team.id, membershipId: membership.id,
+                                    accountId: withdrawnAccountId, status: "suspended" });
+                                await publishTeamChangedInTx(peerTx, { teamId: team.id });
+                            }).finally(() => { peer = false; });
+                            await withdrawal;
+                        }
+                        return Reflect.apply(operation, model, values);
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        try {
+            const result = await createOrRejoinLayout1SessionByTag(input, authentication);
+            expect(withdrawal).toBeDefined();
+            expect(result).toMatchObject({ kind: "rejected", rejection: { reason: "session-initial-access-invalid", code: "session_access_subject_ineligible" } });
+            expect(await db.session.count({ where: { accountId: owner.id, tag: input.tag } })).toBe(0);
+            expect(await db.sessionShare.count({ where: { sharedByUserId: owner.id } })).toBe(0);
+            expect(await db.accountChange.count({ where: { accountId: owner.id, kind: "session" } })).toBe(0);
+        } finally {
+            db.$transaction = transaction;
+            await withdrawal;
+            await db.session.deleteMany({ where: { accountId: owner.id } });
+            await db.team.delete({ where: { id: team.id } });
+            await db.account.deleteMany({ where: { id: { in: [owner.id, recipient.id] } } });
+        }
+    });
 
     it.each(["tag", "reserved"] as const)("creates a grandchild beside an existing sibling through %s admission", async entry => {
         const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });

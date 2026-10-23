@@ -4,7 +4,9 @@ import { V2SessionByIdResponseSchema } from '@happier-dev/protocol';
 
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { db, getDbProviderFromEnv, initDbPostgres } from '@/storage/db';
-import type { Tx } from '@/storage/inTx';
+import { inTx, type Tx } from '@/storage/inTx';
+import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { registerSessionCreateOrLoadRoute } from './registerSessionCreateOrLoadRoute';
 import { registerSessionLookupByTagsRoute } from './registerSessionLookupByTagsRoute';
 
@@ -20,6 +22,59 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('S
         connected = true;
     });
     afterAll(async () => { if (connected) await db.$disconnect(); });
+
+    it('creates and restores the released Layout-0 tag while the Account cursor remains hot', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding() } });
+        const body = { tag: randomUUID(), metadata: 'released-layout-zero-ciphertext', encryptionMode: 'e2ee' };
+        const transaction = db.$transaction;
+        let peer = false;
+        let publications = 0;
+        db.$transaction = new Proxy(transaction, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (peer || typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => {
+                let interleaved = false;
+                return callback(new Proxy(tx, { get(inner, property, innerReceiver) {
+                    if (property !== '$queryRawUnsafe') return Reflect.get(inner, property, innerReceiver);
+                    return async (query: string, ...values: unknown[]) => {
+                        if (!interleaved && query.includes('FROM "Account"') && query.includes('FOR ')) {
+                            interleaved = true;
+                            await inner.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+                            peer = true;
+                            try {
+                                await inTx(peerTx => markAccountChanged(peerTx, { accountId: account.id, kind: 'account', entityId: 'legacy-peer' }));
+                                publications++;
+                            } finally { peer = false; }
+                        }
+                        return inner.$queryRawUnsafe(query, ...values);
+                    };
+                } }));
+            }, ...args.slice(1)]);
+        } });
+        vi.stubEnv('HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY', 'optional');
+        try {
+            await withAuthenticatedTestApp(registerSessionCreateOrLoadRoute, async app => {
+                const headers = { 'x-test-user-id': account.id, 'x-happier-account-stored-content-protocol': '4' };
+                const created = await app.inject({ method: 'POST', url: '/v1/sessions', headers, payload: body });
+                expect(created.statusCode, created.body).toBe(200);
+                expect(created.json().created).toBe(true);
+                const session = V2SessionByIdResponseSchema.parse(created.json()).session;
+                await db.session.update({ where: { id: session.id }, data: { active: false, archivedAt: new Date(123) } });
+                const restored = await app.inject({ method: 'POST', url: '/v1/sessions', headers,
+                    payload: { ...body, metadata: 'losing-request-must-not-replace-stored-ciphertext' } });
+                expect(restored.statusCode, restored.body).toBe(200);
+                expect(restored.json()).toMatchObject({ created: false, session: { id: session.id, metadata: body.metadata } });
+                expect(publications).toBeGreaterThanOrEqual(2);
+                expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toMatchObject({ archivedAt: null });
+                expect(await db.session.count({ where: { accountId: account.id, tag: body.tag } })).toBe(1);
+            });
+        } finally {
+            db.$transaction = transaction;
+            vi.unstubAllEnvs();
+            await db.session.deleteMany({ where: { accountId: account.id } });
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
 
     it.each(['none', 'run_step'] as const)('creates a private %s Session despite continuing peer cursor commits and keeps tag rejoin bound to the stored winner', async originKind => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
@@ -44,7 +99,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('S
                 get(inner, property, innerReceiver) {
                     if (property !== '$queryRawUnsafe') return Reflect.get(inner, property, innerReceiver);
                     return async (query: string, ...values: unknown[]) => {
-                        if (query.includes('FROM "Account"') && query.includes('FOR UPDATE') && values.includes(account.id)) {
+                        if (query.includes('FROM "Account"') && query.includes('FOR KEY SHARE') && values.includes(account.id)) {
                             // Start the owner's real PostgreSQL snapshot, then
                             // advance an independent cursor before its fence.
                             if (injectPeerWrites) {
