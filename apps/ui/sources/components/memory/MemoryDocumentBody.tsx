@@ -1114,8 +1114,8 @@ const MemoryFactRow = React.memo(function MemoryFactRow(
   const now = Date.now();
   const expired = fact.expiresAtMs !== undefined && fact.expiresAtMs <= now;
   const attribution = useMemoryFactAttribution(fact, props.serverId);
+  // Rows sit under their Decisions or Notes section, which already says which kind each one is.
   const facts = [
-    decision ? t('memoryContext.memory.decision') : null,
     attribution.rowApproval,
     now - fact.createdAtMs < JUST_NOW_MS
       ? t('memoryContext.memory.justNow')
