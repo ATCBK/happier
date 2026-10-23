@@ -4,7 +4,7 @@ import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readStoredSessionMessages } from '@happier-dev/session-core/messages';
 import { buildSessionTurnsProjectionV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
-import { createSessionMessagesFixture } from '@/dev/testkit';
+import { createDeferred, createSessionMessagesFixture, waitForTestEvent } from '@/dev/testkit';
 
 import {
     audioStreamStart,
@@ -29,19 +29,9 @@ import {
     publishLocalVoiceSubmittedUserMessage,
     localVoiceSpeechOutputBoundary,
     readLocalVoiceHttpRequests,
+    waitForLocalVoiceBoundaryEvent,
+    waitForLocalVoiceState,
 } from './localVoiceEngine.testHarness';
-
-type CallCountSpy = {
-    mock: {
-        calls: unknown[][];
-    };
-};
-
-const waitForCallCount = async (spy: CallCountSpy, expectedCount: number) => {
-    await vi.waitFor(() => {
-        expect(spy.mock.calls.length).toBeGreaterThanOrEqual(expectedCount);
-    });
-};
 
 async function configureDuplexDeviceSpeech(handsFree: boolean) {
     speechRecStart.mockImplementation(() => {
@@ -85,7 +75,8 @@ describe('local voice engine device STT (experimental)', () => {
         try {
             await engine.toggleLocalVoiceTurn('s1');
             emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'explain the forecast', confidence: 0.9 }] });
-            await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1));
+            await waitForLocalVoiceBoundaryEvent('pending-enqueue');
+            expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1);
             const request = localVoicePendingEnqueue.mock.calls[0]![0];
             const user = { id: 'voice-user', kind: 'user-text' as const, text: 'explain the forecast',
                 localId: String(request.body.localId), seq: 17, createdAt: Date.now() };
@@ -95,7 +86,8 @@ describe('local voice engine device STT (experimental)', () => {
                     transcriptAnchors: { startUserMessageSeq: user.seq, finalAssistantMessageSeq: null },
                 }] }),
             } }, sessionMessages: { s1: createSessionMessagesFixture({ messageIdsOldestFirst: [user.id], messagesById: { [user.id]: user } }) } });
-            await vi.waitFor(() => expect(engine.getLocalVoiceState().status).toBe('recording'));
+            await waitForLocalVoiceState(state => state.status === 'recording');
+            expect(engine.getLocalVoiceState().status).toBe('recording');
             expect(speechRecStart).toHaveBeenCalledTimes(2);
             expect(expoSpeechSpeak).not.toHaveBeenCalled();
         } finally {
@@ -160,7 +152,8 @@ describe('local voice engine device STT (experimental)', () => {
                 await Promise.race([playbackStarted, initialTurn.then(() => undefined, () => undefined)]);
                 expectSpeaking();
             } else {
-                await vi.waitFor(expectSpeaking);
+                await playbackStarted;
+                expectSpeaking();
             }
             // Capture is live again before the held output finishes, using the actual
             // capture owner and recognizer controller rather than injected endpoints.
@@ -169,12 +162,14 @@ describe('local voice engine device STT (experimental)', () => {
             if (scenario === 'after a backchannel') {
                 const playbackStops = expoSpeechStop.mock.calls.length;
                 emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'yeah', confidence: 0.9 }] });
-                await waitForCallCount(speechRecStart, 3);
+                await waitForLocalVoiceBoundaryEvent('recognizer-start', 3);
+                expect(speechRecStart.mock.calls.length).toBeGreaterThanOrEqual(3);
                 expect(expoSpeechStop.mock.calls.length).toBe(playbackStops);
                 expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1);
             }
             emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'instead explain the wind speed', confidence: 0.9 }] });
-            await vi.waitFor(() => expect(expoSpeechStop).toHaveBeenCalled());
+            await waitForLocalVoiceBoundaryEvent('speech-stop');
+            expect(expoSpeechStop).toHaveBeenCalled();
             let manualCommit: Promise<void> | undefined;
             if (scenario === 'manual capture') {
                 await initialTurn;
@@ -186,11 +181,12 @@ describe('local voice engine device STT (experimental)', () => {
                         ? { name: error.name, message: error.message } : { name: typeof error, message: String(error) };
                 });
             }
-            await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({
+            await waitForLocalVoiceBoundaryEvent('pending-enqueue', 2);
+            expect(localVoicePendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({
                 sessionId: 's1', body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
                     role: 'user', content: { type: 'text', text: 'instead explain the wind speed' },
                 }) } }),
-            })));
+            }));
             await initialTurn;
             await engine.stopLocalVoiceSession();
             await manualCommit;
@@ -230,7 +226,8 @@ describe('local voice engine device STT (experimental)', () => {
         try {
             await engine.toggleLocalVoiceTurn('s1');
             emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'explain the forecast', confidence: 0.9 }] });
-            await vi.waitFor(() => expect(engine.getLocalVoiceState()).toMatchObject({ status: 'idle', error: 'send_failed' }));
+            await waitForLocalVoiceState(state => state.status === 'idle' && state.error === 'send_failed');
+            expect(engine.getLocalVoiceState()).toMatchObject({ status: 'idle', error: 'send_failed' });
             await new Promise<void>(resolve => setTimeout(resolve, 0));
             expect(unhandled).toEqual([]);
             await engine.toggleLocalVoiceTurn('s1');
@@ -246,7 +243,8 @@ describe('local voice engine device STT (experimental)', () => {
         let resolvePermission!: (result: { granted: boolean; canAskAgain: boolean }) => void;
         const delayedPermission = new Promise<{ granted: boolean; canAskAgain: boolean }>((resolve) => { resolvePermission = resolve; });
         nativeMicRequestPermissionsAsync.mockResolvedValueOnce({ granted: true, canAskAgain: true });
-        nativeMicRequestPermissionsAsync.mockImplementationOnce(() => delayedPermission);
+        const permissionEntered = createDeferred<void>();
+        nativeMicRequestPermissionsAsync.mockImplementationOnce(() => { permissionEntered.resolve(); return delayedPermission; });
         speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
         expoSpeechSpeak.mockImplementation((_text, options) => options.onDone?.());
         localVoicePendingEnqueue.mockImplementationOnce(async request => {
@@ -257,7 +255,8 @@ describe('local voice engine device STT (experimental)', () => {
         await engine.toggleLocalVoiceTurn('s1');
         emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'explain the forecast', confidence: 0.9 }] });
         const turn = engine.toggleLocalVoiceTurn('s1');
-        await waitForCallCount(nativeMicRequestPermissionsAsync, 2);
+        await permissionEntered.promise;
+        expect(nativeMicRequestPermissionsAsync.mock.calls.length).toBeGreaterThanOrEqual(2);
         const end = engine.stopLocalVoiceSession();
         resolvePermission({ granted: true, canAskAgain: true });
         await Promise.all([turn, end]);
@@ -357,9 +356,11 @@ describe('local voice engine device STT (experimental)', () => {
             await lifecycle.toggle(target);
             expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: 'listening' });
             emitSpeechRecEvent('error', { error: 'not-allowed' });
-            await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({
+            await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot,
+                snapshot => snapshot.status === 'error' && snapshot.canStop === false && snapshot.errorCode === 'mic_permission_denied');
+            expect(lifecycle.getSnapshot()).toMatchObject({
                 status: 'error', canStop: false, errorCode: 'mic_permission_denied',
-            }));
+            });
             const dismissal = lifecycle.dismissFailedAttempt('s1');
             // Dismiss retires the failed attempt through the same physical
             // cleanup owner as End; controls remain until cleanup settles.
@@ -451,7 +452,8 @@ describe('local voice engine device STT (experimental)', () => {
                 expect(lifecycle.getSnapshot().errorMessage).toBeUndefined();
                 // Cancelling Start retires its observer while the OS still
                 // owns capture cleanup and has not acknowledged End.
-                await vi.waitFor(() => expect(restartSettled).toBe(true));
+                await restart;
+                expect(restartSettled).toBe(true);
             }
             emitSpeechRecEvent('end');
             await Promise.all([end, restart, cancellation]);
@@ -485,13 +487,15 @@ describe('local voice engine device STT (experimental)', () => {
         await engine.toggleLocalVoiceTurn('s1');
         if (reason !== 'unavailable') emitSpeechRecEvent('error', { error: reason });
 
-        const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
-        await vi.waitFor(() => expect(getVoiceConversationRuntimeSnapshot().error).toMatchObject({
+        const { getVoiceConversationRuntimeSnapshot, useVoiceConversationRuntimeStore } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
+        await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, getVoiceConversationRuntimeSnapshot,
+            snapshot => snapshot.error?.kind === 'speech_recognition_unavailable');
+        expect(getVoiceConversationRuntimeSnapshot().error).toMatchObject({
             kind: 'speech_recognition_unavailable',
             reason: reason === 'unavailable' ? 'device_stt_unavailable' : reason,
             recoveryAction: 'select_speech_engine',
             presentation: 'error', recoverable: false,
-        }));
+        });
         expect(engine.getLocalVoiceState()).toMatchObject({ status: 'error', sessionId: 's1' });
         expect(localVoicePendingEnqueue).not.toHaveBeenCalled();
         await engine.stopLocalVoiceSession();
@@ -561,12 +565,11 @@ describe('local voice engine device STT (experimental)', () => {
 
         emitSpeechRecEvent('end');
 
-        await vi.waitFor(() => {
-            expect(getLocalVoiceState()).toEqual({
+        await waitForLocalVoiceState(state => state.status === 'idle' && state.error === 'device_stt_error');
+        expect(getLocalVoiceState()).toEqual({
                 status: 'idle',
                 sessionId: 's1',
                 error: 'device_stt_error',
-            });
         });
         const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
         expect(getVoiceConversationRuntimeSnapshot()).toMatchObject({
@@ -740,13 +743,14 @@ describe('local voice engine device STT (experimental)', () => {
         expect(speechRecStart).toHaveBeenCalledTimes(1);
 
         emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'hands free message', confidence: 0.9, segments: [] }] });
-        await vi.waitFor(() => {
-            expect(getLocalVoiceState().status).toBe('transcribing');
-        });
+        await waitForLocalVoiceState(state => state.status === 'transcribing');
+        expect(getLocalVoiceState().status).toBe('transcribing');
         emitSpeechRecEvent('end', {});
 
-        await waitForCallCount(localVoicePendingEnqueue, 1);
-        await waitForCallCount(speechRecStart, 2);
+        await waitForLocalVoiceBoundaryEvent('pending-enqueue');
+        expect(localVoicePendingEnqueue.mock.calls.length).toBeGreaterThanOrEqual(1);
+        await waitForLocalVoiceBoundaryEvent('recognizer-start', 2);
+        expect(speechRecStart.mock.calls.length).toBeGreaterThanOrEqual(2);
         expect(localVoicePendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 's1', body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
                 role: 'user', content: { type: 'text', text: 'hands free message' },
@@ -793,14 +797,15 @@ describe('local voice engine device STT (experimental)', () => {
         expect(speechRecStart).toHaveBeenCalledTimes(1);
 
         emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'yeah', confidence: 0.9, segments: [] }] });
-        await waitForCallCount(speechRecStop, 1);
+        await waitForLocalVoiceBoundaryEvent('recognizer-stop');
+        expect(speechRecStop.mock.calls.length).toBeGreaterThanOrEqual(1);
         emitSpeechRecEvent('end', {});
 
-        await vi.waitFor(() => {
-            expect(localVoicePendingEnqueue).not.toHaveBeenCalled();
-            expect(speechRecStart).toHaveBeenCalledTimes(2);
-            expect(getLocalVoiceState().status).toBe('recording');
-        });
+        await waitForLocalVoiceBoundaryEvent('recognizer-start', 2);
+        await waitForLocalVoiceState(state => state.status === 'recording');
+        expect(localVoicePendingEnqueue).not.toHaveBeenCalled();
+        expect(speechRecStart).toHaveBeenCalledTimes(2);
+        expect(getLocalVoiceState().status).toBe('recording');
     });
 
     it('manual toggle while hands-free recording stops recognition and disables loop', async () => {
@@ -888,12 +893,12 @@ describe('local voice engine device STT (experimental)', () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
         expect(getLocalVoiceState().status).toBe('recording');
 
-        await vi.waitFor(() => {
-            expect(getLocalVoiceState().status).toBe('transcribing');
-        });
+        await waitForLocalVoiceState(state => state.status === 'transcribing');
+        expect(getLocalVoiceState().status).toBe('transcribing');
         emitSpeechRecEvent('end', {});
 
-        await waitForCallCount(localVoicePendingEnqueue, 1);
+        await waitForLocalVoiceBoundaryEvent('pending-enqueue');
+        expect(localVoicePendingEnqueue.mock.calls.length).toBeGreaterThanOrEqual(1);
         expect(localVoicePendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 's1', body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
                 role: 'user', content: { type: 'text', text: 'timed hands free' },
@@ -927,7 +932,8 @@ describe('local voice engine device STT (experimental)', () => {
                 },
             },
         });
-        const onEndpointSignal = vi.fn();
+        const endpointEntered = createDeferred<void>();
+        const onEndpointSignal = vi.fn(() => endpointEntered.resolve());
         const { createLocalVoiceCaptureOwner } = await import('@/voice/runtime/input/LocalVoiceCaptureOwner');
         const { createDeviceSttController } = await import('@/voice/input/DeviceSttController');
         const owner = createLocalVoiceCaptureOwner(
@@ -954,13 +960,12 @@ describe('local voice engine device STT (experimental)', () => {
             results: [{ transcript: 'hands free message', confidence: 0.9, segments: [] }],
         });
 
-        await vi.waitFor(() => {
-            expect(onEndpointSignal).toHaveBeenCalledWith(expect.objectContaining({
+        await endpointEntered.promise;
+        expect(onEndpointSignal).toHaveBeenCalledWith(expect.objectContaining({
                 sessionId: 's1',
                 source: 'heuristic',
                 transcript: 'hands free message',
-            }));
-        });
+        }));
         const stopCallCountBeforeEndpointStop = speechRecStop.mock.calls.length;
         await expect(owner.stopEndpointDrivenCapture({
             adaptiveConfig: { ignoredPhrases: [] },

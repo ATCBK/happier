@@ -18,26 +18,25 @@ import {
     publishLocalVoiceAssistantMessage,
     publishLocalVoiceSubmittedUserMessage,
     setNextRecorderPrepareError,
+    waitForLocalVoiceBoundaryEvent,
+    waitForLocalVoiceState,
 } from './localVoiceEngine.testHarness';
 
 let localVoiceEngine: Awaited<ReturnType<typeof loadLocalVoiceEngineWithCompatState>>;
 
 async function waitForVoiceStatus(getStatus: () => string, expectedStatus: string) {
-    await vi.waitFor(() => {
-        expect(getStatus()).toBe(expectedStatus);
-    });
+    await waitForLocalVoiceState(state => state.status === expectedStatus);
+    expect(getStatus()).toBe(expectedStatus);
 }
 
 async function expectPromiseToStayPending(promise: Promise<unknown>) {
-    await vi.waitFor(async () => {
-        const settled = await Promise.race([
-            promise.then(() => true),
-            new Promise<boolean>((resolve) => {
-                setTimeout(() => resolve(false), 0);
-            }),
-        ]);
-        expect(settled).toBe(false);
-    });
+    const settled = await Promise.race([
+        promise.then(() => true),
+        new Promise<boolean>((resolve) => {
+            setTimeout(() => resolve(false), 0);
+        }),
+    ]);
+    expect(settled).toBe(false);
 }
 
 const restoreHarnessModuleLoader = await warmLocalVoiceEngineHarnessGraph();
@@ -127,9 +126,10 @@ describe('local voice engine TTS behavior', () => {
         expect(speechRecStart).toHaveBeenCalledTimes(2);
         emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'second turn', confidence: 0.9, segments: [] }] });
         const secondTurn = toggleLocalVoiceTurn('s1');
-        await vi.waitFor(() => expect(localVoicePendingEnqueue.mock.calls[1]?.[0]).toMatchObject({ sessionId: 's1', body: {
+        await waitForLocalVoiceBoundaryEvent('pending-enqueue', 2);
+        expect(localVoicePendingEnqueue.mock.calls[1]?.[0]).toMatchObject({ sessionId: 's1', body: {
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'second turn' } } },
-        } }));
+        } });
         await waitForVoiceStatus(() => getLocalVoiceState().status, 'speaking');
         expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(2);
         onDoneRef.current?.();

@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SpeechOptions } from 'expo-speech';
 import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
+import { createDeferred } from '@/dev/testkit';
 
 const speakSpy = vi.fn<(text: string, options: SpeechOptions) => void>();
 const stopSpy = vi.fn<() => Promise<void>>();
@@ -36,12 +37,15 @@ describe('speakDeviceText', () => {
         speakSpy.mockReset();
         const onStart = vi.fn();
         let speechOptions: SpeechOptions | undefined;
+        const speechEntered = createDeferred<void>();
         speakSpy.mockImplementationOnce((_text: string, opts: SpeechOptions) => {
             speechOptions = opts;
+            speechEntered.resolve();
         });
 
         const speaking = speakDeviceText('hello', onStart);
-        await vi.waitFor(() => expect(speakSpy).toHaveBeenCalledTimes(1));
+        await speechEntered.promise;
+        expect(speakSpy).toHaveBeenCalledTimes(1);
         expect(onStart).not.toHaveBeenCalled();
 
         expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot()).toMatchObject({ leaseCount: 1,
@@ -75,13 +79,16 @@ describe('speakDeviceText', () => {
         const controller = new AbortController();
         let current = true;
         let resolveApply!: () => void;
+        const configurationEntered = createDeferred<void>();
         vi.mocked(audioSession.nativeModule.configureAudioSession).mockImplementationOnce(request => new Promise(resolve => {
             resolveApply = () => resolve({ generation: request.generation, aecAvailable: true, aecActive: false, route: 'speaker' });
+            configurationEntered.resolve();
         }));
         speakSpy.mockImplementationOnce((_text: string, opts: SpeechOptions) => opts.onDone?.());
 
         const speaking = speakDeviceText('hello', onStart, { signal: controller.signal, isCurrent: () => current });
-        await vi.waitFor(() => expect(audioSession.nativeModule.configureAudioSession).toHaveBeenCalledTimes(1));
+        await configurationEntered.promise;
+        expect(audioSession.nativeModule.configureAudioSession).toHaveBeenCalledTimes(1);
         if (reason === 'abort') controller.abort();
         else current = false;
         resolveApply();
@@ -109,10 +116,12 @@ describe('speakDeviceText', () => {
         speakSpy.mockReset();
         const onStart = vi.fn();
         const controller = new AbortController();
-        speakSpy.mockImplementationOnce(() => undefined);
+        const speechEntered = createDeferred<void>();
+        speakSpy.mockImplementationOnce(() => speechEntered.resolve());
 
         const speaking = speakDeviceText('hi', onStart, { signal: controller.signal });
-        await vi.waitFor(() => expect(speakSpy).toHaveBeenCalledTimes(1));
+        await speechEntered.promise;
+        expect(speakSpy).toHaveBeenCalledTimes(1);
         controller.abort();
 
         await expect(speaking).resolves.toBeUndefined();

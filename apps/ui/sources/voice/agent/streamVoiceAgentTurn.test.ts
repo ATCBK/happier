@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { VOICE_OUTPUT_INCOMPLETE_TEXT, SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createSessionFixture } from '@/dev/testkit';
+import { createDeferred, createSessionFixture } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import {
@@ -72,8 +72,8 @@ describe('streamVoiceAgentTurn', () => {
             .then(() => { outcome = 'resolved'; }, () => { outcome = 'cancelled'; });
         await admitted;
         caller.abort();
-        await vi.waitFor(() => expect(outcome).toBe('cancelled'));
         await pending;
+        expect(outcome).toBe('cancelled');
         await expect(streamVoiceAgentTurn({ sessionId: 'sys_voice', handle, userText: 'again', displayUserText: 'again' }))
             .resolves.toMatchObject({ assistantText: 'ready' });
     });
@@ -360,9 +360,11 @@ describe('streamVoiceAgentTurn', () => {
 
     it('does not settle a durable user turn or read output before daemon stream admission resolves', async () => {
         const order: string[] = [];
+        const admissionEntered = createDeferred<void>();
         let admitStream!: (started: Readonly<{ streamId: string }>) => void;
         const startTurnStream = vi.fn(() => new Promise<Readonly<{ streamId: string }>>((resolve) => {
             admitStream = resolve;
+            admissionEntered.resolve();
         }));
         const onUserTranscriptAccepted = vi.fn(async () => {
             order.push('accepted');
@@ -396,9 +398,8 @@ describe('streamVoiceAgentTurn', () => {
             options: { onUserTranscriptAccepted },
         });
 
-        await vi.waitFor(() => {
-            expect(startTurnStream).toHaveBeenCalledTimes(1);
-        });
+        await admissionEntered.promise;
+        expect(startTurnStream).toHaveBeenCalledTimes(1);
         expect(onUserTranscriptAccepted).not.toHaveBeenCalled();
         expect(readTurnStream).not.toHaveBeenCalled();
 

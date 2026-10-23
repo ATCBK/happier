@@ -2,11 +2,13 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 import { createVoiceEncodedAudioNativeBoundary } from '@/dev/testkit/harness/voiceEncodedAudioNativeBoundary';
 import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
+import { createDeferred, type Deferred } from '@/dev/testkit';
 
 const fileDelete = vi.fn<() => Promise<void>>(async () => {});
 const audioSession = createNativeVoicePcmCaptureHarness();
 const native = createVoiceEncodedAudioNativeBoundary();
 const nativeSdk = native.nativeModule(audioSession.nativeModule);
+let nativeStarting: Deferred<void>;
 vi.mock('expo-modules-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('expo-modules-core')>();
   return { ...actual, requireOptionalNativeModule: (name: string) =>
@@ -35,6 +37,8 @@ import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePla
 describe('playAudioBytesWithStopper (native iOS)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    nativeStarting = createDeferred<void>();
+    native.start.mockImplementation(async () => { nativeStarting.resolve(); });
     fileDelete.mockResolvedValue(undefined);
   });
   afterAll(async () => { await getSharedVoiceAudioSessionCoordinator()?.dispose(); await audioSession.coordinator.dispose(); });
@@ -61,7 +65,8 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
       registerPlaybackStopper: () => () => {},
       onPlaybackStarted,
     });
-    await vi.waitFor(() => expect(native.start).toHaveBeenCalledOnce());
+    await nativeStarting.promise;
+    expect(native.start).toHaveBeenCalledOnce();
     expect(native.start).toHaveBeenCalledWith(expect.stringMatching(/^file:\/\/\/tmp\/happier-voice-\d+\.mp3$/));
     expect(getSharedVoiceAudioSessionCoordinator()!.getSnapshot()).toMatchObject({ leaseCount: 1,
       configuration: { mode: 'playback', input: false, output: true } });
@@ -82,7 +87,8 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
       format: 'wav',
       registerPlaybackStopper: controller.registerStopper,
     });
-    await vi.waitFor(() => expect(native.start).toHaveBeenCalledOnce());
+    await nativeStarting.promise;
+    expect(native.start).toHaveBeenCalledOnce();
 
     expect(controller.beginInterruptionCandidate()).toBe('retained');
     expect(native.setPaused).toHaveBeenCalledWith(true);
@@ -98,7 +104,8 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
       format: 'mp3',
       registerPlaybackStopper: () => () => {},
     });
-    await vi.waitFor(() => expect(native.start).toHaveBeenCalledOnce());
+    await nativeStarting.promise;
+    expect(native.start).toHaveBeenCalledOnce();
     native.emit({ status: 'failed', reason: 'encoded_audio_decode_failed' });
 
     await expect(promise).rejects.toThrow('encoded_audio_decode_failed');
@@ -127,7 +134,8 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
       format: 'mp3',
       registerPlaybackStopper: () => () => {},
     });
-    await vi.waitFor(() => expect(native.start).toHaveBeenCalledOnce());
+    await nativeStarting.promise;
+    expect(native.start).toHaveBeenCalledOnce();
     native.emit({ status: 'finished' });
 
     await promise;
@@ -143,7 +151,8 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
       format: 'mp3',
       registerPlaybackStopper: (stop) => { stopperRef.current = stop; return () => {}; },
     });
-    await vi.waitFor(() => expect(native.start).toHaveBeenCalledOnce());
+    await nativeStarting.promise;
+    expect(native.start).toHaveBeenCalledOnce();
     stopperRef.current?.();
     await promise;
     native.emit({ status: 'finished' });
@@ -158,7 +167,8 @@ describe('playAudioBytesWithStopper (native iOS)', () => {
       format: 'mp3',
       registerPlaybackStopper: () => () => {},
     });
-    await vi.waitFor(() => expect(native.start).toHaveBeenCalledOnce());
+    await nativeStarting.promise;
+    expect(native.start).toHaveBeenCalledOnce();
 
     native.emit({ status: 'replaced', reason: 'encoded_audio_replaced' });
     await promise;

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { act } from 'react-test-renderer';
 import type { AlertButton } from 'react-native';
-import { renderScreen } from '@/dev/testkit';
+import { createDeferred, renderScreen } from '@/dev/testkit';
 
 import { VOICE_HANDS_FREE_ENDPOINTING_DEFAULTS } from '@/sync/domains/settings/voiceSettings';
 import type { MicSession } from '@/voice/runtime/mic/MicSession';
@@ -93,16 +93,6 @@ async function observeSettledPromptly(promise: Promise<unknown>): Promise<boolea
     ),
     new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
   ]);
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 function captureSynchronousError(callback: () => void): unknown | null {
@@ -433,7 +423,8 @@ describe('createDeviceSttController', () => {
   });
 
   it('uses recognizer facts for native candidates without starting host VAD or host PCM capture', async () => {
-    const onEndpointSignal = vi.fn();
+    const endpoint = createDeferred<void>();
+    const onEndpointSignal = vi.fn(() => { endpoint.resolve(); });
     const onSpeechCandidateStart = vi.fn();
 
     const { createDeviceSttController } = await import('./DeviceSttController');
@@ -461,12 +452,11 @@ describe('createDeviceSttController', () => {
     expect(onSpeechCandidateStart).toHaveBeenCalledWith({
       sessionId: expect.any(String), source: 'device_recognizer',
     });
-    await vi.waitFor(() => {
-      expect(onEndpointSignal).toHaveBeenCalledWith(expect.objectContaining({
+    await endpoint.promise;
+    expect(onEndpointSignal).toHaveBeenCalledWith(expect.objectContaining({
         source: 'heuristic',
         transcript: 'native vad backed transcript',
-      }));
-    });
+    }));
   });
 
   it('uses the current hands-free endpointing defaults for the web-owned VAD stream', async () => {
@@ -526,13 +516,15 @@ describe('createDeviceSttController', () => {
     start.mockClear();
     addListener.mockClear();
     const deferredLease = createDeferred<VoiceAudioSessionApplyResult>();
-    applyAudioSession.mockReturnValueOnce(deferredLease.promise);
+    const applying = createDeferred<void>();
+    applyAudioSession.mockImplementationOnce(() => { applying.resolve(); return deferredLease.promise; });
     const { createDeviceSttController } = await import('./DeviceSttController');
     const controller = createDeviceSttController({ getSettings: () => baseSettings(false), stopTimeoutMs: 0 });
     const params = { micSession: createMicSession(), sink: createSink() };
 
     const firstStart = controller.start(params);
-    await vi.waitFor(() => expect(applyAudioSession).toHaveBeenCalledTimes(1));
+    await applying.promise;
+    expect(applyAudioSession).toHaveBeenCalledTimes(1);
     const concurrentStart = controller.start(params);
 
     await expect(concurrentStart).rejects.toThrow('device_stt_already_started');
@@ -550,13 +542,15 @@ describe('createDeviceSttController', () => {
     start.mockClear();
     addListener.mockClear();
     const deferredLease = createDeferred<VoiceAudioSessionApplyResult>();
-    applyAudioSession.mockReturnValueOnce(deferredLease.promise);
+    const applying = createDeferred<void>();
+    applyAudioSession.mockImplementationOnce(() => { applying.resolve(); return deferredLease.promise; });
     const { createDeviceSttController } = await import('./DeviceSttController');
     const controller = createDeviceSttController({ getSettings: () => baseSettings(false), stopTimeoutMs: 0 });
     const params = { micSession: createMicSession(), sink: createSink() };
 
     const starting = controller.start(params);
-    await vi.waitFor(() => expect(applyAudioSession).toHaveBeenCalledTimes(1));
+    await applying.promise;
+    expect(applyAudioSession).toHaveBeenCalledTimes(1);
     const stopping = controller.stop();
     deferredLease.resolve({ generation: 1, aecAvailable: false, aecActive: false, route: 'test' });
 
@@ -575,12 +569,16 @@ describe('createDeviceSttController', () => {
   it('settles stop while native acquisition is pending and releases the late lease', async () => {
     start.mockClear();
     const deferredLease = createDeferred<VoiceAudioSessionApplyResult>();
-    applyAudioSession.mockReturnValueOnce(deferredLease.promise);
+    const applying = createDeferred<void>();
+    const restoring = createDeferred<void>();
+    applyAudioSession.mockImplementationOnce(() => { applying.resolve(); return deferredLease.promise; });
+    restoreAudioSession.mockImplementationOnce(async () => { restoring.resolve(); });
     const { createDeviceSttController } = await import('./DeviceSttController');
     const controller = createDeviceSttController({ getSettings: () => baseSettings(false) });
 
     const starting = controller.start({ micSession: createMicSession(), sink: createSink() });
-    await vi.waitFor(() => expect(applyAudioSession).toHaveBeenCalledTimes(1));
+    await applying.promise;
+    expect(applyAudioSession).toHaveBeenCalledTimes(1);
     const stopping = controller.stop();
     const stoppedBeforeAcquire = await observeSettledPromptly(stopping);
 
@@ -590,7 +588,8 @@ describe('createDeviceSttController', () => {
     await flushMicrotasks();
 
     expect(stoppedBeforeAcquire).toBe(true);
-    await vi.waitFor(() => expect(restoreAudioSession).toHaveBeenCalledTimes(1));
+    await restoring.promise;
+    expect(restoreAudioSession).toHaveBeenCalledTimes(1);
     expect(start).not.toHaveBeenCalled();
   });
 
@@ -599,13 +598,15 @@ describe('createDeviceSttController', () => {
     start.mockClear();
     addListener.mockClear();
     const deferredMic = createDeferred<void>();
-    const micSession = createMicSession(async () => { await deferredMic.promise; return { getTracks: () => [], getAudioTracks: () => [] } as unknown as MediaStream; });
+    const acquiring = createDeferred<void>();
+    const micSession = createMicSession(async () => { acquiring.resolve(); await deferredMic.promise; return { getTracks: () => [], getAudioTracks: () => [] } as unknown as MediaStream; });
     const { createDeviceSttController } = await import('./DeviceSttController');
     const controller = createDeviceSttController({ getSettings: () => baseSettings(false), stopTimeoutMs: 0 });
     const params = { micSession, sink: createSink() };
 
     const firstStart = controller.start(params);
-    await vi.waitFor(() => expect(micSession.ensureActive).toHaveBeenCalledTimes(1));
+    await acquiring.promise;
+    expect(micSession.ensureActive).toHaveBeenCalledTimes(1);
     const concurrentStart = controller.start(params);
 
     await expect(concurrentStart).rejects.toThrow('device_stt_already_started');
@@ -853,6 +854,7 @@ describe('createDeviceSttController', () => {
   it('settles an unsolicited end once when exclusive audio-session release rejects', async () => {
     const releaseFailure = new Error('native_audio_session_release_failed');
     const releaseSettled = createDeferred<void>();
+    const reported = createDeferred<void>();
     const publicationOrder: string[] = [];
     const unhandledRejections: unknown[] = [];
     let stopSettlementCount = 0;
@@ -866,6 +868,7 @@ describe('createDeviceSttController', () => {
     const sink = createSink();
     sink.onError.mockImplementation(() => {
       publicationOrder.push('terminal_published');
+      reported.resolve();
     });
     process.on('unhandledRejection', captureUnhandledRejection);
 
@@ -892,7 +895,8 @@ describe('createDeviceSttController', () => {
       releaseSettled.reject(releaseFailure);
       await stopExpectation;
       const terminalResult = await stopping;
-      await vi.waitFor(() => expect(sink.onError).toHaveBeenCalledTimes(1));
+      await reported.promise;
+      expect(sink.onError).toHaveBeenCalledTimes(1);
       const terminalError = sink.onError.mock.calls[0]?.[0];
       listeners.end?.({});
       listeners.error?.({ error: 'network' });
@@ -1112,8 +1116,11 @@ describe('createDeviceSttController', () => {
 
   it('surfaces a spontaneous end-only termination instead of publishing an empty success', async () => {
     const restoration = createDeferred<void>();
-    restoreAudioSession.mockReturnValueOnce(restoration.promise);
+    const restoring = createDeferred<void>();
+    restoreAudioSession.mockImplementationOnce(() => { restoring.resolve(); return restoration.promise; });
     const sink = createSink();
+    const reported = createDeferred<void>();
+    sink.onError.mockImplementationOnce(() => { reported.resolve(); });
     const { createDeviceSttController } = await import('./DeviceSttController');
     const controller = createDeviceSttController({
       getSettings: () => baseSettings(false),
@@ -1124,10 +1131,11 @@ describe('createDeviceSttController', () => {
     const stopping = controller.stop();
     const terminalResult = await stopping;
 
-    await vi.waitFor(() => expect(restoreAudioSession).toHaveBeenCalledTimes(1));
+    await restoring.promise;
+    expect(restoreAudioSession).toHaveBeenCalledTimes(1);
     expect(sink.onError).not.toHaveBeenCalled();
     restoration.resolve();
-    await vi.waitFor(() => expect(sink.onError).toHaveBeenCalledTimes(1));
+    await reported.promise;
     expect(sink.onError).toHaveBeenCalledTimes(1);
     expect(sink.onError).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'provider_error',
@@ -1343,7 +1351,10 @@ describe('createDeviceSttController', () => {
   it('settles an abort during native coordinator acquisition and releases a late lease', async () => {
     start.mockClear();
     const lease = createDeferred<VoiceAudioSessionApplyResult>();
-    applyAudioSession.mockReturnValueOnce(lease.promise);
+    const applying = createDeferred<void>();
+    const restoring = createDeferred<void>();
+    applyAudioSession.mockImplementationOnce(() => { applying.resolve(); return lease.promise; });
+    restoreAudioSession.mockImplementationOnce(async () => { restoring.resolve(); });
     const abortController = new AbortController();
     const { createDeviceSttController } = await import('./DeviceSttController');
     const controller = createDeviceSttController({
@@ -1355,7 +1366,8 @@ describe('createDeviceSttController', () => {
       sink: createSink(),
       signal: abortController.signal,
     });
-    await vi.waitFor(() => expect(applyAudioSession).toHaveBeenCalledTimes(1));
+    await applying.promise;
+    expect(applyAudioSession).toHaveBeenCalledTimes(1);
     abortController.abort();
     const settledBeforeAcquire = await observeSettledPromptly(starting);
 
@@ -1364,7 +1376,8 @@ describe('createDeviceSttController', () => {
     await flushMicrotasks();
 
     expect(settledBeforeAcquire).toBe(true);
-    await vi.waitFor(() => expect(restoreAudioSession).toHaveBeenCalledTimes(1));
+    await restoring.promise;
+    expect(restoreAudioSession).toHaveBeenCalledTimes(1);
     expect(start).not.toHaveBeenCalled();
   });
 
@@ -1372,7 +1385,8 @@ describe('createDeviceSttController', () => {
     platformOsMock.value = 'web';
     start.mockClear();
     const micReady = createDeferred<void>();
-    const micSession = createMicSession(async () => { await micReady.promise; return { getTracks: () => [], getAudioTracks: () => [] } as unknown as MediaStream; });
+    const acquiring = createDeferred<void>();
+    const micSession = createMicSession(async () => { acquiring.resolve(); await micReady.promise; return { getTracks: () => [], getAudioTracks: () => [] } as unknown as MediaStream; });
     const { createWebVadController } = await import('@/voice/runtime/input/WebVadController.web');
     const { MicVAD } = await import('@ricky0123/vad-web');
     vi.mocked(MicVAD.new).mockClear();
@@ -1389,7 +1403,8 @@ describe('createDeviceSttController', () => {
       sink: createSink(),
       signal: abortController.signal,
     });
-    await vi.waitFor(() => expect(micSession.ensureActive).toHaveBeenCalledTimes(1));
+    await acquiring.promise;
+    expect(micSession.ensureActive).toHaveBeenCalledTimes(1);
     abortController.abort();
     const settledBeforeMic = await observeSettledPromptly(starting);
 
@@ -1409,8 +1424,9 @@ describe('createDeviceSttController', () => {
     const { createWebVadController } = await import('@/voice/runtime/input/WebVadController.web');
     const { MicVAD } = await import('@ricky0123/vad-web');
     const vadReady = createDeferred<Awaited<ReturnType<typeof MicVAD.new>>>();
+    const initializingVad = createDeferred<void>();
     vi.mocked(MicVAD.new).mockClear();
-    vi.mocked(MicVAD.new).mockReturnValueOnce(vadReady.promise);
+    vi.mocked(MicVAD.new).mockImplementationOnce(() => { initializingVad.resolve(); return vadReady.promise; });
     const webVadController = createWebVadController({ onEndpointSignal: vi.fn() });
     const abortController = new AbortController();
     const { createDeviceSttController } = await import('./DeviceSttController');
@@ -1424,7 +1440,8 @@ describe('createDeviceSttController', () => {
       sink: createSink(),
       signal: abortController.signal,
     });
-    await vi.waitFor(() => expect(MicVAD.new).toHaveBeenCalledTimes(1));
+    await initializingVad.promise;
+    expect(MicVAD.new).toHaveBeenCalledTimes(1);
     abortController.abort();
     const settledBeforeVad = await observeSettledPromptly(starting);
 
@@ -1541,6 +1558,8 @@ describe('createDeviceSttController', () => {
     const sink = createSink();
     const abortController = new AbortController();
     const micSession = createMicSession();
+    const restoring = createDeferred<void>();
+    restoreAudioSession.mockImplementationOnce(async () => { restoring.resolve(); });
     // Abort while the provider-exclusive lease is being acquired, before the recognizer starts.
     applyAudioSession.mockImplementationOnce(async () => {
       abortController.abort();
@@ -1553,7 +1572,8 @@ describe('createDeviceSttController', () => {
     await controller.start({ micSession, sink, signal: abortController.signal });
 
     expect(start).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(restoreAudioSession).toHaveBeenCalledTimes(1));
+    await restoring.promise;
+    expect(restoreAudioSession).toHaveBeenCalledTimes(1);
     await expect(controller.stop()).resolves.toEqual({
       error: expect.objectContaining({
         kind: 'turn_aborted',

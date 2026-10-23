@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SpeechOptions } from 'expo-speech';
+import { createDeferred } from '@/dev/testkit';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { readLocalDirectVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { createDefaultLocalVoiceTtsProviderControllers, type LocalVoiceTtsRequest } from './localVoiceTtsProviderControllers';
@@ -35,11 +36,14 @@ describe('device TTS provider controller', () => {
         let interrupt: () => void = () => { throw new Error('Playback stopper was not registered'); };
         const clearStopper = vi.fn();
         const onSpeaking = vi.fn();
+        const sdkSpeech = createDeferred<void>();
+        speech.speak.mockImplementationOnce(() => sdkSpeech.resolve());
         const speaking = createDefaultLocalVoiceTtsProviderControllers().get('device')!.speak(request({
             onSpeaking,
             registerPlaybackStopper: stopper => { interrupt = stopper; return clearStopper; },
         }));
-        await vi.waitFor(() => expect(speech.speak).toHaveBeenCalled());
+        await sdkSpeech.promise;
+        expect(speech.speak).toHaveBeenCalled();
         const options = speech.speak.mock.calls[0][1];
         expect(onSpeaking).not.toHaveBeenCalled();
         options.onStart?.();

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMachineFixture, createSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, createSessionFixture, createSessionMessagesFixture } from '@/dev/testkit';
 import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
@@ -74,6 +74,7 @@ const sessionMetadata = createSessionMetadataHttpBoundary(() => storage.getState
 let account: Awaited<ReturnType<typeof serveAccountHomes>>;
 let disconnect: (() => Promise<void>) | undefined;
 const events: string[] = [];
+let directPendingEntered = createDeferred<void>();
 type TurnReply = { assistantText: string; actions: VoiceAssistantAction[] };
 let turnReplies: (index: number) => TurnReply = () => ({ assistantText: 'Done.', actions: [] });
 let turnIndex = 0;
@@ -202,6 +203,7 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
   beforeEach(async () => {
     conversationModeState.current = 'agent';
     events.length = 0;
+    directPendingEntered = createDeferred<void>();
     turnIndex = 0;
     rejectStart = false;
     turnReplies = () => ({ assistantText: 'I found Claude and Codex.', actions: [] });
@@ -234,6 +236,7 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
         const body = request.body;
         if (!body || typeof body !== 'object' || !('localId' in body) || !('requestedAction' in body)) throw new Error('Expected canonical pending producer');
         events.push(`enqueue:${body.localId}`);
+        if (request.path === '/v2/sessions/s1/pending') directPendingEntered.resolve();
         // The canonical enqueue producer omits deliveryMode for ordinary
         // queued Actions; only explicit external handoff includes that field.
         return Response.json({ requestedAction: body.requestedAction, pending: { localId: body.localId,
@@ -326,7 +329,8 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
       playbackController: createVoicePlaybackController(), voiceAgentSessions,
     }).then(() => { settled = true; });
     try {
-      await vi.waitFor(() => expect(pendingWrites('s1')).toHaveLength(1));
+      await directPendingEntered.promise;
+      expect(pendingWrites('s1')).toHaveLength(1);
       await submission.mock.results[0]!.value;
       await vi.advanceTimersByTimeAsync(65_000);
       expect(readMountedSessionRealtimeTranscriptConsumerSessionIds(account.homes.voice!.id)).toContain('s1');

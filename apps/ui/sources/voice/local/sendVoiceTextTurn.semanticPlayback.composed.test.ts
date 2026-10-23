@@ -13,6 +13,7 @@ import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePla
 import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
 import type { VoiceAgentSendTurnOptions } from '@/voice/agent/types';
 import { sendVoiceTextTurn } from './sendVoiceTextTurn';
+import { createDeferred } from '@/dev/testkit';
 
 const speech = vi.hoisted(() => ({
   speak: vi.fn<(text: string, options: { onStart?: () => void; onDone?: () => void }) => void>(),
@@ -55,6 +56,7 @@ describe('accepted semantic speech playback', () => {
     'starts the real producer first sentence before %s and preserves playback backpressure',
     async (terminal) => {
       const audio: string[] = [];
+      const speechEntered = createDeferred<void>();
       let finishFirst: (() => void) | undefined;
       let terminalPublished = false;
       speech.speak.mockImplementation((text, options) => {
@@ -62,6 +64,7 @@ describe('accepted semantic speech playback', () => {
         options.onStart?.();
         if (audio.length === 1) finishFirst = options.onDone;
         else options.onDone?.();
+        speechEntered.resolve();
       });
       const playbackController = createVoicePlaybackController();
       const stream = {
@@ -99,7 +102,8 @@ describe('accepted semantic speech playback', () => {
           expect(accepted.spokeAnySegment).toBe(true);
           expect(stream.outputSegmentIndex).toBe(1);
           try {
-            await vi.waitFor(() => expect(audio).toEqual(['Sure.']));
+            await speechEntered.promise;
+            expect(audio).toEqual(['Sure.']);
             expect(terminalPublished).toBe(false);
             finalizeVoiceAgentStreamingSpeech(stream, patch);
             await drain();

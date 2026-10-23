@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 import { createHash } from 'node:crypto';
 import type { ModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 
@@ -132,13 +133,18 @@ describe('synthesizeKokoroWav (native)', () => {
 
   it('prefetches native synthesis of the next sentence while the current WAV is consumed', async () => {
     const synthOrder: string[] = [];
+    const secondSynthesis = createDeferred<void>();
     const consumeOrder: string[] = [];
-    const { stream } = await createNativeSentenceFixture('One. Two. Three.', undefined, sentence => { synthOrder.push(sentence); });
+    const { stream } = await createNativeSentenceFixture('One. Two. Three.', undefined, sentence => {
+      synthOrder.push(sentence);
+      if (sentence === 'Two.') secondSynthesis.resolve();
+    });
     const iterator = stream[Symbol.asyncIterator]();
     const first = await iterator.next();
     if (first.done) throw new Error('first_sentence_missing');
     consumeOrder.push(first.value.sentenceText);
-    await vi.waitFor(() => expect(synthOrder).toContain('Two.'));
+    await secondSynthesis.promise;
+    expect(synthOrder).toContain('Two.');
     const second = await iterator.next();
     if (second.done) throw new Error('second_sentence_missing');
     consumeOrder.push(second.value.sentenceText);
@@ -513,10 +519,11 @@ describe('synthesizeKokoroWav (native)', () => {
       synthesizeResolve = resolve;
     });
 
+    const synthesisStarted = createDeferred<void>();
     const kokoroNativeModule = {
       initialize: vi.fn().mockResolvedValue(undefined),
       listVoices: vi.fn().mockResolvedValue(loadedNativeVoices),
-      synthesizeToWavFile: vi.fn().mockImplementation(() => synthesizePromise),
+      synthesizeToWavFile: vi.fn().mockImplementation(() => { synthesisStarted.resolve(); return synthesizePromise; }),
       cancel: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -543,7 +550,8 @@ describe('synthesizeKokoroWav (native)', () => {
 
     // Abort only once the native job is genuinely in flight: cancelling before
     // it starts would prove the pre-start bail, not in-flight cancellation.
-    await vi.waitFor(() => expect(kokoroNativeModule.synthesizeToWavFile).toHaveBeenCalledTimes(1));
+    await synthesisStarted.promise;
+    expect(kokoroNativeModule.synthesizeToWavFile).toHaveBeenCalledTimes(1);
     controller.abort();
 
     expect(kokoroNativeModule.cancel).toHaveBeenCalledTimes(1);

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 import { createVoiceEncodedAudioNativeBoundary } from '@/dev/testkit/harness/voiceEncodedAudioNativeBoundary';
 import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
@@ -273,10 +274,9 @@ describe('playAudioBytesWithStopper (web)', () => {
     expect(createObjectURL).not.toHaveBeenCalled();
     expect(audioCtor).not.toHaveBeenCalled();
 
-    // Allow the async decode/play pipeline to attach handlers.
-    await vi.waitFor(() => {
-      expect(onPlaybackStarted).toHaveBeenCalledTimes(1);
-    });
+    await waitForTestEvent(notify => voiceRuntimeLevelStore.subscribe('output', notify), voiceRuntimeLevelStore.getSnapshot,
+      snapshot => snapshot.outputSourceActive);
+    expect(onPlaybackStarted).toHaveBeenCalledTimes(1);
     expect(voiceRuntimeLevelStore.getSnapshot()).toMatchObject({ outputSourceActive: true });
     expect(voiceRuntimeLevelStore.getSnapshot().outputLevel).toBeGreaterThan(0);
     if (!endedHandler) throw new Error('Expected onended to be set');
@@ -320,10 +320,10 @@ describe('playAudioBytesWithStopper (web)', () => {
       registerPlaybackStopper: () => () => {},
     });
 
-    await vi.waitFor(() => {
-      expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing');
-      expect(getVoiceQaOutputTapSnapshot().artifact?.bytesBase64).toBe('UklGRgECAwQ=');
-    });
+    await waitForTestEvent(subscribeToVoiceQaOutputTap, getVoiceQaOutputTapSnapshot,
+      snapshot => snapshot.artifact?.lifecycle === 'playing');
+    expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing');
+    expect(getVoiceQaOutputTapSnapshot().artifact?.bytesBase64).toBe('UklGRgECAwQ=');
     if (!endedHandler) throw new Error('Expected web completion handler');
     (endedHandler as () => void)();
     await playback;
@@ -362,7 +362,9 @@ describe('playAudioBytesWithStopper (web)', () => {
         return () => {};
       },
     });
-    await vi.waitFor(() => expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing'));
+    await waitForTestEvent(subscribeToVoiceQaOutputTap, getVoiceQaOutputTapSnapshot,
+      snapshot => snapshot.artifact?.lifecycle === 'playing');
+    expect(getVoiceQaOutputTapSnapshot().artifact?.lifecycle).toBe('playing');
     if (!registeredStopper) throw new Error('Expected playback stopper');
     (registeredStopper as () => void)();
     await playback;
@@ -404,13 +406,13 @@ describe('playAudioBytesWithStopper (web)', () => {
       format: 'wav',
       registerPlaybackStopper: () => () => {},
     });
-    await vi.waitFor(() => {
-      expect(getVoiceQaOutputTapSnapshot().artifact).toMatchObject({
+    await waitForTestEvent(subscribeToVoiceQaOutputTap, getVoiceQaOutputTapSnapshot,
+      snapshot => snapshot.artifact?.lifecycle === 'playing');
+    expect(getVoiceQaOutputTapSnapshot().artifact).toMatchObject({
         originalByteLength: 8,
         capturedByteLength: 8,
         bytesBase64: 'UklGRgECAwQ=',
         lifecycle: 'playing',
-      });
     });
     if (!endedHandler) throw new Error('Expected WebAudio completion handler');
     (endedHandler as () => void)();
@@ -479,7 +481,10 @@ describe('playAudioBytesWithStopper (web)', () => {
     });
     const endedHandler = { current: null as (() => void) | null };
     const pause = vi.fn();
-    const play = vi.fn(async () => {});
+    const firstPlay = createDeferred<void>();
+    const resumed = createDeferred<void>();
+    const play = vi.fn(async () => {}).mockImplementationOnce(async () => { firstPlay.resolve(); })
+      .mockImplementationOnce(async () => { resumed.resolve(); });
     (globalThis as any).Audio = function AudioMock() {
       return {
         pause,
@@ -496,12 +501,14 @@ describe('playAudioBytesWithStopper (web)', () => {
       format: 'wav',
       registerPlaybackStopper: controller.registerStopper,
     });
-    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    await firstPlay.promise;
+    expect(play).toHaveBeenCalledTimes(1);
 
     expect(controller.beginInterruptionCandidate()).toBe('retained');
     expect(pause).toHaveBeenCalledTimes(1);
     controller.resolveInterruptionCandidate('false_alarm');
-    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    await resumed.promise;
+    expect(play).toHaveBeenCalledTimes(2);
 
     if (!endedHandler.current) throw new Error('Expected audio ended handler');
     endedHandler.current();
@@ -510,14 +517,16 @@ describe('playAudioBytesWithStopper (web)', () => {
 
   it('retains a WebAudio candidate that arrives while decoding and starts only after a false alarm', async () => {
     let resolveDecode!: (buffer: AudioBuffer) => void;
+    const decoding = createDeferred<void>();
+    const started = createDeferred<void>();
     let endedHandler: (() => void) | null = null;
-    const start = vi.fn();
+    const start = vi.fn(() => { started.resolve(); });
     class DeferredDecodeAudioContext {
       destination = {};
       currentTime = 0;
       async resume() {}
       decodeAudioData() {
-        return new Promise<AudioBuffer>((resolve) => { resolveDecode = resolve; });
+        return new Promise<AudioBuffer>((resolve) => { resolveDecode = resolve; decoding.resolve(); });
       }
       createBufferSource() {
         return {
@@ -535,7 +544,8 @@ describe('playAudioBytesWithStopper (web)', () => {
       format: 'wav',
       registerPlaybackStopper: controller.registerStopper,
     });
-    await vi.waitFor(() => expect(resolveDecode).toBeTypeOf('function'));
+    await decoding.promise;
+    expect(resolveDecode).toBeTypeOf('function');
     expect(controller.beginInterruptionCandidate()).toBe('retained');
     resolveDecode({ duration: 1 } as AudioBuffer);
     await Promise.resolve();
@@ -543,7 +553,8 @@ describe('playAudioBytesWithStopper (web)', () => {
     expect(start).not.toHaveBeenCalled();
 
     controller.resolveInterruptionCandidate('false_alarm');
-    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    await started.promise;
+    expect(start).toHaveBeenCalledTimes(1);
     if (!endedHandler) throw new Error('Expected WebAudio completion handler');
     (endedHandler as () => void)();
     await playback;
@@ -561,7 +572,8 @@ describe('playAudioBytesWithStopper (web)', () => {
     const play = vi.fn(() => new Promise<void>((resolve) => {
       resolvePlay = resolve;
     }));
-    const onPlaybackStarted = vi.fn();
+    const started = createDeferred<void>();
+    const onPlaybackStarted = vi.fn(() => { started.resolve(); });
 
     (globalThis as any).Audio = function AudioMock(_url: string) {
       return {
@@ -586,9 +598,8 @@ describe('playAudioBytesWithStopper (web)', () => {
 
     expect(onPlaybackStarted).not.toHaveBeenCalled();
     resolvePlay();
-    await vi.waitFor(() => {
-      expect(onPlaybackStarted).toHaveBeenCalledTimes(1);
-    });
+    await started.promise;
+    expect(onPlaybackStarted).toHaveBeenCalledTimes(1);
     const notifyEnded = endedHandler as (() => void) | null;
     if (!notifyEnded) {
       throw new Error('Expected audio ended handler to be registered');
@@ -604,8 +615,10 @@ describe('playAudioBytesWithStopper (web)', () => {
       revokeObjectURL: vi.fn(),
     });
     let resolvePlay!: () => void;
+    const playEntered = createDeferred<void>();
     const play = vi.fn(() => new Promise<void>((resolve) => {
       resolvePlay = resolve;
+      playEntered.resolve();
     }));
     const onPlaybackStarted = vi.fn();
     (globalThis as unknown as { Audio?: unknown }).Audio = function AudioMock() {
@@ -626,7 +639,8 @@ describe('playAudioBytesWithStopper (web)', () => {
       },
       onPlaybackStarted,
     });
-    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+    await playEntered.promise;
+    expect(play).toHaveBeenCalledTimes(1);
 
     const stopPlayback = registeredStopper as (() => void) | null;
     if (!stopPlayback) throw new Error('Expected playback stopper to be registered');
@@ -673,8 +687,11 @@ describe('playAudioBytesWithStopper (native)', () => {
     platformOsMock.value = platformOs;
     vi.spyOn(Date, 'now').mockReturnValue(1234);
     const { start: nativeStart, stop: nativeStop } = encodedNative;
+    const playbackReady = createDeferred<void>();
+    if (platformOs === 'ios') nativeStart.mockImplementationOnce(async () => { playbackReady.resolve(); });
 
     const createAudioPlayer = vi.fn((source: string) => {
+      playbackReady.resolve();
       let listener: ((status: any) => void) | null = null;
       return {
         source,
@@ -722,9 +739,8 @@ describe('playAudioBytesWithStopper (native)', () => {
         registerPlaybackStopper,
       });
 
-      await vi.waitFor(() => {
-        expect(platformOs === 'ios' ? nativeStart : createAudioPlayer).toHaveBeenCalledTimes(1);
-      });
+      await playbackReady.promise;
+      expect(platformOs === 'ios' ? nativeStart : createAudioPlayer).toHaveBeenCalledTimes(1);
       expect(typeof registeredStopper).toBe('function');
       if (platformOs === 'ios') {
         expect(nativeStart).toHaveBeenCalledWith('file:///tmp/happier-voice-1234.wav');

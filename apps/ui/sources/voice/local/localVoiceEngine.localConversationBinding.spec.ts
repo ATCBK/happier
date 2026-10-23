@@ -7,12 +7,13 @@ import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
-import { createMachineFixture, createSessionFixture } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, createSessionFixture, waitForTestEvent } from '@/dev/testkit';
 import type { PartialOptions as ElevenLabsStartOptions } from '@elevenlabs/client';
 import {
     getStorage, loadLocalVoiceEngineWithCompatState, registerLocalVoiceEngineHarnessHooks,
     machineRpcWithServerScope, localVoiceHomeId, localVoiceSpeechOutputBoundary, replaceLocalVoiceSessionHttpSeed,
     setLocalVoiceHttpResponder,
+    waitForLocalVoiceBoundaryEvent,
 } from './localVoiceEngine.testHarness';
 
 // Only the external SDK carrier is held; generated provider activation,
@@ -104,14 +105,15 @@ describe('local voice engine local conversation binding', () => {
 
         await localVoiceEngine.toggleLocalVoiceTurn('session-1');
 
-        await vi.waitFor(async () => {
-            const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
-            expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID)).toMatchObject({
+        const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+        await waitForTestEvent(voiceSessionBindingStore.subscribe,
+            () => voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID),
+            binding => binding?.conversationSessionId === 'voice-home-session');
+        expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID)).toMatchObject({
                 adapterId: 'local_conversation',
                 controlSessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
                 conversationSessionId: 'voice-home-session',
                 targetSessionAddress: { serverId: localVoiceHomeId, sessionId: 'session-1' },
-            });
         });
     }, 60_000);
 
@@ -170,7 +172,8 @@ describe('local voice engine local conversation binding', () => {
         const lifecycle = createVoiceSessionLifecycleController();
         lifecycle.setConfiguredProviderId('local_conversation');
         const start = lifecycle.toggle(null);
-        await Promise.race([start, vi.waitFor(() => expect(resolveBinding).toBeTypeOf('function'))]);
+        await Promise.race([start, waitForLocalVoiceBoundaryEvent(`rpc:${RPC_METHODS.SESSION_SPAWN_NEW}`)]);
+        expect(resolveBinding).toBeTypeOf('function');
         const preparingSnapshot = await getLocalConversationSnapshot();
         resolveBinding();
         await start;
@@ -346,7 +349,8 @@ describe('local voice engine local conversation binding', () => {
         });
 
         const start = localVoiceEngine.toggleLocalVoiceTurn('');
-        await vi.waitFor(() => expect(resolveBinding).toBeTypeOf('function'));
+        await waitForLocalVoiceBoundaryEvent(`rpc:${RPC_METHODS.SESSION_SPAWN_NEW}`);
+        expect(resolveBinding).toBeTypeOf('function');
         await localVoiceEngine.stopLocalVoiceSession();
         resolveBinding();
         await start;
@@ -372,7 +376,8 @@ describe('local voice engine local conversation binding', () => {
 
         const start = localVoiceEngine.toggleLocalVoiceTurn('');
         void start.catch(() => {});
-        await vi.waitFor(() => expect(rejectBinding).toBeTypeOf('function'));
+        await waitForLocalVoiceBoundaryEvent(`rpc:${RPC_METHODS.SESSION_SPAWN_NEW}`);
+        expect(rejectBinding).toBeTypeOf('function');
         const providerId = 'happier.voice.elevenlabs/realtime-elevenlabs';
         const storage = await getStorage();
         const [{ writeVoiceProviderSettingsConfig }, { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS },
@@ -429,7 +434,9 @@ describe('local voice engine local conversation binding', () => {
         });
         let releaseSdk!: () => void;
         const sdkGate = new Promise<void>(resolve => { releaseSdk = resolve; });
+        const sdkEntered = createDeferred<void>();
         elevenLabsSdk.startSession.mockImplementation(async () => {
+            sdkEntered.resolve();
             await sdkGate;
             return { getId: () => 'binding-provider-conversation', endSession: async () => {},
                 setMicMuted() {}, setVolume() {}, sendUserMessage() {}, sendContextualUpdate() {} };
@@ -445,7 +452,8 @@ describe('local voice engine local conversation binding', () => {
             requestedTargetSessionAddress: null, initialContext: '' });
         void newerStart.catch(() => {});
         try {
-            await vi.waitFor(() => expect(elevenLabsSdk.startSession).toHaveBeenCalledOnce());
+            await sdkEntered.promise;
+            expect(elevenLabsSdk.startSession).toHaveBeenCalledOnce();
             expect(newerAdapter.getSnapshot()).toMatchObject({ adapterId: providerId, status: 'connecting' });
             rejectBinding(Object.assign(new Error('stale local failure'), {
                 code: 'VOICE_AGENT_BACKEND_TARGET_UNAVAILABLE',

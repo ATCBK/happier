@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createDeferred, type Deferred } from '@/dev/testkit';
 import { createHash } from 'node:crypto';
 import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { createMemFs } from '@/voice/modelPacks/installerTestFs';
@@ -51,6 +52,8 @@ const sherpaStreamingFinish = vi.fn<() => Promise<SherpaNativeStreamingFinalResu
   async () => ({ status: 'finalized', text: '' }),
 );
 const sherpaCancel = vi.fn(async () => {});
+let pushEntered = createDeferred<void>();
+let cancelEntered = createDeferred<void>();
 
 vi.mock('@happier-dev/sherpa-native', () => ({
   getOptionalHappierSherpaNativeModule: () => runtime.sherpaAvailable ? {
@@ -69,13 +72,15 @@ function createMicSession(): MicSession {
   return session;
 }
 
-function createSink(): SttSink & Record<'onAudioStarted' | 'onPartial' | 'onFinal' | 'onEndpoint' | 'onError', ReturnType<typeof vi.fn>> {
+function createSink(): SttSink & Record<'onAudioStarted' | 'onPartial' | 'onFinal' | 'onEndpoint' | 'onError', ReturnType<typeof vi.fn>> & { errorReported: Deferred<void> } {
+  const errorReported = createDeferred<void>();
   return {
     onAudioStarted: vi.fn(),
     onPartial: vi.fn(),
     onFinal: vi.fn(),
     onEndpoint: vi.fn(),
-    onError: vi.fn(),
+    onError: vi.fn(() => { errorReported.resolve(); }),
+    errorReported,
   };
 }
 
@@ -99,7 +104,8 @@ async function emitAudioFrame(pcm16leBase64 = 'AAE='): Promise<void> {
 
 async function queueOverflow(): Promise<void> {
   captureHarness.emit();
-  await vi.waitFor(() => expect(sherpaStreamingPushFrame).toHaveBeenCalledTimes(1));
+  await pushEntered.promise;
+  expect(sherpaStreamingPushFrame).toHaveBeenCalledTimes(1);
   for (let index = 0; index < 7; index += 1) captureHarness.emit();
   expect(sherpaCancel).not.toHaveBeenCalled();
   // The eighth admitted frame fits; the ninth crosses the controller-owned
@@ -117,11 +123,13 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
     sherpaStreamingCreate.mockReset();
     sherpaStreamingCreate.mockResolvedValue(undefined);
     sherpaStreamingPushFrame.mockReset();
-    sherpaStreamingPushFrame.mockResolvedValue({ text: '', isEndpoint: false });
+    pushEntered = createDeferred<void>();
+    sherpaStreamingPushFrame.mockImplementation(async () => { pushEntered.resolve(); return { text: '', isEndpoint: false }; });
     sherpaStreamingFinish.mockReset();
     sherpaStreamingFinish.mockResolvedValue({ status: 'finalized', text: '' });
     sherpaCancel.mockReset();
-    sherpaCancel.mockResolvedValue(undefined);
+    cancelEntered = createDeferred<void>();
+    sherpaCancel.mockImplementation(async () => { cancelEntered.resolve(); });
   });
   afterEach(async () => {
     for (const harness of captureHarnesses.splice(0)) {
@@ -161,6 +169,7 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
     const frames: string[] = [];
     sherpaStreamingPushFrame.mockImplementation(async (input) => {
       frames.push(input.pcm16leBase64);
+      pushEntered.resolve();
       if (frames.length === 1) await first;
       return { text: frames.length === 1 ? 'last' : 'last word', isEndpoint: false };
     });
@@ -171,9 +180,13 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
     expect(harness.apply).toHaveBeenCalledWith(expect.objectContaining({ configuration: expect.objectContaining({ mode: 'dictation', input: true, output: false, aec: 'off' }) }));
     harness.emit('AAE=');
     harness.emit('AgM=');
-    await vi.waitFor(() => expect(frames).toEqual(['AAE=']));
+    await pushEntered.promise;
+    expect(frames).toEqual(['AAE=']);
+    const captureStopped = createDeferred<void>();
+    harness.nativeModule.stop.mockImplementationOnce(async () => { captureStopped.resolve(); });
     const stopping = controller.stop();
-    await vi.waitFor(() => expect(harness.nativeModule.stop).toHaveBeenCalledTimes(1));
+    await captureStopped.promise;
+    expect(harness.nativeModule.stop).toHaveBeenCalledTimes(1);
     releaseFirst();
     await expect(stopping).resolves.toEqual({ finalText: 'last word' });
     expect(frames).toEqual(['AAE=', 'AgM=']);
@@ -239,8 +252,14 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
 
   it('cancels native decode immediately when graceful finishing is aborted', async () => {
     const harness = useCapture(false);
+    const captureStopped = createDeferred<void>();
+    const stop = vi.mocked(harness.nativeModule.stop);
+    const stopNative = stop.getMockImplementation();
+    if (!stopNative) throw new Error('Native capture stop boundary missing');
+    stop.mockImplementationOnce(async () => { await stopNative(); captureStopped.resolve(); });
     let settlePush!: () => void;
     sherpaStreamingPushFrame.mockImplementation(async () => {
+      pushEntered.resolve();
       await new Promise<void>((resolve) => { settlePush = resolve; });
       return { text: 'aborted words', isEndpoint: false };
     });
@@ -250,12 +269,15 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
     const controller = createSherpaStreamingSttController({ getSettings: () => localNeuralSettings() });
     await controller.start({ capturePurpose: 'dictation', micSession: createMicSession(), sink, signal: signal.signal });
     harness.emit();
-    await vi.waitFor(() => expect(sherpaStreamingPushFrame).toHaveBeenCalledTimes(1));
+    await pushEntered.promise;
+    expect(sherpaStreamingPushFrame).toHaveBeenCalledTimes(1);
     const stopping = controller.stop();
     signal.abort();
     try {
-      await vi.waitFor(() => expect(sherpaCancel).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => expect(harness.capture.getSnapshot().subscriberCount).toBe(0));
+      await cancelEntered.promise;
+      expect(sherpaCancel).toHaveBeenCalledTimes(1);
+      await captureStopped.promise;
+      expect(harness.capture.getSnapshot().subscriberCount).toBe(0);
     } finally {
       settlePush();
       await stopping;
@@ -309,8 +331,9 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
 
   it('does not create a recognizer or capture after model setup resolves for an aborted start, and permits retry', async () => {
     let resolveMetadata!: (value: string) => void;
+    const readingMetadata = createDeferred<void>();
     const metadataRead = vi.spyOn(runtime.fs!.fs.File.prototype, 'text');
-    metadataRead.mockImplementationOnce(() => new Promise<string>((resolve) => { resolveMetadata = resolve; }));
+    metadataRead.mockImplementationOnce(() => new Promise<string>((resolve) => { resolveMetadata = resolve; readingMetadata.resolve(); }));
     const abortController = new AbortController();
     const micSession = createMicSession();
     const { createSherpaStreamingSttController } = await import('./SherpaStreamingSttController');
@@ -321,9 +344,8 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
       sink: createSink(),
       signal: abortController.signal,
     });
-    await vi.waitFor(() => {
-      expect(metadataRead).toHaveBeenCalledTimes(1);
-    });
+    await readingMetadata.promise;
+    expect(metadataRead).toHaveBeenCalledTimes(1);
     abortController.abort();
     resolveMetadata(JSON.stringify({ manifest: installedManifest }));
     await starting;
@@ -475,15 +497,16 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
     let finishFrame!: () => void;
     sherpaStreamingPushFrame.mockImplementationOnce(() => new Promise((resolve) => {
       finishFrame = () => resolve({ text: '', isEndpoint: false });
+      pushEntered.resolve();
     }));
     await queueOverflow();
-    await vi.waitFor(() => expect(sherpaCancel).toHaveBeenCalledTimes(1));
+    await cancelEntered.promise;
+    expect(sherpaCancel).toHaveBeenCalledTimes(1);
     finishFrame();
     expect(sink.onError).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(captureHarness.nativeModule.stop).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => {
-      expect(sink.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'local_neural_stt_pcm_backpressure' }));
-    });
+    await sink.errorReported.promise;
+    expect(captureHarness.nativeModule.stop).toHaveBeenCalledTimes(1);
+    expect(sink.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'local_neural_stt_pcm_backpressure' }));
 
     const secondSink = createSink();
     const second = createSherpaStreamingSttController({ getSettings: () => localNeuralSettings() });
@@ -491,10 +514,9 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
     sherpaStreamingPushFrame.mockRejectedValueOnce(new Error('push_failed'));
     captureHarness.emit();
     expect(secondSink.onError).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(captureHarness.nativeModule.stop).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => {
-      expect(secondSink.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'local_neural_stt_pcm_frame_failed' }));
-    });
+    await secondSink.errorReported.promise;
+    expect(captureHarness.nativeModule.stop).toHaveBeenCalledTimes(2);
+    expect(secondSink.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'local_neural_stt_pcm_frame_failed' }));
   });
 
   it('marks the native job cancelled before waiting on the capture drain', async () => {
@@ -505,31 +527,34 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
     const order: string[] = [];
     let resolveDecode!: () => void;
     sherpaStreamingPushFrame.mockImplementationOnce(async () => {
+      pushEntered.resolve();
       await new Promise<void>((resolve) => { resolveDecode = resolve; });
       order.push('drained');
       return { text: '', isEndpoint: false };
     });
-    sherpaCancel.mockImplementationOnce(async () => { order.push('cancel'); });
+    sherpaCancel.mockImplementationOnce(async () => { order.push('cancel'); cancelEntered.resolve(); });
     const sink = createSink();
     const { createSherpaStreamingSttController } = await import('./SherpaStreamingSttController');
     const controller = createSherpaStreamingSttController({ getSettings: () => localNeuralSettings() });
     await controller.start({ micSession: createMicSession(), sink });
 
     await queueOverflow();
-    await vi.waitFor(() => expect(order).toEqual(['cancel']));
+    await cancelEntered.promise;
+    expect(order).toEqual(['cancel']);
     expect(sherpaCancel).toHaveBeenCalledTimes(1);
     expect(sink.onError).not.toHaveBeenCalled();
     resolveDecode();
-    await vi.waitFor(() => expect(order).toEqual(['cancel', 'drained']));
-    await vi.waitFor(() => {
-      expect(sink.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'local_neural_stt_pcm_backpressure' }));
-    });
+    await sink.errorReported.promise;
+    expect(order).toEqual(['cancel', 'drained']);
+    expect(sink.onError).toHaveBeenCalledWith(expect.objectContaining({ reason: 'local_neural_stt_pcm_backpressure' }));
   });
 
   it('publishes a runtime capture error only after its lease drains, including concurrent stop', async () => {
     let resolveRelease!: () => void;
+    const releasing = createDeferred<void>();
     vi.mocked(captureHarness.nativeModule.stop).mockImplementationOnce(() => new Promise<void>((resolve) => {
       resolveRelease = resolve;
+      releasing.resolve();
     }));
     const sink = createSink();
     const { createSherpaStreamingSttController } = await import('./SherpaStreamingSttController');
@@ -538,7 +563,8 @@ describe('SherpaStreamingSttController (native shared capture)', () => {
 
     sherpaStreamingPushFrame.mockRejectedValueOnce(new Error('push_failed'));
     captureHarness.emit();
-    await vi.waitFor(() => expect(captureHarness.nativeModule.stop).toHaveBeenCalledTimes(1));
+    await releasing.promise;
+    expect(captureHarness.nativeModule.stop).toHaveBeenCalledTimes(1);
     let stopFinished = false;
     const stopping = controller.stop().then((result) => {
       stopFinished = true;

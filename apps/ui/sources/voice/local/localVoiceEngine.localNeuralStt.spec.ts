@@ -11,6 +11,7 @@ import { VoiceLocalSttSchema } from '@/sync/domains/settings/voiceLocalSttSettin
 import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { resolveVoiceSurfaceState } from '@/components/voice/surface/resolveVoiceSurfaceState';
+import { waitForTestEvent } from '@/dev/testkit';
 
 import {
   audioStreamStart,
@@ -29,6 +30,7 @@ import {
   setPlatformOs,
   readLocalVoiceMachinePrerequisites,
   setLocalVoiceHttpResponder,
+  waitForLocalVoiceBoundaryEvent,
 } from './localVoiceEngine.testHarness';
 
 function readPendingTranscripts(sessionId: string) {
@@ -261,9 +263,8 @@ describe('local voice engine local neural STT (streaming)', () => {
       sampleRate: 16000,
       channels: 1,
     });
-    await vi.waitFor(() => {
-      expect(sherpaStreamingPushFrame).toHaveBeenCalledTimes(1);
-    });
+    await waitForLocalVoiceBoundaryEvent('native-frame');
+    expect(sherpaStreamingPushFrame).toHaveBeenCalledTimes(1);
 
     await toggleLocalVoiceTurn('s-finalization-failure');
 
@@ -321,12 +322,12 @@ describe('local voice engine local neural STT (streaming)', () => {
       channels: 1,
     });
 
-    await vi.waitFor(() => {
-      expect(readPendingTranscripts('s1')).toEqual(['hands free sherpa']);
-    });
-    await vi.waitFor(() => {
-      expect(audioStreamStart).toHaveBeenCalledTimes(2);
-    });
+    await waitForLocalVoiceBoundaryEvent('pending-enqueue');
+    expect(readPendingTranscripts('s1')).toEqual(['hands free sherpa']);
+    await waitForLocalVoiceBoundaryEvent('audio-start', 2);
+    expect(audioStreamStart).toHaveBeenCalledTimes(2);
+    const { waitForLocalVoiceState } = await import('./localVoiceEngine.testHarness');
+    await waitForLocalVoiceState(state => state.status === 'recording');
     expect(getLocalVoiceState().status, JSON.stringify(getLocalVoiceState())).toBe('recording');
   });
 
@@ -360,6 +361,7 @@ describe('local voice engine local neural STT (streaming)', () => {
       ? installVoiceWebRtcBrowserBoundary() : null;
     if (browser) vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
     const failedTrackStates: MediaStreamTrackState[][] = [];
+    const endpointDispatch = vi.spyOn(await import('@/utils/system/fireAndForget'), 'fireAndForget');
     const unsubscribe = useVoiceConversationRuntimeStore.subscribe(({ snapshot }) => {
       if (browser && snapshot.state === 'disconnected' && snapshot.error) {
         failedTrackStates.push(browser.micTracks.map(track => track.readyState));
@@ -373,9 +375,11 @@ describe('local voice engine local neural STT (streaming)', () => {
       emitAudioStreamEvent('audioFrame', {
         streamId: 'audio-stream-1', pcm16leBase64: 'AA==', sampleRate: 16000, channels: 1,
       });
-      await vi.waitFor(() => expect(getVoiceConversationRuntimeSnapshot()).toMatchObject({
+      await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, getVoiceConversationRuntimeSnapshot,
+        snapshot => snapshot.state === 'disconnected' && snapshot.error?.reason === 'send_failed');
+      expect(getVoiceConversationRuntimeSnapshot()).toMatchObject({
         state: 'disconnected', error: { reason: 'send_failed' },
-      }));
+      });
       const captureStarts = audioStreamStart.mock.calls.length;
       expect(audioStreamStop).toHaveBeenCalledTimes(captureStarts);
       if (browser) expect(browser.micTracks.every(track => track.readyState === 'ended')).toBe(true);
@@ -387,12 +391,18 @@ describe('local voice engine local neural STT (streaming)', () => {
       if (dictation.status === 'acquired') dictation.lease.release();
       expect(dictation.status).toBe('acquired');
       expect(readPendingTranscripts('s1')).toEqual(['explain the forecast']);
+      const endpointTurn = endpointDispatch.mock.calls.find(([, options]) => options?.tag === 'localVoiceEngine.endpointTurn')?.[0];
+      if (!endpointTurn) throw new Error('The actual endpoint turn was not dispatched');
+      // The failure snapshot precedes the turn promise's cleanup. Join that
+      // failed operation before admitting the retry; do not replay its error.
+      await endpointTurn.catch(() => undefined);
       await engine.toggleLocalVoiceTurn('s1');
       expect(engine.getLocalVoiceState()).toMatchObject({ sessionId: 's1', status: 'recording', error: null });
       expect(audioStreamStart).toHaveBeenCalledTimes(captureStarts + 1);
     } finally {
       await engine.stopLocalVoiceSession();
       unsubscribe();
+      endpointDispatch.mockRestore();
       browser?.restore();
     }
   }, 180_000);

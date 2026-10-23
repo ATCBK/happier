@@ -163,7 +163,8 @@ describe('local model Session voice consumption', () => {
     } });
     storage.setState({ sessions: { ...initialSessions, [target.id]: target } });
     const catalog = createDeferred<unknown>();
-    answerStatus = () => catalog.promise;
+    const readingCatalog = createDeferred<void>();
+    answerStatus = () => { readingCatalog.resolve(); return catalog.promise; };
     const cfg = readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' }));
     const failed = vi.fn();
     const pending = createLocalVoiceTtsController().speak({
@@ -172,7 +173,8 @@ describe('local model Session voice consumption', () => {
         assetId: 'kokoro-82m-v1.0-onnx-q8-wasm', execution: 'daemon', voiceId: 'af_heart' } },
       networkTimeoutMs: 15000, registerPlaybackStopper: () => () => {}, onSpeaking: () => {}, onTtsFailed: failed,
     });
-    await vi.waitFor(() => expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.voiceInference.models.status' })));
+    await readingCatalog.promise;
+    expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.voiceInference.models.status' }));
     storage.setState({ sessions: initialSessions });
     catalog.resolve(statusReply);
     await pending;
@@ -183,11 +185,14 @@ describe('local model Session voice consumption', () => {
 
   it('uses the chosen installed voice without changing model/speed and publishes it only after audio starts', async () => {
     let startPhysicalAudio!: () => void;
+    const playbackReady = createDeferred<void>();
     encodedAudio.start.mockImplementationOnce(async () => {
       startPhysicalAudio = () => { encodedAudio.emit('started'); encodedAudio.emit('finished'); };
+      playbackReady.resolve();
     });
     const result = beginSpeak('am_adam');
-    await vi.waitFor(() => expect(startPhysicalAudio).toBeTypeOf('function'));
+    await playbackReady.promise;
+    expect(startPhysicalAudio).toBeTypeOf('function');
     expect(result.applied).not.toHaveBeenCalled();
     expect(result.speaking).not.toHaveBeenCalled();
     expect(daemonStreamStartRpc).toHaveBeenCalledWith(expect.objectContaining({ voiceId: 'am_adam', speed: 1.2,
@@ -234,9 +239,11 @@ describe('local model Session voice consumption', () => {
   it('retires an awaited catalog result before synthesis when its attempt changes', async () => {
     let current = true;
     const catalog = createDeferred<unknown>();
-    answerStatus = () => catalog.promise;
+    const readingCatalog = createDeferred<void>();
+    answerStatus = () => { readingCatalog.resolve(); return catalog.promise; };
     const result = beginSpeak('am_adam', () => current);
-    await vi.waitFor(() => expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.voiceInference.models.status' })));
+    await readingCatalog.promise;
+    expect(machineRpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.voiceInference.models.status' }));
     current = false;
     catalog.resolve(statusReply);
     await result.pending;
@@ -264,13 +271,15 @@ describe('local model Session voice consumption', () => {
     const cfg = readLocalConversationVoiceSettings(voiceSettingsParse({ providerId: 'local_conversation' }));
     let releaseSynthesis!: () => void;
     const synthesis = createDeferred<void>();
-    daemonStreamStartRpc.mockReturnValueOnce(synthesis.promise);
+    const synthesizing = createDeferred<void>();
+    daemonStreamStartRpc.mockImplementationOnce(() => { synthesizing.resolve(); return synthesis.promise; });
     releaseSynthesis = () => synthesis.resolve();
     const attempt = localNeuralTtsPreviewController.begin('am_adam');
     const pending = previewLocalNeuralTts({ config: { ...cfg.tts.localNeural, execution: 'daemon', voiceId: 'am_adam' },
       sample: 'preview', timeoutMs: cfg.networkTimeoutMs, ...attempt }).finally(attempt.finish);
     const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    await vi.waitFor(() => expect(daemonStreamStartRpc).toHaveBeenCalled());
+    await synthesizing.promise;
+    expect(daemonStreamStartRpc).toHaveBeenCalled();
     expect(localNeuralTtsPreviewController.stop()).toBe(true);
     releaseSynthesis();
     await cancelled;

@@ -854,15 +854,19 @@ describe('DaemonVoiceAgentClient', () => {
 
     const { SESSION_RPC_METHODS } = await import('@happier-dev/protocol/rpc');
     let cancelCalled = false;
+    const readEntered = createDeferred<void>();
+    const cancelEntered = createDeferred<void>();
     daemonRpc.mockImplementation(async (args: any) => {
       if (args?.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START) {
         return { streamId: 'stream-1' } as any;
       }
       if (args?.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ) {
+        readEntered.resolve();
         return { streamId: 'stream-1', events: [], nextCursor: 0, done: false } as any;
       }
       if (args?.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL) {
         cancelCalled = true;
+        cancelEntered.resolve();
         return { ok: true } as any;
       }
       throw new Error(`unexpected rpc method: ${String(args?.method ?? '')}`);
@@ -879,8 +883,9 @@ describe('DaemonVoiceAgentClient', () => {
       signal: controller.signal,
     });
 
-    await vi.waitFor(() => expect(daemonRpc.mock.calls.some(([request]) =>
-      request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ)).toBe(true));
+    await readEntered.promise;
+    expect(daemonRpc.mock.calls.some(([request]) =>
+      request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ)).toBe(true);
 
     const halfway = await settleWithin(sendPromise, 40);
     expect(halfway.state).toBe('pending');
@@ -890,7 +895,8 @@ describe('DaemonVoiceAgentClient', () => {
     const outcome = await settleWithin(sendPromise, 300);
     expect(outcome.state).toBe('rejected');
     expect(String(outcome.state === 'rejected' ? (outcome.reason as any)?.name ?? '' : '')).toBe('AbortError');
-    await vi.waitFor(() => expect(cancelCalled).toBe(true));
+    await cancelEntered.promise;
+    expect(cancelCalled).toBe(true);
   });
 
   it('sendTurn does not fall back to networkTimeoutMs when turnStreamTimeoutMs is null', async () => {

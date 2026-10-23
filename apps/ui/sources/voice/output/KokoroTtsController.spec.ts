@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
 import { createVoicePlaybackController } from '@/voice/runtime/playback/VoicePlaybackController';
+import { createDeferred } from '@/dev/testkit';
 
 const speechBoundary = createVoiceSpeechOutputBoundary({ getAccount: () => { throw new Error('Unexpected daemon RPC in native Kokoro contract'); } });
 afterAll(() => speechBoundary.disposeAudioSession());
@@ -40,12 +41,17 @@ describe('speakKokoroText', () => {
   });
 
   it('registers a stopper that aborts in-flight synthesis', async () => {
-    native.initialize.mockImplementationOnce(() => new Promise<void>(() => {}));
+    const initializing = createDeferred<void>();
+    native.initialize.mockImplementationOnce(() => {
+      initializing.resolve();
+      return new Promise<void>(() => {});
+    });
     let stopper: (() => void) | undefined;
     const onPlaybackStarted = vi.fn();
     const speaking = speakKokoroText({ text: 'Hello.', assetSetId: packId, voiceId: 'af_heart', speed: 1,
       timeoutMs: 15_000, registerPlaybackStopper: next => { stopper = next; return () => {}; }, onPlaybackStarted });
-    await vi.waitFor(() => expect(native.initialize).toHaveBeenCalledOnce());
+    await initializing.promise;
+    expect(native.initialize).toHaveBeenCalledOnce();
     stopper!();
     await expect(speaking).rejects.toThrow('aborted');
     expect(native.cancelInitialization).toHaveBeenCalledOnce();
@@ -55,15 +61,21 @@ describe('speakKokoroText', () => {
 
   it('reports playback start once on the first actual segment and completes after final playback', async () => {
     const onPlaybackStarted = vi.fn();
+    const firstSegment = createDeferred<void>();
+    const secondSegment = createDeferred<void>();
+    playback.start.mockImplementationOnce(async () => { firstSegment.resolve(); });
+    playback.start.mockImplementationOnce(async () => { secondSegment.resolve(); });
     let completed = false;
     const speaking = speakKokoroText({ text: 'Hello. Goodbye.', assetSetId: packId, voiceId: 'af_heart', speed: 1,
       timeoutMs: 15_000, registerPlaybackStopper: () => () => {}, onPlaybackStarted });
     void speaking.then(() => { completed = true; });
-    await vi.waitFor(() => expect(playback.start).toHaveBeenCalledTimes(1));
+    await firstSegment.promise;
+    expect(playback.start).toHaveBeenCalledTimes(1);
     expect(onPlaybackStarted).not.toHaveBeenCalled();
     playback.emit('started');
     playback.emit('finished');
-    await vi.waitFor(() => expect(playback.start).toHaveBeenCalledTimes(2));
+    await secondSegment.promise;
+    expect(playback.start).toHaveBeenCalledTimes(2);
     playback.emit('started');
     expect(onPlaybackStarted).toHaveBeenCalledOnce();
     expect(completed).toBe(false);

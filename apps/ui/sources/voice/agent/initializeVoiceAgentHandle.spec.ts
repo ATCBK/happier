@@ -19,12 +19,14 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { readLocalConversationSettingsFromAccountSettings } from '@/voice/local/localVoiceSettings';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
 import { SessionAppliedModelV1Schema } from '@happier-dev/protocol/providers/model-selection';
+import { createDeferred } from '@/dev/testkit';
 
 // Synthetic daemon ACKs only; the client, Run operations and installable owners stay real.
 const start = vi.fn(async (_request: ExecutionRunEnsureOrStartRequest) => ({ ok: true as const, runId: 'voice-agent-1', created: true }));
 const rpcTargets: Array<{ sessionId: string; method: string }> = [];
 let rootRunnerPid = 123;
 let stallRootRunnerStatus = false;
+let rootRunnerStatusEntered = createDeferred<void>();
 function admittedStart() {
     const request = start.mock.calls.at(-1)?.[0];
     if (!request?.start) throw new Error('Expected the real daemon start admission');
@@ -143,6 +145,7 @@ installDisconnectedServerSocketBoundary(socket => {
         rpcTargets.push({ sessionId, method });
         let result: unknown;
         if (method === RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET) {
+            rootRunnerStatusEntered.resolve();
             if (stallRootRunnerStatus) return await new Promise(() => {});
             const params = request.params as { sessionId: string };
             result = createSessionRunnerRuntimeStatusFixture({ sessionId: params.sessionId, machineId: sessionId, pid: rootRunnerPid, wrapperPid: 122 });
@@ -221,6 +224,7 @@ describe('initializeVoiceAgentHandle', () => {
         start.mockClear();
         rootRunnerPid = 123;
         stallRootRunnerStatus = false;
+        rootRunnerStatusEntered = createDeferred<void>();
         rpcTargets.length = 0;
         sessionExecutionRunList.mockClear();
         sessionExecutionRunGet.mockClear();
@@ -349,10 +353,11 @@ describe('initializeVoiceAgentHandle', () => {
             if (applied === 'cancelled') {
                 let outcome = 'pending';
                 const settled = initializing.then(() => { outcome = 'resolved'; }, () => { outcome = 'cancelled'; });
-                await vi.waitFor(() => expect(rpcTargets.some(request => request.method === RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET)).toBe(true));
+                await rootRunnerStatusEntered.promise;
+                expect(rpcTargets.some(request => request.method === RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET)).toBe(true);
                 lifetime.abort();
-                await vi.waitFor(() => expect(outcome).toBe('cancelled'));
                 await settled;
+                expect(outcome).toBe('cancelled');
                 expect(start).not.toHaveBeenCalled();
                 return;
             }
@@ -464,8 +469,8 @@ describe('initializeVoiceAgentHandle', () => {
         try {
             await entering;
             caller.abort();
-            await vi.waitFor(() => expect(settled).toBe(true));
             expect(await initializing).toMatchObject({ message: 'voice_agent_binding_changed' });
+            expect(settled).toBe(true);
         } finally {
             release();
             await initializing;

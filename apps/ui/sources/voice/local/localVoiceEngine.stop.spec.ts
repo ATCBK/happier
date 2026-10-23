@@ -4,6 +4,7 @@ import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness
 import { describe, expect, it, vi } from 'vitest';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createDeferred, waitForTestEvent } from '@/dev/testkit';
 
 import {
   localVoiceAgentRpc,
@@ -19,6 +20,7 @@ import {
   registerLocalVoiceEngineHarnessHooks,
   speechRecStart,
   speechRecStop,
+  waitForLocalVoiceBoundaryEvent,
 } from './localVoiceEngine.testHarness';
 
 const restoreHarnessModuleLoader = await warmLocalVoiceEngineHarnessGraph();
@@ -57,10 +59,12 @@ describe('local voice engine stop', () => {
     let releaseInitializationRead!: () => void;
     const initializationRead = new Promise<void>(resolve => { releaseInitializationRead = resolve; });
     let heldInitializationRead = false;
+    const initializationReadEntered = createDeferred<void>();
     sessionRpcWithServerScope.mockImplementation(async request => {
       if (cancel === 'provider' && !heldInitializationRead
         && request.method === SESSION_RPC_METHODS.EXECUTION_RUN_GET && localVoiceAgentRpc.readRetainedRun()) {
         heldInitializationRead = true;
+        initializationReadEntered.resolve();
         // Keep the acknowledged Run in prewarm initialization. Its cleanup
         // must borrow retirement's live signal when preparation is cancelled.
         await initializationRead;
@@ -73,11 +77,18 @@ describe('local voice engine stop', () => {
     });
     try {
       await lifecycle.toggle(target);
-      await vi.waitFor(() => expect(localVoiceAgentRpc.readRetainedRun()?.status).toBe('running'));
+      await waitForLocalVoiceBoundaryEvent('agent-start');
       // This case retires an established Agent; daemon admission alone can
       // precede the client's post-start metadata/policy initialization.
-      if (cancel === 'provider') await vi.waitFor(() => expect(heldInitializationRead).toBe(true));
-      else await vi.waitFor(() => expect(isLocalVoiceAgentActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true));
+      if (cancel === 'provider') {
+        await initializationReadEntered.promise;
+        expect(heldInitializationRead).toBe(true);
+      } else {
+        const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
+        await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+        expect(isLocalVoiceAgentActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true);
+      }
+      expect(localVoiceAgentRpc.readRetainedRun()?.status).toBe('running');
       let stopSettled = false;
       const stopping = lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID).catch(() => undefined).finally(() => { stopSettled = true; });
       await entering;
@@ -93,9 +104,9 @@ describe('local voice engine stop', () => {
       const cancelled = cancel === 'close' ? lifecycle.dispose()
         : cancel === 'provider' ? Promise.resolve(lifecycle.setConfiguredProviderId('off'))
         : lifecycle.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
-      await vi.waitFor(() => expect(settled).toBe(true));
-      await vi.waitFor(() => expect(stopSettled).toBe(true));
       await Promise.all([stopping, starting, cancelled]);
+      expect(settled).toBe(true);
+      expect(stopSettled).toBe(true);
       if (cancel === 'close') {
         // A disposed controller no longer republishes snapshots. Observe the
         // owned recording release rather than its frozen pre-disposal controls.
@@ -129,8 +140,13 @@ describe('local voice engine stop', () => {
       lifecycle.setConfiguredProviderId('local_conversation');
       if (cancel === 'end') await lifecycle.retry(VOICE_AGENT_GLOBAL_SESSION_ID);
       else await lifecycle.toggle(target);
-      await vi.waitFor(() => expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true }));
-      await vi.waitFor(() => expect(isLocalVoiceAgentActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true));
+      await waitForTestEvent(lifecycle.subscribe, lifecycle.getSnapshot,
+        snapshot => snapshot.status === 'connected' && snapshot.canStop === true);
+      expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+      await waitForLocalVoiceBoundaryEvent('agent-start', 2);
+      const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
+      await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+      expect(isLocalVoiceAgentActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true);
     } finally {
       stalled = false;
       releaseInitializationRead();
@@ -166,10 +182,11 @@ describe('local voice engine stop', () => {
     await toggleLocalVoiceTurn('s1');
     const stopAndTranscribe = toggleLocalVoiceTurn('s1');
     const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
-    await vi.waitFor(() => expect(localVoiceSpeechTranscription, JSON.stringify({
+    await waitForLocalVoiceBoundaryEvent('transcription');
+    expect(localVoiceSpeechTranscription, JSON.stringify({
       snapshot: getVoiceConversationRuntimeSnapshot(),
       providerId: storage.getState().settings.voice.providerId,
-    })).toHaveBeenCalledOnce());
+    })).toHaveBeenCalledOnce();
 
     await stopLocalVoiceSession();
     resolveTranscription('late transcript');
@@ -201,11 +218,13 @@ describe('local voice engine stop', () => {
     let resolveResume!: () => void;
     let rejectResume!: (error: Error) => void;
     const resume = new Promise<void>((resolve, reject) => { resolveResume = resolve; rejectResume = reject; });
-    localVoiceSpeechOutputBoundary.fileRecording.setMuted.mockImplementationOnce(async () => { await resume; });
+    const resumeEntered = createDeferred<void>();
+    localVoiceSpeechOutputBoundary.fileRecording.setMuted.mockImplementationOnce(async () => { resumeEntered.resolve(); await resume; });
     const unmuting = setLocalVoiceMuted('recorded-retry', false).catch(error => error);
-    await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.setMuted).toHaveBeenLastCalledWith({
+    await resumeEntered.promise;
+    expect(localVoiceSpeechOutputBoundary.fileRecording.setMuted).toHaveBeenLastCalledWith({
       recordingId: 'local-engine-recording', muted: false,
-    }));
+    });
     try {
       await stopLocalVoiceSession();
       await toggleLocalVoiceTurn('recorded-retry');
@@ -280,8 +299,11 @@ describe('local voice engine stop', () => {
     } = await loadLocalVoiceEngineWithCompatState();
 
     await toggleLocalVoiceTurn('s1');
-    await vi.waitFor(() => expect(localVoiceAgentRpc.readRetainedRun(), JSON.stringify(getVoiceConversationRuntimeSnapshot())).toMatchObject({ status: 'running', intent: 'voice_agent' }));
-    await vi.waitFor(() => expect(isLocalVoiceAgentActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true));
+    await waitForLocalVoiceBoundaryEvent('agent-start');
+    const { voiceAgentSessions } = await import('@/voice/agent/voiceAgentSessions');
+    await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+    expect(localVoiceAgentRpc.readRetainedRun(), JSON.stringify(getVoiceConversationRuntimeSnapshot())).toMatchObject({ status: 'running', intent: 'voice_agent' });
+    expect(isLocalVoiceAgentActive(VOICE_AGENT_GLOBAL_SESSION_ID)).toBe(true);
     expect(voiceRuntimeLevelStore.getSnapshot().inputSourceActive).toBe(true);
     getRetainedLocalVoiceEffectOutcomes(VOICE_AGENT_GLOBAL_SESSION_ID).set('effect-1', {
       fingerprint: 'effect-fingerprint',
@@ -400,16 +422,17 @@ describe('local voice engine stop', () => {
     await toggleLocalVoiceTurn('s1');
     const stopPromise = toggleLocalVoiceTurn('s1');
 
-    await vi.waitFor(() => {
-      expect(getVoiceConversationRuntimeSnapshot(), JSON.stringify({ providerId: storage.getState().settings.voice.providerId })).toMatchObject({
+    await waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, getVoiceConversationRuntimeSnapshot,
+      snapshot => snapshot.controlSessionId === 's1' && snapshot.state === 'thinking' && snapshot.error === null);
+    expect(getVoiceConversationRuntimeSnapshot(), JSON.stringify({ providerId: storage.getState().settings.voice.providerId })).toMatchObject({
         controlSessionId: 's1',
         state: 'thinking',
         error: null,
-      });
     });
     // This admitted turn proves that the same real outbound boundary observed
     // by the End negatives actually receives direct-session submissions.
-    await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledOnce());
+    await waitForLocalVoiceBoundaryEvent('pending-enqueue');
+    expect(localVoicePendingEnqueue).toHaveBeenCalledOnce();
 
     const observedStates: string[] = [];
     const unsubscribe = useVoiceConversationRuntimeStore.subscribe(({ snapshot }) => observedStates.push(snapshot.state));

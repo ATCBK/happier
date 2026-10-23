@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, vi } from 'vitest';
+import { waitForTestEvent } from '@/dev/testkit';
 import { captureMachinePresenceObservation as observeLocalVoiceFixturePresence } from '@/sync/domains/machines/reachability/machineReachability';
 import type { Socket } from 'socket.io-client';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
@@ -59,6 +60,22 @@ vi.mock('socket.io-client', async (importOriginal) => (
 const localVoiceSockets = new Set<Socket>();
 const localVoiceRemoteMessages = new Map<string, SessionMessageV1[]>();
 const localVoiceRemoteTurns = new Map<string, SessionTurnsProjectionV1>();
+type LocalVoiceBoundaryEvent = 'agent-start' | 'stream-start' | 'speech' | 'recognizer-start'
+    | 'recognizer-stop' | 'speech-stop' | 'audio-release' | 'audio-start' | 'native-frame'
+    | 'pending-enqueue' | 'transcription' | 'recording-stop' | `rpc:${string}`;
+const localVoiceBoundaryCounts = new Map<LocalVoiceBoundaryEvent, number>();
+const localVoiceBoundaryListeners = new Set<() => void>();
+function publishLocalVoiceBoundaryEvent(event: LocalVoiceBoundaryEvent) {
+    localVoiceBoundaryCounts.set(event, (localVoiceBoundaryCounts.get(event) ?? 0) + 1);
+    for (const listener of [...localVoiceBoundaryListeners]) listener();
+}
+/** Observe actual OS/HTTP/Socket callback entry without replacing queued mock replies. */
+export function waitForLocalVoiceBoundaryEvent(event: LocalVoiceBoundaryEvent, count = 1): Promise<void> {
+    return waitForTestEvent(notify => {
+        localVoiceBoundaryListeners.add(notify);
+        return () => { localVoiceBoundaryListeners.delete(notify); };
+    }, () => localVoiceBoundaryCounts.get(event) ?? 0, actual => actual >= count).then(() => undefined);
+}
 installDisconnectedServerSocketBoundary((socket, serverUrl) => {
     localVoiceSockets.add(socket);
     vi.mocked(socket.connect).mockImplementation(() => {
@@ -77,9 +94,15 @@ installDisconnectedServerSocketBoundary((socket, serverUrl) => {
         const separator = raw.method.indexOf(':');
         const targetId = raw.method.slice(0, separator);
         const method = raw.method.slice(separator + 1);
-        const result = resolveSocketRpcSessionAuthorization(method)
-            ? await sessionRpcWithServerScope({ sessionId: targetId, serverId: localVoiceHomeId, method, payload: raw.params })
-            : await machineRpcWithServerScope({ machineId: targetId, serverId: localVoiceHomeId, method, payload: raw.params });
+        const responding = resolveSocketRpcSessionAuthorization(method)
+            ? sessionRpcWithServerScope({ sessionId: targetId, serverId: localVoiceHomeId, method, payload: raw.params })
+            : machineRpcWithServerScope({ machineId: targetId, serverId: localVoiceHomeId, method, payload: raw.params });
+        publishLocalVoiceBoundaryEvent(`rpc:${method}`);
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
+            || method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) publishLocalVoiceBoundaryEvent('agent-start');
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START
+            || method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2) publishLocalVoiceBoundaryEvent('stream-start');
+        const result = await responding;
         return { ok: true, result };
     });
 });
@@ -93,6 +116,8 @@ export const localVoiceSpeechOutputBoundary: ReturnType<typeof createVoiceSpeech
     return speechAccount;
 } });
 const initialSpeechBoundary = localVoiceSpeechOutputBoundary.reset();
+localVoiceSpeechOutputBoundary.subscribeSpeech(event => publishLocalVoiceBoundaryEvent(event === 'speak' ? 'speech' : 'speech-stop'));
+localVoiceSpeechOutputBoundary.subscribeFileRecording(event => publishLocalVoiceBoundaryEvent(event === 'start' ? 'audio-start' : 'recording-stop'));
 
 export const sessionRpcWithServerScope = vi.fn<(request: Readonly<{ sessionId: string; serverId: string; method: string; payload: unknown }>) => Promise<unknown>>();
 export const machineRpcWithServerScope = vi.fn();
@@ -137,7 +162,12 @@ const EXPO_SPEECH_REC_STATE_KEY = Symbol.for('happier.vitest.expoSpeechRecogniti
 let nativeCapture = initialSpeechBoundary.audioSession;
 const nativeAudioStreamStart = nativeCapture.nativeModule.start.getMockImplementation();
 Object.assign(localVoiceSpeechOutputBoundary.native, {
-    createStreamingRecognizer: sherpaStreamingCreate, pushAudioFrame: sherpaStreamingPushFrame,
+    createStreamingRecognizer: sherpaStreamingCreate,
+    pushAudioFrame: (...args: Parameters<typeof sherpaStreamingPushFrame>) => {
+        const response = sherpaStreamingPushFrame(...args);
+        publishLocalVoiceBoundaryEvent('native-frame');
+        return response;
+    },
     finishStreaming: sherpaStreamingFinish,
 });
 
@@ -402,6 +432,18 @@ export type LocalVoiceEngineCompatState = Readonly<{
     sessionId: string | null;
     error: string | null;
 }>;
+
+export async function waitForLocalVoiceState(predicate: (state: LocalVoiceEngineCompatState) => boolean) {
+    const [{ useVoiceConversationRuntimeStore, getVoiceConversationRuntimeSnapshot }, { deriveLocalVoiceRuntimeProjection }] = await Promise.all([
+        import('@/voice/runtime/machine/voiceConversationRuntimeStore'),
+        import('@/voice/runtime/machine/deriveLocalVoiceSessionSnapshot'),
+    ]);
+    return waitForTestEvent(useVoiceConversationRuntimeStore.subscribe, () => {
+        const snapshot = getVoiceConversationRuntimeSnapshot();
+        return { status: deriveLocalVoiceRuntimeProjection(snapshot).compatStatus,
+            sessionId: snapshot.controlSessionId, error: snapshot.error?.reason ?? null };
+    }, predicate);
+}
 
 export async function loadLocalVoiceEngineWithCompatState(): Promise<
     typeof import('./localVoiceEngine') & Readonly<{ getLocalVoiceState: () => LocalVoiceEngineCompatState }>
@@ -671,7 +713,11 @@ async function createLocalVoiceAccountHarness() {
                         return machine ? Response.json({ machine }) : Response.json({}, { status: 404 });
                     }
                     const pending = /^\/v2\/sessions\/([^/]+)\/pending$/.exec(path);
-                    if (pending && init?.method === 'POST') return localVoicePendingEnqueue({ sessionId: decodeURIComponent(pending[1]), body: JSON.parse(String(init.body)) });
+                    if (pending && init?.method === 'POST') {
+                        const response = localVoicePendingEnqueue({ sessionId: decodeURIComponent(pending[1]), body: JSON.parse(String(init.body)) });
+                        publishLocalVoiceBoundaryEvent('pending-enqueue');
+                        return response;
+                    }
                     if (pending) return Response.json({ pending: [], discarded: [], pendingVersion: 0 });
                     // Durable streamed turns settle or block their claimed input;
                     // both HTTP mutations acknowledge before the pending reread.
@@ -864,6 +910,8 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
             new TextEncoder().encode(JSON.stringify(packManifest)));
         localVoiceModelPackFilesystem.files.set('file:///tmp/rec.m4a', new Uint8Array([1, 2, 3]));
         speechRecStart.mockReset();
+        localVoiceBoundaryCounts.clear();
+        localVoiceBoundaryListeners.clear();
         speechRecStop.mockReset();
         speechRecAbort.mockReset();
         speechRecRequestPermissionsAsync.mockReset();
@@ -887,14 +935,20 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
         audioStreamStop.mockResolvedValue(undefined);
         audioSessionRelease.mockResolvedValue(undefined);
         nativeCapture.nativeModule.start.mockImplementation(async params => {
-            const started = await audioStreamStart(params);
+            const starting = audioStreamStart(params);
+            publishLocalVoiceBoundaryEvent('audio-start');
+            const started = await starting;
             // Retain the canonical OS start callback's capability event. The
             // real coordinator admits AEC only after this native confirmation.
             await nativeAudioStreamStart?.(params);
             return started;
         });
         nativeCapture.nativeModule.stop.mockImplementation(() => audioStreamStop());
-        nativeCapture.nativeModule.restoreAudioSession.mockImplementation(() => audioSessionRelease());
+        nativeCapture.nativeModule.restoreAudioSession.mockImplementation(() => {
+            const response = audioSessionRelease();
+            publishLocalVoiceBoundaryEvent('audio-release');
+            return response;
+        });
         sherpaStreamingPushFrame.mockResolvedValue({ text: '', isEndpoint: false });
         sherpaStreamingFinish.mockResolvedValue({ status: 'finalized', text: '' });
         sherpaStreamingCreate.mockResolvedValue(undefined);
@@ -907,8 +961,16 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
         setExpoSpeechRecognitionStubState({
             recognitionAvailable: true,
             listeners: new Map(),
-            startImpl: (...args: any[]) => (speechRecStart as any)(...args),
-            stopImpl: (...args: any[]) => (speechRecStop as any)(...args),
+            startImpl: (...args: any[]) => {
+                const response = (speechRecStart as any)(...args);
+                publishLocalVoiceBoundaryEvent('recognizer-start');
+                return response;
+            },
+            stopImpl: (...args: any[]) => {
+                const response = (speechRecStop as any)(...args);
+                publishLocalVoiceBoundaryEvent('recognizer-stop');
+                return response;
+            },
             abortImpl: (...args: any[]) => (speechRecAbort as any)(...args),
             requestPermissionsImpl: (...args: any[]) => (speechRecRequestPermissionsAsync as any)(...args),
         });
@@ -963,8 +1025,10 @@ export function registerLocalVoiceEngineHarnessHooks(options?: Readonly<{
                     return DaemonVoiceSpeechTranscribeUploadAbortResponseSchema.parse({ success: true });
                 case RPC_METHODS.DAEMON_VOICE_SPEECH_TRANSCRIBE: {
                     const input = DaemonVoiceSpeechTranscribeRequestSchema.parse(request.payload);
+                    const transcribing = localVoiceSpeechTranscription(input);
+                    publishLocalVoiceBoundaryEvent('transcription');
                     return DaemonVoiceSpeechTranscribeResponseSchema.parse({
-                        ok: true, requestId: input.requestId, text: await localVoiceSpeechTranscription(input),
+                        ok: true, requestId: input.requestId, text: await transcribing,
                     });
                 }
                 default:

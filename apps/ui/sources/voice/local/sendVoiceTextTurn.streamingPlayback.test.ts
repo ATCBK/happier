@@ -555,7 +555,8 @@ describe('sendVoiceTextTurn playback cancellation', () => {
     });
 
     try {
-      await vi.waitFor(() => expect(turnSettled).toBe(true));
+      await turn;
+      expect(turnSettled).toBe(true);
     } finally {
       // Always release a defective implementation's orphaned first playback so
       // the test itself cannot leave queue work behind after recording the result.

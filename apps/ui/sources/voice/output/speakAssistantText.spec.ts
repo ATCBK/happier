@@ -204,7 +204,8 @@ describe('speakAssistantText', () => {
 
   it('rejects delayed local-neural playback from a stopped attempt without poisoning restarted playback', async () => {
     const execution = createDeferred<void>();
-    nativeInitialize.mockReturnValueOnce(execution.promise);
+    const initializing = createDeferred<void>();
+    nativeInitialize.mockImplementationOnce(() => { initializing.resolve(); return execution.promise; });
     const controller = createVoicePlaybackController();
     const staleOnSpeaking = vi.fn();
     const restartedOnSpeaking = vi.fn();
@@ -233,7 +234,8 @@ describe('speakAssistantText', () => {
       registerPlaybackStopper: controller.registerStopper,
       onSpeaking: staleOnSpeaking,
     });
-    await vi.waitFor(() => expect(nativeInitialize).toHaveBeenCalledTimes(1));
+    await initializing.promise;
+    expect(nativeInitialize).toHaveBeenCalledTimes(1);
 
     controller.interrupt();
     await speakAssistantText({
@@ -463,8 +465,10 @@ describe('speakAssistantText', () => {
     const onSpeaking = vi.fn();
     const registerPlaybackStopper = (_s: () => void) => () => {};
     let notifyPlaybackStarted!: () => void;
+    const playbackReady = createDeferred<void>();
     encodedAudio.start.mockImplementationOnce(async () => {
       notifyPlaybackStarted = () => { encodedAudio.emit('started'); encodedAudio.emit('finished'); };
+      playbackReady.resolve();
     });
 
     try {
@@ -500,7 +504,8 @@ describe('speakAssistantText', () => {
       registerPlaybackStopper,
       onSpeaking,
     });
-    await vi.waitFor(() => expect(notifyPlaybackStarted).toBeTypeOf('function'));
+    await playbackReady.promise;
+    expect(notifyPlaybackStarted).toBeTypeOf('function');
 
     expect(speechSynthesizeRpc).toHaveBeenCalledTimes(1);
     const synthesizeInput = DaemonVoiceSpeechSynthesizeRequestSchema.parse(speechSynthesizeRpc.mock.calls[0]?.[0]);
@@ -578,8 +583,10 @@ describe('speakAssistantText', () => {
     voiceConversationRuntimeMachine.transitionToSpeaking({ controlSessionId: controlId });
     voiceConversationRuntimeMachine.setInUseVoice({ controlSessionId: controlId, inUseVoice: previousVoice });
     let started!: () => void;
+    const playbackReady = createDeferred<void>();
     expoSpeechSpeak.mockImplementationOnce((_text, options) => {
       started = () => { options.onStart?.(); options.onDone?.(); };
+      playbackReady.resolve();
     });
     const onSpeaking = vi.fn();
     try {
@@ -587,7 +594,8 @@ describe('speakAssistantText', () => {
         settings: { voice: { providerId: 'local_direct', providers: { local_direct: { schemaVersion: 1,
           config: { tts: { provider: 'device' } } } } } },
         networkTimeoutMs: 15000, registerPlaybackStopper: () => () => {}, onSpeaking });
-      await vi.waitFor(() => expect(started).toBeTypeOf('function'));
+      await playbackReady.promise;
+      expect(started).toBeTypeOf('function');
       expect(voiceConversationRuntimeMachine.getSnapshot().inUseVoice).toEqual(previousVoice);
       expect(onSpeaking).not.toHaveBeenCalled();
       started();
@@ -603,7 +611,8 @@ describe('speakAssistantText', () => {
 
   it('rejects delayed bundled playback from a stopped attempt without poisoning restarted playback', async () => {
     const synthesis = createDeferred<{ bytes: Uint8Array; mimeType: string }>();
-    speechSynthesizeRpc.mockReturnValueOnce(synthesis.promise);
+    const synthesizing = createDeferred<void>();
+    speechSynthesizeRpc.mockImplementationOnce(() => { synthesizing.resolve(); return synthesis.promise; });
     const controller = createVoicePlaybackController();
     const staleOnSpeaking = vi.fn();
     const restartedOnSpeaking = vi.fn();
@@ -642,7 +651,8 @@ describe('speakAssistantText', () => {
       registerPlaybackStopper: controller.registerStopper,
       onSpeaking: staleOnSpeaking,
     });
-    await vi.waitFor(() => expect(speechSynthesizeRpc).toHaveBeenCalledTimes(1));
+    await synthesizing.promise;
+    expect(speechSynthesizeRpc).toHaveBeenCalledTimes(1);
 
     controller.interrupt();
     await speakAssistantText({

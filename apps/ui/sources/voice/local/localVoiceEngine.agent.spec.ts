@@ -23,6 +23,8 @@ import {
     localVoiceRouteState,
     switchLocalVoiceAccount,
     readLocalVoiceMachinePrerequisites,
+    waitForLocalVoiceBoundaryEvent,
+    waitForLocalVoiceState,
 } from './localVoiceEngine.testHarness';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonVoiceInferenceModelsWarmResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
@@ -110,22 +112,6 @@ function configureWarmTransport(reply: (request: MachineRequest) => Promise<unkn
 }
 
 type VoiceAgentTurnStreamReadResult = ReturnType<typeof ExecutionRunTurnStreamReadResponseSchema.parse>;
-
-type MockWithCalls = {
-    mock: {
-        calls: unknown[][];
-    };
-};
-
-async function waitForCondition(check: () => boolean, timeoutMessage: string) {
-    await vi.waitFor(() => {
-        expect(check(), timeoutMessage).toBe(true);
-    });
-}
-
-async function waitForMockCalls(mock: MockWithCalls, expectedCount: number) {
-    await waitForCondition(() => mock.mock.calls.length >= expectedCount, `mock call count ${expectedCount}`);
-}
 
 async function flushMicrotasks(iterations: number) {
     for (let i = 0; i < iterations; i++) {
@@ -484,7 +470,7 @@ describe('local voice engine agent behavior', () => {
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
 
-        await waitForMockCalls(ensureAgentRpc, 1);
+        await waitForLocalVoiceBoundaryEvent('agent-start');
 
         expect(ensureAgentRpc).toHaveBeenCalledTimes(1);
     });
@@ -579,15 +565,15 @@ describe('local voice engine agent behavior', () => {
         });
 
         const toggle = localVoiceEngine.toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID, currentUi.port);
-        await waitForMockCalls(ensureAgentRpc, 1);
+        await waitForLocalVoiceBoundaryEvent('agent-start');
         await toggle;
         expect(startTurnRpc).not.toHaveBeenCalled();
 
         const resolveAgentStart = agentStart.resolve;
         if (!resolveAgentStart) throw new Error('missing local voice agent start resolver');
         resolveAgentStart({ ok: true, runId: 'local-agent-run', created: true });
-        await waitForCondition(() => voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID), 'actual local Agent start');
-        await flushMicrotasks(4000);
+        await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+        expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID), 'actual local Agent start').toBe(true);
 
         await localVoiceEngine.sendLocalVoiceAgentTextTurn(
             VOICE_AGENT_GLOBAL_SESSION_ID,
@@ -641,7 +627,7 @@ describe('local voice engine agent behavior', () => {
             }),
         );
         const stop = localVoiceEngine.stopLocalVoiceSession();
-        await waitForMockCalls(audioSessionRelease, 1);
+        await waitForLocalVoiceBoundaryEvent('audio-release');
         expect(currentUi.port.readCurrentUiContext()).toBeNull();
         const releasePendingNativeAudio = pendingNativeAudio.release;
         if (!releasePendingNativeAudio) throw new Error('missing pending native audio release');
@@ -664,8 +650,10 @@ describe('local voice engine agent behavior', () => {
             VOICE_AGENT_GLOBAL_SESSION_ID,
             retiringCurrentUi.port,
         );
-        await waitForMockCalls(ensureAgentRpc, 2);
+        await waitForLocalVoiceBoundaryEvent('agent-start', 2);
         await retiringToggle;
+        const retiringAgentSettled = voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID)
+            .then(() => undefined, () => undefined);
         const providerCallsBeforeRetiringStart = startTurnRpc.mock.calls.length;
 
         const retiringNativeAudio = {
@@ -677,11 +665,11 @@ describe('local voice engine agent behavior', () => {
             }),
         );
         const retiringStop = localVoiceEngine.stopLocalVoiceSession();
-        await waitForMockCalls(audioSessionRelease, 2);
+        await waitForLocalVoiceBoundaryEvent('audio-release', 2);
         const resolveRetiringAgentStart = retiringAgentStart.resolve;
         if (!resolveRetiringAgentStart) throw new Error('missing retiring local voice agent start resolver');
         resolveRetiringAgentStart({ ok: true, runId: 'local-agent-run', created: true });
-        await flushMicrotasks(4000);
+        await retiringAgentSettled;
         await retiringCurrentUi.update({ detail: { secret: 'LATE_START_CONTEXT_SENTINEL' } });
         expect(startTurnRpc).toHaveBeenCalledTimes(providerCallsBeforeRetiringStart);
         const releaseRetiringNativeAudio = retiringNativeAudio.release;
@@ -901,10 +889,10 @@ describe('local voice engine agent behavior', () => {
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
 
-        await waitForMockCalls(welcomeActionRpc, 1);
+        await waitForLocalVoiceBoundaryEvent(`rpc:${SESSION_RPC_METHODS.EXECUTION_RUN_ACTION}`);
 
         expect(welcomeActionRpc).toHaveBeenCalledTimes(1);
-        await waitForMockCalls(expoSpeechSpeak, 1);
+        await waitForLocalVoiceBoundaryEvent('speech');
         expect(expoSpeechSpeak).toHaveBeenCalled();
     });
 
@@ -965,7 +953,8 @@ describe('local voice engine agent behavior', () => {
         const { toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn('s1');
 
-        await vi.waitFor(() => expect(readWarmRequests()).toHaveLength(1));
+        await waitForLocalVoiceBoundaryEvent(`rpc:${RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM}`);
+        expect(readWarmRequests()).toHaveLength(1);
         expect(readWarmRequests()[0]).toMatchObject({
             machineId: 'machine-1',
             payload: { packIds: [
@@ -1015,17 +1004,20 @@ describe('local voice engine agent behavior', () => {
         const { getLocalVoiceState, toggleLocalVoiceTurn } = localVoiceEngine;
         await toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID);
         expect(getLocalVoiceState().status).toBe('recording');
-        await vi.waitFor(() => expect(rejectWarm).toBeTypeOf('function'));
+        await waitForLocalVoiceBoundaryEvent(`rpc:${RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM}`);
+        expect(rejectWarm).toBeTypeOf('function');
 
         rejectWarm(Object.assign(
             new Error('daemon_voice_inference_model_not_installed'),
             { code: 'model_not_installed' },
         ));
-        await vi.waitFor(() => expect(getLocalVoiceState()).toMatchObject({
+        await waitForLocalVoiceState(state => state.status === 'idle'
+            && state.error === 'daemon_voice_inference_model_not_installed');
+        expect(getLocalVoiceState()).toMatchObject({
             status: 'idle',
             sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
             error: 'daemon_voice_inference_model_not_installed',
-        }));
+        });
     }, 60_000);
 
     it('does not revive a stopped Voice session when its attach-time warm fails late', async () => {
@@ -1062,7 +1054,8 @@ describe('local voice engine agent behavior', () => {
             toggleLocalVoiceTurn,
         } = localVoiceEngine;
         await toggleLocalVoiceTurn('voice-warm-cancelled');
-        await vi.waitFor(() => expect(readWarmRequests()).toHaveLength(1));
+        await waitForLocalVoiceBoundaryEvent(`rpc:${RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM}`);
+        expect(readWarmRequests()).toHaveLength(1);
         // Stop must settle while the real RPC acknowledgement remains held;
         // its private AbortSignal is not part of the daemon's wire contract.
         await stopLocalVoiceSession();
@@ -1124,7 +1117,8 @@ describe('local voice engine agent behavior', () => {
         const { toggleLocalVoiceTurn, resetLocalVoiceAgentPersistence } = localVoiceEngine;
         await toggleLocalVoiceTurn(VOICE_AGENT_GLOBAL_SESSION_ID);
 
-        await flushMicrotasks(4000);
+        await waitForLocalVoiceBoundaryEvent('agent-start');
+        await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
 
         await resetLocalVoiceAgentPersistence();
 
@@ -1396,10 +1390,15 @@ describe('local voice engine agent behavior', () => {
         const { sendLocalVoiceAgentTextUpdate } = localVoiceEngine;
 
         const first = sendLocalVoiceAgentTextUpdate('s1', 'Initial coding request');
-        await waitForMockCalls(startTurnRpc, 1);
+        await waitForLocalVoiceBoundaryEvent('stream-start');
+        expect(startTurnRpc.mock.calls.length).toBeGreaterThanOrEqual(1);
+        // The start request's ingress precedes its ACK and owned stream. Join
+        // read admission before asking a second update to interrupt that stream.
+        await waitForLocalVoiceBoundaryEvent(`rpc:${SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ}`);
 
         const second = sendLocalVoiceAgentTextUpdate('s1', 'Permission required. Ask the human whether to allow it.');
-        await waitForMockCalls(cancelTurnRpc, 1);
+        await waitForLocalVoiceBoundaryEvent(`rpc:${SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_CANCEL}`);
+        expect(cancelTurnRpc.mock.calls.length).toBeGreaterThanOrEqual(1);
 
         resolveFirstRead({
             streamId: 'stream-1',
@@ -1528,7 +1527,7 @@ describe('local voice engine agent behavior', () => {
         await toggleLocalVoiceTurn('s1');
 
         expect(startTurnRpc).toHaveBeenCalledTimes(1);
-        await waitForMockCalls(expoSpeechSpeak, 2);
+        await waitForLocalVoiceBoundaryEvent('speech', 2);
         expect(expoSpeechSpeak.mock.calls.length).toBeGreaterThan(1);
     });
 
@@ -1689,16 +1688,14 @@ describe('local voice engine agent behavior', () => {
             VOICE_AGENT_GLOBAL_SESSION_ID,
             currentUi.port,
         );
-        await waitForCondition(
-            () => ensureAgentRpc.mock.calls.length >= 1,
-            'local Agent start admission',
-        );
+        await waitForLocalVoiceBoundaryEvent('agent-start');
+        expect(ensureAgentRpc.mock.calls.length >= 1, 'local Agent start admission').toBe(true);
         const resolveAgentStart = agentStart.resolve;
         if (!resolveAgentStart) throw new Error('missing local agent start resolver');
         resolveAgentStart({ ok: true, runId: 'local-agent-run', created: true });
         await start;
-        await waitForCondition(() => voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID), 'actual local Agent admission');
-        await flushMicrotasks(4000);
+        await voiceAgentSessions.ensureRunning(VOICE_AGENT_GLOBAL_SESSION_ID);
+        expect(voiceAgentSessions.isActive(VOICE_AGENT_GLOBAL_SESSION_ID), 'actual local Agent admission').toBe(true);
         const localAdapter = getVoiceAdapterRegistry().get('local_conversation');
         if (!localAdapter?.sendTextTurn) throw new Error('local conversation adapter unavailable');
         const settingsBeforeRetirement = storage.getState().settings;

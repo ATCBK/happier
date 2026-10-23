@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
 
 import { createTtsPlaybackController, type TtsAudioChunk } from './TtsController';
 
@@ -56,11 +57,13 @@ describe('createTtsPlaybackController — ordered ack\'d playback queue', () => 
 
     it('applies per-chunk playback-confirm backpressure (next play waits for prior playback)', async () => {
         const events: string[] = [];
+        const firstPlayback = createDeferred<void>();
         let releaseFirst: (() => void) | null = null;
         const controller = createTtsPlaybackController({
             playChunk: async (c) => {
                 events.push(`play:${c.chunkIndex}`);
                 if (c.chunkIndex === 0) {
+                    firstPlayback.resolve();
                     await new Promise<void>((resolve) => { releaseFirst = resolve; });
                 }
             },
@@ -70,7 +73,8 @@ describe('createTtsPlaybackController — ordered ack\'d playback queue', () => 
         controller.enqueue(chunk('g1', 0, false));
         controller.enqueue(chunk('g1', 1, true));
 
-        await vi.waitFor(() => expect(events).toContain('play:0'));
+        await firstPlayback.promise;
+        expect(events).toContain('play:0');
         // Chunk 1 must NOT play until chunk 0 playback resolves.
         expect(events).not.toContain('play:1');
         releaseFirst!();
@@ -80,9 +84,13 @@ describe('createTtsPlaybackController — ordered ack\'d playback queue', () => 
 
     it('does not let delayed remote confirmation postpone the next ready chunk', async () => {
         const played: number[] = [];
+        const secondPlayback = createDeferred<void>();
         let releaseFirstConfirmation: (() => void) | null = null;
         const controller = createTtsPlaybackController({
-            playChunk: async (c) => { played.push(c.chunkIndex); },
+            playChunk: async (c) => {
+                played.push(c.chunkIndex);
+                if (c.chunkIndex === 1) secondPlayback.resolve();
+            },
             confirmPlayback: async (c) => {
                 if (c.chunkIndex === 0) {
                     await new Promise<void>((resolve) => { releaseFirstConfirmation = resolve; });
@@ -94,7 +102,8 @@ describe('createTtsPlaybackController — ordered ack\'d playback queue', () => 
         controller.enqueue(chunk('g1', 0, false));
         controller.enqueue(chunk('g1', 1, true));
 
-        await vi.waitFor(() => expect(played).toEqual([0, 1]));
+        await secondPlayback.promise;
+        expect(played).toEqual([0, 1]);
         let done = false;
         void handle.done.then(() => { done = true; });
         await Promise.resolve();
@@ -105,11 +114,13 @@ describe('createTtsPlaybackController — ordered ack\'d playback queue', () => 
 
     it('abort() stops the queue and resolves done without playing remaining chunks', async () => {
         const played: number[] = [];
+        const firstPlayback = createDeferred<void>();
         let releaseFirst: (() => void) | null = null;
         const controller = createTtsPlaybackController({
             playChunk: async (c) => {
                 played.push(c.chunkIndex);
                 if (c.chunkIndex === 0) {
+                    firstPlayback.resolve();
                     await new Promise<void>((resolve) => { releaseFirst = resolve; });
                 }
             },
@@ -118,7 +129,8 @@ describe('createTtsPlaybackController — ordered ack\'d playback queue', () => 
         const handle = controller.speak();
         controller.enqueue(chunk('g1', 0, false));
         controller.enqueue(chunk('g1', 1, true));
-        await vi.waitFor(() => expect(played).toContain(0));
+        await firstPlayback.promise;
+        expect(played).toContain(0);
 
         handle.abort();
         releaseFirst!();
@@ -149,17 +161,19 @@ describe('createTtsPlaybackController — ordered ack\'d playback queue', () => 
 
     it('bounds prefetch: does not request more than ~2 chunks ahead via onPrefetch', async () => {
         const requested: number[] = [];
+        const prefetched = createDeferred<void>();
         const releasePlay: { current: (() => void) | null } = { current: null };
         const controller = createTtsPlaybackController({
             playChunk: async () => {
                 await new Promise<void>((resolve) => { releasePlay.current = resolve; });
             },
             prefetchDepth: 2,
-            onPrefetch: (count) => { requested.push(count); },
+            onPrefetch: (count) => { requested.push(count); prefetched.resolve(); },
         });
 
         const handle = controller.speak();
-        await vi.waitFor(() => expect(requested.length).toBeGreaterThan(0));
+        await prefetched.promise;
+        expect(requested.length).toBeGreaterThan(0);
         // Initial prefetch should request the bounded depth, not unbounded.
         expect(Math.max(...requested)).toBeLessThanOrEqual(2);
         // releasePlay may still be null here: onPrefetch can fire before playChunk runs, so this is

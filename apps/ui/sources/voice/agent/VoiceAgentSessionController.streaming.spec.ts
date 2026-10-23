@@ -481,8 +481,9 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
   it('aborts and settles the active turn before clearing its retained effect outcomes on stop', async () => {
     const blockedRead = createDeferred<TurnStreamReadResult>();
+    const readEntered = createDeferred<void>();
     daemonStreamStart.mockResolvedValueOnce({ streamId: 'stream-stop' });
-    daemonStreamRead.mockImplementationOnce(async () => await blockedRead.promise);
+    daemonStreamRead.mockImplementationOnce(async () => { readEntered.resolve(); return await blockedRead.promise; });
     const outcomes = getRetainedLocalVoiceEffectOutcomes('s1');
     outcomes.set('effect-stop', {
       fingerprint: 'fingerprint-stop',
@@ -491,7 +492,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     const controller = createVoiceExecutionTransport();
     const activeTurn = trackPromise(controller.sendTurn('s1', 'hello'));
-    await vi.waitFor(() => expect(daemonStreamRead).toHaveBeenCalledTimes(1));
+    await readEntered.promise;
+    expect(daemonStreamRead).toHaveBeenCalledTimes(1);
 
     const stopping = trackPromise(controller.stop('s1'));
     await Promise.resolve();
@@ -507,15 +509,17 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
   it('forwards a concurrent turn to canonical admission instead of queueing it in Voice', async () => {
     const blockedRead = createDeferred<TurnStreamReadResult>();
+    const readEntered = createDeferred<void>();
     daemonStreamStart.mockResolvedValueOnce({ streamId: 'stream-active' });
     daemonStreamStart.mockRejectedValueOnce(
       Object.assign(new Error('Voice agent busy'), { rpcErrorCode: 'execution_run_busy' }),
     );
-    daemonStreamRead.mockImplementationOnce(async () => await blockedRead.promise);
+    daemonStreamRead.mockImplementationOnce(async () => { readEntered.resolve(); return await blockedRead.promise; });
 
     const controller = createVoiceExecutionTransport();
     const activeTurn = trackPromise(controller.sendTurn('s1', 'active turn'));
-    await vi.waitFor(() => expect(daemonStreamRead).toHaveBeenCalledTimes(1));
+    await readEntered.promise;
+    expect(daemonStreamRead).toHaveBeenCalledTimes(1);
 
     await expect(controller.sendTurn('s1', 'concurrent turn')).rejects.toMatchObject({
       rpcErrorCode: 'execution_run_busy',
@@ -727,15 +731,17 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
   it('projects a concurrent text update to canonical admission instead of queueing it in Voice', async () => {
     const blockedRead = createDeferred<TurnStreamReadResult>();
+    const readEntered = createDeferred<void>();
     daemonStreamStart.mockResolvedValueOnce({ streamId: 'stream-1' });
     daemonStreamStart.mockRejectedValueOnce(
       Object.assign(new Error('Voice agent busy'), { rpcErrorCode: 'execution_run_busy' }),
     );
-    daemonStreamRead.mockImplementationOnce(async () => await blockedRead.promise);
+    daemonStreamRead.mockImplementationOnce(async () => { readEntered.resolve(); return await blockedRead.promise; });
 
     const controller: any = createVoiceExecutionTransport();
     const firstTurn = controller.sendTurn('s1', 'hello');
-    await vi.waitFor(() => expect(daemonStreamRead).toHaveBeenCalledTimes(1));
+    await readEntered.promise;
+    expect(daemonStreamRead).toHaveBeenCalledTimes(1);
 
     await expect(
       controller.sendTextUpdate('s1', 'Permission required. Ask the human whether to allow it.'),
