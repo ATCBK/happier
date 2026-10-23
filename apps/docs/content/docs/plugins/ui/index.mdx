@@ -324,10 +324,14 @@ development build, `useSurfaceContext().machineExecutionReady` separately report
 that the exact mounted target is executable. Resource hooks handle these
 transitions automatically. For a custom mounted read, consume the shared
 `usePluginHostReadiness()` projection: defer the read and show loading while
-`pending` is true, and include `revision` in its acquisition dependencies so
+`pending` is true. Do not acquire while `ready === false`, including a settled
+outage with `pending === false`; keep the existing unavailable state and Retry.
+Older hosts may omit `ready`, retaining their loading-only observation. Include
+`pending`, `ready` and `revision` in the acquisition dependencies so
 re-admission re-reads without a manual Retry. Retain the read's existing
 cancellation, data and pacing owners. Account-local reads can pass `false` to
-keep their independent availability. An undemanded reader stays cold; a genuine
+keep their independent availability; this projection reports `ready: true`
+without granting execution permission. An undemanded reader stays cold; a genuine
 outage after readiness stays an error with Retry. These observations grant no
 permission: every invocation still revalidates authority.
 
