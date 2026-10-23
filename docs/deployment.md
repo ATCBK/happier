@@ -64,8 +64,11 @@ Direct queries can still contend with one another; this reservation prevents
 interactive transactions alone from occupying the entire configured pool.
 
 `inTx` charges SQL operations to the existing transaction-attempt budget. Each
-PostgreSQL statement runs under `SET LOCAL statement_timeout` set to the budget
-that remains (never above a stricter configured timeout), so the database itself
+PostgreSQL statement runs under the budget that remains (never above a stricter
+configured `statement_timeout`). An already-enforced stricter timeout is reused;
+`SET LOCAL statement_timeout` runs only when that effective bound changes. A
+single fixed timeout cannot replace shrinking the remaining budget for later
+statements: it would let a late lock wait outlive the attempt. The database itself
 ends a lock wait when the budget expires and an expired transaction never keeps
 waiting for or holding a lock. A statement the budget cancels (SQLSTATE `57014`)
 and a transaction Prisma expired (found by a query, batch query or commit) are
