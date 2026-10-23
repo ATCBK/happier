@@ -15,6 +15,7 @@ import {
 } from '@happier-dev/protocol/runtime/permissionIntentV1';
 import { AgentExecutionRunEventSchema as canonicalAgentExecutionRunEventSchema } from '@happier-dev/protocol/runtime/agentExecutionRunV1';
 import { AgentRuntimeJsonValueSchema as canonicalAgentRuntimeJsonValueSchema, AgentSessionRuntimeEventSchema as canonicalAgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { TERMINAL_BRACKETED_PASTE_START as canonicalTerminalBracketedPasteStart, TERMINAL_BRACKETED_PASTE_END as canonicalTerminalBracketedPasteEnd } from '@happier-dev/protocol/terminal';
 import { AgentSessionProviderBindingV1Schema as canonicalAgentSessionProviderBindingV1Schema } from '@happier-dev/protocol/providers/sessions/agentSessionProviderBindingV1';
 import type {
   AcpForkSessionRequestV1,
@@ -938,3 +939,7 @@ export type RuntimeOutboundTranscriptToolNormalizationV1 = Readonly<{
     rawOutput: unknown;
   }>) => unknown;
 }>;
+
+/** Canonical terminal paste framing; Agent runtimes must not copy escape sequences. */
+export const TERMINAL_BRACKETED_PASTE_START: string = canonicalTerminalBracketedPasteStart;
+export const TERMINAL_BRACKETED_PASTE_END: string = canonicalTerminalBracketedPasteEnd;

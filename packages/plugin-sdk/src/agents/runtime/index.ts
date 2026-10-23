@@ -393,6 +393,8 @@ export { SessionGoalControlFailureV1Schema } from '../../agentRuntime/projection
 export type { ShellCommandDialect } from '../../agentRuntime/projections.js';
 export type { SkillCatalogItemV1 } from '../../agentRuntime/projections.js';
 export type { SkillCatalogV1 } from '../../agentRuntime/projections.js';
+export { TERMINAL_BRACKETED_PASTE_END } from '../../agentRuntime/projections.js';
+export { TERMINAL_BRACKETED_PASTE_START } from '../../agentRuntime/projections.js';
 export type { TerminalAttachmentId } from '../../agentRuntime/projections.js';
 export type { TerminalControlCapture } from '../../agentRuntime/projections.js';
 export type { TerminalControlCaptureResult } from '../../agentRuntime/projections.js';

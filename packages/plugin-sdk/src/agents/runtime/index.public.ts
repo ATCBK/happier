@@ -461,3 +461,5 @@ export { resolveRecoverableTurnFailureRetryDecision } from '../../agentRuntime/p
 export { resolveRecoverableTurnFailureSecondFailure } from '../../agentRuntime/projections.js';
 export { resolveTerminalPromptWriteTimeoutMs } from '../../runtime/promptWriteTimeout.js';
 export { isSessionPermissionShellToolName, matchSessionPermissionToolIdentifier, parseSessionPermissionToolIdentifier } from '../../agentRuntime/projections.js';
+
+export { TERMINAL_BRACKETED_PASTE_START, TERMINAL_BRACKETED_PASTE_END } from '../../agentRuntime/projections.js';
