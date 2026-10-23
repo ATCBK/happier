@@ -36,7 +36,7 @@ export async function readSessionTranscriptForAction(input: Input, scope: Server
             const direction = input.direction ?? 'before';
             const page = await fetchSessionMessagesPage({ sessionId: input.sessionId, scope: input.scope ?? 'main',
                 ...(input.sidechainId ? { sidechainId: input.sidechainId } : {}),
-                limit: input.limit ?? SESSION_TRANSCRIPT_GET_MAX_LIMIT,
+                ...(input.messageId === undefined ? { limit: input.limit ?? SESSION_TRANSCRIPT_GET_MAX_LIMIT } : { messageId: input.messageId }),
                 ...(cursor === undefined ? {} : direction === 'after' ? { afterSeq: cursor } : { beforeSeq: cursor }),
                 signal: guard.signal, requestJson: async (path, signal) => {
                     check();
@@ -49,6 +49,10 @@ export async function readSessionTranscriptForAction(input: Input, scope: Server
                     return value;
                 } });
             if (page.hasMore === undefined) return failure('session_transcript_unavailable');
+            // An exact selector is never satisfied by an unrelated tail page or
+            // a paginated response, even when a server ignored the selector.
+            if (input.messageId !== undefined && (page.messages.length > 1 || page.messages.some(row => row.id !== input.messageId)
+                || page.hasMore !== false || page.nextBeforeSeq != null || page.nextAfterSeq != null)) return failure('session_transcript_unavailable');
             const items: SessionTranscriptGetItem[] = [];
             let payloadTruncations = 0;
             for (const row of page.messages) {
