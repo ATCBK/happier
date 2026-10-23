@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { MachineProcessesAnswerV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
@@ -751,7 +751,16 @@ describe('MachineProcessesTab', () => {
     await act(async () => { await vi.waitFor(() => expect(effects).toEqual([RPC_METHODS.MACHINES_PROCESSES_STOP])); });
   });
 
-  it.each([true, false, undefined])('stopping a service offers Start again only when its owner reports availability (%s)', async (canStartAgain) => {
+  it.each([
+    [true, null],
+    [false, null],
+    [undefined, null],
+    // A phone has no room reserved for the stop preview, but the way back stays under the meter.
+    [true, 'phone'],
+    [false, 'phone'],
+  ] as const)('stopping a service offers Start again only when its owner reports availability (%s, %s)', async (canStartAgain, deviceType) => {
+    device.type = deviceType;
+    onTestFinished(() => { device.type = null; });
     const stops: unknown[] = [];
     const starts: unknown[] = [];
     const answer = createProcessesAnswer();

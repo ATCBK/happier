@@ -232,8 +232,10 @@ export const ProcessesTiles = React.memo(function ProcessesTiles(
           preview !== null && used !== null ? Math.max(0, used - preview) : null
         }
       />
-      {/* A phone stops nothing in place, so it reserves no line for the stop preview. */}
-      {props.compact ? null : <MeterNoteLine note={props.meterNote} />}
+      {/* A phone has no pointer to preview a stop with, so it reserves no line; what a stop freed, with its way back, still shows. */}
+      {!props.compact || props.meterNote?.kind === 'freed' ? (
+        <MeterNoteLine note={props.meterNote} />
+      ) : null}
     </VitalsTile>
   );
   const cpuTile = (
