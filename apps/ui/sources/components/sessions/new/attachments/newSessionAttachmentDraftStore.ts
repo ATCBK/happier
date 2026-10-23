@@ -4,10 +4,11 @@ import {
     clearAttachmentDraftsForKeyPrefix,
     readAttachmentDraftsForKey,
     writeAttachmentDraftsForKey,
+    settleAttachmentDraftsForKey,
+    subscribeAttachmentDraftsForKey,
 } from '@/components/sessions/attachments/attachmentDraftMemoryStore';
 
 const NEW_SESSION_ATTACHMENT_DRAFT_KEY_PREFIX = 'new-session:';
-const removalListeners = new Set<(flowId: string | null) => void>();
 
 function normalizeFlowId(flowId: string | null | undefined): string | null {
     if (typeof flowId !== 'string') return null;
@@ -15,7 +16,7 @@ function normalizeFlowId(flowId: string | null | undefined): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
-function newSessionAttachmentDraftKey(flowId: string): string {
+export function newSessionAttachmentDraftKey(flowId: string): string {
     return `${NEW_SESSION_ATTACHMENT_DRAFT_KEY_PREFIX}${flowId}`;
 }
 
@@ -40,32 +41,28 @@ export function clearNewSessionAttachmentDrafts(flowId: string | null | undefine
     const normalizedFlowId = normalizeFlowId(flowId);
     if (!normalizedFlowId) return;
     clearAttachmentDraftsForKey(newSessionAttachmentDraftKey(normalizedFlowId));
-    for (const listener of removalListeners) listener(normalizedFlowId);
 }
 
 /** Mounted composers release their own sources when the draft owner removes the flow. */
 export function subscribeNewSessionAttachmentDraftRemoval(flowId: string, onRemoved: () => void): () => void {
     const normalizedFlowId = normalizeFlowId(flowId);
-    const listener = (removedFlowId: string | null) => {
-        if (removedFlowId === null || removedFlowId === normalizedFlowId) onRemoved();
-    };
-    removalListeners.add(listener);
-    return () => { removalListeners.delete(listener); };
+    if (!normalizedFlowId) return () => {};
+    return subscribeAttachmentDraftsForKey(newSessionAttachmentDraftKey(normalizedFlowId), event => {
+        if (event === 'cleared') onRemoved();
+    });
 }
 
 /** Accepted custody settles the detached Send, not files added to its successor draft. */
 export function clearAcceptedNewSessionAttachmentDrafts(
     flowId: string | null | undefined,
     acceptedDrafts: readonly AttachmentDraft[],
-    currentDrafts: readonly AttachmentDraft[] = readNewSessionAttachmentDrafts(flowId),
 ): readonly AttachmentDraft[] {
-    const acceptedIds = new Set(acceptedDrafts.map((draft) => draft.id));
-    const remaining = currentDrafts.filter((draft) => !acceptedIds.has(draft.id));
-    writeNewSessionAttachmentDrafts(flowId, remaining);
-    return remaining;
+    const normalizedFlowId = normalizeFlowId(flowId);
+    if (!normalizedFlowId) return [];
+    const key = newSessionAttachmentDraftKey(normalizedFlowId);
+    return settleAttachmentDraftsForKey(key, acceptedDrafts);
 }
 
 export function clearAllNewSessionAttachmentDrafts(): void {
     clearAttachmentDraftsForKeyPrefix(NEW_SESSION_ATTACHMENT_DRAFT_KEY_PREFIX);
-    for (const listener of removalListeners) listener(null);
 }

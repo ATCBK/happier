@@ -1,27 +1,29 @@
 import * as React from 'react';
 
 import type { AttachmentUploadSource, AddWebAttachmentsOptions } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+import { describeAttachmentUploadFileSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
 import type { PickedAttachment, AttachmentFilePickerHandle } from '@/components/sessions/attachments/AttachmentFilePicker.types';
 import type { AgentInputAttachment } from '@/components/sessions/agentInput/agentInputContracts';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { randomUUID } from '@/platform/randomUUID';
+import { fireAndForget } from '@/utils/system/fireAndForget';
+import { nativeReadClipboardImageAttachment } from '@/utils/files/nativeClipboardImageAttachment';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
-import { sendableAttachmentDrafts, type AttachmentDraft } from './attachmentDraftModel';
+import { removeSubmittedAttachmentDrafts, sendableAttachmentDrafts, type AttachmentDraft } from './attachmentDraftModel';
+import { getAttachmentDraftsSnapshotForKey, patchAttachmentDraftForKey, settleAttachmentDraftsForKey,
+    subscribeAttachmentDraftsForKey, writeAttachmentDraftsForKey } from './attachmentDraftMemoryStore';
 import type { AttachmentsUploadConfig } from '@/sync/domains/transfers/ops/uploadSessionAttachment';
 import type { SessionAttachmentTransferContext } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
 import type { ExactSessionMachineTargetIdentity } from '@/sync/ops/sessionMachineTarget';
 
 function resolveSourceSizeBytes(source: AttachmentUploadSource): number | null {
     if (source.kind === 'folder') return source.entries.reduce((total, entry) => total + (resolveSourceSizeBytes(entry.source) ?? 0), 0);
-    if (source.kind === 'web') return source.file.size;
-    if (source.kind === 'memory') return source.bytes.byteLength;
-    return typeof source.sizeBytes === 'number' && Number.isFinite(source.sizeBytes) ? source.sizeBytes : null;
+    return describeAttachmentUploadFileSource(source).sizeBytes;
 }
 
 function resolveSourceName(source: AttachmentUploadSource): string {
-    if (source.kind === 'web') return source.file.name;
-    return source.name;
+    return source.kind === 'folder' ? source.name : describeAttachmentUploadFileSource(source).name;
 }
 
 function resolveImageSourcePresentation(source: AttachmentUploadSource) {
@@ -36,6 +38,9 @@ export function useAttachmentDraftManager(params: Readonly<{
     enabled: boolean;
     maxFileBytes: number;
     initialDrafts?: readonly AttachmentDraft[];
+    /** Existing Account/draft/occurrence address; this manager binds the shared memory owner. */
+    memoryKey?: string | null;
+    isCurrent?: () => boolean;
     eagerUpload?: Readonly<{ sessionId: string; sessionTarget?: ExactSessionMachineTargetIdentity;
         config: AttachmentsUploadConfig; transferContext?: SessionAttachmentTransferContext }>;
     /** Picked uploads mention the exact drafts admitted by this intake owner. */
@@ -53,6 +58,8 @@ export function useAttachmentDraftManager(params: Readonly<{
     agentInputAttachments: readonly AgentInputAttachment[];
     addWebFiles: (files: readonly File[], options?: AddWebAttachmentsOptions) => readonly AttachmentDraft[];
     addPickedAttachments: (picked: readonly PickedAttachment[]) => void;
+    /** Native "Paste image": the clipboard picture joins the tray as a picked attachment. */
+    pasteClipboardImage: () => void;
     removeDraft: (id: string) => void;
     removeSubmittedDrafts: (submitted: readonly AttachmentDraft[]) => readonly AttachmentDraft[];
     clearDrafts: () => void;
@@ -60,8 +67,14 @@ export function useAttachmentDraftManager(params: Readonly<{
     applyDraftPatch: (id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>, expectedSource?: AttachmentUploadSource) => void;
 }> {
     const filePickerRef = React.useRef<AttachmentFilePickerHandle | null>(null);
-    const [drafts, setDrafts] = React.useState<AttachmentDraft[]>(() => [...(params.initialDrafts ?? [])]);
-    const draftsRef = React.useRef<AttachmentDraft[]>(params.initialDrafts ? [...params.initialDrafts] : []);
+    const memoryKey = params.memoryKey ?? null;
+    const activeMemoryKey = React.useRef(memoryKey);
+    const mounted = React.useRef(true);
+    const currentAdmission = React.useRef(params.isCurrent);
+    currentAdmission.current = params.isCurrent;
+    const [drafts, setDrafts] = React.useState<AttachmentDraft[]>(() => [...(params.initialDrafts
+        ?? (memoryKey ? getAttachmentDraftsSnapshotForKey(memoryKey) : []))]);
+    const draftsRef = React.useRef<AttachmentDraft[]>(drafts);
     const draftRevisionRef = React.useRef(0);
     const onRemoveDraftRef = React.useRef(params.onRemoveDraft);
     onRemoveDraftRef.current = params.onRemoveDraft;
@@ -74,11 +87,13 @@ export function useAttachmentDraftManager(params: Readonly<{
     const webPreviewUrlsRef = React.useRef(new Map<string, Readonly<{ file: File; url: string }>>());
     const [webPreviewUrlsVersion, setWebPreviewUrlsVersion] = React.useState(0);
 
-    const getDraftsSnapshot = React.useCallback(() => draftsRef.current, []);
-    const getSendableDraftsSnapshot = React.useCallback(() => sendableAttachmentDrafts(draftsRef.current), []);
+    const getDraftsSnapshot = React.useCallback(() => activeMemoryKey.current !== memoryKey || !mounted.current
+        ? memoryKey ? getAttachmentDraftsSnapshotForKey(memoryKey) : [] : draftsRef.current, [memoryKey]);
+    const getSendableDraftsSnapshot = React.useCallback(() => sendableAttachmentDrafts(getDraftsSnapshot()), [getDraftsSnapshot]);
     const getDraftRevisionSnapshot = React.useCallback(() => draftRevisionRef.current, []);
 
     const commitDrafts = React.useCallback((updater: (previous: AttachmentDraft[]) => AttachmentDraft[]) => {
+        if (!mounted.current || activeMemoryKey.current !== memoryKey) return;
         // Keep this side effect outside React's updater: Strict Mode may replay
         // updater functions, but one public mutation call gets exactly one
         // currentness revision.
@@ -90,7 +105,13 @@ export function useAttachmentDraftManager(params: Readonly<{
         // effects in Strict Mode.
         const next = updater(draftsRef.current);
         draftsRef.current = next;
+        if (memoryKey) writeAttachmentDraftsForKey(memoryKey, next);
         setDrafts(next);
+    }, [memoryKey]);
+
+    React.useLayoutEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
     }, []);
 
     React.useEffect(() => {
@@ -105,9 +126,10 @@ export function useAttachmentDraftManager(params: Readonly<{
     }, []);
 
     const applyDraftPatch = React.useCallback((id: string, patch: Partial<Omit<AttachmentDraft, 'id' | 'source'>>, expectedSource?: AttachmentUploadSource) => {
+        if (memoryKey) { patchAttachmentDraftForKey(memoryKey, id, patch, expectedSource); return; }
         if (expectedSource && !draftsRef.current.some((draft) => draft.id === id && draft.source === expectedSource)) return;
         commitDrafts((prev) => prev.map((d) => d.id === id ? ({ ...d, ...patch } as AttachmentDraft) : d));
-    }, [commitDrafts]);
+    }, [commitDrafts, memoryKey]);
 
     const startEagerUploads = React.useCallback((added: readonly AttachmentDraft[]) => {
         const target = eagerUploadRef.current;
@@ -133,7 +155,7 @@ export function useAttachmentDraftManager(params: Readonly<{
     }, [params.eagerUpload?.sessionId, params.eagerUpload?.sessionTarget?.serverId, params.eagerUpload?.sessionTarget?.accountId]);
 
     const addSources = React.useCallback((sources: readonly AttachmentUploadSource[]): readonly AttachmentDraft[] => {
-        if (!params.enabled) return [];
+        if (!params.enabled || !mounted.current || activeMemoryKey.current !== memoryKey || currentAdmission.current?.() === false) return [];
 
         const next: AttachmentDraft[] = [];
         let skippedOversizeCount = 0;
@@ -160,7 +182,7 @@ export function useAttachmentDraftManager(params: Readonly<{
         commitDrafts((prev) => [...prev, ...next]);
         startEagerUploads(next);
         return next;
-    }, [commitDrafts, params.enabled, params.maxFileBytes, startEagerUploads]);
+    }, [commitDrafts, memoryKey, params.enabled, params.maxFileBytes, startEagerUploads]);
 
     const addWebFiles = React.useCallback((files: readonly File[], options?: AddWebAttachmentsOptions) => {
         return addSources(options?.sources ?? files.map((file) => ({ kind: 'web' as const, file })));
@@ -171,21 +193,31 @@ export function useAttachmentDraftManager(params: Readonly<{
         if (added.length > 0) onPickedDraftsRef.current?.(added);
     }, [addSources]);
 
+    const pasteClipboardImage = React.useCallback(() => {
+        const unavailable = () => Modal.alert(t('attachments.alerts.noClipboardImageTitle'), t('attachments.alerts.noClipboardImageBody'));
+        fireAndForget((async () => {
+            const picked = await nativeReadClipboardImageAttachment();
+            if (picked.length === 0) { unavailable(); return; }
+            addPickedAttachments(picked);
+        })(), { onError: unavailable });
+    }, [addPickedAttachments]);
+
     const removeDraft = React.useCallback((id: string) => {
+        if (!mounted.current || activeMemoryKey.current !== memoryKey) return;
         eagerUploadsRef.current.get(id)?.abort();
         onRemoveDraftRef.current?.(id);
         commitDrafts((prev) => prev.filter((d) => d.id !== id));
-    }, [commitDrafts]);
+    }, [commitDrafts, memoryKey]);
 
     const removeSubmittedDrafts = React.useCallback((submitted: readonly AttachmentDraft[]) => {
         // Source objects are immutable through manager patches; upload checkpoints
         // retain their identity, while a replacement source must survive acceptance.
-        const sourcesById = new Map(submitted.map((draft) => [draft.id, draft.source]));
+        if (memoryKey) return settleAttachmentDraftsForKey(memoryKey, submitted);
         const current = draftsRef.current;
-        const remaining = current.filter((draft) => sourcesById.get(draft.id) !== draft.source);
-        if (remaining.length !== current.length) commitDrafts(() => remaining);
+        const remaining = removeSubmittedAttachmentDrafts(current, submitted);
+        if (remaining.length !== current.length) commitDrafts(() => [...remaining]);
         return draftsRef.current;
-    }, [commitDrafts]);
+    }, [commitDrafts, memoryKey]);
 
     const clearDrafts = React.useCallback(() => {
         commitDrafts(() => []);
@@ -194,6 +226,23 @@ export function useAttachmentDraftManager(params: Readonly<{
     const replaceDrafts = React.useCallback((nextDrafts: readonly AttachmentDraft[]) => {
         commitDrafts(() => [...nextDrafts]);
     }, [commitDrafts]);
+
+    React.useLayoutEffect(() => {
+        const changed = activeMemoryKey.current !== memoryKey;
+        activeMemoryKey.current = memoryKey;
+        if (changed) replaceDrafts(memoryKey ? getAttachmentDraftsSnapshotForKey(memoryKey) : []);
+        else if (memoryKey) writeAttachmentDraftsForKey(memoryKey, draftsRef.current);
+        if (!memoryKey) return;
+        const follow = () => {
+            if (!mounted.current || activeMemoryKey.current !== memoryKey) return;
+            const next = getAttachmentDraftsSnapshotForKey(memoryKey);
+            if (next.length === draftsRef.current.length && next.every((draft, index) => draft === draftsRef.current[index])) return;
+            replaceDrafts(next);
+        };
+        const unsubscribe = subscribeAttachmentDraftsForKey(memoryKey, follow);
+        follow();
+        return unsubscribe;
+    }, [memoryKey, replaceDrafts]);
 
     React.useEffect(() => {
         const map = webPreviewUrlsRef.current;
@@ -271,6 +320,7 @@ export function useAttachmentDraftManager(params: Readonly<{
         agentInputAttachments,
         addWebFiles,
         addPickedAttachments,
+        pasteClipboardImage,
         removeDraft,
         removeSubmittedDrafts,
         clearDrafts,
@@ -278,6 +328,7 @@ export function useAttachmentDraftManager(params: Readonly<{
         applyDraftPatch,
     }), [
         addPickedAttachments,
+        pasteClipboardImage,
         addWebFiles,
         agentInputAttachments,
         applyDraftPatch,

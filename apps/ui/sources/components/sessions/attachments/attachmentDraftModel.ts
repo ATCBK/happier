@@ -22,3 +22,10 @@ export type AttachmentDraft = Readonly<{
 export function sendableAttachmentDrafts(drafts: readonly AttachmentDraft[]): readonly AttachmentDraft[] {
     return drafts.filter(draft => draft.source.kind !== 'folder' || draft.status !== 'error');
 }
+
+/** Acceptance owns only the exact immutable source occurrence captured for Send. */
+export function removeSubmittedAttachmentDrafts(current: readonly AttachmentDraft[], submitted: readonly AttachmentDraft[]): readonly AttachmentDraft[] {
+    const sourcesById = new Map(submitted.map(draft => [draft.id, draft.source]));
+    const remaining = current.filter(draft => sourcesById.get(draft.id) !== draft.source);
+    return remaining.length === current.length ? current : remaining;
+}

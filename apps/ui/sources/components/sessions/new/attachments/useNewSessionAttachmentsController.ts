@@ -34,7 +34,6 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { useAttachmentsUploadConfig } from '@/components/sessions/attachments/useAttachmentsUploadConfig';
 import { buildAttachmentMessageMeta, uploadAttachmentDraftsToSession } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
 import { blurActiveElementOnWeb, deferOnWeb } from '@/utils/platform/deferOnWeb';
-import { nativeReadClipboardImageAttachment } from '@/utils/files/nativeClipboardImageAttachment';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { followUpSpawnedSessionWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession';
@@ -53,10 +52,8 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { admitRunnerAttachmentSource } from '@/sync/domains/ephemeralRunner/runnerAttachmentSourceAdmission';
 
 import {
-    clearAcceptedNewSessionAttachmentDrafts,
-    readNewSessionAttachmentDrafts,
+    newSessionAttachmentDraftKey,
     subscribeNewSessionAttachmentDraftRemoval,
-    writeNewSessionAttachmentDrafts,
 } from './newSessionAttachmentDraftStore';
 import { resolveNewSessionReviewCommentsScope } from './resolveNewSessionReviewCommentsScope';
 import type { NewSessionComposerDocument } from '@/components/sessions/new/hooks/screenModel/useNewSessionComposerDocument';
@@ -130,13 +127,12 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         const trimmed = params.flowId.trim();
         return trimmed.length > 0 ? trimmed : null;
     }, [params.flowId]);
-    const initialDraftsRef = React.useRef<readonly AttachmentDraft[]>(
-        normalizedFlowId ? readNewSessionAttachmentDrafts(normalizedFlowId) : [],
-    );
+    const removedFlowRef = React.useRef<string | null>(null);
     const attachmentDraftManager = useAttachmentDraftManager({
         enabled: attachmentsUploadsEnabled,
         maxFileBytes: attachmentsUploadConfig.maxFileBytes,
-        initialDrafts: initialDraftsRef.current,
+        memoryKey: normalizedFlowId ? newSessionAttachmentDraftKey(normalizedFlowId) : null,
+        isCurrent: () => !normalizedFlowId || removedFlowRef.current !== normalizedFlowId,
         onPickedDrafts: (drafts) => {
             const document = params.composerDocument;
             const scope = getActiveServerAccountScope();
@@ -158,7 +154,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         addWebFiles: addWebFilesToDrafts,
         addPickedAttachments,
         applyDraftPatch,
-        replaceDrafts,
+        removeSubmittedDrafts,
         getDraftsSnapshot,
         getSendableDraftsSnapshot,
     } = attachmentDraftManager;
@@ -195,32 +191,17 @@ export function useNewSessionAttachmentsController(params: Readonly<{
     );
     const hasReviewCommentDrafts = hasDiscoverableReviewCommentDrafts && includedReviewCommentDrafts.length > 0;
 
-    const removedFlowRef = React.useRef<string | null>(null);
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
         removedFlowRef.current = null;
         if (!normalizedFlowId) return;
         return subscribeNewSessionAttachmentDraftRemoval(normalizedFlowId, () => {
             removedFlowRef.current = normalizedFlowId;
-            initialDraftsRef.current = [];
-            replaceDrafts([]);
         });
-    }, [normalizedFlowId, replaceDrafts]);
-
-    React.useEffect(() => {
-        if (!normalizedFlowId) return;
-        // A late picker/upload update cannot restore an authoritatively removed
-        // flow while navigation is still unmounting its old controller.
-        if (removedFlowRef.current === normalizedFlowId) {
-            if (drafts.length > 0) replaceDrafts([]);
-            return;
-        }
-        if (!attachmentsUploadsEnabled) return;
-        writeNewSessionAttachmentDrafts(normalizedFlowId, drafts);
-    }, [attachmentsUploadsEnabled, drafts, normalizedFlowId, replaceDrafts]);
+    }, [normalizedFlowId]);
 
     const clearDraftsForFlow = React.useCallback((accepted: readonly AttachmentDraft[]) => {
-        replaceDrafts(clearAcceptedNewSessionAttachmentDrafts(normalizedFlowId, accepted, getDraftsSnapshot()));
-    }, [getDraftsSnapshot, normalizedFlowId, replaceDrafts]);
+        removeSubmittedDrafts(accepted);
+    }, [removeSubmittedDrafts]);
 
     const setReviewCommentDraftIncluded = React.useCallback((draftId: string, included: boolean) => {
         const draft = discoverableReviewCommentDrafts.find((candidate) => candidate.id === draftId);
@@ -249,20 +230,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         reviewDraftHandlers.clearReviewCommentDrafts();
     }, [reviewDraftHandlers]);
 
-    const pasteAttachmentImage = React.useCallback(() => {
-        void (async () => {
-            try {
-                const picked = await nativeReadClipboardImageAttachment();
-                if (picked.length === 0) {
-                    Modal.alert(t('attachments.alerts.noClipboardImageTitle'), t('attachments.alerts.noClipboardImageBody'));
-                    return;
-                }
-                addPickedAttachments(picked);
-            } catch {
-                Modal.alert(t('attachments.alerts.noClipboardImageTitle'), t('attachments.alerts.noClipboardImageBody'));
-            }
-        })();
-    }, [addPickedAttachments]);
+    const pasteAttachmentImage = attachmentDraftManager.pasteClipboardImage;
 
     const actionPresentation = React.useMemo(() => {
         const chips: AgentInputExtraActionChip[] = [];

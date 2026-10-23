@@ -16,7 +16,7 @@ export type SessionAttachmentDraftScope = Readonly<{
     occurrenceId: string;
 }>;
 
-function sessionAttachmentDraftKey(scope: SessionAttachmentDraftScope): string {
+export function sessionAttachmentDraftKey(scope: SessionAttachmentDraftScope): string {
     // Reuse the canonical Account and Session identity encoders. The occurrence
     // is an opaque Run/first-send identity, never parsed back out. File bytes
     // must never cross an Account switch even when Home, Session, and Run ids

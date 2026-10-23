@@ -57,6 +57,11 @@ function inlineVideoPreviewInput(media: SessionMediaInlineVideoAvailableSummary,
     };
 }
 
+/** Where an inline picture's bytes come from: the Session's files by default, or an owner's own resource read. */
+export type SessionMediaInlinePreviewSource = (
+    media: SessionMediaInlineImageAvailableSummary | SessionMediaInlineVideoAvailableSummary,
+) => UseFilePreviewSourceInput;
+
 type SessionMediaInlineRenderableSummary =
     | SessionMediaInlineImageSummary
     | SessionMediaInlineMediaSummary;
@@ -138,7 +143,7 @@ function resolveInlineVideoAccessibilityLabel(media: SessionMediaInlineVideoAvai
 }
 
 function SessionMediaInlineVideoTile(props: Readonly<{
-    sessionId: string;
+    previewInput: UseFilePreviewSourceInput;
     media: SessionMediaInlineVideoAvailableSummary;
     testIdPrefix: string;
     originRef: React.RefObject<View | null>;
@@ -146,7 +151,7 @@ function SessionMediaInlineVideoTile(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const preview = useFilePreviewSource(inlineVideoPreviewInput(props.media, props.sessionId));
+    const preview = useFilePreviewSource(props.previewInput);
     const accessibilityLabel = resolveInlineVideoAccessibilityLabel(props.media);
 
     return (
@@ -183,8 +188,7 @@ function SessionMediaInlineVideoTile(props: Readonly<{
 }
 
 function SessionMediaInlineImageTile(props: Readonly<{
-    sessionId: string;
-    workspaceScope?: WorkspaceScopeBase | null;
+    previewInput: UseFilePreviewSourceInput;
     media: SessionMediaInlineImageAvailableSummary;
     imageIndex: number;
     testIdPrefix: string;
@@ -198,7 +202,7 @@ function SessionMediaInlineImageTile(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
 
-    const preview = useFilePreviewSource(inlineImagePreviewInput(props.media, props.sessionId, props.workspaceScope));
+    const preview = useFilePreviewSource(props.previewInput);
     const actionable = preview.status !== 'error' || props.fileOpenEnabled;
     const { onPreviewLoaded } = props;
     const loadedUri = preview.status === 'loaded' ? preview.uri : null;
@@ -320,13 +324,20 @@ function SessionMediaUnavailableInlineImageTile(props: Readonly<{
     );
 }
 
-export const SessionMediaInlineImages = React.memo(function SessionMediaInlineImages(props: Readonly<{
+export const SessionMediaInlineImages = React.memo(function SessionMediaInlineImages(props: (Readonly<{
     sessionId: string;
     /**
      * Where the files live when it is not the Session's working directory (media the daemon stored
      * under its own home for this Session). Omitted, the Session's workspace is the root.
      */
     workspaceScope?: WorkspaceScopeBase | null;
+    previewSource?: undefined;
+}> | Readonly<{
+    /** A conversation that owns its files (a Discussion's message attachments) reads them itself. */
+    previewSource: SessionMediaInlinePreviewSource;
+    sessionId?: undefined;
+    workspaceScope?: undefined;
+}>) & Readonly<{
     media: readonly SessionMediaInlineRenderableSummary[];
     onOpenPath: (path: string) => void;
     fileOpenEnabled: boolean;
@@ -339,6 +350,11 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
     onPreviewLoaded?: (path: string, uri: string) => void;
 }>) {
     const styles = stylesheet;
+    const resolvePreviewInput = React.useMemo<SessionMediaInlinePreviewSource>(() => {
+        if (props.previewSource !== undefined) return props.previewSource;
+        const { sessionId, workspaceScope } = props;
+        return (media) => isInlineVideo(media) ? inlineVideoPreviewInput(media, sessionId) : inlineImagePreviewInput(media, sessionId, workspaceScope);
+    }, [props.previewSource, props.sessionId, props.workspaceScope]);
     const testIdPrefix = props.testIdPrefix ?? 'message-session-media';
 
     const stage = useMediaStage();
@@ -371,9 +387,7 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
                 stageItem: {
                     kind: isInlineVideo(media) ? 'video' : 'image',
                     title: media.name,
-                    source: isInlineVideo(media)
-                        ? inlineVideoPreviewInput(media, props.sessionId)
-                        : inlineImagePreviewInput(media, props.sessionId, props.workspaceScope),
+                    source: resolvePreviewInput(media),
                     sizeBytes: media.sizeBytes ?? null,
                     alphaCapable: !isInlineVideo(media) && resolveFileViewerKind({ path: media.path, mimeType: media.mimeType }).alphaCapable,
                     ...(openFile ? { openFile } : {}),
@@ -381,7 +395,7 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
                 stageIndex,
             };
         });
-    }, [props.fileOpenEnabled, props.media, props.onOpenPath, props.sessionId, props.workspaceScope]);
+    }, [props.fileOpenEnabled, props.media, props.onOpenPath, resolvePreviewInput]);
     const openStage = (stageIndex: number) => {
         const items = images.flatMap((entry) => (entry.stageItem ? [{ ...entry.stageItem, originRef: originRefFor(entry.key) }] : []));
         if (items.length > 0) stage.open(items, Math.min(stageIndex, items.length - 1));
@@ -407,7 +421,7 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
                 ) : isInlineVideo(entry.media) ? (
                     <SessionMediaInlineVideoTile
                         key={`${entry.media.id}:${entry.media.path}`}
-                        sessionId={props.sessionId}
+                        previewInput={resolvePreviewInput(entry.media)}
                         media={entry.media}
                         testIdPrefix={testIdPrefix}
                         originRef={originRefFor(entry.key)}
@@ -415,9 +429,8 @@ export const SessionMediaInlineImages = React.memo(function SessionMediaInlineIm
                     />
                 ) : (
                     <SessionMediaInlineImageTile
-                        workspaceScope={props.workspaceScope}
                         key={`${entry.media.id}:${entry.media.path}`}
-                        sessionId={props.sessionId}
+                        previewInput={resolvePreviewInput(entry.media)}
                         media={entry.media}
                         imageIndex={entry.stageIndex ?? 0}
                         originRef={originRefFor(entry.key)}

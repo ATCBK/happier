@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { SessionAttachmentHandleV1 } from '@happier-dev/protocol';
 
-import { SessionMediaInlineImages } from '@/components/sessions/media/SessionMediaInlineImages';
+import { SessionMediaInlineImages, type SessionMediaInlinePreviewSource } from '@/components/sessions/media/SessionMediaInlineImages';
 import { resolveSessionMediaInlineRenderableImageMimeType } from '@/components/sessions/media/presentation';
 import type { SessionMediaInlineMediaSummary } from '@/sync/domains/session/media/sessionMediaMessageMeta';
 
@@ -14,8 +14,11 @@ export type InlineImageAttachmentSummary = Readonly<{
     attachmentHandle?: SessionAttachmentHandleV1;
 }>;
 
-export const AttachmentsInlineImages = React.memo(function AttachmentsInlineImages(props: Readonly<{
-    sessionId: string;
+export const AttachmentsInlineImages = React.memo(function AttachmentsInlineImages(props: (
+    | Readonly<{ sessionId: string; previewSource?: undefined }>
+    /** A message whose files its conversation reads itself (a Discussion attachment). */
+    | Readonly<{ previewSource: SessionMediaInlinePreviewSource; sessionId?: undefined }>
+) & Readonly<{
     attachments: readonly InlineImageAttachmentSummary[];
     onOpenPath: (path: string) => void;
     fileOpenEnabled: boolean;
@@ -49,7 +52,7 @@ export const AttachmentsInlineImages = React.memo(function AttachmentsInlineImag
 
     return (
         <SessionMediaInlineImages
-            sessionId={props.sessionId}
+            {...(props.previewSource !== undefined ? { previewSource: props.previewSource } : { sessionId: props.sessionId })}
             media={media}
             onOpenPath={props.onOpenPath}
             fileOpenEnabled={props.fileOpenEnabled}

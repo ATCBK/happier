@@ -50,6 +50,7 @@ const stylesheet = StyleSheet.create((theme) => ({
 
 function resolveAttachmentIconName(mimeType?: string): IconName {
     if (!mimeType) return 'file';
+    if (mimeType === 'inode/directory') return 'folder';
     if (mimeType.startsWith('image/')) return 'image';
     if (mimeType.startsWith('text/')) return 'file-text';
     return 'file';
