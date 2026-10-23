@@ -297,7 +297,7 @@ export function ManagedMachineSections(props: SectionProps) {
         machine.controller.machineId, machine.controller.installationId, machine.enrolledMachineId, operationReadRevision]);
 
     const run = async (actionId: ManagedMachineActionIdV1, input: unknown, onSucceeded?: (result: unknown) => void,
-        onFailed?: () => void): Promise<boolean> => {
+        onFailed?: () => void, reviewedMachineReferences?: ManagedMachineDeleteReview['census']): Promise<boolean> => {
         const binding = props.binding;
         const interest = interestRef.current;
         if (!binding?.isCurrent() || !props.current || pendingRef.current || !interest || interest.signal.aborted
@@ -345,7 +345,8 @@ export function ManagedMachineSections(props: SectionProps) {
         };
         try {
             const result = await props.executeAction(actionId, input, { surface: 'ui', serverId: props.serverId,
-                expectedAccountId: binding.accountId, signal: interest.signal });
+                expectedAccountId: binding.accountId, signal: interest.signal,
+                ...(reviewedMachineReferences ? { reviewedMachineReferences } : {}) });
             if (!binding.isCurrent() || interest.signal.aborted) return false;
             const outcome = classifyHomeActionOutcome(result);
             if (outcome.kind === 'failed') {
@@ -724,7 +725,8 @@ export function ManagedMachineSections(props: SectionProps) {
                     if (!canMutate || !currentDeleteReview) return;
                     const input = buildReviewedManagedMachineDeleteInput(machine, currentDeleteReview);
                     if (!input) { setError('intent_changed'); return; }
-                    fireAndForget(run('machines.managed.delete', input), { tag: 'ManagedMachineSections.delete' });
+                    fireAndForget(run('machines.managed.delete', input, undefined, undefined, currentDeleteReview.census),
+                        { tag: 'ManagedMachineSections.delete' });
                 } }} /> : null}
         {/* Remove forgets a resource Delete can no longer end (lab m-life: an ended resource's quiet Remove); a live one keeps Delete. */}
         {canRemove && removeReviewKey !== deleteReviewKey && !describeManagedCreation(machine, creationContext).actions.includes('remove')

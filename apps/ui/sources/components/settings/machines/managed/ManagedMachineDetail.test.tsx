@@ -1437,6 +1437,7 @@ describe('managed Machine detail', () => {
         const minted: Array<ReturnType<typeof ExternalActionExecutionAuthorizationRequestV1Schema.parse>> = [];
         const authorizations: Array<ReturnType<typeof ExternalActionExecutionAuthorizationV1Schema.parse>> = [];
         const nativeCarriers: Array<ReturnType<typeof ExternalActionExecutionAuthorizationRequestV1Schema.parse>> = [];
+        let referenceInventoryReads = 0;
         const plainControllerRow = createPlainMachineRowFixture({ id: controller.machineId, accountId: 'foreign-owner' });
         const controllerRow = { ...plainControllerRow,
             access: { custodian: { accountId: 'foreign-owner', displayName: 'Foreign owner' },
@@ -1446,6 +1447,7 @@ describe('managed Machine detail', () => {
         setRuntimeFetch(async (input, init) => {
             const url = new URL(String(input));
             expect(url.origin).toBe('https://managed-delete-review.test');
+            if (url.pathname === '/v1/artifacts') referenceInventoryReads += 1;
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             if (url.pathname === '/v1/machines') return Response.json([controllerRow]);
@@ -1506,8 +1508,12 @@ describe('managed Machine detail', () => {
         expect(screen.findByTestId('managed-machine.delete-decision')).not.toBeNull();
         expect(screen.findByTestId('managed-machine.delete-decision.cancel')).not.toBeNull();
         expect(screen.tree.findAll(node => node.props?.title === t('managedMachines.actions.deleteMachine') && node.props?.mode === 'info')).toHaveLength(0);
+        const referenceInventoryReadsAfterReview = referenceInventoryReads;
         await act(async () => confirm!.props.onPress());
         await flushHookEffects({ cycles: 20 });
+        // Confirm keeps the cheap managed-machine freshness read, but it must
+        // not restart the Artifact/Automation dependency census.
+        expect(referenceInventoryReads).toBe(referenceInventoryReadsAfterReview);
         expect(minted).toHaveLength(1);
         expect(authorizations[0]?.binding).toMatchObject({ accountId: 'owner', serverIdentityId: machine.homeId, authentication,
             machineId: controller.machineId, installationId: controller.installationId, custodianAccountId: 'foreign-owner',
