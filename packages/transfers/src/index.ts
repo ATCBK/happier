@@ -6,7 +6,9 @@ export {
     type TransferRouteViabilityRecord,
 } from './cache/createTransferRouteViabilityCache.js';
 export { uploadInChunks, type ChunkUploadProgress } from './uploadInChunks.js';
-export { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1,
+export { encodeBinaryUploadMetadataV1, decodeBinaryUploadMetadataV1, iterateBinaryUploadFrameV1, readBinaryUploadFrameV1, BinaryUploadFrameErrorV1,
+    type BinaryUploadSegmentV1, type BinaryUploadFrameReaderOptionsV1 } from './binaryUploadFrame.js';
+export { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1, iterateArtifactUploadFrameV1,
     decodeArtifactUploadMetadataV1, type ArtifactUploadDestinationV1 } from './artifactUploadFrame.js';
 export {
     createMachineTransferRouteCache,
