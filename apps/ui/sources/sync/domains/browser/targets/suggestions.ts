@@ -245,8 +245,8 @@ function dedupeRows(rows: readonly BrowserLaunchpadRow[]): readonly BrowserLaunc
  * The running Service an ended relay preview belongs to, read from the launchpad's own running rows
  * (the Services rows), so "Open again" reopens it through the same Services opener and never
  * guesses. The same preview still listed wins; then the same declared Service (Machine, workspace
- * and declaration, whichever occurrence is current); then, for a scanned listener with no
- * declaration, the same Machine and port. Anything else is not the page that ended.
+ * and declaration, whichever occurrence is current). A listener on the same port does not prove
+ * it is the page that ended; unmatched previews recover through Services.
  */
 export function selectRunningServiceForEndedPreview(
     rows: readonly BrowserLaunchpadRow[],
@@ -265,10 +265,7 @@ export function selectRunningServiceForEndedPreview(
             && target.declaration !== undefined && createCanonicalJsonSigningInput(target.declaration) === key
             && (target.cwd ?? null) === (declared.cwd ?? null))?.target ?? null;
     }
-    const port = ended.display?.addressLabel?.split('/')[0]?.match(/:(\d+)$/)?.[1];
-    if (!port) return null;
-    return running.find(({ row, target }) => target.machineId === ended.machineId
-        && target.declaration === undefined && row.portLabel === `:${port}`)?.target ?? null;
+    return null;
 }
 
 export function buildBrowserLaunchpadRows(input: Readonly<{

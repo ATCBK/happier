@@ -254,13 +254,30 @@ describe('browser launchpad suggestions', () => {
             expect(selectRunningServiceForEndedPreview(without, endedDeclared)).toBeNull();
         });
 
-        it('finds a scanned listener on the same machine and port, and nothing once it stopped', async () => {
+        it('does not substitute a replacement process or project on the same machine and port', async () => {
             const { buildBrowserLaunchpadRows, selectRunningServiceForEndedPreview } = await import('./suggestions');
-            const running = buildBrowserLaunchpadRows({ launcherSnapshot: snapshot([{ ...scannedRunning }]), nowMs: 2_000 });
-            expect(selectRunningServiceForEndedPreview(running, endedScanned)?.id).toBe('inventory:entry_new');
+            const running = buildBrowserLaunchpadRows({ launcherSnapshot: snapshot([
+                { ...scannedRunning, title: 'Different application', cwd: '/another-project' },
+            ]), nowMs: 2_000 });
+            expect(running).toHaveLength(1);
+            expect(selectRunningServiceForEndedPreview(running, endedScanned)).toBeNull();
             expect(selectRunningServiceForEndedPreview(running, { ...endedScanned, machineId: 'machine_2' })).toBeNull();
             expect(selectRunningServiceForEndedPreview(running, { ...endedScanned, display: { title: 'Lumen', addressLabel: '127.0.0.1:42599' } })).toBeNull();
             const stopped = buildBrowserLaunchpadRows({ launcherSnapshot: snapshot([{ ...scannedRunning, state: 'stale' }]), nowMs: 2_000 });
+            expect(selectRunningServiceForEndedPreview(stopped, endedScanned)).toBeNull();
+        });
+
+        it('finds the exact registered preview while it is running, but not once it stopped', async () => {
+            const { buildBrowserLaunchpadRows, selectRunningServiceForEndedPreview } = await import('./suggestions');
+            const registered: LocalServiceLauncherSnapshotV1['targets'][number] = {
+                id: 'preview:scanned_original', source: 'registered_preview', machineId: 'machine_1', sessionId: 'session_1',
+                sourceClass: { kind: 'registered_preview', previewId: endedScanned.targetId },
+                title: 'Lumen', subtitle: '127.0.0.1:42511', browserTarget: endedScanned,
+                confidence: 'high', state: 'available', actions: ['open_preview'],
+            };
+            const running = buildBrowserLaunchpadRows({ launcherSnapshot: snapshot([scannedRunning, registered]), nowMs: 2_000 });
+            expect(selectRunningServiceForEndedPreview(running, endedScanned)?.browserTarget).toEqual(endedScanned);
+            const stopped = buildBrowserLaunchpadRows({ launcherSnapshot: snapshot([{ ...registered, state: 'stale' }]), nowMs: 2_000 });
             expect(selectRunningServiceForEndedPreview(stopped, endedScanned)).toBeNull();
         });
     });

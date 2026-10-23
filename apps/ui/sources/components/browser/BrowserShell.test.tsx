@@ -645,12 +645,20 @@ describe('BrowserShell', () => {
       ),
     );
     const base = await createShellState();
+    const declaration = { workspaceRefId: 'ws_1', selection: { kind: 'manifest', name: 'web' } } as const;
     const ended = {
       ...base,
       viewsById: {
         ...base.viewsById,
         view_1: {
           ...base.viewsById.view_1!,
+          target: {
+            ...target,
+            serviceTarget: {
+              kind: 'managed_service', managedServiceId: 'instance_old',
+              machineId: 'machine_1', cwd: '/repo', declaration,
+            },
+          } satisfies BrowserViewTargetV1,
           loadingState: 'failed' as const,
           lastError: 'preview_ended',
         },
@@ -665,16 +673,19 @@ describe('BrowserShell', () => {
         updatedAt: 1_000,
         targets: [
           {
-            id: 'inventory:entry_5173',
-            source: 'inventory_entry',
+            id: 'managed:instance_new',
+            source: 'managed_service',
             machineId: 'machine_1',
             sessionId: 'session_1',
             title: 'vite',
             subtitle: '127.0.0.1:5173',
             sourceClass: {
-              kind: 'inventory_entry',
-              inventoryEntryId: 'entry_5173',
+              kind: 'managed_service',
+              managedServiceId: 'instance_new',
             },
+            cwd: '/repo',
+            declaration,
+            serviceState: 'running',
             endpointUrl: 'http://127.0.0.1:5173/',
             confidence: 'high',
             state: 'available',
@@ -691,12 +702,15 @@ describe('BrowserShell', () => {
     );
     const selectTab = vi.fn();
     const sideActions = { current: { tabs: ['files', 'services'], selectTab } };
-    const render = (rows: readonly BrowserLaunchpadRow[]) => (
+    const render = (
+      rows: readonly BrowserLaunchpadRow[],
+      previewTarget: BrowserViewTargetV1 = ended.viewsById.view_1.target,
+    ) => (
       <RightSidebarActionsContext.Provider value={sideActions}>
         <BrowserShell
           browserSessionId="browser_session_1"
           platform="web"
-          state={ended}
+          state={{ ...ended, viewsById: { ...ended.viewsById, view_1: { ...ended.viewsById.view_1, target: previewTarget } } }}
           onCommand={vi.fn()}
           launchpadRows={rows}
           onOpenTarget={vi.fn()}
@@ -721,13 +735,28 @@ describe('BrowserShell', () => {
       ),
     ).toBeDefined();
 
-    // Its Service stopped: the way to Services is the scope's own right-sidebar chooser.
-    await screen.update(render([]));
+    // A different scanned application reuses the port: recover through Services, never Open again.
+    const replacement = buildBrowserLaunchpadRows({
+      launcherSnapshot: {
+        v: 1, machineId: 'machine_1', sessionId: 'session_1', updatedAt: 3_000,
+        targets: [{
+          id: 'inventory:replacement', source: 'inventory_entry', machineId: 'machine_1', sessionId: 'session_1',
+          sourceClass: { kind: 'inventory_entry', inventoryEntryId: 'replacement' },
+          title: 'Another app', cwd: '/another-project', subtitle: '127.0.0.1:5173',
+          endpointUrl: 'http://127.0.0.1:5173/', confidence: 'high', state: 'available', actions: ['register_preview'],
+        }],
+      },
+    });
+    await screen.update(render(replacement, target));
     expect(screen.findByTestId(openAgain)).toBeNull();
     await screen.pressByTestIdAsync(
       'ended-local-view-frame-ended-services',
     );
     expect(selectTab).toHaveBeenCalledWith('services');
+    // The same recovery remains available after the listener disappears.
+    await screen.update(render([], target));
+    expect(screen.findByTestId(openAgain)).toBeNull();
+    expect(screen.findByTestId('ended-local-view-frame-ended-services')).toBeTruthy();
     await screen.unmount();
   });
 
