@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Animated, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
-import { ChatHeaderCompactContext } from '@/components/sessions/transcript/chatHeaderCompact';
+import { useDetailsTabHeaderActionsCompact } from '@/components/appShell/panes/details/header/DetailsTabHeader';
 
 import { useMountedActivityOverviewSummary } from '@/activity/source/useActivityOverview';
 import { buildPendingNavigationFromSource, type PendingNavigationCandidate } from '@/activity/source/buildPendingNavigationFromSource';
@@ -66,7 +66,7 @@ export const PendingNavigationPill = React.memo(function PendingNavigationPill(p
     const shortcut = useKeyboardShortcutLabel('session.pending.next');
     const phoneDevice = useDeviceType() === 'phone';
     // A tight session header keeps the title readable: the pill says only its count there.
-    const compactHeader = React.useContext(ChatHeaderCompactContext) && props.presentation === 'header';
+    const compactHeader = useDetailsTabHeaderActionsCompact() && props.presentation === 'header';
     const onPress = React.useCallback(() => {
         if (!serverId || !sessionId) return;
         return invokeNextPendingRequest({ excluding: { serverId, sessionId } });

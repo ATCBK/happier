@@ -68,10 +68,10 @@ describe('PendingNavigationPill', () => {
     it('yields to the session title in a tight header: the count alone, still the same Next', async () => {
         const navigate = vi.fn(async () => ({ status: 'opened' as const }));
         unregister = registerPendingNavigationRuntime(navigate);
-        const { ChatHeaderCompactContext } = await import('@/components/sessions/transcript/chatHeaderCompact');
-        const screen = await renderScreen(<ChatHeaderCompactContext.Provider value={true}>
+        const { DetailsTabHeaderActionsCompactContext } = await import('@/components/appShell/panes/details/header/DetailsTabHeader');
+        const screen = await renderScreen(<DetailsTabHeaderActionsCompactContext.Provider value={true}>
             <PendingNavigationPill address={address} presentation="header" />
-        </ChatHeaderCompactContext.Provider>);
+        </DetailsTabHeaderActionsCompactContext.Provider>);
         expect(screen.findByTestId('pending-navigation-header-count')?.props.children).toBe('1');
         expect(screen.findByTestId('pending-navigation-header')?.props.accessibilityLabel).toContain('1 needs you');
         await screen.pressByTestIdAsync('pending-navigation-header');
@@ -100,7 +100,7 @@ describe('PendingNavigationPill', () => {
                     messagesById: { 'unrelated-message': createToolCallMessageFixture({ id: 'unrelated-message' }) },
                     messagesVersion: 1, isLoaded: true,
                 }) },
-                settings: { ...state.settings, composerPromptLibraryButtonEnabled: !state.settings.composerPromptLibraryButtonEnabled },
+                settings: { ...state.settings, agentInputEnterToSend: !state.settings.agentInputEnterToSend },
             }));
         });
         expect(commits).toBe(baseline);
