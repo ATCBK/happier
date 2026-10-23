@@ -2583,6 +2583,14 @@ recorded reply custody and sequence order without opening other rounds or
 issuing one request per participant.
 Selected conditionals retain the same invocation scope, so the narrow reader
 follows their admitted branches when locating peer collections and preparation.
+Protocol's `readWorkflowInvocationMembersV1` owns structural recovery for both
+the round projector and the durable coordinator's slot/member reads. A replacement
+parent inherits its predecessor's nearest unreplaced slots through
+`previousAttemptRecordId`; newer and skipped slots mask older ones. Completed
+descendants survive a replaced parent, while skipped and superseded children
+contribute no round outcomes. Recovery ancestry is read in batches, and unavailable
+ancestry or incomplete declared collection membership fails closed rather than
+reporting that everyone passed.
 
 The Agent/MCP catalog derives the direct `workflow_run_start`,
 `workflow_run_get`, `workflow_run_wait`, and `workflow_run_cancel` tools from
