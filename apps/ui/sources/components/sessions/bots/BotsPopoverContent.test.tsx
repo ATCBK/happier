@@ -13,6 +13,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
 } from 'vitest';
 import {
@@ -25,6 +26,7 @@ import {
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { perfFixtureId } from '../../../../../../packages/tests/src/testkit/stress/scenarios/perfProfile';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -274,6 +276,97 @@ describe('Bots roster', () => {
     await pressNativeBoundary(screen, 'session-list-item-active-bot');
     expect(close).toHaveBeenCalled();
     expect(JSON.stringify(navigate.mock.calls[0]?.[0])).toContain('active-bot');
+  });
+
+  it('does not rescan expanded roster membership for unrelated store publications', async () => {
+    const serverId = connection!.home.id;
+    const now = Date.now();
+    const population = Array.from({ length: 16 }, (_, index) =>
+      createSessionListRenderableSessionFixture({ id: `measured-bot-${index}`, activeAt: now,
+        metadata: { path: '/project', name: `Measured Bot ${index}`, bot: { kind: 'bot' } },
+        ...(index === 0 ? { managedSessions: { total: 1, working: 0, stalled: 0, needsYou: 0 } } : {}) }));
+    population.push(createSessionListRenderableSessionFixture({ id: 'measured-child',
+      metadata: { path: '/project' }, manager: { sessionId: 'measured-bot-0' } }));
+    population.push(...Array.from({ length: 983 }, (_, index) =>
+      createSessionListRenderableSessionFixture({ id: perfFixtureId(4, 'session', index), metadata: { path: '/project' } })));
+    storage.getState().applyLocalSettings({ collapsedGroupKeysV1: {} });
+    storage.getState().applyServerScopedSessionListRows(serverId, population, { source: 'ordinary', mode: 'replace' });
+    const homeKey = resolveServerProfileScopeIdForIdentifier(serverId);
+    let rowMapEnumerations = 0;
+    let metadataReads = 0;
+    const originalRows = storage.getState().sessionListRowsByServerId[homeKey]!;
+    const countedRows = new Proxy(Object.fromEntries(Object.entries(originalRows).map(([key, row]) => [key,
+      new Proxy(row, { get(target, property, receiver) {
+        if (property === 'metadata') metadataReads += 1;
+        return Reflect.get(target, property, receiver);
+      } }),
+    ])), { ownKeys(target) { rowMapEnumerations += 1; return Reflect.ownKeys(target); } });
+    storage.setState(state => ({ sessionListRowsByServerId: { ...state.sessionListRowsByServerId, [homeKey]: countedRows } }));
+    let commits = 0;
+    const { BotsPopoverContent } = await import('./BotsPopoverContent');
+    const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+      <React.Profiler id="measured-bots-roster" onRender={() => { commits += 1; }}>
+        <BotsPopoverContent close={() => {}} maxHeight={520} />
+      </React.Profiler>
+    </InjectedAuthProvider>);
+    await flushHookEffects({ cycles: 3 });
+    await pressNativeBoundary(screen, 'session-row-reports-disclosure:measured-bot-0');
+    await flushHookEffects({ cycles: 3 });
+    expect(screen.findByTestId('session-list-item-measured-child')).not.toBeNull();
+    const mountedRows = population.filter(row => screen.findByTestId(`session-list-item-${row.id}`) !== null).length;
+    rowMapEnumerations = 0;
+    metadataReads = 0;
+    commits = 0;
+    // Isolate this synchronous arrival batch from valid age-clock and bootstrap arrivals.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+    onTestFinished(() => { vi.useRealTimers(); });
+    let notifications = 0;
+    const stopCountingNotifications = storage.subscribe(() => { notifications += 1; });
+    const beforeSettings = storage.getState();
+    try {
+      act(() => {
+        for (let index = 0; index < 10; index += 1) {
+          storage.getState().applySettingsLocal({ wrapLinesInDiffs: index % 2 === 0 });
+        }
+      });
+    } finally {
+      stopCountingNotifications();
+      vi.useRealTimers();
+    }
+    expect(storage.getState().sessions).toBe(beforeSettings.sessions);
+    expect(storage.getState().sessionListRowsByServerId).toBe(beforeSettings.sessionListRowsByServerId);
+    const unrelated = { notifications, commits, rowMapEnumerations, metadataReads };
+    commits = 0;
+    const updated = population.map(row => row.id === 'measured-bot-0'
+      ? { ...row, updatedAt: now + 1, metadata: { ...row.metadata!, name: 'Measured Bot updated' } } : row);
+    await act(async () => {
+      storage.getState().applyServerScopedSessionListRows(serverId, updated, { source: 'ordinary', mode: 'replace' });
+    });
+    await flushHookEffects({ cycles: 3 });
+    expect(screen.getTextContent()).toContain('Measured Bot updated');
+    const ownBotCommits = commits;
+    await act(async () => {
+      storage.getState().applyServerScopedSessionListRows(serverId, updated.map(row => row.id === 'measured-child'
+        ? { ...row, manager: null, seq: row.seq + 1, updatedAt: now + 2 } : row), { source: 'ordinary', mode: 'replace' });
+    });
+    expect(screen.findByTestId('session-list-item-measured-child')).toBeNull();
+    await act(async () => {
+      storage.getState().applyServerScopedSessionListRows(serverId, updated.map(row => row.id === 'measured-child'
+        ? { ...row, seq: row.seq + 2, updatedAt: now + 3 } : row), { source: 'ordinary', mode: 'replace' });
+    });
+    expect(screen.findByTestId('session-list-item-measured-child')).not.toBeNull();
+    await screen.unmount();
+    const { createBotsSummaryReader } = await import('./botsSummary');
+    const readSummary = createBotsSummaryReader([homeKey]);
+    const closedRows = { ...storage.getState().sessionListRowsByServerId, [homeKey]: countedRows };
+    const summary = readSummary(closedRows);
+    rowMapEnumerations = 0;
+    metadataReads = 0;
+    for (let index = 0; index < 10; index += 1) expect(readSummary({ ...closedRows })).toBe(summary);
+    const closed = { rowMapEnumerations, metadataReads };
+    expect(unrelated.notifications).toBe(10);
+    expect(unrelated.rowMapEnumerations).toBe(0);
   });
 
   it('orders Bots needs-you, then working, then most recent, and says nothing about an idle Bot beyond its age', async () => {

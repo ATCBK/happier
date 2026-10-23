@@ -215,16 +215,25 @@ export function BotsPopoverContent(
       botRows: order.map(({ index }) => listedBotRows[index]!),
     };
   }, [listedBotItems, listedBotRows]);
-  const descendants = storage(useShallow(state => {
-    const records: Record<string, Session> = {};
-    for (const item of botItems) {
-      if (collapsed[buildSessionListIndexNodeId(item)] !== false) continue;
-      for (const session of selectSessionReportSubtree(state.sessions, item.sessionId, item.serverId ?? null, state.sessionListRowsByServerId)) {
-        records[buildSessionListIndexNodeId({ type: 'session', serverId: item.serverId, sessionId: session.id })] = session;
+  const selectDescendants = React.useMemo(() => {
+    let previous: Pick<ReturnType<typeof storage.getState>, 'sessions' | 'sessionListRowsByServerId'> | null = null;
+    let records: Record<string, Session> = {};
+    return (state: ReturnType<typeof storage.getState>) => {
+      // Store notifications also carry unrelated settings and transcript updates. Only
+      // relationship inputs can change these rows; useShallow alone skips renders, not scans.
+      if (previous?.sessions === state.sessions && previous.sessionListRowsByServerId === state.sessionListRowsByServerId) return records;
+      previous = { sessions: state.sessions, sessionListRowsByServerId: state.sessionListRowsByServerId };
+      records = {};
+      for (const item of botItems) {
+        if (collapsed[buildSessionListIndexNodeId(item)] !== false) continue;
+        for (const session of selectSessionReportSubtree(state.sessions, item.sessionId, item.serverId ?? null, state.sessionListRowsByServerId)) {
+          records[buildSessionListIndexNodeId({ type: 'session', serverId: item.serverId, sessionId: session.id })] = session;
+        }
       }
-    }
-    return records;
-  }));
+      return records;
+    };
+  }, [botItems, collapsed]);
+  const descendants = storage(useShallow(selectDescendants));
   const items = React.useMemo(() => {
     const byHome = new Map<string, Map<string, SessionIndexItem>>();
     const records = new Map<string, SessionListRenderableSession>();
