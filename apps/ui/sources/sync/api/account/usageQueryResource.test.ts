@@ -292,9 +292,14 @@ describe('usage query captured Resource adapter', () => {
       expect(slice().coach?.sessionCoverage).toEqual(slice().howYouWork?.sessionCoverage);
       if (scenario === 'recovery') {
         expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'partial' });
-        expect(slice().howYouWork?.intervals).toBeNull();
+        expect(slice().howYouWork).toMatchObject({ detailStatus: 'partial',
+          intervals: { agentTimeMs: 600 }, runLengths: { coverage: 'partial', sampleCount: 2,
+            byAgent: [{ agentId: 'codex', durationsMs: [300, 300] }] } });
+        expect(slice().howYouWork?.intervals?.lanes.map(lane => lane.workId).sort()).toEqual([
+          '["healthy-second","healthy-second-turn"]', '["healthy-turns","healthy-turns-turn"]',
+        ]);
         expect(observed.some(row => row.sources.some(source => source.source === 'how_you_work:sessions' && source.status === 'available'))).toBe(false);
-        expect(observed.every(row => row.howYouWork?.intervals == null)).toBe(true);
+        expect(observed.filter(row => row.howYouWork?.intervals).every(row => row.howYouWork?.detailStatus === 'partial')).toBe(true);
       } else {
         expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'available' });
         expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(600);
@@ -2459,6 +2464,95 @@ describe('usage query captured Resource adapter', () => {
     }
   });
 
+  it.each(['refused', 'unreadable-session', 'unreadable-transcript'] as const)('settles partial reading with one readable and one %s Session', async outcome => {
+    const transcript = createDeferred<Response>();
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/unreadable' && outcome === 'refused') return Response.json({ error: 'denied' }, { status: 403 });
+      if (request.path === '/v2/sessions/unreadable' && outcome === 'unreadable-session') return Response.json({ error: 'unavailable' }, { status: 503 });
+      const id = /^\/v2\/sessions\/(readable|unreadable)$/.exec(request.path)?.[1];
+      if (id) return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id,
+        createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) });
+      const turnsId = /^\/v1\/sessions\/(readable|unreadable)\/turns$/.exec(request.path)?.[1];
+      if (turnsId) return Response.json({ v: 1, sessionId: turnsId, updatedAt: 900,
+        turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 }] });
+      if (request.path === '/v1/sessions/readable/messages') return transcript.promise;
+      if (request.path === '/v1/sessions/unreadable/messages') return Response.json({ messages: [{
+        id: 'unopened', seq: 1, createdAt: 200, content: { t: 'encrypted', c: 'unavailable' },
+      }], hasMore: false });
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: Object.fromEntries(
+      ['readable', 'unreadable'].map(id => [id, createSessionFixture({ id, seq: 1,
+        serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' })]),
+    ) });
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query',
+      input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const release = entry.subscribe(() => {}, false);
+    const slice = () => entry.getSnapshot().value ? decodeUsageQueryResource(entry.getSnapshot().value!).results[0] : undefined;
+    const reading = entry.refresh();
+    try {
+      await expect.poll(() => sessionRequests().some(request => request.path === '/v1/sessions/readable/messages')).toBe(true);
+      expect(slice()?.pending).toBe(true);
+      expect(slice()?.sources).toContainEqual(expect.objectContaining({ source: 'how_you_work', status: 'pending' }));
+      transcript.resolve(Response.json({ messages: [], hasMore: false }));
+      await reading;
+      expect(entry.getSnapshot().pending).toBe('idle');
+      expect(slice()?.pending).toBe(false);
+      expect(slice()?.howYouWork?.detailStatus).toBe('partial');
+      expect(slice()?.howYouWork?.sessionCoverage).toEqual({ selected: 2, admitted: outcome === 'unreadable-transcript' ? 2 : 1 });
+      expect(slice()?.howYouWork?.intervals?.agentTimeMs).toBe(outcome === 'unreadable-transcript' ? 600 : 300);
+      expect(slice()?.sources).toContainEqual(expect.objectContaining({ source: 'how_you_work', status: 'partial' }));
+      expect(slice()?.sources).toContainEqual({ source: 'how_you_work:transcripts', status: 'partial' });
+      expect(slice()?.sources.some(source => source.source.startsWith('how_you_work') && source.status === 'pending')).toBe(false);
+    } finally { transcript.resolve(Response.json({ messages: [], hasMore: false })); await reading; release(); }
+  });
+
+  it.each(['summary', 'transcript'] as const)('settles a cold readable subset when a sibling Session admission is superseded during %s', async phase => {
+    const changing = createDeferred<void>();
+    const captured = await context(async request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      const id = /^\/v2\/sessions\/(healthy|changing)$/.exec(request.path)?.[1];
+      if (id) {
+        if (id === 'changing' && phase === 'summary') await changing.promise;
+        return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id,
+          createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) });
+      }
+      const turnsId = /^\/v1\/sessions\/(healthy|changing)\/turns$/.exec(request.path)?.[1];
+      if (turnsId) return Response.json({ v: 1, sessionId: turnsId, updatedAt: 900, turns: [
+        { turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 },
+      ] });
+      if (request.path.endsWith('/messages')) {
+        if (request.path === '/v1/sessions/changing/messages' && phase === 'transcript') await changing.promise;
+        return Response.json({ messages: [], hasMore: false });
+      }
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: Object.fromEntries(
+      ['healthy', 'changing'].map(id => [id, createSessionFixture({ id, seq: 1,
+        serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' })]),
+    ) });
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false });
+    const reading = readUiUsageQueryBatch(captured, { queries: [query] });
+    try {
+      await expect.poll(() => sessionRequests().some(request => request.path === (phase === 'summary'
+        ? '/v2/sessions/changing' : '/v1/sessions/changing/messages'))).toBe(true);
+      storage.setState({ sessions: { ...storage.getState().sessions,
+        changing: { ...storage.getState().sessions.changing!, seq: 2 } } });
+      changing.resolve();
+      const result = (await reading).results[0]!;
+      expect(result.pending).toBe(false);
+      expect(result.howYouWork).toMatchObject({ detailStatus: 'partial',
+        sessionCoverage: { selected: 2, admitted: phase === 'summary' ? 1 : 2 },
+        intervals: { agentTimeMs: phase === 'summary' ? 300 : 600 }, runLengths: { sampleCount: phase === 'summary' ? 1 : 2 } });
+      expect(result.sources.some(source => source.source.startsWith('how_you_work') && source.status === 'pending')).toBe(false);
+      expect(result.sources).toContainEqual(expect.objectContaining({ source: 'how_you_work', errorCode: 'usage_session_evidence_changed' }));
+      expect(sessionRequests().some(request => request.path === '/v1/sessions/healthy/messages')).toBe(true);
+      expect(sessionRequests().some(request => request.path === '/v1/sessions/changing/messages')).toBe(phase === 'transcript');
+    } finally { changing.resolve(); await reading; }
+  });
+
   it('settles a summary slice while a sibling transcript in the same batch is held or fails', async () => {
     const transcript = createDeferred<Response>();
     const captured = await context(request => {
@@ -2539,7 +2633,7 @@ describe('usage query captured Resource adapter', () => {
     } finally { transcript.resolve(Response.json({ messages: [], hasMore: false })); await summaryRead; releaseDetail?.(); release(); }
   });
 
-  it('publishes admitted intervals while shared transcript detail is held, and withdraws them on refusal', async () => {
+  it('publishes admitted intervals while shared transcript detail is held, and keeps the readable subset partial on refusal', async () => {
     const secondAdmission = createDeferred<void>();
     const transcript = createDeferred<Response>();
     let holdTranscript = true;
@@ -2599,8 +2693,13 @@ describe('usage query captured Resource adapter', () => {
       expect(sessionRequests().filter(request => request.path === '/v1/sessions/first/messages')).toHaveLength(1);
       transcript.resolve(Response.json({ error: 'denied' }, { status: 403 }));
       await Promise.all([refreshing, pinnedRefresh]);
-      expect(slice(broad)?.howYouWork?.intervals).toBeNull();
+      expect(slice(broad)?.howYouWork).toMatchObject({ detailStatus: 'partial',
+        sessionCoverage: { selected: 2, admitted: 1 }, intervals: { agentTimeMs: 600,
+          lanes: [{ workId: '["second","turn"]' }] },
+        runLengths: { coverage: 'partial', sampleCount: 1, byAgent: [{ agentId: 'codex', durationsMs: [600] }] } });
+      expect(slice(broad)?.sources).toContainEqual({ source: 'how_you_work:sessions', status: 'partial' });
       expect(slice(pinned)?.howYouWork?.intervals).toBeNull();
+      expect(slice(pinned)?.howYouWork?.runLengths).toBeNull();
       expect(slice(broad)?.sources.some(source => source.source.startsWith('how_you_work') && source.status === 'pending')).toBe(false);
       holdTranscript = false;
       await broad.refresh();
@@ -2947,7 +3046,7 @@ describe('usage query captured Resource adapter', () => {
     expect(JSON.stringify(result)).not.toContain('never-export-this');
   });
 
-  it.each([403, 503])('does not publish a partial Agent-time total after one selected Session fails admission (%s)', async status => {
+  it.each([403, 503])('keeps admitted Agent-time partial after refusal and retains stale facts after ordinary failure (%s)', async status => {
     let failing = false;
     const captured = await context(request => {
       if (request.path === '/v2/usage/query') return Response.json(value);
@@ -2985,7 +3084,11 @@ describe('usage query captured Resource adapter', () => {
         expect.objectContaining({ source: 'how_you_work', status: 'stale', errorCode: 'usage_session_evidence_read_failed' }),
       ]));
     } else {
-      expect(replacement.results[0]?.howYouWork?.intervals, 'a surviving Session is not the full selected total').toBeNull();
+      expect(replacement.results[0]?.howYouWork).toMatchObject({ detailStatus: 'partial',
+        sessionCoverage: { selected: 2, admitted: 1 }, intervals: { agentTimeMs: 600,
+          lanes: [{ workId: '["other","turn"]' }] },
+        runLengths: { coverage: 'partial', sampleCount: 1, byAgent: [{ agentId: 'codex', durationsMs: [600] }] } });
+      expect(replacement.results[0]?.sources).toContainEqual({ source: 'how_you_work:sessions', status: 'partial' });
     }
     failing = false;
     const recovered = await readUiUsageQueryBatch(captured, input, undefined, replacement);
@@ -3040,11 +3143,11 @@ describe('usage query captured Resource adapter', () => {
       period: { startMs: 0, endMs: 1000 }, session: 'shared', metric: 'cost',
     })] }) });
     const countReads = (path: string) => sessionRequests().filter(request => request.path === path).length;
-    const observedAgentTimes: number[] = [];
+    const observedAgentTimes: (number | null)[] = [];
     const observeBroadIntervals = () => {
       const content = broad.getSnapshot().value;
       const intervals = content && decodeUsageQueryResource(content).results[0]?.howYouWork?.intervals;
-      if (intervals) observedAgentTimes.push(intervals.agentTimeMs);
+      if (content) observedAgentTimes.push(intervals?.agentTimeMs ?? null);
     };
     const ready = async (entry: typeof broad) => {
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
@@ -3122,13 +3225,15 @@ describe('usage query captured Resource adapter', () => {
       // incomplete total from the surviving Session in this window.
       await flushHookEffects({ cycles: 20 });
       expect(observedAgentTimes).not.toContain(500);
+      expect(observedAgentTimes, 'remounting the same query must retain witnessed intervals while newer admission is pending').not.toContain(null);
       detailGate.resolve();
       await staleRefresh;
       expect((await ready(pinned)).howYouWork?.permissions?.decisionLatencyMs).toBe(500);
       expect((await ready(broad)).howYouWork?.intervals?.agentTimeMs).toBe(800);
       // Losing one in-flight admission is not a complete 500ms Account total.
-      // The aggregate may withdraw while re-admitting, never publish that subset.
+      // Re-admission retains the complete witnessed total, never that subset or missing data.
       expect(observedAgentTimes).not.toContain(500);
+      expect(observedAgentTimes).not.toContain(null);
 
       detailGate = createDeferred<void>();
       sharedSeq = 5;

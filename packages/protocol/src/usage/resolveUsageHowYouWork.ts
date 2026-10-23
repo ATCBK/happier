@@ -208,7 +208,14 @@ export function resolveUsageHowYouWork(input: Readonly<{
             });
         }
     }
-    if (input.includeAgentCalendar !== false) result.agentCalendar = projectUsageAgentCalendar({
+    // Accounting can advance a rolling window before private evidence answers.
+    // Keep that evidence's calendar at its witnessed window, like its intervals
+    // and Coach projection, rather than combining it with a different period
+    // and turning admitted busy facts into unavailable values.
+    const retainedCalendar = retained?.agentCalendar && intervals
+        && (intervals.period.startMs !== input.period.startMs || intervals.period.endMs !== input.period.endMs)
+        ? retained.agentCalendar : undefined;
+    if (input.includeAgentCalendar !== false) result.agentCalendar = retainedCalendar ?? projectUsageAgentCalendar({
         period: input.period, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes, accounting: input.accounting,
         accountingCalendar: input.accountingCalendar,
         intervals, detailStatus: result.detailStatus, steering: result.steering, nightHours, costMode: input.costMode,

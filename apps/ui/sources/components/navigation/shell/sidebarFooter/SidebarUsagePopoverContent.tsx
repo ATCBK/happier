@@ -124,7 +124,7 @@ const NO_FACTS: SidebarUsageAccountFacts = Object.freeze({ accountsNeedingSignIn
  * The rail's Usage popover (lab `csvc` U1): one component whether the pointer rests on the rail icon
  * or a click pins it. Every connected account with what is left in each window and when it comes
  * back, a signed-out account with its fix, and the keys that report no limits. It reads the one usage
- * owner (`useUsageSummary`: once per launch, else this device's last-known value with its "as of") and
+ * owner (`useUsageSummary`: retained content with visible-demand revalidation and its "as of") and
  * mounts only while open.
  */
 export function SidebarUsagePopoverContent(props: SidebarFooterPopoverContentProps) {

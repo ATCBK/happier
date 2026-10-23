@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import {
   UsageAgentRiver, UsageConstellation, UsageCrew, UsageDayInAgents, UsageDaylight, UsageOrbit, UsagePlanetPortrait, UsageRunLength,
-  UsagePersonalRecords, UsageScore, UsageShipped, UsageSkyOfDays, UsageSteeringTide, UsageWeekTide,
+  UsageChartGhost, UsagePersonalRecords, UsageScore, UsageShipped, UsageSkyOfDays, UsageSteeringTide, UsageWeekTide, type UsageChartGhostShape,
 } from '@happier-dev/plugin-ui/presentation';
 import { t } from '@/text';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
@@ -27,11 +27,24 @@ const HOW_YOU_WORK = ['how_you_work'] as const;
 const LEVEL_NAMES = () => [t('usage.board.charts.levelNone'), t('usage.board.charts.levelQuiet'), t('usage.board.charts.levelSteady'),
   t('usage.board.charts.levelBusy'), t('usage.board.charts.levelBusiest')];
 
-/** Reading, then "needs data" with its reason; one cause, one line. */
-export function UsageChartPending(props: Readonly<{ slice: UsageBodyProps['slice']; testID: string; title: string; reason: string }>) {
-  if (isUsageReadOutstanding(props.slice, [...HOW_YOU_WORK, 'accounting']))
+/**
+ * Reading, then "needs data" with its reason; one cause, one line — over the chart's empty frame when it has one.
+ * While activity is still being read the chart says it is reading, even when accounting has already answered.
+ */
+export function UsageChartPending(props: Readonly<{ slice: UsageBodyProps['slice']; testID: string; title: string; reason: string; ghost?: React.ReactNode }>) {
+  if (isUsageReadOutstanding(props.slice, HOW_YOU_WORK) || isUsageReadOutstanding(props.slice, [...HOW_YOU_WORK, 'accounting']))
     return <UsageBodyReading testID={`${props.testID}.loading`} waitingOn={{ slice: props.slice, sources: [...HOW_YOU_WORK] }} />;
-  return <UsageBodyInsufficient testID={`${props.testID}.needsData`} title={props.title} reason={props.reason} />;
+  const state = <UsageBodyInsufficient testID={`${props.testID}.needsData`} title={props.title} reason={props.reason} replacesContent={!props.ghost} />;
+  return props.ghost ? <View style={{ gap: 12 }}>{state}{props.ghost}</View> : state;
+}
+
+/** The chart's frame while its measure has nothing to draw; the clock axis is the host's. */
+function useChartGhost(serverId: string | null) {
+  const host = useUsageChartHost(serverId);
+  return React.useCallback((shape: UsageChartGhostShape, testID: string, extra?: Readonly<{ count?: number; rows?: readonly string[]; ticks?: readonly string[] }>) =>
+    <UsageChartGhost theme={host.theme} paint={host.paint} shape={shape} testID={`${testID}.ghost`}
+      ticks={extra?.ticks ?? [0, 6, 12, 18, 24].map(usageChartClock)} {...(extra?.rows ? { rows: extra.rows } : {})} {...(extra?.count ? { count: extra.count } : {})} />,
+  [host.theme, host.paint]);
 }
 
 function UsageChartFooter(props: Readonly<{ slice: UsageBodyProps['slice']; testID: string; onRetry: () => void }>) {
@@ -71,10 +84,12 @@ export function UsageSkyStyleBody(props: UsageChartStyleBodyProps) {
     return [...ids].map(host.agent);
   }, [model, host.agent]);
   const metricName = usageChartMetricName(metric);
+  const ghost = useChartGhost(props.serverId);
   useStyleCaption(t('usage.board.charts.inputSky'), metricName);
   if (!model) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.needsDataTitle')} reason={t('usage.board.charts.needsCalendarReason')} />;
   if (calendar && (isMeasureUnrecorded(calendar.coverage, metric) || !model.days.some((day) => day.state !== 'unknown')))
-    return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.metricNotRecordedTitle', { metric: metricName })} reason={t('usage.board.charts.metricNotRecordedHint')} />;
+    return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.metricNotRecordedTitle', { metric: metricName })} reason={t('usage.board.charts.metricNotRecordedHint')}
+      ghost={ghost('sky', props.testID, { count: model.days.length, ticks: [] })} />;
   return <View style={{ gap: 12 }} testID={`${props.testID}.sky`}>
     <UsageSkyOfDays theme={host.theme} paint={host.paint} agents={agents} model={model} testID={`${props.testID}.skyChart`}
       label={t('usage.board.charts.skyA11y', { metric: metricName, count: model.days.length })}
@@ -88,8 +103,10 @@ export function UsageWeekTideStyleBody(props: UsageChartStyleBodyProps) {
   const calendar = useCalendar(props);
   const metric = resolveUsageChartMetric(props.query.metric, 'busy');
   const model = React.useMemo(() => calendar ? projectUsageWeekHours(calendar, metric) : null, [calendar, metric]);
+  const ghost = useChartGhost(props.serverId);
   useStyleCaption(t('usage.board.charts.inputWeekTide'), usageChartMetricName(metric));
-  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, metric))) return <UsageChartPending slice={props.slice} testID={props.testID} title={calendar && isMeasureUnrecorded(calendar.coverage, metric) ? t('usage.board.charts.metricNotRecordedTitle', { metric: usageChartMetricName(metric) }) : t('usage.board.charts.needsDataTitle')}
+  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, metric))) return <UsageChartPending slice={props.slice} testID={props.testID}
+    ghost={calendar ? ghost('tide', props.testID, { rows: usageChartWeekdays() }) : undefined} title={calendar && isMeasureUnrecorded(calendar.coverage, metric) ? t('usage.board.charts.metricNotRecordedTitle', { metric: usageChartMetricName(metric) }) : t('usage.board.charts.needsDataTitle')}
     reason={!calendar ? t('usage.board.charts.needsCalendarReason') : isMeasureUnrecorded(calendar.coverage, metric)
       ? t('usage.board.charts.metricNotRecordedHint') : t('usage.board.charts.metricNotByHourReason', { metric: usageChartMetricName(metric) })} />;
   const weekdays = usageChartWeekdays();
@@ -106,8 +123,10 @@ export function UsageDaylightStyleBody(props: UsageChartStyleBodyProps) {
   const calendar = useCalendar(props);
   const metric = resolveUsageChartMetric(props.query.metric, 'busy');
   const model = React.useMemo(() => calendar ? projectUsageDaylight(calendar, metric, props.slice) : null, [calendar, metric, props.slice]);
+  const ghost = useChartGhost(props.serverId);
   useStyleCaption(t('usage.board.charts.inputDaylight'), usageChartMetricName(metric));
-  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, metric))) return <UsageChartPending slice={props.slice} testID={props.testID} title={calendar && isMeasureUnrecorded(calendar.coverage, metric) ? t('usage.board.charts.metricNotRecordedTitle', { metric: usageChartMetricName(metric) }) : t('usage.board.charts.needsDataTitle')}
+  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, metric))) return <UsageChartPending slice={props.slice} testID={props.testID}
+    ghost={calendar ? ghost('daylight', props.testID) : undefined} title={calendar && isMeasureUnrecorded(calendar.coverage, metric) ? t('usage.board.charts.metricNotRecordedTitle', { metric: usageChartMetricName(metric) }) : t('usage.board.charts.needsDataTitle')}
     reason={!calendar ? t('usage.board.charts.needsCalendarReason') : isMeasureUnrecorded(calendar.coverage, metric)
       ? t('usage.board.charts.metricNotRecordedHint') : t('usage.board.charts.metricNotByHourReason', { metric: usageChartMetricName(metric) })} />;
   const window = (from: number, to: number) => `${usageChartClock(from)}–${usageChartClock(to)}`;
@@ -130,8 +149,10 @@ export function UsageDayStyleBody(props: UsageChartStyleBodyProps & Readonly<{ s
   const bucket = React.useMemo(() => calendar ? resolveUsageChartDay(calendar, props.presentation?.day) : null, [calendar, props.presentation?.day]);
   const model = React.useMemo(() => bucket ? projectUsageDayModel(props.slice, bucket) : null, [bucket, props.slice]);
   const agents = React.useMemo(() => (model?.lanes ?? []).flatMap(lane => lane.agentId === null ? [] : [host.agent(lane.agentId)]), [model, host.agent]);
+  const ghost = useChartGhost(props.serverId);
   useStyleCaption(t('usage.board.charts.dayTitle'), model ? usageChartDateLabels(props.query).day(model.date) : null);
-  if (!model || model.lanes.length === 0) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.dayEmptyTitle')} reason={t('usage.board.charts.dayEmptyReason')} />;
+  if (!model || model.lanes.length === 0) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.dayEmptyTitle')} reason={t('usage.board.charts.dayEmptyReason')}
+    ghost={calendar ? ghost('lanes', props.testID) : undefined} />;
   const dates = usageChartDateLabels(props.query);
   return <View style={{ gap: 12 }} testID={`${props.testID}.day`}>
     <UsageDayInAgents theme={host.theme} paint={host.paint} agents={agents} model={model} style={props.style} testID={`${props.testID}.dayChart`}
@@ -314,7 +335,9 @@ export function UsageRunLengthBody(props: UsageChartStyleBodyProps) {
   useWidgetFrameBodyCaption(t('usage.board.charts.runSubtitle'));
   const model = React.useMemo(() => projectUsageRunLengthModel(props.slice), [props.slice]);
   const agents = React.useMemo(() => (model?.rows ?? []).flatMap((row) => row.agentId ? [host.agent(row.agentId)] : []), [model, host.agent]);
-  if (!model) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.runEmptyTitle')} reason={t('usage.board.charts.runEmptyReason')} />;
+  const ghost = useChartGhost(props.serverId);
+  if (!model) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.runEmptyTitle')} reason={t('usage.board.charts.runEmptyReason')}
+    ghost={props.slice.howYouWork ? ghost('runs', props.testID, { ticks: [t('usage.board.charts.tickMinute'), t('usage.board.charts.tickTenMinutes'), t('usage.board.charts.tickHour'), t('usage.board.charts.tickFourHours')] }) : undefined} />;
   return <View style={{ gap: 12 }} testID={`${props.testID}.runLength`}>
     <UsageRunLength theme={host.theme} paint={host.paint} agents={agents} model={model} testID={`${props.testID}.runLengthChart`} label={t('usage.board.charts.runA11y')}
       labels={{ duration: formatUsageDuration, unknownAgent: t('usage.board.charts.unknownAgent'),

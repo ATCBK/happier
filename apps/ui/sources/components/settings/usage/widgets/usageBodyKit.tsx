@@ -619,12 +619,45 @@ function isUsagePageReadSource(source: string): boolean {
   return USAGE_PAGE_READ_SOURCES.has(usagePageReadFamily(source));
 }
 
-/** The page header's one "Couldn't read …" fact: every shared read that failed, named once for the page. */
-export function describeUsagePageFailedSources(slices: readonly Pick<UsageQueryResultSlice, 'sources'>[]): string | null {
-  const names = [...new Set(slices.flatMap(slice => slice.sources
+function readUsagePageFailedNames(slices: readonly Pick<UsageQueryResultSlice, 'sources'>[]): string[] {
+  return [...new Set(slices.flatMap(slice => slice.sources
     .filter(source => source.status === 'error' && isUsagePageReadSource(source.source))
     .map(source => usageSourceTitle(usagePageReadFamily(source.source)))))];
-  return names.length ? t('usage.board.page.coverageFailed', { sources: names.join(', ') }) : null;
+}
+
+/**
+ * The page header's one "Couldn't read …" fact: every shared read that failed, named once for the page. A read
+ * that settled with only some Sessions' evidence joins the same sentence, so "Showing what arrived" is said once.
+ */
+export function describeUsagePageFailedSources(slices: readonly Pick<UsageQueryResultSlice, 'sources' | 'howYouWork'>[]): string | null {
+  const names = readUsagePageFailedNames(slices);
+  if (!names.length) return null;
+  const witnessed = readUsagePageWitnessedNames(slices);
+  return witnessed.length
+    ? t('usage.board.page.coverageFailedWitnessed', { sources: names.join(', '), witnessed: witnessed.join(', ') })
+    : t('usage.board.page.coverageFailed', { sources: names.join(', ') });
+}
+
+/**
+ * The page header's one partial fact: a page read that settled with only some Sessions' evidence (the rest
+ * refused or unreadable) shows what it witnessed, said here once. Partial usage history is a different
+ * cause, carried by the Sources chooser's coverage detail.
+ */
+const USAGE_PAGE_WITNESSED_SOURCES: ReadonlySet<string> = new Set(['how_you_work']);
+
+function readUsagePageWitnessedNames(slices: readonly Pick<UsageQueryResultSlice, 'sources' | 'howYouWork'>[]): string[] {
+  return [...new Set(slices.flatMap(slice => slice.sources
+    // A quiet reread of a settled read keeps showing its witnessed subset, so its partial fact stays too.
+    .filter(source => USAGE_PAGE_WITNESSED_SOURCES.has(source.source) && (source.status === 'partial'
+      || source.status === 'pending' && source.asOfMs !== undefined && slice.howYouWork?.detailStatus === 'partial'))
+    .map(source => usageSourceTitle(source.source))))];
+}
+
+/** Said alone only when no page read failed; otherwise the failed fact carries it. */
+export function describeUsagePagePartialSources(slices: readonly Pick<UsageQueryResultSlice, 'sources' | 'howYouWork'>[]): string | null {
+  const names = readUsagePageWitnessedNames(slices);
+  if (!names.length || readUsagePageFailedNames(slices).length) return null;
+  return t('usage.board.page.coverageWitnessed', { sources: names.join(', ') });
 }
 
 export function readUsagePageAsOfMs(slices: readonly Pick<UsageQueryResultSlice, 'sources' | 'quota'>[]): number | null {

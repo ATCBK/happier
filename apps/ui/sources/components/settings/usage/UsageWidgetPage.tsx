@@ -63,7 +63,7 @@ import {
   useUsageWidgetBatchSlices,
   useUsageWidgetBatchInventorySlice,
 } from './widgets/usageWidgetBatch';
-import { describeUsagePageFailedSources, describeUsagePagePendingSources, readUsageCoverageGaps, readUsagePageAsOfMs } from './widgets/usageBodyKit';
+import { describeUsagePageFailedSources, describeUsagePagePartialSources, describeUsagePagePendingSources, readUsageCoverageGaps, readUsagePageAsOfMs } from './widgets/usageBodyKit';
 
 const PRESET_ICON: Readonly<Record<UsageWidgetPresetId, IconName>> = {
   overview: 'squares-four',
@@ -543,8 +543,11 @@ function UsagePageHeader(
     const pending = describeUsagePagePendingSources(props.slices);
     // A failed shared read is one cause too: said here once, and every body inherits it quietly.
     const failed = describeUsagePageFailedSources(props.slices);
+    // A read that settled with only some Sessions' evidence is one cause too; bodies show what it witnessed.
+    const partial = describeUsagePagePartialSources(props.slices);
     const reading = [
       ...(failed ? [{ key: 'failed', icon: 'warning' as const, text: failed, testID: 'usage-page.header.failed' }] : []),
+      ...(partial ? [{ key: 'partial', text: partial, testID: 'usage-page.header.partial' }] : []),
       ...(pending ? [{ key: 'reading', text: pending }] : []),
     ];
     const accounting = props.slices.find(

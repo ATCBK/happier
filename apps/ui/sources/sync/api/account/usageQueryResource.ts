@@ -468,13 +468,20 @@ type SessionInputLoadRequest = Readonly<{
 async function readSessionInputPhase(ids: readonly string[], readTranscript: boolean, readSession: SessionInputReader,
     loadBatch: (requests: readonly SessionInputLoadRequest[]) => Promise<void>,
     onValue: (id: string, value: SessionInputEvidence | null) => void,
-    onProgress?: (id: string, value: SessionInputEvidence) => void) {
+    onProgress?: (id: string, value: SessionInputEvidence) => void,
+    onSuperseded?: (id: string) => void) {
     const requests: SessionInputLoadRequest[] = [];
     const reads = ids.map(sessionId => readSession(sessionId, readTranscript,
         (assertCurrent, signal, retained, publish) => new Promise((resolve, reject) => {
             requests.push({ sessionId, assertCurrent, signal, retained, publish, resolve, reject });
         }), onProgress ? value => onProgress(sessionId, value) : undefined,
-    ).then(value => { onValue(sessionId, value); return [sessionId, value] as const; }));
+    ).then(value => { onValue(sessionId, value); return [sessionId, value] as const; }, error => {
+        if (!onSuperseded || !isSessionEvidenceSuperseded(error)) throw error;
+        // Content changed for this Session, not its independent siblings. Let
+        // every selected read finish before projecting the witnessed subset.
+        onSuperseded(sessionId);
+        return [sessionId, null] as const;
+    }));
     const loading = requests.length ? loadBatch(requests).catch(error => {
         for (const request of requests) request.reject(error);
     }) : Promise.resolve();
@@ -491,6 +498,10 @@ function canReuseSessionMessageEvidence(retained: SessionInputEvidence | undefin
 function sessionEvidenceReadError(error: unknown): unknown {
     return error instanceof Error && 'httpStatus' in error && typeof error.httpStatus === 'number' && error.httpStatus >= 500
         ? new RetryableServerResponseError(error.httpStatus, 'Session input evidence unavailable') : error;
+}
+
+function isSessionEvidenceSuperseded(error: unknown): boolean {
+    return error instanceof Error && 'code' in error && error.code === 'usage_session_evidence_changed';
 }
 
 async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries: readonly UsageQuery[],
@@ -596,6 +607,7 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
     };
     const selected = new Map<string, SessionInputEvidence | null>();
     const settled = new Set<string>();
+    const superseded = new Set<string>();
     let publishedPhase: string | undefined;
     const project = (): HowYouWorkEvidenceSnapshot[] => queries.map(query => {
         // Loaded Sessions supply demand, never an access/content fallback after
@@ -606,19 +618,17 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
             currentScope: query.session === null ? active?.scope ?? null : context.accountLifetime.scope,
             isCurrent: context.accountLifetime.isCurrent() && (query.session !== null || active?.isCurrent() === true), sessions, sessionEvidence,
             contributions: byQuery.get(getUsageQueryKey(query)) });
-        // A refused, failed or superseded Session read cannot turn the remaining
-        // lanes into a complete Agent-time total. Withdraw the aggregate until
-        // every selected Session is admitted; never retain withdrawn private facts.
-        const completeIntervals = (idsByQuery.get(getUsageQueryKey(query)) ?? []).every(id => {
-            const session = selected.get(id)?.session;
-            return session && session.access?.capabilities.readTranscript !== false
-                && isSessionContentReadable(readSessionContentAvailability(session));
-        });
+        // The projection admits only readable Sessions and marks their observed
+        // subset partial. A failed sibling must not erase those witnessed facts;
+        // sessionCoverage and the source status keep the missing population explicit.
         const sessionCoverage = { selected: (idsByQuery.get(getUsageQueryKey(query)) ?? []).length,
             admitted: sessions.filter(session => session.access?.capabilities.readTranscript !== false
                 && isSessionContentReadable(readSessionContentAvailability(session))).length };
-        return { query, asOfMs: Date.now(), sessions, sessionCoverage,
-            detail: completeIntervals ? detail : { ...detail, facts: undefined, closedTurns: undefined, activityAtMs: undefined } };
+        const refused = [...selected].some(([id, entry]) => !superseded.has(id) && (!entry
+            || entry.session.access?.capabilities.readTranscript === false
+            || !isSessionContentReadable(readSessionContentAvailability(entry.session))));
+        return { query, asOfMs: Date.now(), sessions, sessionCoverage, detail,
+            ...(superseded.size && !refused ? { errorCode: 'usage_session_evidence_changed' } : {}) };
     });
     const publish = () => {
         if (signal?.aborted || !context.accountLifetime.isCurrent()) return;
@@ -630,9 +640,11 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
         });
         const refused = [...selected.values()].some(value => value === null);
         const sources: UsageQuerySourceState[] = [
-            { source: 'how_you_work:sessions', status: !admitted ? 'pending' : readable ? 'available' : 'partial' },
+            { source: 'how_you_work:sessions', status: !admitted ? 'pending' : readable && !superseded.size ? 'available' : 'partial',
+                ...(superseded.size ? { errorCode: 'usage_session_evidence_changed' } : {}) },
             { source: 'how_you_work:transcripts', status: !readTranscript ? 'not_loaded' : settled.size < selectedIds.length ? 'pending'
-                : readable && selectedIds.every(id => selected.get(id)?.completeMessageCoverage) ? 'available' : 'partial' },
+                : readable && !superseded.size && selectedIds.every(id => selected.get(id)?.completeMessageCoverage) ? 'available' : 'partial',
+                ...(readTranscript && superseded.size ? { errorCode: 'usage_session_evidence_changed' } : {}) },
         ];
         // Publish the admitted interval phase before held transcript I/O, then
         // the completed input phase. Individual unfinished Session completions
@@ -655,6 +667,15 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
         // identical completion turns one refresh into N full-corpus passes.
         if (changed || settled.size === selectedIds.length) publish();
     };
+    const onSuperseded = (sessionId: string) => {
+        requireCurrent(context, signal);
+        superseded.add(sessionId);
+        // A later content version does not revoke a summary already admitted
+        // in this read. Keep its witnesses; only its unfinished detail is stale.
+        if (!selected.has(sessionId)) selected.set(sessionId, null);
+        settled.add(sessionId);
+        publish();
+    };
     const summaries = await readSessionInputPhase(selectedIds, false, readSession, async requests => {
         const ownerSignal = requests[0]!.signal;
         try {
@@ -675,7 +696,10 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
                         }
                         request.resolve(result?.ok ? { ...result.snapshot, detail: projectSessionUsageWorkEvidence(result.snapshot.session),
                             completeMessageCoverage: false } : null);
-                    } catch { request.resolve(null); }
+                    } catch (error) {
+                        if (isSessionEvidenceSuperseded(error)) request.reject(error);
+                        else request.resolve(null);
+                    }
                 }
             });
         } catch (error) {
@@ -685,11 +709,11 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
                 // Failed replacement is not a new empty admission. Let the
                 // Resource retain its admitted snapshot and expose the failure;
                 // cold reads and actual refusals still withdraw unavailable facts.
-                if (request.retained && isTransientConnectivityError(failure)) request.reject(failure);
+                if (isSessionEvidenceSuperseded(failure) || request.retained && isTransientConnectivityError(failure)) request.reject(failure);
                 else request.resolve(null);
             }
         }
-    }, (id, value) => onValue(id, value, !readTranscript || !value));
+    }, (id, value) => onValue(id, value, !readTranscript || !value), undefined, onSuperseded);
     // Transcript demand adds one messages-only transport batch to the same
     // admitted summaries. Held pages never hold interval publication.
     if (readTranscript) await readSessionInputPhase(selectedIds.filter(id => summaries.get(id)), true, readSession, async requests => {
@@ -720,7 +744,7 @@ async function readHowYouWorkEvidence(context: UsageQueryAccountContext, queries
             }));
             await pages;
         });
-    }, (id, value) => onValue(id, value, true), (id, value) => { selected.set(id, value); publish(); });
+    }, (id, value) => onValue(id, value, true), (id, value) => { selected.set(id, value); publish(); }, onSuperseded);
     requireCurrent(context, signal);
     return project();
 }
@@ -834,6 +858,13 @@ export async function readUiUsageQueryBatch(
     let quota: OpenedQuotaRead = readOpenedQuota(context, previous);
     let pools = readOpenedUsagePools(context, queries);
     const priorSlices = new Map(previous?.results.map(slice => [slice.key, slice]));
+    const admitEvidenceSnapshot = (snapshot: HowYouWorkEvidenceSnapshot): HowYouWorkReadSnapshot => {
+        const prior = priorSlices.get(getUsageQueryKey(snapshot.query))?.howYouWork;
+        // Supersession supplies no new access verdict. Preserve an admitted
+        // warm population; a cold read can still show its healthy siblings.
+        return snapshot.errorCode === 'usage_session_evidence_changed' && prior && prior.detailStatus !== 'unknown'
+            ? { query: snapshot.query, errorCode: snapshot.errorCode } : snapshot;
+    };
     let admittedPrevious = previous;
     // All effects share this read's lifetime; snapshots are published directly
     // into its entry, never cached or rerun just to advance independent sources.
@@ -976,16 +1007,16 @@ export async function readUiUsageQueryBatch(
                         if (!snapshots[0] && sameStrictJsonValue(howYouWorkSourcesByQuery.get(key), sources)) return;
                         howYouWorkSourcesByQuery.set(key, sources);
                         if (snapshots[0]) {
-                            howYouWorkByQuery.set(key, snapshots[0]);
+                            howYouWorkByQuery.set(key, admitEvidenceSnapshot(snapshots[0]));
                             howYouWork = [...howYouWorkByQuery.values()];
                         }
                         publish();
                     });
             } catch (error) {
                 requireCurrent(context, signal);
-                if (!isTransientConnectivityError(error)) throw error;
+                if (!isTransientConnectivityError(error) && !isSessionEvidenceSuperseded(error)) throw error;
                 const key = getUsageQueryKey(query);
-                const errorCode = 'usage_session_evidence_read_failed';
+                const errorCode = isSessionEvidenceSuperseded(error) ? 'usage_session_evidence_changed' : 'usage_session_evidence_read_failed';
                 // Keep any actual partial admission/refusal already published.
                 // Otherwise the shared aggregation owner retains the prior facts.
                 howYouWorkByQuery.set(key, { ...(howYouWorkByQuery.get(key) ?? { query }), errorCode });
@@ -998,13 +1029,14 @@ export async function readUiUsageQueryBatch(
             }
             // Binding advice and its catalog admission are one private-evidence
             // result. Unrelated quota/history reads must not hold them back.
-            if (snapshots[0]!.detail.coach?.detail?.mcpUsage?.length) {
+            const admittedSnapshot = admitEvidenceSnapshot(snapshots[0]!);
+            if (admittedSnapshot.detail?.coach?.detail?.mcpUsage?.length) {
                 mcpCatalogRead ??= import('./apiMcpServerCatalog').then(({ readMcpServerCatalog }) =>
                     readMcpServerCatalog(context.accountLifetime.scope, signal, () => requireCurrent(context, signal)));
                 mcpCatalog = await mcpCatalogRead;
                 requireCurrent(context, signal);
             }
-            howYouWorkByQuery.set(getUsageQueryKey(query), snapshots[0]!);
+            howYouWorkByQuery.set(getUsageQueryKey(query), admittedSnapshot);
             howYouWork = [...howYouWorkByQuery.values()];
             settledHowYouWorkQueries.add(getUsageQueryKey(query));
             publish();
@@ -1185,7 +1217,9 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                         entry.needsAdmission = true;
                     } else sessionInputs.delete(key);
                 }
-                if (error && typeof error === 'object' && 'code' in error && error.code === 'usage_session_evidence_changed') return null;
+                // A newer admission superseded this operation. It supplied no
+                // refusal: keep the Resource's witnessed facts until that read
+                // answers instead of publishing an incomplete population.
                 throw error;
             });
             return observe(entry);

@@ -99,8 +99,8 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.strictObject({
     slice.comparison.costFactTotals, projectUsageCostFactTotals(slice.comparison.accounting.costFacts ?? [])))) {
     context.addIssue({ code: 'custom', path: ['comparison', 'costFactTotals'], message: 'Comparison money totals must preserve their admitted accounting and source provenance' });
   }
-  // Retained private evidence can have an older read window during progression.
-  // Accounting comparisons and calendar facts belong to the witnessed A window.
+  // Retained private evidence and its calendar can have an older read window
+  // during progression. Accounting comparisons belong to the witnessed A window.
   const accountingPeriod = 'relative' in slice.shownQuery.period
     ? readBoundedAccountingPeriod(slice.accounting) ?? slice.coach?.period ?? slice.accounting?.coverage?.range
     : slice.shownQuery.period;
@@ -192,6 +192,16 @@ function retainUsageMembers<T extends object>(value: T, previous: T, reconciled:
     Object.prototype.hasOwnProperty.call(previous, key) && result[key] === previous[key]) ? previous : result;
 }
 
+// Admitted accounting is immutable. Independent quota/evidence publications
+// repeatedly reconcile the same response against its already accepted result;
+// do not walk the complete contribution history again for each publication.
+const accountingReferenceReconciliations = new WeakMap<UsageAnalyticsQueryResponse, {
+  previous: UsageAnalyticsQueryResponse; value: UsageAnalyticsQueryResponse;
+}>();
+const accountingSourceLocationProjections = new WeakMap<UsageAnalyticsQueryResponse, {
+  locations: UsagePageAggregationInput['sourceLocations']; value: UsageAnalyticsQueryResponse;
+}>();
+
 /** Reuse semantically unchanged validated slices from the caller's same-authority prior value. */
 export function retainUsageQueryResultReferences(current: UsageQueryBatchResult,
   previous: UsageQueryBatchResult | undefined, settled?: UsageQueryBatchResult): UsageQueryBatchResult {
@@ -200,13 +210,18 @@ export function retainUsageQueryResultReferences(current: UsageQueryBatchResult,
   const original = new Map(settled?.results.map(slice => [slice.key, slice]));
   const retainAccounting = (value: UsageAnalyticsQueryResponse | undefined, retained: UsageAnalyticsQueryResponse | undefined) => {
     if (!value || !retained || value === retained) return value;
+    const input = value;
+    const known = accountingReferenceReconciliations.get(input);
+    if (known && (known.previous === retained || known.value === retained)) return known.value;
     // New accounting facts do not replace unchanged tariffs. Keeping the
     // admitted catalog also lets prior/current UI projections share its model
     // dictionaries instead of retaining a full clone on every refresh.
     if (value.priceCatalog && retained.priceCatalog && value.priceCatalog !== retained.priceCatalog) {
       value = { ...value, priceCatalog: retainUsageMembers(value.priceCatalog, retained.priceCatalog) };
     }
-    return retainUsageMembers(value, retained, ['priceCatalog']);
+    const reconciled = retainUsageMembers(value, retained, ['priceCatalog']);
+    accountingReferenceReconciliations.set(input, { previous: retained, value: reconciled });
+    return reconciled;
   };
   const results = current.results.map(slice => {
     const retained = prior.get(slice.key);
@@ -460,14 +475,25 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
     asOfMs: snapshot.asOfMs ?? (snapshot.value ? resolveUsageAccountingAsOfMs(snapshot.value) : undefined),
   }]));
   const sourceLocations = new Map(input.sourceLocations?.map(location => [location.machineId, location.displayLocation]));
-  const projectSourceLocations = (value: UsageAnalyticsQueryResponse) => !value.coverage ? value : { ...value,
-    coverage: { ...value.coverage, sources: value.coverage.sources.map(candidate => {
+  const projectSourceLocations = (value: UsageAnalyticsQueryResponse) => {
+    const coverage = value.coverage;
+    if (!coverage) return value;
+    const known = accountingSourceLocationProjections.get(value);
+    if (known && sameStrictJsonValue(known.locations, input.sourceLocations)) return known.value;
+    const sources = coverage.sources.map(candidate => {
       // Facts were admitted by the A boundary. Only the authorized client label
       // can expire here; removing it does not require parsing those facts again.
-      const { displayLocation: _previous, ...source } = candidate as typeof candidate & { displayLocation?: string };
-      const displayLocation = source.machineId ? sourceLocations.get(source.machineId) : undefined;
+      const current = candidate as typeof candidate & { displayLocation?: string };
+      const displayLocation = candidate.machineId ? sourceLocations.get(candidate.machineId) : undefined;
+      if (current.displayLocation === displayLocation && (displayLocation !== undefined || !('displayLocation' in current))) return candidate;
+      const { displayLocation: _previous, ...source } = current;
       return { ...source, ...(displayLocation === undefined ? {} : { displayLocation }) };
-    }) } };
+    });
+    const projected = sources.every((source, index) => source === coverage.sources[index]) ? value
+      : { ...value, coverage: { ...coverage, sources } };
+    accountingSourceLocationProjections.set(value, { locations: input.sourceLocations, value: projected });
+    return projected;
+  };
   const projectPrices = (snapshot: UsageAccountingSourceSnapshot | undefined) => {
     if (!snapshot) return snapshot;
     const projected = projectUsageAccountingSnapshotPrices(snapshot, input.pricingOverrides, accounting.values());
@@ -612,7 +638,9 @@ export function resolveUsagePageAggregation(input: UsagePageAggregationInput): U
       contributions: snapshot.value.contributions, evidence: workEvidence, branchEvidence,
     });
     const mergedOutcomes = workProjection && endMs !== undefined && endMs >= startMs
-      && (retainWork || workSnapshot && ['available', 'partial', 'stale'].includes(workSnapshot.status))
+      // An allocation scaffold also exists before Work has ever been read.
+      // Only an observed summary can retain known counts through a reread.
+      && (retainWork && prior?.mergedOutcomes !== undefined || workSnapshot && ['available', 'partial', 'stale'].includes(workSnapshot.status))
       ? summarizeUsageMergedOutcomes({ work: workProjection, period: { startMs, endMs }, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes }) : undefined;
     const slice: UsageQueryResultSlice = {
       key, requestedQuery: query, shownQuery: query,

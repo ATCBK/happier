@@ -240,6 +240,31 @@ describe('resolveUsagePageAggregation', () => {
       expect(UsageQueryBatchResultSchema.safeParse(second).success).toBe(true);
     } finally { parse.mockRestore(); }
   });
+  it('reuses admitted accounting source-location projection across independent source publications', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeSessionEvidence: false,
+      includeWorkEvidence: false, includeActivity: false, includeModelTimeline: false });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, coverage: { status: 'partial', reasons: [],
+      missingDimensions: [], range: { startMs: 100, endMs: 200, complete: false }, ranked: [], sources: [
+        { source: 'native', path: 'native', status: 'partial', eventCount: 1 },
+        { source: 'runtime', path: 'runtime', status: 'available', machineId: 'machine', eventCount: 1 },
+      ] } });
+    const snapshots = [{ query, value, status: 'available' as const }];
+    const sourceLocations = [{ machineId: 'machine', displayLocation: 'Current machine' }];
+    const first = resolveUsagePageAggregation({ queries: [query], accounting: snapshots, sourceLocations });
+    expect(first.results[0]!.accounting!.coverage!.sources[1]).toHaveProperty('displayLocation', 'Current machine');
+    // The same admitted A value feeds several evidence/query publications. A
+    // previous slice must not be needed to avoid copying and comparing it again.
+    const next = resolveUsagePageAggregation({ queries: [query], accounting: snapshots,
+      sourceLocations: sourceLocations.map(row => ({ ...row })), quota: { status: 'pending' } });
+    expect(next.results[0]!.accounting).toBe(first.results[0]!.accounting);
+    const renamed = resolveUsagePageAggregation({ queries: [query], accounting: snapshots,
+      sourceLocations: [{ machineId: 'machine', displayLocation: 'Renamed machine' }] });
+    expect(renamed.results[0]!.accounting!.coverage!.sources[1]).toHaveProperty('displayLocation', 'Renamed machine');
+    const removed = resolveUsagePageAggregation({ queries: [query], accounting: snapshots });
+    expect(removed.results[0]!.accounting!.coverage!.sources.every(row => !('displayLocation' in row))).toBe(true);
+    expect(removed.results[0]!.accounting).not.toBe(renamed.results[0]!.accounting);
+    expect(UsageQueryBatchResultSchema.safeParse(next).success).toBe(true);
+  });
   it('reconciles changed accounting fields once and retains its unchanged contribution population', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeSessionEvidence: false, includeWorkEvidence: false });
     const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, contributions: Array.from({ length: 100 }, (_, index) => ({
@@ -263,6 +288,11 @@ describe('resolveUsagePageAggregation', () => {
     expect(result.results[0]!.accounting!.insights!.activeDays).toBe(2);
     expect(result.results[0]!.accounting!.contributions).toBe(previous.results[0]!.accounting!.contributions);
     expect(visits).toBeLessThanOrEqual(after.contributions!.length);
+    visits = 0;
+    const progress = retainUsageQueryResultReferences({ ...current,
+      results: current.results.map(slice => ({ ...slice, pending: true })) }, result);
+    expect(progress.results[0]!.accounting).toBe(result.results[0]!.accounting);
+    expect(visits, 'independent source progress must not revisit the already reconciled accounting population').toBe(0);
   });
   it('reuses snapshot pricing only for the same response, tariffs and cost basis', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
@@ -332,10 +362,10 @@ describe('resolveUsagePageAggregation', () => {
     expect(arrived.results[0]?.coach).toMatchObject({ asOfMs: nowMs, currentness: 'current' });
     expect(UsageQueryBatchResultSchema.safeParse(arrived).success).toBe(true);
   });
-  it('keeps relative accounting comparisons exact while older private Coach evidence is retained during refresh', () => {
+  it('keeps relative accounting comparisons exact while older private charts and Coach evidence are retained during refresh', () => {
     const nowMs = Date.UTC(2026, 9, 13, 12);
     const laterMs = nowMs + 797_526;
-    const query = normalizeUsageQuery({ period: { relative: '7days' } });
+    const query = normalizeUsageQuery({ period: { relative: '7days' }, includeActivity: true });
     const period = resolveUsageQueryPeriod(query, nowMs);
     const laterPeriod = resolveUsageQueryPeriod(query, laterMs);
     const observed = (range: typeof period) => UsageAnalyticsQueryResponseSchema.parse({ ...accounting,
@@ -343,7 +373,9 @@ describe('resolveUsagePageAggregation', () => {
     });
     const first = resolveUsagePageAggregation({ queries: [query], nowMs,
       accounting: [{ query, period, value: observed(period), status: 'available', asOfMs: nowMs }],
-      howYouWork: [{ query, asOfMs: nowMs, detail: { status: 'partial', facts: [] } }],
+      howYouWork: [{ query, asOfMs: nowMs, detail: { status: 'partial', facts: [
+        { workId: 'work', evidenceId: 'turn', agentId: 'codex', machineId: null, kind: 'busy', startMs: nowMs - 500, endMs: nowMs - 100 },
+      ] } }],
     });
     const refreshed = resolveUsagePageAggregation({ queries: [query], nowMs: laterMs, previous: first,
       accounting: [{ query, period: laterPeriod, value: observed(laterPeriod), status: 'available', asOfMs: laterMs }],
@@ -351,6 +383,8 @@ describe('resolveUsagePageAggregation', () => {
     });
     const slice = refreshed.results[0]!;
     expect(slice.coach).toMatchObject({ period, currentness: 'stale' });
+    expect(slice.howYouWork?.agentCalendar?.periodSummary.totals.busyMs).toBe(400);
+    expect(slice.howYouWork?.agentCalendar?.period).toEqual(period);
     expect(slice.accounting?.coverage?.range).toMatchObject(laterPeriod);
     expect(slice.comparison?.query).toEqual(resolveUsagePageAccountingRequests([query], laterMs)[1]);
     const parsed = UsageQueryBatchResultSchema.safeParse(refreshed);
@@ -365,6 +399,22 @@ describe('resolveUsagePageAggregation', () => {
     expect(failed.results[0]?.accounting?.coverage?.range).toMatchObject(period);
     expect(failed.results[0]?.comparison?.query).toEqual(first.results[0]?.comparison?.query);
     expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+    const refused = resolveUsagePageAggregation({ queries: [query], nowMs: laterMs, previous: refreshed,
+      accounting: [{ query, period: laterPeriod, value: observed(laterPeriod), status: 'available', asOfMs: laterMs }],
+      howYouWork: [{ query, asOfMs: laterMs, detail: { status: 'unknown' }, errorCode: 'permission_denied' }],
+    });
+    expect(refused.results[0]?.howYouWork?.agentCalendar?.periodSummary.totals.busyMs).toBeNull();
+    expect(refused.results[0]?.howYouWork?.agentCalendar?.period).toEqual(laterPeriod);
+    expect(UsageQueryBatchResultSchema.safeParse(refused).success).toBe(true);
+    const completed = resolveUsagePageAggregation({ queries: [query], nowMs: laterMs, previous: refreshed,
+      accounting: [{ query, period: laterPeriod, value: observed(laterPeriod), status: 'available', asOfMs: laterMs }],
+      howYouWork: [{ query, asOfMs: laterMs, detail: { status: 'partial', facts: [
+        { workId: 'work', evidenceId: 'turn', agentId: 'codex', machineId: null, kind: 'busy', startMs: laterMs - 1_000, endMs: laterMs },
+      ] } }],
+    });
+    expect(completed.results[0]?.howYouWork?.agentCalendar?.periodSummary.totals.busyMs).toBe(1_000);
+    expect(completed.results[0]?.howYouWork?.agentCalendar?.period).toEqual(laterPeriod);
+    expect(UsageQueryBatchResultSchema.safeParse(completed).success).toBe(true);
     const unboundedCoverage = resolveUsagePageAggregation({ queries: [query], nowMs: laterMs,
       accounting: [{ query, period: laterPeriod, value: observed({ startMs: laterPeriod.startMs }),
         status: 'available', asOfMs: laterMs }],
@@ -988,6 +1038,45 @@ describe('resolveUsagePageAggregation', () => {
       ...result.results[0]!.work, allocations: result.results[0]!.work!.allocations.map(row => ({ ...row, reason: 'missing_evidence' })),
     } }] }).success).toBe(false);
   });
+
+  it('does not promote an unread Work allocation into known-zero merged outcomes during rolling rereads', () => {
+    const query = normalizeUsageQuery({ population: 'public_eligible_personal', period: { relative: '90days' },
+      includeSessionEvidence: false, includeWorkEvidence: true });
+    const nowMs = Date.parse('2026-10-23T07:00:00Z');
+    const read = (previous: ReturnType<typeof resolveUsagePageAggregation> | undefined, nowMs: number,
+      status: 'pending' | 'error' | 'available') => {
+      const period = resolveUsageQueryPeriod(query, nowMs);
+      const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting,
+        contributions: [{ id: 'admitted-personal-request', observedAtMs: nowMs - 1_000, sessionId: 'session', turnId: 'turn',
+          agentId: 'codex', modelId: null, machineId: null, projectKey: null, workspaceId: null, source: 'runtime',
+          tokens, cost: accounting.totals.cost }],
+        coverage: { status: 'partial', reasons: ['incomplete_history'], missingDimensions: [], ranked: [], sources: [],
+          range: { ...period, complete: false } },
+      });
+      return resolveUsagePageAggregation({ queries: [query], previous, nowMs,
+        accounting: [{ query, period, value, status: 'available', asOfMs: nowMs }],
+        work: [{ query, status, ...(status === 'available' ? { evidence: [], branchEvidence: [] }
+          : status === 'error' ? { errorCode: 'work_evidence_failed' } : {}) }],
+      });
+    };
+    const cold = read(undefined, nowMs, 'error');
+    expect(cold.results[0]?.work?.allocations).toMatchObject([{ reason: 'missing_evidence', outcome: null }]);
+    expect(cold.results[0]?.mergedOutcomes).toBeUndefined();
+    for (const status of ['pending', 'error'] as const) {
+      const reread = read(cold, nowMs + 30_000, status);
+      expect(reread.results[0]?.mergedOutcomes).toBeUndefined();
+      expect(UsageQueryBatchResultSchema.safeParse(reread).success).toBe(true);
+    }
+    const observedEmpty = read(cold, nowMs + 30_000, 'available');
+    expect(observedEmpty.results[0]?.mergedOutcomes).toMatchObject({ linkedMergedCount: 0 });
+    const failedReplacement = read(observedEmpty, nowMs + 60_000, 'error');
+    expect(failedReplacement.results[0]?.sources).toContainEqual({ source: 'work', status: 'stale', errorCode: 'work_evidence_failed' });
+    expect(failedReplacement.results[0]?.mergedOutcomes).toMatchObject({
+      period: resolveUsageQueryPeriod(query, nowMs + 60_000), linkedMergedCount: 0,
+    });
+    expect(UsageQueryBatchResultSchema.safeParse(failedReplacement).success).toBe(true);
+  });
+
   it('settles admitted private detail independently of a pending sibling source', () => {
     const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 100 }, includeWorkEvidence: false });
     const sibling = normalizeUsageQuery({ ...query, agents: ['codex'] });

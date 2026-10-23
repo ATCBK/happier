@@ -9,6 +9,7 @@ import { PUBLIC_PROFILE_ASSET_LABELS, PUBLIC_PROFILE_LOCALE } from './publicProf
 /** Anonymous host wording for the shared bodies; only the already public view supplies its calendar. */
 export function publicProfileUsageLabels(view: PublicProfileViewV1): HappierPublicProfileUsageLabels {
     const count = (value: number) => formatTokenCountLong(value, PUBLIC_PROFILE_LOCALE);
+    const days = (value: number) => `${count(value)} ${value === 1 ? 'day' : 'days'}`;
     const duration = (ms: number) => formatUsageDuration(ms, {
         seconds: seconds => `${count(seconds)} s`, minutes: minutes => `${count(minutes)} min`,
         hours: (hours, minutes) => `${count(hours)} h ${count(minutes)} min`,
@@ -52,10 +53,11 @@ export function publicProfileUsageLabels(view: PublicProfileViewV1): HappierPubl
             day: value => date(value, { weekday: 'short', day: 'numeric', month: 'short' }),
             levels: { quiet: 'Quiet', steady: 'Steady', busy: 'Busy', busiest: 'Busiest' },
             streakBestOngoing: days => `${count(days)}-day streak · best this period, still going`,
-            streakBest: days => `Best · ${count(days)} days`, streakNow: days => `Now · ${count(days)} days`,
+            streakBest: value => `Best · ${days(value)}`, streakNow: value => `Now · ${days(value)}`,
             streakShort: (days, best) => `${count(days)}-day streak${best ? ' · best' : ''}`,
             key: { tie: 'Tie', notAttributed: 'Not attributed', noActivity: 'No activity', notRecorded: 'Not recorded', quieter: 'Quieter', busier: 'Busier' },
-            caption: 'Higher, larger and brighter marks stronger shared intensity. Faint lines join runs of five days or more; the soft band is the 7-day average.',
+            caption: ({ runs, band }) => `Higher, larger and brighter marks stronger shared intensity.${runs && band ? ' Faint lines join runs of five days or more; the soft band is the 7-day average.'
+                : runs ? ' Faint lines join runs of five days or more.' : band ? ' The soft band is the 7-day average.' : ''}`,
             values: { ...values, dateColumn: 'Day', valueColumn: 'Activity level', leaderColumn: 'Led by',
                 noActivity: 'No activity', notRecorded: 'Not recorded', tie: 'Tie', notAttributed: 'Not attributed' },
         },
@@ -87,7 +89,7 @@ export function publicProfileUsageLabels(view: PublicProfileViewV1): HappierPubl
                 formatSpan: (from, to) => `${formatUsageChartClock(from)}–${formatUsageChartClock(to)}` },
         },
         orbit: { percent: formatUsageSharePercent, unknown: names => `${names} · share unknown`, unknownAgent: 'Unknown agent' },
-        crew: { percent: formatUsageSharePercent, days: days => `${count(days)} days`, unknownAgent: 'Unknown agent' },
+        crew: { percent: formatUsageSharePercent, days, unknownAgent: 'Unknown agent' },
         river: {
             week: shortDate, inline: (name, share) => `${name} ${formatUsageSharePercent(share)}`,
             caption: "Each week's shared agent mix. Equal widths do not imply weekly totals.", unknownAgent: 'Unknown agent',
@@ -109,14 +111,14 @@ export function publicProfileUsageLabels(view: PublicProfileViewV1): HappierPubl
             lightNote: 'Grows with each active day in the period', lightRest: 'Rests at half light',
             haloNote: 'Widens with the most work run at once (of 8)', haloRest: 'No halo',
             trailNote: best => best === null ? 'Lengthens with each day of the current streak'
-                : `Lengthens toward the best this period, ${count(best)} days`, trailRest: 'No trail',
+                : `Lengthens toward the best this period, ${days(best)}`, trailRest: 'No trail',
         },
         calendar: {
             month: value => date(value, { month: 'short' }), day: value => date(value, { weekday: 'short', day: 'numeric', month: 'short' }), short: shortDate,
             weekdayInitials: ['M', 'T', 'W', 'T', 'F', 'S', 'S'],
             levels: { quiet: 'Quiet', steady: 'Steady', busy: 'Busy', busiest: 'Busiest' }, noActivity: 'No activity', notRecorded: 'Not recorded',
-            quieter: 'Quieter', busier: 'Busier', best: days => `Best · ${count(days)} days`, now: days => `${count(days)} days now`,
-            ongoingBest: days => `${count(days)} days · longest in this period`,
+            quieter: 'Quieter', busier: 'Busier', best: value => `Best · ${days(value)}`, now: value => `${days(value)} now`,
+            ongoingBest: value => `${days(value)} · longest in this period`,
             lit: (active, days) => `${count(active)} of ${count(days)} days lit`, noRuns: 'No run of three days or more in this period',
             values: { ...values, dateColumn: 'Day', levelColumn: 'How busy', weekColumn: 'Week', activeDaysColumn: 'Active days' },
         },
@@ -148,7 +150,7 @@ export function publicProfileUsageLabels(view: PublicProfileViewV1): HappierPubl
         },
         records: {
             format: (kind, value) => ({ title: recordTitles[kind], detail: `Within the supplied period · ${recordPeriod}`,
-                value: kind === 'longestTurnMs' ? duration(value) : kind === 'peakParallel' ? `${count(value)} at once` : `${count(value)} days` }),
+                value: kind === 'longestTurnMs' ? duration(value) : kind === 'peakParallel' ? `${count(value)} at once` : days(value) }),
             caption: 'Shared records within the period shown.',
         },
     } satisfies Required<HappierPublicProfileUsageLabels>;

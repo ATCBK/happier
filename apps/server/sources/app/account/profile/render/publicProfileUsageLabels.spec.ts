@@ -32,4 +32,14 @@ describe('anonymous Usage chart labels', () => {
         expect(labels.records?.format('longestTurnMs', 59_500).value).toBe('1 min');
         expect(labels.records?.format('activeDays', 0).value.match(/\d+/)?.[0]).toBe('0');
     });
+
+    it('says one day in the singular wherever a day count is spoken', () => {
+        const labels = publicProfileUsageLabels(view);
+        expect(labels.sky?.streakNow(1)).toBe('Now · 1 day');
+        expect(labels.sky?.streakBest(2)).toBe('Best · 2 days');
+        expect(labels.planet?.trailNote(1)).toBe('Lengthens toward the best this period, 1 day');
+        expect(labels.crew?.days(1)).toBe('1 day');
+        expect(labels.sky?.caption({ runs: false, band: false })).not.toMatch(/Faint lines|soft band/u);
+        expect(labels.sky?.caption({ runs: true, band: true })).toContain('Faint lines join runs of five days or more; the soft band is the 7-day average.');
+    });
 });

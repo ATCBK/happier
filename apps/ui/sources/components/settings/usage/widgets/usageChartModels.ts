@@ -315,12 +315,19 @@ export function projectUsageConstellationModel(slice: UsageQueryResultSlice, sha
     edges: summary ? [...edges.values()] : null, unknownStarts: summary?.unknownSourceAgentCount ?? 0 };
 }
 
+/** Per-Agent rows keep the owner's Agent order with the unnamed member last, as the other Agent charts list it. */
+function unknownAgentLast<T extends Readonly<{ agentId: string | null }>>(rows: readonly T[]): T[] {
+  return [...rows.filter((row) => row.agentId !== null), ...rows.filter((row) => row.agentId === null)];
+}
+
 export function projectUsageSteeringModel(slice: UsageQueryResultSlice): UsageSteeringTideModel | null {
   const steering = slice.howYouWork?.steering;
   if (!steering) return null;
   const night = slice.howYouWork?.nightShift ?? null;
   return { night: night ? { fromHour: night.startHour, toHour: night.endHour } : null,
-    rows: steering.byAgent.filter((row) => row.agentId !== null || (row.steeringCount ?? 0) + (row.permissionAnswerCount ?? 0) > 0).map((row) => {
+    // A member with no busy time, no steer and no phone answer has nothing to draw; it is omitted rather than shown as dashes.
+    rows: unknownAgentLast(steering.byAgent.filter((row) => (row.busyMs ?? 0) > 0 || (row.steeringCount ?? 0) > 0
+      || row.byAnsweringClient.ios + row.byAnsweringClient.android > 0)).map((row) => {
       const hourly = steering.hourly.filter((entry) => entry.agentId === row.agentId);
       const steersByHour = Array.from<number | null>({ length: 24 }).fill(steering.inputsObserved ? 0 : null);
       const phoneAnswersByHour = Array.from<number | null>({ length: 24 }).fill(steering.permissionsObserved ? 0 : null);
@@ -336,7 +343,7 @@ export function projectUsageSteeringModel(slice: UsageQueryResultSlice): UsageSt
 export function projectUsageRunLengthModel(slice: UsageQueryResultSlice): (UsageRunLengthModel & Readonly<{ openCount: number; croppedCount: number }>) | null {
   const runs = slice.howYouWork?.runLengths;
   if (!runs || runs.sampleCount === 0) return null;
-  return { rows: runs.byAgent.filter((row) => row.sampleCount > 0).map((row) => ({ agentId: row.agentId, samples: row.sampleCount, medianMs: row.medianMs,
+  return { rows: unknownAgentLast(runs.byAgent.filter((row) => row.sampleCount > 0)).map((row) => ({ agentId: row.agentId, samples: row.sampleCount, medianMs: row.medianMs,
     p90Ms: row.p90Ms, durationsMs: row.durationsMs })), openCount: runs.openCount, croppedCount: runs.croppedCount };
 }
 

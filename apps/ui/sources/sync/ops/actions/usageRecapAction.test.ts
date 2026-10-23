@@ -7,6 +7,7 @@ import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessio
 import { standardCleanup } from '@/dev/testkit';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createDefaultActionExecutor } from './defaultActionExecutor';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
@@ -22,6 +23,11 @@ const clipboard = vi.hoisted(() => ({ image: vi.fn(async (_base64: string) => {}
 vi.mock('expo-clipboard', () => ({ setImageAsync: clipboard.image }));
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
+async function signOutCapturedAccount() {
+  const target = home?.homes.a;
+  if (!target) throw new Error('Expected captured Home fixture');
+  await TokenStorage.removeCredentialsForServerUrl(target.serverUrl, { serverId: target.id });
+}
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; clipboard.image.mockClear(); });
 const accounting: UsageAnalyticsQueryResponse = { v: 1, totals: { eventCount: 1,
   tokens: { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 },
@@ -133,9 +139,9 @@ describe('recap export through the real captured UI Account Action', () => {
 
   it('reads only the current captured public view and refuses its response after Account retirement', async () => {
     let retireOnRead = false;
-    const caller = await context(false, request => {
+    const caller = await context(false, async request => {
       if (request.path !== '/v1/account/public-profile/view') return undefined;
-      if (retireOnRead) retireActiveServerAccountScopeLifetime();
+      if (retireOnRead) await signOutCapturedAccount();
       return Response.json({ kind: 'unavailable' });
     });
     const input = { source: { kind: 'public_profile' } };
@@ -163,7 +169,7 @@ describe('recap export through the real captured UI Account Action', () => {
     expect(clipboard.image.mock.calls).toEqual([]);
     storage.setState({ settings });
     const stale = createDefaultActionExecutor({ usageRecapRender: async () => {
-      retireActiveServerAccountScopeLifetime();
+      await signOutCapturedAccount();
       return { kind: 'rendered', base64: 'iVBORw==' };
     } });
     expect(await stale.execute('usage.recap.deliver', { ...input, intent: 'copy' }, caller))
@@ -274,7 +280,7 @@ describe('recap export through the real captured UI Account Action', () => {
   it('withdraws PNG bytes if the real Account lifetime retires while rendering', async () => {
     const caller = await context();
     const executor = createDefaultActionExecutor({ usageRecapRender: async () => {
-      retireActiveServerAccountScopeLifetime();
+      await signOutCapturedAccount();
       return { kind: 'rendered', base64: 'iVBORw==' };
     } });
     const executed = await executor.execute('usage.recap.export', input, caller);

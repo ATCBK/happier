@@ -17,7 +17,7 @@ import { UsageRhythmWidget } from './UsageRhythmWidget';
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { usageSourceAgentId } from '@/sync/domains/usage/usageLabels';
-import { describeUsagePageFailedSources, describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, isUsageReadOutstanding, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useSettledBodyHeightFloor, useUsageMeterListFirstReadReserve } from './usageBodyKit';
+import { describeUsagePageFailedSources, describeUsagePagePartialSources, describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, isUsageReadOutstanding, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useSettledBodyHeightFloor, useUsageMeterListFirstReadReserve } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -234,6 +234,28 @@ describe('shared Usage identity and dependent coverage', () => {
             .toBe(t('usage.board.page.coverageFailed', { sources: usageSourceTitle('work') }));
         expect(describeUsagePageFailedSources([slice([{ source: 'comparison', status: 'error' }])])).toBeNull();
         expect(describeUsagePageFailedSources([slice([{ source: 'work', status: 'pending' }])])).toBeNull();
+    });
+    it('says a settled partial activity read once for the header, never while it is still reading', () => {
+        const slice = (sources: readonly { source: string; status: string }[]) =>
+            ({ sources }) as unknown as Parameters<typeof describeUsagePagePartialSources>[0][number];
+        expect(describeUsagePagePartialSources([slice([{ source: 'how_you_work', status: 'partial' }, { source: 'how_you_work:sessions', status: 'partial' }]),
+            slice([{ source: 'how_you_work', status: 'partial' }])]))
+            .toBe(t('usage.board.page.coverageWitnessed', { sources: usageSourceTitle('how_you_work') }));
+        // Still reading is the pending fact's line; a failure is the failed fact's line.
+        expect(describeUsagePagePartialSources([slice([{ source: 'how_you_work', status: 'pending' }])])).toBeNull();
+        expect(describeUsagePagePartialSources([slice([{ source: 'how_you_work', status: 'error' }])])).toBeNull();
+        // Partial usage history is the Sources chooser's coverage detail, not a page read that missed Sessions.
+        expect(describeUsagePagePartialSources([slice([{ source: 'accounting', status: 'partial' }])])).toBeNull();
+        // A quiet reread keeps the last settled partial fact; a first read never claims one from its detail.
+        const reread = (asOfMs?: number) => ({ sources: [{ source: 'how_you_work', status: 'pending', ...(asOfMs === undefined ? {} : { asOfMs }) }],
+            howYouWork: { detailStatus: 'partial' } }) as unknown as Parameters<typeof describeUsagePagePartialSources>[0][number];
+        expect(describeUsagePagePartialSources([reread(100)])).toBe(t('usage.board.page.coverageWitnessed', { sources: usageSourceTitle('how_you_work') }));
+        expect(describeUsagePagePartialSources([reread()])).toBeNull();
+        // Beside a failed read, the one "Couldn't read" fact names both and says "Showing what arrived" once.
+        const both = [slice([{ source: 'work', status: 'error' }, { source: 'how_you_work', status: 'partial' }])];
+        expect(describeUsagePagePartialSources(both)).toBeNull();
+        expect(describeUsagePageFailedSources(both)).toBe(t('usage.board.page.coverageFailedWitnessed', {
+            sources: usageSourceTitle('work'), witnessed: usageSourceTitle('how_you_work') }));
     });
     it('keeps admitted sources quiet during background refresh while naming an unanswered sibling', () => {
         const sources: UsageQueryResultSlice['sources'] = [

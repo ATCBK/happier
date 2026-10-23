@@ -61,7 +61,7 @@ export function usageSkyLabels(input: Readonly<{
     streakShort: (days, best) => best ? t('usage.board.charts.streakShortBest', { count: days }) : t('usage.board.charts.streakShort', { count: days }),
     key: { tie: t('usage.board.charts.tie'), notAttributed: t('usage.board.charts.notAttributed'), noActivity: t('usage.board.charts.noActivity'),
       notRecorded: t('usage.board.charts.notRecorded'), quieter: t('usage.board.charts.quieter'), busier: t('usage.board.charts.busier') },
-    caption: input.colourBy === 'leadingAgent' ? t('usage.board.charts.skyCaptionAgent', { metric: input.metricName }) : t('usage.board.charts.skyCaptionIntensity'),
+    caption: (drawn) => input.colourBy === 'leadingAgent' ? t('usage.board.charts.skyCaptionAgent', { metric: input.metricName, ...drawn }) : t('usage.board.charts.skyCaptionIntensity', drawn),
     values: { ...usageChartValuesLabels(), dateColumn: t('usage.board.charts.dateColumn'), valueColumn: input.metricName, leaderColumn: t('usage.board.charts.leaderColumn'),
       noActivity: t('usage.board.charts.noActivity'), notRecorded: t('usage.board.charts.notRecorded'), tie: t('usage.board.charts.tie'), notAttributed: t('usage.board.charts.notAttributed') },
   };

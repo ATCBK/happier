@@ -147,7 +147,7 @@ function UsageChartPlanet({
         view: { w: spec.size, h: spec.size },
         rotate: spec.rotate,
         mirror: false,
-        fullness: 0,
+        fullness: spec.night ?? 0,
         halo: spec.halo,
         tail: spec.tail,
         rise: spec.rise,
