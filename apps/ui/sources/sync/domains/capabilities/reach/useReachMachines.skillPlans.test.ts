@@ -29,6 +29,7 @@ const { storage } = await import('@/sync/domains/state/storageStore');
 const { adoptHomeProfile, setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
 const { useReachMachines, projectReachOnMachines } = await import('./useReachProjection');
 const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { loadDaemonMergedProjectionCacheEntry, clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
 const { buildSkillsReach, skillPlanOnMachine } = await import('@/components/settings/skills/skillsCollectionModel');
 const { useAgentCatalogIdentities } = await import('@/agents/registry/useSessionAgentCatalogIdentity');
@@ -57,6 +58,56 @@ const { WorkspaceRefV1Schema } = await import('@happier-dev/protocol/workspaces/
 const before = storage.getState();
 // Global cleanup retires runtimeFetch after each case; reinstall the network boundary before use.
 beforeEach(() => network.resetRequests());
+it('ignores unrelated raw Machine activity while keeping real capability facts current', async () => {
+    const serverUrl = 'https://reach-subscription-cost.test';
+    await network.addHome(serverUrl, 'reach-cost-account');
+    const home = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
+        homeServerIdentityId: 'srv_reach_cost', canonicalServerUrl: serverUrl, revision: 1,
+        endpoints: [{ kind: 'https', url: serverUrl }] } });
+    await setActiveServerId(home.id);
+    if (!home.serverIdentityId) throw new Error('Expected qualified Home');
+    const scope = { serverId: home.serverIdentityId, accountId: 'reach-cost-account' };
+    storage.setState({ settingsScope: scope, profileScope: scope });
+    const machines = Array.from({ length: 101 }, (_, i) => createMachineFixture({ id: `reach-cost-${i}`,
+        activeAt: Date.now(), daemonState: { pid: 100, contributionRegistryProjectionRevision: 1 }, metadata: { ...createMachineFixture().metadata!,
+            agentInventory: { checkedAt: 2, installedAgentIds: ['codex'] } } }));
+    storage.getState().applyMachines(machines, true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
+    let renders = 0;
+    const hook = await renderHook(() => { renders++; return useReachMachines(); });
+    try {
+        await vi.waitFor(() => expect(hook.getCurrent().machines).toHaveLength(101));
+        await act(async () => storage.setState({ settingsScope: { ...scope, serverId: home.id } }));
+        expect(hook.getCurrent().machines).toHaveLength(101);
+        await act(async () => storage.setState({ settingsScope: scope }));
+        const settled = renders;
+        const previous = hook.getCurrent().machines;
+        for (let i = 0; i < 5; i++) await act(async () => {
+            const machine = storage.getState().machines['reach-cost-0']!;
+            storage.getState().applyMachines([{ ...machine, daemonStateVersion: machine.daemonStateVersion + 1,
+                daemonState: { ...machine.daemonState, resources: { cpu: { percent: i + 1 } } } }], false,
+            { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
+        });
+        expect(renders - settled).toBe(0);
+        expect(hook.getCurrent().machines).toBe(previous);
+        await act(async () => {
+            const machine = storage.getState().machines['reach-cost-0']!;
+            storage.getState().applyMachines([{ ...machine, metadataVersion: machine.metadataVersion + 1,
+                metadata: { ...machine.metadata!, displayName: 'Renamed build machine' } }], false,
+            { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
+        });
+        expect(hook.getCurrent().machines.find(machine => machine.machineId === 'reach-cost-0')?.name).toBe('Renamed build machine');
+        const retainedDisplays = storage.getState().machineDisplayById;
+        await act(async () => {
+            await TokenStorage.removeCredentialsForServerUrl(serverUrl);
+            // Credential retirement precedes Sync clearing its admitted display inputs.
+            // Hold that projection to prove retirement, not the later reset, withdraws it.
+            storage.setState({ settingsScope: scope, profileScope: scope, machineDisplayById: retainedDisplays });
+        });
+        expect(storage.getState().profileScope).toEqual(scope);
+        expect(hook.getCurrent().machines).toEqual([]);
+    } finally { await hook.unmount(); }
+});
+
 it('keeps withdrawn capability places unknown until their exact Account observes each machine again', async () => {
     const serverUrl = 'https://capability-presence.test';
     await network.addHome(serverUrl, 'capability-presence-account');
@@ -71,6 +122,7 @@ it('keeps withdrawn capability places unknown until their exact Account observes
             metadata: { ...machine.metadata!, agentInventory: { checkedAt: 2, installedAgentIds: ['codex'] } } }));
     storage.setState({ settingsScope: scope, profileScope: scope, machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
         machineListByServerId: { [scope.serverId]: machines }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+    storage.getState().applyMachines(machines, true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
     const settings = McpServersSettingsV1Schema.parse({ v: 1, servers: [{ id: 'oauth', name: 'oauth', transport: 'http', env: {},
         remote: { url: 'https://oauth.example/mcp', headers: {}, auth: { kind: 'oauth' } }, createdAt: 1, updatedAt: 1 }], bindings: [] });
     const hook = await renderHook(() => {
@@ -134,6 +186,7 @@ it.each(['skill', 'mcp_server'] as const)('%s mounts Account Project choices and
             { ...refs[0]!, id: 'second-checkout-a', rootPath: '/src/worktree' },
             { ...refs[0]!, id: 'foreign', serverId: 'srv_another_home', projectKey: 'foreign-project' }],
         }) });
+    storage.getState().applyMachines(machines, true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
     const placesHook = await renderHook(() => kind === 'skill' ? useSkillPlaces() : useMcpAddPlaces());
     expect(placesHook.getCurrent().names.projectName('project-key')).toBe('Garden');
     expect(placesHook.getCurrent().projects).toEqual([{ projectKey: 'project-key', name: 'Garden', machineCount: 2 }]);
@@ -291,6 +344,7 @@ it('names same-name Account machines apart, as every machine list does', async (
         metadata: { ...createMachineFixture().metadata!, host: 'shared-host', displayName: index < 2 ? 'Build box' : 'Laptop' } }));
     storage.setState({ settingsScope: scope, profileScope: scope, machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
         machineListByServerId: { [scope.serverId]: machines }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+    storage.getState().applyMachines(machines, true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
     const facts = await renderHook(() => useReachMachines());
     try {
         expect(facts.getCurrent().machines.map(machine => machine.name)).toEqual(['Build box · 08cc', 'Build box · 6a1f', 'Laptop']);
@@ -311,6 +365,7 @@ it('composes installed Machine publication and real catalog demand into passive 
     } });
     storage.setState({ settingsScope: scope, profileScope: scope, machines: { online: machine },
         machineListByServerId: { [scope.serverId]: [machine] }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+    storage.getState().applyMachines([machine], true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
     const projection = PluginProjectionV2Schema.parse({ ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, agentsById: {
         codex: { id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
             capabilities: { tools: { delivery: 'native_mcp' }, skills: { delivery: 'session_dir', nativeDisable: 'unsupported', liveReload: 'unsupported' } } },
@@ -364,6 +419,7 @@ it('composes concrete ACP inventory and the Account catalog into distinct config
     } });
     storage.setState({ settingsScope: scope, profileScope: scope, machines: { [machine.id]: machine },
         machineListByServerId: { [scope.serverId]: [machine] }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+    storage.getState().applyMachines([machine], true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
     const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: ['review', 'build', 'absent'].map(id => ({
         id, name: id, title: `${id} configured agent`, launch: { kind: 'npm', package: 'fixture', version: '1.0', args: [] },
         env: {}, createdAt: 1, updatedAt: 1,

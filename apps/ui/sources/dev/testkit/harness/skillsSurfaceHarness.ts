@@ -27,11 +27,12 @@ export async function createSkillsSurfaceHarness(origin: string, records: readon
         handleExternalRequest: async () => Response.json({ version: 1, items: [] }),
     });
     const { storage } = await import('@/sync/domains/state/storage');
-    const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
+    const { adoptHomeProfile, setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
     const qualified = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
         homeServerIdentityId: `srv_${new URL(origin).hostname.replaceAll('.', '_')}`, canonicalServerUrl: origin, revision: 1,
         endpoints: [{ kind: 'https', url: origin }] } });
     if (!qualified.serverIdentityId) throw new Error('Expected qualified Home');
+    await setActiveServerId(qualified.id);
     const scope = { serverId: qualified.serverIdentityId, accountId: 'artifact-account' };
     const machine = (id: string, offline: boolean) => createMachineFixture({ id, active: !offline, activeAt: offline ? 1 : Date.now(),
         metadata: { ...createMachineFixture().metadata!, displayName: id, host: id, platform: 'linux',
@@ -40,6 +41,7 @@ export async function createSkillsSurfaceHarness(origin: string, records: readon
     storage.setState({ settingsScope: scope, profileScope: scope, isDataReady: true, artifactsLoaded: true,
         machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
         machineListByServerId: { [scope.serverId]: machines }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+    storage.getState().applyMachines(machines, true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
     storage.getState().applyLocalSettings({ skillsFirstRunDecidedAt: null });
     return { ...home, scope, catalog, storage };
 }

@@ -43,6 +43,7 @@ it.each(['mcp_server', 'skill'] as const)('%s includes offline machines and Proj
             { id: 'checkout-a', serverId: scope.serverId, machineId: 'online', rootPath: '/repo', projectKey: 'shared-project', createdAtMs: 1 },
         ], relationships: [], organizations: [], revisionsByPhysicalKey: {} },
         machineListByServerId: { [scope.serverId]: [online, offline] }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+    storage.getState().applyMachines([online, offline], true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
     applyMcpServerCatalogSnapshot(scope, { status: 'ready', authority: 'active', revision: 1, diagnostics: [], catalog: {
         v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio', stdio: { command: 'server', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
         bindings: [{ id: 'on', serverId: 'server', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 },
