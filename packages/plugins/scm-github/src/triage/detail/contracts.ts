@@ -332,6 +332,8 @@ export const GithubChangedFilesInputV1Schema = defineProtocolObject({
   continuation: ContinuationSchema.optional(),
   /** Opt in to comparison evidence through the existing source Action. */
   comparison: defineProtocolLiteral(true).optional(),
+  /** Read only this expanded file's evidence from its already-known page. */
+  filePath: PathSchema.optional(),
 }, { policy: 'closed' });
 export type GithubChangedFilesInputV1 = ReturnType<typeof GithubChangedFilesInputV1Schema.parse>;
 

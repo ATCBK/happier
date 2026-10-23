@@ -473,7 +473,7 @@ export type GithubProjectedChangedFileRowV1 = Readonly<{
    * `false` when GitHub omitted this file's `patch` — which it does for very
    * large files. It is a real provider fact and the reason a row can render as
    * *diff unavailable for this file* with its counts rather than as an empty
-   * diff. Comparison callers consume `evidence`, not this display boolean.
+   * diff. Expanded-file and comparison callers consume `evidence`, not this display boolean.
    */
   diffAvailable: boolean;
   evidence?: GithubPatchEvidenceV1;
@@ -485,7 +485,7 @@ export type GithubProjectedChangedFileRowV1 = Readonly<{
 export function projectGithubChangedFileRows(
   raw: unknown,
   bounds: GithubDetailBoundsV1,
-  comparison = false,
+  includePatchEvidence = false,
 ): GithubPageProjectionV1<GithubProjectedChangedFileRowV1> {
   if (!Array.isArray(raw)) return emptyPage();
 
@@ -498,8 +498,8 @@ export function projectGithubChangedFileRows(
       omittedRowCount += 1;
       continue;
     }
-    const rawPath = comparison && typeof entry['filename'] === 'string' && entry['filename'].length > 0
-      ? entry['filename'] : readString(entry['filename']);
+    const rawPath = typeof entry['filename'] === 'string' && entry['filename'].length > 0
+      ? entry['filename'] : null;
     const rawStatus = readString(entry['status']);
     if (rawPath === null || rawStatus === null) {
       omittedRowCount += 1;
@@ -511,21 +511,17 @@ export function projectGithubChangedFileRows(
       continue;
     }
 
-    const path = comparison ? { value: rawPath, truncated: false } : normalizedOrNull(rawPath);
-    if (path === null) {
-      omittedRowCount += 1;
-      continue;
-    }
+    // A provider path is identity, not prose: display normalization must never
+    // change which exact file an expanded row subsequently asks to read.
+    const path = { value: rawPath, truncated: false };
     const status = normalizedOrNull(rawStatus);
     if (status === null) {
       omittedRowCount += 1;
       continue;
     }
-    const rawPreviousPath = comparison && typeof entry['previous_filename'] === 'string' && entry['previous_filename'].length > 0
-      ? entry['previous_filename'] : readString(entry['previous_filename']);
-    const previousPath = comparison && rawPreviousPath !== null
-      ? { value: rawPreviousPath, truncated: false }
-      : normalizedOrNull(entry['previous_filename']);
+    const rawPreviousPath = typeof entry['previous_filename'] === 'string' && entry['previous_filename'].length > 0
+      ? entry['previous_filename'] : null;
+    const previousPath = rawPreviousPath === null ? null : { value: rawPreviousPath, truncated: false };
     const blobSha = boundedOrNull(entry['sha'], bounds.identifierUtf8Bytes);
     const additions = readCount(entry['additions']) ?? 0;
     const deletions = readCount(entry['deletions']) ?? 0;
@@ -549,7 +545,7 @@ export function projectGithubChangedFileRows(
       ...(blobSha === null ? {} : { blobSha: blobSha.value }),
       ...(webUrl === null ? {} : { webUrl }),
       diffAvailable: typeof entry['patch'] === 'string',
-      ...(comparison ? { evidence: projectPatchEvidence(entry['patch'], readCount(entry['additions']), readCount(entry['deletions'])) } : {}),
+      ...(includePatchEvidence ? { evidence: projectPatchEvidence(entry['patch'], readCount(entry['additions']), readCount(entry['deletions'])) } : {}),
       ...(truncated ? { truncated: true as const } : {}),
     }));
   }

@@ -230,7 +230,7 @@ export async function readGithubTimelinePage(
  * reached position, not the next link, is what decides.
  */
 export async function readGithubChangedFilesPage(
-  input: PagedReadInput & Readonly<{ comparison?: true }>,
+  input: PagedReadInput & Readonly<{ comparison?: true; filePath?: string }>,
   dependencies: GithubDetailReadDependenciesV1,
 ): Promise<GithubDetailReadResultV1<GithubDetailPageV1<GithubProjectedChangedFileRowV1>>> {
   let url: string;
@@ -242,8 +242,14 @@ export async function readGithubChangedFilesPage(
   return readPagedCollection(dependencies, {
     url,
     page: input.page,
+    ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
     ceiling: { limit: GITHUB_CHANGED_FILES_CEILING_V1, perPage: input.perPage },
-    project: (body) => projectGithubChangedFileRows(body, GITHUB_DETAIL_BOUNDS_V1, input.comparison === true),
+    project: (body) => projectGithubChangedFileRows(
+      input.filePath === undefined || !Array.isArray(body) ? body : body.filter((entry: unknown) =>
+        typeof entry === 'object' && entry !== null && 'filename' in entry && entry.filename === input.filePath),
+      GITHUB_DETAIL_BOUNDS_V1,
+      input.comparison === true || input.filePath !== undefined,
+    ),
   });
 }
 

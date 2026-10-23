@@ -16,6 +16,7 @@ import {
   GithubOverviewResultV1Schema,
   GithubTimelineResultV1Schema,
   type GithubOverviewResultV1,
+  type GithubPatchEvidenceV1,
 } from '../../triage/detail/contracts.js';
 import type { GithubRepositoryCapabilitiesV1 } from '../../triage/capabilities.js';
 import type {
@@ -498,9 +499,14 @@ export function useGithubTimeline(
 
 /* ------------------------------------------------------------ changed files */
 
+/** The source-minted page remains opaque; only its originating row carries it. */
+export type GithubChangedFileViewV1 = GithubProjectedChangedFileRowV1 & Readonly<{
+  diffContinuation: string | null;
+}>;
+
 export function useGithubChangedFiles(
   input: TriageDetailSurfaceInputV1,
-): GithubPagedControllerV1<GithubProjectedChangedFileRowV1> {
+): GithubPagedControllerV1<GithubChangedFileViewV1> {
   const action = useMemo(
     () => ({
       pluginId: GITHUB_PLUGIN_ID,
@@ -512,7 +518,7 @@ export function useGithubChangedFiles(
   const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGithubRoutingToken(input);
 
-  const readPage: PageReader<GithubProjectedChangedFileRowV1> = useCallback(async (
+  const readPage: PageReader<GithubChangedFileViewV1> = useCallback(async (
     continuation,
     signal,
   ) => {
@@ -535,10 +541,62 @@ export function useGithubChangedFiles(
     if (parsed.data.kind === 'unavailable') {
       return { kind: 'failed' as const, failure: parsed.data.failure };
     }
-    return { kind: 'page' as const, page: toPage(parsed.data) };
+    return { kind: 'page' as const, page: toPage({ ...parsed.data,
+      rows: parsed.data.rows.map(row => Object.freeze({ ...row, diffContinuation: continuation })),
+    }) };
   }, [execute, instance, localRef, routingToken]);
 
   return useGithubPagedWalk(readPage, routingToken !== null, ROUTE_UNAVAILABLE);
+}
+
+export type GithubChangedFileDiffV1 = Readonly<{
+  evidence: GithubPatchEvidenceV1;
+  /** Standard unified headers plus exact provider hunks; null means no patch. */
+  unifiedDiff: string | null;
+}>;
+
+export type GithubChangedFileDiffControllerV1 = Readonly<{
+  state: GithubReadStateV1<GithubChangedFileDiffV1>;
+  failure: TriageSourceFailureV1 | null;
+  pending: boolean;
+  refresh: () => void;
+}>;
+
+/** Mount only inside an expanded file row. Closing unmounts this read owner. */
+export function useGithubChangedFileDiff(
+  input: TriageDetailSurfaceInputV1,
+  row: GithubChangedFileViewV1,
+): GithubChangedFileDiffControllerV1 {
+  const action = useMemo(() => ({
+    pluginId: GITHUB_PLUGIN_ID, localId: GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.listChangedFiles,
+  }), []);
+  const { execute } = useExecutePluginAction(action);
+  const { instance, localRef } = useTriageDetailRequest(input);
+  const routingToken = useGithubRoutingToken(input);
+  const { active, activeSignal } = useTabPanelActivity();
+  const { path, blobSha, diffContinuation } = row;
+  const read: GithubSettledReader<GithubChangedFileDiffV1> = useCallback(async signal => {
+    if (routingToken === null) return { kind: 'failed', failure: ROUTE_UNAVAILABLE };
+    const execution = await execute({
+      v: 1, instance, localRef, routingToken, limit: GITHUB_CHANGED_FILES_PAGE_SIZE_V1,
+      filePath: path, ...(diffContinuation === null ? {} : { continuation: diffContinuation }),
+    }, { signal }) as ExecuteResult;
+    if (execution.status !== 'success') return { kind: 'failed', failure: dispatchFailure(
+      execution.status, execution.code ?? 'github-file-diff-read-failed',
+    ) };
+    const parsed = GithubChangedFilesResultV1Schema.safeParse(execution.result);
+    if (!parsed.success) return { kind: 'failed', failure: UNREADABLE_RESULT };
+    if (parsed.data.kind === 'unavailable') return { kind: 'failed', failure: parsed.data.failure };
+    const selected = parsed.data.rows.length === 1 ? parsed.data.rows[0] : undefined;
+    if (selected?.path !== path || selected.evidence === undefined) return { kind: 'failed', failure: UNREADABLE_RESULT };
+    const evidence = selected.evidence;
+    const before = selected.status === 'added' ? '/dev/null' : JSON.stringify(`a/${selected.previousPath ?? path}`);
+    const after = selected.status === 'removed' ? '/dev/null' : JSON.stringify(`b/${path}`);
+    return { kind: 'ready', value: Object.freeze({ evidence,
+      unifiedDiff: evidence.state === 'unavailable' ? null : `--- ${before}\n+++ ${after}\n${evidence.patch}`,
+    }) };
+  }, [blobSha, diffContinuation, execute, instance, localRef, path, routingToken]);
+  return useGithubSettledRead(read, active, activeSignal);
 }
 
 /* ------------------------------------------------------------------ feedback */
@@ -796,7 +854,18 @@ function useGithubSettledRead<T>(
   const [pending, setPending] = useState(false);
   const inFlight = useRef(false);
   const lastKnownGood = useRef<T | null>(null);
+  const previousReader = useRef(read);
+  const previousRead = useRef<Promise<void> | null>(null);
   const [attempt, setAttempt] = useState(0);
+
+  if (previousReader.current !== read) {
+    previousReader.current = read;
+    lastKnownGood.current = null;
+    inFlight.current = false;
+    setState({ kind: 'loading' });
+    setFailure(null);
+    setPending(false);
+  }
 
   useEffect(() => {
     if (active) return;
@@ -808,7 +877,10 @@ function useGithubSettledRead<T>(
   }, [active]);
 
   useEffect(() => {
-    if (!active) return undefined;
+    if (!active || activeSignal.aborted) return undefined;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    activeSignal.addEventListener('abort', abort, { once: true });
     // `attempt` is an explicit re-read through the same owner as the first
     // read. There is no timer and no second reader behind refresh.
     void attempt;
@@ -816,10 +888,14 @@ function useGithubSettledRead<T>(
     setPending(true);
     if (lastKnownGood.current === null) setState({ kind: 'loading' });
     setFailure(null);
-    let left = false;
-    void (async () => {
-      const outcome = await read(activeSignal);
-      if (left || activeSignal.aborted) return;
+    const prior = previousRead.current;
+    previousRead.current = (async () => {
+      // A changed file cancels the prior read. Let that same Action controller
+      // settle cancellation before reusing its single-in-flight guard.
+      await prior;
+      if (controller.signal.aborted) return;
+      const outcome = await read(controller.signal);
+      if (controller.signal.aborted) return;
       if (outcome.kind === 'ready') {
         lastKnownGood.current = outcome.value;
         setState({ kind: 'ready', value: outcome.value });
@@ -833,7 +909,8 @@ function useGithubSettledRead<T>(
       setPending(false);
     })();
     return () => {
-      left = true;
+      activeSignal.removeEventListener('abort', abort);
+      controller.abort();
     };
   }, [active, activeSignal, attempt, read]);
 

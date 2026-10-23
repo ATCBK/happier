@@ -458,7 +458,54 @@ describe('GitHub timeline plane', () => {
 /* ---------------------------------------------------------------- changed files */
 
 describe('GitHub changed-files plane', () => {
-  it('retains exact comparison patches and pins endpoints across source continuations', async () => {
+  it('reads one expanded file from its known page through the registered Action without publishing other bodies', async () => {
+    const patch = '@@ -1 +1 @@\n-old  \n+new Ω  ';
+    const body = Array.from({ length: 100 }, (_, index) => ({
+      ...githubChangedFile({ filename: `src/file-${index}.ts` }),
+      additions: 1, deletions: 1, changes: 2, patch,
+    }));
+    const stub = createStubGithubTransport({ respond: request => request.url.includes('/files?')
+      ? jsonResponse(body) : undefined });
+    const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate }, services: {
+      http: stub.context.services.http, connectedAccounts: stub.context.services.connectedAccounts,
+    } });
+    const continuation = encodeGithubDetailContinuation({ v: 1, page: 2, perPage: 100 });
+    try {
+      const inventory = GithubChangedFilesResultV1Schema.parse(await plugin.invokeAction(
+        GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.listChangedFiles, planeInput({ limit: 100, continuation }),
+      ));
+      expect(inventory).toMatchObject({ kind: 'changedFiles', rows: expect.arrayContaining([expect.objectContaining({ path: 'src/file-42.ts' })]) });
+      expect(JSON.stringify(inventory)).not.toContain('@@');
+      const selected = GithubChangedFilesResultV1Schema.parse(await plugin.invokeAction(
+        GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.listChangedFiles,
+        planeInput({ limit: 100, continuation, filePath: 'src/file-42.ts' }),
+      ));
+      expect(selected).toMatchObject({ kind: 'changedFiles', rows: [{
+        path: 'src/file-42.ts', evidence: { state: 'available', patch },
+      }] });
+      if (selected.kind !== 'changedFiles') throw new Error('Expected the expanded file');
+      expect(selected.rows).toHaveLength(1);
+      expect(selected.comparison).toBeUndefined();
+      const fileReads = stub.requests.filter(request => new URL(request.url).pathname.endsWith('/files'));
+      expect(fileReads).toHaveLength(2); // One inventory page, one opened body; never walk the inventory.
+      expect(fileReads.every(request => new URL(request.url).searchParams.get('page') === '2')).toBe(true);
+      expect(stub.requests.some(request => new URL(request.url).pathname.endsWith('/pulls/1284'))).toBe(false);
+    } finally { await plugin.dispose(); }
+  });
+
+  it('distinguishes an omitted file patch from a file that moved out of its known page', async () => {
+    const stub = createStubGithubTransport({ respond: request => request.url.includes('/files?')
+      ? jsonResponse([githubChangedFile({ filename: 'binary.dat', withPatch: false })]) : undefined });
+    expect(GithubChangedFilesResultV1Schema.parse(await listGithubChangedFiles(
+      planeInput({ filePath: 'binary.dat' }), stub.context,
+    ))).toMatchObject({ kind: 'changedFiles', rows: [{ path: 'binary.dat', evidence: { state: 'unavailable', reason: 'provider_patch_missing' } }] });
+    expect(GithubChangedFilesResultV1Schema.parse(await listGithubChangedFiles(
+      planeInput({ filePath: 'moved.ts' }), stub.context,
+    ))).toEqual({ kind: 'unavailable', failure: { class: 'transient', code: 'github_file_page_changed' } });
+    expect(stub.requests.filter(request => new URL(request.url).pathname.endsWith('/files'))).toHaveLength(2);
+  });
+
+  it.each(['named', 'repository-id'] as const)('retains exact comparison patches and pins endpoints across %s source continuations', async (routeKind) => {
     const patch = '@@ -1 +1 @@\n-old  \n+new Ω  ';
     const mergeBaseOid = 'c'.repeat(40);
     const stub = createStubGithubTransport({
@@ -472,7 +519,8 @@ describe('GitHub changed-files plane', () => {
         if (!url.pathname.endsWith('/files')) return undefined;
         const paths = url.searchParams.get('page') === '1' ? Array.from({ length: 100 }, (_, index) => `first-${index}.ts`) : ['second.ts'];
         return jsonResponse(paths.map((filename) => ({ ...githubChangedFile({ filename }), additions: 1, deletions: 1, changes: 2, patch })),
-          url.searchParams.get('page') === '1' ? { link: githubFollowUpLinkHeader({ requestedUrl: request.url, nextPage: 2 }) } : {});
+          url.searchParams.get('page') === '1' ? { link: githubFollowUpLinkHeader({ requestedUrl: routeKind === 'named' ? request.url
+            : request.url.replace(`/repos/${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}/`, '/repositories/4210/'), nextPage: 2 }) } : {});
       },
     });
     const first = GithubChangedFilesResultV1Schema.parse(await listGithubChangedFiles(planeInput({ comparison: true, limit: 100 }), stub.context));
@@ -532,7 +580,7 @@ describe('GitHub changed-files plane', () => {
     expect(stub.requests.some((request) => request.url.startsWith('https://other.example'))).toBe(false);
   });
 
-  it('retains missing and truncated patch facts without normalizing exact paths or patch bytes', async () => {
+  it.each(['comparison', 'expanded'] as const)('retains missing and truncated %s patch facts without normalizing exact paths or patch bytes', async (mode) => {
     const stub = createStubGithubTransport({ respond: (request) => {
       if (new URL(request.url).pathname.endsWith('/pulls/1284')) return jsonResponse({ ...GITHUB_PULL_REQUEST_RESPONSE, changed_files: 3 });
       return request.url.includes('/files') ? jsonResponse([
@@ -541,27 +589,31 @@ describe('GitHub changed-files plane', () => {
         { ...githubChangedFile({ filename: ' ' }), additions: 0, deletions: 0, changes: 0, patch: '' },
       ]) : undefined;
     } });
-    const result = GithubChangedFilesResultV1Schema.parse(await listGithubChangedFiles(planeInput({ comparison: true }), stub.context));
+    const result = GithubChangedFilesResultV1Schema.parse(await listGithubChangedFiles(planeInput(mode === 'comparison'
+      ? { comparison: true } : { filePath: 'two  spaces.ts' }), stub.context));
     expect(result.kind).toBe('changedFiles');
     if (result.kind !== 'changedFiles') return;
-    expect(result.rows[0]?.evidence).toEqual({ state: 'unavailable', reason: 'provider_patch_missing' });
-    expect(result.rows[1]).toMatchObject({ path: 'two  spaces.ts', evidence: { state: 'truncated', patch: '@@ -1 +1,2 @@\n-old\n+first', reason: 'provider_patch_truncated' } });
-    expect(result.rows[2]).toMatchObject({ path: ' ', evidence: { state: 'available', patch: '' } });
-    expect(result.comparison).toMatchObject({ inventory: 'complete', content: 'incomplete' });
+    if (mode === 'comparison') {
+      expect(result.rows[0]?.evidence).toEqual({ state: 'unavailable', reason: 'provider_patch_missing' });
+      expect(result.rows[2]).toMatchObject({ path: ' ', evidence: { state: 'available', patch: '' } });
+      expect(result.comparison).toMatchObject({ inventory: 'complete', content: 'incomplete' });
+    } else expect(result.rows).toHaveLength(1);
+    expect(result.rows[mode === 'comparison' ? 1 : 0]).toMatchObject({ path: 'two  spaces.ts', evidence: { state: 'truncated', patch: '@@ -1 +1,2 @@\n-old\n+first', reason: 'provider_patch_truncated' } });
   });
 
-  it('keeps file inventory and states the real Action envelope limit for an oversized patch', async () => {
+  it.each(['comparison', 'expanded'] as const)('keeps file inventory and states the real Action envelope limit for an oversized %s patch', async (mode) => {
     const patch = '@@ -0,0 +1 @@\n+' + 'x'.repeat(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES);
     const stub = createStubGithubTransport({ respond: (request) => {
       if (new URL(request.url).pathname.endsWith('/pulls/1284')) return jsonResponse({ ...GITHUB_PULL_REQUEST_RESPONSE, changed_files: 1 });
       return request.url.includes('/files') ? jsonResponse([{ ...githubChangedFile({ filename: 'large.txt' }), additions: 1, deletions: 0, changes: 1, patch }]) : undefined;
     } });
-    const result = GithubChangedFilesResultV1Schema.parse(await listGithubChangedFiles(planeInput({ comparison: true }), stub.context));
+    const result = GithubChangedFilesResultV1Schema.parse(await listGithubChangedFiles(planeInput(mode === 'comparison'
+      ? { comparison: true } : { filePath: 'large.txt' }), stub.context));
     expect(isExternalActionResultWithinResponseEnvelopeLimitV1(result)).toBe(true);
     expect(result.kind).toBe('changedFiles');
     if (result.kind !== 'changedFiles') return;
     expect(result.rows[0]).toMatchObject({ path: 'large.txt', evidence: { state: 'unavailable', reason: 'transport_limit' } });
-    expect(result.comparison).toMatchObject({ inventory: 'complete', content: 'incomplete', reasons: expect.arrayContaining(['transport_limit']) });
+    if (mode === 'comparison') expect(result.comparison).toMatchObject({ inventory: 'complete', content: 'incomplete', reasons: expect.arrayContaining(['transport_limit']) });
   });
 
   it.each(['base', 'head'] as const)('refuses a mixed comparison when the %s tip moves before the next page', async (endpoint) => {

@@ -294,6 +294,7 @@ export async function listGithubChangedFiles(
   const parsed = GithubChangedFilesInputV1Schema.safeParse(input);
   if (!parsed.success) return unavailable(INVALID_INPUT_FAILURE);
   const request = parsed.data;
+  if (request.filePath !== undefined && request.comparison === true) return unavailable(INVALID_INPUT_FAILURE);
   const position = resolvePage(request.continuation, request.limit);
   if (!position.ok) return unavailable(CONTINUATION_UNREADABLE_FAILURE);
 
@@ -340,10 +341,12 @@ export async function listGithubChangedFiles(
 
   const page = await readGithubChangedFilesPage({
     route: admitted.route,
+    repositoryId: admitted.repository.repositoryId,
     entryNumber: admitted.entryNumber,
     perPage: request.limit,
     page: position.page,
     ...(request.comparison === true ? { comparison: true as const } : {}),
+    ...(request.filePath === undefined ? {} : { filePath: request.filePath }),
   }, dependencies);
   if (!page.ok) {
     if (endpoints) return Object.freeze({ kind: 'changedFiles', rows: Object.freeze([]), omittedRowCount: 0, projectionTruncated: false,
@@ -351,6 +354,15 @@ export async function listGithubChangedFiles(
         freshness: 'unverified', inventory: 'incomplete', content: 'incomplete', reasons: Object.freeze(['page_failed']), failure: toTriageFailure(page.failure) }),
     });
     return unavailable(toTriageFailure(page.failure));
+  }
+
+  if (request.filePath !== undefined) {
+    if (page.value.rows.length === 0) return unavailable({ class: 'transient', code: 'github_file_page_changed' });
+    return fitGithubChangedFilesPage(Object.freeze({
+      kind: 'changedFiles', rows: page.value.rows,
+      omittedRowCount: page.value.omittedRowCount,
+      projectionTruncated: page.value.projectionTruncated,
+    }), request.limit);
   }
 
   if (endpoints) {
@@ -381,7 +393,7 @@ export async function listGithubChangedFiles(
       ...(page.value.incomplete === null ? {} : { incomplete: page.value.incomplete }),
       ...(continuation === null ? {} : { continuation }),
     });
-    return fitGithubComparisonPage(result, request.limit);
+    return fitGithubChangedFilesPage(result, request.limit);
   }
 
   return Object.freeze({
@@ -391,13 +403,12 @@ export async function listGithubChangedFiles(
 }
 
 /** Preserve inventory when exact text cannot cross the existing Action envelope. */
-function fitGithubComparisonPage(
+function fitGithubChangedFilesPage(
   result: Extract<GithubChangedFilesResultV1, { kind: 'changedFiles' }>,
   perPage: number,
 ): GithubChangedFilesResultV1 {
   if (isExternalActionResultWithinResponseEnvelopeLimitV1(result)) return result;
   const comparison = result.comparison;
-  if (comparison === undefined) return result;
   const rows = [...result.rows];
   const order = rows.map((row, index) => ({ index, size: row.evidence !== undefined && 'patch' in row.evidence ? row.evidence.patch.length : 0 }))
     .sort((a, b) => b.size - a.size);
@@ -406,7 +417,7 @@ function fitGithubComparisonPage(
     comparison: { ...frontier.comparison, contentIncomplete: true },
   });
   const shape = () => Object.freeze({ ...result, rows: Object.freeze([...rows]),
-    comparison: Object.freeze({ ...comparison, content: 'incomplete' as const, reasons: Object.freeze([...comparison.reasons, 'transport_limit']) }),
+    ...(comparison === undefined ? {} : { comparison: Object.freeze({ ...comparison, content: 'incomplete' as const, reasons: Object.freeze([...comparison.reasons, 'transport_limit']) }) }),
     ...(continuation === null ? {} : { continuation }),
   });
   for (const item of order) {
@@ -419,7 +430,8 @@ function fitGithubComparisonPage(
   // existing sequence fitter keeps a usable prefix and states omitted evidence.
   return fitActionResultSequenceV1(rows, (included, omitted) => ({ ...shape(), rows: included,
     omittedRowCount: result.omittedRowCount + omitted, projectionTruncated: true,
-    comparison: { ...shape().comparison, inventory: 'incomplete' as const },
+    ...(comparison === undefined ? {} : { comparison: { ...comparison, content: 'incomplete' as const,
+      reasons: [...comparison.reasons, 'transport_limit'], inventory: 'incomplete' as const } }),
     ...(frontier?.comparison === undefined ? {} : { continuation: encodeGithubDetailContinuation({ ...frontier, perPage,
       comparison: { ...frontier.comparison, contentIncomplete: true, inventoryIncomplete: true },
     }) ?? undefined }),

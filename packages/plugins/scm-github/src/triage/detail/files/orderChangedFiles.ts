@@ -21,17 +21,17 @@ import type { GithubProjectedChangedFileRowV1 } from '../projection.js';
 
 export type GithubChangedFileBandV1 = 'source' | 'test' | 'generated';
 
-export type GithubOrderedChangedFileV1 = Readonly<{
-  row: GithubProjectedChangedFileRowV1;
+export type GithubOrderedChangedFileV1<TRow extends GithubProjectedChangedFileRowV1 = GithubProjectedChangedFileRowV1> = Readonly<{
+  row: TRow;
   band: GithubChangedFileBandV1;
   /** The source path this test is recognizably paired with, when there is one. */
   pairedSourcePath: string | null;
 }>;
 
-export type GithubChangedFileSectionV1 = Readonly<{
+export type GithubChangedFileSectionV1<TRow extends GithubProjectedChangedFileRowV1 = GithubProjectedChangedFileRowV1> = Readonly<{
   band: GithubChangedFileBandV1;
   title: string;
-  rows: readonly GithubProjectedChangedFileRowV1[];
+  rows: readonly TRow[];
 }>;
 
 const BAND_TITLES: Readonly<Record<GithubChangedFileBandV1, string>> = Object.freeze({
@@ -289,9 +289,9 @@ function findPairedSourcePath(
  * order as the code they cover, and an unpaired test sorts after every paired
  * one in path order rather than being interleaved on a guess.
  */
-export function orderGithubChangedFiles(
-  rows: readonly GithubProjectedChangedFileRowV1[],
-): readonly GithubOrderedChangedFileV1[] {
+export function orderGithubChangedFiles<TRow extends GithubProjectedChangedFileRowV1>(
+  rows: readonly TRow[],
+): readonly GithubOrderedChangedFileV1<TRow>[] {
   const banded = rows.map((row) => Object.freeze({
     row,
     band: classifyGithubChangedFile(row.path),
@@ -304,9 +304,9 @@ export function orderGithubChangedFiles(
     sourcePaths.map((path, index) => [path, index] as const),
   );
 
-  const source: GithubOrderedChangedFileV1[] = [];
-  const tests: Array<GithubOrderedChangedFileV1 & Readonly<{ rank: number }>> = [];
-  const generated: GithubOrderedChangedFileV1[] = [];
+  const source: GithubOrderedChangedFileV1<TRow>[] = [];
+  const tests: Array<GithubOrderedChangedFileV1<TRow> & Readonly<{ rank: number }>> = [];
+  const generated: GithubOrderedChangedFileV1<TRow>[] = [];
 
   for (const entry of banded) {
     if (entry.band === 'source') {
@@ -354,9 +354,9 @@ export function orderGithubChangedFiles(
  * The ordered set as the labelled groups the public `List` sectioned arm
  * consumes. An empty band is absent rather than a titled empty group.
  */
-export function groupGithubChangedFiles(
-  ordered: readonly GithubOrderedChangedFileV1[],
-): readonly GithubChangedFileSectionV1[] {
+export function groupGithubChangedFiles<TRow extends GithubProjectedChangedFileRowV1>(
+  ordered: readonly GithubOrderedChangedFileV1<TRow>[],
+): readonly GithubChangedFileSectionV1<TRow>[] {
   const bands: readonly GithubChangedFileBandV1[] = Object.freeze(['source', 'test', 'generated']);
   return Object.freeze(bands.flatMap((band) => {
     const rows = ordered.filter((entry) => entry.band === band).map((entry) => entry.row);

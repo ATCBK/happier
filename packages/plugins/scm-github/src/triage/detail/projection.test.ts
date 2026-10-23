@@ -173,6 +173,13 @@ describe('GitHub detail timeline projection', () => {
 });
 
 describe('GitHub detail changed-file projection', () => {
+  it('preserves exact file identity in metadata so an expanded path can be requested', () => {
+    const projected = projectGithubChangedFileRows([
+      githubChangedFile({ filename: ' src/two  spaces Ω.ts ', status: 'renamed', previousFilename: ' old  name.ts ' }),
+    ], BOUNDS);
+    expect(projected.rows[0]).toMatchObject({ path: ' src/two  spaces Ω.ts ', previousPath: ' old  name.ts ' });
+  });
+
   it('publishes whether a patch exists without publishing the patch', () => {
     const projected = projectGithubChangedFileRows([
       githubChangedFile({ filename: 'src/a.ts' }),
