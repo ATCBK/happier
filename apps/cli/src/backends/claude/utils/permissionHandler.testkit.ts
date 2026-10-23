@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 import type { Session } from '../session';
 import { ClaudePermissionRpcRouter } from './permissionRpcRouter';
 import type { PermissionRpcPayload } from './permissionRpc';
+import { ClaudeToolHookCorrelation } from './claudeToolHookCorrelation';
 
 type AgentState = {
   requests: Record<string, unknown>;
@@ -104,6 +105,7 @@ export function createPermissionHandlerSessionStub(sessionId = 'test-session-id'
 
   const session = {
     client,
+    claudeToolHookCorrelation: new ClaudeToolHookCorrelation(),
     api: {
       push() {
         return { sendToAllDevices: vi.fn() };
@@ -133,6 +135,7 @@ export function createPermissionHandlerSessionStubWithMetadata(params: {
 
   const session = {
     client,
+    claudeToolHookCorrelation: new ClaudeToolHookCorrelation(),
     api: {
       push() {
         return { sendToAllDevices: vi.fn() };

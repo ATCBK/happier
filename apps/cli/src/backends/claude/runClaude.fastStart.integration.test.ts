@@ -1878,7 +1878,10 @@ describe('runClaude fast-start', () => {
     const runPromise = runClaude(credentials, {
       startedBy: 'terminal',
       startingMode: 'local',
-      claudeRemoteMetaDefaults: { claudeUnifiedTerminalEnabled: true },
+      claudeRemoteMetaDefaults: {
+        claudeUnifiedTerminalEnabled: true,
+        claudeUnifiedTerminalPermissionResponseLocation: 'app_only',
+      },
     }).catch((e) => {
       testError = e;
       loopStarted.resolve();
