@@ -45,6 +45,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("D
             externalGroupId: randomUUID(), bindingMode: "native_target" as const,
         }));
         await db.teamExternalGroupBinding.createMany({ data: bindingData });
+        const connectionBinding = await db.teamExternalGroupBinding.create({ data: {
+            teamId: team.id, teamGroupId: group.id, teamIdentityConnectionId: connection.id,
+            externalGroupId: randomUUID(), bindingMode: "native_target",
+        } });
         const accounts = Array.from({ length: 303 }, () => ({ id: randomUUID(), encryptionMode: "plain" as const }));
         await db.account.createMany({ data: accounts });
         const memberships = accounts.map((account) => ({ id: randomUUID(), teamId: team.id, accountId: account.id, role: "member" as const }));
@@ -60,8 +64,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("D
         })) });
         await db.teamGroupMembershipExternalContribution.createMany({ data: memberships.flatMap((membership, index) => {
             // Owned parent memberships remove every contribution. For native
-            // parents, distinguish source-only, native, and another-source facts.
-            const bindings = index === 300 ? bindingData.slice(0, 2) : [bindingData[0]!, bindingData[2]!];
+            // parents, distinguish source-only, native, other-directory and
+            // connection-owned facts. A NULL directorySourceId is another owner.
+            const bindings = index === 300 ? bindingData.slice(0, 2)
+                : [bindingData[0]!, index === 302 ? connectionBinding : bindingData[2]!];
             return bindings.map((binding) => ({ teamGroupId: group.id, teamMembershipId: membership.id, externalGroupBindingId: binding.id }));
         }) });
 

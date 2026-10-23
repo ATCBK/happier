@@ -1020,6 +1020,12 @@ describe("directory source administration", () => {
                 nativeContribution: true,
             },
         });
+        const mixedMember = await db.teamMembership.create({
+            data: { teamId: f.team.id, accountId: f.outsider.id, role: "member" },
+        });
+        await db.teamGroupMembership.create({
+            data: { teamId: f.team.id, teamGroupId: nativeGroup.id, teamMembershipId: mixedMember.id, nativeContribution: false },
+        });
         await db.teamGroupMembershipExternalContribution.createMany({ data: [
             {
                 teamGroupId: nativeGroup.id,
@@ -1041,6 +1047,16 @@ describe("directory source administration", () => {
                 teamMembershipId: nativeMember.id,
                 externalGroupBindingId: secondSourceBinding.id,
             },
+            {
+                teamGroupId: nativeGroup.id,
+                teamMembershipId: mixedMember.id,
+                externalGroupBindingId: sourceBinding.id,
+            },
+            {
+                teamGroupId: nativeGroup.id,
+                teamMembershipId: mixedMember.id,
+                externalGroupBindingId: otherBinding.id,
+            },
         ] });
 
         await expect(preflightDirectorySourceRemovalForActor({
@@ -1053,7 +1069,7 @@ describe("directory source administration", () => {
                 impact: {
                     teamMembershipsRemoved: 1,
                     groupMembershipsRemoved: 1,
-                    groupContributionsRemoved: 4,
+                    groupContributionsRemoved: 5,
                     nativeGroupContributionsPreserved: 1,
                 },
             },
@@ -1100,13 +1116,17 @@ describe("directory source administration", () => {
                 impact: {
                     teamMembershipsRemoved: 1,
                     groupMembershipsRemoved: 1,
-                    groupContributionsRemoved: 4,
+                    groupContributionsRemoved: 5,
                     nativeGroupContributionsPreserved: 1,
                 },
             },
         });
         expect(await db.teamMembership.count({ where: { id: activation.teamMembershipId ?? "missing" } })).toBe(0);
         expect(await db.teamDirectorySource.count({ where: { id: f.source.id } })).toBe(0);
+        expect(await db.teamGroupMembership.findUniqueOrThrow({ where: {
+            teamGroupId_teamMembershipId: { teamGroupId: nativeGroup.id, teamMembershipId: mixedMember.id },
+        }, select: { externalContributions: { select: { externalGroupBindingId: true } } } }))
+            .toEqual({ externalContributions: [{ externalGroupBindingId: otherBinding.id }] });
         await expect(removeDirectorySourceForActor({
             teamId: f.team.id,
             sourceId: f.source.id,

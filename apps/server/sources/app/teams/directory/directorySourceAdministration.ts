@@ -472,7 +472,16 @@ async function readDirectorySourceRemovalImpactInTx(
                 where: {
                     NOT: { teamMembership: sourceOwnedMembership },
                     nativeContribution: false,
-                    externalContributions: { some: sourceContribution, every: sourceContribution },
+                    externalContributions: {
+                        some: sourceContribution,
+                        // A connection-owned binding has NULL directorySourceId.
+                        // Explicitly exclude it: SQL NOT equality in `every`
+                        // otherwise misses NULL and overstates removal impact.
+                        none: { binding: { OR: [
+                            { directorySourceId: null },
+                            { directorySourceId: { not: input.sourceId } },
+                        ] } },
+                    },
                 },
             }),
             tx.teamGroupMembership.count({
