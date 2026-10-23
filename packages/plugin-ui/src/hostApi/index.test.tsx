@@ -132,6 +132,25 @@ function deferred<T>() {
 }
 
 describe('plugin host API hooks', () => {
+  it('distinguishes Machine admission from settled loading and preserves legacy context omission', async () => {
+    const host = createHostApiStub();
+    let answer: ReturnType<typeof usePluginHostReadiness> | undefined;
+    function Probe() { answer = usePluginHostReadiness(); return null; }
+    const render = (context: SurfaceContext) => (
+      <PluginUiHostReadinessProviderInternal hostApi={host.api} context={context}><Probe /></PluginUiHostReadinessProviderInternal>
+    );
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = createRenderer(render(createSurfaceContext({ machineConnectionPending: true, machineExecutionReady: false }))); });
+    expect(answer).toMatchObject({ pending: true, ready: false });
+    await act(async () => { tree.update(render(createSurfaceContext({ machineConnectionPending: false, machineExecutionReady: false }))); });
+    expect(answer).toMatchObject({ pending: false, ready: false });
+    await act(async () => { tree.update(render(createSurfaceContext({ machineConnectionPending: false, machineExecutionReady: true }))); });
+    expect(answer).toMatchObject({ pending: false, ready: true, revision: 1 });
+    await act(async () => { tree.update(render(createSurfaceContext())); });
+    expect(answer).toMatchObject({ pending: false });
+    expect(answer?.ready).toBeUndefined();
+  });
+
   it('reacquires Account reads on host readmission without holding them behind Machine readiness', async () => {
     const host = createHostApiStub();
     let answer: Readonly<{ pending: boolean; revision: number }> | undefined;
@@ -143,12 +162,12 @@ describe('plugin host API hooks', () => {
     );
     let tree!: renderer.ReactTestRenderer;
     await act(async () => { tree = createRenderer(render(true, false)); });
-    expect(answer).toEqual({ pending: false, revision: 0 });
+    expect(answer).toEqual({ pending: false, ready: true, revision: 0 });
     await act(async () => { tree.update(render(false, true)); });
-    expect(answer).toEqual({ pending: false, revision: 1 });
+    expect(answer).toEqual({ pending: false, ready: true, revision: 1 });
     // A settled daemon outage never hides or defers direct Account state.
     await act(async () => { tree.update(render(false, false)); });
-    expect(answer).toEqual({ pending: false, revision: 1 });
+    expect(answer).toEqual({ pending: false, ready: true, revision: 1 });
   });
 
   it('shares an injected Resource owner across mounts without disposing it on one unmount', async () => {

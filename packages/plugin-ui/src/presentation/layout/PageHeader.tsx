@@ -93,8 +93,15 @@ export type HappierPageHeaderProps = Readonly<{
    * page text step against the environment theme and host typography.
    */
   renderText?: HappierPageHeaderTextRender;
+  /**
+   * Wraps a part of the header in place without changing its layout, for an entrance that moves the identity
+   * (`mark`, `title`) and fades what supports it (`supporting`: the lines under the title, and the actions).
+   */
+  wrapPart?: HappierPageHeaderPartWrapper;
   testID?: string;
 }>;
+
+export type HappierPageHeaderPartWrapper = (part: 'mark' | 'title' | 'supporting', node: ReactNode) => ReactNode;
 
 export type HappierPageHeaderTextRender = (input: Readonly<{
   role: HappierPageTextRole;
@@ -298,14 +305,16 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
     </View>
   ) : null;
 
-  const title = showTitle ? renderPageText(props.title, titleRole, renderText, true) : null;
+  const wrapPart = props.wrapPart ?? null;
+  const renderedTitle = showTitle ? renderPageText(props.title, titleRole, renderText, true) : null;
+  const title = renderedTitle && wrapPart ? wrapPart('title', renderedTitle) : renderedTitle;
   const titleLine = title && props.titleAccessory ? (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
       <View style={{ flexShrink: 1, minWidth: 0 }}>{title}</View>
       {props.titleAccessory}
     </View>
   ) : title;
-  const textBelowTitle = (
+  const textBelowTitleContent = (
     <>
       {props.description ? (
         <View style={showTitle ? { marginTop: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx } : undefined}>
@@ -326,6 +335,7 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
       ) : null}
     </>
   );
+  const textBelowTitle = wrapPart ? wrapPart('supporting', textBelowTitleContent) : textBelowTitleContent;
   const splitTitleLine = showTitle && !centered && !inlineActions && Boolean(props.actions || props.status || props.reserveControlLine);
   const actionsBelowIdentity = splitTitleLine
     && actionsWrapWidthPx !== null && splitWidthPx !== null && splitWidthPx <= actionsWrapWidthPx;
@@ -339,7 +349,7 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
   const identityOffsetTopPx = Math.max(0, sharedLeadingHeightPx - identityHeightPx) / 2;
   const wrappedActionsTopPx = Math.max(sharedLeadingHeightPx, identityHeightPx) - identityOffsetTopPx + 12;
   const wrappedActionsWidthPx = splitWidthPx === null ? undefined : splitWidthPx + leadingInsetPx;
-  const actionsBlock = props.actions || props.status ? (
+  const actionsContent = props.actions || props.status ? (
             <View
               onLayout={splitTitleLine ? (event: HappierLayoutChangeEvent) => {
                 handleActionsNaturalLayout(event);
@@ -371,6 +381,7 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
               ) : null}
             </View>
           ) : null;
+  const actionsBlock = actionsContent && wrapPart ? wrapPart('supporting', actionsContent) : actionsContent;
 
   return (
     <View
@@ -402,7 +413,7 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
             : null}
           {props.leading ? (
             <View onLayout={handleLeadingLayout} style={{ flexShrink: 0, position: 'relative' }}>
-              {props.leading}
+              {wrapPart ? wrapPart('mark', props.leading) : props.leading}
               {gutterBack}
             </View>
           ) : null}

@@ -29,6 +29,8 @@ export type HappierSelectionActionBarAction = Readonly<{
   testID?: string;
   /** Drawn before the label in the bar's foreground colour. */
   renderIcon?: (color: string) => ReactNode;
+  /** `menu`: a rare action that always waits under ⋯, so the frequent ones keep their room. */
+  placement?: 'inline' | 'menu';
   onPress: () => unknown;
 }>;
 
@@ -103,25 +105,32 @@ export type HappierSelectionActionBarLayout = Readonly<{
   overflow: readonly HappierSelectionActionBarAction[];
 }>;
 
+/** Sub-pixel layout rounding: a bar this close to its column's width is filling it. */
+const FILL_EPSILON_PX = 0.5;
+
 /**
- * Whether the bar fits its column: folded only when the column is measurably narrower than the bar's
- * own natural width. The primary action (else the first) stays in view; the rest wait under ⋯.
+ * Whether the bar fits its column. The pill never grows past its column (`maxWidth: 100%`): content
+ * wider than that squeezes the label and clips the actions instead, so a pill that fills its column is
+ * the overflowing case. Then the primary action (else the first) stays in view and the rest wait under
+ * ⋯. Actions placed in the `menu` are under ⋯ either way.
  */
 export function resolveHappierSelectionActionBarLayout(input: Readonly<{
   actions: readonly HappierSelectionActionBarAction[];
   containerWidth: number;
   naturalWidth: number;
 }>): HappierSelectionActionBarLayout {
+  const listed = input.actions.filter((action) => action.placement !== 'menu');
+  const menu = input.actions.filter((action) => action.placement === 'menu');
   const folded = input.containerWidth > 0
     && input.naturalWidth > 0
-    && input.naturalWidth > input.containerWidth
-    && input.actions.length > 1;
-  if (!folded) return { folded: false, inline: input.actions, overflow: [] };
-  const kept = input.actions.find((action) => action.emphasis === 'primary') ?? input.actions[0]!;
+    && input.naturalWidth >= input.containerWidth - FILL_EPSILON_PX
+    && listed.length > 1;
+  if (!folded) return { folded: false, inline: listed, overflow: menu };
+  const kept = listed.find((action) => action.emphasis === 'primary') ?? listed[0]!;
   return {
     folded: true,
     inline: [kept],
-    overflow: input.actions.filter((action) => action !== kept),
+    overflow: [...listed.filter((action) => action !== kept), ...menu],
   };
 }
 

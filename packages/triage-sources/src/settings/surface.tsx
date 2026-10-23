@@ -96,6 +96,7 @@ import {
   readTriageSourceConfiguredInstances,
   readTriageSourceDiscovery,
   type TriageSourceSettingsConfigurationV1,
+  type TriageSourceSettingsDiscoveryV1,
   type TriageSourceSettingsRowControlV1,
   type TriageSourceSettingsRowLifecycleV1,
   type TriageSourceSettingsRowV1,
@@ -270,7 +271,7 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
     }, [discoveryDeadlineMs, runDiscovery]);
 
     React.useEffect(() => {
-      if (discoveryReadiness.pending) return;
+      if (discoveryReadiness.pending || discoveryReadiness.ready === false) return;
       let current = true;
       const acquire = () => { if (current) startDiscovery(); };
       const previous = activeDiscovery.current;
@@ -282,7 +283,7 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
         current = false;
         activeDiscovery.current?.controller.abort();
       };
-    }, [discoveryReadiness.pending, discoveryReadiness.revision, startDiscovery]);
+    }, [discoveryReadiness.pending, discoveryReadiness.ready, discoveryReadiness.revision, startDiscovery]);
 
     // Account configuration remains readable while Machine discovery is pending.
     // Both reads re-acquire on the host's existing readmission signal, never a timer.
@@ -291,9 +292,9 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
     }, [configuredReadiness.revision, runConfiguredRead]);
 
     const read = React.useCallback(() => {
-      if (!discoveryReadiness.pending) startDiscovery();
+      if (!discoveryReadiness.pending && discoveryReadiness.ready !== false) startDiscovery();
       void runConfiguredRead({ v: 1 });
-    }, [discoveryReadiness.pending, runConfiguredRead, startDiscovery]);
+    }, [discoveryReadiness.pending, discoveryReadiness.ready, runConfiguredRead, startDiscovery]);
 
     const refresh = React.useCallback(() => {
       // Everything this page learned from its own presses is discarded, because the
@@ -384,7 +385,13 @@ function createTriageSourceSettingsSurfaceWithDiscoveryDeadline(
       });
     }, [DraftEditor, submit]);
 
-    const discovered = readTriageSourceDiscovery(discovery.execution);
+    const discoveredRead = readTriageSourceDiscovery(discovery.execution);
+    // A settled host refusal has no discovery request to fail. Present the
+    // existing unavailable state without fabricating loading or dispatching a
+    // request that the same host has already said it cannot execute.
+    const discovered: TriageSourceSettingsDiscoveryV1 = !discoveryReadiness.pending
+      && discoveryReadiness.ready === false && discoveredRead.kind === 'loading'
+      ? { kind: 'unreachable', failure: null, message: null } : discoveredRead;
     const nativeLoginLabel = identity.nativeLoginLabel === undefined
       ? undefined
       : text(identity.nativeLoginLabel.key, identity.nativeLoginLabel.fallback);

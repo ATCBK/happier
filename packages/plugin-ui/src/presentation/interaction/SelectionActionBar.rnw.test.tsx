@@ -172,6 +172,23 @@ describe('resolveHappierSelectionActionBarLayout', () => {
     expect(layout.overflow.map((action) => action.id)).toEqual(['copy', 'send']);
   });
 
+  it('folds when the bar already fills its column, because the bar never grows past it and its content is clipped', () => {
+    const layout = resolveHappierSelectionActionBarLayout({ actions: list, containerWidth: 358, naturalWidth: 358 });
+    expect(layout.folded).toBe(true);
+    expect(layout.inline.map((action) => action.id)).toEqual(['ask']);
+  });
+
+  it('keeps a rare action behind ⋯ even when the bar fits, and leaves the frequent ones in view', () => {
+    const withRare = [...list, { id: 'side-run', label: 'Ask in a side run', placement: 'menu', onPress: () => undefined } as const];
+    const layout = resolveHappierSelectionActionBarLayout({ actions: withRare, containerWidth: 900, naturalWidth: 520 });
+    expect(layout.folded).toBe(false);
+    expect(layout.inline.map((action) => action.id)).toEqual(['copy', 'send', 'ask']);
+    expect(layout.overflow.map((action) => action.id)).toEqual(['side-run']);
+    const folded = resolveHappierSelectionActionBarLayout({ actions: withRare, containerWidth: 300, naturalWidth: 520 });
+    expect(folded.inline.map((action) => action.id)).toEqual(['ask']);
+    expect(folded.overflow.map((action) => action.id)).toEqual(['copy', 'send', 'side-run']);
+  });
+
   it('has nothing to fold before either width is known', () => {
     expect(resolveHappierSelectionActionBarLayout({ actions: list, containerWidth: 0, naturalWidth: 0 }).folded).toBe(false);
   });

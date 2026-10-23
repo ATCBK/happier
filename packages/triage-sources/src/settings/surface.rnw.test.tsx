@@ -248,6 +248,14 @@ describe('the mounted PRs & Issues source settings page', () => {
 
     await expect(page.getByText('Already configured')).resolves.toBeDefined();
     expect(discoveryReads).toBe(0);
+    // A settled Machine-less Account renderer is still not admitted to run
+    // discovery. Loading ending is not evidence of execution readiness.
+    await act(async () => { await page.updateSurface(createSurfaceContextFixture({
+      machineConnectionPending: false, machineExecutionReady: false,
+    })); });
+    expect(discoveryReads).toBe(0);
+    await pressControl(page, 'Refresh');
+    expect(discoveryReads).toBe(0);
     await act(async () => { await page.updateSurface(ready); });
     await expect(page.getByRole('button', { name: 'Add Workspace 1 to PRs & Issues' })).resolves.toBeDefined();
     await act(async () => { await page.updateSurface(ready); });

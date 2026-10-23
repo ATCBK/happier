@@ -60,7 +60,8 @@ export async function composeEmail(input: {
     html += `<blockquote>${escapeHtml(input.reply.text).replace(/\r\n|\n|\r/g, '<br>')}</blockquote>`;
   }
 
-  const { createTransport } = await import('nodemailer');
+  const nodemailer = await import('nodemailer');
+  const { createTransport } = { ...nodemailer.default, ...nodemailer };
   const transporter = createTransport({ streamTransport: true, buffer: true, newline: 'windows' });
   const result = await transporter.sendMail({
     from: { address: from, name: '' },

@@ -4,6 +4,8 @@ import type { PluginUiHostApi, SurfaceContext } from '@happier-dev/plugin-sdk/ui
 /** Host-owned loading plus the committed re-acquisition signal for mounted reads. */
 export type PluginUiHostReadiness = Readonly<{
   pending: boolean;
+  /** Exact host execution admission; omitted by hosts without this observation. */
+  ready?: boolean;
   /** Changes only when host prerequisites settle or execution is re-admitted. */
   revision: number;
 }>;
@@ -29,12 +31,13 @@ export function PluginUiHostReadinessProviderInternal(props: Readonly<{
     setObserved({ hostApi: props.hostApi, pending, ready,
       revision: replaced ? 0 : observed.revision + (readmitted ? 1 : 0) });
   }
-  const value = useMemo(() => Object.freeze({ pending, revision: observed.revision }), [pending, observed.revision]);
+  const value = useMemo(() => Object.freeze({ pending, ...(ready === undefined ? {} : { ready }),
+    revision: observed.revision }), [pending, ready, observed.revision]);
   return createElement(ReadinessContext.Provider, { value }, props.children);
 }
 
 /**
- * Shared read lifecycle. Defer Machine reads while pending and re-acquire on
+ * Shared read lifecycle. Defer Machine reads while pending or ready is false and re-acquire on
  * revision changes. A settled outage does not advance the revision: Retry stays
  * caller-owned. Account-local reads are never held behind Machine readiness,
  * but share re-acquisition when the mounted host's prerequisites settle.
@@ -42,5 +45,7 @@ export function PluginUiHostReadinessProviderInternal(props: Readonly<{
 export function usePluginHostReadiness(machineBound = true): PluginUiHostReadiness {
   const readiness = useContext(ReadinessContext);
   const pending = machineBound && readiness.pending;
-  return useMemo(() => Object.freeze({ pending, revision: readiness.revision }), [pending, readiness.revision]);
+  const ready = machineBound ? readiness.ready : true;
+  return useMemo(() => Object.freeze({ pending, ...(ready === undefined ? {} : { ready }),
+    revision: readiness.revision }), [pending, ready, readiness.revision]);
 }
