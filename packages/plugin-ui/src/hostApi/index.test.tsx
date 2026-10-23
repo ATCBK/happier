@@ -151,23 +151,53 @@ describe('plugin host API hooks', () => {
     expect(answer?.ready).toBeUndefined();
   });
 
-  it('reacquires Account reads on host readmission without holding them behind Machine readiness', async () => {
+  it('waits for requester admission without coupling Account reads to Machine readmission', async () => {
     const host = createHostApiStub();
-    let answer: Readonly<{ pending: boolean; revision: number }> | undefined;
+    let answer: ReturnType<typeof usePluginHostReadiness> | undefined;
     function Probe() { answer = usePluginHostReadiness(false); return null; }
-    const render = (pending: boolean, ready: boolean) => (
+    const render = (pending: boolean, ready: boolean, requesterExecutionReady?: boolean) => (
       <PluginUiHostReadinessProviderInternal hostApi={host.api} context={createSurfaceContext({
-        machineConnectionPending: pending, machineExecutionReady: ready,
+        machineConnectionPending: pending, machineExecutionReady: ready, requesterExecutionReady,
       })}><Probe /></PluginUiHostReadinessProviderInternal>
     );
     let tree!: renderer.ReactTestRenderer;
-    await act(async () => { tree = createRenderer(render(true, false)); });
-    expect(answer).toEqual({ pending: false, ready: true, revision: 0 });
-    await act(async () => { tree.update(render(false, true)); });
+    await act(async () => { tree = createRenderer(render(true, false, false)); });
+    expect(answer).toEqual({ pending: false, ready: false, revision: 0 });
+    await act(async () => { tree.update(render(false, true, false)); });
+    expect(answer).toEqual({ pending: false, ready: false, revision: 0 });
+    await act(async () => { tree.update(render(true, false, true)); });
     expect(answer).toEqual({ pending: false, ready: true, revision: 1 });
-    // A settled daemon outage never hides or defers direct Account state.
+    await act(async () => { tree.update(render(false, true, true)); });
+    expect(answer).toEqual({ pending: false, ready: true, revision: 1 });
+    // A settled daemon outage never hides or re-starts direct Account state.
+    await act(async () => { tree.update(render(false, false, true)); });
+    expect(answer).toEqual({ pending: false, ready: true, revision: 1 });
+    // Omission preserves hosts without the new requester observation.
     await act(async () => { tree.update(render(false, false)); });
     expect(answer).toEqual({ pending: false, ready: true, revision: 1 });
+  });
+
+  it.each([
+    { kind: 'plugin', reference: resourceRef },
+    { kind: 'Account host read', reference: { hostRead: 'usage.query', input: { queries: [] } } },
+  ] satisfies ReadonlyArray<{ kind: string; reference: Parameters<PluginUiHostApi['readResource']>[0] }>)
+  ('holds automatic and manual Resource reads until its requester is admitted ($kind)', async ({ reference }) => {
+    const host = createHostApiStub();
+    let result!: ReturnType<typeof usePluginResource>;
+    function Probe() { result = usePluginResource(reference); return null; }
+    const render = (requesterExecutionReady: boolean) => (
+      <PluginUiHostReadinessProviderInternal hostApi={host.api} context={createSurfaceContext({
+        machineConnectionPending: false, machineExecutionReady: true, requesterExecutionReady,
+      })}><PluginHostApiProvider hostApi={host.api}><Probe /></PluginHostApiProvider></PluginUiHostReadinessProviderInternal>
+    );
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = createRenderer(render(false)); });
+    expect(host.api.readResource).not.toHaveBeenCalled();
+    await act(async () => { await result.refresh(); });
+    expect(host.api.readResource).not.toHaveBeenCalled();
+    await act(async () => { tree.update(render(true)); });
+    expect(host.api.readResource).toHaveBeenCalledTimes(1);
+    expect(result.resource.value).toBeDefined();
   });
 
   it('shares an injected Resource owner across mounts without disposing it on one unmount', async () => {

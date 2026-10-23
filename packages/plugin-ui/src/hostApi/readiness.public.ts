@@ -10,8 +10,10 @@ export type PluginUiHostReadiness = Readonly<{
   revision: number;
 }>;
 
-const UNSPECIFIED: PluginUiHostReadiness = Object.freeze({ pending: false, revision: 0 });
-const ReadinessContext = createContext<PluginUiHostReadiness>(UNSPECIFIED);
+type HostReadinessProjection = PluginUiHostReadiness & Readonly<{ requester: PluginUiHostReadiness }>;
+const UNSPECIFIED: HostReadinessProjection = Object.freeze({ pending: false, revision: 0,
+  requester: Object.freeze({ pending: false, ready: true, revision: 0 }) });
+const ReadinessContext = createContext<HostReadinessProjection>(UNSPECIFIED);
 /** @internal Carries the same read owner into host-rendered panes. */
 export const PLUGIN_UI_HOST_READINESS_CONTEXT_INTERNAL = ReadinessContext;
 
@@ -22,30 +24,36 @@ export function PluginUiHostReadinessProviderInternal(props: Readonly<{
   children?: ReactNode;
 }>) {
   const pending = props.context.machineConnectionPending === true;
-  const ready = props.context.machineExecutionReady;
-  const [observed, setObserved] = useState(() => ({ hostApi: props.hostApi, pending, ready, revision: 0 }));
-  if (observed.hostApi !== props.hostApi || observed.pending !== pending || observed.ready !== ready) {
+  const requesterReady = props.context.requesterExecutionReady !== false;
+  const ready = requesterReady ? props.context.machineExecutionReady : false;
+  const [observed, setObserved] = useState(() => ({ hostApi: props.hostApi, pending, ready, requesterReady,
+    revision: 0, requesterRevision: 0 }));
+  if (observed.hostApi !== props.hostApi || observed.pending !== pending || observed.ready !== ready
+    || observed.requesterReady !== requesterReady) {
     const replaced = observed.hostApi !== props.hostApi;
     const readmitted = (!observed.ready && ready === true)
       || (observed.pending && !pending && ready !== false);
-    setObserved({ hostApi: props.hostApi, pending, ready,
-      revision: replaced ? 0 : observed.revision + (readmitted ? 1 : 0) });
+    setObserved({ hostApi: props.hostApi, pending, ready, requesterReady,
+      revision: replaced ? 0 : observed.revision + (readmitted ? 1 : 0),
+      requesterRevision: replaced ? 0 : observed.requesterRevision + (!observed.requesterReady && requesterReady ? 1 : 0) });
   }
+  const requester = useMemo(() => Object.freeze({ pending: false, ready: requesterReady,
+    revision: observed.requesterRevision }), [requesterReady, observed.requesterRevision]);
   const value = useMemo(() => Object.freeze({ pending, ...(ready === undefined ? {} : { ready }),
-    revision: observed.revision }), [pending, ready, observed.revision]);
+    revision: observed.revision, requester }), [pending, ready, observed.revision, requester]);
   return createElement(ReadinessContext.Provider, { value }, props.children);
 }
 
 /**
  * Shared read lifecycle. Defer Machine reads while pending or ready is false and re-acquire on
  * revision changes. A settled outage does not advance the revision: Retry stays
- * caller-owned. Account-local reads are never held behind Machine readiness,
- * but share re-acquisition when the mounted host's prerequisites settle.
+ * caller-owned. Account-local reads wait for their requester, never an unrelated
+ * Machine, and reacquire only when that requester's admission returns.
  */
 export function usePluginHostReadiness(machineBound = true): PluginUiHostReadiness {
   const readiness = useContext(ReadinessContext);
-  const pending = machineBound && readiness.pending;
-  const ready = machineBound ? readiness.ready : true;
+  const selected = machineBound ? readiness : readiness.requester;
+  const { pending, ready, revision } = selected;
   return useMemo(() => Object.freeze({ pending, ...(ready === undefined ? {} : { ready }),
-    revision: readiness.revision }), [pending, ready, readiness.revision]);
+    revision }), [pending, ready, revision]);
 }

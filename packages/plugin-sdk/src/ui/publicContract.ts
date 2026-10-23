@@ -298,6 +298,8 @@ export type PluginUiHostApiSurfaceContextV1 = {
     machineConnectionPending?: boolean;
     /** Exact-target execution is currently admitted. Observation only; every invocation revalidates authority. */
     machineExecutionReady?: boolean;
+    /** The mounted requester's origin is admitted. Observation only; invocations still revalidate authority. */
+    requesterExecutionReady?: boolean;
     accountEncryptionMode: 'plain' | 'e2ee';
     platform: PluginUiPlatform;
     locale: string;

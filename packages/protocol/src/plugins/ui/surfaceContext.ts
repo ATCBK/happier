@@ -224,6 +224,8 @@ export const PluginUiHostApiSurfaceContextV1Schema = lazyZodSchema(() => z.stric
   machineConnectionPending: z.optional(z.boolean()),
   /** Read-only exact-target availability; a positive edge can resume a refused read, never authorize an effect. */
   machineExecutionReady: z.optional(z.boolean()),
+  /** Read-only requester-origin admission, independent of any callee or selected Machine. */
+  requesterExecutionReady: z.optional(z.boolean()),
   accountEncryptionMode: z.enum(['plain', 'e2ee']),
   platform: PluginUiPlatformV1Schema,
   locale: PluginUiHostApiSurfaceNonBlankStringV1Schema,
