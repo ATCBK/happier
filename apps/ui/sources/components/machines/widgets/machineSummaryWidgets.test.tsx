@@ -13,7 +13,7 @@ import {
   RPC_ERROR_MESSAGES,
 } from '@happier-dev/protocol/rpcErrors';
 
-import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import {
   createHomeGovernanceHarness,
@@ -81,6 +81,7 @@ const { machineResourceStore } =
 const { WidgetFrameBodyMetaContext } =
   await import('@/components/widgets/frame/widgetFrameBodyCaption');
 const { MachineVitalsWidget } = await import('./MachineVitalsWidget');
+const { useMachineWidgetVitalsView } = await import('./machineWidgetVitalsView');
 const { MachineAttentionStatedAbove } =
   await import('./machineAttentionStatedAbove');
 const { MachineFleetWidget, orderFleetMachines, resolveFleetPresentation } =
@@ -207,6 +208,55 @@ function expectInlineChip(screen: { findByTestId: (id: string) => { props: { sty
 }
 
 describe('Vitals widget (lab rw V, VS)', () => {
+  it.each(['24h', '7d'] as const)('publishes zero unchanged %s chart projections for live arrivals and refreshes changed history', async range => {
+    const { MachineVitalsHistoryV1Schema } = await import('@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1');
+    const { commitPreferredLanguage, getPreferredLanguage } = await import('@/text/preferredLanguage');
+    const originalLanguage = getPreferredLanguage();
+    const translate = vi.spyOn(await import('@/text'), 't').mockImplementation(key => String(key).startsWith('machineVitals.range.')
+      ? `${getPreferredLanguage()}:${String(key)}` : String(key));
+    const at = Date.now();
+    seed(createMachineFixture({ id: 'm1', active: true, activeAt: at, daemonStateVersion: 1, daemonState: { resources } }));
+    const bucketMs = range === '7d' ? 1_800_000 : 300_000;
+    let history = MachineVitalsHistoryV1Schema.parse({ range, bucketMs,
+      points: Array.from({ length: range === '7d' ? 336 : 288 }, (_, index) => ({
+        t: at - (336 - index) * bucketMs, cpu: 12, cpuMax: 20, mem: 57e9, memMax: 60e9,
+        lvl: 'calm', swp: null, rx: 120, tx: 30, rxObservedMs: bucketMs, txObservedMs: bucketMs,
+      })), today: { rxBytes: 120, txBytes: 30 } });
+    let observedAt = at;
+    boundary.rpc.mockImplementation(async input => {
+      if (input.method.includes('watch')) return new Promise(() => {});
+      if (input.method.includes('history')) return history;
+      return { state: 'reporting', sample: sample(observedAt),
+        series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] }, attention: { level: 'calm', reasons: [] } };
+    });
+    const target = { serverId: HOME, machineId: 'm1' };
+    const hook = await renderHook(() => useMachineWidgetVitalsView({ target, facts: useMachineWidgetMachine(target), range }));
+    try {
+      await flushHookEffects();
+      const original = hook.getCurrent();
+      expect(original.timeline?.points).toHaveLength(history.points.length);
+      let publications = 0;
+      for (let arrival = 1; arrival <= 10; arrival++) {
+        observedAt = at + arrival * 2_000;
+        const previous = hook.getCurrent();
+        await act(async () => { await machineResourceStore.read({ ...target, expectedAccountId: 'owner', view: 'overview' }); });
+        if (hook.getCurrent().timeline !== previous.timeline || hook.getCurrent().axis !== previous.axis) publications++;
+      }
+      expect(publications).toBe(0);
+      // Live figures still advance; only the daemon-owned long-range chart stays unchanged.
+      const currentView = hook.getCurrent().view;
+      expect(currentView.kind === 'ready' && currentView.sample.sampledAt).toBe(observedAt);
+      const previous = hook.getCurrent().timeline;
+      history = { ...history, points: [...history.points.slice(0, -1), { ...history.points.at(-1)!, cpu: 80, cpuMax: 90 }] };
+      await act(async () => { await machineResourceStore.readHistory({ ...target, expectedAccountId: 'owner', range }); });
+      expect(hook.getCurrent().timeline).not.toBe(previous);
+      expect(hook.getCurrent().timeline?.points.at(-1)?.cpu).toBe(80);
+      const nextLanguage = originalLanguage === 'fr' ? 'en' : 'fr';
+      await act(async () => { commitPreferredLanguage(nextLanguage); });
+      expect(hook.getCurrent().axis[1]).toBe(`${nextLanguage}:machineVitals.range.now`);
+    } finally { await hook.unmount(); commitPreferredLanguage(originalLanguage); translate.mockRestore(); }
+  });
+
   it('bounds custom disk alerts by this Account’s retained volume rather than treating it as unread', async () => {
     const { MachineResourcesPolicyV1Schema } =
       await import('@happier-dev/protocol/machines/resources/machineResourcesPolicyV1');

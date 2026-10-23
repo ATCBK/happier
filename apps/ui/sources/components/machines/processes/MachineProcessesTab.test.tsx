@@ -1120,7 +1120,7 @@ describe('MachineProcessesTab port chips', () => {
         ).toMatchObject({
           title: 'Open in browser',
           disabled: true,
-          subtitle: 'This device can’t open it directly. Share a link from Local services to open it here.',
+          subtitle: 'This device can’t open it directly. Share a link from Services to open it here.',
         }),
       );
     });

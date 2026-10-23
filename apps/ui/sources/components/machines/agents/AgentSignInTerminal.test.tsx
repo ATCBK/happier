@@ -5,6 +5,7 @@ import { createDeferred, createMachineFixture, renderHook, renderScreen, standar
 import { createServerScopedMachineRpcBoundaryMock } from '@/dev/testkit/mocks/serverScopedRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { observeMachinePresenceForTest } from '@/dev/testkit/harness/machinePresence';
 import { ApprovalRequestSchema, type DaemonTerminalEnsureResponse, type DaemonTerminalStreamReadResponse } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -72,6 +73,7 @@ describe('Agent sign-in terminal lifecycle on web', () => {
         getStorage().setState({ machines: { [machineId]: machine },
             machineListByServerId: { [serverId]: [machine] },
             machineListStatusByServerId: { [serverId]: 'idle' } });
+        observeMachinePresenceForTest({ serverId, accountId: 'fixture-account' }, [machineId]);
         boundary.rpc.mockImplementation(async ({ method }: { method: string }) => {
             if (method === 'daemon.agents.signIn.prepare') return { method: 'native', launch: { kind: 'agent_login', agentId: 'codex' } };
             if (method === 'daemon.terminal.ensure') {
