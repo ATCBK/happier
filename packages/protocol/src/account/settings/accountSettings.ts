@@ -1216,7 +1216,7 @@ const ACCOUNT_SCM_AND_FILES_CATALOG_DEFINITIONS = {
     'scm.diffSummary.modelProfileOverride': accountPreference(accountBoundedString(256), '', 'source control'),
     // Reuse the Account language preference's scalar storage boundary; empty follows the UI locale.
     'scm.diffSummary.outputLanguage': accountPreference(accountBoundedString(256), '', 'source control'),
-    filesDiffSyntaxHighlightingMode: accountPreference(z.enum(['off', 'simple', 'advanced']), 'simple', 'file presentation'),
+    filesDiffSyntaxHighlightingMode: accountPreference(z.enum(['off', 'simple', 'advanced']), 'advanced', 'file presentation'),
     filesDiffRendererMode: accountPreference(z.enum(['happier', 'pierre']), 'pierre', 'file presentation'),
     filesDiffPresentationStyle: accountPreference(z.enum(['unified', 'split']), 'unified', 'file presentation'),
     filesDiffFileListVirtualizationMinFiles: accountPreference(accountNonNegativeInteger(), 20, 'file presentation'),

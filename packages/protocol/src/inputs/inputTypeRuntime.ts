@@ -56,9 +56,6 @@ export type ResolvedInputTypeV1 = Readonly<{
 
 /** A consuming field narrows the type's values; it owns any explicitly declared source. */
 export function readInputFieldOptionsSourceId(field: Pick<InputFieldHint, 'inputType' | 'optionsSourceId'>): string | undefined {
-  if (field.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'agentParticipant') {
-    return field.optionsSourceId;
-  }
   return field.optionsSourceId ?? (field.inputType ? inputTypeOptionsSourceId(field.inputType) : undefined);
 }
 

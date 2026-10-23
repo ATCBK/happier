@@ -34,7 +34,10 @@ export type RoleSourceInventoryV1 = Readonly<{
   entries: readonly RoleActionEntryV1[];
   diagnostics: readonly RoleSourceDiagnosticV1[];
 }>;
-export type RoleSourceReaderV1 = (signal?: AbortSignal) => Promise<RoleSourceInventoryV1>;
+export type RoleSourceReaderV1 = (signal?: AbortSignal, options?: Readonly<{
+  /** Omitted means the complete catalog; otherwise return only the requested Roles. */
+  roleIds?: readonly string[];
+}>) => Promise<RoleSourceInventoryV1>;
 export type RoleSourceReaderParamsV1 = Readonly<{
   artifactStore?: Pick<RoleArtifactStoreV1, 'read' | 'list'>;
   readPluginRoles?: (signal?: AbortSignal) => readonly PluginRoleContributionV1[] | Promise<readonly PluginRoleContributionV1[]>;
@@ -95,48 +98,72 @@ export function projectSessionRoleRpcFailureV1(actionId: string, errorCode: stri
 
 /** Shared Account source owner; hosts supply only Artifact/settings and plugin projection boundaries. */
 export function createRoleSourceReaderV1(params: RoleSourceReaderParamsV1): RoleSourceReaderV1 {
-  return async (signal) => {
+  return async (signal, options) => {
     signal?.throwIfAborted();
+    const selectedRoleIds = options?.roleIds === undefined ? undefined : new Set(options.roleIds);
+    if (selectedRoleIds?.size === 0) return { status: 'ready', entries: [], diagnostics: [] };
+    const customRoleIds = selectedRoleIds ? [...selectedRoleIds]
+      .filter(roleId => !Object.hasOwn(BUILT_IN_ROLES_V1, roleId) && !roleId.startsWith('plugin:')) : undefined;
     const artifactEntries: RoleActionEntryV1[] = [];
     const diagnostics: RoleSourceDiagnosticV1[] = [];
     let artifactCoveragePartial = false;
     let legacyUnavailable = false;
-    // Start independent persistence reads before plugin projection, which can
-    // be synchronous. Merge only after all sources resolve to retain source order.
+    const appendArtifact = (artifact: Readonly<{
+      artifactId: string; header: Readonly<Record<string, unknown>>; body?: unknown; access?: unknown;
+    }>, revision: Readonly<{ headerVersion: number; bodyVersion?: number }>) => {
+      if (artifact.header.kind !== 'role.v1') return;
+      const role = readStoredRoleBodyV1(artifact.body);
+      if (!role || revision.bodyVersion === undefined) {
+        diagnostics.push({ source: 'artifact', artifactId: artifact.artifactId, reason: 'invalid_stored_content' });
+        return;
+      }
+      const access = ArtifactCallerAccessV1Schema.parse(artifact.access);
+      artifactEntries.push({ roleId: artifact.artifactId, role,
+        revision: { headerVersion: revision.headerVersion, bodyVersion: revision.bodyVersion },
+        shared: access !== 'owner', viewOnly: access === 'view', migratedFromV0_2: artifact.header.migratedFromV0_2 === true });
+    };
+    // Full catalogs start independent persistence reads before plugin projection.
+    // Merge after sources resolve to retain their canonical precedence and order.
+    const artifactRead = (async () => {
+      const artifactStore = params.artifactStore;
+      if (!artifactStore) return;
+      if (customRoleIds) {
+        const artifacts = await Promise.all(customRoleIds.map(roleId => artifactStore.read(roleId, signal ? { signal } : undefined)));
+        signal?.throwIfAborted();
+        for (const artifact of artifacts) if (artifact) appendArtifact(artifact, artifact.revision);
+        return;
+      }
+      let cursor: string | undefined;
+      do {
+        // The Artifact list owner's maximum page is 500; consume every page.
+        const page = await artifactStore.list({ kind: 'role.v1', coarseKind: 'other', limit: 500, includeBody: true,
+          ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
+        if (page.coverage === 'partial') artifactCoveragePartial = true;
+        for (const header of page.items) {
+          // The Artifact page owns the matching header/body revision and opens
+          // their envelopes in a batch. Per-role rereads add latency and can
+          // observe a different revision from the listed document.
+          appendArtifact(header, header);
+        }
+        if (page.nextCursor === cursor && page.nextCursor !== undefined) refuse('artifact_list_cursor_invalid');
+        cursor = page.nextCursor;
+      } while (cursor);
+    })();
     const [, rawSettings, pluginRoles] = await Promise.all([
-      (async () => {
-        if (!params.artifactStore) return;
-        let cursor: string | undefined;
-        do {
-          // The Artifact list owner's maximum page is 500; consume every page.
-          const page = await params.artifactStore.list({ kind: 'role.v1', limit: 500, includeBody: true,
-            ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
-          if (page.coverage === 'partial') artifactCoveragePartial = true;
-          for (const header of page.items) {
-            if (header.header.kind !== 'role.v1') continue;
-            // The Artifact page owns the matching header/body revision and opens
-            // their envelopes in a batch. Per-role rereads add latency and can
-            // observe a different revision from the listed document.
-            if (typeof header.body !== 'string' || header.bodyVersion === undefined) {
-              diagnostics.push({ source: 'artifact', artifactId: header.artifactId, reason: 'invalid_stored_content' });
-              continue;
-            }
-            const role = readStoredRoleBodyV1(header.body);
-            if (!role) { diagnostics.push({ source: 'artifact', artifactId: header.artifactId, reason: 'invalid_stored_content' }); continue; }
-            const access = ArtifactCallerAccessV1Schema.parse(header.access);
-            artifactEntries.push({ roleId: header.artifactId, role, revision: { headerVersion: header.headerVersion, bodyVersion: header.bodyVersion },
-              shared: access !== 'owner', viewOnly: access === 'view', migratedFromV0_2: header.header.migratedFromV0_2 === true });
-          }
-          if (page.nextCursor === cursor && page.nextCursor !== undefined) refuse('artifact_list_cursor_invalid');
-          cursor = page.nextCursor;
-        } while (cursor);
-      })(),
+      artifactRead,
       (async (): Promise<Awaited<ReturnType<NonNullable<RoleSourceReaderParamsV1['readRawAccountSettings']>>> | void> => {
         if (!params.accountId || !params.readRawAccountSettings) return;
+        if (customRoleIds) {
+          // Canonical Artifacts win over retained guidance. Only unresolved
+          // selected identities need the legacy Settings fallback.
+          await artifactRead;
+          if (customRoleIds.every(roleId => artifactEntries.some(entry => entry.roleId === roleId))) return;
+        }
         try { return await params.readRawAccountSettings(); }
         catch { signal?.throwIfAborted(); legacyUnavailable = true; }
       })(),
-      Promise.resolve().then(() => params.readPluginRoles?.(signal) ?? []),
+      Promise.resolve().then(() => !selectedRoleIds || [...selectedRoleIds].some(roleId => roleId.startsWith('plugin:'))
+        ? params.readPluginRoles?.(signal) ?? [] : []),
     ]);
     const entries: RoleActionEntryV1[] = Object.entries(BUILT_IN_ROLES_V1).map(([roleId, role]) => ({
       roleId, role, shared: false, viewOnly: false, migratedFromV0_2: false,
@@ -158,7 +185,8 @@ export function createRoleSourceReaderV1(params: RoleSourceReaderParamsV1): Role
       }
     }
     signal?.throwIfAborted();
-    return { status: diagnostics.length || artifactCoveragePartial ? 'partial' : 'ready', entries, diagnostics };
+    return { status: diagnostics.length || artifactCoveragePartial ? 'partial' : 'ready',
+      entries: selectedRoleIds ? entries.filter(entry => selectedRoleIds.has(entry.roleId)) : entries, diagnostics };
   };
 }
 
@@ -228,7 +256,7 @@ export function createAccountRoleActionExecutorV1(params: RoleSourceReaderParams
     if (actionId === 'roles.list') { const source = await listEntries(context.signal); return { items: source.entries, diagnostics: source.diagnostics }; }
     if (actionId === 'roles.get') {
       const request = RoleActionInputSchemasV1[actionId].parse(input);
-      const source = await listEntries(context.signal);
+      const source = await listEntries(context.signal, { roleIds: [request.roleId] });
       const entry = source.entries.find((item) => item.roleId === request.roleId);
       if (!entry) refuse(source.status === 'partial' ? 'role_source_incomplete' : 'role_target_unavailable');
       return entry;

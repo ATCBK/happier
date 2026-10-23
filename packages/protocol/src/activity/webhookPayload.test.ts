@@ -112,7 +112,7 @@ describe('buildActivityWebhookPayload', () => {
   it.each([
     { source: { kind: 'execution_run' as const, sessionId: 'c111111111111111111111111', runId: 'execution' }, terminalEventId: 'terminal' },
     { source: { kind: 'workflow_run' as const, runId: 'workflow' }, revision: 3 },
-  ])('preserves exact Run originals through webhook and private Inbox consumers', original => {
+  ])('preserves exact Run originals through webhooks while rejecting retired Inbox notice copies', original => {
     const follow = { original, event: { kind: 'failed_or_stopped' as const } };
     const notice = { topic: 'follow_update' as const, follow };
     const payload = buildActivityWebhookPayload({ channelId: 'run-hook', createdAt: 1, topic: notice.topic,
@@ -122,7 +122,7 @@ describe('buildActivityWebhookPayload', () => {
       navigation: { source: { ...original.source, runId: 'another-run' } } }).success).toBe(false);
     const content = { v: 1, source: { kind: 'host', topic: notice.topic }, type: 'update', resolved: false, notice };
     const header = { ...content, kind: 'account_notice.v1', title: 'Run failed', status: 'open' };
-    expect(readAccountNoticeArtifactV1({ header, body: JSON.stringify(content) })).toEqual(header);
+    expect(readAccountNoticeArtifactV1({ header, body: JSON.stringify(content) })).toBeNull();
   });
   it('carries one strict Follow original without private rules or forwarded human text', () => {
     const follow = { event: { kind: 'person_wrote' as const }, sourceMessage: { localId: 'human-original', seq: 3 } };

@@ -88,6 +88,101 @@ function createHarness(readError?: Error, guidanceSource?: Readonly<Record<strin
 const context = { surface: 'ui', authority: 'present_user' } as const;
 
 describe('Account Role Action refusal projection', () => {
+  it('demands only the selected source and consults legacy Settings only for unresolved custom Roles', async () => {
+    const settings = { executionRunsGuidanceEntries: [{ id: 'legacy', description: 'Retained guidance' }] };
+    const [legacy] = readLegacyRoleInventoryV1(settings, 'account').entries;
+    if (!legacy) throw new Error('Expected legacy Role identity');
+    const reads: string[] = [];
+    let pluginsAvailable = false;
+    let settingsAvailable = false;
+    const read = createRoleSourceReaderV1({ accountId: 'account',
+      readRawAccountSettings: async () => { reads.push('settings'); if (!settingsAvailable) throw new Error('Settings unavailable'); return settings; },
+      readPluginRoles: () => { reads.push('plugins'); if (!pluginsAvailable) throw new Error('Plugin catalog unavailable');
+        return [{ pluginId: 'example', localId: 'review', role: BUILT_IN_ROLES_V1.reviewer }]; },
+      artifactStore: {
+        list: async () => { throw new Error('Selected reads must not inventory Artifacts'); },
+        read: async artifactId => { reads.push(artifactId); return artifactId === 'custom' ? {
+          artifactId, header: { kind: 'role.v1' }, body: JSON.stringify(BUILT_IN_ROLES_V1.builder),
+          revision: { headerVersion: 1, bodyVersion: 2 }, ownerAccountId: 'account', access: 'owner',
+        } : null; },
+      },
+    });
+    expect(await read(undefined, { roleIds: [] })).toEqual({ status: 'ready', entries: [], diagnostics: [] });
+    expect(reads).toEqual([]);
+    expect(await read(undefined, { roleIds: ['builder'] })).toMatchObject({ status: 'ready', diagnostics: [],
+      entries: [{ roleId: 'builder', role: BUILT_IN_ROLES_V1.builder }] });
+    expect(reads).toEqual([]);
+    expect(await read(undefined, { roleIds: ['custom'] })).toMatchObject({ status: 'ready', diagnostics: [],
+      entries: [{ roleId: 'custom', revision: { headerVersion: 1, bodyVersion: 2 } }] });
+    expect(reads).toEqual(['custom']);
+    pluginsAvailable = true;
+    expect(await read(undefined, { roleIds: ['plugin:example/review'] })).toMatchObject({ status: 'ready', diagnostics: [],
+      entries: [{ roleId: 'plugin:example/review', role: BUILT_IN_ROLES_V1.reviewer }] });
+    expect(reads).toEqual(['custom', 'plugins']);
+    expect(await read(undefined, { roleIds: [legacy.artifactId] })).toMatchObject({ status: 'partial', entries: [],
+      diagnostics: [{ source: 'legacy-guidance', reason: 'unavailable' }] });
+    settingsAvailable = true;
+    expect(await read(undefined, { roleIds: [legacy.artifactId] })).toMatchObject({ status: 'ready', diagnostics: [],
+      entries: [{ roleId: legacy.artifactId, role: legacy.role, migratedFromV0_2: true }] });
+    expect(reads).toEqual(['custom', 'plugins', legacy.artifactId, 'settings', legacy.artifactId, 'settings']);
+    const controller = new AbortController(); controller.abort(new Error('cancelled'));
+    await expect(read(controller.signal, { roleIds: [] })).rejects.toThrow('cancelled');
+  });
+
+  it('reads selected Role identities freshly without opening unrelated Artifact inventory', async () => {
+    const rawSettings = { executionRunsGuidanceEntries: [{ id: 'legacy', description: 'Retained guidance' }] };
+    const [legacy] = readLegacyRoleInventoryV1(rawSettings, 'account').entries;
+    if (!legacy) throw new Error('Expected legacy Role identity');
+    const reads: string[] = [];
+    let instructions = 'First revision';
+    let revision = { headerVersion: 2, bodyVersion: 3 };
+    let outcome: 'ready' | 'missing' | 'wrong-kind' | 'invalid' | 'refused' | 'cancelled' = 'ready';
+    const controller = new AbortController();
+    const read = createRoleSourceReaderV1({ accountId: 'account', readRawAccountSettings: async () => rawSettings,
+      readPluginRoles: () => [{ pluginId: 'example', localId: 'review', role: BUILT_IN_ROLES_V1.reviewer }],
+      artifactStore: {
+        // Persistence is the boundary. A broad scan would encounter an unrelated locked document.
+        list: async () => { throw new Error('Unrelated encrypted Artifact must not be opened'); },
+        read: async (artifactId, options) => {
+          reads.push(artifactId);
+          if (outcome === 'refused') throw Object.assign(new Error('Artifact admission refused'), { code: 'artifact_account_mode_mismatch' });
+          if (outcome === 'cancelled') { controller.abort(new Error('cancelled')); options?.signal?.throwIfAborted(); }
+          if (outcome === 'missing' || artifactId === legacy.artifactId) return null;
+          return { artifactId, header: { kind: outcome === 'wrong-kind' ? 'memory_doc.v1' : 'role.v1' },
+            body: outcome === 'invalid' ? '{' : JSON.stringify({ ...BUILT_IN_ROLES_V1.builder, instructions }),
+            revision, ownerAccountId: 'account', access: 'view' };
+        },
+      },
+    });
+    expect(await read(undefined, { roleIds: [] })).toEqual({ status: 'ready', entries: [], diagnostics: [] });
+    expect((await read(undefined, { roleIds: ['builder', 'plugin:example/review'] })).entries.map(entry => entry.roleId))
+      .toEqual(['builder', 'plugin:example/review']);
+    expect(reads).toEqual([]);
+    const selected = await read(undefined, { roleIds: ['custom-a', 'custom-b', 'custom-a', legacy.artifactId] });
+    expect(reads).toEqual(['custom-a', 'custom-b', legacy.artifactId]);
+    expect(selected.entries).toEqual([
+      ...['custom-a', 'custom-b'].map(roleId => ({ roleId, role: { ...BUILT_IN_ROLES_V1.builder, instructions },
+        revision, shared: true, viewOnly: true, migratedFromV0_2: false })),
+      { roleId: legacy.artifactId, role: legacy.role, shared: false, viewOnly: false, migratedFromV0_2: true },
+    ]);
+    const execute = createAccountRoleActionExecutorV1({ readRoleSources: read, generateId: () => 'unused' });
+    instructions = 'Fresh revision'; revision = { headerVersion: 4, bodyVersion: 5 };
+    expect(await execute({ actionId: 'roles.get', input: { roleId: 'custom-a' }, context }))
+      .toMatchObject({ roleId: 'custom-a', role: { instructions }, revision });
+    for (const unavailable of ['missing', 'wrong-kind'] as const) {
+      outcome = unavailable;
+      await expect(execute({ actionId: 'roles.get', input: { roleId: 'custom-a' }, context }))
+        .rejects.toThrow('role_target_unavailable');
+    }
+    outcome = 'invalid';
+    expect(await read(undefined, { roleIds: ['custom-a'] })).toMatchObject({ status: 'partial', entries: [],
+      diagnostics: [{ source: 'artifact', artifactId: 'custom-a', reason: 'invalid_stored_content' }] });
+    outcome = 'refused';
+    await expect(read(undefined, { roleIds: ['custom-a'] })).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
+    outcome = 'cancelled';
+    await expect(read(controller.signal, { roleIds: ['custom-a'] })).rejects.toThrow('cancelled');
+  });
+
   it('overlaps independent source reads while preserving the complete ordered Role inventory', async () => {
     const rawSettings = { executionRunsGuidanceEntries: [
       { id: 'retained', description: 'Original retained guidance' },
@@ -163,22 +258,29 @@ describe('Account Role Action refusal projection', () => {
   });
 
   it('keeps partial Artifact page coverage incomplete while serving known Roles', async () => {
+    let exactReads = 0;
     const artifactStore: Pick<RoleArtifactStoreV1, 'list' | 'read'> = {
       list: async options => options.cursor ? { items: [], coverage: 'complete' }
         : { items: [{ artifactId: 'known-role', header: { kind: 'role.v1' }, access: 'owner', ownerAccountId: 'account',
           headerVersion: 2, bodyVersion: 3, updatedAt: 1, body: JSON.stringify(BUILT_IN_ROLES_V1.reviewer) }],
           coverage: 'partial', nextCursor: 'last-page' },
-      read: async () => { throw new Error('Role catalog must consume its body page'); },
+      read: async artifactId => {
+        exactReads++;
+        return artifactId === 'known-role' ? { artifactId, header: { kind: 'role.v1' }, access: 'owner', ownerAccountId: 'account',
+          revision: { headerVersion: 2, bodyVersion: 3 }, body: JSON.stringify(BUILT_IN_ROLES_V1.reviewer) } : null;
+      },
     };
     const read = createRoleSourceReaderV1({ artifactStore });
     expect(await read()).toMatchObject({ status: 'partial', diagnostics: [], entries: expect.arrayContaining([
       expect.objectContaining({ roleId: 'known-role', role: BUILT_IN_ROLES_V1.reviewer }),
     ]) });
+    expect(exactReads).toBe(0);
     const execute = createAccountRoleActionExecutorV1({ readRoleSources: read, generateId: () => 'unused' });
     expect(await execute({ actionId: 'roles.get', input: { roleId: 'known-role' }, context }))
       .toMatchObject({ roleId: 'known-role', role: BUILT_IN_ROLES_V1.reviewer });
     await expect(execute({ actionId: 'roles.get', input: { roleId: 'unknown-role' }, context }))
-      .rejects.toThrow('role_source_incomplete');
+      .rejects.toThrow('role_target_unavailable');
+    expect(exactReads).toBe(2);
   });
 
   it('lists plugin role documents as read-only and refuses replacing their instructions', async () => {
