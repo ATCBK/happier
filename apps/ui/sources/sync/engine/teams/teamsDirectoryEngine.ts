@@ -359,6 +359,7 @@ const membersLoader = createScopedSnapshotLoader<TeamMembersTarget>({
         const begun = getTeamMembersSnapshot(scope, address, queryKey);
         const outcome = await loadTeamPageRange({ loadedRowCount,
             loadPage: cursor => listTeamMembers({ scope, address, filter, ...(query ? { query } : {}), cursor }),
+            isCancelled: () => getTeamMembersSnapshot(scope, address, queryKey) !== begun,
         });
         // Sign-out and the last observer retire this sequence while its request
         // may still be pending. Its old answer cannot recreate those private rows.

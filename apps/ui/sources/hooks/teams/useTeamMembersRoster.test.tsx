@@ -41,6 +41,39 @@ async function setupRoster() {
 }
 
 describe('Team member roster demand', () => {
+    it.each(['last observer leaves', 'query changes'] as const)('stops an abandoned multi-page refresh when the %s', async retirement => {
+        const { serverId, scope, address, path, input } = await setupRoster();
+        const rows = Array.from({ length: 150 }, (_, index) => teamMembershipFixture({ id: `member-${index}`, accountId: `account-${index}` }));
+        const held = createDeferred<void>();
+        let refreshing = false;
+        home.answer(serverId, path, { select: body => {
+            const request = body as { cursor?: string; query?: string };
+            if (request.query === 'new') return { body: { items: [], nextCursor: null } };
+            const start = Number(request.cursor ?? 0);
+            return { body: { items: rows.slice(start, start + 50), nextCursor: start < 100 ? String(start + 50) : null },
+                ...(refreshing && start === 0 ? { respondAfter: held.promise } : {}) };
+        } });
+        const list = await renderHook(({ query }) => useTeamMembersRoster({ ...input, query }), { initialProps: { query: 'old' } });
+        await waitForHomeGovernance(() => expect(list.getCurrent().status).toBe('ready'));
+        await act(async () => { await list.getCurrent().loadMore(); await list.getCurrent().loadMore(); });
+        expect(list.getCurrent().rows).toHaveLength(150);
+        expect(home.requestsFor(path)).toHaveLength(3);
+        refreshing = true;
+        let reload!: Promise<void>;
+        await act(async () => { reload = list.getCurrent().reload(); });
+        await waitForHomeGovernance(() => expect(home.requestsFor(path)).toHaveLength(4));
+        if (retirement === 'last observer leaves') await list.unmount();
+        else {
+            await list.rerender({ query: 'new' });
+            await waitForHomeGovernance(() => expect(list.getCurrent().status).toBe('ready'));
+        }
+        expect(getTeamMembersSnapshot(scope, address, teamMembersQueryKey('all', 'old'))).toBeNull();
+        await act(async () => { held.resolve(); await reload; });
+        expect(home.requestsFor(path).filter(request => (request.input as { query?: string }).query === 'old')).toHaveLength(4);
+        expect(getTeamMembersSnapshot(scope, address, teamMembersQueryKey('all', 'old'))).toBeNull();
+        if (retirement === 'query changes') expect(list.getCurrent().rows).toEqual([]);
+    });
+
     it('pages the access-directory member lookup on its exact queried sequence through the real roster owner', async () => {
         const { serverId, path, input } = await setupRoster();
         const members = [7, 8].map(index => teamMembershipFixture({ id: `membership-${index}`, accountId: `account-${index}` }));
