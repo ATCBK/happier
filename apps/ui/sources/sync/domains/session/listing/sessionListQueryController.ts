@@ -474,6 +474,16 @@ export function createSessionListQueryHomeController(params: Readonly<{
         return promise;
     };
 
+    const refresh = (): Promise<void> => {
+        if (inFlight) {
+            refreshQueued = true;
+            const currentRequest = inFlight;
+            // The coalesced replacement is installed synchronously in the current request's finally.
+            return currentRequest.then(() => inFlight ?? Promise.resolve());
+        }
+        return startPage('replace');
+    };
+
     return {
         getSnapshot: () => state,
         subscribe: (listener) => {
@@ -559,17 +569,14 @@ export function createSessionListQueryHomeController(params: Readonly<{
                 await startPage('replace');
             }
         },
-        refresh: () => {
-            if (inFlight) {
-                refreshQueued = true;
-                const currentRequest = inFlight;
-                // `startPage` installs the coalesced replacement synchronously
-                // from the current request's `finally`. Chain to that promise so
-                // pull-to-refresh does not report completion after only the stale
-                // request it asked to replace.
-                return currentRequest.then(() => inFlight ?? Promise.resolve());
+        refresh,
+        retry: () => {
+            if (inFlight) return inFlight;
+            if (state.phase === 'error') {
+                if (state.failedOperation === 'ordinary' && state.hasNext && state.nextCursor) return startPage('ordinary');
+                if (state.failedOperation === 'attention' && state.attentionHasNext && state.attentionNextCursor) return startPage('attention');
             }
-            return startPage('replace');
+            return refresh();
         },
         invalidate: (scope) => {
             if (disposed || !input?.selected || !input.online) return Promise.resolve();
