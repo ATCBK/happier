@@ -34,8 +34,9 @@ describe('Email parser runtime recovery', () => {
     // Only the module-loading boundary is faulted; the MIME parser stays real.
     // Email Actions, trust, Channels admission, Collection CAS and backoff stay real.
     // A throwing mock factory is wrapped by Vitest in an ordinary Error.
-    // Fault the module export read so the native SyntaxError category survives.
-    vi.doMock('mailparser', () => ({ get simpleParser() {
+    // Fault the module export read so the native SyntaxError category survives;
+    // the empty default mirrors the bundled CommonJS shape parse.ts also reads.
+    vi.doMock('mailparser', () => ({ default: {}, get simpleParser() {
       throw new SyntaxError('Synthetic private module detail must never reach poll evidence');
     } }));
     f.setMessages([['opaque-incoming', incoming], ['second', Buffer.from(incoming.toString().replaceAll('incoming@example.com', 'second@example.com'))]]);
