@@ -40,6 +40,7 @@ import type { ResolveManagedProviderPurposeBindingIntent } from '@/providers/man
 import type { ProviderRuntimeModelProjectionReader } from '@/providers/spawn/runtimeCatalog';
 import type { DirectManagedProviderEndpointPreparer } from '@/providers/lifecycle/prepareDirectLaunch';
 import { createProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
+import { traceRunPreparationPhase } from '@/providers/diagnostics';
 import { normalizeUnsetEnvKeys, stripUnsetEnvironmentVariables } from '@/utils/processEnv/buildScopedProcessEnv';
 
 import { withExecutionRunHostRuntimeCleanup } from '../hostRuntime/cleanup';
@@ -204,14 +205,16 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
         signal.throwIfAborted();
         if (resolvedBackendPromise) return await resolvedBackendPromise;
         resolvedBackendPromise = (async () => {
-            const engineResolution = opts.engineRegistry
+            const trace = <T>(phase: Parameters<typeof traceRunPreparationPhase>[1], work: () => T | Promise<T>) =>
+                traceRunPreparationPhase(opts.runId, phase, signal, work);
+            const engineResolution = await trace('engine_resolution', () => opts.engineRegistry
                 ? opts.agentTarget
-                    ? await opts.engineRegistry.resolveForAgentTarget(opts.agentTarget)
-                    : await opts.engineRegistry.resolveForBackendId(opts.backendId)
-                : await resolveBackendEngineAdapterResolution(opts.backendId, {
+                    ? opts.engineRegistry.resolveForAgentTarget(opts.agentTarget)
+                    : opts.engineRegistry.resolveForBackendId(opts.backendId)
+                : resolveBackendEngineAdapterResolution(opts.backendId, {
                     happyHomeDir: opts.happyHomeDir ?? configuration.happyHomeDir,
                     ...(opts.agentTarget ? { agentTarget: opts.agentTarget } : {}),
-                });
+                }));
             if (engineResolution) {
                 throwIfPluginRuntimeStartBlocked(engineResolution);
             }
@@ -252,7 +255,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                 })
                 : null;
             const connectedServicesSelection =
-                await resolveExecutionRunConnectedServicesSelection({
+                await trace('connected_services_selection', () => resolveExecutionRunConnectedServicesSelection({
                     backendId: engineResolution.backendId,
                     signal,
                     backendSourceKind:
@@ -267,7 +270,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                                 opts.connectedServicesDefaultServiceIds,
                         }
                         : {}),
-                });
+                }));
             const prepareRunTeamCredentialProviderBinding = opts.teamCredentialModel
                 ? opts.prepareRunTeamCredentialProviderBinding
                     ?? opts.sessionInteractionHost?.prepareRunTeamCredentialProviderBinding
@@ -279,19 +282,21 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                 const featureEnabled =
                     !opts.modelSelection
                     || opts.modelSelection.providerConnectionId === null
-                    || await opts.resolveProvidersFeatureEnabled?.() === true;
-                const accountSettingsSnapshot = await opts.resolveAccountSettingsSnapshot?.() ?? null;
-                if (opts.providerLaunch && opts.modelSelection?.providerConnectionId) {
+                    || await trace('provider_features', () => opts.resolveProvidersFeatureEnabled?.()) === true;
+                const accountSettingsSnapshot = await trace('account_snapshot', () => opts.resolveAccountSettingsSnapshot?.()) ?? null;
+                const providerLaunchServices = opts.providerLaunch;
+                const modelSelection = opts.modelSelection;
+                if (providerLaunchServices && modelSelection?.providerConnectionId) {
                     if (!accountSettingsSnapshot?.scopeKey) throw Object.assign(new Error('provider_connection_not_found'), { code: 'provider_connection_not_found' });
-                    providerLaunch = await opts.providerLaunch.prepareLaunch({
-                        selection: opts.modelSelection, backendTarget: effectiveBackendTarget,
+                    providerLaunch = await trace('provider_launch', () => providerLaunchServices.prepareLaunch({
+                        selection: modelSelection, backendTarget: effectiveBackendTarget,
                         agentId: engineResolution.agentId, runId: String(opts.runId ?? '').trim(),
                         ...(opts.controllerOccurrenceId ? { controllerOccurrenceId: opts.controllerOccurrenceId } : {}),
                         connectedServices: connectedServicesSelection?.bindings ?? null,
                         expectedAccountSettingsScopeKey: accountSettingsSnapshot.scopeKey,
-                    }, signal);
+                    }, signal));
                     if (providerLaunch.cleanupOnExit) providerResources.register(providerLaunch.cleanupOnExit);
-                } else providerLaunch = await prepareExecutionRunProviderLaunch({
+                } else providerLaunch = await trace('provider_launch', () => prepareExecutionRunProviderLaunch({
                     signal,
                     ...(opts.modelSelection ? { selection: opts.modelSelection } : {}),
                     ...(opts.teamCredentialModel ? { teamCredentialModel: opts.teamCredentialModel } : {}),
@@ -313,7 +318,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                     ...(prepareRunTeamCredentialProviderBinding
                         ? { prepareTeamCredentialProviderBinding: prepareRunTeamCredentialProviderBinding }
                         : {}),
-                });
+                }));
             }
             const materializedConnectedServicesSelection:
                 ResolvedExecutionRunConnectedServicesSelection | null =
@@ -353,7 +358,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                         agentContribution: engineResolution.agent.identity ?? null,
                     });
                 }
-                connectedServicesEnv = await resolveExecutionRunConnectedServicesEnv({
+                connectedServicesEnv = await trace('connected_services_materialization', () => resolveExecutionRunConnectedServicesEnv({
                     signal,
                     runId: connectedServicesRunKey,
                     backendId: engineResolution.backendId,
@@ -372,7 +377,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                         materializedConnectedServicesSelection,
                     cwd: opts.cwd,
                     modelId: boundedOpenInputs?.configuration.model.value ?? opts.modelSelection?.modelId ?? opts.modelId,
-                });
+                }));
                 activeConnectedServicesEnv = connectedServicesEnv;
                 signal.throwIfAborted();
                 if (connectedServicesEnv && opts.onConnectedServicesRegistration) {
@@ -391,9 +396,9 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
             let secretReferenceRedaction: ReturnType<typeof createProviderRedactionLease> | null = null;
             if (opts.secretReferenceOverlay && !opts.secretReferenceEnvironment) {
                 try {
-                    const snapshot = await opts.resolveAccountSettingsSnapshot?.({
+                    const snapshot = await trace('secret_reference_snapshot', () => opts.resolveAccountSettingsSnapshot?.({
                         secretReferenceOverlay: opts.secretReferenceOverlay,
-                    }) ?? null;
+                    })) ?? null;
                     if (!snapshot) {
                         throw new LaunchSecretReferenceOverlayError('reference_unavailable', 'launch');
                     }
@@ -538,7 +543,8 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
 
             let runtime: ExecutionRunHostRuntime;
             try {
-                const providerCurrent = await providerLaunch?.revalidateBeforeCommit(signal);
+                const providerCurrent = providerLaunch
+                    ? await trace('runtime_provider_commit', () => providerLaunch.revalidateBeforeCommit(signal)) : undefined;
                 if (providerCurrent && !providerCurrent.ok) {
                     const error = Object.assign(
                         new Error(providerCurrent.error.code),
@@ -546,7 +552,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                     );
                     throw error;
                 }
-                runtime = runtimeCore.createExecutionRunBackend(runtimeOpts);
+                runtime = await trace('runtime_create', () => runtimeCore.createExecutionRunBackend!(runtimeOpts));
             } catch (error) {
                 if (pluginIsolationBundle?.shouldCleanupIsolation) {
                     await cleanupExecutionRunIsolationBundle(pluginIsolationBundle);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
@@ -9,8 +9,60 @@ import { AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/sessi
 import { splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { admitExecutionRunInheritedProviderSelection, prepareExecutionRunProviderLaunch } from './providerLaunch';
+import { logger } from '@/ui/logger';
+import { resolveCliEngineRegistry } from '@/agent/runtime/registry/engineRegistry';
+import { createExecutionRunRuntime } from './create';
 
 describe('execution-run pinned Provider preparation', () => {
+    it('attributes the real lazy runtime shell once without provisioning a native Agent', async () => {
+        const fixture = await createManagedRunLaunchFixture();
+        const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+        const runtime = createExecutionRunRuntime({ cwd: fixture.happyHomeDir, happyHomeDir: fixture.happyHomeDir,
+            scope: 'detached', runId: 'lazy-preparation-run', backendId: fixture.agentId, permissionMode: 'default',
+            start: { intent: 'review' }, connectedServices: null,
+            engineRegistry: await resolveCliEngineRegistry({ runtimeRegistry: fixture.lease.registry }) });
+        try {
+            await runtime.readResumeSupport();
+            await runtime.readResumeSupport();
+            const phases = diagnostics.mock.calls.flatMap(([marker, record]) =>
+                marker === '[PROVIDER] Run preparation phase' ? [record] : []);
+            expect(phases).toHaveLength(4);
+            expect(phases).toEqual(['engine_resolution', 'connected_services_selection',
+                'connected_services_materialization', 'runtime_create'].map(phase => ({
+                runId: 'lazy-preparation-run', phase, outcome: 'completed', startedAtMs: expect.any(Number),
+                finishedAtMs: expect.any(Number), elapsedMs: expect.any(Number),
+            })));
+        } finally { await runtime.dispose(); diagnostics.mockRestore(); await fixture.cleanup(); }
+    });
+    it.each(['failed', 'cancelled'] as const)('records one payload-free endpoint phase when its boundary is %s', async outcome => {
+        const fixture = await createManagedRunLaunchFixture({ physicalGateway: true });
+        const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+        const controller = new AbortController();
+        const failure = new Error('private-endpoint-credential');
+        try {
+            await expect(prepareExecutionRunProviderLaunch({
+                selection: { agentTargetKey: fixture.agentTargetKey, providerConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), modelId: 'example' },
+                backendTarget: { kind: 'backend', backendId: fixture.agentId },
+                agentId: fixture.agentId, runId: 'endpoint-failure-run', machineId: fixture.machineId,
+                featureEnabled: true, happyHomeDir: fixture.happyHomeDir, accountSettingsSnapshot: fixture.snapshot,
+                runtimeRegistryLease: fixture.lease, signal: controller.signal,
+                resolveManagedPurposeBindingIntent: fixture.gateway!.purposeBindingOwner.resolveBindingIntent,
+                // The endpoint acquisition is the OS/network boundary; real
+                // authorization and cleanup run beneath the public Run owner.
+                prepareManagedEndpoint: async () => {
+                    if (outcome === 'cancelled') controller.abort(failure);
+                    throw failure;
+                },
+            })).rejects.toMatchObject({ code: 'agent_error' });
+            const phases = diagnostics.mock.calls.filter(([marker]) => marker === '[PROVIDER] Run preparation phase');
+            expect(phases.filter(([, record]) => typeof record === 'object' && record !== null
+                && 'phase' in record && record.phase === 'managed_endpoint')).toEqual([
+                ['[PROVIDER] Run preparation phase', { runId: 'endpoint-failure-run', phase: 'managed_endpoint', outcome,
+                    startedAtMs: expect.any(Number), finishedAtMs: expect.any(Number), elapsedMs: expect.any(Number) }],
+            ]);
+            expect(JSON.stringify(phases)).not.toContain(failure.message);
+        } finally { diagnostics.mockRestore(); await fixture.cleanup(); }
+    });
     it('uses the retained executable snapshot for admission and materialization without a runner daemon singleton', async () => {
         const fixture = await createManagedRunLaunchFixture({ physicalGateway: true });
         let endpointReleased = false;

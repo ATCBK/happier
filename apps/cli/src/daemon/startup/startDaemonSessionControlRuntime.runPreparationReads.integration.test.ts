@@ -2,6 +2,7 @@ import axios from 'axios';
 import { expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { createAttachedManagedRunFixture } from './startDaemonSessionControlRuntime.accountManagedRun.testkit';
+import { logger } from '@/ui/logger';
 
 it('shares requester observations within each Run authority read and rechecks authority after preparation', async () => {
   let runReads = 0;
@@ -17,6 +18,7 @@ it('shares requester observations within each Run authority read and rechecks au
       features: { providers: { enabled: true } }, capabilities: {},
     }) }) } });
   let snapshotId: string | undefined;
+  const diagnostics = vi.spyOn(logger, 'infoFile');
   const readCounts = () => {
     const paths = vi.mocked(axios.get).mock.calls.map(([url]) => new URL(String(url)).pathname);
     return { profile: paths.filter(path => path.endsWith('/profile')).length,
@@ -47,6 +49,21 @@ it('shares requester observations within each Run authority read and rechecks au
     expect({ profile: after.profile - before.profile, accounts: after.accounts - before.accounts,
       catalog: after.catalog - before.catalog, history: after.history - before.history, runReads })
       .toEqual({ profile: 61, accounts: 11, catalog: 1, history: 0, runReads: 13 });
+    const phases = diagnostics.mock.calls.flatMap(([marker, record]) =>
+      marker === '[PROVIDER] Run preparation phase' ? [record] : []);
+    // One bounded completion record per awaited preparation step, never per poll.
+    expect(phases).toHaveLength(14);
+    expect(phases).toEqual(expect.arrayContaining([
+      'request_account_context', 'request_settings', 'request_features',
+      'provider_authorization', 'provider_before_effect', 'managed_endpoint',
+      'binding_account_context', 'binding_run_authority', 'managed_source_open',
+      'consumer_application_start', 'binding_source_currentness',
+      'provider_materialization', 'endpoint_currentness', 'provider_commit',
+    ].map(phase => ({ runId: fixture.proof.executionRunId, phase, outcome: 'completed',
+      startedAtMs: expect.any(Number), finishedAtMs: expect.any(Number), elapsedMs: expect.any(Number) }))));
+    for (const phase of phases) {
+      expect(phase).toEqual(expect.objectContaining({ elapsedMs: expect.toSatisfy((value: number) => value >= 0) }));
+    }
     // Revocation during the RPC must defeat its otherwise-current Run answer,
     // not just the next request after the preparation checkpoint has ended.
     withdrawDuringRunRead = fixture.withdrawRequesterAdmission;
@@ -55,7 +72,9 @@ it('shares requester observations within each Run authority read and rechecks au
       operation: { kind: 'execution_run.provider.revalidate_v1' } });
     expect(revalidated).toMatchObject({ ok: true, result: { kind: 'execution_run.provider.revalidated', result: { ok: false } } });
     expect(runReads).toBeGreaterThan(13);
+    expect(diagnostics.mock.calls.filter(([marker]) => marker === '[PROVIDER] Run preparation phase')).toHaveLength(14);
   } finally {
+    diagnostics.mockRestore();
     if (snapshotId) await fixture.dispatch({ kind: 'execution_run.snapshot.release_v1', snapshotId });
     await fixture.cleanup();
   }

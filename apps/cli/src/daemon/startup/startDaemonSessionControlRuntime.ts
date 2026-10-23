@@ -343,6 +343,7 @@ import { createActiveDaemonComposerMediaStageStore } from '@/transfers/staging/c
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { startPublicManagedProviderRuntime } from '@/providers/lifecycle/publicManagedProviderRuntimeStart';
 import { createProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
+import { traceRunPreparationPhase } from '@/providers/diagnostics';
 import { createDaemonShutdownCancellationDomains } from './shutdownCancellationDomains';
 import type { DaemonPluginChangeService } from '@/plugins/daemon/changeService';
 import {
@@ -16906,9 +16907,12 @@ export async function startDaemonSessionControlRuntime(
     const signal = AbortSignal.any([lifetime.signal, shutdownCancellationDomains.daemonWorkSignal]);
     const preparationSignal = AbortSignal.any([signal, input.signal]);
     const resources = createProviderLaunchResourceScope();
+    const trace = <T>(phase: Parameters<typeof traceRunPreparationPhase>[1], work: () => Promise<T>) =>
+      traceRunPreparationPhase(proof.executionRunId, phase, preparationSignal, work);
     let bindingPublished = false;
     try {
-      const account = await resolveAttachedProviderAccount(input.sessionId, input.tracked, proof.expectedAccountSettingsScopeKey, signal);
+      const account = await trace('binding_account_context', () =>
+        resolveAttachedProviderAccount(input.sessionId, input.tracked, proof.expectedAccountSettingsScopeKey, signal));
       if (!account) return null;
       resources.register(account.release);
       if (!account.resolveManagedPurposeBindingIntent) return null;
@@ -16939,12 +16943,12 @@ export async function startDaemonSessionControlRuntime(
         } catch { return false; }
       };
       input.signal.throwIfAborted();
-      if (!await isRunCurrent(preparationSignal)) return null;
+      if (!await trace('binding_run_authority', () => isRunCurrent(preparationSignal))) return null;
       const targetMachineId = basis.deployment.gatewayPlacement?.kind === 'machine'
         ? basis.deployment.gatewayPlacement.machineId : params.machineId;
       const application = { agentTargetKey: basis.agentTargetKey, implementationIdentity: basis.deployment.implementationIdentity,
         endpointTemplateId: basis.endpoint.endpointTemplateId, protocol: basis.endpoint.protocol };
-      const opened = await params.openAccountConnectionManagedConsumerSource({ targetMachineId, accountId: account.accountId,
+      const opened = await trace('managed_source_open', () => params.openAccountConnectionManagedConsumerSource!({ targetMachineId, accountId: account.accountId,
         runtimeBindingBasis: basis, agentId: proof.agentId, modelId: proof.modelId,
         request: { consumer: { kind: 'execution_run', executionRunId: proof.executionRunId }, executionRunOccurrenceId: proof.executionRunOccurrenceId,
           consumerMachineId: params.machineId, application, source: { kind: 'account_connection', connectionId: basis.connectionId,
@@ -16953,22 +16957,22 @@ export async function startDaemonSessionControlRuntime(
               implementationIdentity: basis.deployment.implementationIdentity, managedRuntime: basis.deployment.managedRuntime,
               purposeBindings: basis.deployment.purposeBindings }) } },
         expectedAccountSettingsScopeKey: proof.expectedAccountSettingsScopeKey, readAccountSettingsSnapshot: account.readAccountSettingsSnapshot,
-        resolveManagedPurposeBindingIntent: account.resolveManagedPurposeBindingIntent, signal: preparationSignal, isCurrent: isRunCurrent });
+        resolveManagedPurposeBindingIntent: account.resolveManagedPurposeBindingIntent, signal: preparationSignal, isCurrent: isRunCurrent }));
       if (!opened) return null;
       resources.register(opened.retire);
       const endpointUrl = opened.access.endpointUrl(application.endpointTemplateId);
       if (!endpointUrl) return null;
       let cleanup: (() => Promise<void>) | null = null;
-      const consumer = await startManagedProviderConsumerApplication({ signal, endpointUrl, credentialTransport: basis.runtimeCredentialTransport,
+      const consumer = await trace('consumer_application_start', () => startManagedProviderConsumerApplication({ signal, endpointUrl, credentialTransport: basis.runtimeCredentialTransport,
         request: async request => {
           if (await opened.revalidate(request.signal)) return { ok: true, response: await opened.access.request(request) };
           lifetime.abort();
           void cleanup?.().catch(() => undefined); // The existing PID cleanup retains failed release custody.
           return { ok: false, reasonCode: 'resource_forbidden' };
-        } });
+        } }));
       resources.register(consumer.cleanup);
       input.signal.throwIfAborted();
-      if (!await opened.revalidate(preparationSignal)) return null;
+      if (!await trace('binding_source_currentness', () => opened.revalidate(preparationSignal))) return null;
       const bindingId = randomUUID();
       const result = { kind: 'provider_managed.binding' as const, bindingId, endpointUrl: consumer.endpointUrl,
         headers: { [basis.runtimeCredentialTransport.destination.name]: consumer.renderedCredential } };
@@ -17012,13 +17016,16 @@ export async function startDaemonSessionControlRuntime(
     const tracked = context.trackedSession;
     if (!tracked || !await context.isCurrent()) return null;
     context.signal?.throwIfAborted();
-    const account = await resolveAttachedProviderAccount(context.sessionId, tracked, request.expectedAccountSettingsScopeKey,
-      shutdownCancellationDomains.daemonWorkSignal);
+    const account = await traceRunPreparationPhase(request.runId, 'request_account_context', context.signal, () =>
+      resolveAttachedProviderAccount(context.sessionId, tracked, request.expectedAccountSettingsScopeKey,
+        shutdownCancellationDomains.daemonWorkSignal));
     if (!account) return null;
     try {
-      const accountSettingsSnapshot = await account.readAccountSettingsSnapshot();
+      const accountSettingsSnapshot = await traceRunPreparationPhase(request.runId, 'request_settings', context.signal,
+        () => account.readAccountSettingsSnapshot());
       if (!accountSettingsSnapshot) return null;
-      const serverSnapshot = await (params.resolveServerFeaturesSnapshot?.() ?? fetchServerFeaturesSnapshot({ serverUrl: params.serverBaseUrl }));
+      const serverSnapshot = await traceRunPreparationPhase(request.runId, 'request_features', context.signal,
+        () => params.resolveServerFeaturesSnapshot?.() ?? fetchServerFeaturesSnapshot({ serverUrl: params.serverBaseUrl }));
       if (!await context.isCurrent() || !await account.isCurrent()) return null;
       return { machineId: params.machineId, happyHomeDir: configuration.happyHomeDir, accountSettingsSnapshot,
         readAccountSettingsSnapshot: account.readCurrentAccountSettingsSnapshot,

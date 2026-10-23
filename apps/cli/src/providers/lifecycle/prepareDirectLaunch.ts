@@ -10,7 +10,7 @@ import {
 import type { ProviderSpawnAuthorizationAttempt } from '../spawn/authorize';
 import type { ProviderSpawnAuthorization } from '../spawn/resolve';
 import { isSessionControlEnvKey } from '@/session/runtime/control/sessionControlEnvironment';
-import { logProviderUnexpectedFailure } from '@/providers/diagnostics';
+import { logProviderUnexpectedFailure, traceRunPreparationPhase } from '@/providers/diagnostics';
 
 type ProviderLaunchPrerequisiteContext = Readonly<{
   agentTargetKey: string;
@@ -109,11 +109,14 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
   retainCleanup?: (cleanup: ProviderLaunchCleanup) => void;
 }>): Promise<DirectProviderLaunchResult> {
   const scope = createProviderLaunchResourceScope();
+  const trace = <T>(phase: Parameters<typeof traceRunPreparationPhase>[1], work: () => Promise<T>) =>
+    traceRunPreparationPhase(input.scope.kind === 'execution_run' ? input.scope.executionRunId : undefined,
+      phase, input.signal, work);
   try {
     dependencies.retainCleanup?.(scope.retire);
     for (const resource of dependencies.initialResources ?? []) scope.register(resource);
     const { scope: executionScope, ...providerLaunchInput } = input;
-    const prepared = await prepareProviderLaunch({
+    const prepared = await trace('provider_authorization', () => prepareProviderLaunch({
       ...providerLaunchInput,
       ...(executionScope.kind === 'session' ? { sessionId: executionScope.sessionId } : {}),
       resolvePrerequisites: async (context) => {
@@ -127,7 +130,7 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
         return result.ok ? { ok: true } : { ok: false, error: result.error };
       },
       createAuthorizationAttempt: dependencies.createAuthorizationAttempt,
-    });
+    }));
     if (!prepared.ok) {
       await scope.release();
       return prepared;
@@ -159,19 +162,19 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
     let revalidateManagedEndpoint: Awaited<ReturnType<DirectManagedProviderEndpointPreparer>>['revalidateBeforeCommit'] | null = null;
     let materialized;
     if ('materializeManagedEndpoint' in attempt) {
-      const current = await attempt.revalidateBeforeEffect();
+      const current = await trace('provider_before_effect', () => attempt.revalidateBeforeEffect());
       if (!current.ok) { await scope.release(); return current; }
       let endpointCleanupRegistered = false;
-      const endpoint = await dependencies.prepareManagedEndpoint!({
+      const endpoint = await trace('managed_endpoint', () => dependencies.prepareManagedEndpoint!({
         signal: input.signal,
         scope: input.scope, authorization: attempt.authorization,
         registerCleanup: cleanup => { scope.register(cleanup); endpointCleanupRegistered = true; },
-      });
+      }));
       if (!endpointCleanupRegistered) scope.register(endpoint.cleanup);
       revalidateManagedEndpoint = endpoint.revalidateBeforeCommit;
-      materialized = await attempt.materializeManagedEndpoint(endpoint);
+      materialized = await trace('provider_materialization', () => attempt.materializeManagedEndpoint(endpoint));
     } else {
-      materialized = await attempt.materializeAfterHooks();
+      materialized = await trace('provider_materialization', () => attempt.materializeAfterHooks());
     }
     if (!materialized.ok) {
       await scope.release();
@@ -181,10 +184,10 @@ export async function prepareDirectProviderLaunch(input: Readonly<{
     scope.setSanitizer(sanitizeDiagnosticText);
 
     if (revalidateManagedEndpoint) {
-      const current = await revalidateManagedEndpoint(input.signal);
+      const current = await trace('endpoint_currentness', () => revalidateManagedEndpoint!(input.signal));
       if (!current.ok) { await scope.release(); return current; }
     }
-    const commitAuthorization = await attempt.revalidateBeforeCommit();
+    const commitAuthorization = await trace('provider_commit', () => attempt.revalidateBeforeCommit());
     if (!commitAuthorization.ok) {
       await scope.release();
       return commitAuthorization;
