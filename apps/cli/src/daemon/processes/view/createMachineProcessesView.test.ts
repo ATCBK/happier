@@ -30,6 +30,60 @@ import { decodeHelperCensus } from '@/processes/census/decodeHelperCensus';
 const boundary = vi.hoisted(() => ({ read: vi.fn<(input: ProcessCensusInput) => Promise<ProcessCensusSnapshot>>() }));
 vi.mock('@/processes/census/processCensus', () => ({ readProcessCensus: boundary.read }));
 afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
+it('projects no process rows while an unchanged watch parks and projects each changed row once', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1000);
+    const processCount = 1501;
+    boundary.read.mockImplementation(async () => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2,
+        rows: Array.from({ length: processCount }, (_, index) => ({ pid: 100 + index, ppid: index ? 100 : 1,
+            start: { startTimeMs: 100 + index }, principal: { kind: 'uid', value: '1000' }, name: 'fixture',
+            memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: null })) }));
+    const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc', listRoots: () => [
+        { owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true },
+    ] });
+    const pass = createLeftBehindPass({ processOwnershipRuntime: runtime });
+    const sampler = createMachineVitalsSampler({ readers: { read: async input => ({ state: 'reporting',
+        host: { logicalCores: 2, memoryTotalBytes: 2000, bootedAt: 0 },
+        sample: { v: 1, sampledAt: input.sampledAt, intervalMs: input.intervalMs, cpu: { reported: false, reason: 'unavailable' },
+            memory: { reported: false, reason: 'unavailable' }, disk: { reported: false, reason: 'unavailable' },
+            network: { reported: false, reason: 'unavailable' } },
+        minuteCounters: { monotonicMs: input.monotonicMs, cpu: null, network: null },
+    }) }, historyStore: { read: async () => [], append: async () => true, prune: async () => undefined,
+        appendAlert: async () => undefined, minutes: () => [], alerts: () => [] } });
+    // This adapter supplies actual fixture ownership identity. Count row projection
+    // work at its input, without replacing the projector, planner or ownership logic.
+    let projectedRows = 0;
+    const view = createMachineProcessesView({ processOwnershipRuntime: runtime, leftBehind: pass, machineVitals: sampler,
+        platform: 'darwin', selfPid: 100, allProcessesVisible: () => false,
+        requesterForOwner: () => { projectedRows++; return { accountId: 'a' }; } });
+    const requester = { accountId: 'a', custodianAccountId: 'a' };
+    const request = { machineId: 'm', scope: 'happier' as const, view: 'tree' as const };
+    const cancellation = new AbortController();
+    let pending: Promise<MachineProcessesWatchResultV1> | undefined;
+    try {
+        await sampler.start();
+        const initial = await view.watch(request, requester);
+        expect(initial.changed && initial.answer.totals.happier.processCount).toBe(processCount);
+        expect(projectedRows).toBe(processCount);
+        projectedRows = 0;
+        pending = view.watch({ ...request, since: Date.now() }, requester, cancellation.signal);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(projectedRows).toBe(0);
+        await vi.advanceTimersByTimeAsync(2000);
+        const answer = await pending;
+        expect(answer.changed && answer.answer.totals.happier.processCount).toBe(processCount);
+        expect(projectedRows).toBe(processCount);
+        expect(MachineProcessesWatchResultV1Schema.safeParse(answer).success).toBe(true);
+        projectedRows = 0;
+        pending = view.watch({ ...request, since: Date.now() }, requester, cancellation.signal);
+        await vi.advanceTimersByTimeAsync(0);
+        cancellation.abort();
+        expect(await pending).toEqual({ changed: false });
+        expect(projectedRows).toBe(0);
+    } finally {
+        cancellation.abort(); await pending;
+        view.dispose(); pass.dispose(); await sampler.stop();
+    }
+});
 it.each(['reused', 'exited', 'unreadable', 'resources_unreadable', 'principal_unreadable', 'principal_null', 'principal_changed', 'external_principal_changed', 'external_self_principal_null'] as const)('reconciles a %s PID through the recipient watch projection', async observation => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     let reused = false;
