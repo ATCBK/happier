@@ -44,6 +44,16 @@ export type SessionAccessActionInputById = {
             groupId: string;
         };
     };
+    readonly "session.access.encryption.prepare": {
+        sessionId: string;
+    };
+    readonly "session.access.encryption.reprepare": {
+        sessionId: string;
+        recipientAccountId: string;
+    };
+    readonly "session.access.layout.update": {
+        sessionId: string;
+    };
     readonly "session.access.context.set": {
         sessionId: string;
         primaryTeamId: string | null;
@@ -362,6 +372,41 @@ export type SessionAccessActionResultById = {
             groupId: string;
         };
     };
+    readonly "session.access.encryption.prepare": {
+        status: 'complete' | 'incomplete' | 'scope_changed' | 'not_required' | 'session_data_key_unavailable';
+        preparedCount: number;
+        skippedCount: number;
+        summary: {
+            prepared: number;
+            pending: number;
+            invalid: number;
+            recipientKeyUnavailable: number;
+        } | null;
+        recipientsNeedingSetup: {
+            recipientAccountId: string;
+            reason: 'plain_account' | 'encryption_setup_required' | 'encryption_inconsistent';
+        }[];
+        invalidBindingRecipients: string[];
+    };
+    readonly "session.access.encryption.reprepare": {
+        status: 'complete' | 'incomplete' | 'scope_changed' | 'not_required' | 'session_data_key_unavailable';
+        preparedCount: number;
+        skippedCount: number;
+        summary: {
+            prepared: number;
+            pending: number;
+            invalid: number;
+            recipientKeyUnavailable: number;
+        } | null;
+        recipientsNeedingSetup: {
+            recipientAccountId: string;
+            reason: 'plain_account' | 'encryption_setup_required' | 'encryption_inconsistent';
+        }[];
+        invalidBindingRecipients: string[];
+    };
+    readonly "session.access.layout.update": {
+        status: 'complete';
+    };
     readonly "session.access.context.set": {
         changed: boolean;
         primaryTeamId: string | null;
@@ -496,7 +541,7 @@ export type SessionAccessActionResultById = {
                 label: string;
                 url: string;
             }[];
-            status: 'none' | 'requested' | 'pending' | 'friend' | 'rejected';
+            status: 'pending' | 'none' | 'requested' | 'friend' | 'rejected';
             publicKey: string | null;
             contentPublicKey?: string | null | undefined;
             contentPublicKeySig?: string | null | undefined;

@@ -18,6 +18,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'getStatus';
@@ -36,6 +42,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'snapshot';
@@ -54,6 +66,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'semanticSnapshot';
@@ -72,6 +90,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'queryElements';
@@ -90,6 +114,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'waitFor';
@@ -108,6 +138,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'getActionTimeline';
@@ -130,6 +166,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'navigate';
@@ -148,6 +190,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'reload';
@@ -166,6 +214,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'goBack';
@@ -184,6 +238,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'goForward';
@@ -202,6 +262,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'click';
@@ -220,6 +286,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'tap';
@@ -238,6 +310,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'type';
@@ -256,6 +334,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'press';
@@ -274,6 +358,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'scroll';
@@ -292,6 +382,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'hover';
@@ -310,6 +406,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'focus';
@@ -328,6 +430,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'select';
@@ -346,6 +454,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'setValue';
@@ -388,6 +502,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'upload';
@@ -406,6 +526,12 @@ export type BrowserAutomationActionInputById = {
         actionKind: 'getStatus' | 'snapshot' | 'semanticSnapshot' | 'queryElements' | 'getDiagnosticsSummary' | 'getActionTimeline' | 'waitFor' | 'navigate' | 'reload' | 'goBack' | 'goForward' | 'click' | 'tap' | 'type' | 'press' | 'scroll' | 'hover' | 'focus' | 'select' | 'setValue' | 'upload' | 'drag' | 'evaluate' | 'startElementPicker' | 'cancelElementPicker';
         timeoutMs: number;
         payload?: Record<string, unknown> | undefined;
+        dialogResponse?: {
+            kind: 'alert' | 'confirm' | 'prompt';
+            message: string;
+            accept: boolean;
+            promptText?: string | undefined;
+        } | undefined;
     } & {
         [x: string]: unknown;
         actionKind: 'drag';

@@ -183,6 +183,7 @@ export type WorkflowsActionInputById = {
     };
     readonly "workflow.run.get": {
         runId: string;
+        includeUsage?: boolean | undefined;
     };
     readonly "workflow.run.wait": {
         runId: string;
@@ -300,6 +301,9 @@ export type WorkflowsActionInputById = {
         cursor?: string | undefined;
         limit?: number | undefined;
         parentRecordId?: string | undefined;
+        parentRecordIds?: string[] | undefined;
+        invocationId?: string | undefined;
+        memberOrdinal?: string | undefined;
         lifecycles?: ('running' | 'failed' | 'cancelled' | 'skipped' | 'outcome_uncertain' | 'waiting_for_review' | 'pending' | 'waiting_for_capacity' | 'admitting' | 'waiting_for_approval' | 'needs_attention' | 'completed' | 'cancel_requested' | 'superseded')[] | undefined;
         includeContent?: boolean | undefined;
     };

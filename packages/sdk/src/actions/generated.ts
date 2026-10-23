@@ -65,6 +65,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "browser.automation.type",
   "browser.automation.upload",
   "browser.context.annotation.attachComment",
+  "browser.context.annotation.attachDraft",
   "browser.context.annotation.attachStroke",
   "browser.context.annotation.attachStyleIntent",
   "browser.context.annotation.cancel",
@@ -565,8 +566,11 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "secrets.shared.update",
   "secrets.update",
   "session.access.context.set",
+  "session.access.encryption.prepare",
+  "session.access.encryption.reprepare",
   "session.access.grant.remove",
   "session.access.grant.set",
+  "session.access.layout.update",
   "session.agent.transition",
   "session.attention.set",
   "session.authoring.open",
@@ -1029,6 +1033,7 @@ export type GeneratedActions = Readonly<{
     readonly context: Readonly<{
       readonly annotation: Readonly<{
         readonly attachComment: (input: PublicActionInputById["browser.context.annotation.attachComment"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"browser.context.annotation.attachComment">>;
+        readonly attachDraft: (input: PublicActionInputById["browser.context.annotation.attachDraft"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"browser.context.annotation.attachDraft">>;
         readonly attachStroke: (input: PublicActionInputById["browser.context.annotation.attachStroke"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"browser.context.annotation.attachStroke">>;
         readonly attachStyleIntent: (input: PublicActionInputById["browser.context.annotation.attachStyleIntent"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"browser.context.annotation.attachStyleIntent">>;
         readonly cancel: (input: PublicActionInputById["browser.context.annotation.cancel"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"browser.context.annotation.cancel">>;
@@ -2406,12 +2411,19 @@ export type GeneratedActions = Readonly<{
       readonly context: Readonly<{
         readonly set: (input: PublicActionInputById["session.access.context.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.context.set">>;
       }> ;
+      readonly encryption: Readonly<{
+        readonly prepare: (input: PublicActionInputById["session.access.encryption.prepare"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.encryption.prepare">>;
+        readonly reprepare: (input: PublicActionInputById["session.access.encryption.reprepare"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.encryption.reprepare">>;
+      }> ;
       readonly grant: Readonly<{
         readonly remove: (input: PublicActionInputById["session.access.grant.remove"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.grant.remove">>;
         readonly set: (input: PublicActionInputById["session.access.grant.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.grant.set">>;
       }> ;
       readonly grants: Readonly<{
         readonly list: (input: PublicActionInputById["session.access.grants.list"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.grants.list">>;
+      }> ;
+      readonly layout: Readonly<{
+        readonly update: (input: PublicActionInputById["session.access.layout.update"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.layout.update">>;
       }> ;
       readonly principals: Readonly<{
         readonly resolve: (input: PublicActionInputById["session.access.principals.resolve"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"session.access.principals.resolve">>;
@@ -3472,6 +3484,7 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       context: {
         annotation: {
           attachComment: (input: PublicActionInputById["browser.context.annotation.attachComment"], options?: ActionExecutionOptions) => execute("browser.context.annotation.attachComment", input, options),
+          attachDraft: (input: PublicActionInputById["browser.context.annotation.attachDraft"], options?: ActionExecutionOptions) => execute("browser.context.annotation.attachDraft", input, options),
           attachStroke: (input: PublicActionInputById["browser.context.annotation.attachStroke"], options?: ActionExecutionOptions) => execute("browser.context.annotation.attachStroke", input, options),
           attachStyleIntent: (input: PublicActionInputById["browser.context.annotation.attachStyleIntent"], options?: ActionExecutionOptions) => execute("browser.context.annotation.attachStyleIntent", input, options),
           cancel: (input: PublicActionInputById["browser.context.annotation.cancel"], options?: ActionExecutionOptions) => execute("browser.context.annotation.cancel", input, options),
@@ -4849,12 +4862,19 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
         context: {
           set: (input: PublicActionInputById["session.access.context.set"], options?: ActionExecutionOptions) => execute("session.access.context.set", input, options),
         },
+        encryption: {
+          prepare: (input: PublicActionInputById["session.access.encryption.prepare"], options?: ActionExecutionOptions) => execute("session.access.encryption.prepare", input, options),
+          reprepare: (input: PublicActionInputById["session.access.encryption.reprepare"], options?: ActionExecutionOptions) => execute("session.access.encryption.reprepare", input, options),
+        },
         grant: {
           remove: (input: PublicActionInputById["session.access.grant.remove"], options?: ActionExecutionOptions) => execute("session.access.grant.remove", input, options),
           set: (input: PublicActionInputById["session.access.grant.set"], options?: ActionExecutionOptions) => execute("session.access.grant.set", input, options),
         },
         grants: {
           list: (input: PublicActionInputById["session.access.grants.list"], options?: ActionExecutionOptions) => execute("session.access.grants.list", input, options),
+        },
+        layout: {
+          update: (input: PublicActionInputById["session.access.layout.update"], options?: ActionExecutionOptions) => execute("session.access.layout.update", input, options),
         },
         principals: {
           resolve: (input: PublicActionInputById["session.access.principals.resolve"], options?: ActionExecutionOptions) => execute("session.access.principals.resolve", input, options),
