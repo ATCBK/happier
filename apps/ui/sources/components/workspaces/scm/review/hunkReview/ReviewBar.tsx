@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
 import { FloatingTabBarSurface } from '@/components/ui/navigation/FloatingTabBarSurface';
 import { Text } from '@/components/ui/text/Text';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -40,6 +41,8 @@ export type ReviewBarProps = Readonly<{
 export function ReviewBar(props: ReviewBarProps) {
   const { theme } = useUnistyles();
   const insets = useSafeAreaInsets();
+  // Under the phone's floating tab bar the bar floats just above it (rvp P1), never beneath it.
+  const chromeClearance = useFloatingChromeClearance();
   const completeRef = React.useRef(false);
   React.useEffect(() => {
     const complete = Boolean(props.complete);
@@ -83,41 +86,45 @@ export function ReviewBar(props: ReviewBarProps) {
     </View>
   ) : (
     <View style={styles.row}>
-      <IconButton
-        testID="review-bar-previous"
-        accessibilityLabel={t('hunkReview.previousChange')}
-        iconName="caret-left"
-        variant="plain"
-        iconSize={ICON_SIZE.md}
-        disabled={!props.onPrevious}
-        onPress={() => {
-          hapticsSelection();
-          props.onPrevious?.();
-        }}
-      />
-      <Text
-        variant="label"
-        emphasis="semiBold"
-        accessibilityLiveRegion="polite"
-        style={[styles.position, { color: theme.colors.text.primary }]}
-      >
-        {t('hunkReview.counter', {
-          current: props.current,
-          total: props.total,
-        })}
-      </Text>
-      <IconButton
-        testID="review-bar-next"
-        accessibilityLabel={t('hunkReview.nextChange')}
-        iconName="caret-right"
-        variant="plain"
-        iconSize={ICON_SIZE.md}
-        disabled={!props.onNext}
-        onPress={() => {
-          hapticsSelection();
-          props.onNext?.();
-        }}
-      />
+      {/* ‹ 2 of 7 › reads as one stepper, held tight so Discard · Keep keep their room on a 320 phone. */}
+      <View style={styles.stepper}>
+        <IconButton
+          testID="review-bar-previous"
+          accessibilityLabel={t('hunkReview.previousChange')}
+          iconName="caret-left"
+          variant="plain"
+          iconSize={ICON_SIZE.md}
+          disabled={!props.onPrevious}
+          onPress={() => {
+            hapticsSelection();
+            props.onPrevious?.();
+          }}
+        />
+        <Text
+          variant="label"
+          emphasis="semiBold"
+          accessibilityLiveRegion="polite"
+          numberOfLines={1}
+          style={[styles.position, { color: theme.colors.text.primary }]}
+        >
+          {t('hunkReview.counter', {
+            current: props.current,
+            total: props.total,
+          })}
+        </Text>
+        <IconButton
+          testID="review-bar-next"
+          accessibilityLabel={t('hunkReview.nextChange')}
+          iconName="caret-right"
+          variant="plain"
+          iconSize={ICON_SIZE.md}
+          disabled={!props.onNext}
+          onPress={() => {
+            hapticsSelection();
+            props.onNext?.();
+          }}
+        />
+      </View>
       <View style={styles.grow} />
       {props.onDiscard ? (
         <RoundButton
@@ -150,9 +157,9 @@ export function ReviewBar(props: ReviewBarProps) {
   );
 
   return (
-    <View testID={props.testID} pointerEvents="box-none" style={styles.anchor}>
+    <View testID={props.testID} pointerEvents="box-none" style={[styles.anchor, chromeClearance > 0 ? { bottom: chromeClearance } : null]}>
       {/* Controls at both ends (‹ 2 of 7 › … Discard · Keep): the capsule spans the gutters, like the File page bar. */}
-      <FloatingTabBarSurface bottomInset={insets.bottom} stretch>
+      <FloatingTabBarSurface bottomInset={chromeClearance > 0 ? 0 : insets.bottom} stretch>
         {body}
       </FloatingTabBarSurface>
     </View>
@@ -172,10 +179,16 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s8,
     paddingHorizontal: theme.space.s8,
     paddingVertical: theme.space.s8,
-    minWidth: 320,
+  },
+  stepper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s4,
   },
   position: {
     fontVariant: ['tabular-nums'],
+    // The count never wraps; the spacer gives way first on a narrow phone.
+    flexShrink: 0,
   },
   message: {
     flex: 1,
