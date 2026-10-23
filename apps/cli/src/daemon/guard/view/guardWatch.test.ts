@@ -73,6 +73,7 @@ describe('Guard requester view and parked watch', () => {
       }, subscribe: () => () => {},
     }] }); cleanup.push(() => inventory.dispose());
     let nativeReads = 0;
+    let rootReads = 0;
     let heldNativeRead: Readonly<{ entered(): void; waiting: Promise<void> }> | undefined;
     let guardName = 'systemd-oomd';
     let memoryPages = 1;
@@ -95,14 +96,14 @@ describe('Guard requester view and parked watch', () => {
           return result;
         },
       } },
-      listRoots: snapshot => snapshot.rows.filter(row => row.pid >= 1001 && row.pid <= 1004
+      listRoots: snapshot => { rootReads++; return snapshot.rows.filter(row => row.pid >= 1001 && row.pid <= 1004
         || withProjectServices && row.pid >= 1006 && row.pid <= 1007).map(row => ({
         pid: row.pid, start: row.start, live: true, ownerCreatedAtMs: epoch - 120_000,
         stop: async () => {},
         owner: row.pid >= 1006 ? { kind: 'service' as const, serviceId: `project-service-${row.pid}` }
           : row.pid === 1004 ? { kind: 'browser_sidecar' as const }
           : { kind: 'session' as const, sessionId: `s${row.pid - 1001}` },
-      })),
+      })); },
     });
     let metadata: Record<string, unknown> = {};
     let metadataVersion = 2;
@@ -200,7 +201,7 @@ describe('Guard requester view and parked watch', () => {
         heldNativeRead = { entered, waiting }; cleanup.push(release);
         return { entered: started, release };
       },
-      nativeReads: () => nativeReads, setGuardName: (name: string) => { guardName = name; },
+      nativeReads: () => nativeReads, rootReads: () => rootReads, setGuardName: (name: string) => { guardName = name; },
       setMemory: (pages: number) => { memoryPages = pages; }, listeners: () => changes.size,
       onSubscribe: (callback: () => void) => { onSubscribe = callback; },
       parked: () => changes.size ? Promise.resolve() : new Promise<void>(resolve => { waitingForPark.add(resolve); }),
@@ -219,6 +220,49 @@ describe('Guard requester view and parked watch', () => {
       },
     };
   }
+
+  it('runs one full census for concurrent passive Guard consumers per observation and none without demand', async () => {
+    const h = await setup();
+    const consumers = 8;
+    const before = h.nativeReads();
+    const rootsBefore = h.rootReads();
+    for (let tick = 0; tick < 4; tick++) {
+      const results = await Promise.all(Array.from({ length: consumers }, (_, index) => index % 2
+        ? h.view.watch({ machineId: 'machine' }, requester)
+        : h.view.readView(requester)));
+      for (const result of results) {
+        const view = 'changed' in result ? result.changed ? result.view : undefined : result;
+        expect(view?.idle.map(row => row.sessionRef)).toEqual(['s0']);
+        expect(JSON.stringify(view)).not.toContain('private-s1');
+      }
+      expect(h.nativeReads() - before).toBe(tick + 1);
+      expect(h.rootReads() - rootsBefore).toBe(tick + 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+    }
+    expect(h.nativeReads() - before).toBe(4);
+    expect(h.rootReads() - rootsBefore).toBe(4);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.nativeReads() - before).toBe(4);
+    h.setMemory(2);
+    const current = await h.view.readView(requester);
+    expect(current.ladder.summary.candidatesBytes).toBe(8192);
+    expect(h.nativeReads() - before).toBe(5);
+  });
+
+  it('keeps an effect-time fresh census independent of concurrent passive Guard readers', async () => {
+    const h = await setup();
+    const held = h.holdNativeRead();
+    const before = h.nativeReads();
+    const preview = h.view.readView(requester);
+    await held.entered;
+    try {
+      const fresh = await h.ownership.readOwners({ freshness: 'fresh' });
+      expect(fresh.status).toBe('ok');
+      expect(h.nativeReads() - before).toBe(1);
+    } finally { held.release(); }
+    expect((await preview).idle.map(row => row.sessionRef)).toEqual(['s0']);
+    expect(h.nativeReads() - before).toBe(2);
+  });
 
   it('returns the real planner preview while disclosing only exactly attributed private rows', async () => {
     const h = await setup();
