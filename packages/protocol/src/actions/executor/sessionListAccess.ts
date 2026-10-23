@@ -1,5 +1,5 @@
 import type { ActionId } from '../actionIds.js';
-import { getActionSpec } from '../actionSpecs.js';
+import { getActionSpec, type ActionSpec } from '../actionSpecs.js';
 import { isSessionStateFieldActionId } from '../sessionStateFieldActions.js';
 import type { ActionContextualDefaults } from '../contextualDefaults.js';
 import { resolveActionAgentStartContextV1 } from './agentStartAdmission.js';
@@ -81,6 +81,8 @@ export async function resolveActionCurrentSessionScopeFailure(
   contextualDefaults: ActionContextualDefaults | undefined,
   deps: Pick<ActionExecutorDeps, 'resolveAgentStartContext' | 'sessionList' | 'workflowAction' | 'resolveSessionReference' | 'resolveServerProfileScopeId'>,
   retainCallerContext?: (resolved: AgentStartContextV1) => void,
+  /** Dispatch wrappers supply the resolved Action's current effect facts. */
+  scopeSideEffectClass?: ActionSpec['sideEffectClass'],
 ): Promise<ActionExecuteFailure | null> {
   if (contextualDefaults?.sessionId !== 'current_session') return null;
   // Agent-originated cross-Session message delivery is authorized by the
@@ -137,11 +139,12 @@ export async function resolveActionCurrentSessionScopeFailure(
     return refuse('default_session_unavailable');
   }
 
-  if (context.sessionListAccess === 'current_session' && getActionSpec(actionId).sideEffectClass !== 'read') {
+  const sideEffectClass = scopeSideEffectClass ?? getActionSpec(actionId).sideEffectClass;
+  if (context.sessionListAccess === 'current_session' && sideEffectClass !== 'read') {
     return refuse('current_session_only');
   }
   if (context.sessionListAccess === 'unavailable') return refuse('session_scope_unavailable');
-  if (getActionSpec(actionId).sideEffectClass !== 'read' && !isSessionStateFieldActionId(actionId)
+  if (sideEffectClass !== 'read' && !isSessionStateFieldActionId(actionId)
     && !ledLifecycleAction) {
     return refuse('action_scope_restricted');
   }
