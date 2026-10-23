@@ -23,21 +23,9 @@ export type SettingsStackScreenDefinition = Readonly<{
 }>;
 
 import { listSettingsRouteNames, SETTINGS_ROUTE_CHROME_DEFINITIONS, type SettingsNestedNavigator } from './settingsRouteDefinitions';
+import { matchSettingsRouteSegments as matchRouteSegments } from './settingsRouteMatching';
+export { resolveSettingsNestedRouteName } from './settingsRouteMatching';
 export { listSettingsRouteNames, type SettingsNestedNavigator } from './settingsRouteDefinitions';
-
-function matchRouteSegments(pattern: readonly string[], segments: readonly string[]): 'static' | 'dynamic' | null {
-    if (pattern.length !== segments.length) return null;
-    let dynamic = false;
-    for (let i = 0; i < pattern.length; i += 1) {
-        const part = pattern[i]!;
-        if (part.startsWith('[') && part.endsWith(']')) {
-            dynamic = true;
-            continue;
-        }
-        if (part !== segments[i]) return null;
-    }
-    return dynamic ? 'dynamic' : 'static';
-}
 
 function routeStaticSegmentCount(pattern: readonly string[]): number {
     return pattern.filter((part) => !(part.startsWith('[') && part.endsWith(']'))).length;
@@ -73,43 +61,6 @@ export function resolveSettingsRouteTitleKey(pathname: string | null | undefined
         }
     }
     return dynamicMatch?.titleKey ?? null;
-}
-
-/**
- * The nested-navigator screen that renders `pathname` inside a collection (`/settings/<navigator>/…`),
- * from the same registry the navigator registers its screens from. A fully static route wins over a
- * dynamic sibling (`members/add` over `members/[membershipId]`).
- */
-export function resolveSettingsNestedRouteName(
-    navigator: SettingsNestedNavigator,
-    pathname: string | null | undefined,
-): string | null {
-    if (typeof pathname !== 'string') return null;
-    const normalized = pathname.trim().replace(/\/+$/, '') || '/';
-    if (!normalized.startsWith('/settings/')) return null;
-    // A navigator may sit under a dynamic segment (`home/[serverId]/people`): its root matches by pattern.
-    const rootPattern = navigator.split('/');
-    const pathSegments = normalized.slice('/settings/'.length).split('/');
-    if (pathSegments.length < rootPattern.length
-        || matchRouteSegments(rootPattern, pathSegments.slice(0, rootPattern.length)) === null) {
-        return null;
-    }
-    const segments = pathSegments.slice(rootPattern.length);
-    let dynamicMatch: Readonly<{ name: string; staticSegments: number }> | null = null;
-    for (const definition of SETTINGS_ROUTE_CHROME_DEFINITIONS) {
-        if (definition.navigator !== navigator) continue;
-        const nameSegments = definition.name.split('/');
-        const candidate = nameSegments[nameSegments.length - 1] === 'index' ? nameSegments.slice(0, -1) : nameSegments;
-        const match = matchRouteSegments(candidate, segments);
-        if (match === 'static') return definition.name;
-        if (match === 'dynamic') {
-            const staticSegments = routeStaticSegmentCount(candidate);
-            if (dynamicMatch === null || staticSegments > dynamicMatch.staticSegments) {
-                dynamicMatch = { name: definition.name, staticSegments };
-            }
-        }
-    }
-    return dynamicMatch?.name ?? null;
 }
 
 /**
