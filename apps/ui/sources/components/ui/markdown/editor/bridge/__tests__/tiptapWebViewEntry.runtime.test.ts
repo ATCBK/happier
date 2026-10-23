@@ -15,6 +15,10 @@ vi.mock('@tiptap/core', () => ({
             coordsAtPos: () => ({ left: 0, top: 0, bottom: 10 }),
         };
         commands = {};
+        registerPlugin() {}
+        unregisterPlugin() {}
+        on() {}
+        off() {}
 
         constructor(public options: Record<string, unknown>) {
             runtimeState.instances.push(this);

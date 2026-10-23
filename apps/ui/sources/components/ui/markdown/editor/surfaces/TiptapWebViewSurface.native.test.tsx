@@ -61,6 +61,7 @@ vi.mock('@/sync/store/hooks', () => ({
 
 import { TiptapWebViewSurface } from './TiptapWebViewSurface.native';
 import { renderScreen } from '@/dev/testkit';
+import type { MarkdownEditorSurfaceRef } from './TiptapWebViewSurface.native';
 
 function emitEnvelope(envelope: any) {
     if (!lastWebViewProps?.onMessage) throw new Error('WebView onMessage missing');
@@ -93,6 +94,27 @@ function readRequestDocRequestId(callStartIndex: number): string {
 }
 
 describe('TiptapWebViewSurface (native)', () => {
+    it('keeps Find requested before readiness and accepts only matching, valid runtime results', async () => {
+        postMessageSpy.mockClear();
+        const ref = React.createRef<MarkdownEditorSurfaceRef>();
+        await renderScreen(<TiptapWebViewSurface ref={ref} resetKey="find" value="Retry now" onChange={vi.fn()} />);
+        const find = ref.current!.find!;
+        const options = { matchCase: false, regex: false };
+        find.seed('Retry', options);
+        expect(findPostedEnvelope('find.set')).toBeNull();
+        emitEnvelope({ v: 1, type: 'ready', payload: {} });
+        expect(findPostedEnvelope('find.set')?.payload).toEqual({ query: 'Retry', options });
+        const status = { kind: 'results', total: 1, current: 1, coverage: 'complete' } as const;
+        emitEnvelope({ v: 1, type: 'find.status', payload: { query: 'old', options, status } });
+        expect(find.getSnapshot().status.kind).toBe('searching');
+        emitEnvelope({ v: 1, type: 'find.status', payload: { query: 'Retry', options, status: { ...status, current: 2 } } });
+        expect(find.getSnapshot().status.kind).toBe('searching');
+        emitEnvelope({ v: 1, type: 'find.status', payload: { query: 'Retry', options, status } });
+        expect(find.getSnapshot().status).toEqual(status);
+        find.close();
+        expect(findPostedEnvelope('find.close')).not.toBeNull();
+    });
+
     beforeEach(() => {
         openURLSpy.mockClear();
         unistylesState.themeOverride = {

@@ -8,6 +8,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import type { MarkdownEditorController, MarkdownSelectionState } from './markdownEditorTypes';
 import { RichMarkdownEditorPanel } from './RichMarkdownEditorPanel';
+import { CodeEditorWithFind } from '@/components/ui/code/editor/CodeEditorWithFind';
+import { KeyboardShortcutProvider, useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { executeFindAction } from '@/keyboard/findActionRuntime';
+import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import { useMarkdownEditMode, type MarkdownEditModeState } from './useMarkdownEditMode';
+import { storage } from '@/sync/domains/state/storageStore';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -43,6 +50,81 @@ vi.mock('@tiptap/react', async (importOriginal) => {
 });
 
 describe('rich markdown ready-panel boundary (web)', () => {
+    it('switches Rich to Raw and back through the real mode owner without a phantom draft', async () => {
+        engine.ready = true;
+        const originalSettings = storage.getState().settings;
+        storage.setState({ settings: { ...originalSettings, experiments: true, markdownDefaultEditMode: 'rich',
+            featureToggles: { ...originalSettings.featureToggles, 'files.editor': true, 'files.markdownRichEditor': true } } });
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const initial = '# Guide\n\n- one\n- two\n';
+        let mode: MarkdownEditModeState | null = null;
+        let text = initial;
+        function Field() {
+            const [value, setValue] = React.useState(initial);
+            text = value;
+            const editorRef = React.useRef<TextEditorHandle | null>(null);
+            mode = useMarkdownEditMode({ value, language: 'markdown', baseResetKey: 'mode', editorHandleRef: editorRef, onValueChange: setValue });
+            return mode.showRich ? <RichMarkdownEditorPanel editorRef={editorRef} resetKey={mode.resetKey}
+                value={mode.seedText} onChange={setValue} hideFooterToolbar /> : null;
+        }
+        const currentMode = () => { if (!mode) throw new Error('Mode owner not mounted'); return mode; };
+        try {
+            await act(async () => root.render(<Field />));
+            await act(async () => { await vi.dynamicImportSettled(); });
+            expect(currentMode().showRich).toBe(true);
+            await act(async () => { await currentMode().onToggle('raw'); });
+            expect(text).toBe(initial);
+            expect(currentMode().markdownEditMode).toBe('raw');
+            await act(async () => { await currentMode().onToggle('rich'); });
+            await act(async () => { await vi.dynamicImportSettled(); });
+            expect(text).toBe(initial);
+            expect(currentMode().showRich).toBe(true);
+            const editor = engine.current!;
+            let lastTextEnd = 0;
+            editor.state.doc.descendants((node, position) => { if (node.isText) lastTextEnd = position + node.nodeSize; });
+            await act(async () => { editor.commands.insertContentAt(lastTextEnd, ' '); });
+            const edited = editor.getMarkdown();
+            expect(edited.trimEnd()).toBe(initial.trimEnd());
+            await act(async () => { await currentMode().onToggle('raw'); });
+            expect(text).toBe(edited);
+            expect(text).not.toBe(initial);
+        } finally {
+            await act(async () => root.unmount()); container.remove(); storage.setState({ settings: originalSettings });
+        }
+    });
+
+    it('opens and searches the rich surface through the shared registered Find composition', async () => {
+        engine.ready = true;
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const editorRef = { current: null as TextEditorHandle | null };
+        let open: ReturnType<typeof useFindSurfaceRuntime>['open'] = () => false;
+        function Probe() { open = useFindSurfaceRuntime().open; return null; }
+        const onChange = vi.fn();
+        const value = '# Retries\n\nRetry **now**. Retry now.\n';
+        try {
+            await act(async () => root.render(<KeyboardShortcutProvider handlers={{}} enabledWhenDisabledCommandIds={['find.open']}>
+                <PluginSurfaceFocusEligibilityProvider active><Probe /><CodeEditorWithFind
+                    editorRef={editorRef} resetKey="rich-find" value={value} language="markdown" onChange={onChange} surfaceId="rich:file"
+                    renderEditor={publish => <RichMarkdownEditorPanel editorRef={editorRef} onEditorHandleChange={publish}
+                        resetKey="rich-find" value={value} onChange={onChange} hideFooterToolbar />}
+                /></PluginSurfaceFocusEligibilityProvider>
+            </KeyboardShortcutProvider>));
+            await act(async () => { await vi.dynamicImportSettled(); });
+            await act(async () => { expect(open('rich:file')).toBe(true); });
+            expect(container.querySelector('[data-testid="file-editor-find"]')).not.toBeNull();
+            await act(async () => {
+                await executeFindAction({ actionId: 'ui.find', input: { op: 'set', query: 'Retry now' }, context: { surface: 'ui' } });
+            });
+            expect(editorRef.current?.find?.getSnapshot().status).toEqual({ kind: 'results', total: 2, current: 1, coverage: 'complete' });
+            expect(container.querySelector('.ProseMirror')).not.toBeNull();
+            expect(onChange).not.toHaveBeenCalled();
+        } finally { await act(async () => root.unmount()); container.remove(); }
+    });
+
     it('keeps the surface focus handle safe after its real editor is destroyed and focuses the replacement', async () => {
         engine.ready = true;
         engine.deferCreation = true;

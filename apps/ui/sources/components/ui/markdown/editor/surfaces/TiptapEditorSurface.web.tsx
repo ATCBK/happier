@@ -26,6 +26,8 @@ import { buildMarkdownProseCss } from '../markdownEditorProseStyle';
 import type { MarkdownEditorSurfaceRef } from './TiptapWebViewSurface.native';
 import { createMarkdownEditorExtensions } from '../core/tiptap/createMarkdownEditorExtensions';
 import { markdownToDoc } from '../core/tiptap/markdownSerialization';
+import { createTiptapFind } from '../core/tiptap/tiptapFind';
+import { normalizeSoftBreaks } from '../core/tiptap/normalizeSoftBreaks';
 import { runWithPreservedTiptapViewState } from '../core/tiptap/preserveTiptapViewState';
 import {
     readActiveLinkHref,
@@ -92,8 +94,8 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
         // The markdown the editor was last seeded with (initial mount or external
         // sync). Used to suppress the initial-seed echo (R-A7).
         const seedRef = React.useRef(props.value);
-        // While true, `onUpdate` is treated as a (programmatic) seed echo and does
-        // not emit `onChange`. Lifted on the first divergent user transaction.
+        const seedDocumentRef = React.useRef<Editor['state']['doc'] | null>(null);
+        // Only programmatic seeding suppresses updates. Whitespace edits are real edits too.
         const ignoreChangeRef = React.useRef(true);
 
         const pendingChangeRef = React.useRef<string | null>(null);
@@ -237,18 +239,10 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
 
         const handleUpdate = React.useCallback(
             (editor: Editor) => {
-                const next = editor.getMarkdown();
-                if (ignoreChangeRef.current) {
-                    // Still showing the seed; only a divergent transaction counts as
-                    // a real user edit (R-A7).
-                    // The serializer reads a document that ends in a list or block back with a blank
-                    // line after it; that is the seed echoed, not an edit, so a built-in or imported
-                    // document is never dirty before anyone touches it.
-                    if (next === seedRef.current || next.trimEnd() === seedRef.current.trimEnd()) {
-                        return;
-                    }
-                    ignoreChangeRef.current = false;
-                }
+                if (ignoreChangeRef.current) return;
+                const next = seedDocumentRef.current && editor.state.doc.eq(seedDocumentRef.current)
+                    ? seedRef.current : editor.getMarkdown();
+                if (next === latestValueRef.current) return;
                 latestValueRef.current = next;
                 scheduleChange(next);
             },
@@ -274,6 +268,15 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
             // eslint-disable-next-line react-hooks/exhaustive-deps
             [props.resetKey],
         );
+
+        const richFind = React.useMemo(() => editor ? createTiptapFind(editor) : null, [editor]);
+        React.useEffect(() => () => richFind?.destroy(), [richFind]);
+        React.useEffect(() => {
+            if (!editor) return;
+            editor.view.dom.style.setProperty('--happier-rich-find-all', theme.colors.find.matchAll);
+            editor.view.dom.style.setProperty('--happier-rich-find-current', theme.colors.find.matchCurrent);
+            editor.view.dom.style.setProperty('--happier-rich-find-current-foreground', theme.colors.find.matchCurrentForeground);
+        }, [editor, theme.colors.find]);
 
         // Reset the seed/suppression state whenever the editor is (re)built for a
         // new reset key.
@@ -367,6 +370,13 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
             editorRef.current = editor ?? null;
             if (!editor || editor.isDestroyed) return;
 
+            // Capture the actual seeded document after canonical structural normalization.
+            // Comparing documents preserves untouched bytes without suppressing trailing-space edits.
+            ignoreChangeRef.current = true;
+            normalizeSoftBreaks(editor);
+            seedDocumentRef.current = editor.state.doc;
+            ignoreChangeRef.current = false;
+
             // Subscribers can mount before creation or survive editor replacement.
             notifySelection(editor);
 
@@ -390,7 +400,7 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
                     // ignore
                 }
             };
-        }, [editor, handleUpdate, notifySelection, notifyLinkBubble]);
+        }, [editor, handleUpdate, notifySelection, notifyLinkBubble, props.resetKey]);
 
         // Keep editability in sync with the readOnly prop after mount.
         React.useEffect(() => {
@@ -408,6 +418,9 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
             if (!editor) return;
             const current = editor.getMarkdown();
             if (current === props.value) {
+                seedRef.current = props.value;
+                seedDocumentRef.current = editor.state.doc;
+                ignoreChangeRef.current = false;
                 // Editor and parent agree; any still-pending change is a settled echo.
                 cancelPendingChange();
                 return;
@@ -425,9 +438,13 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
             try {
                 runWithPreservedTiptapViewState(editor, () => {
                     editor.commands.setContent(markdownToDoc(props.value));
+                    normalizeSoftBreaks(editor);
                 });
             } catch {
                 // ignore
+            } finally {
+                seedDocumentRef.current = editor.state.doc;
+                ignoreChangeRef.current = false;
             }
         }, [cancelPendingChange, editor, flushPendingChange, props.value]);
 
@@ -435,10 +452,12 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
             ref,
             () => ({
                 getValue: () => {
+                    // A mode switch must read untouched source bytes, not normalized Markdown.
                     const live = editorRef.current;
                     if (!live) return latestValueRef.current;
                     try {
-                        return live.getMarkdown();
+                        return seedDocumentRef.current && live.state.doc.eq(seedDocumentRef.current)
+                            ? seedRef.current : live.getMarkdown();
                     } catch {
                         return latestValueRef.current;
                     }
@@ -450,6 +469,7 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
                     const live = editorRef.current;
                     if (live && !live.isDestroyed) live.commands.focus();
                 },
+                find: richFind?.find,
                 runCommand: (command) => controllerRef.current?.runCommand(command),
                 subscribeSelection: (callback) =>
                     controllerRef.current?.subscribeSelection(callback) ?? (() => {}),
@@ -462,7 +482,7 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
                 subscribeLinkBubble: (callback) =>
                     controllerRef.current?.subscribeLinkBubble?.(callback) ?? (() => {}),
             }),
-            [flushPendingChange],
+            [flushPendingChange, richFind],
         );
 
         // Flush any pending debounced change on unmount.

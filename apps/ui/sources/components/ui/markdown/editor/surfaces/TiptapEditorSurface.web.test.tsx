@@ -24,6 +24,8 @@ type FakeEditorEvents = {
 
 function createFakeEditor(initialMarkdown: string) {
     const events: FakeEditorEvents = { update: [], selectionUpdate: [], transaction: [] };
+    const doc = (markdownValue: string) => ({ markdownValue, content: { size: Math.max(2, markdownValue.length + 2) },
+        eq: (other: { markdownValue: string }) => other.markdownValue === markdownValue });
     const editor: any = {
         markdownValue: initialMarkdown,
         destroyed: false,
@@ -32,11 +34,12 @@ function createFakeEditor(initialMarkdown: string) {
         lastSetTextSelection: null as unknown,
         state: {
             selection: { from: 1, to: 1 },
-            doc: { content: { size: Math.max(2, initialMarkdown.length + 2) } },
+            doc: doc(initialMarkdown),
         },
         view: {
             dom: {
                 parentElement: { scrollTop: 0, scrollLeft: 0 },
+                style: { setProperty: () => undefined },
             },
         },
         on(name: keyof FakeEditorEvents, handler: () => void) {
@@ -46,6 +49,8 @@ function createFakeEditor(initialMarkdown: string) {
         off() {
             return editor;
         },
+        registerPlugin() {},
+        unregisterPlugin() {},
         getMarkdown() {
             return editor.markdownValue;
         },
@@ -58,7 +63,7 @@ function createFakeEditor(initialMarkdown: string) {
                 const markdownValue = typeof content === 'object' && content !== null && 'markdownValue' in content
                     ? String(content.markdownValue ?? '')
                     : '';
-                editor.state.doc.content.size = Math.max(2, markdownValue.length + 2);
+                editor.state.doc = doc(markdownValue);
                 return true;
             },
             setTextSelection: (selection: unknown) => {
@@ -76,9 +81,10 @@ function createFakeEditor(initialMarkdown: string) {
             editor.destroyed = true;
         },
         // Helpers the test uses to drive events.
-        __emitUpdate(nextMarkdown?: string) {
+        __emitUpdate(nextMarkdown?: string, sameDocument = false) {
             if (typeof nextMarkdown === 'string') {
                 editor.markdownValue = nextMarkdown;
+                if (!sameDocument) editor.state.doc = doc(nextMarkdown);
             }
             for (const handler of events.update) handler();
         },
@@ -86,6 +92,7 @@ function createFakeEditor(initialMarkdown: string) {
             for (const handler of events.selectionUpdate) handler();
         },
     };
+    Object.defineProperty(editor.view, 'state', { get: () => ({ ...editor.state, schema: { nodes: {} } }) });
     return editor;
 }
 
@@ -110,8 +117,9 @@ vi.mock('react-native', async () => {
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     const base = await createUnistylesMock();
+    const { createThemeFixture } = await import('@/dev/testkit/fixtures/themeFixtures');
     const baseRuntime = base.useUnistyles().rt;
-    const theme = {
+    const theme = createThemeFixture({
         dark: true,
         colors: {
             border: { default: '#303030' },
@@ -119,7 +127,7 @@ vi.mock('react-native-unistyles', async () => {
             surface: { base: '#151515', inset: '#1f1f1f', elevated: '#101010' },
             state: { active: { foreground: '#58a6ff' } },
         },
-    };
+    });
     return {
         ...base,
         useUnistyles: () => ({ theme, rt: baseRuntime }),
@@ -212,7 +220,7 @@ describe('TiptapEditorSurface (web)', () => {
         );
 
         await act(async () => {
-            editor.__emitUpdate(`${seed}\n`);
+            editor.__emitUpdate(`${seed}\n`, true);
             await flushHookEffects();
         });
         expect(onChange).toHaveBeenCalledTimes(0);

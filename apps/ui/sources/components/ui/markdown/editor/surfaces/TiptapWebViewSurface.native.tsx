@@ -22,6 +22,8 @@ import type {
 import { resolveMarkdownEditorTheme } from '../markdownEditorTheme';
 import { buildTiptapWebViewHtml } from '../bridge/tiptapWebViewHtml';
 import { resolveNativeOpenableMarkdownHref } from '../core/tiptap/markdownLinkOpening';
+import type { CodeEditorFindHandle, CodeEditorFindSnapshot } from '@/components/ui/code/editor/codeEditorTypes';
+import { readCodeMirrorFindStatus } from '@/components/ui/code/editor/bridge/codeEditorFindBridge';
 
 /**
  * Native TipTap editor surface (Lane N / N2).
@@ -78,6 +80,7 @@ type LinkBubbleChangedPayload = LinkBubbleState | null;
 
 type InboundEnvelope =
     | Readonly<{ v: 1; type: 'ready'; payload: unknown }>
+    | Readonly<{ v: 1; type: 'find.status'; payload: unknown }>
     | Readonly<{ v: 1; type: 'docChanged'; payload: DocChangedPayload }>
     | Readonly<{ v: 1; type: 'docSnapshot'; payload: DocSnapshotPayload }>
     | Readonly<{ v: 1; type: 'selectionState'; payload: SelectionStatePayload }>
@@ -230,6 +233,8 @@ function parseInboundEnvelope(decoded: WebViewBridgeEnvelopeV1): InboundEnvelope
     switch (decoded.type) {
         case 'ready':
             return { v: 1, type: 'ready', payload: decoded.payload };
+        case 'find.status':
+            return { v: 1, type: 'find.status', payload: decoded.payload };
         case 'error':
             return { v: 1, type: 'error', payload: decoded.payload };
         case 'docChanged': {
@@ -316,6 +321,7 @@ export const TiptapWebViewSurface = React.forwardRef<MarkdownEditorSurfaceRef, M
                 theme.colors.border.default,
                 theme.colors.state.active.background,
                 theme.colors.state.active.foreground,
+                theme.colors.find,
             ],
         );
 
@@ -327,6 +333,9 @@ export const TiptapWebViewSurface = React.forwardRef<MarkdownEditorSurfaceRef, M
         // `ready`) and reset this flag on resetKey. The messenger owns only the
         // chunked transport + decode/dispatch (D8/R-A5).
         const readyRef = React.useRef(false);
+        const findOpenRef = React.useRef(false);
+        const findSnapshotRef = React.useRef<CodeEditorFindSnapshot>({ query: '', options: { matchCase: false, regex: false }, status: { kind: 'idle' } });
+        const findListenersRef = React.useRef(new Set<() => void>());
         const pendingInitRef = React.useRef<null | { doc: string }>(null);
         // Synchronous mirror of the current document (R5) + the latest content the
         // fallback path hands to `onUnavailable` (R-A17).
@@ -396,6 +405,34 @@ export const TiptapWebViewSurface = React.forwardRef<MarkdownEditorSurfaceRef, M
             },
             [messenger],
         );
+
+        const find = React.useMemo<CodeEditorFindHandle>(() => {
+            const publish = (next: CodeEditorFindSnapshot) => {
+                findSnapshotRef.current = next;
+                for (const listener of findListenersRef.current) listener();
+            };
+            const set: CodeEditorFindHandle['set'] = (query, options) => {
+                findOpenRef.current = true;
+                publish({ query, options, status: query ? { kind: 'searching', total: 0 } : { kind: 'idle' } });
+                if (readyRef.current) postEnvelope({ v: 1, type: 'find.set', payload: { query, options } });
+            };
+            return {
+                presentation: 'shared',
+                open: () => { const { query, options } = findSnapshotRef.current; set(query, options); },
+                seed: set, set,
+                step: direction => { if (readyRef.current) postEnvelope({ v: 1, type: 'find.step', payload: { direction } }); },
+                close: () => {
+                    findOpenRef.current = false;
+                    publish({ ...findSnapshotRef.current, status: { kind: 'idle' } });
+                    if (readyRef.current) postEnvelope({ v: 1, type: 'find.close', payload: {} });
+                },
+                getSnapshot: () => findSnapshotRef.current,
+                subscribe: listener => { findListenersRef.current.add(listener); return () => { findListenersRef.current.delete(listener); }; },
+                containsFocus: () => false,
+                isOpen: () => findOpenRef.current,
+                isInputFocused: () => false,
+            };
+        }, [postEnvelope]);
 
         const sendInit = React.useCallback(() => {
             if (!readyRef.current) return;
@@ -552,6 +589,7 @@ export const TiptapWebViewSurface = React.forwardRef<MarkdownEditorSurfaceRef, M
             ref,
             () => ({
                 getValue: () => lastDocRef.current,
+                find,
                 flushPendingChange,
                 focus: () => messenger.webViewRef.current?.requestFocus?.(),
                 runCommand,
@@ -563,7 +601,7 @@ export const TiptapWebViewSurface = React.forwardRef<MarkdownEditorSurfaceRef, M
                 measureEditorViewportInWindow,
                 subscribeLinkBubble,
             }),
-            [flushPendingChange, runCommand, subscribeSelection, subscribeMenuTrigger, subscribeMenuKeyDown, runMenuCommand, subscribeEditorViewportLayout, measureEditorViewportInWindow, subscribeLinkBubble],
+            [find, flushPendingChange, runCommand, subscribeSelection, subscribeMenuTrigger, subscribeMenuKeyDown, runMenuCommand, subscribeEditorViewportLayout, measureEditorViewportInWindow, subscribeLinkBubble],
         );
 
         const clearPendingDocRequests = React.useCallback(() => {
@@ -628,6 +666,19 @@ export const TiptapWebViewSurface = React.forwardRef<MarkdownEditorSurfaceRef, M
                     case 'ready': {
                         readyRef.current = true;
                         sendInit();
+                        if (findOpenRef.current) {
+                            const { query, options } = findSnapshotRef.current;
+                            postEnvelope({ v: 1, type: 'find.set', payload: { query, options } });
+                        }
+                        return;
+                    }
+                    case 'find.status': {
+                        if (!findOpenRef.current) return;
+                        const status = readCodeMirrorFindStatus(envelope.payload, findSnapshotRef.current);
+                        if (status) {
+                            findSnapshotRef.current = { ...findSnapshotRef.current, status };
+                            for (const listener of findListenersRef.current) listener();
+                        }
                         return;
                     }
 
@@ -706,7 +757,7 @@ export const TiptapWebViewSurface = React.forwardRef<MarkdownEditorSurfaceRef, M
                     }
                 }
             },
-            [sendInit],
+            [sendInit, postEnvelope],
         );
 
         // Keep the messenger's `onEnvelope` pointed at the latest handler.

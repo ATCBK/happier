@@ -1,3 +1,5 @@
+import type { Theme } from '@/theme';
+
 /**
  * Shared prose/editor theme resolver for the unified `MarkdownEditor` (Lane F / F10).
  *
@@ -46,6 +48,9 @@ export type MarkdownEditorTheme = Readonly<{
     linkColor: string;
     /** Inline-code + code-block background. */
     codeBackgroundColor: string;
+    findMatchBackgroundColor?: string;
+    findCurrentBackgroundColor?: string;
+    findForegroundColor?: string;
 }>;
 
 /**
@@ -59,6 +64,7 @@ type MarkdownEditorThemeInput = {
         text: { primary: string; secondary: string; link: string };
         border: { default: string };
         state: { active: { background: string; foreground: string } };
+        find?: Pick<Theme['colors']['find'], 'matchAll' | 'matchCurrent' | 'matchCurrentForeground'>;
     };
 };
 
@@ -83,5 +89,8 @@ export function resolveMarkdownEditorTheme(theme: MarkdownEditorThemeInput, pres
         selectionAccentColor: colors.state.active.foreground,
         linkColor: colors.text.link,
         codeBackgroundColor: colors.surface.elevated,
+        findMatchBackgroundColor: colors.find?.matchAll ?? colors.state.active.background,
+        findCurrentBackgroundColor: colors.find?.matchCurrent ?? colors.state.active.background,
+        findForegroundColor: colors.find?.matchCurrentForeground ?? colors.text.primary,
     };
 }

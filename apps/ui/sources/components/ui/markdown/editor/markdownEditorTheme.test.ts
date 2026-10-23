@@ -5,21 +5,23 @@ import {
     type MarkdownEditorTheme,
 } from './markdownEditorTheme';
 import type { TiptapWebViewTheme } from './bridge/tiptapWebViewHtml';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 
 /**
  * A minimal live-theme fixture shaped like the slice `resolveMarkdownEditorTheme`
  * reads (the real Unistyles theme carries much more).
  */
 function makeThemeFixture(overrides?: { dark?: boolean }) {
-    return {
+    return createThemeFixture({
         dark: overrides?.dark ?? true,
         colors: {
             surface: { inset: '#111111', elevated: '#222222', base: '#111111' },
             text: { primary: '#eeeeee', secondary: '#aaaaaa', link: '#58a6ff' },
             border: { default: '#303030' },
             state: { active: { background: '#0a84ff33', foreground: '#0a84ff' } },
+            find: { matchAll: '#332211', matchCurrent: '#665522', matchCurrentForeground: '#ffffff' },
         },
-    };
+    });
 }
 
 describe('resolveMarkdownEditorTheme', () => {
@@ -36,6 +38,9 @@ describe('resolveMarkdownEditorTheme', () => {
             selectionAccentColor: '#0a84ff',
             linkColor: '#58a6ff',
             codeBackgroundColor: '#222222',
+            findMatchBackgroundColor: '#332211',
+            findCurrentBackgroundColor: '#665522',
+            findForegroundColor: '#ffffff',
         });
     });
 

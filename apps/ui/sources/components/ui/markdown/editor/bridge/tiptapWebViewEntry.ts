@@ -26,6 +26,7 @@ import {
     runMarkdownEditorCommand,
 } from '../core/tiptap/markdownEditorCommands';
 import { seedMarkdown } from '../core/tiptap/seedMarkdown';
+import { createTiptapFind } from '../core/tiptap/tiptapFind';
 import type { MenuTriggerKeyDownEvent, MenuTriggerState } from '../core/tiptap/menuTriggerExtensionTypes';
 import type {
     LinkBubbleState,
@@ -131,6 +132,8 @@ function createRuntime(params: Readonly<{
 
     let applyingRemote = false;
     let seeded = false;
+    let source = '';
+    let edited = false;
     let docChangeTimer: ReturnType<typeof setTimeout> | null = null;
     let selectionTimer: ReturnType<typeof setTimeout> | null = null;
     let lastSelectionState: MarkdownSelectionState | null = null;
@@ -253,6 +256,7 @@ function createRuntime(params: Readonly<{
             if (!seeded) {
                 return;
             }
+            edited = true;
             if (docChangeTimer) {
                 clearTimeout(docChangeTimer);
             }
@@ -275,9 +279,14 @@ function createRuntime(params: Readonly<{
         },
     });
 
+    const richFind = createTiptapFind(editor);
+    richFind.find.subscribe(() => postEnvelope({ v: 1, type: 'find.status', payload: richFind.find.getSnapshot() }));
+
     const setDoc = (nextDoc: string) => {
         const current = editor.getMarkdown();
         if (current === nextDoc) {
+            source = nextDoc;
+            edited = false;
             // Editor and host agree; any still-pending change is a settled echo.
             cancelPendingDocChange();
             return;
@@ -296,6 +305,8 @@ function createRuntime(params: Readonly<{
             // pre-pass runs on this seed boundary too (raw HTML / comments →
             // byte-verbatim atoms).
             seedMarkdown(editor, nextDoc, { preserveViewState: true });
+            source = nextDoc;
+            edited = false;
         } finally {
             applyingRemote = false;
         }
@@ -320,6 +331,8 @@ function createRuntime(params: Readonly<{
             try {
                 // Encode-on-input via the shared seed helper (see `setDoc`).
                 seedMarkdown(editor, doc);
+                source = doc;
+                edited = false;
             } finally {
                 applyingRemote = false;
             }
@@ -336,7 +349,7 @@ function createRuntime(params: Readonly<{
             const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
             let doc = '';
             try {
-                doc = editor.getMarkdown();
+                doc = edited ? editor.getMarkdown() : source;
             } catch {
                 doc = '';
             }
@@ -379,9 +392,20 @@ function createRuntime(params: Readonly<{
             emitSelectionState(editor);
             emitLinkBubbleChanged(editor);
         }
+        if (envelope.type === 'find.set' && typeof payload.query === 'string') {
+            const options = asRecord(payload.options);
+            if (typeof options.matchCase === 'boolean' && typeof options.regex === 'boolean') {
+                richFind.find.set(payload.query, { matchCase: options.matchCase, regex: options.regex });
+            }
+        } else if (envelope.type === 'find.step' && (payload.direction === 1 || payload.direction === -1)) {
+            richFind.find.step(payload.direction);
+        } else if (envelope.type === 'find.close') {
+            richFind.find.close();
+        }
     };
 
     const destroy = () => {
+        richFind.destroy();
         cancelPendingDocChange();
         if (selectionTimer) {
             clearTimeout(selectionTimer);

@@ -125,6 +125,10 @@ export async function buildTiptapWebViewBundle({ expoAppDir, repoRootDir }) {
         legalComments: 'eof',
         sourcemap: false,
         treeShaking: true,
+        conditions: ['happier-source'],
+        // The shared Find matcher comes from plugin-ui's public presentation barrel. Its UI-only
+        // exports tree-shake away; React Native's Flow sources must not be parsed for this DOM runtime.
+        external: ['react', 'react-native', 'react-native-svg'],
     });
 
     const js = result.outputFiles?.[0]?.text ?? '';

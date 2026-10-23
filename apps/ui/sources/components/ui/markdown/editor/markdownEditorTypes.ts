@@ -56,6 +56,7 @@ export type MarkdownEditMode = 'raw' | 'rich';
  *   the WebView, see R5).
  */
 export type MarkdownEditorHandle = Readonly<{
+    find?: import('@/components/ui/code/editor/codeEditorTypes').CodeEditorFindHandle;
     getValue: () => string;
     flushPendingChange: () => Promise<void>;
     focus?: () => void;

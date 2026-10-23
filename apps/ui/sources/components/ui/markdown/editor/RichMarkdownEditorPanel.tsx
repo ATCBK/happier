@@ -70,6 +70,7 @@ const CANVAS_PANEL_STYLE = { flex: 1 } as const;
 function RichMarkdownEditorPanelImpl(props: Readonly<{
     resetKey: string;
     editorRef: Readonly<React.MutableRefObject<TextEditorHandle | null>>;
+    onEditorHandleChange?: (handle: TextEditorHandle | null) => void;
     value: string;
     onChange: (next: string) => void;
     onUnavailable?: (latestMarkdown: string) => void;
@@ -96,7 +97,7 @@ function RichMarkdownEditorPanelImpl(props: Readonly<{
     const { theme } = useUnistyles();
     const paintColor = useHappierMaterialColorResolver();
     const surfaceRef = React.useRef<MarkdownEditorSurfaceRef | null>(null);
-    const publishEditorHandle = usePublishCodeEditorHandle(props.editorRef);
+    const publishEditorHandle = usePublishCodeEditorHandle(props.editorRef, props.onEditorHandleChange);
 
     // Split the leading YAML frontmatter off the document. The editor only ever
     // sees `body`; `frontmatter` is shown read-only and re-prepended on every
@@ -122,6 +123,7 @@ function RichMarkdownEditorPanelImpl(props: Readonly<{
             getValue: () => reattachFrontMatter(frontmatterRef.current, instance.getValue()),
             flushPendingChange: () => instance.flushPendingChange(),
             focus: () => instance.focus?.(),
+            find: instance.find,
         });
     }, [publishEditorHandle]);
 

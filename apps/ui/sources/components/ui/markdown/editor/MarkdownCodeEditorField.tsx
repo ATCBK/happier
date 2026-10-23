@@ -175,9 +175,10 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
     const [rawHandle, setRawHandle] = React.useState<TextEditorHandle | null>(null);
     const onHostHandleChange = props.onEditorHandleChange;
     const onRawHandleChange = React.useCallback((handle: TextEditorHandle | null) => {
-        setRawHandle(handle);
-        onHostHandleChange?.(handle);
-    }, [onHostHandleChange]);
+        const raw = showRich ? null : handle;
+        setRawHandle(raw);
+        onHostHandleChange?.(raw);
+    }, [onHostHandleChange, showRich]);
     const accessoryTestID = props.testID ? `${props.testID}-accessory` : 'markdown-editor-accessory';
     const keyRow = accessory === null ? null
         : !showRich ? <CodeEditorAccessoryBar editor={rawHandle} save={accessory.save} testID={accessoryTestID} />
@@ -236,22 +237,6 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
             <View style={{ flex: 1 }}>
                 {props.sourceOnly !== true && markdownEditMode === 'rich' && richEligibilityPending && !showRich ? (
                     <ActivitySpinner size="small" />
-                ) : showRich ? (
-                    <RichMarkdownEditorPanel
-                        resetKey={resetKey}
-                        editorRef={editorHandleRef}
-                        value={seedText}
-                        onChange={props.onChange}
-                        onUnavailable={onUnavailable}
-                        readOnly={props.readOnly}
-                        changeDebounceMs={props.changeDebounceMs}
-                        bridgeMaxChunkBytes={props.bridgeMaxChunkBytes}
-                        // Inline toolbar lives in our header — suppress the
-                        // panel's footer toolbar so the chrome doesn't double up.
-                        hideFooterToolbar
-                        presentation={props.presentation}
-                        onControllerChange={handleRichControllerChange}
-                    />
                 ) : (
                     <CodeEditorWithFind
                         editorRef={editorHandleRef}
@@ -279,6 +264,20 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                         reviewLaneWidth={props.reviewLaneWidth}
                         presentation={props.presentation}
                         testID={props.testID ? `${props.testID}:source` : undefined}
+                        renderEditor={showRich ? (publishHandle) => <RichMarkdownEditorPanel
+                            resetKey={resetKey}
+                            editorRef={editorHandleRef}
+                            onEditorHandleChange={publishHandle}
+                            value={seedText}
+                            onChange={props.onChange}
+                            onUnavailable={onUnavailable}
+                            readOnly={props.readOnly}
+                            changeDebounceMs={props.changeDebounceMs}
+                            bridgeMaxChunkBytes={props.bridgeMaxChunkBytes}
+                            hideFooterToolbar
+                            presentation={props.presentation}
+                            onControllerChange={handleRichControllerChange}
+                        /> : undefined}
                     />
                 )}
             </View>

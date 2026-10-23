@@ -30,6 +30,8 @@ export type CodeEditorWithFindProps = CodeEditorProps & Readonly<{
     onChangeMarkersChange?: (controller: EditorChangeMarkersController | null) => void;
     /** The mounted engine's handle, for host chrome that subscribes to it (the phone key row's Undo/Redo). */
     onEditorHandleChange?: (handle: TextEditorHandle | null) => void;
+    /** Alternate text surface using the same Find registration and shared bar (Rich Markdown). */
+    renderEditor?: (publishHandle: React.RefCallback<TextEditorHandle>) => React.ReactNode;
 }>;
 
 function CodeEditorWithFindImpl(props: CodeEditorWithFindProps) {
@@ -122,7 +124,7 @@ function CodeEditorWithFindImpl(props: CodeEditorWithFindProps) {
     }, [clear, eligible, find, sharedOpen]);
     return (
         <View ref={localRootRef} style={{ flex: 1 }}>
-            <CodeEditor
+            {props.renderEditor ? props.renderEditor(publishEditorHandle) : <CodeEditor
                 ref={publishEditorHandle}
                 resetKey={props.resetKey}
                 value={props.value}
@@ -141,7 +143,7 @@ function CodeEditorWithFindImpl(props: CodeEditorWithFindProps) {
                 initialLine={props.initialLine}
                 lineNumberDigits={props.lineNumberDigits}
                 reviewLaneWidth={props.reviewLaneWidth}
-            />
+            />}
             {eligible && sharedOpen && find?.presentation === 'shared' && controller ?
                 <CodeEditorFindBar find={find} controller={controller} inputRef={inputRef}
                     onInputFocus={() => setInputFocused(true)} onInputBlur={() => setInputFocused(false)} /> : null}

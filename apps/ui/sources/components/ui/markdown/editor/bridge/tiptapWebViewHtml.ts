@@ -37,6 +37,9 @@ export type TiptapWebViewTheme = Readonly<{
     selectionAccentColor: string;
     linkColor: string;
     codeBackgroundColor: string;
+    findMatchBackgroundColor?: string;
+    findCurrentBackgroundColor?: string;
+    findForegroundColor?: string;
 }>;
 
 export function buildTiptapWebViewHtml(params: Readonly<{
@@ -96,6 +99,9 @@ export function buildTiptapWebViewHtml(params: Readonly<{
       :root {
         --happier-tiptap-selection-background-color: ${params.theme.selectionBackgroundColor};
         --happier-tiptap-selection-accent-color: ${params.theme.selectionAccentColor};
+        --happier-rich-find-all: ${params.theme.findMatchBackgroundColor ?? params.theme.selectionBackgroundColor};
+        --happier-rich-find-current: ${params.theme.findCurrentBackgroundColor ?? params.theme.selectionBackgroundColor};
+        --happier-rich-find-current-foreground: ${params.theme.findForegroundColor ?? params.theme.textColor};
         --happier-tiptap-gap-cursor-color: ${params.theme.textColor};
       }
       html, body {
