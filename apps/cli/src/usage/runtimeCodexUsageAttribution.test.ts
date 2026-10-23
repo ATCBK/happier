@@ -45,7 +45,7 @@ describe('native Codex request scope → host → ingest', () => {
                 provider: 'codex', publish: input => publisher.publish({ sessionId: 'actual-happier-session', ...input }),
             }, undefined, undefined, {
                 context: {} as AgentSessionRuntimeContext, cwd: '/private/repository',
-                connectedAccounts: [{ purpose: 'agent', account: { service, accountId: 'account-A' } }],
+                connectedAccounts: [{ purpose: 'agent', usageAccountScope: 'personal', account: { service, accountId: 'account-A' } }],
                 capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
                 cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
             });
