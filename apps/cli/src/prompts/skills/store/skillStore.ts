@@ -173,24 +173,30 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                 const manifestPath = join(pluginRoot, 'session.json');
                 const previous = await readManifest(manifestPath);
                 const unchanged = previous && JSON.stringify(previous) === JSON.stringify(items);
-                const entriesPresent = await exists(skillsRoot) && (await readdir(skillsRoot)).length === items.length
-                    && (await Promise.all(items.map(item => exists(join(skillsRoot, item.sourceFolderName ?? item.name))))).every(Boolean);
                 const copy = platform === 'win32' || admitted.materialization === 'copy';
-                const entrypointsPresent = entriesPresent && (await Promise.all(items.map(async item => {
-                    const entry = join(skillsRoot, item.sourceFolderName ?? item.name, 'SKILL.md');
-                    return await exists(entry) && (await lstat(entry)).isFile();
-                }))).every(Boolean);
-                const copiesPresent = !copy || entrypointsPresent && (await Promise.all(items.map(async item => {
+                const previousByFolder = new Map(previous?.map(item => [item.sourceFolderName ?? item.name, item]));
+                const reusable = new Set<string>();
+                for (const item of items) {
+                    const folder = item.sourceFolderName ?? item.name;
+                    const prior = previousByFolder.get(folder);
+                    if (!prior || prior.skillId !== item.skillId || prior.name !== item.name || prior.digest !== item.digest) continue;
                     const directory = join(skillsRoot, item.sourceFolderName ?? item.name);
-                    return (await Promise.all((await readdir(directory)).map(async name =>
-                        !(await lstat(join(directory, name))).isSymbolicLink()))).every(Boolean);
-                }))).every(Boolean);
+                    let entrypoint: Stats;
+                    try { entrypoint = await lstat(join(directory, 'SKILL.md')); }
+                    catch (error) { if (errorCode(error) === 'ENOENT') continue; throw error; }
+                    if (!entrypoint.isFile()) continue;
+                    if (copy && !(await Promise.all((await readdir(directory)).map(async name =>
+                        !(await lstat(join(directory, name))).isSymbolicLink()))).every(Boolean)) continue;
+                    reusable.add(folder);
+                }
                 const marketplaceManifest = join(pluginRoot, '.augment-plugin', 'marketplace.json');
-                if (unchanged && entrypointsPresent && copiesPresent && await exists(marketplaceManifest)) return result();
+                if (unchanged && reusable.size === items.length && await exists(skillsRoot)
+                    && (await readdir(skillsRoot)).length === items.length && await exists(marketplaceManifest)) return result();
                 await mkdir(pluginRoot, { recursive: true, mode: 0o700 });
                 await mkdir(skillsRoot, { recursive: true, mode: 0o700 });
                 await chmod(skillsRoot, 0o700);
                 for (const item of [...items]) {
+                    if (reusable.has(item.sourceFolderName ?? item.name)) continue;
                     const destination = join(skillsRoot, item.sourceFolderName ?? item.name);
                     const temporary = join(skillsRoot, `.staging-${randomUUID()}`);
                     try {

@@ -1,9 +1,16 @@
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs/promises';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { createSkillStore, type SkillSessionDirItem } from './skillStore';
+
+// Count materialization at the OS boundary without replacing store logic or filesystem behavior.
+vi.mock('node:fs/promises', async importOriginal => {
+    const actual = await importOriginal<typeof import('node:fs/promises')>();
+    return { ...actual, cp: vi.fn(actual.cp) };
+});
 
 const scratch: string[] = [];
 const pendingReadCleanup: Array<() => Promise<void>> = [];
@@ -37,6 +44,38 @@ async function fixture(platform: NodeJS.Platform = process.platform) {
     return { happyHomeDir, store, ensure, cachePath };
 }
 describe('daemon skill store', () => {
+    it.each([undefined, 'copy'] as const)('materializes only a changed or damaged skill among 139 delivered items (%s)', async materialization => {
+        const f = await fixture();
+        const items = Array.from({ length: 139 }, (_, index) => skill(`guide-${index}`));
+        const ensure = () => f.store.ensureSkillSessionDir({ ownerKey: 'session-one', items, nativeDisables: [], materialization });
+        const result = await ensure();
+        const unchangedEntry = join(result.skillsRoot, items[1]!.name, 'SKILL.md');
+        const unchangedBefore = await stat(unchangedEntry);
+        const copies = vi.mocked(fs.cp);
+        copies.mockClear();
+        items[0] = skill(items[0]!.name, 'Changed guide');
+        await ensure();
+        expect(copies.mock.calls).toHaveLength(1);
+        expect(await readFile(join(result.skillsRoot, items[0]!.name, 'SKILL.md'), 'utf8')).toBe('Changed guide');
+        expect((await stat(unchangedEntry)).mtimeMs).toBe(unchangedBefore.mtimeMs);
+        const damagedDirectory = join(result.skillsRoot, items[2]!.name);
+        await chmod(damagedDirectory, 0o700);
+        await chmod(join(damagedDirectory, 'SKILL.md'), 0o600);
+        await unlink(join(damagedDirectory, 'SKILL.md'));
+        copies.mockClear();
+        await ensure();
+        expect(copies.mock.calls).toHaveLength(1);
+        expect(await readFile(join(damagedDirectory, 'SKILL.md'), 'utf8')).toBe('Use guide-2');
+        copies.mockClear();
+        await ensure();
+        expect(copies.mock.calls).toHaveLength(0);
+        await chmod(result.skillsRoot, 0o700);
+        await mkdir(join(result.skillsRoot, 'orphan'));
+        await chmod(result.skillsRoot, 0o555);
+        await ensure();
+        expect(copies.mock.calls).toHaveLength(0);
+        expect(await readdir(result.skillsRoot)).toHaveLength(items.length);
+    });
     it('shares immutable cache entries, preserves executable bits and makes repeated ensure a no-op', async () => {
         const f = await fixture();
         const item = skill();
