@@ -3,7 +3,7 @@ import { readSocketRoomSnapshot, type SocketRoomDiscoveryServer, type SocketRoom
 
 export type MachineDaemonPresenceSocketServer = SocketRoomDiscoveryServer;
 
-export interface MachineDaemonSocketIdentity {
+export interface MachineScopedSocketIdentity {
     readonly accountId: string;
     readonly machineId: string;
 }
@@ -20,20 +20,13 @@ export function classifyMachineDaemonPresence(
     return inventory.state === 'known' ? 'disconnected' as const : 'unknown' as const;
 }
 
-/**
- * Reads only the ordinary authenticated Machine-scoped socket identity. Reserved server-origin
- * methods add their own installation-proof requirement at their dispatch boundary.
- */
-export function readMachineDaemonSocketIdentity(socketData: unknown): MachineDaemonSocketIdentity | null {
+/** Reads the authenticated Machine-scoped address, including restricted Runners. */
+export function readMachineScopedSocketIdentity(socketData: unknown): MachineScopedSocketIdentity | null {
     if (!socketData || typeof socketData !== "object" || Array.isArray(socketData)) {
         return null;
     }
 
     const data = socketData as Record<string, unknown>;
-    const restricted = data.ephemeralRunnerAdmission;
-    if (restricted && typeof restricted === 'object' && 'kind' in restricted && restricted.kind === 'machine-runtime') {
-        return null;
-    }
     if (data.clientType !== "machine-scoped") {
         return null;
     }
@@ -45,6 +38,15 @@ export function readMachineDaemonSocketIdentity(socketData: unknown): MachineDae
     }
 
     return { accountId: data.userId, machineId: data.machineId };
+}
+
+/** Ordinary daemon presence excludes a Runner's Session-bound Machine runtime. */
+export function readMachineDaemonSocketIdentity(socketData: unknown): MachineScopedSocketIdentity | null {
+    const identity = readMachineScopedSocketIdentity(socketData);
+    if (!identity) return null;
+    const restricted = (socketData as Record<string, unknown>).ephemeralRunnerAdmission;
+    return restricted && typeof restricted === 'object' && 'kind' in restricted && restricted.kind === 'machine-runtime'
+        ? null : identity;
 }
 
 /**

@@ -18,7 +18,7 @@ import { verifyCurrentExternalActionPrincipal, verifyCurrentExternalActionPrinci
     hasCurrentExternalActionSessionSource, isExternalActionAuthorizationBoundToEnvelope,
     projectExternalActionBoundPrincipal, isOriginalAccountHandoffAction,
     readCurrentExternalActionHandoffBindingInTx } from '@/app/auth/externalActionExecutionAuthorization';
-import { readMachineDaemonSocketIdentity } from "@/app/machines/machineDaemonPresence";
+import { readMachineScopedSocketIdentity } from "@/app/machines/machineDaemonPresence";
 import { readCurrentCommittedSessionInputMachineTargetInTx } from '@/app/session/messages/sessionInputAdmission';
 import {
     readSessionPublisherAuthorityProjection,
@@ -436,7 +436,7 @@ function isExactMachineDaemonTarget(
     machineId: string,
     installationId: string,
 ): boolean {
-    const identity = readMachineDaemonSocketIdentity(target.data);
+    const identity = readMachineScopedSocketIdentity(target.data);
     return identity?.machineId === machineId
         && readVerifiedMachineSocketInstallationIdFromSocketData(target.data) === installationId;
 }

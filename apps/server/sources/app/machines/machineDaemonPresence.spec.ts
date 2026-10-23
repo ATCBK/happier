@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { getSocketRooms } from "@/app/api/socketRooms";
 
-import { classifyMachineDaemonPresence, getMachineDaemonPresenceInventory, readMachineDaemonSocketIdentity } from "./machineDaemonPresence";
+import { classifyMachineDaemonPresence, getMachineDaemonPresenceInventory, readMachineDaemonSocketIdentity, readMachineScopedSocketIdentity } from "./machineDaemonPresence";
 
 describe("exact Machine socket identity and inventory", () => {
     it('reads only the demanded daemon identities in a large Account', async () => {
@@ -25,10 +25,13 @@ describe("exact Machine socket identity and inventory", () => {
     });
 
     it('keeps empty exact demand local and excludes an ephemeral runner from ordinary daemon presence', async () => {
-        const io = { in: () => ({ fetchSockets: async () => [{ data: {
+        const data = {
             userId: 'alice', clientType: 'machine-scoped', machineId: 'runner',
             ephemeralRunnerAdmission: { kind: 'machine-runtime' },
-        } }] }) };
+        };
+        expect(readMachineScopedSocketIdentity(data)).toEqual({ accountId: 'alice', machineId: 'runner' });
+        expect(readMachineDaemonSocketIdentity(data)).toBeNull();
+        const io = { in: () => ({ fetchSockets: async () => [{ data }] }) };
         expect(classifyMachineDaemonPresence(await getMachineDaemonPresenceInventory({
             accountId: 'alice', io, machineIds: ['runner'],
         }), 'runner')).toBe('disconnected');
