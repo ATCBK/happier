@@ -17,7 +17,6 @@ import type { InteractionTransientRequesterV1 } from '@happier-dev/protocol/plug
 import { MessageActionAvailableSnapshotV1Schema, type MessageActionAvailableSnapshotV1, type MessageActionReferenceV1 } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
 import { PluginMachineMaterializationRefV1Schema } from '@happier-dev/protocol/plugins/availability/materializationRefV1';
 import type { PluginJsonValueV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
-import type { PluginProjectedActionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginDiagnosticRemediationV1 } from '@happier-dev/protocol/daemon/pluginContributionIntrospection';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import type { PluginReference } from '@happier-dev/plugin-sdk';
@@ -72,11 +71,11 @@ import {
 } from '@/components/plugins/reactNative/clientExecutableContributions';
 import { resolvePluginUiClientExecutablePlatform } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import { readPluginUiAccountExecutableOrigin } from '@/components/plugins/reactNative/executableModuleHost';
-import { readPluginUiAccountActionDeclaration } from '@/sync/domains/plugins/availability/reader';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
 import { createPluginActionHandlerNotStartedError } from '@happier-dev/plugin-sdk/host/registration';
 import {
     isPluginProjectedActionExecutable,
+    type PluginUiActionProjection,
     type PluginUiProjectionModel,
     createPluginUiProjectedActionResolver,
 } from '@/sync/domains/plugins/ui/projection';
@@ -198,7 +197,7 @@ export type PluginSurfaceContributedActionTransport =
  */
 export type PluginSurfaceContributedActionDescriptorResolver = (
     identity: PluginContributionIdentityV1,
-) => PluginProjectedActionV2 | null;
+) => PluginUiActionProjection | null;
 
 /**
  * Branch 2 wiring. Note the absence of `executionSurface`: the stamp belongs to
@@ -239,7 +238,7 @@ export type PluginSurfaceClientActionBinding = Readonly<{
 
 /** The incumbent UI confirmation lifecycle, bound to one presenting owner. */
 export type PluginSurfaceActionCurrentIntentPresenter = (
-    request: PluginActionCurrentIntentRequest<PluginProjectedActionV2>,
+    request: PluginActionCurrentIntentRequest<PluginUiActionProjection>,
 ) => Promise<PluginActionCurrentIntentResult>;
 
 export type PluginSurfaceActionDispatchOutcome =
@@ -476,7 +475,7 @@ function resolveContributedActionIdentity(input: DispatchPluginSurfaceActionInpu
 function resolveProjectedContributedAction(
     input: DispatchPluginSurfaceActionInput,
     identity: PluginContributionIdentityV1,
-): PluginProjectedActionV2 | null {
+): PluginUiActionProjection | null {
     try {
         const action = input.resolveContributedAction?.(identity) ?? null;
         return isPluginProjectedActionExecutable(action)
@@ -492,8 +491,8 @@ function resolveProjectedContributedAction(
 }
 
 type ClientContributedActionSelection = Readonly<{
-    action: PluginProjectedActionV2;
-    authorization: NonNullable<PluginProjectedActionV2['authorization']>;
+    action: PluginUiActionProjection;
+    authorization: NonNullable<PluginUiActionProjection['authorization']>;
     binding: PluginSurfaceClientActionBinding;
     registration: PluginUiClientExecutableRegistration;
     /** Opaque generic-registration value, narrowed at the public SDK boundary. */
@@ -512,8 +511,7 @@ function clientActionInvocation(selection: ClientContributedActionSelection): Ex
             pluginId: selection.action.pluginId,
             contributionLocalId: selection.action.id,
             occurrenceId: selection.registration.occurrenceId,
-            ...(accountOrigin ? { sourceCustody: accountOrigin.sourceCustody, pluginVersion: selection.pluginVersion,
-                ...(accountOrigin.declarationDigest ? { declarationDigest: accountOrigin.declarationDigest } : {}) } : {}),
+            ...(accountOrigin ? { sourceCustody: accountOrigin.sourceCustody, pluginVersion: selection.pluginVersion } : {}),
             // Source-backed development occurrences have no materialization.
             ...(selection.registration.executionOrigin && 'materializationRef' in selection.registration.executionOrigin
                 ? { materializationRef: selection.registration.executionOrigin.materializationRef } : {}),
@@ -530,7 +528,7 @@ function clientActionInvocation(selection: ClientContributedActionSelection): Ex
 function resolveClientContributedActionSelection(
     input: DispatchPluginSurfaceActionInput,
     identity: PluginContributionIdentityV1,
-    expectedAction: PluginProjectedActionV2,
+    expectedAction: PluginUiActionProjection,
 ): ClientContributedActionSelection | null {
     const binding = input.clientAction;
     if (
@@ -846,7 +844,7 @@ function actionOutcomeUnknownFailure(
 function isApprovalRequiredByActionSettings(
     identity: PluginContributionIdentityV1,
     invocationSurface: PluginSurfaceActionInvocationSurface,
-    action: Pick<PluginProjectedActionV2, 'dangerLevel' | 'confirmation' | 'confirmationWhen'>,
+    action: Pick<PluginUiActionProjection, 'dangerLevel' | 'confirmation' | 'confirmationWhen'>,
     normalizedInput?: unknown,
     invocationAuthority?: ActionRequiredAuthority,
 ): boolean {
@@ -904,7 +902,7 @@ async function contributedInvocationAuthority(
  */
 function resolveCurrentIntentPresenter(
     input: DispatchPluginSurfaceActionInput,
-    projectedAction: PluginProjectedActionV2,
+    projectedAction: PluginUiActionProjection,
     invocationSurface: PluginSurfaceActionInvocationSurface,
 ): PluginSurfaceActionCurrentIntentPresenter {
     return input.requestCurrentIntent ?? createPluginActionCurrentIntentHandler({
@@ -929,7 +927,7 @@ function resolveCurrentIntentPresenter(
 async function settleDaemonActionPresentUserIntent(
     input: DispatchPluginSurfaceActionInput,
     identity: PluginContributionIdentityV1,
-    projectedAction: PluginProjectedActionV2,
+    projectedAction: PluginUiActionProjection,
     settledInput: PluginUiJsonValueV1 | undefined,
 ): Promise<Readonly<{ ok: true; presentUserIntent?: 'confirmed' }> | PluginSurfaceActionDispatchFailure> {
     const invocationSurface = input.invocationSurface ?? 'ui';
@@ -1017,7 +1015,7 @@ async function settleDaemonActionPresentUserIntent(
 async function executeClientContributedAction(
     input: DispatchPluginSurfaceActionInput,
     identity: PluginContributionIdentityV1,
-    projectedAction: PluginProjectedActionV2,
+    projectedAction: PluginUiActionProjection,
     /** The dispatcher-settled input, already carrying any selected Account ref. */
     settledInput: PluginUiJsonValueV1 | undefined,
 ): Promise<PluginSurfaceActionDispatchOutcome> {
@@ -1037,7 +1035,7 @@ async function executeClientContributedAction(
     if (!authority) return failure('unavailable', 'plugin_surface_client_action_unavailable');
     const invocationAuthority = await contributedInvocationAuthority(input, authority.serverId);
     const accountDeclaration = projectedAction.execution.target === 'account'
-        ? readPluginUiAccountActionDeclaration(projectedAction) : null;
+        ? projectedAction.accountActionDeclaration : null;
     let inputSchema: Parameters<typeof createPluginActionInvocation>[0]['inputSchema'];
     if (projectedAction.execution.target === 'account') {
         if (!accountDeclaration || !readPluginUiAccountExecutableOrigin(projectedAction)) {
@@ -1075,7 +1073,7 @@ async function executeClientContributedAction(
         isCurrent: initial.isCurrent,
     });
     let normalizedInput: unknown;
-    const presentUserGate = createPluginActionPresentUserGate<PluginProjectedActionV2>({
+    const presentUserGate = createPluginActionPresentUserGate<PluginUiActionProjection>({
         resolve: () => {
             const current = resolveClientContributedActionSelection(input, identity, projectedAction);
             if (!current || !current.action.authorization) {
@@ -1086,7 +1084,7 @@ async function executeClientContributedAction(
             }
             const accountAvailability = current.action.execution.target === 'account'
                 ? evaluateContributionAvailability({
-                    availability: readPluginUiAccountActionDeclaration(current.action)?.availability,
+                    availability: current.action.accountActionDeclaration?.availability,
                     facts: resolveInvocationContributionPolicyFacts({
                         sessionId: current.binding.sessionId,
                         hostPlatform: resolvePluginUiClientExecutablePlatform() ?? undefined,
@@ -1545,7 +1543,6 @@ function mountedHostActionContext(input: DispatchPluginSurfaceActionInput, calle
                     contributionLocalId: caller?.contributionLocalId ?? clientCaller!.contributionLocalId,
                     occurrenceId: caller?.occurrenceId ?? clientCaller!.occurrenceId,
                     ...(declarationBinding?.pluginVersion === undefined ? {} : { pluginVersion: declarationBinding.pluginVersion }),
-                    ...(declarationBinding?.declarationDigest === undefined ? {} : { declarationDigest: declarationBinding.declarationDigest }),
                     ...(sourceCustody === undefined
                         ? {}
                         : { sourceCustody }),
@@ -1919,6 +1916,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
      * canonical facade; they never replace Action, Resource, or local handlers.
      */
     mountedHostApiHandlers?: PluginSurfaceHostApiHandlers;
+    readMountedHostApiHandlers?: () => PluginSurfaceHostApiHandlers;
     /** Retires effects owned by `mountedHostApiHandlers` with this same mount. */
     disposeMountedHostApiHandlers?: () => void;
     isCurrent?: () => boolean;
@@ -1989,7 +1987,9 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
         surfaceContext: input.surfaceContext,
         ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
     });
-    const mountedDisposeHostResource = input.mountedHostApiHandlers?.disposeHostResource;
+    const readMountedHandlers = () => input.readMountedHostApiHandlers?.() ?? input.mountedHostApiHandlers ?? {};
+    const mountedDisposeHostResource: PluginSurfaceHostApiMethodHandler = (request, options) =>
+        readMountedHandlers().disposeHostResource?.(request, options) ?? null;
     const resourceDisposeHostResource = resourceWatch?.disposeHostResource;
     const executeAction = createPluginSurfaceActionDispatchHandler({
         pluginId: input.surfaceContext.pluginId,
@@ -2022,7 +2022,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
             : {}),
         ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
     });
-    return createPluginSurfaceHostApi({
+    const hostApiInput: Parameters<typeof createPluginSurfaceHostApi>[0] = {
         surfaceContext: input.surfaceContext,
         ...(input.admissionMethods ? { admissionMethods: input.admissionMethods } : {}),
         ...(input.isMethodAvailable ? { isMethodAvailable: input.isMethodAvailable } : {}),
@@ -2030,7 +2030,6 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
         ...(input.isConnectionPending ? { isConnectionPending: input.isConnectionPending } : {}),
         ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
         handlers: {
-            ...input.mountedHostApiHandlers,
             ...localHostHandlers,
             executeAction,
             admitAction: async (request, options) => {
@@ -2080,19 +2079,6 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
                 }
                 : {}),
             ...(resourceWatch ? { watchResource: resourceWatch.watchResource } : {}),
-            ...(resourceDisposeHostResource || mountedDisposeHostResource
-                ? {
-                    disposeHostResource: async (request, options) => {
-                        const mountedResult = mountedDisposeHostResource
-                            ? await mountedDisposeHostResource(request, options)
-                            : null;
-                        const resourceResult = resourceDisposeHostResource
-                            ? await resourceDisposeHostResource(request)
-                            : null;
-                        return resourceResult ?? mountedResult;
-                    },
-                }
-                : {}),
             ...(input.openSurface
                 ? {
                     openSurface: createPluginSurfaceOpenSurfaceHandler(
@@ -2113,6 +2099,19 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
             resourceWatch?.dispose();
             feedback.dispose();
             input.disposeMountedHostApiHandlers?.();
+        },
+    };
+    const disposeHostResource: PluginSurfaceHostApiMethodHandler = async (request, options) => {
+        const mountedResult = await mountedDisposeHostResource(request, options);
+        const resourceResult = resourceDisposeHostResource ? await resourceDisposeHostResource(request) : null;
+        return resourceResult ?? mountedResult;
+    };
+    return createPluginSurfaceHostApi({ ...hostApiInput,
+        readHandlers: () => {
+            const mounted = readMountedHandlers();
+            return { ...mounted, ...hostApiInput.handlers,
+                ...(resourceDisposeHostResource || mounted.disposeHostResource ? { disposeHostResource } : {}),
+            };
         },
     });
 }

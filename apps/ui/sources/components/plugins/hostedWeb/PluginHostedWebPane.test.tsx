@@ -29,6 +29,7 @@ import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync
 // Keep Availability declaration admission and exact Artifact source logic real.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: Object.freeze([]),
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: Object.freeze([]),
     BUNDLED_PLUGIN_BRAND_MARKS: Object.freeze([]),
 }));
 

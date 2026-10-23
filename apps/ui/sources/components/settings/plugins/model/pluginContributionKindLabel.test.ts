@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pluginListingAddsTitles, resolvePluginKindShelf } from './pluginContributionKindLabel';
+import { pluginListingAdds, resolvePluginKindShelf } from './pluginContributionKindLabel';
 
 describe('plugin kind shelf', () => {
     it('recognizes language-server plugins above generic panels and dependencies without displacing agents', () => {
@@ -26,8 +26,22 @@ describe('plugin kind shelf', () => {
 
 describe('what a listing adds', () => {
     it('says the manifest families in people words, once each, and leaves plumbing families out', () => {
-        expect(pluginListingAddsTitles(['agents', 'skills', 'mcp'])).toEqual(['Agents', 'Skills', 'MCP tools']);
-        expect(pluginListingAddsTitles(['voiceProviders', 'actions', 'voiceModelPacks', 'settings'])).toEqual(['Voice']);
-        expect(pluginListingAddsTitles(['actions', 'events'])).toEqual([]);
+        expect(pluginListingAdds(['agents', 'skills', 'mcp']).map((row) => row.title)).toEqual(['Agents', 'Skills', 'MCP tools']);
+        expect(pluginListingAdds(['voiceProviders', 'actions', 'voiceModelPacks', 'settings']).map((row) => row.title)).toEqual(['Voice']);
+        expect(pluginListingAdds(['actions', 'events'])).toEqual([]);
+    });
+
+    it('gives every listed family one line of what it brings, never the family word again', () => {
+        const families = ['agents', 'skills', 'machineProvisioners', 'providers', 'scmHostingProviders', 'scmBackends',
+            'languageServers', 'roles', 'workflows', 'inputTypes', 'mcp', 'connectedAccountDescriptors', 'voiceProviders',
+            'composerControls', 'ui', 'browserTargets'];
+        const rows = pluginListingAdds(families);
+        expect(rows).toHaveLength(families.length);
+        for (const row of rows) {
+            expect(row.description.length).toBeGreaterThan(0);
+            expect(row.description).not.toBe(row.title);
+            expect(row.description).not.toMatch(/^settingsPlugins\./);
+        }
+        expect(new Set(rows.map((row) => row.description)).size).toBe(rows.length);
     });
 });

@@ -16,6 +16,7 @@ import {
 
 import { createDeferred, createMachineFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { observeMachinePresenceForTest } from '@/dev/testkit/harness/machinePresence';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { storage } from '@/sync/domains/state/storageStore';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -99,6 +100,7 @@ afterEach(async () => {
 });
 
 async function mountClientExecutableFixture(options: { waitForAdmission?: boolean; admitPeer?: boolean; searchProvider?: boolean; coldDaemon?: boolean;
+    artifactLabel?: string;
     scopedGrants?: PluginActionPresentUserAuthorizationFacts['scopedGrants'] } = {}) {
     pluginBoundary.pending = createDeferred<string>();
     pluginBoundary.cleanups = 0;
@@ -128,9 +130,13 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
         machines: { [machine.id]: machine, [peerMachine.id]: peerMachine }, machineListByServerId: { [serverId]: [machine, peerMachine] },
         machineListStatusByServerId: { [serverId]: 'idle' }, settings: { ...storage.getState().settings,
             machineAdministrationTargetsLocalV1: { [`plugin.runOn:${pluginId}`]: { serverIdentityId, machineId: machine.id } } } });
+    // Restoring display rows after the prior Account transport retires does not
+    // re-observe those Machines. This fixture supplies a fresh census ingress.
+    observeMachinePresenceForTest(lifetime.scope, [machine.id, peerMachine.id]);
 
     fixtureGlobal.executableContinuityFixture = pluginBoundary;
-    daemon.bytes = new TextEncoder().encode(`globalThis.executableContinuityFixture.evaluations += 1;
+    daemon.bytes = new TextEncoder().encode(`// ${options.artifactLabel ?? 'continuity'}
+    globalThis.executableContinuityFixture.evaluations += 1;
     exports.activate = async function(api) {
         globalThis.executableContinuityFixture.enteredActivation = true;
         api.actions.register('hold', async function(input, context) {
@@ -271,6 +277,7 @@ async function mountClientExecutableFixture(options: { waitForAdmission?: boolea
     if (options.waitForAdmission === false) return { ...fixture, registration: null };
     await vi.waitFor(async () => {
         await flushHookEffects();
+        expect(readObserved()?.unavailableReasonCode).toBeUndefined();
         expect(observed).toMatchObject({ phase: 'current', clientExecutableActivation: { status: 'ready' } });
     });
     expect(lifetime.isCurrent()).toBe(true);
@@ -439,7 +446,11 @@ it('retains a pending client Action and its exact admission across equivalent Av
 
 it('keeps one preparing client artifact evaluation across equivalent Availability publications', async () => {
     pluginBoundary.activationGate = createDeferred<void>();
-    const { lifetime, materialization, snapshot, composition, address } = await mountClientExecutableFixture({ waitForAdmission: false });
+    // Own a cold byte graph: earlier cases legitimately retain the evaluated
+    // namespace for their identical Artifact and Machine activation scope.
+    const { lifetime, materialization, snapshot, composition, address } = await mountClientExecutableFixture({
+        waitForAdmission: false, artifactLabel: 'preparing-equivalent-availability',
+    });
     await vi.waitFor(async () => {
         await flushHookEffects();
         expect(pluginBoundary.enteredActivation).toBe(true);

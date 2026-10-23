@@ -22,7 +22,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PLUGIN_UI_OUTWARD_EFFECT_HOST_METHODS_V1 } from '@/components/plugins/hostApi/outwardEffectSettlement';
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
-import { createPluginSurfaceContext, preparePluginSurfaceContext } from '@/components/plugins/surfaces/pluginSurfaceContext';
+import { createPluginSurfaceContext } from '@/components/plugins/surfaces/pluginSurfaceContext';
+import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
+import { resolveThemeStyleScales } from '@/theme/themeStyleScales';
+import type { Theme } from '@/theme';
+import type { SurfaceFinishGradient } from '@/theme/raisedEdge';
 import { PluginUiHostApiSurfaceContextV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import {
     createPluginSurfaceHostApi,
@@ -2334,6 +2339,67 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
         });
     }
 
+    it('keeps produced theme finishes immutable through public context reads while publishing real theme changes', async () => {
+        const base = resolveThemeProfile({ mode: 'dark', profile: null });
+        const original = base.colors.edge.finishGradient;
+        if (!original) throw new Error('Expected the real theme finish fixture');
+        const gradient: SurfaceFinishGradient = {
+            colors: [...original.colors], locations: [...original.locations],
+            start: { ...original.start }, end: { ...original.end },
+            ...(original.band ? { band: { ...original.band } } : {}),
+        };
+        const theme: Theme = { ...base, ...resolveThemeStyleScales({ finish: 'soft' }), colors: { ...base.colors,
+            edge: { ...base.colors.edge, finishGradient: gradient, primaryFinishGradient: gradient, secondaryFinishGradient: gradient },
+        } };
+        const project = (value: Theme = theme) => createPluginSurfaceContext({
+            mount: canonicalSurface.mount, target: canonicalSurface.target,
+            accountEncryptionMode: canonicalSurface.accountEncryptionMode, translations: canonicalSurface.translations,
+            environment: { ...canonicalSurface, columnVisible: false, theme: projectPluginUiTheme(value) },
+        });
+        const initial = project();
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({ surface: initial,
+            requestSurface: surface, requestIdPrefix: 'rn-immutable-theme', installedMethods: ['context', 'watchContext'],
+            handleRequest: async () => null,
+        });
+        const publications: SurfaceContext[] = [];
+        const watch = await adapter.api.watchContext(context => publications.push(context));
+        try {
+            const published = await adapter.api.context();
+            expect(published).toBe(initial);
+            const expected = JSON.stringify(published.theme);
+            const finishes = published.theme.surfaceFinish;
+            if (!finishes) throw new Error('Expected projected surface finishes');
+            const writes: boolean[] = [];
+            for (const finish of Object.values(finishes)) {
+                if (!finish) throw new Error('Expected each soft surface finish');
+                writes.push(Reflect.set(finish.colors, '0', 'changed plugin ink'));
+                if (finish.locations) writes.push(Reflect.set(finish.locations, '0', 0.25));
+                if (finish.start) writes.push(Reflect.set(finish.start, 'x', 0.25));
+                if (finish.end) writes.push(Reflect.set(finish.end, 'y', 0.75));
+                if (finish.band) writes.push(Reflect.set(finish.band, 'height', 1));
+                writes.push(Reflect.set(finish, 'colors', ['changed', 'changed']));
+            }
+            writes.push(Reflect.set(finishes, 'card', null));
+            expect(writes.every(written => !written)).toBe(true);
+            expect(JSON.stringify(published.theme)).toBe(expected);
+            expect(publications).toEqual([]);
+
+            // Projection owns its coordinates, not the app theme's mutable input graph.
+            expect(Reflect.set(gradient.start, 'x', 0.125)).toBe(true);
+            expect(JSON.stringify(published.theme)).toBe(expected);
+            adapter.pushSurfaceContext(project({ ...theme, colors: { ...theme.colors,
+                edge: { ...theme.colors.edge, finishGradient: { ...gradient, start: { ...gradient.start, x: 0.5 } },
+                    primaryFinishGradient: { ...gradient, start: { ...gradient.start, x: 0.5 } },
+                    secondaryFinishGradient: { ...gradient, start: { ...gradient.start, x: 0.5 } } },
+            } }));
+            expect(adapter.getSurfaceContext()).toBe(initial);
+            adapter.pushSurfaceContext(project({ ...theme, space: { ...theme.space, s4: theme.space.s4 + 1 } }));
+            expect(publications).toHaveLength(1);
+            expect(publications[0]?.theme.spacing.xsmall).toBe(theme.space.s4 + 1);
+            expect(JSON.stringify(initial.theme)).toBe(expected);
+        } finally { watch.dispose(); adapter.dispose(); }
+    });
+
     it('carries the canonical mount approval projection through the live context publisher and strict SDK consumer', async () => {
         const adapter = createAdapter();
         const observed: SurfaceContext['pendingApproval'][] = [];
@@ -2418,9 +2484,9 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
         await expect(adapter.api.context()).resolves.toBe(canonicalSurface);
     });
 
-    it('publishes one owned host context to renderer and public watchers while reacquiring new mutable input', async () => {
-        const translations = { title: 'Original' };
-        const theme = { ...canonicalSurface.theme, colors: { ...canonicalSurface.theme.colors } };
+    it('publishes fresh changed host snapshots once while retaining equal context and subfield identities', async () => {
+        const translations = Object.freeze({ title: 'Original' });
+        const theme = canonicalSurface.theme;
         const raw = createPluginSurfaceContextFixture({
             mount: canonicalRightPaneMount,
             target: { kind: 'session', sessionId: 'session-1', agentId: undefined },
@@ -2429,25 +2495,17 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
         });
         const adapter = createCanonicalPluginReactNativeHostApiAdapter({
             surface: raw,
-            prepareSurfaceContext: preparePluginSurfaceContext,
             requestSurface: surface,
             requestIdPrefix: 'rn-owned-context',
             installedMethods: ['context', 'watchContext'],
             handleRequest: async () => null,
         });
         const initial = adapter.getSurfaceContext();
-        expect(initial).not.toBe(raw);
-        expect(initial.translations).not.toBe(translations);
+        expect(initial).toBe(raw);
+        expect(initial.translations).toBe(translations);
         expect(Object.isFrozen(initial.translations)).toBe(true);
-        expect(Object.isFrozen(translations)).toBe(false);
         expect(Object.isFrozen(initial.theme.colors)).toBe(true);
-        expect(Object.isFrozen(theme.colors)).toBe(false);
         expect(Object.hasOwn(initial.target, 'agentId')).toBe(true);
-        const omittedOptional = preparePluginSurfaceContext({ ...raw,
-            target: { kind: 'session', sessionId: 'session-1' },
-        }, preparePluginSurfaceContext(raw));
-        expect(Object.hasOwn(omittedOptional.surface.target, 'agentId')).toBe(false);
-        expect(omittedOptional.semanticKey).not.toBe(preparePluginSurfaceContext(raw).semanticKey);
         await expect(adapter.api.context()).resolves.toBe(initial);
         const events: SurfaceContext[] = [];
         const watch = await adapter.api.watchContext(context => events.push(context));
@@ -2456,37 +2514,32 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
         adapter.pushSurfaceContext({ ...raw, translations: { title: 'Original' } });
         expect(adapter.getSurfaceContext()).toBe(initial);
         expect(events).toEqual([]);
-        translations.title = 'Changed';
+        const next = { ...raw, translations: Object.freeze({ title: 'Changed' }) };
         expect(initial.translations.title).toBe('Original');
-        // A newly supplied raw entry is acquired even when its caller reused
-        // the mutable source reference; no shallow-freeze/ref trust is used.
-        adapter.pushSurfaceContext(raw);
+        adapter.pushSurfaceContext(next);
         const changed = adapter.getSurfaceContext();
         expect(changed.translations.title).toBe('Changed');
         expect(changed.target).toBe(initial.target);
         expect(events).toEqual([changed]);
         expect(rendererChanges).toBe(1);
         const initialCanvas = initial.theme.colors.canvas;
-        theme.colors.canvas = initialCanvas === '#010203' ? '#030201' : '#010203';
-        adapter.pushSurfaceContext(raw);
+        const nextTheme = { ...theme, colors: { ...theme.colors,
+            canvas: initialCanvas === '#010203' ? '#030201' : '#010203' } };
+        adapter.pushSurfaceContext({ ...next, theme: nextTheme });
         const nestedChange = adapter.getSurfaceContext();
-        expect(nestedChange.theme.colors.canvas).toBe(theme.colors.canvas);
+        expect(nestedChange.theme.colors.canvas).toBe(nextTheme.colors.canvas);
         expect(initial.theme.colors.canvas).toBe(initialCanvas);
         expect(nestedChange.translations).toBe(changed.translations);
         expect(events).toEqual([changed, nestedChange]);
         expect(rendererChanges).toBe(2);
-        expect(() => adapter.pushSurfaceContext({ ...raw, textScale: -1 })).toThrow();
-        expect(adapter.getSurfaceContext()).toBe(nestedChange);
-        expect(() => createCanonicalPluginReactNativeHostApiAdapter({
-            surface: { ...raw, textScale: -1 }, prepareSurfaceContext: preparePluginSurfaceContext,
-            requestSurface: surface, requestIdPrefix: 'rn-invalid-initial-context',
-            installedMethods: [], handleRequest: async () => null,
-        })).toThrow();
+        adapter.pushSurfaceContext({ ...nestedChange, target: { kind: 'session', sessionId: 'session-1' } });
+        expect(Object.hasOwn(adapter.getSurfaceContext().target, 'agentId')).toBe(false);
+        expect(rendererChanges).toBe(3);
         detach();
         watch.dispose();
         adapter.dispose();
         adapter.pushSurfaceContext({ ...raw, locale: 'de' });
-        expect(rendererChanges).toBe(2);
+        expect(rendererChanges).toBe(3);
         await expect(adapter.api.context()).rejects.toMatchObject({ code: 'stale_surface' });
     });
 

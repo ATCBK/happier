@@ -253,6 +253,27 @@ const scopeCases: readonly Readonly<{
 ];
 
 describe('useComposerScopePluginPresentation', () => {
+    it('keeps control Actions usable when the optional physical surface catalog is omitted', async () => {
+        const projectionInputs = publishDaemonMergedProjectionInputs({ projection: createProjection() });
+        const open = vi.fn();
+        const isScopeCurrent = () => true;
+        const hook = await renderHook(() => useComposerScopePluginPresentation({
+            composer: { kind: 'session', sessionId: 'session-1' }, physicalTarget: { kind: 'session', sessionId: 'session-1' },
+            resourceContext: { kind: 'session', sessionId: 'session-1' }, machineId: 'machine-1', serverId: 'server-1',
+            projectionPhase: 'ready', projectionInputs, accountLifetime: null, isScopeCurrent,
+            attachmentsEnabled: true, includeSessionActions: false, onOpenControlAction: open,
+        }));
+        try {
+            const menu = hook.getCurrent().extraActionChips[0]?.collapsedAction?.({
+                tint: 'test-tint', dismiss() {}, blurInput() {}, openCollapsedPopover() {},
+            });
+            if (!menu || !('onPress' in menu)) throw new Error('Expected the current control Action');
+            expect(menu.disabled).toBe(false);
+            menu.onPress?.();
+            expect(open).toHaveBeenCalledWith(expect.objectContaining({ action: control.identity }));
+        } finally { await hook.unmount(); }
+    });
+
     it('follows current scope readiness without waiting for a catalog or callback replacement', async () => {
         let current = false;
         const isScopeCurrent = () => current;
@@ -628,6 +649,62 @@ describe('useComposerScopePluginPresentation', () => {
         expect(readParentLifetime(current.renderComposerRegion(current.composerRegions[0]!))).toBe(activeLifetime);
 
         await hook.unmount();
+    });
+
+    it.each(['attachment', 'custody'] as const)('keeps Composer presentation ownership only for an unchanged physical catalog (%s)', async updateKind => {
+        const projection = createProjection();
+        const initialInputs = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [createCatalogEntry()] });
+        const updatedProjection = PluginProjectionV2Schema.parse({ ...projection,
+            familiesById: { ...projection.familiesById, composerAttachments: { family: 'composerAttachments', entriesById: {
+                'acme.compose/issue': { id: 'acme.compose/issue', pluginId: 'acme.compose',
+                    identity: { pluginId: 'acme.compose', localId: 'issue' }, occurrenceId: 'generation-1',
+                    definition: { id: 'issue', title: 'Issue', icon: 'file', cardinality: 'many', valueSchema: { type: 'object' } } },
+            } } },
+        });
+        const catalogEntry = createCatalogEntry();
+        const updatedCatalogEntry = updateKind === 'custody' ? DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse({
+            ...catalogEntry, contributorTargetedContributions: { ...catalogEntry.contributorTargetedContributions,
+                target: { ...catalogEntry.contributorTargetedContributions.target,
+                    sourceCustody: { kind: 'development', registeredRootId: 'replacement-compose-root' } },
+            },
+        }) : catalogEntry;
+        const updatedInputs = publishDaemonMergedProjectionInputs({ projection: updatedProjection,
+            composerSurfaceCatalog: [updatedCatalogEntry] }, initialInputs);
+        let scopeCurrent = true;
+        const isScopeCurrent = () => scopeCurrent;
+        const hook = await renderHook((projectionInputs: typeof initialInputs) => useComposerScopePluginPresentation({
+            composer: { kind: 'session', sessionId: 'session-1' }, physicalTarget: { kind: 'session', sessionId: 'session-1' },
+            resourceContext: { kind: 'session', sessionId: 'session-1' }, machineId: 'machine-1', serverId: 'server-1',
+            projectionPhase: 'ready', projectionInputs, accountLifetime: null, isScopeCurrent,
+            attachmentsEnabled: true, includeSessionActions: true,
+        }), { initialProps: initialInputs });
+        const readMount = (presentation: ComposerScopePluginPresentation) => {
+            const node = presentation.renderComposerRegion(presentation.composerRegions[0]!);
+            if (!React.isValidElement<React.ComponentProps<typeof import('./ComposerPluginSurface').ComposerPluginSurface>>(node)) {
+                throw new Error('Expected real Composer surface entry');
+            }
+            return node.props;
+        };
+        try {
+            const initialSignal = asSessionActionAdapterPresentation(hook.getCurrent()).scopeSignal;
+            const initialAction = asSessionActionAdapterPresentation(hook.getCurrent()).getCurrentActionSnapshot();
+            const before = readMount(hook.getCurrent());
+            const current = await hook.rerender(updatedInputs);
+            const after = readMount(current);
+            expect(asSessionActionAdapterPresentation(current).scopeSignal).toBe(initialSignal);
+            expect(initialAction?.host.isCurrent?.()).toBe(false);
+            expect(before.parentLifetime.isCurrent()).toBe(updateKind === 'attachment');
+            if (updateKind === 'attachment') expect(after.parentLifetime).toBe(before.parentLifetime);
+            else expect(after.parentLifetime).not.toBe(before.parentLifetime);
+            expect(after.transactionApplier).toBe(before.transactionApplier);
+            expect(after.transactionApplier.resolveAttachmentIdentity({ attachmentLocalId: 'issue',
+                admittedContributor: { identity: control.identity, occurrenceId: 'generation-1' } })).toEqual({
+                pluginId: 'acme.compose', localId: 'issue',
+            });
+            scopeCurrent = false;
+            await hook.rerender(updatedInputs);
+            expect(after.parentLifetime.isCurrent()).toBe(false);
+        } finally { await hook.unmount(); }
     });
 
     // A parent that rebuilds an equal Session target object on every render must not retire the

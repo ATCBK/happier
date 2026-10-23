@@ -1,4 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { renderHook } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 
@@ -108,7 +110,8 @@ const { resolveProjectedPluginUiClientExecutables } = await import('@/components
 const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
 const { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } = await import('@/sync/domains/plugins/ui/projectionUnion');
 const { createPluginSurfaceActionHostApi: createPluginSurfaceActionHostApiImpl, dispatchPluginSurfaceAction: dispatchPluginSurfaceActionImpl } = await import('./pluginSurfaceActionDispatch');
-const { createBoundPluginSurfaceController } = await import('./boundPluginSurfaceController');
+const { createBoundPluginSurfaceController, useBoundPluginSurfaceController } = await import('./boundPluginSurfaceController');
+const { createPluginActionInputSelectionFactsPublication } = await import('./pluginActionInputSelectionFacts');
 const { createPluginSurfaceStoredImageOwner } = await import('./pluginSurfaceStoredImage');
 const { dispatchPluginResolvedSemanticCommand } = await import('./dispatchPluginResolvedSemanticCommand');
 const { dispatchPluginAppPageHeaderAction } = await import('@/components/appShell/plugins/pluginAppPageHeaderActions');
@@ -254,7 +257,7 @@ const CLIENT_ACTION_GENERATION = 9;
 function clientAccountLifetime() {
     let current = true;
     const listeners = new Set<() => void>();
-    return {
+    const lifetime = {
         scope: { serverId: 'server-client-action', accountId: 'test-account' },
         isCurrent: () => current,
         onRetire(listener: () => void) {
@@ -267,6 +270,8 @@ function clientAccountLifetime() {
             listeners.clear();
         },
     } satisfies ActiveServerAccountScopeLifetime & { retire(): void };
+    onTestFinished(lifetime.retire);
+    return lifetime;
 }
 const CLIENT_ACTION_ARTIFACT_GRAPH = PluginUiArtifactsManifestEntryV2Schema.parse({
     artifactId: CLIENT_ACTION_TARGET.artifactId,
@@ -449,7 +454,8 @@ function createClientActionActivation(input: Readonly<{
                 appliedGeneration: input.occurrenceId ?? `occurrence-${pluginId}`,
             },
         },
-        ...(accountOrigin ? { hostAccountOrigin: accountOrigin, hostAccountDeclaration: accountDeclaration }
+        ...(accountOrigin ? { hostAccountOrigin: accountOrigin,
+            accountActionDeclaration: accountDeclaration?.contributes.actions?.find(candidate => candidate.id === action.id) }
             : { executionOrigin, [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: hostOrigin }),
     });
     const bundleId = `reactNativeBundle:${pluginId}:${localId}`;
@@ -457,7 +463,8 @@ function createClientActionActivation(input: Readonly<{
         `${pluginId}/${declaration.id}`, Object.freeze({ ...projectedAction, id: declaration.id,
             title: declaration.title, scopes: declaration.scopes, surfaces: declaration.surfaces,
             execution: declaration.execution, placementBindings: declaration.placementBindings,
-            dangerLevel: declaration.dangerLevel, confirmation: declaration.confirmation }),
+            dangerLevel: declaration.dangerLevel, confirmation: declaration.confirmation,
+            accountActionDeclaration: declaration }),
     ])) : { [`${pluginId}/${localId}`]: projectedAction };
     const projection = Object.freeze({
         ...EMPTY_PLUGIN_UI_PROJECTION,
@@ -569,6 +576,53 @@ function resolveDaemonTargetAction(
 }
 
 describe('Account Action placement through the executable dispatcher', () => {
+    it('finishes an entered Account Action across its unchanged caller Resource declaration refresh', async () => {
+        const accountLifetime = clientAccountLifetime();
+        let enteredSignal: AbortSignal | undefined;
+        let release = () => {};
+        const settled = new Promise<void>(resolve => { release = resolve; });
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime,
+            accountHandler: async (_value, context) => {
+                enteredSignal = context.signal;
+                await settled;
+                return { read: true };
+            } });
+        const actionInputSelectionFactsKey = createPluginActionInputSelectionFactsPublication()
+            .publish({ targetPluginId: CALLER_PLUGIN_ID });
+        const facts = {
+            pluginId: CALLER_PLUGIN_ID, contributionId: 'panel', surfaceId: 'caller-panel',
+            placement: 'appSurface' as const, platform: 'web' as const, channel: 'internal' as const,
+            machineId: CLIENT_ACTION_ORIGIN.materializationRef.machineId,
+            serverId: accountLifetime.scope.serverId, occurrenceId: 'requester-current',
+            executionOrigin: CLIENT_ACTION_ORIGIN, accountLifetime, actionInputSelectionFactsKey,
+            interactionEnabled: true, daemonInteractionEnabled: true,
+            resourceCapability: { readable: true, dynamic: true },
+            resolveContributedAction: resolveExactClientAction(activation.action),
+            pluginUiProjection: activation.projection,
+        };
+        await activation.composition.unload();
+        await activation.composition.reconcile([activation.activation]);
+        const hook = await renderHook(({ projection }: { projection: PluginUiProjectionModel }) =>
+            useBoundPluginSurfaceController({ facts: { ...facts, pluginUiProjection: projection } }),
+        { initialProps: { projection: activation.projection } });
+        try {
+            const pending = hook.getCurrent().dispatchAction({ pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, {});
+            await vi.waitFor(() => expect(enteredSignal).toBeDefined());
+            await hook.rerender({ projection: { ...activation.projection, resourcesById: {
+                [`${CALLER_PLUGIN_ID}/status`]: { id: 'status', pluginId: CALLER_PLUGIN_ID,
+                    resourceKind: 'config', scope: 'global', contentType: 'application/json' },
+            } } });
+            expect(enteredSignal!.aborted).toBe(false);
+            release();
+            expect(await pending).toEqual({ read: true });
+        } finally {
+            release();
+            await hook.unmount();
+            await activation.composition.unload();
+            accountLifetime.retire();
+        }
+    });
+
     it('refuses an admitted Account Action until its exact executable registration commits, and again after withdrawal', async () => {
         const accountLifetime = clientAccountLifetime();
         let effects = 0;

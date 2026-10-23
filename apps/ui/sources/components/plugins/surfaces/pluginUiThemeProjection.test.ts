@@ -72,6 +72,9 @@ describe('plugin UI semantic theme projection (§3.3, UI-D12)', () => {
         const spinner = { style: 'hWave', speed: 'slow', pause: 'long' };
         const projected = projectPluginUiTheme(theme, spinner);
         expect(projected.spinner).toEqual(spinner);
+        expect(Reflect.set(projected.spinner!, 'style', 'changed plugin preference')).toBe(false);
+        spinner.style = 'classicRing';
+        expect(projected.spinner?.style).toBe('hWave');
         expect(projected.colors).toEqual(projectPluginUiTheme(theme).colors);
     });
     it('projects status text ink separately from marker colors for same-realm and hosted badges', () => {

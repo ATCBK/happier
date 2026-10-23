@@ -116,19 +116,22 @@ function shelfKeyFor(kind: PluginContributionKind): PluginKindShelfKey | null {
   return null;
 }
 
+/** A family a listing adds, keyed by the shelf it belongs to (skills have no shelf but are something a person adds). */
+type ListingAddsKey = PluginKindShelfKey | 'skills';
+
 /**
- * What a listing adds, in people words: the title of the shelf a manifest family belongs to ("agents" → "Agents",
- * "mcp" → "MCP tools"). Plumbing families (actions, settings, events, hooks …) are not something a person adds, so
- * they have no title and are not listed.
+ * What a listing adds, in people words: the shelf a manifest family belongs to ("agents" → agent, "mcp" → mcp).
+ * Plumbing families (actions, settings, events, hooks …) are not something a person adds, so they have no key and
+ * are not listed.
  */
-function listingFamilyTitle(family: string): string | null {
+function listingFamilyKey(family: string): ListingAddsKey | null {
   switch (family) {
     case 'agents':
-      return pluginKindShelfTitle('agent');
+      return 'agent';
     case 'skills':
-      return t('capabilities.skills.title');
+      return 'skills';
     case 'machineProvisioners':
-      return pluginKindShelfTitle('machines');
+      return 'machines';
     case 'providers':
     case 'scmHostingProviders':
     case 'scmBackends':
@@ -137,27 +140,35 @@ function listingFamilyTitle(family: string): string | null {
     case 'workflows':
     case 'inputTypes':
     case 'mcp':
-      return pluginKindShelfTitle(family);
+      return family;
     case 'connectedAccountDescriptors':
-      return pluginKindShelfTitle('connectedAccounts');
+      return 'connectedAccounts';
     case 'voiceProviders':
     case 'voiceModelPacks':
-      return pluginKindShelfTitle('voice');
+      return 'voice';
     case 'composerAttachments':
     case 'composerControls':
     case 'composerRegions':
-      return pluginKindShelfTitle('composer');
+      return 'composer';
     case 'ui':
-      return pluginKindShelfTitle('pluginUi');
+      return 'pluginUi';
     case 'browserTargets':
     case 'browserActions':
-      return pluginKindShelfTitle('pluginBrowser');
+      return 'pluginBrowser';
     default:
       return null;
   }
 }
 
+/** One thing a listing adds: its title and one line of what it brings (the marketplace summary has no counts). */
+export type PluginListingAdd = Readonly<{ key: ListingAddsKey; title: string; description: string }>;
+
 /** The distinct, people-worded things a listing adds, in the order its manifest declares them. */
-export function pluginListingAddsTitles(families: readonly string[]): readonly string[] {
-  return [...new Set(families.map(listingFamilyTitle).filter((title): title is string => title !== null))];
+export function pluginListingAdds(families: readonly string[]): readonly PluginListingAdd[] {
+  const keys = [...new Set(families.map(listingFamilyKey).filter((key): key is ListingAddsKey => key !== null))];
+  return keys.map((key) => ({
+    key,
+    title: key === 'skills' ? t('capabilities.skills.title') : pluginKindShelfTitle(key),
+    description: t(`settingsPlugins.catalog.addsLine.${key}`),
+  }));
 }

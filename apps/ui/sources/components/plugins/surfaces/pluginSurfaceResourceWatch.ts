@@ -228,6 +228,7 @@ function createContextualResourceWatchOwner(input: Readonly<{
                     signal: watch.controller.signal,
                 });
                 if (watch.closed || !isCurrent()) return;
+                if (input.resource.store) { retireOrdinaryWatches(); return; }
 
                 if (outcome.supported && outcome.result.ok) {
                     consecutiveFailures = 0;
@@ -271,12 +272,14 @@ function createContextualResourceWatchOwner(input: Readonly<{
                 );
                 consecutiveFailures += 1;
                 if (watch.closed || !isCurrent()) return;
+                if (input.resource.store) { retireOrdinaryWatches(); return; }
                 const reopened = await openAtDaemon(
                     watch.subscriptionId,
                     watch.resourceId,
                     watch.controller.signal,
                 );
                 if (watch.closed || !isCurrent()) return;
+                if (input.resource.store) { retireOrdinaryWatches(); return; }
                 if (!reopened.ok) {
                     if (!reopened.terminal) continue;
                     watch.closed = true;
@@ -311,6 +314,15 @@ function createContextualResourceWatchOwner(input: Readonly<{
         });
     }
 
+    function retireOrdinaryWatches(): void {
+        for (const watch of [...watches.values()]) {
+            if (watch.releaseStore) continue;
+            retire(watch.subscriptionId);
+            watch.deliver(terminalEvent(watch.subscriptionId, 'unavailable', 'plugin_resource_not_found'));
+        }
+    }
+    const releaseNamespaceAdmission = input.resource.onDeclaredNamespaceAdmission?.(retireOrdinaryWatches);
+
     return Object.freeze({
         async open(params): Promise<WatchOpenResult> {
             if (!isCurrent()) {
@@ -320,11 +332,17 @@ function createContextualResourceWatchOwner(input: Readonly<{
             // client never runs two pumps for one Resource subscription.
             retire(params.subscriptionId);
             if (input.resource.store) {
-                const entry = input.resource.store.getEntry({ pluginId: input.pluginId, localId: params.resourceId });
+                let entry;
+                try { entry = input.resource.store.getEntry({ pluginId: input.pluginId, localId: params.resourceId }); }
+                catch (error) {
+                    return { ok: false, terminal: true, reason: error && typeof error === 'object'
+                        && 'code' in error && typeof error.code === 'string' ? error.code : 'plugin_resource_unavailable' };
+                }
                 const watch: ActiveWatch = { subscriptionId: params.subscriptionId, resourceId: params.resourceId,
                     deliver: params.deliver, controller: new AbortController(), lastDigest: null, closed: false };
+                let established = false;
                 const changed = (): void => {
-                    if (watch.closed || !isCurrent()) return;
+                    if (!established || watch.closed || !isCurrent()) return;
                     const snapshot = entry.getSnapshot();
                     if (snapshot.pending !== 'idle') return;
                     if (snapshot.error) {
@@ -345,7 +363,8 @@ function createContextualResourceWatchOwner(input: Readonly<{
                 watch.releaseStore = entry.subscribe(changed, true);
                 watches.set(params.subscriptionId, watch);
                 try {
-                    const snapshot = await readPluginResourceStoreSnapshot(entry, params.signal);
+                    await readPluginResourceStoreSnapshot(entry, params.signal);
+                    const snapshot = entry.getSnapshot();
                     if (!isCurrent() || params.signal?.aborted || snapshot.error || !snapshot.value) {
                         retire(params.subscriptionId);
                         return { ok: false, terminal: true, reason: snapshot.error?.code ?? 'plugin_resource_unavailable' };
@@ -356,6 +375,7 @@ function createContextualResourceWatchOwner(input: Readonly<{
                         return { ok: false, terminal: true, reason: 'plugin_resource_digest_invalid' };
                     }
                     watch.lastDigest = digest.data;
+                    established = true;
                     return { ok: true, digest: digest.data };
                 } catch {
                     retire(params.subscriptionId);
@@ -371,7 +391,7 @@ function createContextualResourceWatchOwner(input: Readonly<{
                 }
                 throw error;
             }
-            if (params.signal?.aborted) {
+            if (params.signal?.aborted || input.resource.store) {
                 if (opened.ok) {
                     void close(daemon.machineId, {
                         serverId: daemon.serverId,
@@ -406,6 +426,7 @@ function createContextualResourceWatchOwner(input: Readonly<{
         dispose: (): void => {
             if (disposed) return;
             disposed = true;
+            releaseNamespaceAdmission?.();
             for (const subscriptionId of [...watches.keys()]) retire(subscriptionId);
         },
     });

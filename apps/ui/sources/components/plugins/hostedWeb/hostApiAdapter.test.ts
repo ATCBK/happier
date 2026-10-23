@@ -695,7 +695,6 @@ describe('hosted web plugin host API adapter', () => {
                 kind: 'negotiated',
                 identity: canonicalIdentity,
                 methods: ['context', 'executeAction'],
-                surface: canonicalSurface,
             },
         });
 
@@ -1483,7 +1482,7 @@ describe('hosted web plugin host API adapter', () => {
         expect(executeDispatches).toBe(3);
     });
 
-    it('keeps target-scoped context on the sole 1.0 negotiation and rejects retired ranges', async () => {
+    it('negotiates only version and methods while current context retains target scope and retired ranges are rejected', async () => {
         const targetedSurface = {
             ...canonicalSurface,
             targetedContributions: {
@@ -1507,14 +1506,16 @@ describe('hosted web plugin host API adapter', () => {
         });
         await handler(createEnvelope('ready', { ready: true }));
 
-        await expect(handler(createEnvelope('hostApi', {
+        const negotiated = await handler(createEnvelope('hostApi', {
             wireVersion: 1,
             kind: 'negotiate',
             identity: canonicalIdentity,
             apiRange: '^1.0.0',
-        }))).resolves.toMatchObject({
-            payload: { kind: 'negotiated', apiVersion: '1.0.0', surface: targetedSurface },
+        }));
+        expect(negotiated).toMatchObject({
+            payload: { kind: 'negotiated', apiVersion: '1.0.0', methods: ['context'] },
         });
+        expect(negotiated.payload).not.toHaveProperty('surface');
         await expect(handler(createEnvelope('hostApi', {
             wireVersion: 1,
             kind: 'request',

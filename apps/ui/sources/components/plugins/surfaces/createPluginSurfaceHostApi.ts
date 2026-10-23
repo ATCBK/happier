@@ -194,11 +194,16 @@ export async function settlePluginSurfaceHostApiRequest(
         return PluginUiHostApiResponseEnvelopeV1Schema.parse(error
             ? { ...base, kind: 'error' as const, payload: error }
             : { ...base, kind: 'result' as const, payload });
-    } catch {
+    } catch (error) {
+        const aborted = error !== null && typeof error === 'object'
+            && 'name' in error && error.name === 'AbortError';
         return PluginUiHostApiResponseEnvelopeV1Schema.parse({
             ...base,
             kind: 'error',
-            payload: {
+            payload: aborted ? {
+                code: 'unavailable',
+                diagnostics: ['plugin_ui_invocation_aborted'],
+            } : {
                 code: 'internal_error',
                 diagnostics: ['host_api_handler_failed'],
             },
@@ -209,6 +214,8 @@ export async function settlePluginSurfaceHostApiRequest(
 export type CreatePluginSurfaceHostApiInput = Readonly<{
     surfaceContext: PluginUiSurfaceContextV1;
     handlers?: PluginSurfaceHostApiHandlers;
+    /** Mounted semantic bundles may change without withdrawing the physical caller. */
+    readHandlers?: () => PluginSurfaceHostApiHandlers;
     /** Controller-projected host support whose execution binding may be unavailable. */
     admissionMethods?: readonly PluginUiHostMethodV1[];
     fallback?: PluginSurfaceHostApiMethodHandler;
@@ -275,11 +282,14 @@ export function createPluginSurfaceHostApi(
         ]);
     }
     const surfaceContext = parsedContext.data;
-    const handlers = input.handlers ?? {};
-    const installedMethods = resolveInstalledPluginSurfaceHostMethods(handlers);
-    const admissionMethods = Object.freeze(PLUGIN_UI_HOST_METHODS_V1.filter(method =>
-        installedMethods.includes(method) || input.admissionMethods?.includes(method),
-    ));
+    const readHandlers = () => input.readHandlers?.() ?? input.handlers ?? {};
+    const readInstalledMethods = () => resolveInstalledPluginSurfaceHostMethods(readHandlers());
+    const readAdmissionMethods = () => {
+        const installedMethods = readInstalledMethods();
+        return Object.freeze(PLUGIN_UI_HOST_METHODS_V1.filter(method =>
+            installedMethods.includes(method) || input.admissionMethods?.includes(method),
+        ));
+    };
     const isMethodAvailable = input.isMethodAvailable;
     const enrichUnavailable = (result: PluginUiJsonValueV1, request: PluginUiHostApiRequestEnvelopeV1): PluginUiJsonValueV1 => {
         const error = readPluginSurfaceHostApiErrorPayload(result);
@@ -295,6 +305,7 @@ export function createPluginSurfaceHostApi(
         // that rejects a request below; otherwise a consumer could negotiate a
         // stale method that the only request owner must refuse.
         if (input.isCurrent?.() === false) return Object.freeze([]);
+        const installedMethods = readInstalledMethods();
         if (!isMethodAvailable) return installedMethods;
         return Object.freeze(installedMethods.filter((method) => isMethodAvailable(method)));
     };
@@ -308,7 +319,7 @@ export function createPluginSurfaceHostApi(
             return resolveLiveInstalledMethods();
         },
         get admissionMethods(): readonly PluginUiHostMethodV1[] {
-            return input.isCurrent?.() === false ? Object.freeze([]) : admissionMethods;
+            return input.isCurrent?.() === false ? Object.freeze([]) : readAdmissionMethods();
         },
         ...(onDispose
             ? {
@@ -327,10 +338,11 @@ export function createPluginSurfaceHostApi(
                 return createPluginSurfaceHostApiError('stale_surface', ['plugin_surface_retired']);
             }
             const releasedMethod = PluginUiHostMethodV1Schema.safeParse(request.method);
+            const handlers = readHandlers();
             // A request admits only its addressed method. Enumerating the full
             // live set repeats currentness and unrelated method admissions;
             // negotiation getters still read that complete set independently.
-            if (releasedMethod.success && (!installedMethods.includes(releasedMethod.data)
+            if (releasedMethod.success && ((releasedMethod.data !== 'context' && handlers[releasedMethod.data] === undefined)
                 || (isMethodAvailable !== undefined && !isMethodAvailable(releasedMethod.data)))) {
                 // Structural absence and transient narrowing are different
                 // facts. A daemon-owned method this mount installs is
@@ -338,7 +350,7 @@ export function createPluginSurfaceHostApi(
                 // answering `unsupported_method` would hand the caller a
                 // permanent capability verdict it must never revisit; the
                 // retryable `unavailable` envelope keeps recovery reachable.
-                return admissionMethods.includes(releasedMethod.data)
+                return readAdmissionMethods().includes(releasedMethod.data)
                     ? enrichUnavailable(createPluginSurfaceHostApiError(
                         'unavailable',
                         [`host_api_method_unavailable:${request.method}`],

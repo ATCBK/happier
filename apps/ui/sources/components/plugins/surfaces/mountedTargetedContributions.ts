@@ -4,7 +4,7 @@ import type {
     DaemonPluginUiTargetedSurfaceMountV1,
     PreparedPluginJsonSchema,
 } from '@happier-dev/protocol';
-import type { PluginUiTargetedSurfaceMountCoreV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import type { DaemonPluginUiResourceDeclarationsByPluginIdV1, PluginUiTargetedSurfaceMountCoreV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginUiAccountExecutableOrigin } from '../reactNative/executableModuleHost';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
 import { readMountedAccountTargetedContributions } from './mountedAccountTargetedContributions';
@@ -62,6 +62,8 @@ type PreparedTargetedSurfaceMount<TMount> = TMount extends MountedPluginUiTarget
         inputNormalizer: NonNullable<ReturnType<typeof rehydrateCanonicalProtocolComposableSchema>>;
         /** Joined with current catalog/text by this target's source publication. */
         actionInputSelectionFactsKey?: PluginActionInputSelectionSnapshot;
+        /** Present, even empty, only for a producer-complete plugin declaration set. */
+        resourceDeclarations?: DaemonPluginUiResourceDeclarationsByPluginIdV1[string];
     }
 > : never;
 
@@ -111,6 +113,8 @@ export type MountedTargetedContributionsState = Readonly<{
     projectionInputs: DaemonMergedProjectionInputs | null;
     /** Already normalized/composed before the mounted host reads it. */
     pluginUiProjection: PluginUiProjectionModel | null;
+    /** Missing plugin keys are unknown, not a declaration withdrawal. */
+    resourceDeclarationsByPluginId: DaemonPluginUiResourceDeclarationsByPluginIdV1 | null;
     actionInputSelectionFactsKey: PluginActionInputSelectionSnapshot;
     failure: MountedTargetedContributionsFailure | null;
 }>;
@@ -121,6 +125,7 @@ const IDLE_STATE: MountedTargetedContributionsState = Object.freeze({
     preparedTargetedSurfaceMounts: null,
     projectionInputs: null,
     pluginUiProjection: null,
+    resourceDeclarationsByPluginId: null,
     actionInputSelectionFactsKey: readPluginActionInputSelectionPresenceSnapshot({ hasPluginProjection: false, hasTargetedContributions: false }),
     failure: null,
 });
@@ -203,17 +208,18 @@ export function useMountedTargetedContributions(params: Readonly<{
     const targetPublication = React.useMemo<{
         current: PluginUiTargetedContributionsV1 | null;
         retainedPresentation: PluginUiProjectionModel | null;
+        resourceDeclarationsByPluginId: DaemonPluginUiResourceDeclarationsByPluginIdV1 | null;
     }>(
-        () => ({ current: null, retainedPresentation: null }), [accountLifetime, targetKey],
+        () => ({ current: null, retainedPresentation: null, resourceDeclarationsByPluginId: null }), [accountLifetime, targetKey],
     );
     const selectionPublication = React.useMemo(() => createPluginActionInputSelectionFactsPublication(), [accountLifetime, targetKey]);
     const childPublications = React.useMemo<{
         entries: Array<{ mount: PreparedDaemonPluginUiTargetedSurfaceMountV1; selection: ReturnType<typeof createPluginActionInputSelectionFactsPublication> }>;
         snapshot: readonly PreparedDaemonPluginUiTargetedSurfaceMountV1[] | null;
     }>(() => ({ entries: [], snapshot: null }), [accountLifetime, targetKey]);
-    const readCurrentSources = React.useCallback((): Pick<MountedTargetedContributionsState, 'projectionInputs' | 'pluginUiProjection' | 'actionInputSelectionFactsKey' | 'preparedTargetedSurfaceMounts'> => {
+    const readCurrentSources = React.useCallback((): Pick<MountedTargetedContributionsState, 'projectionInputs' | 'pluginUiProjection' | 'resourceDeclarationsByPluginId' | 'actionInputSelectionFactsKey' | 'preparedTargetedSurfaceMounts'> => {
         if (!accountLifetime?.isCurrent()) return { projectionInputs: null, pluginUiProjection: null, actionInputSelectionFactsKey: IDLE_STATE.actionInputSelectionFactsKey,
-            preparedTargetedSurfaceMounts: null };
+            preparedTargetedSurfaceMounts: null, resourceDeclarationsByPluginId: null };
         const entry = projectionScope ? readCachedDaemonMergedProjectionCacheEntry(projectionScope) : null;
         const projectionInputs = entry?.accountCurrentness?.isCurrent()
             && areServerAccountScopesEqual(entry.accountScope ?? null, accountLifetime.scope)
@@ -239,6 +245,7 @@ export function useMountedTargetedContributions(params: Readonly<{
         return {
             projectionInputs,
             pluginUiProjection,
+            resourceDeclarationsByPluginId: targetPublication.resourceDeclarationsByPluginId,
             preparedTargetedSurfaceMounts: childPublications.snapshot,
             actionInputSelectionFactsKey: selectionPublication.publish({ pluginProjectionById: projectionInputs?.pluginProjectionById,
                 translationsByPluginId: pluginUiProjection?.translationsByPluginId,
@@ -254,6 +261,7 @@ export function useMountedTargetedContributions(params: Readonly<{
             const next = readCurrentSources();
             setLoaded(previous => previous.requestKey !== targetKey || previous.accountLifetime !== accountLifetime
                 || (previous.state.projectionInputs === next.projectionInputs && previous.state.pluginUiProjection === next.pluginUiProjection
+                    && previous.state.resourceDeclarationsByPluginId === next.resourceDeclarationsByPluginId
                     && previous.state.actionInputSelectionFactsKey === next.actionInputSelectionFactsKey
                     && previous.state.preparedTargetedSurfaceMounts === next.preparedTargetedSurfaceMounts)
                 ? previous : { ...previous, state: { ...previous.state, ...next } });
@@ -288,6 +296,7 @@ export function useMountedTargetedContributions(params: Readonly<{
                         : null,
                     projectionInputs: sameTarget ? previous.state.projectionInputs : null,
                     pluginUiProjection: sameTarget ? previous.state.pluginUiProjection : null,
+                    resourceDeclarationsByPluginId: sameTarget ? previous.state.resourceDeclarationsByPluginId : null,
                     actionInputSelectionFactsKey: sameTarget ? previous.state.actionInputSelectionFactsKey : IDLE_STATE.actionInputSelectionFactsKey,
                     failure: null,
                 },
@@ -355,7 +364,13 @@ export function useMountedTargetedContributions(params: Readonly<{
                     publishMachineContributionRegistryProjectionInvalidation(projectionScope);
                 }
             }
-            const preparedTargetedSurfaceMounts = prepareTargetedSurfaceMounts(result.targetedSurfaceMounts);
+            const incomingResources = result.resourceDeclarationsByPluginId ?? null;
+            targetPublication.resourceDeclarationsByPluginId = sameStrictJsonValue(targetPublication.resourceDeclarationsByPluginId, incomingResources)
+                ? targetPublication.resourceDeclarationsByPluginId : incomingResources;
+            const preparedTargetedSurfaceMounts = Object.freeze(prepareTargetedSurfaceMounts(result.targetedSurfaceMounts).map(mount => Object.freeze({
+                ...mount,
+                resourceDeclarations: targetPublication.resourceDeclarationsByPluginId?.[mount.contributor?.pluginId ?? mount.target.pluginId],
+            })));
             const previousChildren = childPublications.entries;
             childPublications.entries = preparedTargetedSurfaceMounts.map(mount => ({ mount,
                 selection: previousChildren.find(child => child.mount.contributor?.pluginId === mount.contributor?.pluginId

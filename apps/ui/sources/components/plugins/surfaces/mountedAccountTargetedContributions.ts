@@ -127,12 +127,16 @@ export async function readMountedAccountTargetedContributions(input: Readonly<{
                 if (selection.sourceCustody.kind !== 'account_release' && selection.sourceCustody.kind !== 'bundled_first_party') continue;
                 mounts.push(Object.freeze({ ...core, accountExecutionOrigin: Object.freeze({
                     ...input.accountLifetime.scope, custodyId: selection.custodyId, sourceCustody: selection.sourceCustody,
-                    ...(selection.sourceCustody.kind === 'bundled_first_party'
-                        ? { declarationDigest: availability.readBundledAccountDeclarationDigest(contributor.pluginId)! } : {}),
                 }) }));
             }
         }
     }
     assertCurrent();
-    return { supported: true as const, targetedContributions, targetedSurfaceMounts: Object.freeze(mounts) };
+    // Machine Resource census belongs only to the actual Machine contributors,
+    // never to this Account target or another Account-selected contributor.
+    const machinePluginIds = new Set(mounts.filter(mount => 'executionOrigin' in mount).map(mount => mount.contributor.pluginId));
+    const resourceDeclarationsByPluginId = machineRead?.supported && machineRead.resourceDeclarationsByPluginId
+        ? Object.fromEntries(Object.entries(machineRead.resourceDeclarationsByPluginId).filter(([pluginId]) => machinePluginIds.has(pluginId)))
+        : undefined;
+    return { supported: true as const, targetedContributions, targetedSurfaceMounts: Object.freeze(mounts), resourceDeclarationsByPluginId };
 }

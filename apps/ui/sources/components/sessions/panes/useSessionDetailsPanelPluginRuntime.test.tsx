@@ -34,7 +34,7 @@ describe('useSessionDetailsPanelPluginRuntime', () => {
             }
             expect(renders - before).toBe(0);
             await act(async () => storage.setState(state => ({ profile: { ...state.profile, id: 'replacement-account' } })));
-            expect(hook.getCurrent().peerMediationObservabilityScope?.accountId).toBe('replacement-account');
+            expect(hook.getCurrent().peerMediationObservabilityScope).toMatchObject({ kind: 'machine', accountId: 'replacement-account' });
         } finally {
             await hook.unmount();
             storage.setState(previous, true);

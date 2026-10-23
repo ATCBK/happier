@@ -16,8 +16,6 @@ import {
 import {
     PLUGIN_UI_HOST_API_VERSION_V1,
     PLUGIN_UI_HOST_API_WIRE_VERSION_V1,
-    PluginUiMountContextV1Schema,
-    PluginUiTargetedContributionsV1Schema,
     type PluginUiInstanceKeyV1,
 } from '@happier-dev/protocol/plugins/ui';
 import type {
@@ -352,13 +350,6 @@ function readCanonicalPluginUiRenderContextDiagnostic(value: unknown): string | 
     if (!context.plugin?.id || !context.plugin?.version) return 'render_context_plugin_identity_missing';
     if ('view' in context) return 'render_context_view_removed';
     if (!context.surface) return 'render_context_surface_missing';
-    if (!PluginUiMountContextV1Schema.safeParse(context.surface.mount).success) {
-        return 'render_context_surface_mount_invalid';
-    }
-    if (context.surface.targetedContributions !== undefined
-        && !PluginUiTargetedContributionsV1Schema.safeParse(context.surface.targetedContributions).success) {
-        return 'render_context_targeted_contributions_invalid';
-    }
     if (!(context.signal instanceof AbortSignal)) return 'render_context_signal_missing';
     const hostApi = context.hostApi as Partial<RenderContext['hostApi']> | undefined;
     if (!hostApi || typeof hostApi.version !== 'function') return 'render_context_host_api_missing';

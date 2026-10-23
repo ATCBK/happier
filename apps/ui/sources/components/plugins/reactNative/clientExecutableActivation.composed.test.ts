@@ -25,7 +25,7 @@ const rpcIo = vi.hoisted(() => ({ request: vi.fn<(input: Readonly<{
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', async () => {
     const { computePluginUiArtifactFileSetSha256DigestV1, computePluginUiArtifactSha256DigestV1,
         PluginUiArtifactsManifestEntryV2Schema } = await import('@happier-dev/protocol/plugins/ui');
-    return { BUNDLED_PLUGIN_BRAND_MARKS: [], BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [1, 2].map(id => {
+    return { BUNDLED_PLUGIN_BRAND_MARKS: [], BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [], BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [1, 2].map(id => {
         const bytes = new TextEncoder().encode(`// target ${id}`);
         const entry = 'react-native/action/entry.cjs.bundle';
         const digest = computePluginUiArtifactFileSetSha256DigestV1([{ relativePath: entry, bytes }]);

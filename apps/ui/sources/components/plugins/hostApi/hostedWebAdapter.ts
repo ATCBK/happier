@@ -613,11 +613,6 @@ export function createHostedFrameHostApiBridgeHandler<TAuthority>(
                 identity: binding.identity,
                 apiVersion: PLUGIN_UI_HOST_API_VERSION_V1,
                 methods: [...canonicalMethods],
-                // The snapshot a late negotiation receives is the CURRENT one,
-                // not the one this handler was constructed with — otherwise a
-                // frame that reloads after a theme change negotiates stale facts
-                // and only learns the truth on its next push.
-                surface: currentSurface ?? binding.surface,
             }));
         }
         if (message.kind === 'cancel') {

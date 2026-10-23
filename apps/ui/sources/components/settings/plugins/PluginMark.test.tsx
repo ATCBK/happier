@@ -16,6 +16,7 @@ vi.mock('react-native-svg', async () => await import('@/dev/testkit/mocks/reactN
 const bundledBrands = vi.hoisted(() => [] as { pluginId: string; resourceId: string; releaseVersion: string; displayName: string; digest: string; bytes: Uint8Array }[]);
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [],
     BUNDLED_PLUGIN_BRAND_MARKS: bundledBrands,
 }));
 beforeEach(() => {

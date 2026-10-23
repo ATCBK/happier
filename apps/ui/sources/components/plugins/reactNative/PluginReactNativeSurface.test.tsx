@@ -1,6 +1,8 @@
 import * as React from 'react';
 import {
     PLUGIN_UI_HOST_METHODS_V1,
+    PluginUiMountContextV1Schema,
+    PluginUiTargetedContributionsV1Schema,
     type PluginUiSurfaceContextV1,
 } from '@happier-dev/protocol/plugins/ui';
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
@@ -75,6 +77,52 @@ afterAll(() => {
 });
 
 describe('PluginReactNativeSurface', () => {
+
+    it('renders host surface facts without re-admission while checking current host versions', async () => {
+        const { PluginReactNativeSurface } = await import('./PluginReactNativeSurface');
+        const surface = createPluginSurfaceContextFixture({
+            targetedContributions: PluginUiTargetedContributionsV1Schema.parse({
+                target: { pluginId: 'acme.preview', occurrenceId: 'native-perf', sourceCustody: {
+                    kind: 'managed', immutableGenerationId: 'native-perf', installSource: 'archive',
+                } },
+                points: [],
+            }),
+        });
+        const module = { renderSurface: () => React.createElement('PluginNativeSurface', { testID: 'plugin-native-admitted' }) };
+        const element = (context: RenderContext) => <PluginReactNativeSurface
+            surfaceId="surface_1"
+            renderContext={context}
+            decision={{ state: 'load', reason: 'compatible', diagnostics: [] }}
+            module={module}
+        />;
+        const mountParse = vi.spyOn(PluginUiMountContextV1Schema, 'safeParse');
+        const targetedParse = vi.spyOn(PluginUiTargetedContributionsV1Schema, 'safeParse');
+        try {
+            let retired = false;
+            const context = { ...defaultRenderContext, surface, hostApi: {
+                ...defaultRenderContext.hostApi,
+                version: () => {
+                    if (retired) throw new Error('retired host');
+                    return defaultRenderContext.hostApi.version();
+                },
+            } };
+            const screen = await renderScreen(element(context));
+            for (let index = 0; index < 20; index += 1) await screen.update(element({ ...context }));
+            expect(screen.findByTestId('plugin-native-admitted')).toBeTruthy();
+            expect(mountParse).not.toHaveBeenCalled();
+            expect(targetedParse).not.toHaveBeenCalled();
+            // A new host publication needs no separate admission proof.
+            await screen.update(element({ ...context, surface: Object.freeze({ ...surface }) }));
+            expect(mountParse).not.toHaveBeenCalled();
+            expect(targetedParse).not.toHaveBeenCalled();
+            retired = true;
+            await screen.update(element(context));
+            expect(screen.findByTestId('plugin-rn-ui-unavailable')).toBeTruthy();
+        } finally {
+            mountParse.mockRestore();
+            targetedParse.mockRestore();
+        }
+    });
 
     it('uses fallback instead of loading when compatibility does not allow RN execution', async () => {
         const { PluginReactNativeSurface } = await import('./PluginReactNativeSurface');
@@ -637,23 +685,6 @@ describe('PluginReactNativeSurface', () => {
 
         expect(renderSurface).toHaveBeenCalledOnce();
         expect(screen.findByTestId('plugin-native-unfrozen-context')).toBeTruthy();
-    });
-
-    it('rejects present malformed targeted contributions rather than treating them as absent', async () => {
-        const { PluginReactNativeSurface } = await import('./PluginReactNativeSurface');
-        const screen = await renderScreen(<PluginReactNativeSurface
-            surfaceId="surface_1"
-            decision={{ state: 'load', reason: 'compatible', diagnostics: [] }}
-            // The renderer admits unknown external render contexts at this boundary.
-            renderContext={{
-                ...defaultRenderContext,
-                surface: { ...defaultCanonicalSurface, targetedContributions: null },
-            } as unknown as RenderContext}
-            module={{ renderSurface: () => React.createElement('PluginNativeSurface', { testID: 'plugin-native-invalid-target' }) }}
-        />);
-
-        expect(screen.findByTestId('plugin-native-invalid-target')).toBeNull();
-        expect(screen.findByTestId('plugin-rn-ui-unavailable')).toBeTruthy();
     });
 
     it('rejects a noncanonical render context instead of adapting it at the surface boundary', async () => {

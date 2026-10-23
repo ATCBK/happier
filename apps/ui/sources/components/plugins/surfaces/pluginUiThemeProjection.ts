@@ -180,13 +180,34 @@ export function usePluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['spinne
  */
 export function projectPluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['spinner']): PluginUiThemeV1 {
     const code = ({ ...Typography.variant('micro', 'regular'), ...Typography.mono(), ...Typography.tabular() });
+    const surfaceFinish: NonNullable<PluginUiThemeV1['surfaceFinish']> = {};
+    for (const role of ['card', 'floating', 'composer', 'primaryButton', 'secondaryButton'] as const) {
+        const gradient = resolveThemeSurfaceFinish(theme, role);
+        if (!gradient) {
+            surfaceFinish[role] = null;
+            continue;
+        }
+        // Own every nested value before freezing: the app theme remains mutable
+        // independently of the immutable snapshot shared with plugin renderers.
+        const finish: NonNullable<(typeof surfaceFinish)[typeof role]> = {
+            colors: [...gradient.colors],
+            ...(gradient.locations ? { locations: [...gradient.locations] } : {}),
+            ...(gradient.start ? { start: { ...gradient.start } } : {}),
+            ...(gradient.end ? { end: { ...gradient.end } } : {}),
+            ...(gradient.band ? { band: { ...gradient.band } } : {}),
+        };
+        Object.freeze(finish.colors);
+        if (finish.locations) Object.freeze(finish.locations);
+        if (finish.start) Object.freeze(finish.start);
+        if (finish.end) Object.freeze(finish.end);
+        if (finish.band) Object.freeze(finish.band);
+        surfaceFinish[role] = Object.freeze(finish);
+    }
+    Object.freeze(surfaceFinish);
     return Object.freeze({
         version: 1,
-        ...(spinner ? { spinner } : {}),
-        surfaceFinish: Object.fromEntries((['card', 'floating', 'composer', 'primaryButton', 'secondaryButton'] as const).map(role => {
-            const gradient = resolveThemeSurfaceFinish(theme, role);
-            return [role, gradient ? { ...gradient, colors: [...gradient.colors], ...(gradient.locations ? { locations: [...gradient.locations] } : {}) } : null];
-        })) as PluginUiThemeV1['surfaceFinish'],
+        ...(spinner ? { spinner: Object.freeze({ ...spinner }) } : {}),
+        surfaceFinish,
         statusText: Object.freeze({
             success: theme.colors.state.success.textForeground,
             warning: theme.colors.state.warning.textForeground,

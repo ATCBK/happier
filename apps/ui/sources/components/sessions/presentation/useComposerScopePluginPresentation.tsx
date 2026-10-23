@@ -410,9 +410,12 @@ export function useComposerScopePluginPresentation(
             .sort(compareOrderedComposerContributions);
     }, [actionSnapshot, params.composer.kind, params.contributorPluginId, pluginProjection.composerRegionsById]);
     const composerSurfaceCatalog = params.projectionInputs?.composerSurfaceCatalog ?? [];
+    const physicalCatalog = params.projectionInputs?.composerSurfaceCatalog;
+    const physicalCatalogRef = React.useRef(physicalCatalog);
+    physicalCatalogRef.current = physicalCatalog;
     const transactionApplier = React.useMemo(() => createComposerPresentationTransactionApplier({
         ...(params.composer.kind === 'discussion' ? { scope: params.accountLifetime?.scope ?? null } : {}),
-        composerAttachmentsById: pluginProjection.composerAttachmentsById,
+        get composerAttachmentsById() { return pluginProjectionRef.current.composerAttachmentsById; },
         localize: localizePluginText,
         ...(params.composer.kind === 'session'
             ? { sessionAddress: exactSessionAddress }
@@ -422,13 +425,18 @@ export function useComposerScopePluginPresentation(
         params.accountLifetime,
         localizePluginText,
         params.composer.kind,
-        pluginProjection.composerAttachmentsById,
     ]);
+    const hasSurfaceSnapshot = actionSnapshot !== null;
     const surfaceLifetime = React.useMemo<BoundPluginSurfaceMountLifetime | null>(() => {
-        const snapshot = actionSnapshot;
-        if (!snapshot) return null;
+        const catalog = physicalCatalog;
+        if (!hasSurfaceSnapshot) return null;
         const isCurrent = (): boolean => (
-            actionSnapshotRef.current === snapshot
+            // Acquisition retains this exact canonical catalog only while all
+            // physical rows, renderer/origin facts and contributor custody are
+            // unchanged. Action invocations keep their separate exact snapshot
+            // check; attachment-only delivery cannot retire document watches.
+            physicalCatalogRef.current === catalog
+            && actionSnapshotRef.current !== null
             && scopeAbort.signal.aborted === false
             && isScopeCurrentRef.current()
             && params.accountLifetime?.isCurrent() !== false
@@ -456,7 +464,7 @@ export function useComposerScopePluginPresentation(
                 });
             },
         });
-    }, [actionSnapshot, params.accountLifetime, scopeAbort]);
+    }, [hasSurfaceSnapshot, params.accountLifetime, physicalCatalog, scopeAbort]);
     // The one qualified-destination owner for the scope this Composer is
     // mounted in. Both the declarative control host below and every physical
     // Composer surface reach navigation through it, so a Composer-origin open

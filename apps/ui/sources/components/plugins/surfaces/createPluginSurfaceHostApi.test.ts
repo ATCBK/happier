@@ -37,6 +37,18 @@ function request(
 }
 
 describe('createPluginSurfaceHostApi', () => {
+    it('advertises and serves only the current mounted handler contract without replacing the facade', async () => {
+        let handlers: import('./createPluginSurfaceHostApi').PluginSurfaceHostApiHandlers = { readComposer: () => null };
+        const hostApi = createPluginSurfaceHostApi({ surfaceContext, readHandlers: () => handlers });
+        expect(hostApi.installedMethods).toContain('readComposer');
+        expect(hostApi.admissionMethods).not.toContain('focusComposer');
+        handlers = { focusComposer: () => ({ focused: true }) };
+        expect(hostApi.installedMethods).not.toContain('readComposer');
+        expect(hostApi.admissionMethods).toContain('focusComposer');
+        expect(await hostApi.handleRequest(request('readComposer'))).toMatchObject({ code: 'unsupported_method' });
+        expect(await hostApi.handleRequest(request('focusComposer'))).toEqual({ focused: true });
+    });
+
     it('adds trusted unavailable context without interpreting a matching domain result as an error', async () => {
         const invocation = request('executeAction');
         const domainResult = { code: 'unavailable', diagnostics: ['plugin_surface_contributed_action_unavailable'] };
@@ -101,6 +113,52 @@ describe('createPluginSurfaceHostApi', () => {
             surfaceId: 'surface-1',
         });
         await expect(hostApi.handleRequest(request('writeClipboard'))).resolves.toEqual({ copied: true });
+    });
+
+    it('settles a native invocation cancellation through the canonical aborted failure', async () => {
+        const controller = new AbortController();
+        const invocation = request('executeAction');
+        const hostApi = createPluginSurfaceHostApi({
+            surfaceContext,
+            handlers: {
+                executeAction: async (_request, options) => {
+                    const signal = options?.signal;
+                    if (!signal) throw new Error('Cancellation signal missing');
+                    await new Promise<void>((resolve) => {
+                        signal.addEventListener('abort', () => resolve(), { once: true });
+                    });
+                    signal.throwIfAborted();
+                    return null;
+                },
+            },
+        });
+        const settlement = settlePluginSurfaceHostApiRequest(invocation,
+            () => hostApi.handleRequest(invocation, { signal: controller.signal }));
+
+        controller.abort();
+
+        await expect(settlement).resolves.toMatchObject({
+            requestId: invocation.requestId,
+            kind: 'error',
+            payload: { code: 'unavailable', diagnostics: ['plugin_ui_invocation_aborted'] },
+        });
+    });
+
+    it.each([
+        new Error('AbortError'),
+        new DOMException('The operation timed out', 'TimeoutError'),
+    ])('keeps unexpected handler failures internal: %s', async (error) => {
+        const invocation = request('executeAction');
+        const hostApi = createPluginSurfaceHostApi({
+            surfaceContext,
+            handlers: { executeAction: async () => { throw error; } },
+        });
+
+        await expect(settlePluginSurfaceHostApiRequest(invocation,
+            () => hostApi.handleRequest(invocation))).resolves.toMatchObject({
+            kind: 'error',
+            payload: { code: 'internal_error', diagnostics: ['host_api_handler_failed'] },
+        });
     });
 
     it('returns the canonical unsupported-method refusal for an uninstalled method', () => {

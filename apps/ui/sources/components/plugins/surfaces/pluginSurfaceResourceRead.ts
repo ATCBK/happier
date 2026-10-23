@@ -56,6 +56,8 @@ export type PluginSurfaceResourceBinding = Readonly<{
     read?: PluginSurfaceResourceReadTransport;
     /** Host-private shared owner; never accepted from a plugin request. */
     store?: PluginUiResourceStore;
+    /** Private declaration-owner notification; no Resource bytes or plugin-authored policy. */
+    onDeclaredNamespaceAdmission?: (listener: () => void) => () => void;
 }>;
 
 /** Hold static demand until admitted bytes are available or the read settles. */
@@ -236,8 +238,10 @@ export function createPluginSurfaceResourceReadHandler(input: Readonly<{
             const merged = mergeAbortSignals([input.lifetimeSignal, options?.signal]);
             try {
                 if (merged.signal?.aborted || input.isCurrent?.() === false) return resourceAbortPayload(input.isCurrent);
-                const snapshot = await readPluginResourceStoreSnapshot(input.hostResourceStore.getEntry(hostReference.data), merged.signal);
+                const entry = input.hostResourceStore.getEntry(hostReference.data);
+                await readPluginResourceStoreSnapshot(entry, merged.signal);
                 if (merged.signal?.aborted || input.isCurrent?.() === false) return resourceAbortPayload(input.isCurrent);
+                const snapshot = entry.getSnapshot();
                 if (!snapshot.value) return errorPayload('unavailable', snapshot.error?.code ?? 'plugin_resource_unavailable');
                 return { contentType: snapshot.value.contentType, digest: snapshot.value.digest,
                     bytesBase64: encodeBase64(snapshot.value.bytes, 'base64') };
@@ -268,8 +272,12 @@ export function createPluginSurfaceResourceReadHandler(input: Readonly<{
 
         if (input.resource.store) {
             try {
-                const snapshot = await readPluginResourceStoreSnapshot(input.resource.store.getEntry(reference), signal);
+                const entry = input.resource.store.getEntry(reference);
+                await readPluginResourceStoreSnapshot(entry, signal);
                 if (signal?.aborted || input.isCurrent?.() === false) return resourceAbortPayload(input.isCurrent);
+                // The physical caller survives declaration updates. Authority
+                // may have withdrawn while the cached read yielded.
+                const snapshot = entry.getSnapshot();
                 if (snapshot.error || !snapshot.value) return errorPayload('unavailable', snapshot.error?.code ?? 'plugin_resource_unavailable');
                 return { contentType: snapshot.value.contentType, digest: snapshot.value.digest,
                     bytesBase64: encodeBase64(snapshot.value.bytes, 'base64') };
@@ -295,7 +303,7 @@ export function createPluginSurfaceResourceReadHandler(input: Readonly<{
             if (signal?.aborted) return resourceAbortPayload(input.isCurrent);
             throw error;
         }
-        if (signal?.aborted) return resourceAbortPayload(input.isCurrent);
+        if (signal?.aborted || input.resource.store) return resourceAbortPayload(input.isCurrent);
         if (!outcome.supported) {
             return errorPayload(
                 'unavailable',

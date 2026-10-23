@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginMachineMaterializationV1Schema, PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability';
-import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
+import { createPluginAccountAvailabilityReader, createPluginAccountAvailabilityReaderStore } from '@/sync/domains/plugins/availability/reader';
 
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
@@ -30,9 +30,77 @@ function currentness(projection: PluginUiProjectionModel): PluginUiProjectionCur
 }
 
 describe('AppShell projection source publication', () => {
+    it('publishes selected origins only when the origin report changes, not on unrelated Machine reports', () => {
+        const owner = createAppShellPluginUiProjectionPublication();
+        const pluginId = 'acme.publication';
+        const origin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test', sourceRef: {
+            machineId: 'machine', pluginId, sourceCustody: { kind: 'development', registeredRootId: 'publication-root' },
+        } });
+        owner.publishSources({ accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
+            activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
+            onlineMachineIds: ['machine'], selectableMachineIds: [] });
+        const model = translationProjection(1, 'Visible');
+        owner.publishMachineCurrentness('machine', null, currentness(model));
+        owner.publishExecutionOrigin(pluginId, null, origin, [origin], true);
+        const initial = owner.getSnapshot().pluginUiProjection;
+        const gets = vi.spyOn(Map.prototype, 'get');
+        try {
+            for (let report = 0; report < 20; report++) {
+                owner.publishMachineCurrentness('machine', null, {
+                    ...currentness(model), connectedAccountProjection: { kind: 'loading' },
+                });
+                expect(owner.getSnapshot().pluginUiProjection).toBe(initial);
+            }
+            // Reading a selection Map returns the origin itself, unlike the
+            // reports/candidates Maps. Observe the real composed path, not a mock.
+            expect(gets.mock.results.filter(result => result.type === 'return' && result.value === origin)).toHaveLength(0);
+        } finally { gets.mockRestore(); owner.dispose(); }
+    });
+
+    it('keeps settled declarations quiet across cursor and observation-only Availability publications', () => {
+        const owner = createAppShellPluginUiProjectionPublication();
+        const store = createPluginAccountAvailabilityReaderStore();
+        const scope = { serverId: 'server-1', accountId: 'account-1' };
+        const manifest = PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: 'acme.publication',
+            version: '1.0.0', displayName: 'Publication', runtime: { apiVersion: 1 }, contributes: {
+                registrySources: [{ id: 'skills', title: 'Skills', format: 'git', kinds: ['skill'], url: 'https://example.com/skills' }],
+            } });
+        const materialization = PluginMachineMaterializationV1Schema.parse({ serverIdentityId: 'srv_test', machineId: 'machine',
+            materializationId: 'installation', pluginId: manifest.id, version: manifest.version, sourceClass: 'localPath',
+            portableRelease: false, uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: 1,
+            declaredManifest: manifest, declaredUiEntries: {} });
+        const machines = ['machine'];
+        const sources = { accountLifetime: null, hostBundledUiEnabled: false, activeServerId: scope.serverId,
+            serverProfilesGeneration: 0, activeInventoryLoaded: true, onlineMachineIds: machines, selectableMachineIds: machines };
+        const publish = (cursor: number, row = materialization) => {
+            store.replace({ scope, snapshot: { availabilityCursor: cursor, intentReads: [], materializations: [row],
+                snapshots: [{ serverIdentityId: row.serverIdentityId, machineId: row.machineId, materializations: [row] }] } });
+            owner.publishSources({ ...sources, availabilityInputs: store.bind(scope).readUiProjectionInputs() });
+        };
+        publish(1);
+        const initial = owner.getSnapshot();
+        let publications = 0;
+        const stop = owner.subscribe(() => { publications++; });
+        try {
+            for (let cursor = 2; cursor <= 21; cursor++) publish(cursor, { ...materialization, observedAt: cursor });
+            expect.soft(publications).toBe(0);
+            expect.soft(owner.getSnapshot()).toBe(initial);
+            publish(22, { ...materialization, declaredManifest: { ...manifest, contributes: {
+                ...manifest.contributes, registrySources: [{ ...manifest.contributes.registrySources![0]!, url: 'https://example.com/changed' }],
+            } } });
+            expect(publications).toBe(1);
+            expect(owner.getSnapshot().pluginUiProjection?.registrySourcesById['acme.publication/skills']?.definition.url)
+                .toBe('https://example.com/changed');
+            publish(23, { ...materialization, enabled: false, trustState: 'revoked' });
+            expect(publications).toBe(2);
+            expect(owner.getSnapshot().pluginUiProjection?.installedPackagesById[manifest.id]).toBeUndefined();
+            expect(owner.getSnapshot().pluginUiProjection?.registrySourcesById['acme.publication/skills']).toBeUndefined();
+        } finally { stop(); owner.dispose(); }
+    });
+
     it('does not republish equivalent Machine currentness wrappers and still withdraws changed authority', () => {
         const owner = createAppShellPluginUiProjectionPublication();
-        owner.publishSources({ accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+        owner.publishSources({ accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
             activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
         const report = currentness(translationProjection(1, 'First'));
@@ -61,7 +129,7 @@ describe('AppShell projection source publication', () => {
         const model = { ...translationProjection(1, 'First'), skillsById: { [id]: { id, pluginId, pluginVersion: '1.0.0',
             definition: { id: 'check', directory: './skills/check' } } } };
         const emptyIdentity = owner.getSnapshot().skillSourceIdentity;
-        owner.publishSources({ accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+        owner.publishSources({ accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
             activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
         owner.publishMachineCurrentness('machine', null, currentness(model));
@@ -108,7 +176,7 @@ describe('AppShell projection source publication', () => {
         };
         const preparing = readerFor('unknown');
         expect(preparing.readInstalledPlugins()).toMatchObject({ plugins: [{ installations: [{ uiDeclarationState: 'preparing' }] }] });
-        const sources = { accountLifetime: null, availabilityReader: preparing, hostBundledUiEnabled: false,
+        const sources = { accountLifetime: null, availabilityInputs: preparing.readUiProjectionInputs(), hostBundledUiEnabled: false,
             activeServerId: scope.serverId, serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] };
         try {
@@ -119,18 +187,16 @@ describe('AppShell projection source publication', () => {
                 .toEqual({ en: { title: 'Live title' } });
 
             // Known non-UI declarations survive while the UI census is still preparing.
-            owner.publishSources({ ...sources, availabilityReader: readerFor('manifest') });
+            owner.publishSources({ ...sources, availabilityInputs: readerFor('manifest').readUiProjectionInputs() });
             expect(owner.getSnapshot().pluginUiProjection?.translationsByPluginId['acme.publication']?.bundles)
                 .toEqual({ en: { title: 'Live title' } });
-            expect(owner.getSnapshot().unionMembers.find(member => member.machineId === 'machine')
-                ?.projection?.registrySourcesById['acme.publication/skills'])
+            expect(owner.getSnapshot().pluginUiProjection?.registrySourcesById['acme.publication/skills'])
                 .toMatchObject({ definition: { id: 'skills' } });
 
             // A proven empty census really does withdraw the preceding daemon declaration.
-            owner.publishSources({ ...sources, availabilityReader: readerFor('complete') });
+            owner.publishSources({ ...sources, availabilityInputs: readerFor('complete').readUiProjectionInputs() });
             expect(owner.getSnapshot().pluginUiProjection?.translationsByPluginId['acme.publication']).toBeUndefined();
-            expect(owner.getSnapshot().unionMembers.find(member => member.machineId === 'machine')
-                ?.projection?.registrySourcesById['acme.publication/skills'])
+            expect(owner.getSnapshot().pluginUiProjection?.registrySourcesById['acme.publication/skills'])
                 .toMatchObject({ definition: { id: 'skills' } });
         } finally { owner.dispose(); }
     });
@@ -158,7 +224,7 @@ describe('AppShell projection source publication', () => {
         });
         const declaration = () => owner.getSnapshot().pluginUiProjection?.translationsByPluginId[pluginId];
         try {
-            owner.publishSources({ accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+            owner.publishSources({ accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
                 activeServerId: 'server-1', serverProfilesGeneration: 0, activeInventoryLoaded: true,
                 onlineMachineIds: machines, selectableMachineIds: machines });
             models.forEach((model, index) => owner.publishMachineCurrentness(machines[index]!, null,
@@ -167,6 +233,8 @@ describe('AppShell projection source publication', () => {
             expect(declaration()).toMatchObject({ hostCompatibility: 'conflict' });
             expect(declarationWalks).toBeGreaterThan(0);
             const initial = owner.getSnapshot();
+            const unchangedNotifications = vi.fn();
+            const stopUnchanged = owner.subscribe(unchangedNotifications);
             declarationWalks = 0;
             for (const selectable of [[unrepresented, origins[0]!, origins[1]!], [origins[0]!, origins[1]!],
                 [origins[0]!, unrepresented, origins[1]!]]) {
@@ -174,6 +242,8 @@ describe('AppShell projection source publication', () => {
                 expect(owner.getSnapshot().projectionUnion).toBe(initial.projectionUnion);
                 expect(owner.getSnapshot().candidateFactsByPluginId).toBe(initial.candidateFactsByPluginId);
             }
+            stopUnchanged();
+            expect.soft(unchangedNotifications).not.toHaveBeenCalled();
             expect.soft(declarationWalks).toBe(0);
             declarationWalks = 0;
             owner.publishExecutionOrigin(pluginId, null, null, [origins[0]!, unrepresented]);
@@ -207,7 +277,7 @@ describe('AppShell projection source publication', () => {
                 }) }),
             }) satisfies PluginUiProjectionModel;
         });
-        const sources = { accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+        const sources = { accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
             activeServerId: 'server-1', serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: machines, selectableMachineIds: machines };
         owner.publishSources(sources);
@@ -288,7 +358,7 @@ describe('AppShell projection source publication', () => {
             + entries.mock.calls.filter(([value]) => sourceMaps.has(value)).length
             + keys.mock.calls.filter(([value]) => sourceMaps.has(value)).length;
         try {
-            owner.publishSources({ accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+            owner.publishSources({ accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
                 activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
                 onlineMachineIds: machines, selectableMachineIds: machines });
             models.forEach((model, index) => owner.publishMachineCurrentness(machines[index]!, null,
@@ -330,7 +400,7 @@ describe('AppShell projection source publication', () => {
             [nativeId]: Object.freeze({ id: nativeId, displayName: 'Native provisioner', enabled: true,
                 version: '1.0.0', occurrenceId: 'native-occurrence', executionOrigin: origin,
                 sourceCustody: origin.sourceRef.sourceCustody, source: { kind: 'localPath' as const, locator: 'native-root' } }) }) });
-        owner.publishSources({ accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+        owner.publishSources({ accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
             activeServerId: 'server-1', serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
         owner.publishMachineCurrentness('machine', null, { ...currentness(model), serverId: 'server-1' });
@@ -361,7 +431,7 @@ describe('AppShell projection source publication', () => {
 
     it('notifies committed candidate readers for native-only changes without replacing the aggregate declaration', () => {
         const owner = createAppShellPluginUiProjectionPublication();
-        const sources = { accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+        const sources = { accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
             activeServerId: 'server-1', serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: Object.freeze(['machine']), selectableMachineIds: Object.freeze(['machine']) };
         const pluginId = 'acme.native-only';
@@ -443,7 +513,7 @@ describe('AppShell projection source publication', () => {
 
     it('makes repeated reads inert and publishes a changed source without rebuilding on equivalent commits', () => {
         const owner = createAppShellPluginUiProjectionPublication();
-        const sources = { accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+        const sources = { accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
             activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: Object.freeze(['machine']), selectableMachineIds: Object.freeze(['machine']) };
         owner.publishSources(sources);
@@ -476,7 +546,7 @@ describe('AppShell projection source publication', () => {
 
     it('drops a departing Machine report so its return cannot re-admit the old current snapshot', () => {
         const owner = createAppShellPluginUiProjectionPublication();
-        const sources = { accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+        const sources = { accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
             activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: Object.freeze(['machine']), selectableMachineIds: Object.freeze(['machine']) };
         owner.publishSources(sources);
@@ -487,13 +557,13 @@ describe('AppShell projection source publication', () => {
         owner.publishSources({ ...sources });
         expect(owner.getSnapshot().projectionTargets).toHaveLength(1);
         expect(owner.getSnapshot().projectionUnion.interactionEnabled).toBe(false);
-        expect(owner.getSnapshot().unionMembers[0]?.phase).toBe('establishing');
+        expect(owner.getSnapshot().projectionUnion.hasEstablishingMembers).toBe(true);
         owner.dispose();
     });
 
     it('does not re-admit an old unscoped Home report under the same Machine id', () => {
         const owner = createAppShellPluginUiProjectionPublication();
-        const sources = { accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+        const sources = { accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
             activeServerId: 'home-a', serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: Object.freeze(['machine']), selectableMachineIds: Object.freeze(['machine']) };
         const first = { ...currentness(translationProjection(1, 'Home A')), serverId: 'home-a' };
@@ -503,7 +573,7 @@ describe('AppShell projection source publication', () => {
         owner.publishSources({ ...sources, activeServerId: 'home-b' });
         owner.publishMachineCurrentness('machine', null, first);
         expect(owner.getSnapshot().projectionUnion.interactionEnabled).toBe(false);
-        expect(owner.getSnapshot().unionMembers[0]?.phase).toBe('establishing');
+        expect(owner.getSnapshot().projectionUnion.hasEstablishingMembers).toBe(true);
         owner.dispose();
     });
 });

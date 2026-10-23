@@ -38,6 +38,7 @@ const bundledBrands = vi.hoisted(() => [] as { pluginId: string; resourceId: str
 // Packaged inventory bytes are the app/Expo asset boundary; admission stays real.
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [],
     BUNDLED_PLUGIN_BRAND_MARKS: bundledBrands,
 }));
 installTokenStorageWebPlatformMocks();

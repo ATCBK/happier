@@ -131,9 +131,9 @@ describe('plugin surface execution requirement', () => {
             return null;
         }
         function ContextualWrapper({ children }: React.PropsWithChildren) {
-            return React.createElement(InjectedAuthProvider, { credentials, children: React.createElement(Wrapper, null, React.createElement(MainAppTabStateProvider, null,
+            return React.createElement(InjectedAuthProvider, { credentials, children: React.createElement(MainAppTabStateProvider, null,
                 React.createElement(AppPaneProvider, null, React.createElement(CurrentUiContextProvider, null,
-                    React.createElement(ContextPort), children)))) });
+                    React.createElement(ContextPort), children))) });
         }
         try {
             committedProjection = declarationProjection;
@@ -231,6 +231,8 @@ describe('plugin surface execution requirement', () => {
                 targetedStarted.resolve();
                 return targetedReply.promise;
             });
+            // Sibling consumers share the mounted AppShell publisher. Creating
+            // another provider would replace its process-wide committed reader.
             const targetHook = await renderHook(() => {
                 const origin = usePluginSurfaceExecutionOrigin({ pluginId, projection: initialProjection,
                     entry: initialProjection.surfacePlacementsById[entryId], includeMachineCandidates: false, enabled: true });
@@ -239,7 +241,7 @@ describe('plugin surface execution requirement', () => {
                     accountLifetime: lifetime,
                     mountedOccurrenceId: occurrenceId, enabled: Boolean(occurrenceId) });
                 return { origin, targeted };
-            }, { wrapper: Wrapper });
+            });
             try {
                 await targetedStarted.promise;
                 expect(targetHook.getCurrent().origin.selectedSupply).toMatchObject({ occurrenceId: 'occurrence-a' });
@@ -290,16 +292,15 @@ describe('plugin surface execution requirement', () => {
             expect(composerEntry).toBeDefined();
             const composerOrigin = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId,
                 projection: initialProjection, entry: composerEntry, enabled: true, includeMachineCandidates: false,
-            }), { wrapper: Wrapper });
+            }));
             expect(composerOrigin.getCurrent().selectedSupply).toMatchObject({ machineId, occurrenceId: 'occurrence-a' });
             expect(composerOrigin.getCurrent().isExecutionOriginCurrent()).toBe(true);
             committedProjection = project('replacement-occurrence', 2);
-            await composerOrigin.rerender();
+            await hook.rerender();
             expect(composerOrigin.getCurrent().isExecutionOriginCurrent()).toBe(false);
             await composerOrigin.unmount();
             committedProjection = initialProjection;
-            // The nested test provider published the same global committed
-            // reader; restore this mounted provider after its cleanup.
+            // Restore the source through the same AppShell publication owner.
             await hook.rerender();
             // Currentness is read during controller construction in render.
             // Inspecting authority must not persist a last-use hint or notify
@@ -391,8 +392,9 @@ describe('plugin surface execution requirement', () => {
                 machineListByServerId: { [connection.home.id]: [machine, otherMachine] },
                 settings: { ...storage.getState().settings, machineAdministrationTargetsLocalV1: {} } }); });
             committedProjection = multiProjection;
+            await hook.rerender();
             const multiHook = await renderHook(() => usePluginSurfaceExecutionOrigin({ pluginId, projection: multiProjection,
-                entry: pageEntry, enabled: true }), { wrapper: Wrapper });
+                entry: pageEntry, enabled: true }));
             expect(multiHook.getCurrent().selection.state).toMatchObject({ kind: 'selected', selectionSource: 'auto',
                 origin: { sourceRef: { machineId } } });
             expect(multiHook.getCurrent().selectedSupply?.machineId).toBe(machineId);

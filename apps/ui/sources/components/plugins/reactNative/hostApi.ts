@@ -91,7 +91,7 @@ import {
     settlePluginSurfaceHostApiRequest,
     type PluginSurfaceHostApiRequestOptions,
 } from '../surfaces/createPluginSurfaceHostApi';
-import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { decodeBase64 } from '@/encryption/base64';
 import { createSelectedActionInputCustody } from '../hostApi/selectedActionInputCustody';
 
@@ -818,11 +818,6 @@ function readCanonicalComposerContentInspection(value: PluginUiJsonValueV1 | und
  */
 export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<{
     surface: SurfaceContext;
-    /** The mounted host acquires owned SDK snapshots at this existing owner. */
-    prepareSurfaceContext?: (
-        source: SurfaceContext,
-        previous?: Readonly<{ surface: SurfaceContext; semanticKey: string }>,
-    ) => Readonly<{ surface: SurfaceContext; semanticKey: string }>;
     requestSurface: PluginUiSurfaceContextV1;
     requestIdPrefix: string;
     handleRequest: PluginReactNativeHostApiRequestHandler;
@@ -858,9 +853,7 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
         resolveCanonicalPluginReactNativeHostApiMethods(
             params.getAdmissionMethods?.() ?? params.getInstalledMethods?.() ?? params.installedMethods,
         );
-    const initialContext = params.prepareSurfaceContext?.(params.surface);
-    let currentSurface = initialContext?.surface ?? params.surface;
-    let currentSurfaceSemanticKey = initialContext?.semanticKey ?? stableJsonStringify(currentSurface);
+    let currentSurface = params.surface;
     const selectedInputs = createSelectedActionInputCustody();
     const contextWatchers = new Set<(surface: SurfaceContext) => void>();
     let disposed = false;
@@ -1525,14 +1518,18 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
         publishComposerSubscriptionEvent: (input) => transport.publishComposerSubscriptionEvent(input),
         pushSurfaceContext: (surface: SurfaceContext) => {
             if (disposed || surface === currentSurface) return;
-            const prepared = params.prepareSurfaceContext?.(surface, {
-                surface: currentSurface,
-                semanticKey: currentSurfaceSemanticKey,
-            });
-            const surfaceSemanticKey = prepared?.semanticKey ?? stableJsonStringify(surface);
-            if (surfaceSemanticKey === currentSurfaceSemanticKey) return;
-            currentSurface = prepared?.surface ?? surface;
-            currentSurfaceSemanticKey = surfaceSemanticKey;
+            if (sameStrictJsonValue(surface, currentSurface)) return;
+            // Host factories publish immutable snapshots. Keep equal nested
+            // facts stable while delivering each changed publication once.
+            const retained = { ...surface };
+            const next = surface as Readonly<Record<string, unknown>>;
+            const previous = currentSurface as Readonly<Record<string, unknown>>;
+            for (const key of Object.keys(retained)) {
+                const value = next[key];
+                if (value !== null && typeof value === 'object' && Object.hasOwn(previous, key)
+                    && sameStrictJsonValue(value, previous[key])) Object.assign(retained, { [key]: previous[key] });
+            }
+            currentSurface = Object.freeze(retained);
             // Serialized per push and isolated per listener: one author's
             // failure never stops the next subscriber from observing the change.
             for (const watcher of [...contextWatchers]) {
