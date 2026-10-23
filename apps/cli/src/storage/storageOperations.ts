@@ -310,14 +310,20 @@ export function createStorageOperations(input: Readonly<{
                     children: discovered.filter(item => !comparison.equal(path, item.path) && comparison.contains(path, item.path)) });
             }
             const descendants = [...new Set(page.flatMap(item => item.children))];
+            // Permission-limited discovery rows already carry Check and cannot
+            // grant cleanup authority. Their unresolved parents cannot be
+            // physically probed again; retain that Check contribution verbatim.
+            const classifiableDescendants = descendants.filter(item => !item.evidence.includes('directory_permission_unavailable'));
             // One page shares one fresh physical rule set, including catalog
             // descendants contained by more than one returned folder.
             const classifications = await timeWebLatencyPhase('storage.projection.classification', () => classifyPaths([
                 ...page.map(item => ({ path: item.path, managedItemPath: item.owner?.path })),
-                ...descendants.map(item => ({ path: item.path, managedItemPath: item.categoryId === undefined ? undefined : item.path })),
+                ...classifiableDescendants.map(item => ({ path: item.path, managedItemPath: item.categoryId === undefined ? undefined : item.path })),
             ], facts));
-            const byDescendant = new Map(descendants.map((item, index) => [item,
-                { ...item, ...classifiedItemVerdict(item, classifications[page.length + index]) }]));
+            const byDescendant = new Map(descendants.map(item => [item, item]));
+            for (const [index, item] of classifiableDescendants.entries()) {
+                byDescendant.set(item, { ...item, ...classifiedItemVerdict(item, classifications[page.length + index]) });
+            }
             const dataRoots = catalog.dataRoots();
             const projectedNodes = new Map<DiskNodeV1, DiskNodeV1>();
             for (const [index, item] of page.entries()) {

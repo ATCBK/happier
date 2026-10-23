@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
 import * as childProcess from 'node:child_process';
 import * as filesystem from 'node:fs/promises';
-import { link, lstat, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
@@ -12,7 +12,7 @@ import { createStorageService, type StorageOperationActor, type StorageService, 
 import { createDaemonStorageRoutes, registerDaemonStorageRpcHandlers } from '@/rpc/handlers/storage';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { RpcHandlerMap, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
-import { createHappierTempDir, getHappierTempRoot } from '@happier-dev/cli-common/tempDirs';
+import { createHappierTempDir, getHappierTempRoot, getHappierTempDirOwnerPath } from '@happier-dev/cli-common/tempDirs';
 import { createActivityLog } from '@/daemon/guard/activityLog';
 import { createMachineResourceSummary } from '@/daemon/resources/machineResourceSummary';
 import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
@@ -74,11 +74,123 @@ async function waitForStorageScan(service: StorageService, scanId: string, actor
 describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('storage service with the actual native helper', () => {
     beforeAll(async () => {
         scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-storage-service-')));
-        disposeNative = await createProcessCustodyFixture();
+        disposeNative = await createProcessCustodyFixture({ repoRoot: resolve(__dirname, '../../../..') });
     });
     afterAll(async () => {
         await disposeNative?.();
         if (scratch) await rm(scratch, { recursive: true, force: true });
+    });
+
+    it.skipIf(process.getuid?.() === 0).each([false, true])('serves readable scan results while a mode-000 folder remains incomplete (known project: %s)', async knownProject => {
+        const home = join(scratch, `permission-home-${knownProject}`);
+        const root = join(scratch, `permission-scan-${knownProject}`);
+        const denied = join(root, 'permission-denied');
+        const readable = join(root, 'readable');
+        await Promise.all([home, denied, readable].map(path => mkdir(path, { recursive: true })));
+        await writeFile(join(readable, 'bytes'), Buffer.alloc(8192, 1));
+        await chmod(denied, 0);
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'person', custodianAccountId: 'owner',
+            assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
+        const service = createStorageService({ homeDir: scratch, scmRegistry: createScmBackendRegistry([]),
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'permission-no-temp'),
+                readProjects: () => ({ status: 'ready', projects: knownProject ? [{ repositoryRoot: denied }] : [] }),
+                readInUsePaths: () => ({ reliable: true, paths: [] }) },
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
+            readVolumes: () => [{ id: 'permission', label: 'Permission', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
+        try {
+            const state = await service.scanStart({ machineId: 'machine', target: { folderPath: root } }, { actor });
+            await waitForStorageScan(service, state.scanId, actor);
+            for (const sort of [undefined, { by: 'size' as const, direction: 'desc' as const }]) {
+                const result = MachineStorageScanGetResultV1Schema.parse(await service.scanGet({ machineId: 'machine', scanId: state.scanId,
+                    view: { tab: 'folders', depth: 1, ...(sort ? { sort } : {}) } }, { actor }));
+                expect(result.state?.unreadable.counts.permission).toBe(1);
+                expect(result.root?.size.atLeast).toBe(true);
+                expect(result.nodes.find(node => node.nodeId === denied)).toMatchObject({ size: { atLeast: true }, flags: { atLeast: true } });
+                expect(result.nodes.find(node => node.nodeId === readable)?.size.allocatedBytes).toBeGreaterThan(0);
+            }
+        } finally { service.dispose(); await chmod(denied, 0o700); }
+    });
+
+    it('preserves temp ownership through Undo and forecasts only exclusive bytes through pile and Trash', async () => {
+        const root = join(scratch, 'temp-undo'); const home = join(root, 'home'); const tempRoot = join(root, 'tmp');
+        await mkdir(home, { recursive: true });
+        const source = createHappierTempDir({ root: tempRoot, purpose: 'undo-fixture' });
+        const marker = getHappierTempDirOwnerPath(source);
+        // A reused PID with a different start identity is a canonical gone-owner fixture.
+        await writeFile(marker, JSON.stringify({ v: 1, purpose: 'undo-fixture', pid: process.pid, processInstanceFingerprint: 'former-instance' }));
+        const ownerBytes = await readFile(marker, 'utf8');
+        const sample = join(source, 'sample'); const outside = join(root, 'outside-link');
+        await writeFile(sample, Buffer.alloc(16_384, 7)); await link(sample, outside);
+        const identity = await lstat(sample);
+        const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+            historyStore: await createMinuteHistoryStore({ directory: join(home, 'history') }) });
+        const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+        const activityLog = await createActivityLog({ activeServerDir: home, resourceSummary });
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'person', custodianAccountId: 'owner',
+            assertCurrent: async () => {}, assertCurrentAuthority: async () => {} };
+        let availableBytes = 500_000; let volumeChanged = () => {};
+        const open = () => createStorageService({ homeDir: scratch, machineId: 'machine', activityLog,
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot,
+                readProjects: () => ({ status: 'ready', projects: [] }), readInUsePaths: () => ({ reliable: true, paths: [] }) },
+            readVolumes: () => [{ id: 'main', label: 'Main', mount: root, totalBytes: 1_000_000, availableBytes }],
+            subscribeVolumeChanges(listener) { volumeChanged = listener; return () => {}; } });
+        const measurements = () => vi.mocked(childProcess.spawn).mock.calls.filter(([, args]) => args?.[0] === 'disk-measure').length;
+        let service = open();
+        const check = async () => {
+            const item = (await service.categoryList('temporary')).items.find(item => item.path === source)!;
+            expect(item.verdict).toBe('safe');
+            expect((await service.suggestionsList({ machineId: 'machine' }, { actor })).items.some(item => item.path === source)).toBe(true);
+            const pile = await service.pileSet({ machineId: 'machine', add: [{ itemId: item.itemId, path: source }] }, { actor });
+            return service.itemsCheck(pile.items, { actor });
+        };
+        try {
+            const review = await check(); const size = review.items[0]!.size;
+            expect(size.sharedBytes).toBeGreaterThan(0); expect(size.freesBytes).toBeLessThan(size.allocatedBytes);
+            const before = HappierStorageSummaryV1Schema.parse(await service.summary({ actor }));
+            expect(before.volumes[0]).toMatchObject({ pileBytes: size.allocatedBytes, pileFreesBytes: review.totalFreesBytes });
+            const moved = await service.trashMove({ machineId: 'machine', items: review.items.map(item => ({ ref: item.ref,
+                expect: item.expect, claimedVerdict: item.verdict })) }, { actor });
+            expect(moved.outcomes).toMatchObject([{ status: 'moved' }]);
+            const inTrash = HappierStorageSummaryV1Schema.parse(await service.summary({ actor }));
+            expect(inTrash.volumes[0]).toMatchObject({ pileBytes: 0, pileFreesBytes: 0, trashBytes: size.allocatedBytes, trashFreesBytes: size.freesBytes });
+            expect(inTrash.categories.find(category => category.categoryId === 'trash')?.size.freesBytes).toBe(size.freesBytes);
+            const measuredBeforeCapacity = measurements();
+            availableBytes = 400_000; volumeChanged();
+            expect((await service.summary({ actor })).volumes[0]).toMatchObject({ freeBytes: availableBytes,
+                trashBytes: size.allocatedBytes, trashFreesBytes: size.freesBytes });
+            expect(measurements() - measuredBeforeCapacity).toBe(0);
+            service.dispose(); service = open();
+            expect((await service.trashRestore({ machineId: 'machine', batchId: moved.batchId }, { actor })).outcomes)
+                .toMatchObject([{ status: 'restored' }]);
+            expect(await readFile(marker, 'utf8')).toBe(ownerBytes);
+            expect(await readFile(sample)).toEqual(Buffer.alloc(16_384, 7));
+            expect((await lstat(sample)).ino).toBe(identity.ino);
+            const again = await check();
+            const second = await service.trashMove({ machineId: 'machine', items: again.items.map(item => ({ ref: item.ref,
+                expect: item.expect, claimedVerdict: item.verdict })) }, { actor });
+            expect((await service.trashEmpty({ machineId: 'machine', batchId: second.batchId }, { actor })).freedBytes).toBe(size.freesBytes);
+            expect(await readFile(outside)).toEqual(Buffer.alloc(16_384, 7));
+            expect((await lstat(outside)).ino).toBe(identity.ino);
+            const pair = [createHappierTempDir({ root: tempRoot, purpose: 'pair-a' }),
+                createHappierTempDir({ root: tempRoot, purpose: 'pair-b' })];
+            for (const [index, path] of pair.entries()) await writeFile(getHappierTempDirOwnerPath(path),
+                JSON.stringify({ v: 1, purpose: index === 0 ? 'pair-a' : 'pair-b', pid: process.pid, processInstanceFingerprint: 'former-instance' }));
+            await writeFile(join(pair[0]!, 'linked'), Buffer.alloc(8192, 1));
+            await link(join(pair[0]!, 'linked'), join(pair[1]!, 'linked'));
+            await service.refresh();
+            const refs = (await service.categoryList('temporary')).items.filter(item => pair.includes(item.path))
+                .map(item => ({ itemId: item.itemId, path: item.path }));
+            expect(refs).toHaveLength(2);
+            await service.pileSet({ machineId: 'machine', add: refs }, { actor });
+            const together = await service.itemsCheck(refs, { actor });
+            expect(together.totalFreesBytes).toBeGreaterThan(together.items.reduce((sum, item) => sum + item.size.freesBytes, 0));
+            await service.summary();
+            const measuredBeforePileProjection = measurements();
+            expect((await service.summary({ actor })).volumes[0]?.pileFreesBytes).toBe(together.totalFreesBytes);
+            // Per-volume union attribution reuses the one pile measurement,
+            // including links between selected roots; it adds no second walk.
+            expect(measurements() - measuredBeforePileProjection).toBe(1);
+        } finally { service.dispose(); }
     });
 
     it('serves retained logs with process protection facts without starving the daemon', async () => {
@@ -1009,7 +1121,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
         const secondary = join(scratch, 'trash-totals-secondary');
         const volumes = [{ id: 'main', label: 'Main', mount: home, totalBytes: 1_000_000, availableBytes: 500_000 },
             { id: 'secondary', label: 'Secondary', mount: secondary, totalBytes: 1_000_000, availableBytes: 500_000 }];
-        await Promise.all([home, secondary, join(home, 'trash')].map(path => mkdir(path, { recursive: true })));
+        await Promise.all([home, secondary, join(home, 'trash')].map(path => mkdir(path, { recursive: true, mode: 0o700 })));
         const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
             historyStore: await createMinuteHistoryStore({ directory: join(home, 'history') }) });
         const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
