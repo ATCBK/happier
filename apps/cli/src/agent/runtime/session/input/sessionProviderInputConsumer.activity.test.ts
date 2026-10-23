@@ -188,6 +188,61 @@ describe('Session input live-work observation', () => {
 
 describe('Session input live-work notification stability', () => {
   afterEach(() => { vi.useRealTimers(); });
+  it('keeps settled input parked across metadata wakes until its context source changes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(100);
+    const metadataWaiters = new Set<() => void>();
+    const controller = new AbortController();
+    let probes = 0;
+    let contextChanged: (() => void) | undefined;
+    const waitForMetadataUpdate = (signal?: AbortSignal) => new Promise<boolean>(resolve => {
+      const finish = (changed: boolean) => {
+        metadataWaiters.delete(wake);
+        signal?.removeEventListener('abort', abort);
+        resolve(changed);
+      };
+      const wake = () => finish(true);
+      const abort = () => finish(false);
+      metadataWaiters.add(wake);
+      signal?.addEventListener('abort', abort, { once: true });
+    });
+    const consumer = createSessionProviderInputConsumer({ messageQueue: new MessageQueue2<string>(() => 'mode'), session: {
+      waitForMetadataUpdate, getMetadataSnapshot: () => ({}), getAgentStateSnapshot: () => ({}),
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }), readRuntimeActivitySnapshotTail: idleTail,
+      getPendingQueueState: () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+      readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+      materializeNextPendingMessageSafely: async () => ({ type: 'no_pending' as const }),
+    }, takeContextOnlyInput: async () => { probes += 1; return null; },
+    waitForContextOnlyInputChange: signal => new Promise<boolean>(resolve => {
+      const finish = (changed: boolean) => {
+        signal.removeEventListener('abort', abort);
+        resolve(changed);
+      };
+      const abort = () => finish(false);
+      contextChanged = () => finish(true);
+      signal.addEventListener('abort', abort, { once: true });
+    }) });
+    const unsubscribe = consumer.subscribeLiveWork(() => {});
+    const waiting = consumer.waitForNextInput({ abortSignal: controller.signal });
+    try {
+      await vi.waitFor(() => {
+        expect(probes).toBe(1);
+        expect(metadataWaiters.size).toBe(2);
+      });
+      const settledAt = (await consumer.readLiveWork()).settledAt;
+      for (let update = 0; update < 20; update += 1) {
+        vi.setSystemTime(1000 + update);
+        for (const wake of [...metadataWaiters]) wake();
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+      // A Guard notice changes metadata, not the context source. Neither its
+      // own warning nor an activity observation may start another empty probe.
+      expect(probes).toBe(1);
+      expect((await consumer.readLiveWork()).settledAt).toBe(settledAt);
+      contextChanged?.();
+      await vi.waitFor(() => expect(probes).toBe(2));
+    } finally { controller.abort(); await waiting; unsubscribe(); }
+  });
   it('does not re-notify the observer that only re-read an unchanged host', async () => {
     // The daemon re-reads live work on every notification, and each Session snapshot
     // refresh wakes the metadata observer. A read the pending drain could not prove
