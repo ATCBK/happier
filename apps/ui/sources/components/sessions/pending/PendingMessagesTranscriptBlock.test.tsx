@@ -2027,7 +2027,13 @@ describe('PendingMessagesTranscriptBlock', () => {
             }));
             const publishesLayout: string[] = [];
             for (const message of pendingMessages) {
-                const bubble = screen.findByTestId(`pendingMessages.message:${message.id}`);
+                const bubble = screen.findByTestId(`pendingMessages.bubble:${message.id}`);
+                expect(bubble).toBeTruthy();
+                // The measured node is the painted prompt surface the committed row inherits: it holds
+                // the message, never the row's status mark, byline or actions (their height is not the
+                // committed bubble's).
+                expect(bubble!.findAll((node) => node.props?.testID === `pendingMessages.message:${message.id}`).length).toBeGreaterThan(0);
+                expect(bubble!.findAll((node) => node.props?.testID === `pendingMessages.pendingAffordance:${message.id}`)).toHaveLength(0);
                 // A row that must not publish does not merely return early — it attaches no
                 // `onLayout` at all, so there is no path from its layout to the carried height.
                 if (typeof bubble?.props?.onLayout !== 'function') continue;
@@ -2037,7 +2043,7 @@ describe('PendingMessagesTranscriptBlock', () => {
                         bubble,
                         'onLayout',
                         { nativeEvent: { layout: { height: 160 } } },
-                        `pendingMessages.message:${message.id}`,
+                        `pendingMessages.bubble:${message.id}`,
                     );
                 });
             }

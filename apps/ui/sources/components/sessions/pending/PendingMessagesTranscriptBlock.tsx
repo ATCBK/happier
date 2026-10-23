@@ -59,7 +59,7 @@ import { TranscriptEventRow } from '@/components/sessions/transcript/events/Tran
 import { isHostAuthoredInputMeta } from '@/components/sessions/transcript/events/hostAuthoredInput';
 import { useSessionMessageAuthorshipScope } from '@/components/sessions/transcript/useSessionMessageAuthorshipScope';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
-import { SurfaceRim } from '@/components/ui/surfaces/SurfaceRim';
+import { UserMessageBubble, userMessageBubbleAlignerStyle, userMessageBubbleContentPadding } from '@/components/sessions/transcript/UserMessageBubble';
 import type { PendingMessageWithdrawRecoveryResult } from '@/components/sessions/composer/pendingMessageComposerDocumentOwner';
 import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
@@ -727,12 +727,26 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             viewerScope={accountActorViewerScope}
                             hasOtherNamedCollaborator={authorship.hasOtherNamedCollaborator}
                         />}
-                        {/* The bubble is a surface, not a button: its message opens the menu and its
-                            "View more" toggles the clamp, side by side, so the web never nests one
-                            <button> inside another. Full opacity, like the committed bubble it
-                            becomes: a queued utterance that paints dimmer BRIGHTENS one step at the
-                            crossover. The delivery state is carried by the status mark, not the ink. */}
-                        <View style={isHostFollowInput ? undefined : [styles.userMessageBubble, { backgroundColor: theme.colors.message.user.background, borderRadius: theme.parts.userBubble.radius }]}>
+                        {/* The bubble is the committed prompt's own surface (`UserMessageBubble`), not a
+                            button: its message opens the menu and its "View more" toggles the clamp, side by
+                            side, so the web never nests one <button> inside another. Full opacity, like the
+                            committed bubble it becomes: a queued utterance that paints dimmer BRIGHTENS one
+                            step at the crossover. The delivery state is carried by the status mark, not the ink. */}
+                        <PendingUtteranceSurface
+                            testID={`pendingMessages.bubble:${message.id}`}
+                            isHostFollowInput={isHostFollowInput}
+                            onLayout={messagePresentation === 'head' ? (event) => {
+                                // The painted height of THIS utterance's bubble surface (padding included),
+                                // carried to the committed row that replaces it
+                                // (`recordPaintedUtteranceBubbleHeight`). HEAD only, and the head is never
+                                // clamped: a backlog row is line-clamped (not the height its twin will have)
+                                // and paints a "View more" toggle the committed row never has.
+                                const bubbleHeightPx = event?.nativeEvent?.layout?.height;
+                                const localId = typeof message.localId === 'string' ? message.localId : null;
+                                if (localId === null || typeof bubbleHeightPx !== 'number' || !Number.isFinite(bubbleHeightPx)) return;
+                                props.onPaintedUtteranceBubbleMeasured?.({ localId, bubbleHeightPx });
+                            } : undefined}
+                        >
                             <Pressable
                                 onPress={(event) => {
                                     if (menuOpen) {
@@ -746,19 +760,8 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 testID={`pendingMessages.message:${message.id}`}
                                 accessibilityRole="button"
                                 accessibilityLabel={text || t('session.pendingMessages.title')}
-                                onLayout={messagePresentation === 'head' ? (event) => {
-                                    // The painted height of THIS utterance's bubble, carried to the
-                                    // committed row that replaces it (`recordPaintedUtteranceBubbleHeight`).
-                                    // HEAD only, and the head is never clamped, so this press target IS
-                                    // the whole bubble. A backlog row is line-clamped (not the height its
-                                    // twin will have) and paints a "View more" toggle the committed row
-                                    // never has.
-                                    const bubbleHeightPx = event?.nativeEvent?.layout?.height;
-                                    const localId = typeof message.localId === 'string' ? message.localId : null;
-                                    if (localId === null || typeof bubbleHeightPx !== 'number' || !Number.isFinite(bubbleHeightPx)) return;
-                                    props.onPaintedUtteranceBubbleMeasured?.({ localId, bubbleHeightPx });
-                                } : undefined}
                                 style={({ pressed }) => ([
+                                    !isHostFollowInput ? userMessageBubbleContentPadding(theme) : null,
                                     !isHostFollowInput ? styles.userMessageBubbleBody : null,
                                     isCollapsible ? styles.userMessageBubbleBodyAboveToggle : null,
                                     { opacity: pressed ? motionTokens.press.opacitySubtle : 1 },
@@ -797,9 +800,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                     </Text>
                                 </Pressable>
                             ) : null}
-                            {/* The committed bubble's edge, so the crossover changes nothing but the status. */}
-                            {!isHostFollowInput && <SurfaceRim role="bubble" radius={theme.parts.userBubble.radius} border="surface" />}
-                        </View>
+                        </PendingUtteranceSurface>
 
                         <View
                             testID={`pendingMessages.pendingAffordance:${message.id}`}
@@ -1036,7 +1037,6 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         theme.colors.surface.base,
         theme.colors.text.link,
         theme.colors.text.secondary,
-        theme.colors.message.user.background,
         theme.colors.message.user.foreground,
         toggleMessageExpanded,
     ]);
@@ -1097,7 +1097,9 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             styles.userMessageWrapper,
                             isHostFollowInput ? styles.hostInputContainer : null,
                             // Same rule the estimate models: no trailing gap under the last row.
-                            { paddingBottom: resolvePendingMessageGapPx({ isLastInScrollContent: isLastDiscarded }), opacity: 0.85 },
+                            { paddingBottom: resolvePendingMessageGapPx({ isLastInScrollContent: isLastDiscarded }) },
+                            // A discarded prompt dims through its bubble (`UserMessageBubble discarded`); a notice has no bubble.
+                            isHostFollowInput ? { opacity: 0.85 } : null,
                         ]}
                         {...(!isWeb ? { pointerEvents: 'box-none' as const } : null)}
                         {...(isWeb
@@ -1113,6 +1115,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             viewerScope={accountActorViewerScope}
                             hasOtherNamedCollaborator={authorship.hasOtherNamedCollaborator}
                         />}
+                        <PendingUtteranceSurface isHostFollowInput={isHostFollowInput} discarded>
                         <Pressable
                             onPress={(event) => {
                                 if (menuOpen) {
@@ -1127,9 +1130,9 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             accessibilityRole="button"
                             accessibilityLabel={text || t('session.pendingMessages.discarded.label')}
                             style={({ pressed }) => ([
-                                !isHostFollowInput ? styles.userMessageBubble : null,
+                                !isHostFollowInput ? userMessageBubbleContentPadding(theme) : null,
                                 !isHostFollowInput ? styles.userMessageBubbleBody : null,
-                                { backgroundColor: isHostFollowInput ? undefined : theme.colors.input.background, opacity: pressed ? motionTokens.press.opacity : 0.82 },
+                                { opacity: pressed ? motionTokens.press.opacity : 1 },
                             ])}
                         >
                             {isHostFollowInput ? <TranscriptEventRow event={{ type: 'message', message: text }}
@@ -1143,6 +1146,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 {t('session.pendingMessages.discarded.label')}
                             </Text>
                         </Pressable>
+                        </PendingUtteranceSurface>
 
                         {isWeb && (!isArchivedUncertainty || Boolean(text)) ? (
                             <View
@@ -1458,7 +1462,27 @@ function IconAction(props: {
     );
 }
 
-const styles = StyleSheet.create(() => ({
+/**
+ * A queued or discarded prompt's surface: the committed prompt's own bubble (paint, padding, radius, rim and
+ * discarded state), so queue→commit changes nothing but the status. Its parts own the padding so the message's
+ * press target fills the bubble. A host notice has no bubble and stays a plain event row.
+ */
+function PendingUtteranceSurface(props: Readonly<{
+    isHostFollowInput: boolean;
+    discarded?: boolean;
+    onLayout?: React.ComponentProps<typeof UserMessageBubble>['onLayout'];
+    testID?: string;
+    children: React.ReactNode;
+}>) {
+    if (props.isHostFollowInput) return <View onLayout={props.onLayout} testID={props.testID}>{props.children}</View>;
+    return (
+        <UserMessageBubble padding="parts" discarded={props.discarded} onLayout={props.onLayout} testID={props.testID}>
+            {props.children}
+        </UserMessageBubble>
+    );
+}
+
+const styles = StyleSheet.create((theme) => ({
     messageContainer: {
         flexDirection: 'row',
         justifyContent: 'center',
@@ -1551,9 +1575,10 @@ const styles = StyleSheet.create(() => ({
     clearComposerButtonText: {
         ...Typography.variant('meta', 'semiBold'),
     },
+    // The queued prompt's aligner: the committed row's silhouette (`userMessageBubbleAlignerStyle`), resolved
+    // against the same reading column, so the crossover keeps its width. A notice stretches (hostInputContainer).
     userMessageWrapper: {
-        maxWidth: '100%',
-        alignSelf: 'flex-end',
+        ...userMessageBubbleAlignerStyle,
         position: 'relative',
         paddingBottom: 8,
     },
@@ -1564,6 +1589,7 @@ const styles = StyleSheet.create(() => ({
     // the person's bubbles sit inside the queue's gutter.
     hostInputContainer: {
         alignSelf: 'stretch',
+        maxWidth: '100%',
         marginLeft: -QUEUE_GUTTER_PX,
     },
     // The notice row reaches back over the queue's gutter (it carries the column's own margin), so its
@@ -1571,14 +1597,8 @@ const styles = StyleSheet.create(() => ({
     hostDiscardedLabel: {
         marginLeft: QUEUE_GUTTER_PX,
     },
-    userMessageBubble: {
-        borderRadius: 12,
-        maxWidth: '100%',
-    },
-    // The bubble's padding lives on its parts, so the message's press target fills the bubble.
+    // The message is a web <button>: its text reads from the bubble's leading edge, like the committed prompt.
     userMessageBubbleBody: {
-        paddingHorizontal: 14,
-        paddingVertical: 8,
         textAlign: 'left',
     },
     userMessageBubbleBodyAboveToggle: {
@@ -1586,9 +1606,9 @@ const styles = StyleSheet.create(() => ({
     },
     userMessageBubbleToggle: {
         alignSelf: 'flex-start',
-        paddingHorizontal: 14,
-        paddingTop: 6,
-        paddingBottom: 8,
+        paddingHorizontal: userMessageBubbleContentPadding(theme).paddingHorizontal,
+        paddingTop: theme.space.s6,
+        paddingBottom: userMessageBubbleContentPadding(theme).paddingVertical,
     },
     transcriptMarkdownText: {
         ...transcriptMarkdownTextStyle,

@@ -375,7 +375,8 @@ const lightThemeBase = {
         // Message View colors
         message: {
             user: {
-                background: '#f0eee6',
+                // One ink step over the page, so a prompt is recognisable while scrolling.
+                background: '#EAE7DE',
                 foreground: '#222222',
             },
             agent: {
@@ -732,7 +733,7 @@ const darkThemeBase = {
         // Message View colors
         message: {
             user: {
-                background: '#221C1C',
+                background: '#302A29',
                 foreground: '#EFEFEF',
             },
             agent: {

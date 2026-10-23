@@ -86,7 +86,7 @@ import { createWorkflowInvocationRoute } from '@/sync/domains/workflows/workflow
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { TranscriptJumpAttention } from '@/components/sessions/transcript/navigation/TranscriptJumpHighlightOverlay';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
-import { UserMessageBubble } from './UserMessageBubble';
+import { UserMessageBubble, userMessageBubbleAlignerStyle } from './UserMessageBubble';
 
 const EMPTY_FOLLOW_DELIVERY_BY_LOCAL_ID: ReadonlyMap<string, FollowDeliveryProjectionV1 | null> = new Map();
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
@@ -1770,14 +1770,9 @@ const styles = StyleSheet.create((theme) => ({
       justifyContent: 'flex-end',
       marginBottom: theme.space.s6,
     },
-    userMessageBubbleAligner: {
-      // Hug + right-align the bubble within the full-width wrapper. The bubble itself stays
-      // a default-stretch child of this aligner so its text wraps at a bounded width on
-      // native (a flex-end/auto-width bubble would measure text at max-content and overflow
-      // on one line, since maxWidth:'100%' only clamps the box, it does not bound the text).
-      alignSelf: 'flex-end',
-      maxWidth: '100%',
-    },
+    // Hug + right-align the bubble within the full-width wrapper, capped to the shared prompt
+    // silhouette (queued prompts use the same aligner, so the crossover keeps its width).
+    userMessageBubbleAligner: userMessageBubbleAlignerStyle,
   userStructuredMessageWrapper: {
     maxWidth: '100%',
   },
