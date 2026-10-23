@@ -8,7 +8,7 @@ import {
     SessionOwnerMetadataV1Schema,
     SessionSharedMetadataV1Schema,
 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
-import { renderScreen, flushHookEffects, createSessionAccessFixture, createDeferred } from '@/dev/testkit';
+import { renderScreen, flushHookEffects, createSessionAccessFixture, createDeferred, installTimerCensus, standardCleanup } from '@/dev/testkit';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -95,6 +95,23 @@ describe('Project Sessions widget body', () => {
         extraEmptyPage = false;
         continuationIds = ['by-checkout', 'by-path'];
         continuationGate = null;
+    });
+    it.each([false, true])('owns a relative-time wake only for rendered Sessions (populated: %s)', async populated => {
+        sessionIds = populated ? ['own'] : [];
+        const checkout = { id: 'checkout', serverId: runtime.serverId, machineId: 'machine', rootPath: '/repo', projectKey: 'anchor', createdAtMs: 1 };
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [checkout] });
+        const timers = installTimerCensus(stack => stack.includes('sessionListRuntimeClock') ? 'session-list-clock' : null);
+        try {
+            const screen = await renderScreen(<runtime.Wrapper><ProjectSessionsWidgetBody checkout={checkout} testID="clock-widget" /></runtime.Wrapper>);
+            await vi.waitFor(async () => {
+                await flushHookEffects();
+                expect(screen.findHostByTestId(populated ? 'clock-widget.session:own' : 'clock-widget.empty')).not.toBeNull();
+            });
+            expect(timers.read().filter(timer => timer.consumer === 'session-list-clock')).toHaveLength(populated ? 1 : 0);
+        } finally {
+            standardCleanup();
+            timers.stop();
+        }
     });
     it('lists only this Project\'s Sessions as rows', async () => {
         fail = false;

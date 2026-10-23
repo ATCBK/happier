@@ -43,8 +43,9 @@ export function ProjectSessionsWidgetBody(
   const { theme } = useUnistyles();
   const items = sessions.access === 'available' ? sessions.items : [];
   const renderables = useSessionListRowRenderablesForItems(items);
-  const relativeNowMs = useSessionListRelativeNowMs();
-  const runtimeNowMs = useSessionListRuntimeNowMs();
+  const hasRenderableSessions = renderables.size > 0;
+  const relativeNowMs = useSessionListRelativeNowMs(hasRenderableSessions);
+  const runtimeNowMs = useSessionListRuntimeNowMs(hasRenderableSessions);
   const { presentation, query } = sessions;
   const hasMore = Object.values(query.statesByServerId).some(
     (state) => state?.hasNext || state?.attentionHasNext,
