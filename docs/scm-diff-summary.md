@@ -367,6 +367,17 @@ Each nested Start writes one content-free file-log observation containing the
 saved result id, outer Action request id, entry flag, outcome class, closed error
 code or class, and Run-creation evidence. Prompt, diff, arbitrary error prose and
 credential content are excluded.
+The executor preserves a closed exception class in the Start evidence when it
+returns a caught exception. The log also recognizes the canonical Agent-start
+refusal codes; an unrecognized code is null, never relabelled `action_failed`.
+The returned failure envelope may itself represent a lost dispatched reply;
+its Run-creation evidence, rather than the fact that the executor returned,
+decides whether a new attempt is safe.
+The native Start owner acknowledges a Run it has already created even when
+initial publication, runtime construction or initial-input admission fails.
+The caller observes that same Run's failed or recoverable state instead of
+mistaking initialization failure for uncertain Run creation. A failure before
+creation carries `noRunCreated`; a lost Start reply still cannot prove creation.
 Initial output admission and publication use the Run's existing initial input
 identity, including its host default when no explicit input id was supplied.
 Ordinary later discussion retains an empty output scope.
