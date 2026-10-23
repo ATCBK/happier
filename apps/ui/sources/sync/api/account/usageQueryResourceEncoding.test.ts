@@ -3,7 +3,7 @@ import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageQueryBatchResult } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { encodeUsageQueryResource } from './usageQueryResourceEncoding';
 
-it('encodes changed members without a temporary whole-accounting buffer and preserves exact Unicode JSON', () => {
+it('encodes a large immutable Resource with one native UTF-8 operation and preserves exact Unicode JSON', () => {
     const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 100 } });
     const tokens = { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1 };
     const cost = { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' };
@@ -16,37 +16,36 @@ it('encodes changed members without a temporary whole-accounting buffer and pres
     const batch: UsageQueryBatchResult = { v: 1, results: [{ key: 'query', requestedQuery: query, shownQuery: query,
         accounting, sources: [], pending: false }] };
     const encode = vi.spyOn(TextEncoder.prototype, 'encode');
+    const encodeInto = vi.spyOn(TextEncoder.prototype, 'encodeInto');
     try {
         const first = encodeUsageQueryResource(batch);
         expect(new TextDecoder().decode(first.bytes)).toBe(JSON.stringify(batch));
-        expect(encode.mock.calls.length, 'sizing must not allocate a temporary byte buffer for every scalar and key').toBe(0);
-        const fullAccountingAllocations = encode.mock.calls.filter(([text]) => text?.includes('"contributions":') && text.includes('λ'));
-        expect(fullAccountingAllocations.length, 'one field cannot grow an additional full-accounting byte buffer').toBe(0);
+        expect(encode.mock.calls.length, 'one changed Resource needs one native UTF-8 operation, not a JavaScript walk per scalar/key').toBe(1);
+        expect(encodeInto.mock.calls.length, 'native serialization must not cross the UTF-8 boundary for every key and scalar').toBe(0);
         encode.mockClear();
         const changed: UsageQueryBatchResult = { ...batch, results: [{ ...batch.results[0]!, accounting: {
             ...accounting, totals: { ...accounting.totals, eventCount: 1001 },
         } }] };
-        const second = encodeUsageQueryResource(changed, first);
+        const second = encodeUsageQueryResource(changed);
         expect(new TextDecoder().decode(second.bytes)).toBe(JSON.stringify(changed));
-        expect(encode.mock.calls.filter(([text]) => text?.includes('λ')).length,
-            'unchanged contribution rows reuse the already admitted byte range').toBe(0);
+        expect(encode.mock.calls.length).toBe(1);
         encode.mockClear();
         const third: UsageQueryBatchResult = { ...changed, results: [{ ...changed.results[0]!, accounting: {
             ...changed.results[0]!.accounting!, contributions: accounting.contributions.map((row, index) => index === 0
                 ? { ...row, id: 'changed-λ-🌍' } : row),
         } }] };
-        const thirdBytes = encodeUsageQueryResource(third, second);
+        const thirdBytes = encodeUsageQueryResource(third);
         expect(new TextDecoder().decode(thirdBytes.bytes)).toBe(JSON.stringify(third));
-        expect(encode.mock.calls.filter(([text]) => text?.includes('λ')).length,
-            'a later changed row still reuses siblings inside the previously copied array').toBeLessThanOrEqual(2);
+        expect(encode.mock.calls.length).toBe(1);
         // Native TextEncoder polyfills need not implement encodeInto.
-        const encodeInto = Object.getOwnPropertyDescriptor(TextEncoder.prototype, 'encodeInto');
+        const descriptor = Object.getOwnPropertyDescriptor(TextEncoder.prototype, 'encodeInto');
         Object.defineProperty(TextEncoder.prototype, 'encodeInto', { configurable: true, value: undefined });
         try {
-            expect(encodeUsageQueryResource(batch).bytes).toEqual(first.bytes);
+            expect(new TextDecoder().decode(encodeUsageQueryResource(batch).bytes))
+                .toBe(new TextDecoder().decode(first.bytes));
         } finally {
-            if (encodeInto) Object.defineProperty(TextEncoder.prototype, 'encodeInto', encodeInto);
+            if (descriptor) Object.defineProperty(TextEncoder.prototype, 'encodeInto', descriptor);
             else Reflect.deleteProperty(TextEncoder.prototype, 'encodeInto');
         }
-    } finally { encode.mockRestore(); }
+    } finally { encode.mockRestore(); encodeInto.mockRestore(); }
 });

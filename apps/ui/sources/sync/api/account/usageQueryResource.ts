@@ -49,7 +49,7 @@ import { HappyError } from '@/utils/errors/errors';
 import { readMachineName } from '@/utils/sessions/machineDisplayNames';
 import { getUsageQueryPoolMachineSelection, isUsageProjectionHomeAccountChange, subscribeUsageQueryStateInvalidation } from './usageQueryInvalidation';
 import type { ProviderAccountUsageProjectionDocuments } from './apiProviderAccountUsage';
-import { encodeUsageQueryResource, type UsageByteRange } from './usageQueryResourceEncoding';
+import { encodeUsageQueryResource } from './usageQueryResourceEncoding';
 import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import { createCapturedServerReadTransport, type CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
@@ -880,7 +880,11 @@ export async function readUiUsageQueryBatch(
         // Accounting reductions belong to the admitted A response, not each quota/selection publication.
         // Keep derived values in this read's existing per-query snapshot map.
         for (const [key, snapshot] of accounting) {
-            const priced = projectUsageAccountingSnapshotPrices(snapshot, accountSettings.usageModelPriceOverridesV1, accounting.values());
+            // Admit references at the existing producer snapshot, not only in
+            // the published slice. Source labels/progress may replace wrappers
+            // without changing the already admitted contribution population.
+            const priced = projectUsageAccountingSnapshotPrices(snapshot, accountSettings.usageModelPriceOverridesV1,
+                accounting.values(), priorAccounting.get(key)?.value);
             accounting.set(key, calendarQueryKeys.has(key) ? projectUsageAccountingSnapshotCalendar(priced, accounting.values()) : priced);
         }
         const sourceLocations = Object.values(readOpenedQuotaScope(context)?.state.machines ?? {}).flatMap(machine => {
@@ -1256,9 +1260,9 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                 const entry = owner.store.getEntry(reference);
                 // Keep the admitted facts, not the superseded serialized bytes,
                 // in this async frame while unrelated source reads are pending.
-                const ownPrevious = (() => {
+                const { value: ownPrevious, digest: ownPreviousDigest } = (() => {
                     const retained = entry.getSnapshot().value;
-                    return retained ? decodeUsageQueryResource(retained) : undefined;
+                    return { value: retained ? decodeUsageQueryResource(retained) : undefined, digest: retained?.digest };
                 })();
                 const queries = normalizeUsageQueryBatchInput(reference.input).queries;
                 const previousByKey = new Map(ownPrevious?.results.map(slice => [slice.key, slice]));
@@ -1323,14 +1327,15 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                     // Reuse the entry's bytes as well as its decoded value. A
                     // terminal read commonly repeats its last progress revision.
                     if (current && value === currentBatch) return current;
-                    const encoded = encodeUsageQueryResource(value, current ? {
-                        bytes: current.bytes, ranges: decodedValues.get(current)?.ranges,
-                    } : undefined);
+                    const encoded = encodeUsageQueryResource(value);
                     const bytes = encoded.bytes;
                     const digest = await computePluginUiArtifactSha256Digest(bytes);
                     requireCurrent(sharedContext, options?.signal);
+                    if (current?.digest === digest) return current;
                     const content = { contentType: 'application/json', bytes, digest } as const;
-                    decodedValues.set(content, { value, ranges: encoded.ranges });
+                    // The existing transport digest already proves a return to
+                    // the settled value; do not deep-compare that whole slice.
+                    decodedValues.set(content, { value: digest === ownPreviousDigest && ownPrevious ? ownPrevious : value });
                     return content;
                 };
                 let queuedProgress: UsageQueryBatchResult | null = null;
@@ -1591,8 +1596,6 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
 // select the same slice reference. No response or request lifetime lives here.
 const decodedValues = new WeakMap<ResourceContent, Readonly<{
     value: UsageQueryBatchResult;
-    /** Locations in these exact bytes, not a second retained byte representation. */
-    ranges?: ReadonlyMap<object, UsageByteRange>;
 }>>();
 
 export function decodeUsageQueryResource(value: ResourceContent): UsageQueryBatchResult {

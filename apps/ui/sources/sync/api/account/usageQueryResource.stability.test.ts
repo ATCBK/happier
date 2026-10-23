@@ -1,4 +1,5 @@
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import * as strictJson from '@happier-dev/protocol/json/strictJsonValue';
 import { afterEach, expect, it, vi } from 'vitest';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { standardCleanup } from '@/dev/testkit';
@@ -25,6 +26,41 @@ afterEach(async () => {
     await home?.dispose();
     home = undefined;
     vi.restoreAllMocks();
+});
+
+it('reuses contribution references across equal refetches without whole-population equality', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_900_000_000_000);
+    const tokens = { input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 15 };
+    const cost = { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' };
+    const population = Array.from({ length: 3600 }, (_, index) => ({ id: String(index), observedAtMs: 1500,
+        sessionId: null, turnId: null, agentId: null, modelId: null, machineId: null, projectKey: null,
+        workspaceId: null, source: null, eventCount: 1, tokens, tokenCategories: tokens, cost }));
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-equal-refetch.test', accountId: 'account-a' }],
+        route: request => request.path === '/v2/usage/query' ? Response.json({ v: 1,
+            totals: { eventCount: population.length, tokens, cost }, contributions: population }) : undefined });
+    const server = home.homes.a!;
+    publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const captured = captureUiUsageQueryAccountContext((await TokenStorage.getCredentialsForServerUrl(server.serverUrl))!)!;
+    storage.setState({ profileScope: captured.accountLifetime.scope, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
+    const query = normalizeUsageQuery({ period: { relative: 'all' }, includeSessionEvidence: false,
+        includeWorkEvidence: false, includeActivity: false, includeModelTimeline: false });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query',
+        input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const stop = entry.subscribe(() => {}, false);
+    try {
+        await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+        const before = decodeUsageQueryResource(entry.getSnapshot().value!);
+        const compare = vi.spyOn(strictJson, 'sameStrictJsonValue'); // Observe real comparisons; no internal logic is replaced.
+        for (let index = 0; index < 3; index++) await entry.refresh();
+        const after = decodeUsageQueryResource(entry.getSnapshot().value!);
+        expect(after.results[0]?.accounting).toBe(before.results[0]?.accounting);
+        const walks = compare.mock.calls.filter(([value]) => Array.isArray(value) && value.length === population.length);
+        expect(walks.length, 'fresh rows are reconciled once at producer admission, never as a whole-population member').toBe(0);
+        expect(compare.mock.calls.filter(([value]) => value && typeof value === 'object'
+            && 'shownQuery' in value && 'sources' in value).length,
+            'the existing Resource digest replaces settled-slice deep equality').toBe(0);
+    } finally { stop(); }
 });
 
 it('keeps completed source dates and a quiet header while the same query rereads in the background', async () => {
@@ -65,7 +101,7 @@ it('keeps completed source dates and a quiet header while the same query rereads
     } finally { held.resolve(); await reading; }
 });
 
-it('encodes unchanged accounting once while independent source phases advance', async () => {
+it('preserves exact Resource bytes and digest without scalar UTF-8 calls while independent source phases advance', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(1_900_000_000_000);
     const sibling = createDeferred<void>();
     const tokens = { input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 15 };
@@ -86,7 +122,7 @@ it('encodes unchanged accounting once while independent source phases advance', 
     storage.setState({ profileScope: captured.accountLifetime.scope, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
     // The UTF-8 boundary measures repeated whole-payload work without replacing
     // any internal query, projection, or serialization behavior.
-    const encode = vi.spyOn(TextEncoder.prototype, 'encode');
+    const encodeInto = vi.spyOn(TextEncoder.prototype, 'encodeInto');
     // Call through the real schema; a native typed producer's final revision
     // must not clone the entire population after progressive admission.
     const readmission = vi.spyOn(UsageQueryBatchResultSchema, 'safeParse');
@@ -105,15 +141,7 @@ it('encodes unchanged accounting once while independent source phases advance', 
         expect(JSON.parse(new TextDecoder().decode(content.bytes))).toEqual(JSON.parse(JSON.stringify(decodeUsageQueryResource(content))));
         expect(content.digest).toBe(await computePluginUiArtifactSha256Digest(content.bytes));
         expect(decodeUsageQueryResource(content).results[0]?.accounting?.contributions?.[0]?.id).toBe('serialization-evidence-λ');
-        const observed = encode.mock.calls.filter(([text]) => {
-            if (!text?.includes('serialization-evidence-λ')) return false;
-            const parsed: unknown = JSON.parse(text);
-            // Exclude the HTTP fixture and detector evidence-id hashes. The
-            // Resource encodes either the whole batch or its admitted A field.
-            return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-                && ('results' in parsed || 'totals' in parsed && 'priceCatalog' in parsed);
-        });
-        expect(observed.length, 'Resource encoding must not materialize a whole-accounting temporary string/buffer').toBe(0);
+        expect(encodeInto.mock.calls.length, 'Resource encoding must not call UTF-8 per scalar/key').toBe(0);
         expect(readmission.mock.calls.reduce((count, [value]) => count +
             (typeof value === 'object' && value !== null && 'results' in value ? 1 : 0), 0)).toBe(0);
     } finally { sibling.resolve(); release(); }
