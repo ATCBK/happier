@@ -54,8 +54,41 @@ export type MessageStructuredReferences = Readonly<{
     imageNumbers: ReadonlyMap<string, number>;
 }>;
 
+/** Uploaded file/folder presentation is shared by Session and resource-backed readers. */
+export function projectMessageAttachmentReference(attachment: Readonly<{
+    id: string;
+    name: string;
+    kind: 'file' | 'folder';
+    path?: string;
+    imageNumber?: number;
+}>): InlineMessageReference {
+    const imageNumber = attachment.imageNumber;
+    return {
+        ref: buildMentionRefV1(INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, attachment.id),
+        kind: 'attachment', attachmentId: attachment.id,
+        ...(attachment.path === undefined ? {} : { path: attachment.path }),
+        label: imageNumber ? `Image #${imageNumber}` : attachment.name,
+        marker: imageNumber ? `[Image #${imageNumber}]` : `[${attachment.kind === 'folder' ? 'Folder' : 'File'}: ${attachment.name}]`,
+        glyph: imageNumber ? 'preview' : 'file',
+        ...(imageNumber ? { imageNumber } : {}),
+    };
+}
+
 const NO_REFERENCES: readonly TranscriptStructuredReference[] = Object.freeze([]);
 const NO_PROJECTION: MessageStructuredReferences = Object.freeze({ inline: new Map(), row: NO_REFERENCES, imageNumbers: new Map() });
+
+/** Shared authored-token eligibility; code never acquires a live reference. */
+export function readEligibleMessageInlineReferenceTokens(text: string): ReturnType<typeof scanInlineReferenceTokensV1> {
+    const tokens = scanInlineReferenceTokensV1(text);
+    if (tokens.length === 0) return tokens;
+    const codeRanges: Array<Readonly<{ start: number; end: number }>> = [];
+    parseMarkdownSyntax(text).iterate({ enter(node) {
+        if (node.name !== 'InlineCode' && node.name !== 'FencedCode' && node.name !== 'CodeBlock') return;
+        codeRanges.push({ start: node.from, end: node.to });
+        return false;
+    } });
+    return tokens.filter(token => !codeRanges.some(range => token.start >= range.start && token.end <= range.end));
+}
 
 /** Eligibility stays with the typed projection even when multiple tokens share one destination. */
 export function resolveInlineMessageReference(
@@ -67,7 +100,7 @@ export function resolveInlineMessageReference(
         ? reference : null;
 }
 
-function projectMention(mention: MentionRefV1, tokenLabel: string): InlineMessageReference | null {
+export function projectMessageMentionReference(mention: MentionRefV1, tokenLabel: string): InlineMessageReference | null {
     const ref = parseMentionRefV1(mention.ref);
     if (!ref) return null;
     const base = { ref: mention.ref, kind: mention.kind, token: mention.token, label: mention.label ?? tokenLabel,
@@ -115,14 +148,8 @@ export function resolveMessageStructuredReferences(
     // D-4 precedence lives at one owner: with `mentions` present the legacy per-kind arrays
     // and meta-root aliases are ignored entirely.
     const { mentions } = readStructuredInputMentionSourcesV1(envelope);
-    const tokens = scanInlineReferenceTokensV1(input.text);
+    const tokens = readEligibleMessageInlineReferenceTokens(input.text);
     const inline = new Map<string, InlineMessageReference & { tokenStarts: Set<number> }>();
-    const codeRanges: Array<Readonly<{ start: number; end: number }>> = [];
-    if (tokens.length > 0) parseMarkdownSyntax(input.text).iterate({ enter(node) {
-        if (node.name !== 'InlineCode' && node.name !== 'FencedCode' && node.name !== 'CodeBlock') return;
-        codeRanges.push({ start: node.from, end: node.to });
-        return false;
-    } });
     const attachments = readTranscriptAttachmentsMeta(input.meta)?.attachments ?? [];
     const primary = parseHappierMetaEnvelope(input.meta);
     const media = parseSessionMediaMessageMeta(primary?.kind === 'session_media.v1' ? primary : parseHappierMetaEnvelope(input.meta, 'happierMedia'));
@@ -140,14 +167,9 @@ export function resolveMessageStructuredReferences(
     for (const attachment of attachments) {
         const imageNumber = imageNumbers.get(attachment.id ?? attachment.path);
         if (!attachment.id) continue;
-        const ref = buildMentionRefV1(INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, attachment.id);
-        const folder = attachment.mimeType === 'inode/directory';
-        attachmentReferences.set(ref, {
-            ref, kind: 'attachment', attachmentId: attachment.id, path: attachment.path,
-            label: imageNumber ? `Image #${imageNumber}` : attachment.name,
-            marker: imageNumber ? `[Image #${imageNumber}]` : `[${folder ? 'Folder' : 'File'}: ${attachment.name}]`,
-            glyph: imageNumber ? 'preview' : 'file', ...(imageNumber ? { imageNumber } : {}),
-        });
+        const reference = projectMessageAttachmentReference({ ...attachment, id: attachment.id,
+            kind: attachment.mimeType === 'inode/directory' ? 'folder' : 'file', imageNumber });
+        attachmentReferences.set(reference.ref, reference);
     }
     for (const attachment of envelope?.composerAttachments ?? []) {
         const ref = buildMentionRefV1(INLINE_REFERENCE_ATTACHMENT_SCHEME_V1, attachment.instanceId);
@@ -162,9 +184,8 @@ export function resolveMessageStructuredReferences(
         });
     }
     for (const token of tokens) {
-        if (codeRanges.some(range => token.start >= range.start && token.end <= range.end)) continue;
         const mention = mentions.find((entry) => entry.ref === token.ref && entry.token === input.text.slice(token.start, token.end));
-        const reference = mention ? projectMention(mention, token.label) : attachmentReferences.get(token.ref);
+        const reference = mention ? projectMessageMentionReference(mention, token.label) : attachmentReferences.get(token.ref);
         if (reference) {
             const previous = inline.get(token.ref);
             if (previous) previous.tokenStarts.add(token.start);

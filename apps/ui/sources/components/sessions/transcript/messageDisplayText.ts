@@ -12,7 +12,7 @@ export { readTranscriptAttachmentsMeta } from './structured/happierMetaEnvelope'
 import { resolveUnsupportedContentLabel } from '@/sync/domains/messages/resolveUnsupportedContentLabel';
 import { scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { projectInlineReferenceLabelsV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
-import { resolveInlineMessageReference, resolveMessageStructuredReferences } from './references/messageStructuredReferences';
+import { resolveInlineMessageReference, resolveMessageStructuredReferences, type MessageStructuredReferences } from './references/messageStructuredReferences';
 
 export type TranscriptMessageDisplayOptions = Readonly<{
     debugInformationEnabled?: boolean;
@@ -71,9 +71,13 @@ export function prepareTranscriptMessageBody(
 /** Human readers never disclose token syntax; only typed message records supply markers. */
 export function readableMessageText(text: string, meta?: unknown): string {
     if (meta == null) return projectInlineReferenceLabelsV1(text);
+    return readableMessageTextWithReferences(text, resolveMessageStructuredReferences({ text, meta }).inline);
+}
+
+/** Resource adapters supply typed bindings, never pretend their files are Session paths. */
+export function readableMessageTextWithReferences(text: string, inline: MessageStructuredReferences['inline']): string {
     const tokens = scanInlineReferenceTokensV1(text);
     if (tokens.length === 0) return text;
-    const { inline } = resolveMessageStructuredReferences({ text, meta });
     const chunks: string[] = [];
     let cursor = 0;
     for (const token of tokens) {
