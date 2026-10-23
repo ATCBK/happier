@@ -3469,7 +3469,7 @@ describe('Channels core activation', () => {
     let forceSnapshotDrift = false;
     const collection = {
       async query(
-        request: Readonly<{ prefix?: readonly unknown[]; limit?: number }>,
+        request: Readonly<{ index: string; prefix?: readonly unknown[]; limit?: number }>,
         options?: Readonly<{ signal?: AbortSignal }>,
       ) {
         assertChannelsTestCollectionQueryLimit(request.limit);
@@ -3479,7 +3479,9 @@ describe('Channels core activation', () => {
         if (kind === 'binding') bindingQueryCount += 1;
         return {
           rows: stateRows
-            .filter((row) => row['record-kind'] === kind)
+            .filter((row) => request.index === 'by-connection-binding-v2'
+              ? row['connection-id'] === request.prefix?.[0]
+              : row['record-kind'] === kind)
             .map((value, index) => ({ rowId: value.id, revision: index + 1, value })),
           changeCursor: forceSnapshotDrift
             ? (kind === 'connection' ? connectionQueryCount * 2 : bindingQueryCount * 2 + 1)
@@ -3547,9 +3549,9 @@ describe('Channels core activation', () => {
       expect(await list({}, context)).toEqual(expected);
       expect(await read({ connectionId: exactConnection.id }, context)).toEqual(expected);
       expect(await read({ connectionId: samePluginDifferentMachine.id }, context)).toEqual({});
-      expect(connectionQueryCount).toBe(3);
-      expect(bindingQueryCount).toBe(3);
-      expect(querySignals).toHaveLength(6);
+      expect(connectionQueryCount).toBe(1);
+      expect(bindingQueryCount).toBe(1);
+      expect(querySignals).toHaveLength(4);
       expect(querySignals.every((signal) => signal === context.signal)).toBe(true);
 
       forceSnapshotDrift = true;
@@ -3560,8 +3562,8 @@ describe('Channels core activation', () => {
       // One authoritative pass owns the answer: cursor movement surfaces the
       // existing retryable outcome instead of quietly re-scanning the whole
       // Account behind an unowned local attempt count.
-      expect(connectionQueryCount).toBe(4);
-      expect(bindingQueryCount).toBe(4);
+      expect(connectionQueryCount).toBe(2);
+      expect(bindingQueryCount).toBe(2);
     } finally {
       await activation.dispose();
     }
@@ -3689,10 +3691,12 @@ describe('Channels core activation', () => {
       replayContinuity: 'none',
     });
     const collection = {
-      async query(request: Readonly<{ prefix?: readonly unknown[]; limit?: number }>) {
+      async query(request: Readonly<{ index: string; prefix?: readonly unknown[]; limit?: number }>) {
         assertChannelsTestCollectionQueryLimit(request.limit);
         return {
-          rows: request.prefix?.[0] === 'connection'
+          rows: (request.index === 'by-connection-binding-v2'
+            ? request.prefix?.[0] === connection.id
+            : request.prefix?.[0] === 'connection')
             ? [{ rowId: connection.id, revision: 1, value: connection }]
             : [],
           changeCursor: 1,

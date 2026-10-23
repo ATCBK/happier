@@ -7,11 +7,14 @@ import {
 
 import {
   listConversationProviderConnectionsForCaller,
+  listConversationProviderConnectionsForInvocation,
   readConversationBindingInputModesNoLongerDeliverable,
   readConversationProviderConnectionForCaller,
+  readConversationProviderConnectionForInvocation,
   type ConversationReconciliationConnectionStateV1,
 } from './reconciliation.js';
-import { createCurrentConversationPendingOldTransportStopFixture } from './testkit/currentConnectionFixture.js';
+import { createCurrentConversationConnectionFixture, createCurrentConversationPendingOldTransportStopFixture } from './testkit/currentConnectionFixture.js';
+import { MemoryCollection } from './testkit/memoryCollection.js';
 
 function pendingTransferStop(input: Readonly<{
   overlapSafety: 'safe' | 'providerExclusive' | 'destructive';
@@ -104,6 +107,90 @@ function reconciliationConnectionStateBase() {
 }
 
 describe('Conversation provider reconciliation', () => {
+  it('reads only one connection scope and keeps a provider reconciliation linear at 50 connections / 500 bindings', async () => {
+    const collection = new MemoryCollection();
+    const authority = {
+      ...reconciliationConnectionStateBase(),
+      providerContributionSelection: { contributionId: 'discord-provider' },
+      providerSetupInput: {},
+      routingIdentityKey: 'r'.repeat(43),
+      integrationPrincipal: { id: 'discord:application-1' },
+    };
+    for (let index = 0; index < 50; index += 1) {
+      const connectionId = `connection-${index}`;
+      const connection = createCurrentConversationConnectionFixture({
+        connectionId,
+        authority,
+        transport: { kind: 'socket' },
+      });
+      collection.rows.set(connectionId, { rowId: connectionId, revision: 1, value: connection });
+      for (let binding = 0; binding < 10; binding += 1) {
+        const bindingId = `binding-${index}-${binding}`;
+        // The Collection is the admission boundary; reconciliation consumes
+        // only these already-admitted binding policy fields.
+        collection.rows.set(bindingId, { rowId: bindingId, revision: 1, value: {
+          id: bindingId, 'record-kind': 'binding', 'connection-id': connectionId, 'binding-id': bindingId,
+          payload: { enabled: true, endpoint: { audience: 'shared' }, inputMode: 'allAllowedMessages' },
+        } });
+      }
+    }
+    let pages = 0;
+    let rows = 0;
+    let forceCursorDrift = false;
+    const context = {
+      caller: caller({ pluginId: 'happier.channel.discord', materializationId: 'discord-install-1' }),
+      signal: new AbortController().signal,
+      services: { storage: { account: { collection: () => ({
+        async query(request: Parameters<MemoryCollection['query']>[0]) {
+          const page = await collection.query(request);
+          pages += 1;
+          rows += page.rows.length;
+          return { ...page, changeCursor: forceCursorDrift && request.cursor !== undefined ? 2 : page.changeCursor };
+        },
+      }) } } },
+    } as unknown as PluginInvocationContext;
+
+    await expect(readConversationProviderConnectionForInvocation({ connectionId: 'connection-0' }, context))
+      .resolves.toMatchObject({ 'connection-0': { authorityEpoch: 4, requiresFullSharedMessageContent: true } });
+    const exactReadCost = { pages, rows };
+
+    pages = 0;
+    rows = 0;
+    const listed = await listConversationProviderConnectionsForInvocation({}, context);
+    expect(Object.keys(listed)).toHaveLength(50);
+    for (const connectionId of Object.keys(listed)) {
+      await expect(readConversationProviderConnectionForInvocation({ connectionId }, context))
+        .resolves.toMatchObject({ [connectionId]: { requiresFullSharedMessageContent: true } });
+    }
+    expect({ exactReadCost, reconciliationCost: { pages, rows } }).toEqual({
+      exactReadCost: { pages: 1, rows: 11 },
+      reconciliationCost: { pages: 54, rows: 1_100 },
+    });
+
+    // An exact read must still observe revocation after discovery rather than
+    // reusing the previously admitted provider snapshot or demand projection.
+    const stored = collection.rows.get('connection-0')!;
+    collection.rows.set(stored.rowId, { ...stored, revision: 2, value: createCurrentConversationConnectionFixture({
+      connectionId: stored.rowId, authority: { ...authority, authorityEpoch: 5 }, enabled: false, transport: { kind: 'socket' },
+    }) });
+    await expect(readConversationProviderConnectionForInvocation({ connectionId: 'connection-0' }, context))
+      .resolves.toMatchObject({ 'connection-0': { enabled: false, authorityEpoch: 5 } });
+    await expect(readConversationProviderConnectionForInvocation({ connectionId: 'missing-connection' }, context))
+      .resolves.toEqual({});
+
+    // Scope narrowing must not weaken the same-cursor proof when a single
+    // connection itself spans pages.
+    const binding = collection.rows.get('binding-0-0')!;
+    for (let index = 0; index < 200; index += 1) {
+      const bindingId = `binding-0-extra-${index}`;
+      collection.rows.set(bindingId, { ...binding, rowId: bindingId,
+        value: { ...binding.value, id: bindingId, 'binding-id': bindingId } });
+    }
+    forceCursorDrift = true;
+    await expect(readConversationProviderConnectionForInvocation({ connectionId: 'connection-0' }, context))
+      .rejects.toMatchObject({ code: 'channels_reconciliation_snapshot_changed', retryable: true });
+  });
+
   it('follows current host-stamped source custody at the same route and refuses another Home, Machine or plugin', () => {
     const sourceCustody = { kind: 'development', registeredRootId: '/runtime-1/discord' } as const;
     const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_reconciliation', sourceRef: {

@@ -5,7 +5,7 @@ import {
   type PluginInvocationContext,
 } from '@happier-dev/plugin-sdk';
 import { arePluginMachineExecutionRoutingsEqual, getPluginMachineExecutionRouting } from '@happier-dev/plugin-sdk/actions';
-import { PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 } from '@happier-dev/plugin-sdk/collections';
+import { PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1, type PluginCollectionQuery } from '@happier-dev/plugin-sdk/collections';
 import type {
   ConversationEndpointAudienceV1,
   ConversationProviderConnectionReadInputV1,
@@ -202,9 +202,9 @@ export async function readConversationBindingInputModesNoLongerDeliverable(input
   // pay for. This is the same rule the protocol deliverability owner applies;
   // stating it here keeps the read off the common path without a second answer.
   if (input.sharedEndpointInputModes === undefined) return [];
-  const read = await readCollectionValuesByKind({
-    context: input.context,
-    kind: CHANNEL_STATE_RECORD_KIND.binding,
+  const read = await readCollectionValues(input.context, {
+    index: CHANNEL_STATE_INDEX_ID.byConnectionBindingV2,
+    prefix: [input.connectionId],
   });
   return bindingInputModesNoLongerDeliverable({
     connectionId: input.connectionId,
@@ -350,23 +350,22 @@ function bindingPolicyFromCollectionValue(
   };
 }
 
-async function readCollectionValuesByKind(input: Readonly<{
-  context: PluginInvocationContext;
-  kind: typeof CHANNEL_STATE_RECORD_KIND.connection | typeof CHANNEL_STATE_RECORD_KIND.binding;
-}>): Promise<ReconciliationCollectionRead> {
-  const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
+async function readCollectionValues(
+  context: PluginInvocationContext,
+  query: Pick<PluginCollectionQuery, 'index' | 'prefix'>,
+): Promise<ReconciliationCollectionRead> {
+  const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
   const values: JsonValue[] = [];
   let cursor: string | undefined;
   let observedCursor: number | undefined;
 
   for (;;) {
     const page = await collection.query({
-      index: CHANNEL_STATE_INDEX_ID.byKind,
-      prefix: [input.kind],
+      ...query,
       order: 'asc',
       limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
       ...(cursor === undefined ? {} : { cursor }),
-    }, { signal: input.context.signal });
+    }, { signal: context.signal });
     if (observedCursor !== undefined && page.changeCursor !== observedCursor) {
       throw reconciliationSnapshotChangedError();
     }
@@ -381,6 +380,7 @@ async function readCollectionValuesByKind(input: Readonly<{
 
 async function readCurrentReconciliationState(
   context: PluginInvocationContext,
+  connectionId?: string,
 ): Promise<Readonly<{
   connections: readonly ConversationReconciliationConnectionStateV1[];
   bindingPolicies: readonly ConversationReconciliationBindingPolicyStateV1[];
@@ -389,16 +389,18 @@ async function readCurrentReconciliationState(
   // within either scan or between the two — surfaces the existing retryable
   // outcome to the operation/supervisor retry owners instead of an unowned
   // local attempt count masking the contention.
-  const [connectionRead, bindingRead] = await Promise.all([
-    readCollectionValuesByKind({
-      context,
-      kind: CHANNEL_STATE_RECORD_KIND.connection,
-    }),
-    readCollectionValuesByKind({
-      context,
-      kind: CHANNEL_STATE_RECORD_KIND.binding,
-    }),
-  ]);
+  // An exact read gathers both families in one existing connection-prefix
+  // traversal. Its pages share the same cursor proof, without rereading any
+  // other connection's rows or reusing authority from provider discovery.
+  const [connectionRead, bindingRead] = connectionId === undefined
+    ? await Promise.all([
+      readCollectionValues(context, { index: CHANNEL_STATE_INDEX_ID.byKind, prefix: [CHANNEL_STATE_RECORD_KIND.connection] }),
+      readCollectionValues(context, { index: CHANNEL_STATE_INDEX_ID.byKind, prefix: [CHANNEL_STATE_RECORD_KIND.binding] }),
+    ])
+    : await readCollectionValues(context, {
+      index: CHANNEL_STATE_INDEX_ID.byConnectionBindingV2,
+      prefix: [connectionId],
+    }).then(read => [read, read] as const);
   if (connectionRead.changeCursor !== bindingRead.changeCursor) {
     throw reconciliationSnapshotChangedError();
   }
@@ -471,7 +473,7 @@ export async function readConversationProviderConnectionForInvocation(
   input: ConversationProviderConnectionReadInputV1,
   context: PluginInvocationContext,
 ): Promise<ConversationProviderConnectionReadResultV1> {
-  const { connections, bindingPolicies } = await readCurrentReconciliationState(context);
+  const { connections, bindingPolicies } = await readCurrentReconciliationState(context, input.connectionId);
   return readConversationProviderConnectionForCaller({
     caller: context.caller,
     connections,
