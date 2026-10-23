@@ -92,7 +92,8 @@ import type { ProviderRuntimeModelProjectionReader } from '@/providers/spawn/run
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createRuntimeProviderConnectionServices } from '@/providers/connections/runtimeServices';
-import type { ResolveSharedManagedProviderGatewayBinding } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
+import { createMachineSharedProviderGatewayResolver } from '@/providers/lifecycle/sharedGatewayIdentity';
+export { createMachineSharedProviderGatewayResolver } from '@/providers/lifecycle/sharedGatewayIdentity';
 import { readCurrentManagedChildMachineMetadata, refreshMachineMetadataForCurrentDaemon } from './metadata';
 import { detectCliSnapshotOnDaemonPath } from '@/capabilities/snapshots/cliSnapshot';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -483,27 +484,6 @@ async function resolvePeerTcpTunnelRelayBootstrapContext(params: Readonly<{
     ?? (params.credentials ? readAccountIdFromToken(params.credentials.token) : null);
   if (!accountId) return null;
   return { accountId, serverFeatures };
-}
-
-export function createMachineSharedProviderGatewayResolver(input: Readonly<{
-  machineId: string;
-  readAccountId(): string | null;
-  readOrigin(): Promise<CurrentMachineExecutionOriginContext | null>;
-}>): ResolveSharedManagedProviderGatewayBinding {
-  const readIdentity: NonNullable<ResolveSharedManagedProviderGatewayBinding['readIdentity']> = async ({ connectionId, signal }) => {
-    signal?.throwIfAborted();
-    const origin = await input.readOrigin();
-    signal?.throwIfAborted();
-    const accountId = normalizeNonEmptyString(input.readAccountId());
-    const homeId = normalizeNonEmptyString(origin?.serverIdentityId);
-    if (!homeId || !accountId || origin?.machineId !== input.machineId) {
-      throw createProviderErrorV1('provider_authorization_changed', { connectionId, machineId: input.machineId });
-    }
-    return Object.freeze({ homeId, accountId, connectionId, machineId: input.machineId });
-  };
-  const resolve: ResolveSharedManagedProviderGatewayBinding = async ({ consumerId, ...request }) =>
-    Object.freeze({ ...await readIdentity(request), consumerId });
-  return Object.assign(resolve, { readIdentity });
 }
 
 export type BootstrapMachineSyncRuntimeResult = Readonly<{
