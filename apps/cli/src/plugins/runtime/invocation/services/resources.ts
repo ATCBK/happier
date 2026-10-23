@@ -909,7 +909,7 @@ export async function createStablePluginResourcesOwner(params: Readonly<{
     dynamicProducers?: readonly StableDynamicPluginResourceProducer[];
     bindDynamicResourceAccountStorage?: BindDynamicResourceAccountStorage;
     resolveSessionResourceAccess?: ResolveSessionResourceAccess;
-    isCommittedGenerationCurrent?: () => boolean | Promise<boolean>;
+    isPluginCurrent?: (pluginId: string) => boolean | Promise<boolean>;
 }>): Promise<StablePluginResourcesOwner> {
     if (!Array.isArray(params.registry.resources)) {
         return fail('plugin_resource_capacity_exceeded', 'Resource occurrenceId exceeds its declaration bound');
@@ -932,10 +932,9 @@ export async function createStablePluginResourcesOwner(params: Readonly<{
         ...(params.resolveSessionResourceAccess
             ? { resolveSessionResourceAccess: params.resolveSessionResourceAccess }
             : {}),
-        ...(params.isCommittedGenerationCurrent
+        ...(params.isPluginCurrent
             ? {
-                isCommittedGenerationCurrent:
-                    params.isCommittedGenerationCurrent,
+                isPluginCurrent: params.isPluginCurrent,
             }
             : {}),
     });
@@ -994,8 +993,7 @@ export async function createStableImmutablePluginResourcesOwner(
             : {}),
         ...(params.isOccurrenceCurrent
             ? {
-                isCommittedGenerationCurrent:
-                    params.isOccurrenceCurrent,
+                isPluginCurrent: params.isOccurrenceCurrent,
             }
             : {}),
     });
@@ -1085,8 +1083,7 @@ async function createStablePluginResourcesOwnerFromNormalized(
         dynamicProducers: readonly StableDynamicPluginResourceProducer[];
         bindDynamicResourceAccountStorage?: BindDynamicResourceAccountStorage;
         resolveSessionResourceAccess?: ResolveSessionResourceAccess;
-        isCommittedGenerationCurrent?:
-            () => boolean | Promise<boolean>;
+        isPluginCurrent?: (pluginId: string) => boolean | Promise<boolean>;
     }>,
 ): Promise<StablePluginResourcesOwner> {
     const generationsByPluginId = new Map<string, ReturnType<typeof normalizeGeneration>>();
@@ -2532,8 +2529,8 @@ async function createStablePluginResourcesOwnerFromNormalized(
                 if (resource.source === 'dynamic' && resource.admissionFailure) throw resource.admissionFailure;
                 return resource;
             }
-            async function guardCommittedGeneration(): Promise<void> {
-                if (params.isCommittedGenerationCurrent && !await params.isCommittedGenerationCurrent()) {
+            async function guardPluginCurrent(): Promise<void> {
+                if (params.isPluginCurrent && !await params.isPluginCurrent(bindParams.pluginId)) {
                     return fail('plugin_generation_stale', 'Plugin occurrenceId is stale');
                 }
             }
@@ -2634,13 +2631,13 @@ async function createStablePluginResourcesOwnerFromNormalized(
                         }
                     }
                     const bytes = await withStableResourceErrors(async () => {
-                        await guardCommittedGeneration();
+                        await guardPluginCurrent();
                         const verified = await verifyBytes(
                             resource,
                             normalizedOptions.maxBytes,
                             () => guard(normalizedOptions.signal),
                         );
-                        await guardCommittedGeneration();
+                        await guardPluginCurrent();
                         return verified;
                     });
                     return Object.freeze({

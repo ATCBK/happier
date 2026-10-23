@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { Agent } from 'undici';
+import type { Agent } from 'undici';
 import { logger } from '@/ui/logger';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import { assertManagedServiceRequestBodySize, failManagedServiceRequestSize } from './managedServiceRequestSize';
 import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import { LocalServiceEstablishmentFailureV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -224,9 +225,7 @@ const MAX_MANAGED_SERVICE_RESPONSE_CHUNK_BYTES = 64 * 1024;
 const MAX_MANAGED_SERVICE_REQUEST_TIMEOUT_MS = 300_000;
 // Like the incumbent ambient fetch pool, this pool lives with the process.
 // Individual caller/handle signals still own each request and response body.
-const managedServiceHttpDispatcher = new Agent({
-    headersTimeout: 0, bodyTimeout: 0,
-});
+let managedServiceHttpDispatcher: Agent | undefined;
 
 export function projectManagedServiceSpawnEnvironmentKeys(
     spec: ManagedServiceSpec,
@@ -3003,10 +3002,14 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         }
     };
     const platformFetch = globalThis.fetch.bind(globalThis);
-    const hostFetch: typeof globalThis.fetch = input.fetch ?? ((target, init) => {
+    const hostFetch: typeof globalThis.fetch = input.fetch ?? (async (target, init) => {
+        init?.signal?.throwIfAborted();
+        const { Agent } = await import('undici');
+        init?.signal?.throwIfAborted();
+        const dispatcher = managedServiceHttpDispatcher ??= new Agent({ headersTimeout: 0, bodyTimeout: 0 });
         // Node consumes the dispatcher; Bun consumes timeout:false. Both keep
         // transport deadlines beneath the owning caller/handle lifetime.
-        const options = { ...init, dispatcher: managedServiceHttpDispatcher, timeout: false };
+        const options = { ...init, dispatcher, timeout: false };
         return platformFetch(target, options);
     });
     const removeSemanticEntry = (
@@ -4431,12 +4434,15 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         async stopForAccessLoss(requester: RequesterWorkAttributionV1, options?: Readonly<{
             verifyCurrentMachineAdmission: () => Promise<boolean>;
         }>) {
-            const matching = projectEntries().filter(entry => (
-                entry.project.requester.serverId === requester.serverId
-                && entry.project.requester.accountId === requester.accountId
-                && entry.project.requester.machineId === requester.machineId
-                && entry.project.requester.installationId === requester.installationId
-            ));
+            const matching = [];
+            for (const entry of projectEntries()) {
+                if (entry.project.requester.accountId === requester.accountId
+                    && entry.project.requester.machineId === requester.machineId
+                    && entry.project.requester.installationId === requester.installationId
+                    && await isServerProfileHomeIdentity(requester.serverId, entry.project.requester.serverId)) {
+                    matching.push(entry);
+                }
+            }
             return await Promise.all(matching.map(async (entry): Promise<ProjectServiceAccessLossResult> => {
                 const { handle: _handle, ...witness } = entry.project;
                 const incomplete = (): ProjectServiceAccessLossResult => {

@@ -3002,6 +3002,7 @@ describe('managed-services SVC09 owner', () => {
     it('keeps Bun-native prompt headers pending for caller lifetime beyond the native idle deadline', async () => {
         vi.useFakeTimers();
         let fetchSignal: AbortSignal | undefined;
+        const arrived = deferred<void>();
         const response = deferred<Response>();
         const platformFetch = vi.spyOn(globalThis, 'fetch');
         let handle: ManagedServiceHandle | undefined;
@@ -3034,6 +3035,7 @@ describe('managed-services SVC09 owner', () => {
                 };
                 fetchSignal.addEventListener('abort', abort, { once: true });
                 if (fetchSignal.aborted) abort();
+                arrived.resolve();
             }));
             platformFetch.mockImplementation(hostFetch);
             const harness = createHarness();
@@ -3053,6 +3055,9 @@ describe('managed-services SVC09 owner', () => {
             const result = handle.request({ pathAndQuery: '/session/native/message', method: 'POST' })
                 .then(value => ({ status: value.status }), error => ({ error }));
 
+            // Exercise the pending native request, not the owner's asynchronous
+            // first-use transport preparation before this boundary is reached.
+            await arrived.promise;
             await vi.advanceTimersByTimeAsync(300_001);
 
             expect(fetchSignal?.aborted).toBe(false);

@@ -1,7 +1,7 @@
 import type { DaemonPluginStructuredMessageActionInvocationV1 } from '@happier-dev/protocol';
 import { arePluginMachineMaterializationRefsEqual, arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { computePluginAccountBundledDeclarationDigestV1, type PluginAccountExecutionSelectionV1 } from '@happier-dev/protocol/plugins/availability';
+import type { PluginAccountExecutionSelectionV1 } from '@happier-dev/protocol/plugins/availability';
 import type { PluginInvocationCaller } from '@happier-dev/plugin-sdk';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { normalizePluginSourceCustody, pluginSourceCustodyEqual } from '@/plugins/runtime/sourceAuthority';
@@ -67,16 +67,15 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
     }
 
     const accountSourceCustody = binding.sourceCustody;
-    if (accountSourceCustody?.kind === 'account_release' || binding.declarationDigest !== undefined) {
+    if (accountSourceCustody?.kind === 'account_release'
+        || (accountSourceCustody?.kind === 'bundled_first_party' && binding.pluginVersion !== undefined)) {
         const resolveSelection = input.resolveAccountExecutionSelection;
         if (!resolveSelection || !accountSourceCustody || binding.materializationRef !== undefined) {
             return Object.freeze({ status: 'unavailable' as const });
         }
         const matchesAccountDeclaration = (selection: PluginAccountExecutionSelectionV1): boolean => {
             if (selection.kind !== 'available' || selection.manifest.id !== binding.pluginId
-                || (binding.pluginVersion !== undefined && binding.pluginVersion !== selection.manifest.version)
-                || (binding.declarationDigest !== undefined
-                    && binding.declarationDigest !== computePluginAccountBundledDeclarationDigestV1(selection.manifest))) return false;
+                || (binding.pluginVersion !== undefined && binding.pluginVersion !== selection.manifest.version)) return false;
             const contributions = selection.manifest.contributes;
             const declaredCaller = invocation?.kind === 'clientPluginAction'
                 ? contributions.actions?.some(action => action.id === binding.contributionLocalId && action.execution.target === 'account')
@@ -88,12 +87,11 @@ export async function deriveMountedPluginInvocationCaller(input: Readonly<{
                 return pluginSourceCustodyEqual(accountSourceCustody, selection.sourceCustody);
             }
             if (accountSourceCustody.kind !== 'bundled_first_party' || selection.sourceCustody.kind !== 'bundled_first_party'
-                || binding.pluginVersion !== selection.manifest.version || binding.declarationDigest === undefined) return false;
+                || binding.pluginVersion !== selection.manifest.version) return false;
             const claimedRuntime = accountSourceCustody.packagedRuntime;
             const selectedRuntime = selection.sourceCustody.packagedRuntime;
-            return claimedRuntime.kind !== 'source_declaration'
-                || (claimedRuntime.declarationDigest === binding.declarationDigest
-                    && (selectedRuntime.kind !== 'source_declaration' || claimedRuntime.packageName === selectedRuntime.packageName));
+            return claimedRuntime.kind !== 'source_declaration' || selectedRuntime.kind !== 'source_declaration'
+                || claimedRuntime.packageName === selectedRuntime.packageName;
         };
         try {
             const selection = await resolveSelection(binding.pluginId);

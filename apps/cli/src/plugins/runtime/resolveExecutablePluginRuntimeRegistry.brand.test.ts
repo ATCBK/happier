@@ -205,4 +205,52 @@ describe('executable plugin portable brand Resource projection', () => {
             await rm(fixture.pluginRoot, { recursive: true, force: true });
         }
     }, 60_000);
+
+    it('serves an admitted external Resource across another plugin installation until its own occurrence retires', async () => {
+        const fixture = await seedFixture(true);
+        const peerRoot = await mkdtemp(join(tmpdir(), 'happier-brand-runtime-peer-'));
+        let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+        try {
+            const inputs = await resolveFixtureRuntimeInputs(fixture);
+            runtime = await resolveExecutablePluginRuntimeRegistry({
+                happyHomeDir: fixture.happyHomeDir,
+                contributes: inputs.contributes,
+                generationAuthority: inputs.generationAuthority,
+            });
+            const caller = {
+                callerPluginId: PLUGIN_ID,
+                expectedCallerOccurrenceId: runtime.readPluginOccurrenceId?.(PLUGIN_ID)!,
+                resourceId: 'brand-icon',
+            };
+            await expect(runtime.readUiResource?.(caller)).resolves.toMatchObject({
+                digest: digest(fixture.brandBytes),
+            });
+
+            await mkdir(join(peerRoot, '.happier-plugin'), { recursive: true });
+            await writeFile(join(peerRoot, '.happier-plugin', 'plugin.json'), JSON.stringify({
+                schemaVersion: 2, id: 'acme.brand-peer', version: '1.0.0',
+                displayName: 'Peer fixture', engines: { happier: '^0.2.0' },
+                runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.mjs' },
+                hostAccess: { required: [], optional: [] }, contributes: {},
+            }));
+            await writeFile(join(peerRoot, 'daemon.mjs'), 'export function activate() {}\n');
+            await seedCurrentLocalPathPluginFixture({
+                happyHomeDir: fixture.happyHomeDir,
+                pluginRoot: peerRoot, pluginId: 'acme.brand-peer', manifestVersion: '1.0.0',
+            });
+            await expect(runtime.readUiResource?.(caller)).resolves.toMatchObject({
+                digest: digest(fixture.brandBytes),
+            });
+
+            runtime.fencePluginConsumers?.([PLUGIN_ID]);
+            await expect(runtime.readUiResource?.(caller)).rejects.toMatchObject({
+                code: 'plugin_generation_stale',
+            });
+        } finally {
+            await runtime?.dispose();
+            await rm(fixture.happyHomeDir, { recursive: true, force: true });
+            await rm(fixture.pluginRoot, { recursive: true, force: true });
+            await rm(peerRoot, { recursive: true, force: true });
+        }
+    }, 60_000);
 });

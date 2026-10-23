@@ -10,6 +10,21 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { spawnTestProcess } from '@/testkit/process/spawn';
 import { resolveCliTsxTsconfigPath } from '@/utils/spawnHappyCLI';
 
+async function writeModuleLoadObserver(observerPath: string, observationsPath: string): Promise<void> {
+  await writeFile(observationsPath, '', 'utf8');
+  // Observe the real Node loader without redirecting or substituting modules.
+  await writeFile(observerPath, [
+    'import { appendFileSync } from "node:fs";',
+    'let output;',
+    'export function initialize(data) { output = data.output; }',
+    'export async function load(url, context, nextLoad) {',
+    '  const result = await nextLoad(url, context);',
+    '  appendFileSync(output, JSON.stringify(url) + "\\n");',
+    '  return result;',
+    '}',
+  ].join('\n'), 'utf8');
+}
+
 describe('first-party Agent runtime demand', () => {
   it.each([
     { agentId: 'claude', implementation: 'nativeRuntime.ts' },
@@ -32,19 +47,7 @@ describe('first-party Agent runtime demand', () => {
       const probePath = join(tempDir, 'runtime-demand.mjs');
       const stagedRoot = join(tempDir, 'staged');
       await mkdir(stagedRoot);
-      await writeFile(observationsPath, '', 'utf8');
-      // This observes the real Node loader boundary. It neither redirects a
-      // module nor substitutes any plugin, registration, or runtime logic.
-      await writeFile(observerPath, [
-        'import { appendFileSync } from "node:fs";',
-        'let output;',
-        'export function initialize(data) { output = data.output; }',
-        'export async function load(url, context, nextLoad) {',
-        '  const result = await nextLoad(url, context);',
-        '  appendFileSync(output, JSON.stringify(url) + "\\n");',
-        '  return result;',
-        '}',
-      ].join('\n'), 'utf8');
+      await writeModuleLoadObserver(observerPath, observationsPath);
       await writeFile(probePath, [
         'import assert from "node:assert/strict";',
         'import { readFileSync } from "node:fs";',
@@ -159,6 +162,62 @@ describe('first-party Agent runtime demand', () => {
       const [code] = await closed;
       expect(code, diagnostics.join('')).toBe(0);
       expect(diagnostics.join('')).toContain('runtime-demand-verified');
+    });
+  }, 120_000);
+});
+
+describe('first-party GitHub Action demand', () => {
+  it('keeps Triage execution unloaded through root activation and loads the real registered Action on first use', async () => {
+    const cliRoot = projectPath();
+    const repoRoot = join(cliRoot, '..', '..');
+    const pluginRoot = join(repoRoot, 'packages', 'plugins', 'scm-github');
+    const sourceRuntimeUrl = pathToFileURL(join(repoRoot, 'packages', 'cli-common', 'registerSourceRuntime.mjs')).href;
+    await withTempDir('happier-github-action-demand-', async tempDir => {
+      const observationsPath = join(tempDir, 'loaded-modules.ndjson');
+      const observerPath = join(tempDir, 'observe-loads.mjs');
+      const probePath = join(tempDir, 'action-demand.mjs');
+      await writeModuleLoadObserver(observerPath, observationsPath);
+      await writeFile(probePath, [
+        'import assert from "node:assert/strict";',
+        'import { readFileSync } from "node:fs";',
+        'import { register } from "node:module";',
+        `register(${JSON.stringify(pathToFileURL(observerPath).href)}, { data: { output: ${JSON.stringify(observationsPath)} } });`,
+        'const loaded = () => readFileSync(' + JSON.stringify(observationsPath) + ', "utf8").trim().split("\\n").filter(Boolean).map(line => new URL(JSON.parse(line)).href.split("?")[0]);',
+        `const operations = ${JSON.stringify(['operations.ts', 'detailOperations.ts', 'mutationOperations.ts'].map(name => pathToFileURL(join(pluginRoot, 'src', 'triage', name)).href))};`,
+        `const plugin = await import(${JSON.stringify(pathToFileURL(join(pluginRoot, 'src', 'index.ts')).href)});`,
+        'assert.deepEqual(operations.filter(url => loaded().includes(url)), [], "root import must not execute unrelated Triage leaves");',
+        'const { createPluginTestkit } = await import("@happier-dev/plugin-sdk/testing");',
+        'const { TriageListInstancesResultV1Schema } = await import("@happier-dev/triage-protocol/v1");',
+        'const testkit = await createPluginTestkit({ manifest: plugin.manifest, module: { activate: plugin.activate } });',
+        'try {',
+        '  assert.equal(typeof testkit.registration("backgroundServices", "automation-repository-event-checkpointed-pull"), "function", "the Event observer remains registered");',
+        '  assert.deepEqual(operations.filter(url => loaded().includes(url)), [], "activation must not execute unrelated Triage leaves");',
+        '  const result = await testkit.invokeAction("triage/list-github-instances", { v: 1 });',
+        '  assert.ok(TriageListInstancesResultV1Schema.safeParse(result).success, "the real first-use Action must return its published result");',
+        '  assert.ok(loaded().includes(operations[0]), "the registered Action must load its real execution leaf");',
+        '  assert.ok(!loaded().includes(operations[1]) && !loaded().includes(operations[2]), "discovery must not load detail or mutation execution");',
+        '  process.stdout.write("github-action-demand-verified\\n");',
+        '} finally { await testkit.dispose(); }',
+      ].join('\n'), 'utf8');
+      const child = spawnTestProcess(process.execPath, ['--import', sourceRuntimeUrl, probePath], {
+        cwd: cliRoot,
+        env: { ...process.env, TSX_TSCONFIG_PATH: resolveCliTsxTsconfigPath() },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const closed = once(child, 'close');
+      const diagnostics: string[] = [];
+      child.stdout?.on('data', chunk => diagnostics.push(String(chunk)));
+      child.stderr?.on('data', chunk => diagnostics.push(String(chunk)));
+      onTestFailed(() => console.error(diagnostics.join('')));
+      onTestFinished(async () => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill();
+          await closed;
+        }
+      });
+      const [code] = await closed;
+      expect(code, diagnostics.join('')).toBe(0);
+      expect(diagnostics.join('')).toContain('github-action-demand-verified');
     });
   }, 120_000);
 });

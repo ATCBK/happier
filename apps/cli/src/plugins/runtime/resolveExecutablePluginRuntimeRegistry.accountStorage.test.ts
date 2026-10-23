@@ -144,6 +144,7 @@ function createFixtureAccountStorageDependencies(
                     return {
                         status: 200,
                         data: {
+                            absenceEpoch: 0,
                             row: {
                                 rowId: 'connection-1',
                                 revision: 1,
@@ -857,6 +858,7 @@ describe('executable plugin Account Collections binding', () => {
             return {
                 status: 200,
                 data: {
+                    absenceEpoch: 0,
                     row: {
                         rowId: 'connection-1',
                         revision: 1,
@@ -1045,14 +1047,13 @@ describe('executable plugin Account Collections binding', () => {
         }
     }, 60_000);
 
-    it('fences a held notification sender from Account mutation after committed authority flips', async () => {
+    it('fences a held notification sender from Account mutation after its occurrence retires', async () => {
         const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-account-notification-currentness-home-'));
         const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-account-notification-currentness-plugin-'));
         const credentials = { token: 'notification-account-token', encryption: null } satisfies StoredCredentials;
         const credentialsReadStarted = deferred<void>();
         const releaseCredentials = deferred<StoredCredentials>();
         let holdCredentials = false;
-        let committedGenerationCurrent = true;
         let runtime: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
 
         accountDataBoundary.readStoredCredentials.mockImplementation(async () => {
@@ -1103,16 +1104,7 @@ describe('executable plugin Account Collections binding', () => {
                 hostAccess: 'required',
                 mutateAccountStorage: true,
             });
-            const authority = await readCurrentCommittedPluginGenerations(
-                resolvePluginStorePaths({ happyHomeDir }),
-                {},
-            );
-            if (!authority) throw new Error('Expected notification fixture generation authority');
-            const generationAuthority = Object.freeze({
-                ...authority,
-                isCurrent: async () => committedGenerationCurrent,
-            });
-            runtime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, generationAuthority });
+            runtime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir });
             await expect(runtime.activateContributionsOnDemand([{
                 pluginId: PLUGIN_ID,
                 family: 'actions',
@@ -1139,7 +1131,7 @@ describe('executable plugin Account Collections binding', () => {
                 );
             });
             await credentialsReadStarted.promise;
-            committedGenerationCurrent = false;
+            runtime.fencePluginConsumers?.([PLUGIN_ID]);
             releaseCredentials.resolve(credentials);
 
             await expect(pending).resolves.toMatchObject({

@@ -8,7 +8,7 @@ import { actionInputIssueFailure } from '@happier-dev/protocol/actions/executor/
 import { randomUUID } from 'node:crypto';
 import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 import { projectPluginActionUnavailableOutcomeCode, pluginActionRequiresPresentUserIntent, pluginActionDeclarationRequiresConfirmationForInput } from '@happier-dev/protocol/plugins/actions/invocation';
-import { resolveApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { APPROVAL_REQUESTER_UNAVAILABLE_MESSAGE_V1, resolveApprovalRequesterConfirmationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { projectTargetActionApprovalInput } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import type { ActionsSettingsV1, ApprovalExecutionOriginV1, JsonValue, MessageActionAvailableSnapshotV1, MessageActionReferenceV1, PluginMachineExecutionOriginV1, RehydratedPluginContributionPointOperationV1, TargetActionApprovalReplayPlacementV1, UiContributedActionExecuteRequestV1 } from '@happier-dev/protocol';
 import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
@@ -1065,7 +1065,8 @@ export async function executeContributedAction(params: Readonly<{
             targetResult.actionHandlerInvocation,
           )
           : targetResult.code,
-        error: inputFailure ? targetResult.code : targetResult.message,
+        error: inputFailure ? targetResult.code : targetResult.code === 'approval_requester_unavailable'
+          ? APPROVAL_REQUESTER_UNAVAILABLE_MESSAGE_V1 : targetResult.message,
         ...(inputFailure ? { details: inputFailure.details } : {}),
         ...(targetResult.retryable === undefined
           ? {}

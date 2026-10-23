@@ -245,7 +245,7 @@ describe('stable plugin managed dependencies host', () => {
     it.each([
         { kind: 'account_release', pluginId: 'acme.plugin', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
         { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'ui-bundle' } },
-        { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/plugin', declarationDigest: `sha256:${'b'.repeat(64)}` } },
+        { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/plugin' } },
     ] satisfies PluginSourceCustodyV1[])('refuses portable declaration custody at runner dependency retention: $kind', (sourceCustody) => {
         const host = v2Host({
             contributions: [v2Contribution('acme.plugin', 'tool', [{ kind: 'system', executableNames: ['tool'] }])],

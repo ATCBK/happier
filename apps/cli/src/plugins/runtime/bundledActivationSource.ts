@@ -11,7 +11,6 @@ import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import { readBundledPluginManifest, loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
 import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
-import { computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
 
 import {
     normalizeBundledWorkspaceNameFromPackageName,
@@ -492,8 +491,7 @@ export function createBundledActivationSourceResolver(params: Readonly<{
                 .find(plugin => plugin.pluginId === target.pluginId && plugin.sourceSpec.kind === 'bundled'
                     && plugin.sourceSpec.locator === packageName);
             if (!declaration || !target.manifest || !target.pluginRootPath) return null;
-            const declarationDigest = computePluginAccountBundledDeclarationDigestV1(declaration.manifest);
-            if (computePluginAccountBundledDeclarationDigestV1(target.manifest) !== declarationDigest) return null;
+            if (target.manifest.id !== declaration.manifest.id || target.manifest.version !== declaration.manifest.version) return null;
             if (!isAbsolute(declaration.pluginRootPath) || !isAbsolute(target.pluginRootPath)) return null;
             let packageRoot: string;
             try {
@@ -512,7 +510,7 @@ export function createBundledActivationSourceResolver(params: Readonly<{
             const sourceAuthority = bindPluginRuntimeSourceAuthority({ custody: {
                 kind: 'bundled_first_party', packagedRuntime: params.packagedRuntimeRoot && params.packagedRuntime
                     ? params.packagedRuntime
-                    : { kind: 'source_declaration', packageName, declarationDigest },
+                    : { kind: 'source_declaration', packageName },
             }, resolvedRoot: packageRoot });
             return {
                 kind: 'bundled', moduleId: packageName, sourceAuthority,
@@ -530,7 +528,7 @@ export function createBundledActivationSourceResolver(params: Readonly<{
                         const metadata = await lstat(manifestPath);
                         if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error('Bundled Account manifest must be a regular file');
                         const manifest = readCanonicalPluginManifest(JSON.parse(await readFile(manifestPath, 'utf8')));
-                        if (!manifest || computePluginAccountBundledDeclarationDigestV1(manifest) !== declarationDigest) {
+                        if (!manifest || manifest.id !== declaration.manifest.id || manifest.version !== declaration.manifest.version) {
                             throw new Error('Bundled Account declaration mismatch');
                         }
                     }

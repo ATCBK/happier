@@ -1,6 +1,6 @@
 import fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
-import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema, normalizePluginReleaseFactsV1, computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema, normalizePluginReleaseFactsV1, createPluginAccountBundledSelectionV1 } from '@happier-dev/protocol/plugins/availability';
 import type { DaemonPluginStructuredMessageActionMountedBinding } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
@@ -37,9 +37,7 @@ describe('Account nested Action caller provenance', () => {
             const registry = { contributes: {} };
             const resolveAccountExecutionSelection = async (currentPluginId: string) => readCurrentAccountPluginExecutionSelection({ pluginId: currentPluginId,
                 serverUrl: 'http://account-provenance.test', credentials: { token: 'fixture', encryption: null },
-                bundled: { manifest: currentManifest, sourceCustody: { kind: 'bundled_first_party', packagedRuntime: {
-                    kind: 'source_declaration', packageName: '@acme/portable', declarationDigest: computePluginAccountBundledDeclarationDigestV1(currentManifest),
-                } }, custodyId: computePluginAccountBundledDeclarationDigestV1(currentManifest) },
+                bundled: createPluginAccountBundledSelectionV1({ packageName: '@acme/portable', manifest: currentManifest }),
             });
             const resolveExecutionOriginContext = async () => ({ serverIdentityId: 'srv_account-provenance', machineId: receivingMachineId });
             const derive = (contributionLocalId = 'aggregate', callerBinding: DaemonPluginStructuredMessageActionMountedBinding = binding,
@@ -75,7 +73,6 @@ describe('Account nested Action caller provenance', () => {
             expect(await caller.isMountedCallerCurrent()).toBe(false);
             receivingMachineId = 'reading-machine';
             expect(await derive('not-declared')).toEqual({ status: 'unavailable' });
-            expect(await derive('aggregate', { ...binding, declarationDigest: `sha256:${'e'.repeat(64)}` })).toEqual({ status: 'unavailable' });
             expect(await derive('aggregate', { ...binding, materializationRef: {
                 pluginId, machineId: 'reading-machine', materializationId: 'fabricated-machine-custody',
             } })).toEqual({ status: 'unavailable' });
@@ -90,23 +87,21 @@ describe('Account nested Action caller provenance', () => {
             enabled = true;
             bundled = true;
             const bundledBinding: DaemonPluginStructuredMessageActionMountedBinding = { ...binding, pluginVersion: manifest.version,
-                declarationDigest: computePluginAccountBundledDeclarationDigestV1(manifest),
-                sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'invoking-app-bundle' } } };
+                sourceCustody: createPluginAccountBundledSelectionV1({ packageName: '@acme/portable', manifest }).sourceCustody };
             const bundledCaller = await derive('aggregate', bundledBinding);
             expect((await deriveSurface(bundledBinding)).status).toBe('available');
-            expect(await deriveSurface({ ...bundledBinding, declarationDigest: `sha256:${'e'.repeat(64)}` }))
-                .toEqual({ status: 'unavailable' });
             expect(bundledCaller.status).toBe('available');
             if (bundledCaller.status !== 'available') throw new Error('Expected bundled Account caller');
             expect(bundledCaller.caller).not.toHaveProperty('materialization');
             expect(bundledCaller.caller).not.toHaveProperty('executionOrigin');
             expect(await derive('aggregate', { ...bundledBinding, pluginVersion: '2.0.0' })).toEqual({ status: 'unavailable' });
-            expect(await derive('aggregate', { ...bundledBinding, declarationDigest: `sha256:${'e'.repeat(64)}` })).toEqual({ status: 'unavailable' });
-            expect(await derive('aggregate', { ...bundledBinding, declarationDigest: undefined })).toEqual({ status: 'unavailable' });
+            expect(await derive('aggregate', { ...bundledBinding, pluginVersion: undefined })).toEqual({ status: 'unavailable' });
             currentManifest = normalizePluginManifestV2({ ...manifest, contributes: { ...manifest.contributes,
                 actions: manifest.contributes.actions.map(action => ({ ...action, dangerLevel: 'writesRemote',
                     confirmation: { title: 'Confirm changed declaration' } })),
             } });
+            expect(await bundledCaller.isMountedCallerCurrent()).toBe(true);
+            currentManifest = normalizePluginManifestV2({ ...manifest, version: '2.0.0' });
             expect(await bundledCaller.isMountedCallerCurrent()).toBe(false);
             archiveDigestSha256 = binding.sourceCustody.archiveDigestSha256;
             enabled = false;

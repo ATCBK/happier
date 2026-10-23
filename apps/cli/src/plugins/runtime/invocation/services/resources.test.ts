@@ -381,7 +381,7 @@ describe('stable plugin resources owner', () => {
         expect(() => service.describe('shared')).toThrowError(expect.objectContaining({ code: 'plugin_generation_stale' }));
     });
 
-    it('rechecks durable committed-occurrenceId currentness before serving bytes', async () => {
+    it('rechecks the selected plugin occurrence before serving bytes', async () => {
         const value = await fixture('acme.alpha');
         let committedGenerationCurrent = true;
         const owner = await createStablePluginResourcesOwner({
@@ -389,7 +389,7 @@ describe('stable plugin resources owner', () => {
             generations: new Map([['acme.alpha', {
                 pluginId: 'acme.alpha', immutableGenerationId: 'alpha-7', rootPath: value.rootPath, files: [value.file],
             }]]),
-            isCommittedGenerationCurrent: async () => committedGenerationCurrent,
+            isPluginCurrent: async (pluginId) => pluginId === 'acme.alpha' && committedGenerationCurrent,
         });
         const service = owner.bind({
             pluginId: 'acme.alpha', signal: new AbortController().signal,

@@ -249,7 +249,6 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
     activationAdmissionFailuresByPluginId?: ReadonlyMap<string, Readonly<{
         immutableGenerationId: string;
         message: string;
-        isCurrent: () => Promise<boolean>;
     }>>;
     resolveActivationSource?: (target: ActivationTarget) => PluginActivationSource<PluginDaemonModuleNamespace> | null;
     invocationServices?: TargetInvocationServiceOwner;
@@ -357,13 +356,6 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
         );
         const admissionFailure = params.activationAdmissionFailuresByPluginId?.get(target.pluginId);
         if (admissionFailure) {
-            let current = false;
-            try {
-                current = await admissionFailure.isCurrent();
-            } catch {
-                current = false;
-            }
-            if (!current) continue;
             const diagnostic: PluginCompatibilityDiagnostic = {
                 code: 'plugin_daemon_module_load_failed',
                 message: projectPluginFailureText(new Error(
@@ -563,13 +555,6 @@ export async function activatePluginRuntimeRegistry(params: Readonly<{
             reportedAdmissionFailurePluginIds.has(pluginId)
             || (allowedPluginIds && !allowedPluginIds.has(pluginId))
         ) continue;
-        let current = false;
-        try {
-            current = await admissionFailure.isCurrent();
-        } catch {
-            current = false;
-        }
-        if (!current) continue;
         const diagnostic: PluginCompatibilityDiagnostic = {
             code: 'plugin_daemon_module_load_failed',
             message: projectPluginFailureText(new Error(

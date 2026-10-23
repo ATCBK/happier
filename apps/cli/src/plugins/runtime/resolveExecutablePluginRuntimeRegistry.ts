@@ -2250,7 +2250,6 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 Object.freeze({
                     immutableGenerationId: rejected.immutableGenerationId,
                     message: rejected.message,
-                    isCurrent: committed!.isCurrent,
                 }),
             ]),
         ),
@@ -2583,7 +2582,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
             ...(params?.resolveSessionResourceAccess
                 ? { resolveSessionResourceAccess: params.resolveSessionResourceAccess }
                 : {}),
-            isCommittedGenerationCurrent: committed.isCurrent,
+            isPluginCurrent: consumerAssembly.isPluginCurrent,
         })
         : undefined;
     for (const asset of authoritativeContributes.promptAssets ?? []) {
@@ -4048,9 +4047,6 @@ export async function resolveExecutablePluginRuntimeRegistry(
                                         && isRetainedPhysicalSourceCurrent?.(context.pluginId, context.occurrenceId, context.physicalSourceCustody) === true;
                                 }
                                 return context.isCurrent()
-                                    && isPluginConsumerCurrent(context.pluginId)
-                                    && await committed.isCurrent()
-                                    && context.isCurrent()
                                     && isPluginConsumerCurrent(context.pluginId);
                             } catch {
                                 return false;
@@ -4626,8 +4622,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
         async isOccurrenceCurrent(action) {
             return isPluginConsumerCurrent(action.pluginId)
                 && action.occurrenceId === readCurrentPluginOccurrenceId(action.pluginId)
-                && activatedRegistry.activatedPluginIds.has(action.pluginId)
-                && (!committed || await committed.isCurrent());
+                && activatedRegistry.activatedPluginIds.has(action.pluginId);
         },
         storagePaths: pluginStorePaths,
         daemonDatabase: daemonDatabaseHost,
@@ -4756,11 +4751,6 @@ export async function resolveExecutablePluginRuntimeRegistry(
                     && (callerSeed === undefined || callerSeed.isOccurrenceCurrent())
                     && activatedRegistry.targetRegistrations.includes(entry)
                 );
-                const isChannelCurrent = async (): Promise<boolean> => {
-                    if (!isChannelLocallyCurrent()) return false;
-                    if (!committed || !await committed.isCurrent()) return false;
-                    return isChannelLocallyCurrent();
-                };
                 const channelHostAccessRequests = resolveManifestHostAccessRequests({
                     manifest: channelTarget.manifest,
                     pluginId: ref.pluginId,
@@ -4772,7 +4762,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 return Object.freeze({
                     occurrenceId: entry.occurrenceId,
                     retirementSignal: resolveRuntimeConsumerLifecycle(ref.pluginId).retirementSignal,
-                    isCurrent: isChannelCurrent,
+                    isCurrent: isChannelLocallyCurrent,
                     async send(request, signal) {
                         const lifetime = createPluginInvocationLifetime(
                             composePluginConsumerSignal(ref.pluginId, signal),
@@ -4819,7 +4809,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                                 channelSeed,
                                 Object.freeze({
                                     ...hostPolicy.serviceBinding,
-                                    accountStorageCurrentness: isChannelCurrent,
+                                    accountStorageCurrentness: isChannelLocallyCurrent,
                                 }),
                             );
                             const context: PluginInvocationContext = Object.freeze({

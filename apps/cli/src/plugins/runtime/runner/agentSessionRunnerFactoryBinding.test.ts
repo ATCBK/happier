@@ -10,7 +10,7 @@ describe('Agent Session runner binding', () => {
   it.each([
     { kind: 'account_release', pluginId: 'acme.agent', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
     { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'ui-bundle' } },
-    { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/agent', declarationDigest: `sha256:${'b'.repeat(64)}` } },
+    { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/agent' } },
   ])('refuses portable declaration custody before admitting a Machine runner: $kind', (sourceCustody) => {
     expect(() => verifyAgentSessionRunnerBindingV1({
       kind: 'host_declarative_acp_v1', v: 1, pluginId: 'acme.agent', pluginVersion: '1.0.0',

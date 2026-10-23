@@ -556,13 +556,11 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
     callerSignal = createEmptySignal(),
   ): Promise<AutomationEventAdoptedDefinitionSetRefreshResultV1> {
     const signal = AbortSignal.any([params.occurrenceSignal, callerSignal]);
-    // One immutable Account crypto/currentness snapshot for the whole attempt.
-    // The adopted catalog publishes atomically, so nothing built under it is
-    // observable before the closing recheck admits it; re-reading the Account
-    // once per definition bought no guarantee the boundary rechecks do not.
-    const attemptAccountEncryption = await readCurrentAccountEncryption(signal);
-    if (attemptAccountEncryption === null) return { kind: 'discarded', reason: 'notCurrent' };
-    const attemptAccountCurrentness = attemptAccountEncryption.witness;
+    if (!await isCallerCurrent(signal)) return { kind: 'discarded', reason: 'notCurrent' };
+    // Resolve material only when changed rows need opening. One immutable
+    // snapshot covers every page; nothing becomes observable before the final
+    // fresh Account check admits the complete candidate.
+    let attemptAccountEncryption: AvailableAutomationAccountEncryptionV1 | null = null;
 
     let cursor: string | undefined;
     let expectedRevision: string | undefined;
@@ -599,8 +597,7 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
           ? { kind: 'discarded', reason: 'notCurrent' }
           : { kind: 'discarded', reason: 'unavailable' };
       }
-      // Page boundary: the attempt's Account content identity must still hold.
-      if (!await isCurrent(signal, attemptAccountCurrentness)) {
+      if (!await isCallerCurrent(signal)) {
         return { kind: 'discarded', reason: 'notCurrent' };
       }
 
@@ -639,6 +636,9 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
             continue;
           }
         }
+        if (!await isCurrent(signal, adopted.accountCurrentness)) {
+          return { kind: 'discarded', reason: 'notCurrent' };
+        }
         return { kind: 'unchanged', revision: result.revision };
       }
       if (!isCanonicalUnsignedRevision(result.revision)
@@ -664,6 +664,10 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
       } else if (result.scope !== expectedStoredDefinitionScope) {
         return { kind: 'discarded', reason: 'invalidPage' };
       }
+
+      attemptAccountEncryption ??= await readCurrentAccountEncryption(signal);
+      if (attemptAccountEncryption === null) return { kind: 'discarded', reason: 'notCurrent' };
+      const attemptAccountCurrentness = attemptAccountEncryption.witness;
 
       for (const storedDefinition of result.definitions) {
         const stableKey = definitionStableKey(storedDefinition);
@@ -907,7 +911,7 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
   async function requireAdoptedSnapshot(signal: AbortSignal): Promise<AdoptedSnapshot | null> {
     if (adopted !== null) return adopted;
     const refreshed = await joinAdoptedSnapshotRefresh(signal);
-    if (refreshed.kind === 'discarded' || !await isCurrent(signal)) return null;
+    if (refreshed.kind === 'discarded' || !await isCallerCurrent(signal)) return null;
     return adopted;
   }
 
@@ -955,7 +959,7 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
     },
     async listPublicProjection(request) {
       const signal = AbortSignal.any([params.occurrenceSignal, request.signal ?? createEmptySignal()]);
-      if (!await isCurrent(signal)) return { kind: 'unavailable' };
+      if (!await isCallerCurrent(signal)) return { kind: 'unavailable' };
       if (
         !request.accountId.trim()
         || !sameTransport(request.input.transport, params.transport)
@@ -970,7 +974,7 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
         // owner before it can publish an unchanged result. Cursor pages stay
         // bound to their already-adopted snapshot.
         const refreshed = await joinAdoptedSnapshotRefresh(signal);
-        if (refreshed.kind === 'discarded' || !await isCurrent(signal)) {
+        if (refreshed.kind === 'discarded' || !await isCallerCurrent(signal)) {
           return { kind: 'unavailable' };
         }
         snapshot = adopted;
@@ -978,6 +982,7 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
         snapshot = await requireAdoptedSnapshot(signal);
       }
       if (snapshot === null) return { kind: 'unavailable' };
+
       if (params.transport.kind === 'durablePush') {
         const reference = request.webhookInvocationReference;
         if (reference === undefined) return { kind: 'unavailable' };
@@ -1000,6 +1005,12 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
         }
       }
       if (snapshot === null) return { kind: 'unavailable' };
+      const accountCurrentness = snapshot.accountCurrentness;
+      const disclose = async (
+        projection: AutomationEventSourcesListResultV1,
+      ): Promise<AutomationEventAdoptedDefinitionPublicProjectionResultV1> => (
+        await isCurrent(signal, accountCurrentness) ? projection : { kind: 'unavailable' }
+      );
 
       const projectionDefinitions = params.transport.kind === 'durablePush'
         ? snapshot.definitions.filter((definition) => matchesDurableWebhookInvocation({
@@ -1030,16 +1041,16 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
             return AutomationEventSourcesListResultV1Schema.parse(classification);
           }
           if (classification.kind === 'unavailable') return { kind: 'unavailable' };
-          return AutomationEventSourcesListResultV1Schema.parse({
+          return await disclose(AutomationEventSourcesListResultV1Schema.parse({
             kind: 'unchanged',
             revision: snapshot.revision,
             checkpointRetirements: classification.checkpointRetirements,
-          });
+          }));
         }
-        return AutomationEventSourcesListResultV1Schema.parse({
+        return await disclose(AutomationEventSourcesListResultV1Schema.parse({
           kind: 'unchanged',
           revision: snapshot.revision,
-        });
+        }));
       }
 
       const scope = createPublicProjectionScopeFingerprint({
@@ -1096,13 +1107,12 @@ export function createAutomationEventAdoptedDefinitionSetV1(params: Readonly<{
           lastDefinitionKeyDigest: publicProjectionDefinitionKeyDigest(lastDefinition),
         })
         : null;
-      if (!await isCurrent(signal)) return { kind: 'unavailable' };
-      return AutomationEventSourcesListResultV1Schema.parse({
+      return await disclose(AutomationEventSourcesListResultV1Schema.parse({
         kind: 'page',
         revision: snapshot.revision,
         definitions,
         nextCursor,
-      });
+      }));
     },
     async prepareAdmission(request) {
       const signal = AbortSignal.any([params.occurrenceSignal, request.signal ?? createEmptySignal()]);

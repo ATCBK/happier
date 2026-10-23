@@ -323,6 +323,7 @@ function createAcpBoundaryContext(
                 }),
             }),
         }),
+        happierTools: Object.freeze({ readPluginToolCatalog: async () => Object.freeze([]) }),
         accountUsage: Object.freeze({
             resolveSourceContext: async () => null,
             recordSnapshot: async () => Object.freeze({

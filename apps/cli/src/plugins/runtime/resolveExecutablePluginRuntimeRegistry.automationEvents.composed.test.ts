@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { definePlugin, type PluginServices } from '@happier-dev/plugin-sdk';
 import type { PluginAccountCollectionForDefinition } from '@happier-dev/plugin-sdk/collections';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { AccountProfileSchema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/storage/artifactStoredContent';
 import {
     createPluginEventAutomationSetupResultV1JsonSchema,
     PluginEventAutomationHistoryGapResetActionInputV1JsonSchema,
@@ -25,6 +29,12 @@ import { loadInstalledPlugins } from '@/plugins/discovery/load/installed';
 import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { createDaemonApprovalExecutionOriginCurrentness, createDaemonExternalActionTargetResolver } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
+import { readAuthoritativePluginSlotOccurrence } from '@/plugins/runtime/reload/runtimeLease';
+import { fetchAccountProfile } from '@/api/accountProfile';
+import { configuration } from '@/configuration';
 import { createGithubAutomationEventCheckpointedPullObserver } from '../../../../../packages/plugins/scm-github/src/observations/githubAutomationEventObserver';
 import { GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION } from '../../../../../packages/plugins/scm-github/src/observations/githubAutomationEventCheckpoint';
 
@@ -40,6 +50,209 @@ function httpResponse<T>(data: T): AxiosResponse<T> {
 afterEach(() => vi.restoreAllMocks());
 
 describe('admitted Automation Event background caller composition', () => {
+    it('retains one explicitly required external-source health approval across wakes until the report executes', async () => {
+        const externalPluginId = 'example.pending-event-source';
+        const homeId = 'srv_automation_event_observer';
+        let currentMachineId = machineId;
+        const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-observer' })).toString('base64url')}.signature`,
+            encryption: null, credentialProvenance: 'stored_session' as const };
+        const report = { kind: 'catalogReconciliation', scope: { kind: 'checkpointedPull' },
+            observedRevision: '7', adoptedRevision: '7', state: 'current', scanStartedAt: null, nextRetryAt: null } as const;
+        vi.spyOn(persistence, 'readSettings').mockResolvedValue({ schemaVersion: 6, machineId });
+        vi.spyOn(globalThis, 'fetch').mockImplementation(async url => {
+            if (!['/v1/features', '/v1/features/authenticated'].includes(new URL(String(url)).pathname)) throw new Error('Unexpected fetch');
+            return new Response(JSON.stringify(FeaturesResponseSchema.parse({
+                features: {}, capabilities: { serverIdentity: { serverIdentityId: homeId } },
+            })), { status: 200 });
+        });
+        const artifacts = new Map<string, { id: string; header: string; body: string; headerVersion: number; bodyVersion: number; dataEncryptionKey: string;
+            ownerAccountId: string; access: 'owner'; encryptionMode: 'plain'; seq: number; createdAt: number; updatedAt: number }>();
+        const coordinator = getSharedBlockingApprovalCoordinator();
+        const catalogStates: string[] = [];
+        let invalidateDuringClaim = false;
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/encryption/currentness') return httpResponse({ mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+                recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } });
+            if (path === '/v1/account/profile') return httpResponse(AccountProfileSchema.parse({ id: 'account-observer' }));
+            if (path === '/v1/account/encryption') return httpResponse({ mode: 'plain', updatedAt: 1 });
+            const artifact = artifacts.get(path.split('/').at(-1)!);
+            if (artifact) return httpResponse(artifact);
+            throw new Error(`Unexpected GET ${path}`);
+        });
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            const path = new URL(String(url)).pathname;
+            if (path === AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1) {
+                AutomationEventStoredDefinitionsReadHttpRequestV1Schema.parse(body);
+                return httpResponse(AutomationEventStoredDefinitionsReadResultV1Schema.parse({ kind: 'page', revision: '7',
+                    definitions: [], nextCursor: null, eventDeclarationRelease: { release: { pluginId: externalPluginId, version: '1.0.0' },
+                        archiveDigestSha256: `sha256:${'a'.repeat(64)}` } }));
+            }
+            if (path === '/v1/artifacts') {
+                const value = body as { id: string; header: string; body: string };
+                artifacts.set(value.id, { ...value, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, ownerAccountId: 'account-observer',
+                    access: 'owner', encryptionMode: 'plain', seq: 1, createdAt: 1, updatedAt: 1 });
+                return httpResponse({ id: value.id, headerVersion: 1, bodyVersion: 1 });
+            }
+            if (path.startsWith('/v1/artifacts/')) {
+                const artifact = artifacts.get(path.split('/').at(-1)!);
+                if (!artifact) throw new Error('Unknown approval');
+                const value = body as { header: string; body: string; expectedHeaderVersion: number; expectedBodyVersion: number };
+                expect(value.expectedHeaderVersion).toBe(artifact.headerVersion);
+                expect(value.expectedBodyVersion).toBe(artifact.bodyVersion);
+                Object.assign(artifact, { header: value.header, body: value.body,
+                    headerVersion: artifact.headerVersion + 1, bodyVersion: artifact.bodyVersion + 1 });
+                if (invalidateDuringClaim && (await approvals.approvalsGet({ artifactId: artifact.id }))?.status === 'executing') {
+                    // OS/source identity changes after the human decision but
+                    // before its retained invocation reaches the status write.
+                    invalidateDuringClaim = false;
+                    currentMachineId = 'replacement-machine';
+                }
+                return httpResponse({ success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion });
+            }
+            if (path === AutomationEventActionHttpPathsV1['automation.event.source.status.report']) {
+                const request = AutomationEventActionHttpRequestSchemasV1['automation.event.source.status.report'].parse(body);
+                expect(request.caller.pluginId).toBe(externalPluginId);
+                if (request.input.kind === 'catalogReconciliation') catalogStates.push(request.input.state);
+                return httpResponse({});
+            }
+            throw new Error(`Unexpected POST ${path}`);
+        });
+        let wake: (() => Promise<void>) | undefined;
+        let published = 0;
+        const plugin = definePlugin({ id: externalPluginId, version: '1.0.0', entrypoints: { daemon: './daemon.mjs' },
+            actions: {
+                setup: { title: 'Setup', surfaces: ['plugin'], dangerLevel: 'safe', inputSchema: sourceConfigSchema,
+                    resultSchema: createPluginEventAutomationSetupResultV1JsonSchema(1, sourceConfigSchema),
+                    run: () => { throw new Error('Empty catalog must not run setup'); } },
+                reset: { title: 'Reset', surfaces: ['plugin'], dangerLevel: 'safe', inputSchema: PluginEventAutomationHistoryGapResetActionInputV1JsonSchema,
+                    resultSchema: PluginEventAutomationHistoryGapResetActionResultV1JsonSchema,
+                    run: () => { throw new Error('Empty catalog must not reset a source'); } },
+            },
+            events: { changed: { declaration: { kind: 'event', title: 'Changed', payloadSchema: { type: 'object' },
+                automation: { v: 1, eligible: true, source: { sourceContractVersion: 1, supportedObservationTransports: ['checkpointedPull'],
+                    sourceConfigSchema, setupActionRef: { pluginId: externalPluginId, localId: 'setup' },
+                    historyGapResetActionRef: { pluginId: externalPluginId, localId: 'reset' }, connectedAccountPurposeBindings: [] } },
+            } } },
+            backgroundServices: [{ declaration: { id: 'observer', title: 'External source' }, runner: async context => {
+                await context.services.actions.execute('automation.event.sources.list', listInput);
+                wake = async () => {
+                    await context.services.actions.execute('automation.event.source.status.report', report, { signal: context.signal });
+                    published += 1;
+                };
+                await new Promise<void>(resolve => {
+                    if (context.signal.aborted) resolve();
+                    else context.signal.addEventListener('abort', () => resolve(), { once: true });
+                });
+            } }],
+        });
+        const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [{ manifest: plugin.manifest,
+            files: { 'daemon.mjs': 'export function activate() {}' }, instantiateCommittedModule: () => ({ activate: plugin.activate }) }],
+            async resolveContributes(happyHomeDir) { return createResolvedContributionRegistry(projectLoadedPluginContributes({
+                loadResult: await loadInstalledPlugins({ happyHomeDir }), provenance: 'external' })); },
+            runtimeOptions: { scopedActionRuntime: { credentials,
+                actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({
+                    actionsSettingsV1: { v: 1, actions: { 'automation.event.source.status.report': { approvalRequiredSurfaces: ['plugin'] } } },
+                }), allowEnvironmentOverride: false }) }, resolveCurrentMachineId: () => currentMachineId,
+                resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: homeId, machineId: currentMachineId }) },
+        });
+        const pending: Promise<void>[] = [];
+        const approvals = createCliApprovalsArtifactStore({ credentials });
+        // The deciding person's boundary supplies UI presence. The ordinary
+        // Action executor, policy, Artifact store and source currentness stay real.
+        const decisionExecutor = createCliActionExecutorHarness({ credentials, token: credentials.token,
+            sessionId: 'cli-global', mode: 'plain', ctx: null,
+            serverId: configuration.activeServerId, serverHttpBaseUrl: configuration.apiServerUrl,
+            actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}), allowEnvironmentOverride: false }),
+        }, {
+            isApprovalExecutionOriginCurrent: createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account-observer', machineId,
+                serverId: configuration.activeServerId,
+                resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: homeId, machineId: currentMachineId }),
+                resolveCurrentPluginSourceCustody: async pluginId => readAuthoritativePluginSlotOccurrence(pluginId, { controller: fixture.controller })?.sourceCustody ?? null,
+                resolveTarget: createDaemonExternalActionTargetResolver({ credentials, serverApiUrl: configuration.apiServerUrl }),
+                isAccountCurrent: async () => (await fetchAccountProfile({ token: credentials.token })).id === 'account-observer',
+                listAccountApiTokens: async () => { throw new Error('A stored Account source must not enumerate API tokens'); },
+            }),
+        }).executor;
+        const decide = async (artifactId: string, decision: 'approve' | 'reject') => {
+            const result = await decisionExecutor.execute('approval.request.decide', { artifactId, decision }, {
+                surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+                serverIdentityId: homeId, runtimeAccountId: 'account-observer',
+            });
+            if (!result.ok) throw new Error(result.errorCode);
+            return result;
+        };
+        let wakeError: unknown;
+        const wakeSource = () => {
+            const promise = wake!();
+            void promise.catch(error => { wakeError = error; });
+            pending.push(promise);
+        };
+        try {
+            fixture.registry.startAdoptedBackgroundServices?.();
+            await vi.waitFor(() => expect(wake).toBeDefined());
+            wakeSource();
+            await vi.waitFor(() => { if (wakeError) throw wakeError; expect(artifacts.size).toBe(1); });
+            wakeSource();
+            await setImmediate();
+            expect(published).toBe(0); // Returning an approval envelope as success must fail here.
+            expect(catalogStates).toEqual([]);
+            expect(artifacts.size).toBe(1);
+            const artifactId = artifacts.keys().next().value!;
+            const request = ApprovalRequestV2Schema.parse(await approvals.approvalsGet({ artifactId }));
+            expect(request).toMatchObject({ actionId: 'automation.event.source.status.report', status: 'open',
+                approval: { flow: 'blocking' }, executionOriginV1: { machineId, caller: { kind: 'plugin', pluginId: externalPluginId } } });
+            await vi.waitFor(() => expect(coordinator.getLiveWaiterCount(artifactId)).toBe(1));
+            await decide(artifactId, 'approve');
+            const completed = await Promise.allSettled(pending);
+            const settledApproval = ApprovalRequestV2Schema.parse(await approvals.approvalsGet({ artifactId }));
+            expect(settledApproval.execution?.details ?? null).toBeNull();
+            expect(settledApproval.execution?.errorCode ?? null).toBeNull();
+            expect({ status: settledApproval.status, execution: settledApproval.execution }).toMatchObject({ status: 'executed', execution: { ok: true } });
+            expect(completed).toEqual([{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }]);
+            expect(catalogStates).toEqual(['current']);
+            expect(published).toBe(2);
+            expect(artifacts.size).toBe(1);
+            wakeSource();
+            await vi.waitFor(() => expect(artifacts.size).toBe(2));
+            expect(published).toBe(2);
+            const rejectedId = [...artifacts.keys()][1]!;
+            await vi.waitFor(() => expect(coordinator.getLiveWaiterCount(rejectedId)).toBe(1));
+            await decide(rejectedId, 'reject');
+            await expect(pending[2]).rejects.toMatchObject({ code: 'approval_rejected' });
+            expect(catalogStates).toEqual(['current']);
+            expect(published).toBe(2);
+            expect(ApprovalRequestV2Schema.parse(await approvals.approvalsGet({ artifactId: rejectedId })).status).toBe('rejected');
+            wakeError = undefined;
+            wakeSource();
+            await vi.waitFor(() => { if (wakeError) throw wakeError; expect(artifacts.size).toBe(3); });
+            const staleId = [...artifacts.keys()][2]!;
+            await vi.waitFor(() => expect(coordinator.getLiveWaiterCount(staleId)).toBe(1));
+            invalidateDuringClaim = true;
+            await decide(staleId, 'approve');
+            await expect(pending[3]).rejects.toMatchObject({ code: 'approval_stale' });
+            expect(catalogStates).toEqual(['current']);
+            currentMachineId = machineId;
+            wakeError = undefined;
+            wakeSource();
+            await vi.waitFor(() => { if (wakeError) throw wakeError; expect(artifacts.size).toBe(4); });
+            const retiredId = [...artifacts.keys()][3]!;
+            await vi.waitFor(() => expect(coordinator.getLiveWaiterCount(retiredId)).toBe(1));
+            await fixture.lease.release();
+            await fixture.controller.shutdown();
+            expect((await Promise.allSettled([pending[4]]))[0]?.status).toBe('rejected');
+            expect(ApprovalRequestV2Schema.parse(await approvals.approvalsGet({ artifactId: retiredId })).status).toBe('canceled');
+            expect(catalogStates).toEqual(['current']);
+        } finally {
+            for (const artifactId of artifacts.keys()) coordinator.cancelApproval(artifactId);
+            await fixture.lease.release();
+            await fixture.controller.shutdown();
+            await Promise.allSettled(pending);
+            await fixture.dispose();
+        }
+    });
+
     it('admits current Conversation callers but never borrows replacement or retired occurrence authority', async () => {
         const conversationPluginId = 'example.conversation-caller';
         vi.spyOn(persistence, 'readSettings').mockResolvedValue({ schemaVersion: 6, machineId });
@@ -122,7 +335,7 @@ describe('admitted Automation Event background caller composition', () => {
         }
     });
 
-    it('adopts an empty catalog with authorized status writes and parks, without lending successor authority', async () => {
+    it('adopts an empty catalog with default-policy status writes and parks, without lending successor authority', async () => {
         // HTTP and OS persistence are boundaries; signing, source admission,
         // caller stamping, Action execution and definition adoption stay real.
         vi.spyOn(persistence, 'readSettings').mockResolvedValue({ schemaVersion: 6, onboardingCompleted: true, machineId });
@@ -136,10 +349,7 @@ describe('admitted Automation Event background caller composition', () => {
         });
         const callers: Array<ReturnType<typeof AutomationEventStoredDefinitionsReadHttpRequestV1Schema.parse>['caller']> = [];
         const catalogStates: string[] = [];
-        const accountSettings = accountSettingsParse({ actionsSettingsV1: {
-            v: 1, actions: {},
-            approvalWaivedSurfaces: { 'automation.event.source.status.report': ['plugin'] },
-        } });
+        const accountSettings = accountSettingsParse({});
         const post = vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
             if (String(url).endsWith(AUTOMATION_EVENT_STORED_DEFINITIONS_READ_HTTP_PATH_V1)) {
                 callers.push(AutomationEventStoredDefinitionsReadHttpRequestV1Schema.parse(body).caller);
@@ -225,8 +435,6 @@ describe('admitted Automation Event background caller composition', () => {
                 runtimeOptions: {
                     scopedActionRuntime: {
                         credentials: { token: 'fixture-account-token', encryption: null },
-                        // This Account has explicitly allowed automatic source
-                        // status writes; defaults would correctly request Ask.
                         actionsSettingsProvider: createActionSettingsProvider({
                             getAccountSettings: () => accountSettings,
                             allowEnvironmentOverride: false,

@@ -25,8 +25,8 @@ import type {
 } from '@happier-dev/plugin-sdk/interactions';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import type { ActionExecuteResult, ActionExecutorContext, ActionPluginCaller, ActionCaller, ActionId } from '@happier-dev/protocol/actions';
+import { sameStrictJsonValue, StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
+import type { ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps, ActionPluginCaller, ActionCaller, ActionId } from '@happier-dev/protocol/actions';
 import { arePluginMachineMaterializationRefsEqual, arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionRouting, PluginMachineExecutionOriginV1Schema, PluginMachineExecutionRoutingV1Schema, type PluginMachineExecutionRoutingV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { readPluginActionFailureAuthorPayload } from '@happier-dev/protocol/plugins/actions/invocation';
@@ -89,7 +89,7 @@ export type PluginActionsHostExecutor = Readonly<{
             signal: AbortSignal;
         }>,
     ): Promise<ActionExecuteResult>;
-    bindInvocation?(signal: AbortSignal): PluginActionsHostExecutor;
+    bindInvocation?(signal: AbortSignal, approvalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime']): PluginActionsHostExecutor;
 }>;
 
 export type ContributedActionInvocationResult = Readonly<
@@ -448,7 +448,7 @@ export function createPluginInvocationActionsService(params: Readonly<{
         );
         return result.value as TResult;
     };
-    const execute = async (
+    const executeOnce = async (
         actionOrRef: PluginInvocableActionId | PluginContributionRef,
         input: unknown,
         options?: PluginCancellationOptions,
@@ -549,7 +549,18 @@ export function createPluginInvocationActionsService(params: Readonly<{
             }
         };
         const source = params.seed.approvalContext;
-        const result = await actionExecutor.execute(actionId, parsedPluginInput.data, {
+        // Release the bound executor's invocation resources after this report,
+        // rather than accumulating them on a long-lived background source.
+        const reportRetirement = actionId === 'automation.event.source.status.report' ? new AbortController() : null;
+        const executionSignal = reportRetirement ? AbortSignal.any([signal, reportRetirement.signal]) : signal;
+        const reportExecutor = actionId === 'automation.event.source.status.report'
+            ? params.actionExecutor.bindInvocation?.(executionSignal, {
+                actionId, signal: executionSignal, surface: 'plugin',
+                isCurrent: () => !signal.aborted && params.seed.isOccurrenceCurrent()
+                    && hasCurrentContributedActionCaller(params.seed, actionCaller),
+            }) ?? actionExecutor
+            : actionExecutor;
+        const result = await reportExecutor.execute(actionId, parsedPluginInput.data, {
             ...(executionOriginRequest ? { contributedActionExecutionOrigin: executionOriginRequest } : {}),
             // Preserve original execution/signing custody without inheriting
             // present-person authority or a bypass from the initiating call.
@@ -578,7 +589,7 @@ export function createPluginInvocationActionsService(params: Readonly<{
             ...(params.seed.surface === 'agent'
                 && (actionId === 'session.needs_you.raise' || actionId === 'session.user_action.answer')
                 ? { readSessionActionRpcOrigin } : {}),
-            signal,
+            signal: executionSignal,
             ...(attribution ? { actionRequestAttributionV1: materializeActionRequestAttributionV1(attribution) } : {}),
             ...(params.seed.surface === 'agent'
                 ? {
@@ -604,6 +615,8 @@ export function createPluginInvocationActionsService(params: Readonly<{
             ...(params.seed.bypassActionInterception === true
                 ? { bypassActionInterception: true }
                 : {}),
+        }).finally(() => {
+            reportRetirement?.abort();
         });
         const inactiveStartDetails = actionId === 'execution.run.start'
             ? withExecutionRunStartFailureDetails(undefined, 'outcomeUnknown')
@@ -662,6 +675,30 @@ export function createPluginInvocationActionsService(params: Readonly<{
             });
         }
         return parsedResult.data;
+    };
+
+    // Status publication retains one live invocation while the canonical
+    // Action approval waiter owns consent and execution. Repeated source wakes
+    // observe that invocation, rather than creating another approval. This is
+    // service-local interest only; settlement and retirement release it.
+    const pendingStatusReports: Array<Readonly<{ input: JsonValue; signal: AbortSignal; result: Promise<unknown> }>> = [];
+    const execute: typeof executeOnce = async (actionOrRef, input, options, executionOriginRequest) => {
+        if (actionOrRef !== 'automation.event.source.status.report') {
+            return await executeOnce(actionOrRef, input, options, executionOriginRequest);
+        }
+        const signal = options?.signal ?? params.seed.signal;
+        throwIfInactive(params.seed, signal);
+        const parsed = StrictJsonValueSchema.safeParse(input);
+        if (!parsed.success) return await executeOnce(actionOrRef, input, options, executionOriginRequest);
+        const pending = pendingStatusReports.find(report => report.signal === signal && sameStrictJsonValue(report.input, parsed.data));
+        if (pending) return await pending.result;
+        const report = { input: parsed.data, signal, result: executeOnce(actionOrRef, parsed.data, options, executionOriginRequest) };
+        pendingStatusReports.push(report);
+        try {
+            return await report.result;
+        } finally {
+            pendingStatusReports.splice(pendingStatusReports.indexOf(report), 1);
+        }
     };
 
     const executeWithExecutionOrigin = async (

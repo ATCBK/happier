@@ -3,17 +3,15 @@ import type { ApiMachineClient } from '@/api/apiMachine';
 import type { PluginWebhookDaemonWorkerHandleV1 } from './pluginWebhookDaemonWorker';
 
 /**
- * AccountChange is durable/currentness-bearing; this listener only converts
- * its optional socket hint into a trigger for the daemon's existing
- * single-flight polling owner. It never receives webhook delivery content.
+ * The existing Account feed classifies durable queue/endpoint and admission
+ * invalidations before waking the single-flight worker. Unrelated Account
+ * traffic must not cancel its parked claim. No delivery content is carried.
  */
 export function attachPluginWebhookDaemonWakeV1(params: Readonly<{
-  apiMachine: Pick<ApiMachineClient, 'onUpdate'>;
+  apiMachine: Pick<ApiMachineClient, 'onPluginWebhookInvalidated'>;
   getWorker: () => Pick<PluginWebhookDaemonWorkerHandleV1, 'trigger'> | null;
 }>): () => void {
-  return params.apiMachine.onUpdate((update) => {
-    if (update.body.t !== 'account-change') return;
+  return params.apiMachine.onPluginWebhookInvalidated(() => {
     params.getWorker()?.trigger();
-    return true;
   });
 }

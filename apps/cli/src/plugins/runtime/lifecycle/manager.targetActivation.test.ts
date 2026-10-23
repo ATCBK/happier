@@ -79,6 +79,25 @@ async function createCommittedFileBackedFixtureActivationSource(params: Readonly
 }
 
 describe('target activation publication', () => {
+    it('reports captured source-admission failures without another currentness authority', async () => {
+        const registry = await activatePluginRuntimeRegistry({
+            contributes: createResolvedContributionRegistry({}),
+            generation: 1,
+            activationAdmissionFailuresByPluginId: new Map([['acme.missing', {
+                immutableGenerationId: 'missing-generation',
+                message: 'The installed manifest is missing',
+            }]]),
+        });
+        try {
+            expect(registry.activatedPluginIds.has('acme.missing')).toBe(false);
+            expect(registry.pluginDiagnosticsByPluginId['acme.missing']).toEqual([
+                expect.objectContaining({ code: 'plugin_daemon_module_load_failed' }),
+            ]);
+        } finally {
+            await registry.dispose();
+        }
+    });
+
     it('resolves the public native command and environment, refusing late retired results', async () => {
         const projectRoot = await mkdtemp(join(tmpdir(), 'happier-native-adapter-project-'));
         const configContent = '[tasks]\ncheck = "echo checked"';

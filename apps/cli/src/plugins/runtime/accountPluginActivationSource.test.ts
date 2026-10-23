@@ -304,7 +304,7 @@ describe('Account activation source assembly', () => {
             expect(list().some(action => action.id === `${pluginId}/actions/echo`)).toBe(false);
         } finally { await runtime?.dispose(); restore(); await app.close(); await rm(home, { recursive: true, force: true }); }
     });
-    it('loads a current host-bundled portable declaration without an Account release or Machine installation', async () => {
+    it.each(['Account disable', 'same-version source retirement'] as const)('loads a current host-bundled declaration and refuses it after %s', async retirement => {
         const home = await mkdtemp(join(tmpdir(), 'account-bundled-source-'));
         const app = fastify();
         const { pluginId, manifest, generated, files, setBundledFallback, setEnabled } = await registerAuthoredAccountActionRelease(app, 'owner');
@@ -323,12 +323,13 @@ describe('Account activation source assembly', () => {
         setBundledFallback();
         await app.ready();
         const restore = installAxiosFastifyAdapter({ app, origin: 'http://account-bundled-source.test' });
+        let current = true;
         try {
             const source = await resolveAccountPluginActivationSources({
                 contributes: createResolvedContributionRegistry(projectLoadedPluginContributes({ provenance: 'first_party',
                     loadResult: { loadedPlugins: [declaration], diagnosticsByPluginId: {} } })),
                 paths: resolvePluginStorePaths({ happyHomeDir: home }), credentials: { token: 'fixture', encryption: null },
-                serverUrl: 'http://account-bundled-source.test', isCurrent: () => true,
+                serverUrl: 'http://account-bundled-source.test', isCurrent: () => current,
                 resolveBundledActivationSource: createBundledActivationSourceResolver({ bundledPackageNames: [packageName],
                     bundledDeclarations: [declaration] }),
             });
@@ -337,8 +338,12 @@ describe('Account activation source assembly', () => {
             expect(source.contributes.activationTargets).toMatchObject([{ daemonEntryPath: null,
                 account: { artifactId: 'account-runtime', exportName: 'activate' } }]);
             expect(typeof (await source.sourcesByPluginId.get(pluginId)?.resolveRelativeModule?.('account-runtime'))?.module.activate).toBe('function');
-            setBundledFallback(false);
-            setEnabled(false);
+            if (retirement === 'Account disable') {
+                setBundledFallback(false);
+                setEnabled(false);
+            } else {
+                current = false;
+            }
             expect(await source.revalidate(pluginId)).toBe(false);
             await expect(source.sourcesByPluginId.get(pluginId)?.resolveRelativeModule?.('account-runtime')).rejects.toThrow('plugin_account_execution_retired');
         } finally { restore(); await app.close(); await rm(home, { recursive: true, force: true }); }

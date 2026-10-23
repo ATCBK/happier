@@ -1,8 +1,6 @@
 import axios from 'axios';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes as nodeRandomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
-import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityCollectionWritersClaimActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
@@ -119,6 +117,8 @@ export type AccountPluginDataStorageHostDependencies = Readonly<{
      * and that declares Account-scoped contributions. Only such a plugin
      * claims a release-less Account intent with it; a managed portable
      * install is selected by the present user through its release.
+     * The admitted occurrence owns a stable manifest reference; replacing it
+     * denotes a new declaration, independently of code-byte identity.
      */
     resolveReleaseLessDeclaration?: (pluginId: string) => CanonicalPluginManifest | null;
     /** The exact declaring module, loaded by the existing activation/source owner. */
@@ -637,7 +637,8 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
     const subscribeChanges = params.subscribeChanges ?? subscribePluginAccountCollectionWatchInvalidation;
     const resolveReleaseLessDeclaration = params.resolveReleaseLessDeclaration ?? (() => null);
     type WriterClaim = Readonly<{
-        declarationDigest: string;
+        manifest: CanonicalPluginManifest;
+        encodedClaim: string | null;
         occurrenceId: string | undefined;
         accountLifetimeToken: number;
         availabilityChangeKey: string;
@@ -645,12 +646,6 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
         result: Promise<PluginError | null>;
     }>;
     const writerClaimsByScope = new Map<string, WriterClaim>();
-    // Admitted manifests are immutable. Prepare their digest and wire bytes
-    // once per projection; retry/currentness state remains with writerClaimsByScope.
-    const preparedDeclarations = new WeakMap<CanonicalPluginManifest, Readonly<{
-        digest: string;
-        encodedClaim: string | null;
-    }>>();
 
     const readKnownCollectionLimits = (): PluginDataCollectionsCapabilities | undefined => {
         try {
@@ -840,29 +835,35 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             const scopeKey = currentAccountScopeKey();
             if (!manifest || scopeKey === null) return;
             const key = `${scopeKey}\u0000${lifecycle.pluginId}`;
-            let declaration = preparedDeclarations.get(manifest);
-            if (!declaration || declaration.encodedClaim === null) {
-                declaration = Object.freeze({
-                    digest: declaration?.digest
-                        ?? computePluginUiArtifactSha256DigestV1(new TextEncoder().encode(createCanonicalJsonSigningInput(manifest))),
-                    encodedClaim: serializeRequestBody({ manifest }),
-                });
-                preparedDeclarations.set(manifest, declaration);
-            }
-            const declarationDigest = declaration.digest;
             const availabilityChangeKey = readPluginAccountAvailabilityChangeKey(scopeKey, lifecycle.pluginId);
             let claim = writerClaimsByScope.get(key);
-            if (!claim || claim.declarationDigest !== declarationDigest
+            let availabilityRefused = false;
+            while (claim && claim.manifest === manifest
+                && claim.occurrenceId === lifecycle.occurrenceId
+                && claim.accountLifetimeToken === lifecycle.accountLifetimeToken
+                && claim.availabilityChangeKey !== availabilityChangeKey) {
+                const refusal = await claim.result;
+                // A peer may already have published the retry while this caller waited.
+                const currentClaim = writerClaimsByScope.get(key);
+                if (currentClaim !== claim) {
+                    claim = currentClaim;
+                    continue;
+                }
+                availabilityRefused = refusal !== null;
+                break;
+            }
+            if (!claim || claim.manifest !== manifest
                 || claim.occurrenceId !== lifecycle.occurrenceId
                 || claim.accountLifetimeToken !== lifecycle.accountLifetimeToken
-                || claim.availabilityChangeKey !== availabilityChangeKey) {
+                || availabilityRefused) {
+                const encodedClaim = claim?.manifest === manifest ? claim.encodedClaim : serializeRequestBody({ manifest });
                 // A background publication can start the promise another Action later awaits.
                 // This diagnostic-only id joins those records without exposing claim inputs.
                 const diagnosticClaimAttemptId = process.env.HAPPIER_WEB_LATENCY_TRACE === '1' ? randomUUID() : undefined;
                 traceExternalActionInnerStage('collection.writer_claim.start', {
                     ...(diagnosticClaimAttemptId ? { claimAttemptId: diagnosticClaimAttemptId } : {}),
                     claimAbsent: claim === undefined,
-                    declarationChanged: claim !== undefined && claim.declarationDigest !== declarationDigest,
+                    declarationChanged: claim !== undefined && claim.manifest !== manifest,
                     occurrenceChanged: claim !== undefined && claim.occurrenceId !== lifecycle.occurrenceId,
                     accountChanged: claim !== undefined && claim.accountLifetimeToken !== lifecycle.accountLifetimeToken,
                     availabilityChanged: claim !== undefined && claim.availabilityChangeKey !== availabilityChangeKey,
@@ -870,7 +871,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                 const claimOnce = (prepare?: true) => post({
                     path: COLLECTION_WRITERS_CLAIM_HTTP_PATH,
                     body: { manifest, ...(prepare ? { prepare } : {}) },
-                    ...(prepare ? {} : { encodedBody: declaration.encodedClaim }),
+                    ...(prepare ? {} : { encodedBody: encodedClaim }),
                     credentials,
                     ...(operationSignal ? { operationSignal } : {}),
                     parseError: (value, status) => {
@@ -923,12 +924,12 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     }
                 })().then(() => null, (error: unknown) => {
                     if (isPluginError(error) && error.code === 'plugin_collection_contract_conflict') return error;
-                    if (isPluginError(error) && error.code === COLLECTION_WRITERS_CLAIM_SETTLED_REFUSAL) return null;
+                    if (isPluginError(error) && error.code === COLLECTION_WRITERS_CLAIM_SETTLED_REFUSAL) return error;
                     // An obsolete request must not evict a newer input's claim.
                     if (writerClaimsByScope.get(key)?.result === result) writerClaimsByScope.delete(key);
                     return null;
                 });
-                claim = { declarationDigest, occurrenceId: lifecycle.occurrenceId,
+                claim = { manifest, encodedClaim, occurrenceId: lifecycle.occurrenceId,
                     accountLifetimeToken: lifecycle.accountLifetimeToken, availabilityChangeKey, result,
                     ...(diagnosticClaimAttemptId ? { diagnosticClaimAttemptId } : {}) };
                 writerClaimsByScope.set(key, claim);
@@ -937,7 +938,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             const refusal = await runTracedExternalActionInnerStage('collection.writer_claim.wait', () => retainedClaim.result,
                 retainedClaim.diagnosticClaimAttemptId ? { claimAttemptId: retainedClaim.diagnosticClaimAttemptId } : {});
             await assertBoundCurrent(lifecycle, operationSignal);
-            if (refusal) throw refusal;
+            if (refusal && refusal.code !== COLLECTION_WRITERS_CLAIM_SETTLED_REFUSAL) throw refusal;
         };
         const request = async (input: Readonly<{
             path: string;

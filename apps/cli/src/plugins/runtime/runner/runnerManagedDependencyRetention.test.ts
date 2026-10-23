@@ -22,7 +22,7 @@ describe('Runner managed Provider retained authority', () => {
     it.each([
         { kind: 'account_release', pluginId: 'acme.provider', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
         { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'ui-bundle' } },
-        { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/provider', declarationDigest: `sha256:${'b'.repeat(64)}` } },
+        { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/provider' } },
     ])('refuses non-Machine executable custody in retained dependencies: $kind', (sourceCustody) => {
         expect(RunnerManagedDependencyRetentionV1Schema.safeParse({
             v: 1, sourceCustodies: [sourceCustody], qualifiedDependencyIds: [],

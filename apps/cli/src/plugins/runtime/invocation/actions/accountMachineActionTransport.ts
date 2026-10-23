@@ -3,7 +3,6 @@ import type { TargetedContributionManifestDeclaration } from '@happier-dev/plugi
 import { DaemonPluginUiTargetedContributionsReadRequestSchema, DaemonPluginUiTargetedContributionsReadResponseSchema,
     DaemonPluginStructuredMessageActionExecuteResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { DaemonPluginStructuredMessageActionExecuteRequestSchema } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
-import { computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { callExactMachineRpc, readMachineRpcRequestDisposition } from '@/session/transport/rpc/machineRpc';
@@ -51,8 +50,6 @@ export async function invokeAccountMachineSourceAction(input: AccountMachineTran
         ...(input.request.sessionId ? { sessionId: input.request.sessionId } : {}),
         invocation: { kind: 'clientPluginAction', clientActionBinding: {
             pluginId: input.callerManifest.id, pluginVersion: input.callerManifest.version,
-            ...(input.callerSourceCustody.kind === 'bundled_first_party'
-                ? { declarationDigest: computePluginAccountBundledDeclarationDigestV1(input.callerManifest) } : {}),
             contributionLocalId, occurrenceId: caller.occurrenceId, sourceCustody: input.callerSourceCustody,
         } },
     });

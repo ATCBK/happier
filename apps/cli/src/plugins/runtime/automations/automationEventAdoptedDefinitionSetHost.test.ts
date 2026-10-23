@@ -20,11 +20,12 @@ import {
 } from '@happier-dev/protocol';
 
 const transportMocks = vi.hoisted(() => ({
+  get: vi.fn(),
   post: vi.fn(),
   createPublisherHeader: vi.fn(),
 }));
 
-vi.mock('axios', () => ({ default: { post: transportMocks.post } }));
+vi.mock('axios', () => ({ default: { get: transportMocks.get, post: transportMocks.post } }));
 vi.mock('@/plugins/installations/publisherProof', () => ({
   createDefaultPluginInstallationPublisherHeader: transportMocks.createPublisherHeader,
 }));
@@ -1125,7 +1126,79 @@ describe('adopted definition set Account-currentness cost', () => {
     const oneDefinition = await measure(1);
     const twentyDefinitions = await measure(20);
     expect(twentyDefinitions).toBe(oneDefinition);
-    // Attempt snapshot, page boundary, closing boundary.
-    expect(oneDefinition).toBe(3);
+    // One opening snapshot and one final admission, independent of pages.
+    expect(oneDefinition).toBe(2);
+  });
+
+  it('reads fresh Account authority only at unchanged refresh and public disclosure boundaries', async () => {
+    let currentness = await plainCurrentness();
+    transportMocks.get.mockReset().mockImplementation(async () => ({ status: 200, data: currentness }));
+    transportMocks.createPublisherHeader.mockResolvedValue('publisher-proof');
+    let heldRead: (() => void) | undefined;
+    let releaseRead: (() => void) | undefined;
+    transportMocks.post.mockImplementation(async (_url, body: { input: { knownRevision?: string } }) => {
+      if (body.input.knownRevision === '7') {
+        if (heldRead) {
+          heldRead();
+          await new Promise<void>(resolve => { releaseRead = resolve; });
+        }
+        return { data: { kind: 'unchanged', revision: '7', eventDeclarationRelease } };
+      }
+      return { data: { kind: 'page', revision: '7', eventDeclarationRelease,
+        definitions: [storedDefinition()], nextCursor: null } };
+    });
+    const owner = createAutomationEventAdoptedDefinitionSetHostV1({
+      credentials, caller, occurrenceId, sourceCustody,
+      transport: { kind: 'checkpointedPull' }, occurrenceSignal: new AbortController().signal,
+      isOccurrenceCurrent: () => true, revalidateCallerMaterialization: async () => true,
+      revalidateCallerOccurrence: async () => true,
+    });
+    await expect(owner.refresh()).resolves.toEqual({ kind: 'adopted', revision: '7' });
+    transportMocks.get.mockClear();
+    await expect(owner.refresh()).resolves.toEqual({ kind: 'unchanged', revision: '7' });
+    expect(transportMocks.get).toHaveBeenCalledTimes(1);
+    transportMocks.get.mockClear();
+    await expect(owner.listPublicProjection({ accountId: 'account-1', input: {
+      transport: { kind: 'checkpointedPull' }, pageSize: 500, knownRevision: '7',
+    } })).resolves.toEqual({ kind: 'unchanged', revision: '7' });
+    expect(transportMocks.get).toHaveBeenCalledTimes(2);
+
+    const reading = new Promise<void>(resolve => { heldRead = resolve; });
+    const pending = owner.listPublicProjection({ accountId: 'account-1', input: {
+      transport: { kind: 'checkpointedPull' }, pageSize: 500, knownRevision: '7',
+    } });
+    await reading;
+    // The stale adopted Plain snapshot must not authorize disclosure after a
+    // Home mode change, even before its socket publication reaches the host.
+    const material = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee',
+      material: { type: 'legacy', secret: credentials.encryption.secret } });
+    currentness = { ...currentness, mode: 'e2ee', version: 8,
+      signingKeyFingerprint: 'aemk1_signing', contentKeyFingerprint:
+        convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint),
+      updatedAt: 8, recipientEnvelopeReadiness: { status: 'available' } };
+    releaseRead?.();
+    await expect(pending).resolves.toEqual({ kind: 'unavailable' });
+
+    const changedCurrentness = currentness;
+    currentness = await plainCurrentness();
+    let startedAuthority!: () => void;
+    let releaseAuthority!: () => void;
+    const authorityStarted = new Promise<void>(resolve => { startedAuthority = resolve; });
+    const authorityResponse = new Promise<void>(resolve => { releaseAuthority = resolve; });
+    transportMocks.get.mockClear().mockImplementation(async () => {
+      startedAuthority();
+      await authorityResponse;
+      return { status: 200, data: currentness };
+    });
+    // An already adopted page does not refresh the stored definitions. Its
+    // own final HTTP admission must still observe an unpublished mode change.
+    const cachedPage = owner.listPublicProjection({ accountId: 'account-1', input: {
+      transport: { kind: 'checkpointedPull' }, pageSize: 500,
+    } });
+    await authorityStarted;
+    currentness = changedCurrentness;
+    releaseAuthority();
+    await expect(cachedPage).resolves.toEqual({ kind: 'unavailable' });
+    expect(transportMocks.get).toHaveBeenCalledTimes(1);
   });
 });

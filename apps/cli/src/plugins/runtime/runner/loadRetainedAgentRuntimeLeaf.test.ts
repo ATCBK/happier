@@ -437,7 +437,7 @@ describe('loadRetainedAgentRuntimeLeaf', () => {
   it.each([
     { kind: 'account_release', pluginId: 'acme.runner-loader', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
     { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'ui-bundle' } },
-    { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/runner-loader', declarationDigest: `sha256:${'b'.repeat(64)}` } },
+    { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@acme/runner-loader' } },
   ])('refuses portable custody at the retained Agent load boundary: $kind', async (sourceCustody) => {
     await expect(loadRetainedAgentRuntimeLeaf({
       paths: resolvePluginStorePaths({ happyHomeDir: join(tmpdir(), 'happier-portable-no-machine-root') }),

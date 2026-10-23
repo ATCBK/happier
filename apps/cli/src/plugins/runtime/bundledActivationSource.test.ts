@@ -12,7 +12,6 @@ import {
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
-import { computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
 
 import {
   createBundledActivationSourceResolver,
@@ -146,8 +145,8 @@ describe('createBundledActivationSourceResolver', () => {
     const target = { pluginId: manifest.id, daemonEntryPath: daemon ? packageName : null, sourceSpec, pluginRootPath: packageRoot, manifest };
     const source = resolveSource(target, { realm: 'account' });
     expect(source?.sourceAuthority).toEqual({ kind: 'bundled_first_party',
-      packagedRuntime: mode === 'packaged' ? packagedRuntime : { kind: 'source_declaration', packageName,
-        declarationDigest: computePluginAccountBundledDeclarationDigestV1(manifest) }, resolvedRoot: await realpath(packageRoot) });
+      packagedRuntime: mode === 'packaged' ? packagedRuntime : { kind: 'source_declaration', packageName },
+      resolvedRoot: await realpath(packageRoot) });
     expect(resolveSource({ ...target, manifest: { ...manifest, version: '9.0.0' } }, { realm: 'account' })).toBeNull();
     expect(resolveSource({ ...target, pluginRootPath: runtimeRoot }, { realm: 'account' })).toBeNull();
     await source?.prepare?.();

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import * as collectionCodec from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
+import * as artifactIntegrity from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import {
     FeaturesResponseSchema,
     PLUGIN_COLLECTION_DEFAULT_DEPLOYMENT_LIMITS_V1,
@@ -1438,7 +1439,7 @@ describe('Account plugin Data storage host', () => {
             expect(calls.filter((url) => url === CLAIM_URL)).toHaveLength(2);
         });
 
-        it('encodes an immutable declaration once across retryable claims without transport reparsing', async () => {
+        it('uses the admitted declaration identity without hashing or transport reparsing', async () => {
             const encodedClaim = JSON.stringify({ manifest: declaredManifest });
             const claimBodies: unknown[] = [];
             // Axios's adapter is the actual HTTP boundary. Keep its real request
@@ -1454,7 +1455,7 @@ describe('Account plugin Data storage host', () => {
             });
             // Passive native-engine observations measure the expensive work
             // itself; neither JSON operation has a substituted implementation.
-            const stringify = vi.spyOn(JSON, 'stringify');
+            const hash = vi.spyOn(artifactIntegrity, 'computePluginUiArtifactSha256DigestV1');
             const parse = vi.spyOn(JSON, 'parse');
             try {
                 const bind = claimingHost({
@@ -1466,12 +1467,10 @@ describe('Account plugin Data storage host', () => {
                 await expect(collection.get('task-1')).resolves.toBeNull();
                 await expect(collection.get('task-2')).resolves.toBeNull();
                 expect(claimBodies).toEqual([encodedClaim, encodedClaim]);
-                const encodings = stringify.mock.calls.filter(([value]) => value
-                    && typeof value === 'object' && 'manifest' in value && value.manifest === declaredManifest);
-                expect(encodings).toHaveLength(1);
+                expect(hash).not.toHaveBeenCalled();
                 expect(parse.mock.calls.filter(([value]) => value === encodedClaim)).toHaveLength(0);
             } finally {
-                stringify.mockRestore();
+                hash.mockRestore();
                 parse.mockRestore();
             }
         });
@@ -1554,9 +1553,8 @@ describe('Account plugin Data storage host', () => {
                     .rejects.toMatchObject({ code: 'plugin_collection_contract_conflict' });
             };
             await refused();
-            manifest = PluginManifestV2Schema.parse(declaredManifest);
             await refused();
-            expect(claims).toBe(1); // Equal declarations, not object identity.
+            expect(claims).toBe(1);
             manifest = PluginManifestV2Schema.parse({ ...declaredManifest, displayName: 'Corrected Tasks' });
             await refused();
             expect(claims).toBe(2);
@@ -1593,7 +1591,7 @@ describe('Account plugin Data storage host', () => {
                 await refused();
                 expect(claims).toBe(1);
                 publishPluginAccountAvailabilityChanges(scopeKey, [change(PLUGIN_ID, 9)]);
-                await refused();
+                await Promise.all([refused(), refused(), refused()]);
                 expect(claims).toBe(2);
                 publishPluginAccountAvailabilityChanges(scopeKey, [change(PLUGIN_ID, 9), change(PLUGIN_ID, 7)]);
                 await refused();
@@ -1604,6 +1602,51 @@ describe('Account plugin Data storage host', () => {
                 publishPluginAccountAvailabilityChanges(scopeKey, [change(PLUGIN_ID, 4)]);
                 await refused();
                 expect(claims).toBe(4);
+            } finally {
+                retirePluginAccountCollectionWatchScope(scopeKey);
+            }
+        });
+
+        it('keeps a successful declaration claim across Availability hints and AccountChange cursor resets', async () => {
+            const scopeKey = 'successful-claim-account';
+            const calls: string[] = [];
+            let manifest = declaredManifest;
+            let available = true;
+            const bind = claimingHost({
+                resolveReleaseLessDeclaration: () => manifest,
+                scopeKey: () => scopeKey,
+                post: async (url, body) => {
+                    const response = await recordingPost(calls, { status: 200, data: {} }, manifest)(url, body);
+                    return url !== CLAIM_URL && !available
+                        ? { status: 404, data: { error: 'collection_unavailable' } }
+                        : response;
+                },
+            });
+            try {
+                const collection = bind().collection(collectionDefinition);
+                await expect(collection.get('task-1')).resolves.toBeNull();
+                for (const cursor of [1, 2, 3]) {
+                    publishPluginAccountAvailabilityChanges(scopeKey, [{
+                        cursor, kind: 'pluginDomain', entityId: `pluginDomain/${PLUGIN_ID}/availability`, changedAt: 1,
+                        hint: { pluginDomain: 'availability', pluginId: PLUGIN_ID },
+                    }]);
+                    await expect(collection.get('task-1')).resolves.toBeNull();
+                    publishPluginAccountCollectionWatchInvalidation({ kind: 'reset', accountScopeKey: scopeKey, changeCursor: cursor });
+                    await expect(collection.get('task-1')).resolves.toBeNull();
+                }
+                expect(calls.filter(url => url === CLAIM_URL)).toHaveLength(1);
+                expect(calls.filter(url => url.endsWith('/v1/plugins/data/get'))).toHaveLength(7);
+                available = false;
+                await expect(collection.get('task-1')).rejects.toMatchObject({ code: 'collection_unavailable' });
+                await expect(collection.put({ id: 'task-1', status: 'open', privateNote: 'new' }, { expectedRevision: 'absent' }))
+                    .rejects.toMatchObject({ code: 'collection_unavailable' });
+                expect(calls.filter(url => url === CLAIM_URL)).toHaveLength(1);
+                expect(calls.filter(url => url.endsWith('/v1/plugins/data/mutate'))).toHaveLength(0);
+
+                available = true;
+                manifest = PluginManifestV2Schema.parse({ ...declaredManifest, version: '1.4.1' });
+                await expect(bind().collection(collectionDefinition).get('task-1')).resolves.toBeNull();
+                expect(calls.filter(url => url === CLAIM_URL)).toHaveLength(2);
             } finally {
                 retirePluginAccountCollectionWatchScope(scopeKey);
             }

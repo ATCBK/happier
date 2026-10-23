@@ -5,7 +5,7 @@ import { createCanonicalJsonSigningInput } from '@happier-dev/protocol';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema,
     PluginAvailabilityUiArtifactReadActionInputV1Schema, PluginAvailabilityUiArtifactReadActionOutputV1Schema,
     PluginAvailabilityIntentsListActionOutputV1Schema, PLUGIN_ACCOUNT_AVAILABILITY_INTENT_PAGE_SIZE,
-    resolvePluginAccountExecutionSelectionV1, computePluginAccountBundledCustodyIdV1, computePluginAccountBundledDeclarationDigestV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1, normalizePluginReleaseFactsV1,
+    resolvePluginAccountExecutionSelectionV1, createPluginAccountBundledSelectionV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1, snapshotPluginReleaseFactsV1,
     type PluginAvailabilityIntentReadActionOutputV1, type PluginAccountExecutionSelectionV1 } from '@happier-dev/protocol/plugins/availability';
 import { createPluginUiArtifactArchiveV1, decodePluginUiArtifactArchiveBodyV1, openPluginUiArtifactArchiveV1,
     type PluginUiArtifactsManifestEntryV2 } from '@happier-dev/protocol/plugins/ui';
@@ -50,7 +50,7 @@ function snapshotIntentRead(pluginId: string, response: PluginAvailabilityIntent
         throw new Error('plugin_account_execution_identity_mismatch');
     }
     return Object.freeze({ ...response,
-        release: response.release ? normalizePluginReleaseFactsV1(response.release) : null,
+        release: response.release ? snapshotPluginReleaseFactsV1(response.release) : null,
     });
 }
 
@@ -79,14 +79,9 @@ export async function readCurrentMountedAccountPluginExecutionSelection(input: R
     if (!await input.runtime.isCurrent()) return unavailable;
     const declaration = input.registry.contributes.pluginDeclarations?.find(plugin =>
         plugin.pluginId === input.pluginId && plugin.sourceSpec.kind === 'bundled');
-    const bundled = declaration ? {
-        manifest: declaration.manifest,
-        sourceCustody: { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'source_declaration' as const,
-            packageName: declaration.sourceSpec.locator,
-            declarationDigest: computePluginAccountBundledDeclarationDigestV1(declaration.manifest) } },
-        custodyId: computePluginAccountBundledCustodyIdV1({ packageName: declaration.sourceSpec.locator,
-            manifest: declaration.manifest, artifacts: declaration.generatedUiArtifactsManifest?.entries ?? [] }),
-    } : undefined;
+    const bundled = declaration ? createPluginAccountBundledSelectionV1({
+        packageName: declaration.sourceSpec.locator, manifest: declaration.manifest,
+    }) : undefined;
     const selection = await readCurrentAccountPluginExecutionSelection({ pluginId: input.pluginId, credentials: input.runtime.credentials,
         serverUrl: input.runtime.serverHttpBaseUrl, ...(bundled ? { bundled } : {}), ...(input.signal ? { signal: input.signal } : {}) });
     return await input.runtime.isCurrent() ? selection : unavailable;
@@ -151,7 +146,7 @@ export async function resolveAccountPluginActivationSources(input: AccountPlugin
             const next = resolvePluginAccountExecutionSelectionV1({ pluginId, intentRead: read,
                 ...(admitted.bundled ? { bundled: admitted.bundled } : {}) });
             if (await input.isCredentialCurrent?.() === false || !isCurrent(pluginId) || next.kind !== 'available'
-                || createCanonicalJsonSigningInput(next) !== createCanonicalJsonSigningInput(admitted.selection)) {
+                || admitted.selection.kind !== 'available' || next.custodyId !== admitted.selection.custodyId) {
                 retired.add(pluginId);
                 return false;
             }
@@ -180,9 +175,10 @@ export async function resolveAccountPluginActivationSources(input: AccountPlugin
             const hostCustody = hostSource?.sourceAuthority?.kind === 'bundled_first_party'
                 ? resolvePluginSourceCustody(hostSource.sourceAuthority) : null;
             if (hostDeclaration && hostCustody) {
-                bundledSelection = { manifest: hostDeclaration.manifest, sourceCustody: hostCustody,
-                    custodyId: computePluginAccountBundledCustodyIdV1({ packageName: hostDeclaration.sourceSpec.locator,
-                        manifest: hostDeclaration.manifest, artifacts: hostDeclaration.generatedUiArtifactsManifest?.entries ?? [] }) };
+                bundledSelection = createPluginAccountBundledSelectionV1({
+                    packageName: hostDeclaration.sourceSpec.locator,
+                    manifest: hostDeclaration.manifest, sourceCustody: hostCustody,
+                });
                 accountSelection = resolvePluginAccountExecutionSelectionV1({ pluginId, intentRead: read, bundled: bundledSelection });
             }
         }
