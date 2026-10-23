@@ -17,7 +17,7 @@ import { useTeamBinding } from '@/hooks/teams/useTeamBinding';
 import { useTeamMembersRoster } from '@/hooks/teams/useTeamMembersRoster';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
-import { getPreferredLanguage, t } from '@/text';
+import { t, usePreferredLanguage } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -92,7 +92,7 @@ export const TeamMembersCollectionRail = React.memo(
       enabled: canRead,
     });
     const searching = query.trim().length > 0;
-    const language = getPreferredLanguage();
+    const language = usePreferredLanguage();
     const addressServerId = props.address.serverId;
     const teamId = props.address.teamId;
 
