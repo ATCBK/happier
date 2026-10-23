@@ -4041,6 +4041,7 @@
     "src/storage/protection/protectedPaths.test.ts",
     "src/storage/protection/storageProtectedFolders.test.ts",
     "src/storage/scan/scan.test.ts",
+    "src/storage/scan/scanIndex.settlement.test.ts",
     "src/storage/scan/scanIndex.storedRead.test.ts",
     "src/storage/storagePath.test.ts",
     "src/storage/storageService.test.ts",
