@@ -6,7 +6,7 @@ import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/pr
 
 import type { SessionAccessProjectionRow } from "@/app/session/access/sessionAccess";
 
-import { createDbMocks, installDbModuleMock } from "../../testkit/dbMocks";
+import { createDbMocks, createDbTransactionMock, inTxPostgresControlStatementMock, installDbModuleMock } from "../../testkit/dbMocks";
 import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
 import type { RouteRequestOverrides } from "../../testkit/requestFixtures";
 
@@ -169,8 +169,8 @@ const txDbMocks = createDbMocks({
     discussionMessage: ["findMany"],
     discussionReadState: ["findMany"],
 } as const);
-export const txExecuteRawUnsafe = vi.fn(async () => 1);
-export const dbQueryRaw = vi.fn(async () => [] as Array<{ sessionId: string }>);
+export const txExecuteRawUnsafe = vi.fn(async (_query?: string, ..._parameters: unknown[]) => 1);
+export const dbQueryRaw = vi.fn(async (_query?: unknown, ..._parameters: unknown[]) => [] as Array<{ sessionId: string }>);
 // Account owner-metadata admission locks bound Account rows; the fixture database holds every requested row.
 export const txQueryRawUnsafe = vi.fn(async (_query: string, ...parameters: unknown[]) =>
     (Array.isArray(parameters[0]) ? parameters[0] : parameters)
@@ -178,8 +178,19 @@ export const txQueryRawUnsafe = vi.fn(async (_query: string, ...parameters: unkn
         .map(id => ({ id })));
 const txDb = Object.assign(txDbMocks.db, {
     $queryRawUnsafe: txQueryRawUnsafe,
-    $executeRawUnsafe: txExecuteRawUnsafe,
-    $queryRaw: dbQueryRaw,
+    $executeRawUnsafe: async (query: string, ...values: unknown[]) => {
+        if (query.startsWith("SET LOCAL statement_timeout = ") || query.startsWith("SET LOCAL application_name = ")) {
+            return await inTxPostgresControlStatementMock.$executeRawUnsafe(query, ...values);
+        }
+        return await txExecuteRawUnsafe(query, ...values);
+    },
+    $executeRaw: inTxPostgresControlStatementMock.$executeRaw,
+    $queryRaw: async (query: TemplateStringsArray, ...values: unknown[]) => {
+        if (Array.isArray(query) && query.join("?").trim() === "SHOW statement_timeout") {
+            return await inTxPostgresControlStatementMock.$queryRaw(query, ...values);
+        }
+        return await dbQueryRaw(query, ...values);
+    },
 });
 // Listing/detail routes execute their visibility predicate and row read in the
 // same transaction. Keep a separate delegate object so the transaction and
@@ -522,8 +533,9 @@ const PRISMA_RUNTIME_MOCK = {
     AnyNull: Symbol.for("Prisma.AnyNull"),
 };
 
+const transactionBoundary = createDbTransactionMock(() => txDb);
 installDbModuleMock({
-    db: Object.assign(sessionDbMocks.db, { $queryRaw: dbQueryRaw }),
+    db: transactionBoundary.wrapDb(Object.assign(sessionDbMocks.db, { $queryRaw: dbQueryRaw })),
     getDbProviderFromEnv: () => "postgres",
     prismaRuntime: PRISMA_RUNTIME_MOCK,
     // Sentinel access mirrors the real provider-matched namespace; bounded JSON
@@ -589,8 +601,8 @@ vi.mock("@/app/session/agentTransition/applySessionAgentTransitionCutover", () =
 }));
 export const markAccountChanged = vi.fn(async () => 1);
 // Route specs record the terminal Account-change write. Publication scheduling and
-// cursor locks are database-side effects of the same boundary, so they are no-ops here
-// (a partial importOriginal would load the real transaction owner ahead of its mock).
+// cursor locks are database-side effects of the same boundary, so they are no-ops here.
+// The transaction lifecycle itself stays real over the Prisma fixture above.
 vi.mock("@/app/changes/markAccountChanged", () => ({
     markAccountChanged,
     beforeAccountChangePublication: vi.fn(),
@@ -604,13 +616,6 @@ vi.mock("@/app/account/profile/accountDisplayProfile", async (importOriginal) =>
     ...(await importOriginal<typeof import("@/app/account/profile/accountDisplayProfile")>()),
     ACCOUNT_DISPLAY_PROFILE_SELECT: {},
     toShareUserProfile: vi.fn(),
-}));
-vi.mock("@/storage/inTx", async (importOriginal) => ({
-    ...await importOriginal<typeof import("@/storage/inTx")>(),
-    inTx: vi.fn(async (fn: any) => await fn(txDb)),
-    // Snapshot reads share this DB-boundary fixture; route tests do not model isolation.
-    inReadSnapshot: vi.fn(async (fn: (tx: typeof txDb) => Promise<unknown>) => await fn(txDb)),
-    afterTx: vi.fn(),
 }));
 
 export function resetSessionRouteMocks(): void {
