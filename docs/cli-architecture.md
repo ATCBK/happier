@@ -1055,7 +1055,11 @@ the terminal parent state, after which ordinary history deletion is available.
 In 0.3 development source, the same recovery owner publishes accepted Discussion
 results before retiring custody. Its publisher projects the accepted tagged
 result destination into the strict committed-origin envelope used by the Machine
-transport. A definitive publication refusal on a terminal
+transport. Accepted Session leaves also return through the installed Machine
+after the native Session exits, using the closed V2 terminal-return packet and
+the existing installation/Session binding and original-input/turn/attempt checks.
+They do not resume the Session or acquire a live Session publisher. The same
+receiver retains V1 reviewed and non-Session Workflow publications. A definitive publication refusal on a terminal
 Run records a Run/invocation-qualified failure diagnostic and permits custody
 settlement while preserving the accepted result. Pending approval, unavailable
 transport or encryption material, and a lost append acknowledgement retain
