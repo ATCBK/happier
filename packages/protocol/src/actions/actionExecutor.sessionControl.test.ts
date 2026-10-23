@@ -869,7 +869,7 @@ describe('createActionExecutor (session control)', () => {
         wait: true,
         timeoutSeconds: 42,
       },
-      { surface: 'cli', defaultSessionId: null, signal: cancellation.signal },
+      { surface: 'cli', defaultSessionId: null, actionRequestId: 'outer-request-identity', signal: cancellation.signal },
     );
 
     expect(res).toEqual({ ok: true, result: { status: 'accepted', localId: 'input-1' } });
@@ -885,6 +885,46 @@ describe('createActionExecutor (session control)', () => {
       timeoutSeconds: 42,
       signal: cancellation.signal,
     }));
+  });
+
+  it('reuses the Action request identity for generic Session send admission retries', async () => {
+    for (const surface of ['ui', 'agent'] as const) {
+      expect(listActionSpecsForCatalogSurface({ surface }).map(spec => spec.id)).toContain('session.message.send');
+    }
+    const acceptedLocalIds = new Set<string>();
+    let acceptedTurns = 0;
+    const sessionSendMessage = vi.fn(async (input: { localId?: string }) => {
+      const localId = input.localId ?? `minted-${acceptedTurns + 1}`;
+      if (acceptedLocalIds.has(localId)) return { status: 'alreadyAccepted' as const, localId };
+      acceptedLocalIds.add(localId);
+      acceptedTurns += 1;
+      return { status: 'accepted' as const, localId };
+    });
+    const executor = createExecutor({ sessionSendMessage });
+    const input = { sessionId: 's1', message: 'Retry-safe input' };
+
+    await expect(executor.execute('session.message.send', input, {
+      surface: 'ui', actionRequestId: 'send-request-1',
+    })).resolves.toEqual({ ok: true, result: { status: 'accepted', localId: 'action-request:send-request-1' } });
+    await expect(executor.execute('session.message.send', input, {
+      surface: 'ui', actionRequestId: 'send-request-1',
+    })).resolves.toEqual({ ok: true, result: { status: 'alreadyAccepted', localId: 'action-request:send-request-1' } });
+    // The server's terminal-transcript branch rejoins by this same localId;
+    // retry timing must not change the identity forwarded by this owner.
+    await expect(executor.execute('session.message.send', input, {
+      surface: 'ui', actionRequestId: 'send-request-1',
+    })).resolves.toEqual({ ok: true, result: { status: 'alreadyAccepted', localId: 'action-request:send-request-1' } });
+    await expect(executor.execute('session.message.send', input, {
+      surface: 'ui', actionRequestId: 'send-request-2',
+    })).resolves.toEqual({ ok: true, result: { status: 'accepted', localId: 'action-request:send-request-2' } });
+
+    expect(acceptedTurns).toBe(2);
+    expect(sessionSendMessage.mock.calls.map(([request]) => request.localId)).toEqual([
+      'action-request:send-request-1',
+      'action-request:send-request-1',
+      'action-request:send-request-1',
+      'action-request:send-request-2',
+    ]);
   });
 
   it('defaults generic session.message.send to settings-aware steering intent', async () => {

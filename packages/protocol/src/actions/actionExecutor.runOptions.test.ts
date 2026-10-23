@@ -593,7 +593,7 @@ describe('createActionExecutor run options parity (model + effort)', () => {
     expect(executionRunCheckProtocolV2).toHaveBeenCalledWith(null, expect.objectContaining({ detachedScope: true }), undefined);
   });
 
-  it('defaults an unexpected start-path exception to outcomeUnknown at the canonical Action boundary', async () => {
+  it('proves no Run was created when start preparation throws before entering transport', async () => {
     const executionRunStart = vi.fn(async () => ({ runId: 'run_1', callId: 'call_1', sidechainId: 'call_1' }));
     const executor = createActionExecutor(createDeps({
       executionRunStart,
@@ -610,7 +610,7 @@ describe('createActionExecutor run options parity (model + effort)', () => {
       ok: false,
       errorCode: 'action_failed',
       error: 'server lookup failed',
-      details: { executionRunStart: { v: 1, runCreation: 'outcomeUnknown' } },
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
     });
     expect(executionRunStart).not.toHaveBeenCalled();
   });
