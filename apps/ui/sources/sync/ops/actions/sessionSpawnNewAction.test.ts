@@ -293,6 +293,25 @@ describe('session.spawn_new Action failure presentation', () => {
         })).toBe(t('newSession.actionMethodUnavailable'));
     });
 
+    it('names the preserved launch cause while keeping the generic fallback for unknown causes', () => {
+        const failed = (code: string) => ({
+            type: 'error', code: 'spawn_failed', retryable: true,
+            launchError: { kind: 'launch_error', code, message: 'Runner exited before startup completed' },
+        }) as const;
+        const authority = sessionSpawnNewAction.resolveSessionSpawnNewResultFailureMessage(
+            failed('native_agent_privileged_effect_authority_unavailable'),
+        );
+        expect(authority).toContain('Runner daemon authority is unavailable');
+        expect(authority).toContain('native_agent_privileged_effect_authority_unavailable');
+        expect(authority).not.toContain('spawn_failed');
+        expect(sessionSpawnNewAction.resolveSessionSpawnNewResultFailureMessage(failed('broker_unavailable')))
+            .toContain('Shared Team credential refused the request');
+        const unknown = sessionSpawnNewAction.resolveSessionSpawnNewResultFailureMessage(failed('daemon_private_cause'));
+        expect(unknown).toContain(t('newSession.failedToStart'));
+        expect(unknown).toContain('spawn_failed');
+        expect(unknown).not.toContain('daemon_private_cause');
+    });
+
     it('reserves update guidance for an unavailable Action method', () => {
         const resolveFailurePresentation = (
             sessionSpawnNewAction as unknown as Readonly<{

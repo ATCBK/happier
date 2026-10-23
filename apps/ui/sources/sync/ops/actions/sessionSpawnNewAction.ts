@@ -34,6 +34,7 @@ import { ScopedRpcSocketConnectionTimeoutError } from '@/sync/runtime/orchestrat
 import { isSocketIoAckTimeoutError, readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { parseToken } from '@/utils/auth/parseToken';
 
+import { readSessionStartupFailurePreview } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { createFrontDoorActionExecute, requireActionSuccess } from './frontDoorRuntimeActionExecutor';
 import { captureLazyActionAccountContext, withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { prepareSessionFollowSourceKey } from '@/components/sessions/follow/prepareSessionFollowSourceKey';
@@ -267,10 +268,16 @@ export function resolveSessionSpawnNewResultFailureMessage(
     result: Exclude<SessionSpawnNewResultV1, Readonly<{ type: 'success' }>>,
 ): string {
     const key = resolveSessionSpawnNewResultFailureMessageKey(result);
-    const message = t(key);
-    return result.type !== 'pending' && key === 'newSession.failedToStart'
-        ? t('errors.errorWithCode', { message, code: result.code })
-        : message;
+    if (result.type !== 'pending' && key === 'newSession.failedToStart') {
+        // A closed launch cause outranks the generic guidance; any other cause keeps the
+        // outer code so no private detail reaches the person.
+        const cause = result.code === 'spawn_failed' ? result.launchError?.code : undefined;
+        const preview = readSessionStartupFailurePreview(cause);
+        return preview !== null && cause !== undefined
+            ? t('errors.errorWithCode', { message: preview, code: cause })
+            : t('errors.errorWithCode', { message: t(key), code: result.code });
+    }
+    return t(key);
 }
 
 /** Present a terminal operation failure through the same localized spawn-failure owner as the direct Action path. */
