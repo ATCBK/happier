@@ -22,7 +22,11 @@ import type {
   EditorDecoration,
   TextEditorHandle,
 } from '@/components/ui/code/editor/codeEditorTypes';
-import type { DiffHunkInfo } from '@/components/ui/code/diff/diffViewerTypes';
+import type { DiffHunkInfo, DiffViewerHunks } from '@/components/ui/code/diff/diffViewerTypes';
+import { ChangedFilesReviewDiffBlock } from '../ChangedFilesReviewDiffBlock';
+import { createChangedFilesReviewDiffStateSource } from '../ChangedFilesReviewDiffStore';
+import { DiffReviewCommentsViewer } from '@/components/ui/code/diff/reviewComments/DiffReviewCommentsViewer';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
@@ -36,6 +40,59 @@ afterEach(() => {
 const patch = '@@ -1,3 +1,3 @@\n-old\n+new\n middle\n-before\n+after\n';
 
 describe('hunk review through the shared keyboard and Account port', () => {
+  it('publishes no new per-file hunk model for 20 unrelated editor draft renders and retains the displayed action authority', async () => {
+    let controller!: ReturnType<typeof useHunkReviewController>;
+    let renders = 0;
+    let generation = 0;
+    let contentHash = 'saved-v1';
+    const asked: number[] = [];
+    const discarded: { generation: number; expectedHash?: string }[] = [];
+    const onAsk = () => { asked.push(generation); };
+    let onDiscard = (target: { expectedHash?: string }) => { discarded.push({ generation: 0, expectedHash: target.expectedHash }); };
+    const setReviewedKeys = () => {};
+    const Consumer = React.memo((_props: { hunks: DiffViewerHunks }) => { renders += 1; return null; });
+    const liveFiles = Array.from({ length: 300 }, (_, index) => ({ path: `file-${index}.ts`, unifiedDiff: patch }));
+    const liveEntries = [{ path: liveFiles[0]!.path, kind: 'modified' as const, hasIncludedDelta: false }];
+    function Review() {
+      controller = useHunkReviewController({
+        source: { kind: 'live', root: '/repo' }, path: liveFiles[0]!.path, unifiedDiff: patch,
+        liveFiles, liveEntries, contentHash, host: null, serverId: null,
+        onAsk, onDiscard,
+        marks: { record: null, unavailableReason: null, setReviewed: () => {}, clear: () => {}, setReviewedKeys },
+      });
+      return <Consumer hunks={controller.hunksForPath(liveFiles[0]!.path)} />;
+    }
+    const screen = await renderScreen(<Review />);
+    const initial = controller.hunks;
+    renders = 0;
+    for (generation = 1; generation <= 20; generation += 1) await screen.update(<Review />);
+    expect(renders).toBe(0);
+    expect(controller.hunksForPath(liveFiles[0]!.path)).toBe(initial);
+    generation = 20;
+    await act(async () => initial.actions?.ask?.({ key: controller.reviewUnits[0]!.key } as DiffHunkInfo));
+    expect(asked).toEqual([20]);
+    contentHash = 'saved-v2';
+    generation = 21;
+    onDiscard = target => { discarded.push({ generation: 21, expectedHash: target.expectedHash }); };
+    await screen.update(<Review />);
+    expect(renders).toBe(1);
+    expect(controller.hunks).not.toBe(initial);
+    // An old row retains both its displayed hash and its authorizing action producer.
+    await act(async () => initial.actions?.discard?.({ key: controller.reviewUnits[0]!.key } as DiffHunkInfo));
+    expect(discarded).toEqual([{ generation: 0, expectedHash: 'saved-v1' }]);
+  });
+  it('preserves the published review model through a diff block repaint', async () => {
+    const source = createChangedFilesReviewDiffStateSource();
+    source.setDiffState('a.ts', { status: 'loaded', diff: patch, error: null });
+    const hunks: DiffViewerHunks = { currentIndex: 0 };
+    const drafts: readonly [] = [];
+    const props = { sessionId: 's1', snapshotSignature: 'sig', filePath: 'a.ts', diffStateSource: source,
+      reviewCommentsEnabled: true, reviewCommentDrafts: drafts, hunkReview: hunks };
+    const screen = await renderScreen(<ChangedFilesReviewDiffBlock {...props} theme={createThemeFixture()} />);
+    const published = screen.tree.root.findByType(DiffReviewCommentsViewer).props.hunks;
+    await screen.update(<ChangedFilesReviewDiffBlock {...props} theme={createThemeFixture()} />);
+    expect(screen.tree.root.findByType(DiffReviewCommentsViewer).props.hunks).toBe(published);
+  });
   it.each([
     ['live', 'modified', true, 'staged'],
     ['live', 'renamed', false, 'renamed_or_copied'],
