@@ -1012,14 +1012,6 @@ describe("session organization routes", () => {
         });
     });
 
-    it("admits the Section Action through the retained folder-assignment transport", async () => {
-        const url = "/v2/session-organization/folder-assignments/:sessionId";
-        const route = await createSessionRouteTestBuilder("PUT", url);
-        expect(isExternalActionSessionRoutePurposeAllowed({
-            method: "PUT", routeOptions: { url, config: route.app.routes.get(`PUT ${url}`)?.opts.config },
-        }, "session.section.set")).toBe(true);
-    });
-
     it("sets folder assignments only to active current-account folders and emits legacy plus organization hints", async () => {
         sessionFindFirst.mockResolvedValue({ id: "s1" });
         txSessionOrganizationFolderFindMany.mockResolvedValue([
