@@ -145,6 +145,7 @@ import {
   resolveSessionListRuntimePriorityRowNextFreshnessAtMs,
 } from '../domains/session/listing/sessionListRuntimePriorityRows';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope, selectActiveServerAccountScopeForServer, type ActiveServerAccountScopeLifetime } from '../domains/scope/activeServerAccountScope';
 import {
   subscribeAppliedActiveServer,
@@ -154,6 +155,7 @@ import {
   areServerProfileIdentifiersEquivalent,
   captureServerProfileScopeResolver,
   getServerProfileById,
+  getServerProfilesGeneration,
   resolveServerProfileScopeIdForIdentifier,
 } from '../domains/server/serverProfiles';
 import { resolveServerScopedMachineInventory, resolveServerScopedMachineInventoryKeys } from '../domains/machines/resolveServerScopedMachines';
@@ -2717,9 +2719,36 @@ export function useMachineCliDetectionTargets(machineIds: readonly string[]): Ma
 }
 
 export function useServerScopedMachine(serverId: string | null | undefined, machineId: string): Machine | null {
-  return getStorage()(useShallow((state) => {
-    return resolveServerScopedMachine(state, serverId, machineId);
-  }));
+  const store = getStorage();
+  const normalizedMachineId = typeof machineId === 'string' ? machineId.trim() : '';
+  const enabled = normalizedMachineId.length > 0;
+  const getSnapshot = React.useCallback(
+    () => resolveServerScopedMachine(store.getState(), serverId, normalizedMachineId),
+    [store, serverId, normalizedMachineId],
+  );
+  const subscribe = React.useCallback((listener: () => void) => {
+    let profilesGeneration = getServerProfilesGeneration();
+    let activeServerId = getActiveServerSnapshot().serverId;
+    return store.subscribe((state, previous) => {
+      const nextProfilesGeneration = getServerProfilesGeneration();
+      const nextActiveServerId = getActiveServerSnapshot().serverId;
+      // These are the exact resolver's inputs. Unrelated Session/Artifact
+      // publications must not search a Machine inventory for each mounted row.
+      if (state.machines === previous.machines
+        && state.machineListByServerId === previous.machineListByServerId
+        && state.machineListStatusByServerId === previous.machineListStatusByServerId
+        && profilesGeneration === nextProfilesGeneration
+        && activeServerId === nextActiveServerId) return;
+      profilesGeneration = nextProfilesGeneration;
+      activeServerId = nextActiveServerId;
+      listener();
+    });
+  }, [store]);
+  return React.useSyncExternalStore(
+    enabled ? subscribe : noopMachineSubscribe,
+    enabled ? getSnapshot : readNullMachine,
+    enabled ? getSnapshot : readNullMachine,
+  );
 }
 
 export function useAllSessions(): Session[] {
