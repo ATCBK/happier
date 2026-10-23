@@ -79,6 +79,67 @@ async function home(
 }
 
 describe('UI qualified prompt-library Artifact authority', () => {
+  it.each([false, true])('selects only Prompt Docs through the captured indexed query without repair or bodies (unknown membership: %s)', async hasUnclassified => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const f = await home('prompt_doc.v2', undefined, { handleRequest: async (path, init) => {
+      if (path.startsWith('/v1/artifacts?') && new URL(path, 'https://home.test').searchParams.has('kinds')) {
+        const response = await f.boundary.handle(path, init);
+        if (!response) throw new Error('Expected the Artifact list HTTP boundary');
+        const page = await response.json();
+        return Response.json({ ...page, hasUnclassified });
+      }
+      return catalog.handle(path, init);
+    } });
+    // More than a transport page of unrelated, classified headers must never
+    // be opened merely to discover the one Prompt Doc.
+    await Promise.all(Array.from({ length: 512 }, (_, index) => f.boundary.handle('/v1/artifacts', {
+      method: 'POST', body: JSON.stringify({ id: `unrelated-bundle-${index}`,
+        header: encodePlainArtifactStoredContent({ v: 1, kind: 'prompt_bundle.v2', title: `Bundle ${index}` }),
+        body: encodePlainArtifactStoredContent({ body: '{}' }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER }),
+    })));
+    expect(f.boundary.list()).toHaveLength(513);
+    storage.setState({ artifacts: {}, artifactsLoaded: false });
+    const before = f.requests.length;
+    const result = await withUiPromptLibraryArtifactStore(store => listPromptLibrary({ store, request: {} }), { serverId: f.home.id });
+    expect(result).toMatchObject({ coverage: hasUnclassified ? 'partial' : 'complete', items: [{ artifactId: 'current', title: 'Current' }] });
+    const requests = f.requests.slice(before).filter(request => request.path.startsWith('/v1/artifacts'));
+    expect(requests).toHaveLength(1);
+    expect(requests[0].method).toBe('GET');
+    const query = new URL(requests[0].path, 'https://home.test').searchParams;
+    expect(Object.fromEntries(query)).toEqual({ limit: '500', kinds: '["prompt_doc.v2"]' });
+  });
+
+  it('does not join an unrelated pending full inventory before reading Prompt Docs', async () => {
+    const catalog = createPromptLibraryCatalogBoundary();
+    const inventoryRequested = createDeferred<void>();
+    const releaseInventory = createDeferred<void>();
+    const f = await home('prompt_doc.v2', undefined, { handleRequest: async (path, init) => {
+      if (path.startsWith('/v1/artifacts?') && !new URL(path, 'https://home.test').searchParams.has('kinds')) {
+        inventoryRequested.resolve();
+        await releaseInventory.promise;
+      }
+      return catalog.handle(path, init);
+    } });
+    storage.setState({ artifacts: {}, artifactsLoaded: false });
+    await withUiPromptLibraryArtifactStore(async (store, account) => {
+      const { fetchAndApplyArtifactsList } = await import('@/sync/engine/artifacts/syncArtifacts');
+      const basis = storage.getState().artifacts;
+      const inventory = fetchAndApplyArtifactsList({ credentials: account.credentials, request: account.request,
+        inventoryScope: account.accountLifetime.scope, encryption: null, artifactDataKeys: new Map(),
+        applyArtifacts: (rows, source) => storage.getState().applyArtifacts(rows, source === 'inventory' ? basis : undefined) });
+      await inventoryRequested.promise;
+      const action = listPromptLibrary({ store, request: {} });
+      try {
+        await vi.waitFor(() => expect(f.requests.some(request => request.path.startsWith('/v1/artifacts?')
+          && new URL(request.path, 'https://home.test').searchParams.get('kinds') === '["prompt_doc.v2"]')).toBe(true));
+        expect(await action).toMatchObject({ coverage: 'complete', items: [{ artifactId: 'current' }] });
+      } finally {
+        releaseInventory.resolve();
+        await Promise.allSettled([inventory, action]);
+      }
+    }, { serverId: f.home.id });
+  });
+
   it('shares finite catalog rows without starting retained Settings maintenance', async () => {
     const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
     const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
