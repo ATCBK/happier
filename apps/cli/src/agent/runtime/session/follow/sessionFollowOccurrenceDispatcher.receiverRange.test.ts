@@ -14,21 +14,69 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { notificationCatalogFixture } from '@/notifications/activity/activityNotification.testkit';
 import { logger } from '@/ui/logger';
 import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 
 afterEach(() => vi.restoreAllMocks());
 
-it('discovers future predicate matches without waking receiver rules that exclude the changed Session', async () => {
+it.each([
+  { show: 'sessions', homeServerId: 'home', exactReads: 0 },
+  { show: 'runs', homeServerId: 'home', exactReads: 0 },
+  { show: 'sessions', homeServerId: 'unresolved-home', exactReads: 3 },
+  { show: 'sessions', homeServerId: 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN', exactReads: 0 },
+] as const)('discovers $show receiver rules with $homeServerId source facts without unnecessary Session reads', async ({ show, homeServerId, exactReads }) => {
+  const run = async () => {
+    const serverId = homeServerId.startsWith('srv_') ? 'follow-local-profile' : 'home';
+    const receiverSessionId = 'c222222222222222222222222';
+    const reads = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+      if (path === '/v2/account/session-follow-rules') return { status: 200, data: { rules: [{
+        ruleId: 'kind-only', version: 1, receiver: { kind: 'session', sessionId: receiverSessionId }, sources: [],
+        content: { t: 'plain', v: { v: 1, enabled: true,
+          filter: normalizeSessionListFilterV1({ homeServerIds: [homeServerId], scope: 'all_accessible', show,
+            startedBy: ['you', 'agents', 'triggers'] }), policy: { preset: 'quiet' } } },
+      }] } };
+      if (path === '/v2/account/session-follow-preferences') return { status: 200,
+        data: { assigned: false, direct: false, team: false, group: false } };
+      if (path.startsWith('/v2/sessions/')) return { status: 404, data: {} };
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: {
+      token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null }, serverId, serverHttpBaseUrl: 'http://follow.test',
+      machineId: 'machine', installationId: 'installation', signal: new AbortController().signal,
+      isCurrent: async () => true, subscribeInvalidation: () => () => {}, resolveSourceKeyContext: async () => null,
+      isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
+    try {
+      for (const sourceSessionId of ['source-1', 'source-2', 'source-3']) {
+        expect(await dispatcher.readReceiverSessionIds(sourceSessionId)).toEqual(show === 'sessions' ? [receiverSessionId] : []);
+      }
+      expect(reads.mock.calls.map(([url]) => new URL(String(url)).pathname).filter(path => path.startsWith('/v2/sessions/')),
+        'known facts skip exact reads, but an unresolved Home must remain conservative').toEqual(exactReads
+        ? ['/v2/sessions/source-1', '/v2/sessions/source-2', '/v2/sessions/source-3'] : []);
+    } finally { dispatcher.dispose(); }
+  };
+  if (homeServerId.startsWith('srv_')) {
+    await withConfiguredDaemonTestHome({ prefix: 'follow-known-home-' }, async () => {
+      await seedTestServerProfile({ id: 'follow-local-profile', homeId: homeServerId, serverUrl: 'https://follow.test' });
+      await run();
+    });
+  } else await run();
+});
+
+it('reads fresh facts for unresolved receiver predicates and retains unknown matches without reviving known misses', async () => {
   const sourceSessionId = 'c111111111111111111111111';
   const matchingReceiver = 'c222222222222222222222222';
   const unrelatedReceiver = 'c333333333333333333333333';
   const rule = (sessionId: string, show: 'sessions' | 'runs') => ({ ruleId: sessionId, version: 1,
     receiver: { kind: 'session', sessionId }, sources: [], content: { t: 'plain', v: { v: 1, enabled: true,
-      filter: normalizeSessionListFilterV1({ homeServerIds: ['home'], startedBy: ['you', 'agents', 'triggers'], scope: 'all_accessible', show }),
+      filter: normalizeSessionListFilterV1({ homeServerIds: ['home'], startedBy: ['you', 'agents', 'triggers'], scope: 'all_accessible', show,
+        ...(show === 'sessions' ? { source: 'persisted' } : {}) }),
       policy: { preset: 'quiet' } } } });
   const source = createSessionRecordFixture({ id: sourceSessionId, ownerAccountId: 'account-1', encryptionMode: 'plain',
     dataEncryptionKey: null, metadata: JSON.stringify({ path: '/work', host: 'host', machineId: 'machine' }) });
   let readable = true;
-  vi.spyOn(axios, 'get').mockImplementation(async url => {
+  const reads = vi.spyOn(axios, 'get').mockImplementation(async url => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
     if (path === '/v2/account/session-follow-rules') return { status: 200,
@@ -46,7 +94,8 @@ it('discovers future predicate matches without waking receiver rules that exclud
   try {
     expect(await dispatcher.readReceiverSessionIds(sourceSessionId)).toEqual([matchingReceiver]);
     readable = false;
-    expect(await dispatcher.readReceiverSessionIds(sourceSessionId)).toEqual([matchingReceiver, unrelatedReceiver]);
+    expect(await dispatcher.readReceiverSessionIds(sourceSessionId)).toEqual([matchingReceiver]);
+    expect(reads.mock.calls.filter(([url]) => new URL(String(url)).pathname === `/v2/sessions/${sourceSessionId}`)).toHaveLength(2);
   }
   finally { dispatcher.dispose(); }
 });

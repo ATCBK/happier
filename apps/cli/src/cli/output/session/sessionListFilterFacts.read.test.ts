@@ -50,6 +50,26 @@ function input(filters = [project('bob-project'), tag('bob-tag')]) {
 }
 
 describe('captured Account current filter facts', () => {
+  it('does not read supplemental Project or tag facts for predicates already excluded by known Session facts', async () => {
+    const { get, post } = boundary();
+    const excluded = normalizeSessionListFilterV1({ ...project('bob-project'), show: 'runs',
+      tagIds: [{ serverId: 'home', tagId: 'bob-tag' }] });
+    const facts = await readCliSessionListFilterFactsV1(input([excluded]));
+    expect(facts).not.toBeNull();
+    expect(matchSessionListFilterV1(excluded, facts!)).toBe('miss');
+    expect(get).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+  it('still reads current supplemental facts for eligible predicates alongside known misses', async () => {
+    const { get, post } = boundary();
+    const excluded = normalizeSessionListFilterV1({ ...tag('bob-tag'), show: 'runs' });
+    const eligible = project('bob-project');
+    const facts = await readCliSessionListFilterFactsV1(input([excluded, eligible]));
+    expect(matchSessionListFilterV1(excluded, facts!)).toBe('miss');
+    expect(matchSessionListFilterV1(eligible, facts!)).toBe('match');
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(get.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(['/v1/account/encryption']);
+  });
   it.each(['portable', 'local'] as const)('reads portable Project and tag facts from a captured local Home profile (%s filter)', async qualifier => {
     await withConfiguredDaemonTestHome({ prefix: 'follow-facts-portable-home-' }, async () => {
       const profileId = 'stack_agent-qa-coord-n1__id_default';

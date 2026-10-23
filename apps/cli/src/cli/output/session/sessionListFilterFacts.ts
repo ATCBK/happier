@@ -1,5 +1,5 @@
 import type { SessionListFilterFactsV1, SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
-import { readSessionListStartedByV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { matchSessionListFilterV1, readSessionListStartedByV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { readSessionAwarenessPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import { resolveLinkedExternalSessionAuthorityV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
 import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
@@ -39,7 +39,12 @@ export async function readCliSessionListFilterFactsV1(input: CliSessionAwareness
 }>): Promise<SessionListFilterFactsV1 | null> {
   if (input.signal.aborted || readAccountIdFromToken(input.credentials.token) !== input.accountId || !await input.isCurrent()) return null;
   const serverId = await resolveServerProfileHomeIdentityId(input.serverId) ?? input.serverId;
-  const projectHomes = [...new Set(input.filters.flatMap(filter => filter.projects
+  const workspaceContext = { normalizeServerId: (id: string) => id === input.serverId ? serverId : id };
+  const knownFacts = projectCliSessionListFilterFactsV1({ ...input, serverId, viewerAccountId: input.accountId, workspaceContext });
+  // Supplemental facts cannot reverse a known conjunctive miss. Unknown
+  // Project/tag facts remain eligible for the same canonical matcher below.
+  const relevantFilters = input.filters.filter(filter => matchSessionListFilterV1(filter, knownFacts) !== 'miss');
+  const projectHomes = [...new Set(relevantFilters.flatMap(filter => filter.projects
     ? [...filter.projects.include, ...filter.projects.exclude].map(project => project.serverId) : []))];
   const projectsRequired = (await Promise.all(projectHomes.map(home => isServerProfileHomeIdentity(input.serverId, home))))
     .some(admitted => admitted);
@@ -47,15 +52,14 @@ export async function readCliSessionListFilterFactsV1(input: CliSessionAwareness
     projectsRequired ? readProjectAccountRows({ credentials: input.credentials, serverId, signal: input.signal,
       sessionCustody: { accountId: input.accountId, serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl,
         isCurrent: input.isCurrent } }) : Promise.resolve(undefined),
-    readCliSessionListTagAssignmentsV1({ ...input, serverId, sessionIds: [input.row.id] }),
+    readCliSessionListTagAssignmentsV1({ ...input, filters: relevantFilters, serverId, sessionIds: [input.row.id] }),
   ]);
   if (input.signal.aborted || !await input.isCurrent()) return null;
   // Profile aliases qualify caller filters, never stored Workspace identities.
   const workspaceRefs = projects.status === 'fulfilled' ? projects.value?.workspaceRefs.filter(ref => ref.serverId === serverId) : undefined;
   const tagIds = tags.status === 'fulfilled' ? tags.value?.get(input.row.id) : undefined;
-  return projectCliSessionListFilterFactsV1({ ...input, serverId, viewerAccountId: input.accountId,
-    preparedFacts: { workspaceRefs, tagIds },
-    workspaceContext: { normalizeServerId: id => id === input.serverId ? serverId : id } });
+  return { ...knownFacts, workspaceRefs: workspaceRefs ?? knownFacts.workspaceRefs,
+    ...(tagIds === undefined ? {} : { tagIds }) };
 }
 
 /** Current authorized facts shared by list/preview and occurrence evaluation; never persisted. */

@@ -48,6 +48,7 @@ import { ListSessionFollowRulesResponseV1Schema, SESSION_FOLLOW_RULES_ROUTE_V1 }
 import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
 import { matchSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import type { SessionFollowRuleInvalidation } from './sessionFollowRuleCache';
+import { resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 export type { SessionFollowAccountOccurrence } from './sessionFollowRuleSourceEvidence';
 export type SessionFollowReceiverRangeResult = Readonly<{ coveredEvents: readonly Readonly<{
   sourceSessionId: string; kind: FollowEventV1['kind'];
@@ -701,20 +702,38 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       if (opened.status !== 'available' || !await current()) return [];
       let candidates = opened.rules.filter(rule => rule.definition.enabled && rule.receiver.kind === 'session');
       if (sourceSessionId && candidates.length) {
-        const [encryption, source] = await Promise.allSettled([
-          fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl, signal: input.signal }),
-          fetchSessionById({ token: input.credentials.token, sessionId: sourceSessionId,
-            serverUrl: input.serverHttpBaseUrl, signal: input.signal }),
-        ]);
+        const homeId = await resolveServerProfileHomeIdentityId(input.serverId);
+        const serverId = homeId ?? input.serverId;
         if (!await current()) return [];
-        if (encryption.status === 'fulfilled' && source.status === 'fulfilled' && source.value) {
-          const facts = await readCliSessionListFilterFactsV1({ credentials: input.credentials, accountEncryption: encryption.value,
-            row: source.value, serverId: input.serverId, nowMs: Date.now(), accountId: input.accountId,
-            serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal, isCurrent: current,
-            filters: candidates.map(rule => rule.definition.filter) });
-          // A known miss suppresses discovery only. Unknown facts retain the
-          // receiver, and actual dispatch still proves rules and source fresh.
-          if (facts) candidates = candidates.filter(rule => matchSessionListFilterV1(rule.definition.filter, facts) !== 'miss');
+        // Discovery already knows the source Home and kind. The canonical
+        // matcher can decide some rules without reading a mutable Session row;
+        // only unavailable predicates need fresh source/supplemental facts.
+        const known = candidates.map(rule => ({ rule,
+          // An identical local profile is the existing in-process target
+          // contract. Otherwise an unresolved portable Home is not a miss.
+          match: homeId !== null || rule.definition.filter.homeServerIds.includes(input.serverId)
+            ? matchSessionListFilterV1(rule.definition.filter, {
+              serverId, kind: 'session', workspaceContext: { normalizeServerId: id => id === input.serverId ? serverId : id },
+            }) : 'unavailable' as const,
+        }));
+        candidates = known.filter(candidate => candidate.match !== 'miss').map(candidate => candidate.rule);
+        const unresolved = known.filter(candidate => candidate.match === 'unavailable').map(candidate => candidate.rule);
+        if (unresolved.length) {
+          const [encryption, source] = await Promise.allSettled([
+            fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl, signal: input.signal }),
+            fetchSessionById({ token: input.credentials.token, sessionId: sourceSessionId,
+              serverUrl: input.serverHttpBaseUrl, signal: input.signal }),
+          ]);
+          if (!await current()) return [];
+          if (encryption.status === 'fulfilled' && source.status === 'fulfilled' && source.value) {
+            const facts = await readCliSessionListFilterFactsV1({ credentials: input.credentials, accountEncryption: encryption.value,
+              row: source.value, serverId: input.serverId, nowMs: Date.now(), accountId: input.accountId,
+              serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal, isCurrent: current,
+              filters: unresolved.map(rule => rule.definition.filter) });
+            // A known miss suppresses discovery only. Unknown facts retain the
+            // receiver, and actual dispatch still proves rules and source fresh.
+            if (facts) candidates = candidates.filter(rule => matchSessionListFilterV1(rule.definition.filter, facts) !== 'miss');
+          }
         }
       }
       return await current() ? [...new Set(candidates.flatMap(rule => rule.receiver.kind === 'session' ? [rule.receiver.sessionId] : []))] : [];
