@@ -74,6 +74,8 @@ export type HappierPresenceCapsuleProps = Readonly<{
   checking?: boolean;
   /** Opens the surface this capsule narrates (a session-wide line's Watch). */
   onWatch?: () => void;
+  /** Retains an unavailable Watch and explains why it cannot be pressed. */
+  watchDisabledReason?: string | null;
   /** Phone and narrow panes: the capsule spans the frame in thumb reach. */
   compact?: boolean;
   /**
@@ -315,7 +317,9 @@ export function HappierPresenceCapsule(props: HappierPresenceCapsuleProps): Reac
           </View>
         )}
         {props.onWatch && !(compact && unconfirmed) ? (
-          <host.Button emphasis="plain" title={copy.watch} onPress={props.onWatch} testID={`${testID}-watch`} />
+          <host.Button emphasis="plain" title={copy.watch} onPress={props.onWatch}
+            disabled={Boolean(props.watchDisabledReason)} accessibilityHint={props.watchDisabledReason ?? undefined}
+            testID={`${testID}-watch`} />
         ) : null}
         {human && !observationRecovery && props.onHandBack ? (
           <host.Button emphasis="primary" title={copy.handBack} onPress={props.onHandBack} testID={`${testID}-hand-back`} />

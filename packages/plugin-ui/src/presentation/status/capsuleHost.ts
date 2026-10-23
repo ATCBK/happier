@@ -56,6 +56,8 @@ export type HappierCapsuleHost = Readonly<{
     title: string;
     emphasis: HappierCapsuleButtonEmphasis;
     onPress: () => void;
+    disabled?: boolean;
+    accessibilityHint?: string;
     loading?: boolean;
     leading?: ReactNode;
     testID: string;

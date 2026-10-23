@@ -46,7 +46,7 @@ function createHost(): Readonly<{ host: HappierCapsuleHost; settle: () => void }
     Surface: (props) => <div data-testid={props.testID} data-elevation={props.elevation}>{props.children}</div>,
     Text: (props) => <span data-lines={props.numberOfLines}>{props.children}</span>,
     Button: (props) => (
-      <button type="button" data-testid={props.testID} onClick={props.onPress}>{props.title}</button>
+      <button type="button" data-testid={props.testID} onClick={props.onPress} disabled={props.disabled} title={props.accessibilityHint}>{props.title}</button>
     ),
     Spinner: () => <span data-testid="spinner" />,
     renderGlyph: (glyph) => <span data-glyph={glyph} />,
@@ -79,6 +79,23 @@ async function click(element: HTMLElement | null): Promise<void> {
 }
 
 describe('HappierPresenceCapsule', () => {
+  it('keeps an unavailable Watch visible and explains why it cannot open', async () => {
+    const { host } = createHost();
+    const onWatch = vi.fn();
+    const mounted = mountThroughReactNativeWeb(
+      <HappierPresenceCapsule presence={{ kind: 'agent', controlEpoch: 1 }} copy={COPY} colors={COLORS}
+        host={host} onWatch={onWatch} watchDisabledReason="Machine is not answering" compact placement="strip" testID="p" />,
+    );
+    try {
+      const watch = byTestId(mounted.container, 'p-watch') as HTMLButtonElement;
+      expect(watch).toBeTruthy();
+      expect(watch.disabled).toBe(true);
+      expect(watch.title).toBe('Machine is not answering');
+      await act(async () => { watch.click(); });
+      expect(onWatch).not.toHaveBeenCalled();
+    } finally { mounted.unmount(); }
+  });
+
   it('keeps Watch reachable in a compact strip without requesting control', async () => {
     const { host } = createHost();
     let watching = false;
