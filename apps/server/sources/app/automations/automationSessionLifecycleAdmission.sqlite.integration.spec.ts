@@ -485,7 +485,7 @@ describe("Session lifecycle Automation admission on SQLite", () => {
             .toMatchObject({ id: newest.id, lastSucceededRun: { runId: active.run!.id, checkpointEnvelope } });
     });
 
-    it("suppresses signed host archive origin, retains ancestry for unrelated triggers, and refuses an unsigned origin claim", async () => {
+    it("suppresses signed host archive origin, retains ancestry, and refuses unverified origins", async () => {
         const current = await source();
         const own = await trigger({ ...current, workflow: true, policy: { kind: "firstMatch" } });
         const unrelated = await trigger({ ...current, workflow: true, policy: { kind: "firstMatch" } });
@@ -510,6 +510,34 @@ describe("Session lifecycle Automation admission on SQLite", () => {
             const body = { originRunId: root.id };
             const headers = { "x-test-user-id": current.accountId };
             expect((await app.inject({ method: "POST", url, payload: body, headers })).statusCode).toBe(403);
+            const misbound = createSignedPluginInstallationPublisherHeader({ keyPair, machineId: assignment.machineId,
+                installationId, path: url, body: { originRunId: "another-run" } });
+            expect((await app.inject({ method: "POST", url, payload: body,
+                headers: { ...headers, [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: misbound } })).statusCode).toBe(403);
+            const foreign = await source();
+            const foreignTrigger = await trigger({ ...foreign, workflow: true });
+            const foreignRun = await db.automationRun.create({ data: { accountId: foreign.accountId,
+                automationId: foreignTrigger.automationId, state: "running", scheduledAt: new Date(), dueAt: new Date(),
+                workflowCustodyState: "pending", workflowAcceptedSnapshotEnvelope: "{}", ...encodeAutomationRunCause(AutomationRunCauseSchema.parse({
+                    kind: "trigger", triggerKind: "schedule", triggerId: foreignTrigger.id, triggerRevision: 1,
+                    occurredAt: 100, evidence: { scheduledFor: 100 }, occurrenceKey: deriveAutomationManualOccurrenceKeyV1({
+                        automationId: foreignTrigger.automationId, idempotencyKey: randomUUID(),
+                    }),
+                })) } });
+            await db.automationRunAssignment.create({ data: { runId: foreignRun.id, machineId: assignment.machineId } });
+            for (const originRunId of [foreignRun.id, randomUUID()]) {
+                const payload = { originRunId };
+                const signed = createSignedPluginInstallationPublisherHeader({ keyPair, machineId: assignment.machineId,
+                    installationId, path: url, body: payload });
+                expect((await app.inject({ method: "POST", url, payload,
+                    headers: { ...headers, [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: signed } })).statusCode).toBe(403);
+            }
+            await db.automationRunAssignment.deleteMany({ where: { runId: root.id } });
+            const unassigned = createSignedPluginInstallationPublisherHeader({ keyPair, machineId: assignment.machineId,
+                installationId, path: url, body });
+            expect((await app.inject({ method: "POST", url, payload: body,
+                headers: { ...headers, [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: unassigned } })).statusCode).toBe(403);
+            await db.automationRunAssignment.create({ data: { runId: root.id, machineId: assignment.machineId } });
             expect((await db.session.findUniqueOrThrow({ where: { id: current.sessionId } })).archivedAt).toBeNull();
             const signed = createSignedPluginInstallationPublisherHeader({ keyPair, machineId: assignment.machineId,
                 installationId, path: url, body });
@@ -527,6 +555,11 @@ describe("Session lifecycle Automation admission on SQLite", () => {
                 v: 1, kind: "sessionLifecycle", event: "sessionArchived", sourceSessionId: current.sessionId,
                 occurredAt: Date.now(), originRunId: descendant.id,
             }))).toEqual(new Set([unrelated.id, own.id]));
+            const repeatSigned = createSignedPluginInstallationPublisherHeader({ keyPair, machineId: assignment.machineId,
+                installationId, path: url, body });
+            expect((await app.inject({ method: "POST", url, payload: body,
+                headers: { ...headers, [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: repeatSigned } })).statusCode).toBe(200);
+            expect(await db.automationRun.count({ where: { triggerId: { in: [own.id, unrelated.id] } } })).toBe(2);
         });
     });
 

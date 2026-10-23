@@ -6,6 +6,8 @@ import { markSessionProjectionRecipientsChanged } from "@/app/session/changeTrac
 import { prepareSessionAccountCursorLocks } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { clearSessionRuntimeActivityProjectionInTx } from "@/app/session/sessionWriteService";
 import { transitionSessionArchiveStateInTx } from "@/app/session/archive/transitionSessionArchiveStateInTx";
+import { isAutomationOriginRunPublisherTx } from "@/app/automations/automationTriggerCauseChain";
+import { PluginInstallationPublisherProofError, verifyPluginInstallationPublisherHeader } from "@/app/plugins/installations/publisherProof";
 import { inTx } from "@/storage/inTx";
 import { db } from "@/storage/db";
 import { didSessionActivityBadgeSignalChange } from "@/app/activity/accountActivityBadge";
@@ -24,6 +26,7 @@ export function registerSessionArchiveRoutes(app: Fastify) {
         },
         schema: {
             params: z.object({ sessionId: z.string() }),
+            body: z.nullish(z.strictObject({ originRunId: z.optional(z.string().check(z.minLength(1))) })),
             response: {
                 200: z.object({ success: z.literal(true), archivedAt: z.number() }),
                 403: z.union([z.object({ error: z.literal("Forbidden") }), z.object({ error: z.literal("team_authentication_required") })]),
@@ -49,9 +52,27 @@ export function registerSessionArchiveRoutes(app: Fastify) {
             return reply.code(403).send({ error: "Forbidden" });
         }
 
+        const originRunId = request.body?.originRunId;
+        let originPublisher: Awaited<ReturnType<typeof verifyPluginInstallationPublisherHeader>> = null;
+        if (originRunId !== undefined) {
+            try {
+                originPublisher = await verifyPluginInstallationPublisherHeader({
+                    accountId: userId, request,
+                    path: `/v2/sessions/${encodeURIComponent(sessionId)}/archive`, required: true,
+                });
+            } catch (error) {
+                if (!(error instanceof PluginInstallationPublisherProofError)) throw error;
+                return reply.code(403).send({ error: "Forbidden" });
+            }
+            if (!originPublisher) return reply.code(403).send({ error: "Forbidden" });
+        }
+
         const res = await inTx(async (tx) => {
             const authority = await assertSessionCapabilityInTx({ tx, accountId: userId, sessionId, capability: "archiveSession", authentication });
             if (!authority.ok) return { ok: false as const, error: authority.reason };
+            if (originRunId !== undefined && (!originPublisher || !await isAutomationOriginRunPublisherTx(tx, {
+                accountId: userId, machineId: originPublisher.machineId, runId: originRunId,
+            }))) return { ok: false as const, error: "unavailable" as const };
             const session = await tx.session.findUnique({
                 where: { id: sessionId },
                 select: {
@@ -77,6 +98,7 @@ export function registerSessionArchiveRoutes(app: Fastify) {
                 sessionId,
                 wasArchived: session.archivedAt !== null,
                 archivedAt: new Date(),
+                ...(originRunId !== undefined ? { originRunId } : {}),
             });
             const runtimeActivityClear = await clearSessionRuntimeActivityProjectionInTx({ tx, sessionId });
 
