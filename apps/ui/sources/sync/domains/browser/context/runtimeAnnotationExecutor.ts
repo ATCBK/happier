@@ -138,7 +138,7 @@ export function resolveBrowserAnnotationRuntimeActionIdForRequest(
 
 export function isBrowserAnnotationRuntimeAction(
     actionId: RuntimeActionIdV1,
-): actionId is BrowserAnnotationRuntimeActionId {
+): actionId is Extract<BrowserAnnotationRuntimeActionId, `browser.context.annotation.${string}`> {
     return actionId !== 'browser.context.attachToComposer' && ANNOTATION_ACTION_KINDS.has(actionId);
 }
 
