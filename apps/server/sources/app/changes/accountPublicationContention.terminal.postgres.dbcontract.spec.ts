@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ChangesResponseSchema } from '@happier-dev/protocol/changes';
 import { db, initDbPostgres } from '@/storage/db';
-import { inTx } from '@/storage/inTx';
+import { inTx, type Tx } from '@/storage/inTx';
 import { getDbProviderFromEnv } from '@/storage/prisma';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { createAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { changesRoutes } from '@/app/api/routes/changes/changesRoutes';
-import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { afterAccountChangePublication, beforeAccountChangePublication, markAccountChanged } from '@/app/changes/markAccountChanged';
+import { acquireAccountSessionOwnerMetadataFenceInTx } from '@/app/encryption/accountSessionOwnerMetadataFence';
+import { eventRouter } from '@/app/events/connectionEventRouter';
+import { observeLazyPrismaQuery } from './accountPublicationContention.testkit';
 
 function latch() {
     let release!: () => void;
@@ -23,6 +26,61 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('T
         await db.$connect();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it.each(['content', 'serializing', 'exclusive'] as const)('uses only the necessary Account lock statements after %s admission', async intent => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const original = db.$transaction;
+        const locks: string[] = [];
+        // Observe consumed SQL at the real Prisma transport boundary. Keep
+        // admission, transaction budgets and terminal publication unchanged.
+        db.$transaction = new Proxy(original, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            return Reflect.apply(target, receiver, [async (tx: Tx) => callback(new Proxy(tx, {
+                get(owner, property, proxyReceiver) {
+                    if (property !== '$queryRawUnsafe') return Reflect.get(owner, property, proxyReceiver);
+                    return (sql: string, ...values: unknown[]) => observeLazyPrismaQuery(owner.$queryRawUnsafe(sql, ...values), () => ({
+                        started: () => { if (sql.startsWith('SELECT "id" FROM "Account"') && sql.includes('FOR ')) locks.push(sql); },
+                        settled: () => {},
+                    }));
+                },
+            })), ...args.slice(1)]);
+        } });
+        try {
+            const publication = await inTx(async tx => {
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, intent);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, intent);
+                return markAccountChanged(tx, { accountId: account.id, kind: 'account', entityId: 'cost-contract' });
+            }, { isolationLevel: 'ReadCommitted', transactionClass: 'publication-cost-contract' });
+            expect(publication.resolveCursor()).toBe(1);
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(1);
+            const expectedLocks = intent === 'content' ? 2 : 1;
+            expect(locks).toHaveLength(expectedLocks);
+        } finally {
+            db.$transaction = original;
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
+
+    it('performs no cursor allocation or wake for admitted no-op work while still running currentness and projection callbacks', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const emitted = vi.spyOn(eventRouter, 'emitUpdate');
+        let validations = 0, projections = 0;
+        try {
+            for (let index = 0; index < 20; index++) await inTx(async tx => {
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, 'content');
+                beforeAccountChangePublication(tx, [account.id], async () => { validations++; });
+                afterAccountChangePublication(tx, async () => { projections++; });
+            }, { isolationLevel: 'ReadCommitted' });
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(0);
+            expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
+            expect(emitted.mock.calls.filter(([event]) => event.userId === account.id)).toHaveLength(0);
+            expect({ validations, projections }).toEqual({ validations: 20, projections: 20 });
+        } finally {
+            emitted.mockRestore();
+            await db.account.delete({ where: { id: account.id } });
+        }
+    });
 
     it('overlaps unrelated Session domain writes before either transaction publishes', async () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
