@@ -50,7 +50,11 @@ function admitPluginRuntime(
 describe('buildPluginProjectionV2', () => {
     it('carries the authored scoped confirmation default through normalization and the strict UI projection', async () => {
         const { createCollectionDetailPlugin } = await import('../../../../../../../packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-collection-detail/index');
-        const { manifest } = createCollectionDetailPlugin();
+        const { manifest: original } = createCollectionDetailPlugin();
+        const manifest = { ...original, contributes: { ...original.contributes,
+            actions: original.contributes.actions.map(action => action.id === 'clear'
+                ? { ...action, confirmVerb: { key: 'actions.clear', fallback: 'Clear' }, irreversible: true as const } : action),
+        } };
         const loaded: LoadedPlugin = {
             pluginId: manifest.id, pluginRootPath: '/plugins/reviews', manifestPath: '/plugins/reviews/.happier-plugin/plugin.json',
             daemonEntryPath: '/plugins/reviews/dist/index.js', devDaemonEntryPath: null,
@@ -65,6 +69,9 @@ describe('buildPluginProjectionV2', () => {
             dangerLevel: 'writesLocal', confirmationWhen: { presentUserUi: false },
         });
         expect(projection.actionsById[`${manifest.id}/clear`]).not.toHaveProperty('confirmationWhen');
+        expect(projection.actionsById[`${manifest.id}/clear`]).toMatchObject({
+            confirmVerb: { key: 'actions.clear', fallback: 'Clear' }, irreversible: true,
+        });
         expect(projection.actionsById[`${manifest.id}/restore`]).not.toHaveProperty('confirmationWhen');
     });
 

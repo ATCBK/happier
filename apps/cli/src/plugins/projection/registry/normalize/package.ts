@@ -267,6 +267,8 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
     kindVersion,
     id: definition.id,
     title: displayText(definition.title),
+    ...(definition.confirmVerb === undefined ? {} : { confirmVerb: definition.confirmVerb }),
+    ...(definition.irreversible === undefined ? {} : { irreversible: definition.irreversible }),
     ...(definition.icon ? { icon: definition.icon } : {}),
     description: definition.description ? displayText(definition.description) : null,
     safety,

@@ -761,6 +761,8 @@ function buildActionsById(
                     purpose: scope.purpose.purpose, serviceRefs: [...scope.serviceRefs],
                 })),
             title: localizedPresentation?.title ?? action.definition.title,
+            ...(action.definition.confirmVerb === undefined ? {} : { confirmVerb: action.definition.confirmVerb }),
+            ...(action.definition.irreversible === undefined ? {} : { irreversible: action.definition.irreversible }),
             description: localizedPresentation?.description ?? readOptionalString(action.definition.description),
             ...(action.definition.icon ? { icon: action.definition.icon } : {}),
             scopes: resolveActionScopes(action),
