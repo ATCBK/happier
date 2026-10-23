@@ -444,6 +444,7 @@ describe("local service API route composition", () => {
     it.each([
         { publicServerUrl: "https://app.happier.test:8443", domain: "preview.example.test" },
         { publicServerUrl: "http://home.localhost:8181", domain: "localhost" },
+        { publicServerUrl: "http://preview.localhost:8181", domain: "localhost" },
     ])("revokes public exposures through the composed shared runtime ($publicServerUrl)", async ({ publicServerUrl, domain }) => {
         const mod = await loadLocalServiceRoutesModule();
         expect(mod?.registerLocalServiceRoutes).toBeTypeOf("function");

@@ -86,18 +86,12 @@ function appendPreviewToken(url: URL, token: string): URL {
     return url;
 }
 
-/**
- * Canonical owner of the per-resource isolated origin used by BOTH the private preview
- * `originMode:'host'` branch and public exposures (S-3). An exposed local service serves
- * untrusted content, so it must never share the API origin — or another resource's origin —
- * where same-origin credentialed `fetch` and cross-preview scripting become possible. Callers
- * that cannot obtain an origin must refuse rather than fall back to the API origin.
- */
-export function resolveLocalServiceHostOrigin(input: Readonly<{
+/** Configuration readiness does not invent a resource id that could collide with the API host. */
+export function resolveLocalServiceHostOriginConfiguration(input: Readonly<{
     publicBaseUrl: string;
     hostOriginBaseDomain: string | null | undefined;
-    resourceId: string;
-}>): ResolveLocalServiceHostOriginResult {
+}>): Readonly<{ ok: true; previewBase: URL; publicOrigin: string }>
+    | Readonly<{ ok: false; reasonCode: LocalServiceHostOriginFailureReason }> {
     const publicBase = parseUrl(input.publicBaseUrl);
     if (!publicBase || (publicBase.protocol !== "http:" && publicBase.protocol !== "https:")) {
         return { ok: false, reasonCode: "invalid_public_base_url" };
@@ -110,14 +104,33 @@ export function resolveLocalServiceHostOrigin(input: Readonly<{
         return { ok: false, reasonCode: "https_required" };
     }
     const previewBase = new URL(publicBase.origin);
-    previewBase.hostname = `${resolveLocalServicePreviewHostLabel(input.resourceId)}.${baseDomain}`;
+    previewBase.hostname = baseDomain;
     if (!isSecurePreviewUrl(previewBase)) {
         return { ok: false, reasonCode: "https_required" };
     }
-    if (previewBase.origin === publicBase.origin) {
+    return { ok: true, previewBase, publicOrigin: publicBase.origin };
+}
+
+/**
+ * Canonical owner of the per-resource isolated origin used by BOTH the private preview
+ * `originMode:'host'` branch and public exposures (S-3). An exposed local service serves
+ * untrusted content, so it must never share the API origin — or another resource's origin —
+ * where same-origin credentialed `fetch` and cross-preview scripting become possible. Callers
+ * that cannot obtain an origin must refuse rather than fall back to the API origin.
+ */
+export function resolveLocalServiceHostOrigin(input: Readonly<{
+    publicBaseUrl: string;
+    hostOriginBaseDomain: string | null | undefined;
+    resourceId: string;
+}>): ResolveLocalServiceHostOriginResult {
+    const configuration = resolveLocalServiceHostOriginConfiguration(input);
+    if (!configuration.ok) return configuration;
+    const preview = configuration.previewBase;
+    preview.hostname = `${resolveLocalServicePreviewHostLabel(input.resourceId)}.${preview.hostname}`;
+    if (preview.origin === configuration.publicOrigin) {
         return { ok: false, reasonCode: "host_origin_unavailable" };
     }
-    return { ok: true, origin: previewBase.origin };
+    return { ok: true, origin: preview.origin };
 }
 
 export function resolveLocalServicePreviewUrl(input: ResolveLocalServicePreviewUrlInput): ResolveLocalServicePreviewUrlResult {

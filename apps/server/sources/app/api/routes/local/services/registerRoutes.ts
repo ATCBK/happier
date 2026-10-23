@@ -12,7 +12,7 @@ import {
 } from "@/app/api/routes/local/services/preview/registerRoutes";
 import { registerLocalServicePublicRoutes, handleLocalServicePublicHttpRequest, type RegisterLocalServicePublicRoutesOptions } from "@/app/api/routes/local/services/public/registerRoutes";
 import { registerLocalServiceHostRoutes } from './hostRoutes';
-import { readLocalServiceRequestHostname, resolveLocalServiceHostOrigin } from '@/app/local/services/preview/origin';
+import { readLocalServiceRequestHostname, resolveLocalServiceHostOriginConfiguration } from '@/app/local/services/preview/origin';
 import {
     createServerFeatureGatedRouteApp,
     isServerFeatureEnabledForHome,
@@ -125,10 +125,9 @@ function resolveLocalServicePublicDnsTlsValid(env: NodeJS.ProcessEnv): boolean {
     if (!featureEnv.publicPolicy.dnsTlsRequired && env.NODE_ENV !== "production") {
         return true;
     }
-    return resolveLocalServiceHostOrigin({
+    return resolveLocalServiceHostOriginConfiguration({
         publicBaseUrl: resolvePublicBaseUrl(env) ?? '',
         hostOriginBaseDomain: featureEnv.previewHostOriginBaseDomain,
-        resourceId: 'preview',
     }).ok;
 }
 

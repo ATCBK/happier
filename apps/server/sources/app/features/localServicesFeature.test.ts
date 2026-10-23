@@ -167,11 +167,15 @@ describe("local services server feature resolver", () => {
         );
     });
 
-    it("enables public exposure only when preview and public exposure are explicitly enabled", () => {
+    it.each([
+        { publicBaseUrl: "https://app.example.test", domain: "preview.example.test" },
+        { publicBaseUrl: "http://home.localhost:8181", domain: "localhost" },
+        { publicBaseUrl: "http://preview.localhost:8181", domain: "localhost" },
+    ])("enables configured public exposure on an admitted origin ($publicBaseUrl)", ({ publicBaseUrl, domain }) => {
         const payload = resolveServerFeaturePayload({
             ...grantSigningEnv(),
             HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: "1",
-            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: "preview.example.test",
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN: domain,
             HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: "1",
             HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: "secret_link",
             HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: "300000",
@@ -181,7 +185,7 @@ describe("local services server feature resolver", () => {
             HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOW_TEST_RATE_LIMIT_CHECKER: "1",
             HAPPIER_FEATURE_MACHINES_TUNNEL_SERVER_ROUTED__ENABLED: "1",
             HAPPIER_FEATURE_MACHINES_TUNNEL_ALLOWED_PORTS: "5173",
-            HAPPIER_PUBLIC_SERVER_URL: "https://app.example.test",
+            HAPPIER_PUBLIC_SERVER_URL: publicBaseUrl,
         } as NodeJS.ProcessEnv, serverFeatureRegistry);
 
         expect(readServerEnabledBit(payload, "localServices.publicPreview")).toBe(true);

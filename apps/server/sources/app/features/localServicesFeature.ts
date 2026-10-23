@@ -1,5 +1,5 @@
 import type { FeaturesPayloadDelta } from "./types";
-import { resolveLocalServiceHostOrigin } from "@/app/local/services/preview/origin";
+import { resolveLocalServiceHostOriginConfiguration } from "@/app/local/services/preview/origin";
 import {
     readLocalServicesFeatureEnv,
     readMachineTunnelFeatureEnv,
@@ -39,10 +39,9 @@ export function resolveLocalServicesFeature(env: NodeJS.ProcessEnv): FeaturesPay
         if (!peerMediationConfig.substrateEnabled) return ["peer_mediation_grant_signing_unavailable"];
         return [];
     })();
-    const publicDnsTlsHostModeAvailable = resolveLocalServiceHostOrigin({
+    const publicDnsTlsHostModeAvailable = resolveLocalServiceHostOriginConfiguration({
         publicBaseUrl: resolvePublicBaseUrl(env) ?? '',
         hostOriginBaseDomain: featureConfig.previewHostOriginBaseDomain,
-        resourceId: 'preview',
     }).ok;
     const publicAllowedModesConfigured = featureConfig.publicPolicy.allowedModes.length > 0;
     const publicMaxTtlConfigured = typeof featureConfig.publicPolicy.maxTtlMs === "number";
