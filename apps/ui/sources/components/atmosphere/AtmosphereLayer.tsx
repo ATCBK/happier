@@ -87,7 +87,7 @@ export const AtmosphereLayer = React.memo(function AtmosphereLayer(
       pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={StyleSheet.absoluteFill}
+      style={[StyleSheet.absoluteFill, styles.window]}
     >
       {current?.geometry && origin ? (
         <AtmospherePicture
@@ -319,7 +319,7 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
                   renderGroup={renderGroup}
                   {...job}
                   onReady={onReady}
-                  onRendered={onRendered}
+                  onRendered={index === 0 ? onRendered : undefined}
                   testID="atmosphere-band"
                 />
               </View>
@@ -385,5 +385,6 @@ function BandScroll(props: Readonly<{ stageId: number; children: React.ReactNode
 
 
 const styles = StyleSheet.create({
+  window: { overflow: 'hidden' },
   pane: { position: 'absolute', overflow: 'hidden' },
 });

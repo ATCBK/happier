@@ -1,13 +1,12 @@
 import * as React from 'react';
-import { AppState } from 'react-native';
+import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 export function useCanvasRenderState(size: { width: number; height: number }) {
-    const [visible, setVisible] = React.useState(() => AppState.currentState == null || AppState.currentState === 'active');
+    const activelyViewed = useHostActivelyViewed();
+    const presented = useLayoutPresentationActive();
+    const visible = activelyViewed && presented;
     const [settled, setSettled] = React.useState(size);
-    React.useEffect(() => {
-        const subscription = AppState.addEventListener('change', state => setVisible(state === 'active'));
-        return () => subscription.remove();
-    }, []);
     React.useEffect(() => {
         if (!visible || (size.width === settled.width && size.height === settled.height)) return;
         const timer = setTimeout(() => setSettled(size), 120);

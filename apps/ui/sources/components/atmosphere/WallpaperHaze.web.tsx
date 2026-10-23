@@ -22,13 +22,15 @@ export function WallpaperHaze(
     onRendered?: React.ComponentProps<typeof BackdropCanvas>['onRendered'];
   }>,
 ) {
+  // Both blur layers project identical pixels; their CSS masks/blur remain independent.
+  const renderGroup = React.useMemo(() => ({}), []);
   const quarter = {
     width: Math.max(2, Math.round(props.size.width / 4)),
     height: Math.max(2, Math.round(props.size.height / 4)),
   };
   const at = `${((props.focus.x / props.size.width) * 100).toFixed(1)}% ${((props.focus.y / props.size.height) * 100).toFixed(1)}%`;
   const maskOf = (ellipse: string, solid: string, centre = at) => `radial-gradient(ellipse ${ellipse} at ${centre}, #000 ${solid}, transparent 100%)`;
-  const layer = (blur: number, ellipse: string, solid: string) => {
+  const layer = (blur: number, ellipse: string, solid: string, measureTone: boolean) => {
     const mask = maskOf(ellipse, solid);
     return (
       <View
@@ -56,7 +58,8 @@ export function WallpaperHaze(
             size={quarter}
             dpr={1}
             {...props.job}
-            onRendered={props.onRendered}
+            renderGroup={renderGroup}
+            onRendered={measureTone ? props.onRendered : undefined}
           />
         </View>
       </View>
@@ -66,7 +69,7 @@ export function WallpaperHaze(
   const veilMask = veil ? maskOf(`${veil.rx * 100}% ${veil.ry * 100}%`, `${veil.solid * 100}%`, `${(veil.at.x * 100).toFixed(1)}% ${(veil.at.y * 100).toFixed(1)}%`) : null;
   return (
     <>
-      {layers.map(spec => <React.Fragment key={spec.blur}>{layer(spec.blur, `${spec.rx * 100}% ${spec.ry * 100}%`, `${spec.solid * 100}%`)}</React.Fragment>)}
+      {layers.map((spec, index) => <React.Fragment key={spec.blur}>{layer(spec.blur, `${spec.rx * 100}% ${spec.ry * 100}%`, `${spec.solid * 100}%`, index === 0)}</React.Fragment>)}
       {veil && veilMask ? (
         <View style={[StyleSheet.absoluteFill, { backgroundColor: veil.color, opacity: veil.alpha, maskImage: veilMask, WebkitMaskImage: veilMask } as object]} />
       ) : null}
