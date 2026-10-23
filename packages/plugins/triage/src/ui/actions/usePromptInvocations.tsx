@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { usePluginHostApi } from '@happier-dev/plugin-ui';
+import { useEffect, useMemo, useState } from 'react';
+import { usePluginHostApi, usePluginHostReadiness } from '@happier-dev/plugin-ui';
 
 import {
     readTriagePromptInvocationsV1,
@@ -26,21 +26,21 @@ export type TriagePromptInvocationsStateV1 = Readonly<{
 
 export function useTriagePromptInvocations(): TriagePromptInvocationsStateV1 {
     const host = usePluginHostApi() as unknown as TriageActionResolutionHostV1;
+    const readiness = usePluginHostReadiness(false);
     const [state, setState] = useState<TriagePromptInvocationsStateV1>({
         invocations: [],
         coverage: null,
     });
-    const retired = useRef(false);
-
     useEffect(() => {
-        retired.current = false;
+        if (readiness.pending || readiness.ready === false) return;
+        const controller = new AbortController();
         void (async () => {
-            const read = await readTriagePromptInvocationsV1(host);
-            if (retired.current || read.status !== 'read') return;
+            const read = await readTriagePromptInvocationsV1(host, { signal: controller.signal });
+            if (controller.signal.aborted || read.status !== 'read') return;
             setState({ invocations: read.invocations, coverage: read.coverage });
         })();
-        return () => { retired.current = true; };
-    }, [host]);
+        return () => { controller.abort(); };
+    }, [host, readiness.pending, readiness.ready, readiness.revision]);
 
     return useMemo(() => state, [state]);
 }

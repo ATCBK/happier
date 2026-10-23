@@ -3,7 +3,7 @@ import * as React from 'react';
 import { act } from 'react';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
-import { defineUiSurface } from '@happier-dev/plugin-ui';
+import { defineUiSurface, Text } from '@happier-dev/plugin-ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -17,6 +17,8 @@ import { TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1 } from '../../settings/actions.js';
 import { createTestkitAccountKv } from '../../settings/testkit/accountKv.test-support.js';
 import { TriageActionsEditor } from './ActionsEditor.js';
 import { useTriageActions } from './useTriageActions.js';
+import { useTriageLaunchProfiles } from './useLaunchProfiles.js';
+import { useTriagePromptInvocations } from './usePromptInvocations.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -99,6 +101,51 @@ afterEach(async () => {
 });
 
 describe('action editor draft settlement', () => {
+  it.each([false, true])('reacquires editor catalogs only under admitted requester custody and fences late old results (initially admitted: %s)', async (initiallyAdmitted) => {
+    const calls: Array<Readonly<{ action: string; signal: AbortSignal | undefined }>> = [];
+    const held: Array<() => void> = [];
+    let current = false;
+    const result = (action: string, label: string) => action === 'sessions.spawn.profiles.list'
+      ? { coverage: 'complete', items: [{ id: 'profile', name: label }] }
+      : { coverage: 'complete', items: [{ id: 'prompt', token: '/prompt', title: label, allowArgs: false }] };
+    const surface = defineUiSurface(() => {
+      const profiles = useTriageLaunchProfiles();
+      const invocations = useTriagePromptInvocations();
+      return <Text value={[...profiles.profiles.map(profile => profile.name),
+        ...invocations.invocations.map(invocation => invocation.title)].join('|')} />;
+    });
+    const context = createSurfaceContextFixture({ requesterExecutionReady: initiallyAdmitted,
+      machineConnectionPending: true, machineExecutionReady: false });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: `catalog-custody-${initiallyAdmitted}`, mountNonce: `catalog-custody-${initiallyAdmitted}` },
+      authorPlugin: { id: 'happier.triage', version: '0.0.0' }, surface, surfaceContext: context,
+      adapter: createPluginUiRnwSemanticSurfaceAdapter(), handlers: { executeAction: async ({ action, signal }) => {
+        const actionId = String(action);
+        calls.push({ action: actionId, signal });
+        if (current) return result(actionId, 'current');
+        return await new Promise<ReturnType<typeof result>>(resolve => { held.push(() => resolve(result(actionId, 'old'))); });
+      } },
+    });
+    mounted.push(fixture);
+    try {
+      if (!initiallyAdmitted) {
+        expect(calls).toHaveLength(0);
+        await act(async () => { await fixture.updateSurface({ ...context, requesterExecutionReady: true }); });
+      }
+      expect(calls).toHaveLength(2);
+      await act(async () => { await fixture.updateSurface({ ...context, requesterExecutionReady: false }); });
+      expect(calls).toHaveLength(2);
+      current = true;
+      await act(async () => { await fixture.updateSurface({ ...context, requesterExecutionReady: true }); });
+      await expect(fixture.getByText('current|current')).resolves.toBeDefined();
+      expect(calls).toHaveLength(4);
+      expect(calls.slice(0, 2).every(call => call.signal?.aborted)).toBe(true);
+      await act(async () => { for (const finish of held) finish(); });
+      await expect(fixture.getByText('current|current')).resolves.toBeDefined();
+      await expect(fixture.queryByText('old|old')).resolves.toBeUndefined();
+    } finally { for (const finish of held) finish(); }
+  });
+
   it('keeps newer update input and saves it against the acknowledged revision', async () => {
     const editor = await mountEditor();
     await press(editor.fixture, 'Ask');

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { usePluginHostApi } from '@happier-dev/plugin-ui';
+import { useEffect, useMemo, useState } from 'react';
+import { usePluginHostApi, usePluginHostReadiness } from '@happier-dev/plugin-ui';
 
 import {
     readTriageLaunchProfilesV1,
@@ -31,18 +31,18 @@ export type TriageLaunchProfilesStateV1 = Readonly<{
 
 export function useTriageLaunchProfiles(): TriageLaunchProfilesStateV1 {
     const host = usePluginHostApi() as unknown as TriageActionResolutionHostV1;
+    const readiness = usePluginHostReadiness(false);
     const [state, setState] = useState<TriageLaunchProfilesStateV1>({
         profiles: [],
         coverage: null,
         pending: true,
     });
-    const retired = useRef(false);
-
     useEffect(() => {
-        retired.current = false;
+        if (readiness.pending || readiness.ready === false) return;
+        const controller = new AbortController();
         void (async () => {
-            const read = await readTriageLaunchProfilesV1(host);
-            if (retired.current) return;
+            const read = await readTriageLaunchProfilesV1(host, { signal: controller.signal });
+            if (controller.signal.aborted) return;
             if (read.status !== 'read') {
                 setState({ profiles: [], coverage: null, pending: false });
                 return;
@@ -53,8 +53,8 @@ export function useTriageLaunchProfiles(): TriageLaunchProfilesStateV1 {
                 pending: false,
             });
         })();
-        return () => { retired.current = true; };
-    }, [host]);
+        return () => { controller.abort(); };
+    }, [host, readiness.pending, readiness.ready, readiness.revision]);
 
     return useMemo(() => state, [state]);
 }
