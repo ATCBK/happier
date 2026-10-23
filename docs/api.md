@@ -1752,6 +1752,27 @@ from the inspected `server-v0.2.11` and `server-v0.2.11-preview.2` contracts; ne
 the feature before using them. Source implementation alone does not establish release availability
 or completed runtime delivery validation.
 
+- In 0.3 development, `GET /v2/account/session-follows` and
+  `GET /v2/sessions/:destinationSessionId/follows/sessions` accept optional
+  `cursor`, positive integer `limit`, and `source` (a JSON-encoded existing
+  `FollowSourceRefV1`, excluding rules). The public `follow.list` Action uses
+  `{ direction: 'following', receiver, source?, cursor?, limit? }` and encodes
+  that query through its canonical transport. A Session source selects its own
+  explicit Follow and execution-run Follows belonging to that exact Session;
+  Discussion, execution-run and workflow-run references select only that exact
+  source. No Session inventory or content matching is involved.
+  Selection and candidate paging happen in SQL before source admission and
+  projection; every returned row is freshly readmitted. A short or empty page
+  can still carry `continuation` when candidates lose access or cannot project.
+  Continue until it is absent. A cursor is bound to the authenticated Account,
+  receiver and source selection; changing that selection returns
+  `400 invalid_parameters`. Forward-list continuations are sealed by the server
+  so their candidate position cannot disclose an omitted source identity;
+  clients treat them as opaque strings. This uses the existing server key,
+  independently of the Account's plain/E2EE mode. Omitting `limit` returns all currently admitted
+  matching rows, preserving the unfiltered default when `source` is omitted.
+  The selector extends the undeployed V1 contract and must not be silently
+  ignored by an older server.
 - `GET /v2/sessions/:sessionId/follow` returns `{ follow, capabilities: { manageFollow } }`, where
   `follow` is null or the authenticated Account's own Follow preferences. Alongside
   `{ sessionId, following, notificationLevel, includeInVoice }`, the development projection
