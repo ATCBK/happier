@@ -80,7 +80,8 @@ export function useProjectsTreeKeyboard(rows: readonly ProjectsTreeRow[], handle
         accessibilityLevel: row.level + 1,
         accessibilityExpanded: row.expandable ? row.expanded : undefined,
         pressableRef: (target) => tree.bindFocusTarget(row.key, target?.focus ? { focus: () => target.focus?.() } : null),
-        onFocus: () => setFocusedKey(row.key),
+        onFocus: () => tree.onFocusChange(row.key, true),
+        onBlur: () => tree.onFocusChange(row.key, false),
         onKeyDown: (event) => {
             const key = event.nativeEvent?.key ?? event.key;
             if (key && tree.onKeyDown(row.key, key, event)) event.preventDefault?.();

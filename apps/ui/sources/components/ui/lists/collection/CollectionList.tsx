@@ -197,7 +197,7 @@ export const CollectionNavigationRow = React.memo(function CollectionNavigationR
     /** A row that is there but not active (an offline machine's last-known checkout, a saved source not open). */
     dimmed?: boolean;
     /** A tree item's semantics and roving focus, from the shared tree interaction owner (a column tree). */
-    treeItem?: Pick<ItemProps, 'webRole' | 'webTabIndex' | 'accessibilityLevel' | 'accessibilityExpanded' | 'pressableRef' | 'onFocus' | 'onKeyDown'>;
+    treeItem?: Pick<ItemProps, 'webRole' | 'webTabIndex' | 'accessibilityLevel' | 'accessibilityExpanded' | 'pressableRef' | 'onFocus' | 'onBlur' | 'onKeyDown'>;
     icon?: React.ReactNode;
     leftElement?: React.ReactNode;
     leftElementWhenHovered?: React.ReactNode;

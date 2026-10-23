@@ -3,7 +3,7 @@ import { useHappierTreeInteraction, type HappierTreeNode } from '@happier-dev/pl
 import type { ItemProps } from '@/components/ui/lists/Item';
 
 export type FilesystemTreeKeyboardNode = Readonly<{ path: string; parentPath?: string | null; depth: number; type: string; isExpanded: boolean }>;
-export type FilesystemTreeRowProps = Pick<ItemProps, 'webRole' | 'webTabIndex' | 'accessibilityLevel' | 'webKeyShortcuts' | 'accessibilityExpanded' | 'pressableRef' | 'onFocus' | 'onKeyDown'>;
+export type FilesystemTreeRowProps = Pick<ItemProps, 'webRole' | 'webTabIndex' | 'accessibilityLevel' | 'webKeyShortcuts' | 'accessibilityExpanded' | 'pressableRef' | 'onFocus' | 'onBlur' | 'onKeyDown'>;
 const ignoreActivation = () => {};
 
 /** One keyboard/focus owner for filesystem trees and their changed-file projection. */
@@ -35,7 +35,8 @@ export function useFilesystemTreeKeyboard(nodes: readonly FilesystemTreeKeyboard
         accessibilityLevel: node.depth + 1,
         accessibilityExpanded: node.type === 'directory' ? node.isExpanded : undefined,
         pressableRef: target => tree.bindFocusTarget(node.path, target?.focus ? { focus: () => target.focus?.() } : null),
-        onFocus: () => setFocusedPath(node.path),
+        onFocus: () => tree.onFocusChange(node.path, true),
+        onBlur: () => tree.onFocusChange(node.path, false),
         onKeyDown: event => {
             if (event.ctrlKey || event.metaKey || event.altKey) return;
             if (event.target && event.currentTarget && event.target !== event.currentTarget) return;
@@ -47,6 +48,6 @@ export function useFilesystemTreeKeyboard(nodes: readonly FilesystemTreeKeyboard
                 onExpandedChange: () => onDisclosure?.(), onActivate: ignoreActivation,
             })) event.preventDefault?.(); // Plain Enter remains owned by Pressable, avoiding double activation.
         },
-    }), [tree.activeKey, tree.bindFocusTarget, tree.onKeyDown]);
+    }), [tree.activeKey, tree.bindFocusTarget, tree.onFocusChange, tree.onKeyDown]);
     return { activePath: tree.activeKey, getRowProps, focusPath: tree.focusKey };
 }

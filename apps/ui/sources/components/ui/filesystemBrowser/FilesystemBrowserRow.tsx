@@ -38,7 +38,7 @@ export type FilesystemBrowserRowSelection = Readonly<{
 
 export type FilesystemBrowserRowProps = Readonly<{
     node: FilesystemBrowserNode;
-    treeItemProps?: Pick<ItemProps, 'webRole' | 'webTabIndex' | 'accessibilityLevel' | 'webKeyShortcuts' | 'accessibilityExpanded' | 'pressableRef' | 'onFocus' | 'onKeyDown'>;
+    treeItemProps?: Pick<ItemProps, 'webRole' | 'webTabIndex' | 'accessibilityLevel' | 'webKeyShortcuts' | 'accessibilityExpanded' | 'pressableRef' | 'onFocus' | 'onBlur' | 'onKeyDown'>;
     title: string;
     /** Drawn right after the title on its line (a folder's changed-file count). */
     titleAccessory?: React.ReactNode;
@@ -195,6 +195,7 @@ export function FilesystemBrowserRow(props: FilesystemBrowserRowProps): React.Re
                     onContextMenu={props.onContextMenu}
                     keyboardShortcuts={props.treeItemProps?.webKeyShortcuts}
                     onFocus={props.treeItemProps?.onFocus ?? (() => {})}
+                    onBlur={props.treeItemProps?.onBlur}
                     onKeyDown={(_key, event) => {
                         props.treeItemProps?.onKeyDown?.(event as Parameters<NonNullable<ItemProps['onKeyDown']>>[0]);
                         return (event as { defaultPrevented?: boolean } | null)?.defaultPrevented === true;
