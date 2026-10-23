@@ -512,9 +512,9 @@ const EMPTY_RESOURCE_SCOPE: readonly PluginUiSurfaceContextV1['resourceScope'][n
 const NOOP_MOUNT_RETIREMENT = Object.freeze({ dispose(): void {} });
 
 function isDaemonOwnedPluginSurfaceMethod(method: PluginUiHostMethodV1): boolean {
+    // Openable stat/read use the File opener's concrete host binding, whose own
+    // target/transport reports availability independently of the plugin daemon.
     return method === 'watchLiveStream' || method === 'readStoredImage' || method === 'readResource' || method === 'watchResource'
-        || method === 'statOpenableContent'
-        || method === 'readOpenableContent'
         || method === 'selectActionInput';
 }
 
@@ -1298,8 +1298,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         // exists. Resource declarations retain their own capability ceiling;
         // opaque viewers retain only their concrete file binding's methods.
         admissionMethods: isOpenableContentViewer ? [] : PLUGIN_UI_HOST_METHODS_V1.filter(method => {
-            if (!isDaemonOwnedPluginSurfaceMethod(method)
-                || method === 'statOpenableContent' || method === 'readOpenableContent') return false;
+            if (!isDaemonOwnedPluginSurfaceMethod(method)) return false;
             if (method === 'readResource') return canReadResource;
             if (method === 'watchResource') return canWatchResource;
             return true;

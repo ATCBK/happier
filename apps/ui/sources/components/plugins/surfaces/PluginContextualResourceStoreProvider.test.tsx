@@ -33,6 +33,7 @@ import { HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
 import { createWidgetSnapshotCaptureSlot, WidgetSnapshotCaptureContext } from '@/components/widgets/definitions/widgetSnapshotCapture';
 import { WidgetSnapshotConfirmPanel } from '@/components/widgets/definitions/WidgetSnapshotConfirmPanel';
 import { t } from '@/text';
+import { WidgetDefinitionV1Schema } from '@happier-dev/protocol/widgets/widgetDefinitionV1';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -224,6 +225,39 @@ function ResourceProbe(props: Readonly<{
 }
 
 describe('PluginContextualResourceStoreProvider', () => {
+    it('renders admitted data documents without repeating whole-document admission', async () => {
+        const account = await createAccountLifetime({ accountId: 'account-a' });
+        const draft = { v: 1, id: 'admitted-metrics', name: 'Metrics',
+            sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+            inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false },
+            provenance: { source: { kind: 'authored' } },
+            body: { kind: 'declarative', document: { version: 1, root: { kind: 'stack', children:
+                Array.from({ length: 128 }, (_, index) => ({ kind: 'metric', label: `Metric ${index}`,
+                    data: { kind: 'value', value: index }, value: { path: [], type: 'number' } })) } } } };
+        // The definition ingress remains strict, including semantic data-field admission.
+        expect(WidgetDefinitionV1Schema.safeParse({ ...draft, body: { kind: 'declarative', document: {
+            version: 1, root: { kind: 'metric', label: 'Invalid', data: { kind: 'value', value: 'private' },
+                value: { path: [], type: 'number' } },
+        } } }).success).toBe(false);
+        const definition = WidgetDefinitionV1Schema.parse(draft);
+        if (definition.body.kind !== 'declarative') throw new Error('Expected declarative definition');
+        const document = definition.body.document;
+        const runtime = { pluginUiProjection: null, pluginBrowserProjection: null, phase: 'establishing' as const,
+            interactionEnabled: false, machineId: null, serverId: null, platform: 'web' as const, accountLifetime: account.lifetime };
+        // Observe the real schema; do not replace admission or any rendering logic.
+        const admission = vi.spyOn(PluginDeclarativeDocumentV1Schema, 'safeParse');
+        let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
+        try {
+            screen = await renderScreen(<DeclarativeWidgetDocument document={document} input={{}} runtime={runtime}
+                accountLifetime={account.lifetime} isCurrent={account.lifetime.isCurrent} testID="admitted-data" />);
+            expect(screen.tree.root.findAllByType(HappierDataMetric)).toHaveLength(128);
+            await screen.update(<DeclarativeWidgetDocument document={document} input={{}} runtime={runtime}
+                accountLifetime={account.lifetime} isCurrent={account.lifetime.isCurrent} testID="admitted-data-update" />);
+            expect(screen.tree.root.findAllByType(HappierDataMetric)).toHaveLength(128);
+            expect(admission).toHaveBeenCalledTimes(0);
+        } finally { admission.mockRestore(); await screen?.unmount(); }
+    });
+
     it('measures Canvas read/watch demand before and after viewport deferral through the real Resource transport', async () => {
         const a = await createAccountLifetime({ accountId: 'account-a' });
         const surface = { ...a.lifetime.scope, owner: { kind: 'workBoard', boardId: 'demand' } } as const;
