@@ -10,6 +10,8 @@ export { ARTIFACT_ACTION_IDS_V1 } from './artifactActionIdsV1.js';
 import { ArtifactRevisionV1Schema } from './artifactRevisionV1.js';
 import { ArtifactWorkspacePublicationSourceV1Schema } from './artifactWorkspaceFileV1.js';
 import { UiSurfaceCapabilityRequestV1Schema } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
+import { RoleArtifactV1Schema } from '../prompts/roles/roleArtifactV1.js';
+import { LaunchProfileArtifactV1Schema } from '../launchProfiles/launchProfileArtifactV1.js';
 export { ArtifactRevisionV1Schema, type ArtifactRevisionV1 } from './artifactRevisionV1.js';
 
 export const ArtifactActionIdV1Schema = lazyZodSchema(() => z.enum(ARTIFACT_ACTION_IDS_V1));
@@ -46,9 +48,13 @@ export const ArtifactUpdateInputV1Schema = lazyZodSchema(() => z.union([
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { expectedRevision: ArtifactRevisionV1Schema, header: ArtifactHeaderMetadataV1Schema, ...upload })),
 ]));
 export const ArtifactDeleteInputV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { expectedRevision: ArtifactRevisionV1Schema }));
-export const ArtifactExportInputV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, {
-  path: z.string().check(z.minLength(1)), overwrite: z.optional(z.boolean()),
-}));
+export const ArtifactExportInputV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ ...subject.shape, path: z.string().check(z.minLength(1)), overwrite: z.optional(z.boolean()) }),
+  z.strictObject({ portable: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('role'), document: RoleArtifactV1Schema }),
+    z.strictObject({ kind: z.literal('launch-profile'), document: LaunchProfileArtifactV1Schema }),
+  ]) }),
+]));
 export const ArtifactPublishFromFileInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ArtifactWorkspacePublicationSourceV1Schema, {
   title: z.optional(z.string()), mime: z.optional(z.string().check(z.minLength(1))), kind: z.optional(z.string().check(z.minLength(1))),
   requestedCapabilities: z.optional(UiSurfaceCapabilityRequestV1Schema),
@@ -114,7 +120,10 @@ export const ArtifactActionInputSchemasV1 = {
 export const ArtifactActionOutputSchemasV1 = {
   'artifact.create': acknowledgement,
   'artifact.get': z.strictObject({ artifact: z.nullable(ArtifactDocumentV1Schema), ...htmlPreview }),
-  'artifact.export': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { path: z.string().check(z.minLength(1)), sizeBytes: z.number().check(z.int(), z.nonnegative()) })),
+  'artifact.export': lazyZodSchema(() => z.union([
+    z.strictObject({ ...subject.shape, path: z.string().check(z.minLength(1)), sizeBytes: z.number().check(z.int(), z.nonnegative()) }),
+    z.strictObject({ exported: z.literal(true), fileName: z.string().check(z.minLength(1)) }),
+  ])),
   'artifact.list': z.strictObject({ items: z.array(ArtifactHeaderV1Schema), nextCursor: z.optional(z.string().check(z.minLength(1))) }),
   'artifact.update': acknowledgement,
   'artifact.delete': (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(subject, { deleted: z.literal(true) })),

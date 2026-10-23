@@ -68,6 +68,8 @@ export function createCliArtifactActions(params: Readonly<{
         }
         case 'artifact.export': {
           const input = ArtifactActionInputSchemasV1[args.actionId].parse(args.input);
+          // Portable save/share belongs to the connected answering client, selected by the catalog.
+          if ('portable' in input) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:artifact.export' };
           const caller = await params.resolvePublishCaller(args.context);
           if (!caller?.sessionId) throw Object.assign(new Error('artifact_source_unavailable'), { code: 'artifact_source_unavailable' });
           const artifact = await params.store.read(input.artifactId, { signal, includeSharedAudience: false });
