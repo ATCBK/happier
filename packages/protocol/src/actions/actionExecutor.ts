@@ -3694,7 +3694,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     const nextExecuted: ApprovalRequest = {
       ...settleApprovalRequestReplayInputs(request),
       status: exec.ok ? 'executed' : 'failed',
-      updatedAtMs: executedAtMs,
+      updatedAtMs: Math.max(executedAtMs, request.updatedAtMs),
       execution: persistedExec.ok
         ? { executedAtMs, effectAttempted, ok: true, result: persistedExec.result }
         : request.v === 2
@@ -4962,7 +4962,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             const nextRequest: ApprovalRequest = {
               ...settleApprovalRequestReplayInputs(decision.request),
               status: decision.decision === 'reject' ? 'rejected' : 'canceled',
-              updatedAtMs: nowRejected,
+              updatedAtMs: Math.max(nowRejected, decision.request.updatedAtMs),
               ...(decision.decision === 'reject'
                 ? { decision: { kind: 'reject' as const, decidedAtMs: nowRejected } }
                 : {}),
@@ -4984,7 +4984,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             : {
                 ...decision.request,
                 status: 'approved' as const,
-                updatedAtMs: Date.now(),
+                updatedAtMs: Math.max(Date.now(), decision.request.updatedAtMs),
                 decision: { kind: 'approve' as const, decidedAtMs: Date.now() },
               };
           if (decision.request.status === 'open') {
@@ -11392,7 +11392,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const nextRejected: ApprovalRequest = {
             ...settleApprovalRequestReplayInputs(existing),
             status: 'rejected',
-            updatedAtMs: now,
+            updatedAtMs: Math.max(now, existing.updatedAtMs),
             decision: { kind: 'reject', decidedAtMs: now,
               ...(existing.v === 2 && existing.requesterConfirmation && ctx.requesterApprovalDecision
                 ? { authority: 'present_user' as const, decidingAccountId: ctx.requesterApprovalDecision.actor.accountId } : {}) },
@@ -11447,7 +11447,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           approvedRequest = {
             ...existing,
             status: 'approved',
-            updatedAtMs: now,
+            updatedAtMs: Math.max(now, existing.updatedAtMs),
             decision: { kind: 'approve', decidedAtMs: now,
               ...(existing.v === 2 && resolveHostStampedAuthority(ctx) === 'present_user' ? {
                 authority: 'present_user' as const,

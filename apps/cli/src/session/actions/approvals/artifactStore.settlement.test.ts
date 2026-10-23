@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import {
   API_TOKEN_FULL_GRANT_V1,
@@ -183,6 +184,47 @@ function storedBody(artifactId: string): string {
 }
 
 describe('approval settlement through the real CLI Artifact store', () => {
+  it.each([
+    { decision: 'approve', rollbackAt: 'decision' },
+    { decision: 'reject', rollbackAt: 'decision' },
+    { decision: 'cancel', rollbackAt: 'decision' },
+    { decision: 'approve', rollbackAt: 'effect' },
+  ] as const)('settles $decision when the wall clock moves backwards at $rollbackAt', async ({ decision, rollbackAt }) => {
+    // Clock and Home HTTP are the only controlled boundaries. The real
+    // executor, transition owner, Artifact codecs and versioned CAS stay live.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(20_000);
+    try {
+      const store = createStore();
+      let deleteCount = 0;
+      http.request.mockImplementation(async ({ method, url }: { method: string; url: string }) => {
+        expect(method).toBe('DELETE');
+        expect(url).toBe('http://approval-settlement.invalid/v1/sessions/clock-session');
+        deleteCount += 1;
+        if (rollbackAt === 'effect') clock.mockReturnValue(10_000);
+        return { status: 200, data: { success: true } };
+      });
+      const executor = createExecutor(store, {
+        isActionApprovalRequired: actionId => actionId === 'session.delete',
+        homeDomainAction: createAccountServerActionDeps({ token: 'synthetic-token', serverId: 'home-1',
+          serverHttpBaseUrl: 'http://approval-settlement.invalid' }).homeDomainAction,
+      });
+      const context = { ...uiContext, surface: 'cli' as const, defaultSessionId: 'clock-session' };
+      const created = await executor.execute('session.delete', { sessionId: 'clock-session' }, context);
+      expect(created).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const { artifactId } = ActionApprovalRequestCreatedResultSchema.parse(created.ok ? created.result : null);
+      if (rollbackAt === 'decision') clock.mockReturnValue(10_000);
+      const decided = await executor.execute('approval.request.decide', { artifactId, decision }, context);
+      const status = decision === 'approve' ? 'executed' : decision === 'reject' ? 'rejected' : 'canceled';
+      expect(decided, JSON.stringify(decided)).toMatchObject({ ok: true, result: { status } });
+      expect(await store.approvalsGet({ artifactId, serverId: null })).toMatchObject({ status, updatedAtMs: 20_000 });
+      if (decision === 'approve') {
+        expect(await executor.execute('approval.request.decide', { artifactId, decision }, context))
+          .toMatchObject({ ok: true, result: { status: 'executed' } });
+      }
+      expect(deleteCount).toBe(decision === 'approve' ? 1 : 0);
+    } finally { clock.mockRestore(); }
+  });
+
   it('uses one fresh Artifact read for transition validation and its revision-fenced update', async () => {
     const store = createStore();
     const executor = createExecutor(store, { homeDomainAction: async () => ({}) });
