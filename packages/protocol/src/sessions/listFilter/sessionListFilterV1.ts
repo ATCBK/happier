@@ -57,6 +57,18 @@ export function canSessionListFilterIncludeRunsV1(
 export type SessionListFilterMatchV1 = 'match' | 'miss' | 'unavailable';
 export type SessionListStartedByFactV1 = SessionListFilterV1['startedBy'][number] | 'other_account' | 'non_person';
 
+/** One Started-by clause for public preselection and the final tri-state predicate. */
+export function matchSessionListStartedByV1(
+    selection: SessionListFilterV1['startedBy'],
+    fact: SessionListStartedByFactV1 | undefined,
+): SessionListFilterMatchV1 {
+    if (selection.length === 0) return 'miss';
+    if (['you', 'agents', 'triggers'].every(value => selection.some(selected => selected === value))) return 'match';
+    if (fact === undefined) return 'unavailable';
+    if (fact === 'non_person') return selection.some(value => value !== 'you') ? 'unavailable' : 'miss';
+    return fact !== 'other_account' && selection.includes(fact) ? 'match' : 'miss';
+}
+
 /** Immutable creation provenance and Account identity, never a title, Bot marker or hosting daemon. */
 export function readSessionListStartedByV1(input: Readonly<{
     origin?: SessionAwarenessOriginV1;
@@ -96,11 +108,7 @@ export function matchSessionListFilterV1(filter: SessionListFilterV1, facts: Ses
     const known = (value: boolean | undefined): SessionListFilterMatchV1 => value === undefined ? 'unavailable' : value ? 'match' : 'miss';
     results.push(known(filter.homeServerIds.some(sameHome)));
     results.push(known(filter.show === 'both' || (filter.show === 'runs') === (facts.kind === 'run')));
-    results.push(filter.startedBy.length === 0 ? 'miss'
-        : ['you', 'agents', 'triggers'].every(value => filter.startedBy.some(selected => selected === value)) ? 'match'
-        : facts.startedBy === undefined ? 'unavailable'
-        : facts.startedBy === 'non_person' ? filter.startedBy.some(value => value !== 'you') ? 'unavailable' : 'miss'
-        : known(facts.startedBy !== 'other_account' && filter.startedBy.includes(facts.startedBy)));
+    results.push(matchSessionListStartedByV1(filter.startedBy, facts.startedBy));
     if (filter.scope !== 'all_accessible') results.push(known(facts.scopeMatches?.[filter.scope]));
     if (filter.underSessionId !== undefined) results.push(known(facts.underSessionMatches));
     if (filter.attention !== 'any') results.push(known(facts.attentionRequired));
