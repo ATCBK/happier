@@ -68,6 +68,19 @@ question, participant and `throughSeq` cutoff travel with protected input
 custody into the host turn witness. Injected context and bounded Discussion
 reads use that cutoff; this does not erase a native continuation's prior history.
 
+Attachment hydration consumes that same protected source, not a new queue or Agent
+plugin API. `readDiscussionInputMessages` supplies the exact original and admitted
+ancestors; `materializeDiscussionInputAttachments` opens only their qualified Home
+leaves with the Discussion key. The target-neutral `materializeSessionAttachments`
+uses the receiving Session's existing encrypted upload/folder-finalization owner
+and real issued handles before ordinary structured-file/native-image projection.
+No path string supplied by Discussion content becomes local filesystem authority.
+Final normal and steer dispatch share this preparation and the incumbent Pending
+readmission before/after its asynchronous work. Missing sources, keys or issuance
+produce `discussion_attachment_preparation_unavailable`; no attachment-bearing
+original is silently downgraded to text. Source tests and loaded Home/runtime
+validation remain separate evidence.
+
 The existing Session reply owner arbitrates an explicit reply against the exact
 turn's final-result fallback. The Discussion append transaction commits the
 publication and settles that original together; a committed explicit reply

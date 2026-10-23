@@ -109,6 +109,31 @@ dual format or old-binary rollback contract. Keep the historical reader while
 0.2-created messages and drafts remain supported; undeployed 0.3 intermediates
 do not get additional compatibility paths.
 
+## Discussion attachments (0.3 development)
+
+New Discussion writers use one strict `attachment` content arm containing the
+shared Session file/folder payload. Folder paths and empty directories are
+content, not Machine-local authority. Stored-content readers remain tolerant of
+unknown future part kinds; fresh writes do not accept undeployed attachment
+intermediates. The existing inline attachment token is reused rather than
+introducing a Discussion token family.
+
+Bytes use the existing explicit plain/encrypted envelope and are bound to the
+committed Discussion message. Exact reads require current Discussion access;
+an older or unsupported Home cannot be treated as supporting the byte operation.
+There is no fallback to a public URL, unrelated Artifact grants, or the sender's
+Machine path. Account conversion includes retained attachment bindings and
+bytes, including archived Discussions, in its existing fenced transition.
+
+The predecessor frontier for this corridor was refreshed on 2026-10-23 at
+`../0.2` HEAD `a487b2ec48873bfc0ad67bb1d31be0a2cffd3c92`. The relevant Protocol,
+Session attachment and CLI Artifact/Discussion paths had no committed change
+from the earlier `e7c3bd55849a0d00e86eb74a26f478f96c6bc0e0` inspection. Dirty
+AgentInput changes add send-menu/shortcut options, not a new attachment input
+shape. Its Session attachment inputs remain supported by the shared owners.
+Discussion attachments are new 0.3 development behavior, not a released 0.2
+write format or a promise that old binaries can read new writes.
+
 ## Public-profile integration boundary (0.3 development)
 
 Public-profile publication is an unfinished new capability, distinct from the
