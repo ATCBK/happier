@@ -898,6 +898,22 @@ reading supplies saved context without overriding the current request. Agent cod
 assistant text with its admitted turn so retained Runs can publish the reply;
 history and native sidechains do not acquire foreground result authority.
 
+In unreleased 0.3 source, the Run intent's transcript projection applies to both
+streamed text and native committed messages. Structured reply JSON stays available
+to host parsing without becoming assistant prose; ordinary discussion remains
+visible. A changed saved output publishes one host notice with the existing
+`happier.kind: 'scm_diff_summary.v1'` saved-result payload and a typed
+`scmResultUpdate` publication receipt. The receipt identifies changed output kinds,
+whether each value was created or updated relative to the saved value, and the
+saved result's Undo availability. It is derived from successful saved publication,
+not a revision guess or a separate status store. Baseline metadata, prose-only
+discussion, unchanged values and refused/conflicted writes do not carry a success
+receipt. The UI receipt adapter validates this metadata alongside the saved
+result identity, revision and comparison without interpreting transcript JSON.
+For a Session-owned retained Run, the host notice reaches the existing durable
+sidechain writer before native terminal settlement. Its actual committed message
+is the input's reply result; the hidden consumed structured-source record is not.
+
 In unreleased 0.3 source, `review.start`, `review.walkthrough` and
 `review.explain_findings` accept an explicit `target: { kind: 'detached' }` on
 the admitted Home/Machine/root. Run association stays `sessionId: null` even
