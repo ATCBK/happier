@@ -22,6 +22,7 @@ import { recordStackRuntimeStart, readStackRuntimeStateFile } from '../utils/sta
 import { beginPendingSourceStart } from '../runtime/shared/pending_source_start.mjs';
 import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs';
 import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
+import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
 
 test('captured Metro crawls workspace-local installed dependencies', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-captured-metro-dependencies-', registerCleanup: false });
@@ -451,6 +452,90 @@ test('real Metro router transforms partition captures and reuse a stable project
   }
 });
 
+test('source exports reuse transforms across captures and refresh changed modules and routes', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-web-stable-transform-root-' });
+  const sourceRepo = fileURLToPath(new URL('../../../../', import.meta.url));
+  const repoDir = fixture.path('source');
+  await prepareFiniteSourceWebFixture({ sourceRepo, repoDir });
+  const uiPackagePath = join(repoDir, 'apps/ui/package.json');
+  const uiPackage = JSON.parse(await readFile(uiPackagePath, 'utf8'));
+  delete uiPackage.type; // The real Metro config is CommonJS.
+  await writeFile(uiPackagePath, JSON.stringify(uiPackage));
+  const requireFromUi = createRequire(join(sourceRepo, 'apps/ui/package.json'));
+  const Transformer = requireFromUi('metro/private/DeltaBundler/Transformer').default;
+  const { FileStore } = requireFromUi('metro-cache');
+  const routerFile = requireFromUi.resolve('expo-router/_ctx.web.js');
+  const sourcePaths = Array.from({ length: 100 }, (_, index) => `sources/module${index}.js`);
+  for (const path of sourcePaths) await writeFile(join(repoDir, 'apps/ui', path), 'export const value = 1;');
+  let previousRoot;
+  let hits;
+  let writes;
+  const outputs = [];
+  class ObservedFileStore extends FileStore {
+    async get(key) {
+      const result = await super.get(key);
+      hits.push(result !== null);
+      return result;
+    }
+    set(key, value) {
+      const pending = super.set(key, value);
+      writes.push(pending);
+      return pending;
+    }
+  }
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt === 2) await writeFile(join(repoDir, 'apps/ui', sourcePaths[0]), 'export const value = 2;');
+    if (attempt === 3) await writeFile(join(repoDir, 'apps/ui/sources/app/new-route.tsx'), 'export default function Route() { return null; }');
+    hits = [];
+    writes = [];
+    await exportSourceWebUi({ repoDir, baseDir: fixture.path('state'), outputDir: fixture.path(`export-${attempt}`),
+      env: { ...process.env, EXPO_PUBLIC_DEBUG: '0' }, runImpl: async (_command, args, { cwd }) => {
+        if (previousRoot) assert.equal(cwd, previousRoot, 'one export context must keep its Router-bound project root');
+        previousRoot = cwd;
+        const requireFromCapture = createRequire(join(cwd, 'package.json'));
+        const configPath = requireFromCapture.resolve('./metro.config.js');
+        delete requireFromCapture.cache[configPath];
+        const config = requireFromCapture(configPath);
+        config.cacheStores = [new ObservedFileStore({ root: fixture.path('transforms') })];
+        config.maxWorkers = 1;
+        const transformer = new Transformer(config, { getOrComputeSha1: async file => {
+          const content = await readFile(file);
+          return { sha1: createHash('sha1').update(content).digest('hex'), content };
+        } });
+        const bytes = [];
+        try {
+          for (const file of [...sourcePaths.map(path => join(cwd, path)), routerFile]) {
+            const result = await transformer.transformFile(file, {
+              customTransformOptions: { routerRoot: './sources/app' }, dev: false,
+              experimentalImportSupport: false, inlinePlatform: true, inlineRequires: false,
+              minify: false, nonInlinedRequires: [], platform: 'web', type: 'module',
+              unstable_transformProfile: 'default',
+            });
+            bytes.push(result.output);
+            if (file === routerFile) {
+              const dependency = result.dependencies.find(({ data }) => data.contextParams);
+              const routeRoot = resolve(dirname(routerFile), dependency.name);
+              assert.equal(routeRoot, join(cwd, 'sources/app'));
+              await access(join(routeRoot, '_layout.tsx'));
+              if (attempt === 3) await access(join(routeRoot, 'new-route.tsx'));
+            }
+          }
+          await Promise.all(writes);
+        } finally { await transformer.end(); }
+        outputs.push(createHash('sha256').update(JSON.stringify(bytes)).digest('hex'));
+        const web = args[args.indexOf('--output-dir') + 1];
+        await mkdir(web);
+        await writeFile(join(web, 'index.html'), '<script src="./app.js"></script>');
+        await writeFile(join(web, 'app.js'), JSON.stringify(bytes));
+      } });
+    assert.equal(hits.length, 101);
+    assert.equal(hits.filter(Boolean).length, attempt === 0 ? 0 : attempt === 2 ? 100 : 101,
+      'unchanged transforms hit the persisted cache; one changed source transforms once');
+  }
+  assert.equal(outputs[0], outputs[1], 'cold and warm transformed bytes must match');
+  assert.notEqual(outputs[1], outputs[2], 'changed source must produce new transformed bytes');
+});
+
 test('shared source publication retains serving, selected and pending web exports independently', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-web-product-retention-', registerCleanup: false });
   const store = fixture.path('alias-stacks');
@@ -687,7 +772,7 @@ test('source web export uses fresh private source projections and one-shot origi
     assert.match(inventory, /BUNDLED_PLUGIN_BRAND_MARKS/);
     assert.match(inventory, /happier\.inspector/);
     assert.match(inventory, /happier\.machine\.hetzner/);
-    assert.ok(inventory.includes(expectedOutputDir));
+    assert.ok(inventory.includes(join(baseDir, 'source-web')));
     const uiDir = args[args.indexOf('--output-dir') + 1];
     exportInputs.push({ tmpDir: options.env.TMPDIR,
       inventoryPath: options.env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, uiDir });
@@ -710,7 +795,8 @@ test('source web export uses fresh private source projections and one-shot origi
   assert.equal(exportInputs[0].tmpDir, exportInputs[1].tmpDir,
     'explicit rebuilds must preserve the canonical Expo cache directory');
   assert.ok(exportInputs[0].tmpDir.startsWith(baseDir));
-  assert.notEqual(exportInputs[0].inventoryPath, exportInputs[1].inventoryPath);
+  assert.equal(exportInputs[0].inventoryPath, exportInputs[1].inventoryPath,
+    'the compiler retains its validated candidates across exports in one context');
   assert.notEqual(result.uiDir, second.uiDir);
   assert.equal(await readFile(join(result.uiDir, 'app.js'), 'utf8'), firstBytes);
   assert.notEqual(await readFile(join(second.uiDir, 'app.js'), 'utf8'), firstBytes);
@@ -848,8 +934,11 @@ export async function resolveExpoBin() {
     await withDependencyRefreshLock({ installDir: repoDir, env, signal: context.signal }, async () => {});
     await writeFile(available, '16777216');
     await pending;
-    assert.deepEqual(JSON.parse(await readFile(executed, 'utf8')),
-      { className: 'validation', owners: 1, cwd: join(outputDir, 'workspace/apps/ui') });
+    const observed = JSON.parse(await readFile(executed, 'utf8'));
+    assert.ok(resolveHeavyweightMemoryFloorKiB(observed.className) > resolveHeavyweightMemoryFloorKiB('validation'),
+      'the real Expo tree must retain the measured export envelope rather than validation');
+    assert.deepEqual({ owners: observed.owners, cwd: observed.cwd },
+      { owners: 1, cwd: fixture.path('expo-state/source-web/workspace/apps/ui') });
     assert.deepEqual(await readdir(join(native.admissionRoot, 'owners')), []);
     assert.deepEqual(await readdir(join(native.admissionRoot, 'waiters')), []);
   });

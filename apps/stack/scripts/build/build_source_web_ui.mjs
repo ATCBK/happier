@@ -23,6 +23,7 @@ import { retainPendingSourcePreparation, updatePendingSourcePreparationPhase } f
 import { readJsonIfExists } from '../utils/fs/json.mjs';
 import { readCachedFileDigest } from '../utils/fs/cached_file_digest.mjs';
 import { sourceWebExportArgs } from './sourceWebExportArgs.mjs';
+import { withJsonOwnerFileLock } from '../utils/proc/jsonOwnerFileLock.mjs';
 
 /** Stack starts reuse completed account-free exports through source publication.
  * Explicit outputDir callers keep their private finite producer boundary, used
@@ -224,15 +225,10 @@ async function prepareSharedSourceWebUi({ repoDir, baseDir, stackBaseDir, reques
   // the shared publication owner still governs both products' custody.
   const outputDir = await mkdtemp(join(bundleRoot, `web-${fingerprint}-`));
   try {
-    const { built, captured } = await withBuildInputDependencies({ sourceDir: repoDir, env, signal }, async env => {
-      const captured = await captureSourceWebBuildInputs({ repoDir, outputDir: join(outputDir, 'workspace'), signal });
-      const built = await consumeSourceWebUiInputs({ repoDir, baseDir, outputDir, env, signal, captured });
-      return { built, captured };
-    });
-    // Keep the serving closure only; SDK inputs/tools and captured source have
-    // completed their finite use and never become shared account state.
-    await rm(join(outputDir, 'inputs'), { recursive: true, force: true });
-    await rm(join(outputDir, 'tools'), { recursive: true, force: true });
+    const { built, captured } = await withBuildInputDependencies({ sourceDir: repoDir, env, signal }, env =>
+      consumeSourceWebUiInputs({ repoDir, baseDir, outputDir, env, signal }));
+    // The shared product contains only its serving closure. Compiler candidates
+    // belong to the export context; captured source has already been retired.
     const record = { ...built, component: 'web', inputIdentity: captured.inputIdentity, buildOptions,
       outputDigests: await webOutputDigests(built.uiDir), reuseFingerprint: fingerprint };
     return await withSourceBundlePublication({ stackBaseDir, outputDir, record, signal }, async () => {
@@ -250,7 +246,7 @@ async function prepareSharedSourceWebUi({ repoDir, baseDir, stackBaseDir, reques
   }
 }
 
-async function exportSourceWebUiOnce({ repoDir, baseDir, outputDir, env, signal, runImpl, captured, preparationStackBaseDir, requestId }) {
+async function exportSourceWebUiOnce({ repoDir, baseDir, outputDir, env, signal, runImpl, preparationStackBaseDir, requestId }) {
   if (!runImpl) {
     const stdout = await runSourceBuildCommand({ repoDir, scriptPath: fileURLToPath(import.meta.url),
       args: [JSON.stringify({ repoDir, baseDir, outputDir, privateExport: true, preparationStackBaseDir, requestId })], env, signal,
@@ -259,38 +255,57 @@ async function exportSourceWebUiOnce({ repoDir, baseDir, outputDir, env, signal,
   }
   if (preparationStackBaseDir && requestId) await updatePendingSourcePreparationPhase({ stackBaseDir: preparationStackBaseDir,
     requestId, phase: 'building', component: 'ui', signal });
-  return await withBuildInputDependencies({ sourceDir: repoDir, env, signal }, env =>
-    consumeSourceWebUiInputs({ repoDir, baseDir, outputDir, env, signal, runImpl, captured }));
+  const { built } = await withBuildInputDependencies({ sourceDir: repoDir, env, signal }, env =>
+    consumeSourceWebUiInputs({ repoDir, baseDir, outputDir, env, signal, runImpl }));
+  return built;
 }
 
-async function consumeSourceWebUiInputs({ repoDir, baseDir, outputDir, env, signal, runImpl, captured }) {
-  try {
-    const { inventoryPath, uiProjectDir } = await prepareSourceWebUiInputsInWorker({ repoDir, outputDir, env, signal, captured });
-    const { env: isolatedEnv } = await prepareExpoCommandEnv({
-      baseDir, kind: 'source-web-export', projectDir: join(repoDir, 'apps/ui'),
-      baseEnv: sourceWebExportEnv(env),
-    });
-    const exportEnv = applyExpoNodeHeapEnv({
-      ...isolatedEnv, CI: '1', HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath,
-    });
-    const uiDir = resolve(outputDir, 'web');
-    const exportStartedAt = performance.now();
-    const expoCommand = await resolveExpoBin(join(repoDir, 'apps/ui'));
-    const expoArgs = sourceWebExportArgs(exportEnv, uiDir);
-    // The optional runner substitutes only the external Expo boundary in tests.
-    // Real finite exports reuse their containing native envelope and dependency
-    // custody; injected runners replace only the external Expo boundary.
-    if (runImpl) await runImpl(expoCommand, expoArgs, { cwd: uiProjectDir, env: exportEnv, signal });
-    else await runSourceBuildCommand({ repoDir, command: expoCommand, args: expoArgs,
-      cwd: uiProjectDir, env: exportEnv, signal, captureStdout: false, captureStderr: true,
-      stdoutStream: process.stderr });
-    await assertWebArtifactPayload({ payloadDir: uiDir, entrypoint: 'index.html' });
-    await precompressUiWebAssets({ dir: uiDir });
-    console.log(`[source-ui] phase=web-export elapsedMs=${Math.round(performance.now() - exportStartedAt)}`);
-    return { uiDir, entrypoint: 'index.html', runtimeMode: 'source' };
-  } finally {
-    await rm(join(outputDir, 'workspace'), { recursive: true, force: true });
-  }
+async function consumeSourceWebUiInputs({ repoDir, baseDir, outputDir, env, signal, runImpl }) {
+  // Router embeds the captured project root in transforms. Keep that root and
+  // the existing compiler's retained inventory stable for this export context,
+  // while serving products remain private immutable outputs. Only one export
+  // may replace this context's captured inputs until Metro has finished reading.
+  const contextDir = resolve(baseDir, 'source-web');
+  return await withJsonOwnerFileLock(async () => {
+    const workspace = join(contextDir, 'workspace');
+    await rm(workspace, { recursive: true, force: true });
+    try {
+      const captured = await captureSourceWebBuildInputs({ repoDir, outputDir: workspace, signal });
+      const built = await exportCapturedSourceWebUiInputs({ repoDir, baseDir, outputDir,
+        preparationDir: contextDir, env, signal, runImpl, captured });
+      return { built, captured };
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  }, { lockPath: `${contextDir}.lock`, timeoutMs: Infinity, staleAfterMs: Infinity,
+    signal, errorLabel: 'source-web capture lock' });
+}
+
+async function exportCapturedSourceWebUiInputs({ repoDir, baseDir, outputDir, preparationDir, env, signal, runImpl, captured }) {
+  const { inventoryPath, uiProjectDir } = await prepareSourceWebUiInputsInWorker({ repoDir,
+    outputDir: preparationDir, env, signal, captured });
+  const { env: isolatedEnv } = await prepareExpoCommandEnv({
+    baseDir, kind: 'source-web-export', projectDir: join(repoDir, 'apps/ui'),
+    baseEnv: sourceWebExportEnv(env),
+  });
+  const exportEnv = applyExpoNodeHeapEnv({
+    ...isolatedEnv, CI: '1', HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath,
+  });
+  const uiDir = resolve(outputDir, 'web');
+  const exportStartedAt = performance.now();
+  const expoCommand = await resolveExpoBin(join(repoDir, 'apps/ui'));
+  const expoArgs = sourceWebExportArgs(exportEnv, uiDir);
+  // The optional runner substitutes only the external Expo boundary in tests.
+  // Real finite exports reuse their containing native envelope and dependency
+  // custody; injected runners replace only the external Expo boundary.
+  if (runImpl) await runImpl(expoCommand, expoArgs, { cwd: uiProjectDir, env: exportEnv, signal });
+  else await runSourceBuildCommand({ repoDir, command: expoCommand, args: expoArgs,
+    cwd: uiProjectDir, env: exportEnv, signal, captureStdout: false, captureStderr: true,
+    stdoutStream: process.stderr });
+  await assertWebArtifactPayload({ payloadDir: uiDir, entrypoint: 'index.html' });
+  await precompressUiWebAssets({ dir: uiDir });
+  console.log(`[source-ui] phase=web-export elapsedMs=${Math.round(performance.now() - exportStartedAt)}`);
+  return { uiDir, entrypoint: 'index.html', runtimeMode: 'source' };
 }
 
 /** Source QA and native web construction share the compiler and private inventory. */
@@ -328,9 +343,9 @@ async function prepareSourceWebUiInputs({ repoDir, outputDir, inventoryPath, ret
     name.startsWith('@happier-dev/plugins-') && bundledPackageNames.has(name)
   )).sort(([left], [right]) => left.localeCompare(right));
   const inputsDir = join(outputDir, 'inputs');
-  await mkdir(inputsDir);
+  await mkdir(inputsDir, { recursive: true });
   const toolsDir = join(outputDir, 'tools');
-  await mkdir(toolsDir);
+  await mkdir(toolsDir, { recursive: true });
   // The canonical source loader resolves each manifest on demand inside the
   // compiler's per-plugin failure boundary. A static aggregate import would
   // abort every plugin before that boundary on one malformed declaration.
@@ -367,8 +382,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       }
       const built = options.shared
         ? await prepareSharedSourceWebUi({ ...options, env: process.env, signal: cancellation.signal })
-        : await withBuildInputDependencies({ sourceDir: options.repoDir, env: process.env, signal: cancellation.signal }, env =>
-          consumeSourceWebUiInputs({ ...options, env, signal: cancellation.signal }));
+        : (await withBuildInputDependencies({ sourceDir: options.repoDir, env: process.env, signal: cancellation.signal }, env =>
+          consumeSourceWebUiInputs({ ...options, env, signal: cancellation.signal }))).built;
       process.stdout.write(JSON.stringify(built));
     } finally {
       process.removeListener('SIGINT', interrupt);
