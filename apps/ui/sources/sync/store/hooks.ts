@@ -3546,14 +3546,12 @@ function useSessionApprovalArtifacts(
     let previousArtifacts: StorageState['artifacts'] | null = null;
     let previousMembership: StorageState['ordinarySessionListMembershipByServerId'] | null = null;
     let previousSessionServerId: string | undefined;
-    let previousSignature = '';
     let previousApprovals: ReadonlyArray<OpenApprovalArtifactForSession> = emptyOpenApprovalArtifactsForSession;
 
     return (state: StorageState): ReadonlyArray<OpenApprovalArtifactForSession> => {
       if (!normalizedTarget || !state.isDataReady) {
         previousIsDataReady = state.isDataReady;
         previousArtifacts = state.artifacts;
-        previousSignature = '';
         previousApprovals = emptyOpenApprovalArtifactsForSession;
         return previousApprovals;
       }
@@ -3576,12 +3574,6 @@ function useSessionApprovalArtifacts(
           ...(settledPresentations ? { settledPresentations } : {}),
         },
       );
-      const nextSignature = buildOpenApprovalArtifactsForSessionSignature(nextApprovals);
-      if (nextSignature === previousSignature) {
-        return previousApprovals;
-      }
-
-      previousSignature = nextSignature;
       previousApprovals = nextApprovals.length === 0
         ? emptyOpenApprovalArtifactsForSession
         : nextApprovals;

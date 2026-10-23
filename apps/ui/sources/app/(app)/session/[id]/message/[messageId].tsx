@@ -13,7 +13,7 @@ import { useDestinationFocus, useDestinationInstanceKey, useDestinationPageTitle
 import { DefaultBackButton } from '@/components/navigation/Header';
 import { NavigationBackChromeProvider, useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
-import { readDeclinedApprovalAtToolCall, usePreparedToolApprovalRequests } from '@/components/tools/shell/views/toolApprovalPromptMatching';
+import { readDeclinedApprovalAtToolCall, useToolApprovalRequestsIndex } from '@/components/tools/shell/views/toolApprovalPromptMatching';
 import { TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '@/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { ToolDetailsPageHeader } from '@/components/tools/shell/presentation/ToolDetailsPageHeader';
@@ -119,10 +119,11 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         [agentState, session, sessionServerId, tool],
     );
     // The call's Action approval is a separate artifact: a declined one makes the call read as refused.
-    const approvalRequests = usePreparedToolApprovalRequests(useTranscriptApprovalArtifactsForSession(
+    const approvalRequests = useTranscriptApprovalArtifactsForSession(
         normalizeSessionAddress(session?.serverId, props.sessionId),
         TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS,
-    ));
+    );
+    useToolApprovalRequestsIndex(approvalRequests);
     const declinedApproval = tool
         ? readDeclinedApprovalAtToolCall({ requests: approvalRequests, sessionId: props.sessionId, messageId: message?.id, tool })
         : null;

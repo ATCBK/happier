@@ -2,49 +2,82 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { ApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
-import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
+import { listTranscriptApprovalArtifactsForSession, type OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import { resolveMessageRouteIdForDisplay } from '@happier-dev/session-core/messages';
-import { doesApprovalMatchToolCall, selectMatchingToolApprovalRequests, selectToolApprovalRequestsForMessages, usePreparedToolApprovalRequests } from './toolApprovalPromptMatching';
+import { doesApprovalMatchToolCall, selectMatchingToolApprovalRequests, selectToolApprovalRequestsForMessages, useToolApprovalRequestsIndex } from './toolApprovalPromptMatching';
 
 afterEach(standardCleanup);
 
-function request(index: number): OpenApprovalArtifactForSession {
-    return {
-        artifact: { id: `approval-${index}`, title: null, isDecrypted: true, headerVersion: 1, bodyVersion: 1,
-            seq: index, createdAt: 1, updatedAt: 1 },
-        approval: ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+const fixtureSession = { serverId: 'fixture-home', sessionId: 'fixture' };
+
+function requestArtifact(index: number): Extract<OpenApprovalArtifactForSession['artifact'], { isDecrypted: true }> {
+    const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
             createdBy: { surface: 'agent', sessionId: 'fixture' }, actionId: 'skills.rules.set',
             actionArgs: { id: String(index), state: 'on' }, summary: 'Change reach',
-            origin: { kind: 'transcript_tool_call', sessionId: 'fixture', toolName: 'action_execute' } }),
-    };
+            origin: { kind: 'transcript_tool_call', sessionId: 'fixture', toolName: 'action_execute' } });
+    return { id: `approval-${index}`, title: approval.summary, isDecrypted: true, headerVersion: 1, bodyVersion: 1,
+        header: buildApprovalRequestArtifactHeaderV1(approval, { legacyServerId: fixtureSession.serverId }),
+        body: JSON.stringify(approval), seq: index, createdAt: 1, updatedAt: 1 };
+}
+
+function request(index: number): OpenApprovalArtifactForSession {
+    return listTranscriptApprovalArtifactsForSession([requestArtifact(index)], fixtureSession)[0]!;
 }
 
 describe('transcript approval matching cost', () => {
+    it('normalizes omitted contextual operands without sharing Session scope across cached inputs', () => {
+        const makeRequest = (sessionId: string): OpenApprovalArtifactForSession => {
+            const base = request(1);
+            return { ...base, artifact: { ...base.artifact, id: `approval-${sessionId}` }, approval: ApprovalRequestV1Schema.parse({ ...base.approval,
+                actionId: 'session.title.set', actionArgs: { sessionId, title: 'Scoped title' },
+                origin: { kind: 'transcript_tool_call', sessionId, toolName: 'action_execute' },
+            }) };
+        };
+        const tool = { ...createToolCallMessageFixture().tool, name: 'mcp__happier__action_execute',
+            input: { actionId: 'session.title.set', input: { title: 'Scoped title' } } };
+        const requests = [makeRequest('session-a'), makeRequest('session-b')];
+        for (const [i, sessionId] of ['session-a', 'session-b'].entries()) {
+            expect(selectMatchingToolApprovalRequests({ requests, sessionId, messageId: undefined, tool, normalizedToolName: 'MCP' }))
+                .toEqual([requests[i]]);
+        }
+        const wrong = { ...tool, input: { ...tool.input, input: { title: 'Scoped title', sessionId: 'session-b' } } };
+        expect(selectMatchingToolApprovalRequests({ requests, sessionId: 'session-a', messageId: undefined,
+            tool: wrong, normalizedToolName: 'MCP' })).toEqual([]);
+    });
     it('changes only the affected tool row when an approval arrives in a 1,000-row transcript', async () => {
-        const requests = Array.from({ length: 12 }, (_, i) => request(i));
+        const artifacts = Array.from({ length: 12 }, (_, i) => requestArtifact(i));
+        const requests = listTranscriptApprovalArtifactsForSession(artifacts, fixtureSession);
         const tools = Array.from({ length: 1000 }, (_, i) => createToolCallMessageFixture({ id: `message-${i}`,
             tool: { ...createToolCallMessageFixture({ id: 'base' }).tool, id: `tool-${i}`, name: 'mcp__happier__action_execute',
                 input: { actionId: 'skills.rules.set', input: { id: String(i), state: 'on' } } } }).tool);
         let renders = 0;
         const Row = React.memo((_props: { requests: readonly OpenApprovalArtifactForSession[] }) => { renders++; return null; });
         function Transcript(props: { requests: readonly OpenApprovalArtifactForSession[] }) {
-            const prepared = usePreparedToolApprovalRequests(props.requests);
+            useToolApprovalRequestsIndex(props.requests);
             return React.createElement(React.Fragment, null, ...tools.map((tool, i) => React.createElement(Row, { key: i,
-                requests: selectMatchingToolApprovalRequests({ requests: prepared, sessionId: 'fixture', messageId: `message-${i}`, tool, normalizedToolName: tool.name }),
+                requests: selectMatchingToolApprovalRequests({ requests: props.requests, sessionId: 'fixture', messageId: `message-${i}`, tool, normalizedToolName: tool.name }),
             })));
         }
         const screen = await renderScreen(React.createElement(Transcript, { requests }));
         renders = 0;
-        const incoming = request(12);
+        const incoming = requestArtifact(12);
         const stringify = vi.spyOn(JSON, 'stringify');
         try {
-            // The inventory's new publication reparses unchanged bodies but retains their Artifacts.
-            await screen.update(React.createElement(Transcript, { requests: [...requests.map(x => ({ ...x, approval: { ...x.approval } })), incoming] }));
+            // Exercise the real producer; the matcher must not repair freshly cloned siblings.
+            await screen.update(React.createElement(Transcript, {
+                requests: listTranscriptApprovalArtifactsForSession([...artifacts, incoming], fixtureSession),
+            }));
             expect(renders).toBe(1);
-            expect(stringify.mock.calls.length).toBeLessThanOrEqual(1);
+            // Admission/membership also serialize their own data now that this fixture uses the
+            // real producer. Count input signatures (the canonicalizing replacer), not that work;
+            // unchanged-body admission has its own real-producer cost contract.
+            expect(stringify.mock.calls.filter(([, replacer]) => typeof replacer === 'function')).toHaveLength(1);
             renders = 0;
-            await screen.update(React.createElement(Transcript, { requests: [...requests.slice(1), incoming] }));
+            await screen.update(React.createElement(Transcript, {
+                requests: listTranscriptApprovalArtifactsForSession([...artifacts.slice(1), incoming], fixtureSession),
+            }));
             expect(renders).toBe(1);
         } finally { stringify.mockRestore(); }
     });
@@ -79,14 +112,20 @@ describe('transcript approval matching cost', () => {
     });
 
     it('withdraws old associations when an approval changes its origin or disappears', async () => {
-        const initial = request(1);
-        const hook = await renderHook((props: { requests: readonly OpenApprovalArtifactForSession[] }) => usePreparedToolApprovalRequests(props.requests), { initialProps: { requests: [initial] } });
+        const initialArtifact = requestArtifact(1);
+        const initial = listTranscriptApprovalArtifactsForSession([initialArtifact], fixtureSession)[0]!;
+        const hook = await renderHook((props: { requests: readonly OpenApprovalArtifactForSession[] }) => {
+            useToolApprovalRequestsIndex(props.requests);
+            return props.requests;
+        }, { initialProps: { requests: [initial] } });
         const tool = { ...createToolCallMessageFixture().tool, id: 'call', name: 'mcp__happier__action_execute',
             input: { actionId: 'skills.rules.set', input: { id: '1', state: 'on' } } };
         const select = () => selectMatchingToolApprovalRequests({ requests: hook.getCurrent(), sessionId: 'fixture', messageId: 'message', tool, normalizedToolName: tool.name });
         expect(select()).toHaveLength(1);
-        const changed = { artifact: { ...initial.artifact, bodyVersion: 2 }, approval: { ...initial.approval,
-            origin: { ...initial.approval.origin!, toolCallId: 'other' } } };
+        const changedApproval = { ...initial.approval, origin: { ...initial.approval.origin!, toolCallId: 'other' } };
+        const changed = listTranscriptApprovalArtifactsForSession([
+            { ...initialArtifact, bodyVersion: 2, body: JSON.stringify(changedApproval) },
+        ], fixtureSession)[0]!;
         await hook.rerender({ requests: [changed] });
         expect(select()).toHaveLength(0);
         await hook.rerender({ requests: [] });

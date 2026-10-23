@@ -1,7 +1,8 @@
 import * as React from 'react';
 import type { Message, ToolCall } from "@happier-dev/session-core/messages";
 import { normalizeToolCallForRendering } from '@happier-dev/session-core/tools';
-import { readHappierActionToolPayload } from '@happier-dev/protocol/actions/happierActionToolResult';
+import { isRecord, readHappierActionToolPayload } from '@happier-dev/protocol/actions/happierActionToolResult';
+import { bindContextualActionToolInput } from '@happier-dev/protocol/actions/actionToolContext';
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
 import type { DeclinedApprovalDisposition } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import type { PermissionToolCallMessageLocation } from '@/utils/sessions/permissions/permissionToolCallLocationTypes';
@@ -25,8 +26,38 @@ function stableSerialize(value: unknown): string | null {
 // These weak projections retain no superseded calls or requests and do no work on unchanged inputs.
 // Baseline: 1,000 rows × 12 fallback requests serialized 24,000 inputs on each render.
 const approvalInputs = new WeakMap<OpenApprovalArtifactForSession['approval'], string | null>();
-const structuredToolInputs = new WeakMap<object, string | null>();
-const primitiveToolInputs = new WeakMap<ToolCall, Readonly<{ input: unknown; value: string | null }>>();
+type InputContext = Readonly<{ actionId: string; sessionId: string; machineId?: string; wrapped: boolean }>;
+type InputContexts = Map<string, InputContext>;
+const structuredToolInputs = new WeakMap<object, Map<string, string | null>>();
+const primitiveToolInputs = new WeakMap<ToolCall, Readonly<{ input: unknown; values: Map<string, string | null> }>>();
+
+function approvalInputContext(request: OpenApprovalArtifactForSession): InputContext {
+    const { approval } = request;
+    const declared = approval.origin?.toolInput;
+    const binding = approval.v === 2 ? approval.executionOriginV1.externalActionExecutionAuthorization?.binding : undefined;
+    // Execution placement can target another Machine; only admitted originating Session custody
+    // establishes its contextual Machine. Never infer that default from the approved operand.
+    const machineId = binding && 'sessionActionSource' in binding
+        && binding.sessionActionOrigin?.caller.sessionId === approval.origin?.sessionId
+        ? binding.sessionActionSource?.machineId : undefined;
+    return { actionId: approval.actionId, sessionId: approval.origin?.sessionId ?? '',
+        machineId,
+        wrapped: approval.origin?.toolName === 'action_execute' || (isRecord(declared) && typeof declared.actionId === 'string' && Object.hasOwn(declared, 'input')) };
+}
+
+function inputContextKey(context: InputContext): string {
+    // Wrapped calls carry their own exact Action id; direct tools get it from the admitted request.
+    return `${context.wrapped ? 'w' : 'd'}${keyPart(context.wrapped ? '' : context.actionId)}${keyPart(context.sessionId)}${keyPart(context.machineId ?? '')}`;
+}
+
+function contextualInput(value: unknown, context: InputContext): unknown {
+    const binding = { defaultSessionId: context.sessionId, defaultSessionMachineId: context.machineId };
+    if (context.wrapped) {
+        if (!isRecord(value) || typeof value.actionId !== 'string') return value;
+        return { ...value, input: bindContextualActionToolInput({ actionId: value.actionId, input: value.input, context: binding }) };
+    }
+    return bindContextualActionToolInput({ actionId: context.actionId, input: value, context: binding });
+}
 
 function approvalInput(request: OpenApprovalArtifactForSession): string | null {
     const approval = request.approval;
@@ -34,25 +65,30 @@ function approvalInput(request: OpenApprovalArtifactForSession): string | null {
     const origin = approval.origin;
     const expected = origin?.toolInput ?? (origin?.toolName === 'action_execute'
         ? { actionId: approval.actionId, input: approval.actionArgs } : approval.actionArgs);
-    const value = stableSerialize(expected);
+    const value = stableSerialize(contextualInput(expected, approvalInputContext(request)));
     approvalInputs.set(approval, value);
     return value;
 }
 
-function toolInput(tool: ToolCall): string | null {
+function toolInput(tool: ToolCall, context: InputContext): string | null {
     // Rendering normalization can project a new ToolCall for an output/name change while keeping
     // the same input. Key structured inputs directly, so the projection neither recomputes nor
     // retains a previous input after the reducer replaces it.
+    // The same input object may be displayed in different Session contexts. Never reuse a bound
+    // signature across those scopes (or across distinct Session Machines/direct Actions).
+    let values: Map<string, string | null>;
     if (tool.input !== null && typeof tool.input === 'object') {
-        if (structuredToolInputs.has(tool.input)) return structuredToolInputs.get(tool.input)!;
-        const value = stableSerialize(readHappierActionToolPayload(tool.input));
-        structuredToolInputs.set(tool.input, value);
-        return value;
+        values = structuredToolInputs.get(tool.input) ?? new Map();
+        structuredToolInputs.set(tool.input, values);
+    } else {
+        const previous = primitiveToolInputs.get(tool);
+        values = previous && previous.input === tool.input ? previous.values : new Map();
+        primitiveToolInputs.set(tool, { input: tool.input, values });
     }
-    const previous = primitiveToolInputs.get(tool);
-    if (previous && previous.input === tool.input) return previous.value;
-    const value = stableSerialize(readHappierActionToolPayload(tool.input));
-    primitiveToolInputs.set(tool, { input: tool.input, value });
+    const key = inputContextKey(context);
+    if (values.has(key)) return values.get(key)!;
+    const value = stableSerialize(contextualInput(readHappierActionToolPayload(tool.input), context));
+    values.set(key, value);
     return value;
 }
 
@@ -65,10 +101,9 @@ type ToolApprovalMatch = Readonly<{
 type Requests = readonly OpenApprovalArtifactForSession[];
 const noRequests: Requests = Object.freeze([]);
 type ApprovalIndex = Readonly<{
-    byId: ReadonlyMap<string, OpenApprovalArtifactForSession>;
     buckets: ReadonlyMap<string, Requests>;
-    fallbackNames: ReadonlySet<string>;
-    fallbackSessions: ReadonlySet<string>;
+    fallbackNames: ReadonlyMap<string, InputContexts>;
+    fallbackSessions: ReadonlyMap<string, InputContexts>;
     selections: Map<string, Requests>;
     order: ReadonlyMap<OpenApprovalArtifactForSession, number>;
 }>;
@@ -78,24 +113,23 @@ const matchKey = (sessionId: string, kind: string, value: string) => `${keyPart(
 const sameRequests = (a: Requests | undefined, b: Requests) => a?.length === b.length && b.every((request, i) => a[i] === request);
 
 /** One immutable association projection per transcript approval publication, shared by all its rows. */
-function prepareToolApprovalRequests(requests: Requests, previous?: Requests): Requests {
-    if (approvalIndexes.has(requests)) return requests;
-    const prior = previous ? approvalIndexes.get(previous) : undefined;
-    // The inventory reparses its bodies when one Artifact changes. Unchanged Artifact identities still
-    // represent the same admitted request; normalize those rows here before projecting associations.
-    const rows = requests.map(request => {
-        const old = prior?.byId.get(request.artifact.id);
-        return old?.artifact === request.artifact ? old : request;
-    });
+function prepareToolApprovalRequests(requests: Requests, prior?: ApprovalIndex): ApprovalIndex {
+    const existing = approvalIndexes.get(requests);
+    if (existing) return existing;
     const buckets = new Map<string, OpenApprovalArtifactForSession[]>();
-    const fallbackNames = new Set<string>();
-    const fallbackSessions = new Set<string>();
+    const fallbackNames = new Map<string, InputContexts>();
+    const fallbackSessions = new Map<string, InputContexts>();
+    const addContext = (index: Map<string, InputContexts>, key: string, context: InputContext) => {
+        const contexts = index.get(key) ?? new Map<string, InputContext>();
+        contexts.set(inputContextKey(context), context);
+        index.set(key, contexts);
+    };
     const add = (key: string, request: OpenApprovalArtifactForSession) => {
         const bucket = buckets.get(key);
         if (bucket) { if (bucket[bucket.length - 1] !== request) bucket.push(request); }
         else buckets.set(key, [request]);
     };
-    for (const request of rows) {
+    for (const request of requests) {
         const origin = request.approval.origin;
         if (origin?.kind !== 'transcript_tool_call') continue;
         for (const id of [origin.messageId, origin.parentMessageId]) if (id) add(matchKey(origin.sessionId, 'm', id), request);
@@ -104,8 +138,9 @@ function prepareToolApprovalRequests(requests: Requests, previous?: Requests): R
         const input = approvalInput(request);
         if (input === null) continue;
         const nameKey = matchKey(origin.sessionId, 'n', origin.toolName);
-        fallbackNames.add(nameKey);
-        fallbackSessions.add(origin.sessionId);
+        const context = approvalInputContext(request);
+        addContext(fallbackNames, nameKey, context);
+        addContext(fallbackSessions, origin.sessionId, context);
         add(`${nameKey}${keyPart(input)}`, request);
         add(matchKey(origin.sessionId, 'i', input), request);
     }
@@ -114,42 +149,37 @@ function prepareToolApprovalRequests(requests: Requests, previous?: Requests): R
         const old = prior?.buckets.get(key);
         if (sameRequests(old, bucket)) projectedBuckets.set(key, old!);
     }
-    const order = new Map(rows.map((request, i) => [request, i]));
+    const order = new Map(requests.map((request, i) => [request, i]));
     const selections = new Map<string, Requests>();
     // Keep only selections whose requests still belong to this publication; revoked/withdrawn rows
     // cannot survive in the projection. Each mounted transcript owns only its current associations.
     for (const [key, value] of prior?.selections ?? []) if (value.every(request => order.has(request))) selections.set(key, value);
-    const result = sameRequests(previous, rows) ? previous! : rows;
-    approvalIndexes.set(result, { byId: new Map(rows.map(request => [request.artifact.id, request])), buckets: projectedBuckets, fallbackNames, fallbackSessions, selections, order });
-    // Raw arrays supplied by isolated tool/details surfaces use the same matcher, without a second path.
-    approvalIndexes.set(requests, approvalIndexes.get(result)!);
+    const result: ApprovalIndex = { buckets: projectedBuckets, fallbackNames, fallbackSessions, selections, order };
+    approvalIndexes.set(requests, result);
     return result;
 }
 
-/** UI projection only: acquisition, approval policy and lifecycle remain with the existing owners. */
-export function usePreparedToolApprovalRequests(requests: Requests): Requests {
-    const previous = React.useRef<Requests | undefined>(undefined);
-    return React.useMemo(() => {
-        const next = prepareToolApprovalRequests(requests, previous.current);
-        previous.current = next;
-        return next;
-    }, [requests]);
+/** Share unchanged candidate arrays across publications; never replace producer-owned entries. */
+export function useToolApprovalRequestsIndex(requests: Requests): void {
+    const previous = React.useRef<ApprovalIndex | undefined>(undefined);
+    previous.current = prepareToolApprovalRequests(requests, previous.current);
 }
 
 /** Exact associations first; fallback input is prepared once per changed ToolCall input. */
 export function selectMatchingToolApprovalRequests(params: ToolApprovalMatch & Readonly<{ requests: Requests | undefined }>): Requests {
     if (!params.sessionId || !params.requests?.length) return noRequests;
-    prepareToolApprovalRequests(params.requests);
-    const index = approvalIndexes.get(params.requests)!;
+    const index = prepareToolApprovalRequests(params.requests);
     const keys: string[] = [];
     if (params.messageId) keys.push(matchKey(params.sessionId, 'm', params.messageId));
     if (typeof params.tool.id === 'string') keys.push(matchKey(params.sessionId, 't', params.tool.id));
     const names = new Set([params.tool.name, params.normalizedToolName,
         ...(params.tool.name.startsWith('mcp__happier__') ? [params.tool.name.slice('mcp__happier__'.length)] : [])]);
     const nameKeys = [...names].map(name => matchKey(params.sessionId!, 'n', name)).filter(key => index.fallbackNames.has(key));
-    if (nameKeys.length) {
-        const input = toolInput(params.tool);
-        if (input !== null) for (const key of nameKeys) keys.push(`${key}${keyPart(input)}`);
+    for (const key of nameKeys) {
+        for (const context of index.fallbackNames.get(key)!.values()) {
+            const input = toolInput(params.tool, context);
+            if (input !== null) keys.push(`${key}${keyPart(input)}`);
+        }
     }
     const buckets = keys.flatMap(key => { const bucket = index.buckets.get(key); return bucket ? [bucket] : []; });
     if (!buckets.length) return noRequests;
@@ -174,8 +204,7 @@ export function selectToolApprovalRequestsForMessages(params: Readonly<{
     messageId?: string;
 }>): Requests {
     if (!params.requests?.length) return noRequests;
-    prepareToolApprovalRequests(params.requests);
-    const index = approvalIndexes.get(params.requests)!;
+    const index = prepareToolApprovalRequests(params.requests);
     const selected = new Set<OpenApprovalArtifactForSession>();
     const visit = (message: Message) => {
         if (message.kind !== 'tool-call') return;
@@ -188,8 +217,8 @@ export function selectToolApprovalRequestsForMessages(params: Readonly<{
         }
         // Header inference may name an old tool differently. This parent projection narrows by the
         // reviewed input only; the leaf still enforces its exact raw/normalized name through the matcher.
-        if (index.fallbackSessions.has(params.sessionId)) {
-            const input = toolInput(tool);
+        for (const context of index.fallbackSessions.get(params.sessionId)?.values() ?? []) {
+            const input = toolInput(tool, context);
             if (input !== null) for (const request of index.buckets.get(matchKey(params.sessionId, 'i', input)) ?? []) selected.add(request);
         }
         for (const child of message.children) visit(child);
@@ -233,7 +262,7 @@ export function doesApprovalMatchToolCall(params: Readonly<{
     // input. Reuse the stored Action operands; never persist another raw input
     // copy or fall back to a tool name alone (notably action_execute).
     const originInput = approvalInput(params.request);
-    return originInput !== null && originInput === toolInput(params.tool);
+    return originInput !== null && originInput === toolInput(params.tool, approvalInputContext(params.request));
 }
 
 /** A declined request (rejected or canceled) at this call: its card says what was asked and that the person said no. */
