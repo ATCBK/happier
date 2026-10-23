@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,20 +8,19 @@ import { createSessionFilesViewFixture, fileViewSnapshot, prepareSessionFilesVie
 import { createSessionFileNativeTransferBoundary } from '@/components/sessions/files/sessionFileNativeTransferTestkit';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import { installReactDomPortalBoundaryForTests } from '@/dev/testkit/mocks/reactDom';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createAccountSettingsHttpBoundary } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPluginDeclarativeModelFixture } from '@/dev/testkit/fixtures/pluginDeclarativeModelFixture';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { OpenableContentStatResultV1Schema } from '@happier-dev/protocol/plugins/openableContent';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { normalizePluginUiProjection, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import type { DetailsSurfaceRenderInputV1 } from '@/components/appShell/panes/details/surfaces/types';
-import type { DetailsTabState } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
+import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 
 const clipboard = vi.hoisted(() => ({ setStringAsync: vi.fn(async (_text: string) => true) }));
 const viewerViewport = vi.hoisted(() => ({ width: 1280 }));
@@ -50,6 +50,7 @@ let viewerStatBytes: Uint8Array | null;
 let settingsRequests: Array<{ method: string; status: number }>;
 // Compile and load the real runtime graph during collection, as the other composed File tests do.
 await prepareSessionFilesViewTestkit();
+const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
 const { WorkspaceFileDetailsView } = await import('./WorkspaceFileDetailsView');
 const { ImageWell } = await import('@/components/ui/media/ImageWell');
 const { Modal, ModalProvider } = await import('@/modal');
@@ -90,12 +91,17 @@ function installedViewerProjection(platform: 'web' | 'ios' = 'web') {
 }
 
 function InstalledViewerFileHost(props: Readonly<{ projection: PluginUiProjectionModel; platform: 'web' | 'ios'; formFactor: 'phone' | 'tablet' }>) {
-    const [tab, setTab] = React.useState<DetailsTabState>({ key: 'file:notes.txt', kind: 'workspace-file',
-        title: 'notes.txt', resource: { filePath: 'notes.txt' }, isPinned: true, isPreview: false });
+    const pane = useAppPaneScope('project:installed-viewers');
+    React.useEffect(() => {
+        pane.openDetailsTab({ key: 'file:notes.txt', kind: 'workspace-file',
+            title: 'notes.txt', resource: { filePath: 'notes.txt' } }, { intent: 'pinned' });
+    }, [pane.openDetailsTab]);
+    const tab = pane.scopeState?.details.tabs.find(candidate => candidate.key === pane.scopeState?.details.activeTabKey);
+    if (!tab) return null;
     const scope = { ...fixture.scope, kind: 'project' as const, workspaceRefId: 'project:installed-viewers' };
     const details: DetailsSurfaceRenderInputV1 = { tab, scope, region: 'details', active: true,
         descriptor: { surfaceId: tab.kind, resourceKey: tab.key, scope, region: 'details', status: 'available' },
-        callbacks: { replaceTab: (_key, next) => setTab({ ...next, isPinned: true, isPreview: false }) } };
+        callbacks: { replaceTab: pane.replaceDetailsTab } };
     const renderer = createPluginDetailsDestinationSurfaceRenderer({ targetKind: 'project', projection: props.projection,
         mount: { ...fixture.scope, projectId: scope.workspaceRefId, platform: props.platform, formFactor: props.formFactor,
             projectionPhase: 'current', projectionInteractionEnabled: true } });
@@ -186,6 +192,57 @@ describe('SVG File page preview dispatch', () => {
             }));
             expect(settingsRequests).toContainEqual({ method: 'POST', status: 200 });
             await vi.waitFor(() => expect(screen.getTextContent()).toContain('External viewer 11 mounted'));
+            // Exercise the public host admission as well as the real File holder. A freshly returned
+            // viewer can have a pending plugin-daemon connection while its independent file binding works.
+            const { PluginSurfacePlacementHost } = await import('@/components/plugins/surfaces');
+            const { createBoundPluginSurfaceController } = await import('@/components/plugins/surfaces/boundPluginSurfaceController');
+            const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+            const readSelectedFile = async (connectionPending = false) => {
+                const mounted = screen.findByType(PluginSurfacePlacementHost);
+                const binding = mounted.props.binding.openableContent;
+                const ref = mounted.props.launchInput;
+                expect(binding.ref).toEqual(ref);
+                const controller = createBoundPluginSurfaceController({
+                    facts: {
+                        pluginId: 'com.external.viewer-11', contributionId: 'text-viewer',
+                        surfaceId: 'surfacePlacement:com.external.viewer-11:text-viewer',
+                        placement: 'projectSurface', platform, ...fixture.scope,
+                        projectionGeneration: mounted.props.pluginUiProjection.generation,
+                        occurrenceId: mounted.props.placement.occurrenceId,
+                        executionOrigin: mounted.props.placement.executionOrigin,
+                        accountLifetime: captureActiveServerAccountScopeLifetime(), interactionEnabled: true,
+                        daemonInteractionEnabled: !connectionPending,
+                        isDaemonConnectionPending: () => connectionPending,
+                    },
+                    binding: { openableContent: binding },
+                });
+                try {
+                    const statResult = await controller.hostApi.handleRequest({
+                        version: 1, requestId: 'selected-file-stat', surface: controller.surfaceContext,
+                        method: 'statOpenableContent', payload: { ref },
+                    });
+                    expect(statResult).toMatchObject({ status: 'ready' });
+                    const stat = OpenableContentStatResultV1Schema.parse(statResult);
+                    if (stat.status !== 'ready') throw new Error('Selected file must be readable');
+                    return await controller.hostApi.handleRequest({
+                        version: 1, requestId: 'selected-file-read', surface: controller.surfaceContext,
+                        method: 'readOpenableContent', payload: { ref, expectedRevision: stat.revision, maxBytes: 256 * 1024 },
+                    });
+                } finally { controller.dispose(); }
+            };
+            expect(await readSelectedFile()).toMatchObject({ status: 'ready', content: { kind: 'utf8', text: 'plain notes\n' } });
+            const { FilePageHeader } = await import('../file/FilePageHeader');
+            const { FileEditorPanel } = await import('../file/editor/FileEditorPanel');
+            await act(async () => { fixture.storage.getState().applySettingsLocal({ experiments: true,
+                featureToggles: { 'scm.writeOperations': true, 'files.reviewComments': false,
+                    'files.diffSyntaxHighlighting': false, 'files.editor': true } }); });
+            await act(async () => { screen.findByType(FilePageHeader).props.edit.onPress(); });
+            await vi.waitFor(() => expect(screen.findAllByType(FileEditorPanel), screen.getTextContent()).toHaveLength(1));
+            await act(async () => { screen.findByType(FileEditorPanel).props.onReady?.(); });
+            await vi.waitFor(() => expect(screen.findByType(FilePageHeader).props.edit.kind).toBe('done'));
+            await act(async () => { screen.findByType(FilePageHeader).props.edit.onPress(); });
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('External viewer 11 mounted'));
+            expect(await readSelectedFile(true)).toMatchObject({ status: 'ready', content: { kind: 'utf8', text: 'plain notes\n' } });
             await screen.pressByTestIdAsync('plugin-details-viewer-choice:builtin');
             await vi.waitFor(() => expect(screen.getTextContent()).toContain('plain notes'));
             expect(screen.getTextContent()).not.toContain('External viewer 11 mounted');

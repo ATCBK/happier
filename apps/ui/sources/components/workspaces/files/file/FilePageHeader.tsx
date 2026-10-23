@@ -102,6 +102,8 @@ export type FilePageHeaderProps = Readonly<{
     providerFacts?: readonly DetailsTabHeaderMetaFact[] | null;
     /** Who last changed the file and when (the facts line's last fact). */
     attribution?: Readonly<{ agentName: string | null; requesterName: string | null; updatedAt: number | null }> | null;
+    /** The lifecycle-admitted current write replaces settled attribution, independently of Track. */
+    writing?: Readonly<{ agentName: string; line: number | null }> | null;
     /** A file deleted on disk: who and when, then Restore, in the attribution's place (lab FV2d). */
     deletion?: Readonly<{ agentName: string | null; at: number | null; onRestore?: () => void | Promise<void> }> | null;
     /** A state the page is in, in one word beside the actions ("Deleted"). Editing states come from `editor`. */
@@ -383,6 +385,8 @@ export function FilePageHeader(props: FilePageHeaderProps) {
     ) : null;
     const separated = meta.length > 0 || breadcrumb !== null;
     const attribution = props.deletion ? <FilePageDeletionFact {...props.deletion} separated={separated} />
+        : props.writing ? <FilePageAttributionFact agentName={props.writing.agentName} requesterName={null} updatedAt={null}
+            writing={props.writing} separated={separated} />
         : props.attribution ? <FilePageAttributionFact {...props.attribution} separated={separated} /> : null;
 
     return (

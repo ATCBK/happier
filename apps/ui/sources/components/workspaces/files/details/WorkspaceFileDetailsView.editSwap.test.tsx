@@ -2,7 +2,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushHookEffects, standardCleanup } from '@/dev/testkit';
+import { createToolCallMessageFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { createSessionFileNativeTransferBoundary } from '@/components/sessions/files/sessionFileNativeTransferTestkit';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
@@ -90,6 +90,32 @@ beforeEach(async () => {
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); portalBoundary?.restore(); vi.unstubAllGlobals(); });
 
 describe('File page View → Edit swap', () => {
+    it('replaces settled attribution with the live writing note even with Track off, then restores it on settlement', async () => {
+        const { createReducer } = await import('@happier-dev/session-core/reducer');
+        const message = createToolCallMessageFixture({ id: 'writing-header', tool: { id: 'writing-header', name: 'Patch',
+            input: { changes: [{ path: `${fixture.scope.rootPath}/${filePath}`, kind: { type: 'update' },
+                diff: '@@ -1 +1 @@\n-export const attempts = 3;\n+export const attempts = 4;' }] },
+            state: 'running', createdAt: 1, startedAt: 2, completedAt: null, description: null } });
+        fixture.storage.setState({ localSettings: { ...fixture.storage.getState().localSettings, filesTrackAgentEdits: false } });
+        fixture.storage.getState().applySessions([{ ...fixture.session, active: true, activeAt: Date.now(),
+            thinking: true, thinkingAt: Date.now(), latestTurnStatus: 'in_progress' }]);
+        fixture.storage.setState({ sessionMessages: { [fixture.session.id]: { messageIdsOldestFirst: [message.id],
+            messagesById: { [message.id]: message }, messagesMap: { [message.id]: message }, reducerState: createReducer(),
+            messagesVersion: 1, isLoaded: true, latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null } } });
+        const screen = await fixture.render(<ModalProvider>
+            <WorkspaceFileDetailsView scopeId="session:writing-header" scope={fixture.scope} filePath={filePath}
+                sessionIdForAugmentation={fixture.session.id} />
+        </ModalProvider>);
+        try {
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('retryLabel'));
+            await vi.waitFor(() => expect(screen.findHostByTestId('file-page-writing')).not.toBeNull());
+            expect(screen.findHostByTestId('file-page-attribution')).toBeNull();
+            await act(async () => { fixture.storage.getState().applySessions([{ ...fixture.session, active: false,
+                thinking: false, latestTurnStatus: 'completed' }]); });
+            await vi.waitFor(() => expect(screen.findHostByTestId('file-page-writing')).toBeNull());
+        } finally { await screen.unmount(); }
+    });
+
     it.each(['workingTree', 'session'] as const)('opens and saves a removed-side Changes selection comment from %s', async source => {
         const selectedDiff = '--- a/src/retry.ts\n+++ b/src/retry.ts\n@@ -1,2 +1,2 @@\n-old first\n-old second\n+new first\n+new second\n';
         scmDiff = source === 'workingTree' ? selectedDiff : '--- a/src/retry.ts\n+++ b/src/retry.ts\n@@ -1 +1 @@\n-other live text\n+unrelated live change\n';
@@ -196,6 +222,38 @@ describe('File page View → Edit swap', () => {
                 anchor: expect.objectContaining({ startLine: 1, endLine: 1 }),
                 snapshot: expect.objectContaining({ selectedLines: ['export const attempts = 3;'] }) })]);
             expect(screen.findAllByType(ReviewCommentInlineComposer)).toHaveLength(0);
+        } finally { await screen.unmount(); }
+    });
+
+    it('gives the bottom seat to the working capsule after a phone Ask is sent, and takes it back when the turn ends', async () => {
+        viewport.width = 390;
+        viewport.height = 844;
+        const { SurfaceStateSizeProvider } = await import('@/components/ui/surfaces/surfaceStateSize');
+        const { PhoneAskSheetProvider } = await import('@/components/sessions/composer/phoneAsk/phoneAskSheetState');
+        const sheet = (phase: 'closed' | 'open' | 'working') => ({ phase, open: () => {}, close: () => {}, sent: () => {}, finish: () => {} });
+        const page = (phase: 'closed' | 'open' | 'working') => <ModalProvider><PhoneAskSheetProvider value={sheet(phase)}>
+            <SurfaceStateSizeProvider size="phone">
+                <WorkspaceFileDetailsView scopeId="project:phone-ask-capsule" scope={fixture.scope} filePath={filePath}
+                    sessionIdForAugmentation={null} />
+            </SurfaceStateSizeProvider>
+        </PhoneAskSheetProvider></ModalProvider>;
+        let setPhase: (phase: 'closed' | 'open' | 'working') => void = () => {};
+        function Harness() {
+            const [phase, set] = React.useState<'closed' | 'open' | 'working'>('closed');
+            setPhase = set;
+            return page(phase);
+        }
+        const screen = await fixture.render(<Harness />);
+        try {
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('retryLabel'));
+            await flushHookEffects({ cycles: 4 });
+            expect(screen.findHostByTestId('file-page-toolbar')).not.toBeNull();
+            await act(async () => { setPhase('working'); });
+            await flushHookEffects({ cycles: 2 });
+            expect(screen.findHostByTestId('file-page-toolbar')).toBeNull();
+            await act(async () => { setPhase('closed'); });
+            await flushHookEffects({ cycles: 2 });
+            expect(screen.findHostByTestId('file-page-toolbar')).not.toBeNull();
         } finally { await screen.unmount(); }
     });
 

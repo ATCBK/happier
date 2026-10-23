@@ -158,6 +158,7 @@ import {
     type WorkspaceFileViewerChoiceModel,
     type WorkspaceFileViewerMatch,
 } from './workspaceFileDetails/resolveWorkspaceFileViewer';
+import { usePhoneAskSheet } from '@/components/sessions/composer/phoneAsk/phoneAskSheetState';
 
 
 /** How long a jump target stays highlighted (a deep link, or Track's scroll to the agent's region). */
@@ -651,7 +652,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const [copyContentBusy, setCopyContentBusy] = React.useState(false);
 
     const tabKey = React.useMemo(() => `file:${filePath}`, [filePath]);
-    const { view: fileView, patchView: patchFileView } = useWorkspaceFileView(pane, tabKey);
+    const { view: fileView, initialChanges, patchView: patchFileView } = useWorkspaceFileView(pane, tabKey);
     const isActive = props.openableContentViewer?.details.active ?? (presentation === 'screen' || (pane.scopeState?.details?.isOpen === true && pane.scopeState.details.activeTabKey === tabKey));
     const rememberFind = React.useCallback((find: FileViewerFindMemory) => patchFileView({ findQuery: find.query, findOpen: find.open }), [patchFileView]);
     const rememberReadingLine = React.useCallback((scrollLine: number) => patchFileView({ scrollLine }), [patchFileView]);
@@ -943,7 +944,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const reviewDraftHandlers = useWorkspaceReviewCommentDraftHandlers(scope);
 
     // The writing agent's name for the editor's conflict and Undo copy; "the version on disk" when unknown.
-    const editorAttribution = useFilePageAttribution({ address: sessionAddress, filePath, workspaceRoot: scope?.rootPath ?? null, active: isActive });
+    const editorAttribution = useFilePageAttribution({ address: sessionAddress, filePath, workspaceRoot: scope?.rootPath ?? null, active: isActive,
+        content: fileContent?.isBinary ? null : fileContent?.content });
     const approval = useActionApprovalContinuation({
         scopeKey: JSON.stringify([scope?.serverId, editorAccountScope?.accountId, props.scopeId, filePath]),
         serverId: scope?.serverId ?? '', onExecuted: refreshAll,
@@ -1280,12 +1282,15 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const effectiveWrapLines = fileView.wrap ?? wrapLinesInDiffs;
     const isBinaryContent = fileContent?.isBinary === true;
     const onChangesScopeChange = React.useCallback((changesScope: FileChangesScope) => patchFileView({ changesScope }), [patchFileView]);
-    const offerWholeTurnRollback = useFileChangesRollback(isActive && fileView.changesScope?.kind === 'turn' ? sessionAddress : null, scope.rootPath);
+    const offerWholeTurnRollback = useFileChangesRollback(isActive
+        && (fileView.changesScope?.kind === 'turn' || (!fileView.changesScope && initialChanges?.kind === 'turnCheckpoint'))
+        ? sessionAddress : null, scope.rootPath);
     // P5's Changes owner, once per page: the Changes body draws it, and its comparison arm is the only
     // whole-file Discard / Restore (View, Changes and the deleted tab alike; no HEAD-arm fallback, RV-B M8).
     const changesReview = useFileChangesReview({
         scope, sessionId: sessionId || null, filePath,
         liveDiff: diffContent, refreshLiveDiff: onRefresh, view: fileView, onChangesScopeChange,
+        initialChanges,
         liveEntry: fileEntry,
         contentHash: fileContent?.contentHash ?? null,
         active: isActive && (displayMode === 'diff' || Boolean(fileEntry)),
@@ -1397,7 +1402,9 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const [selectionBarPath, setSelectionBarPath] = React.useState<string | null>(null);
     const reportSelectionBarShown = React.useCallback((shown: boolean) => setSelectionBarPath(current => shown ? filePath : current === filePath ? null : current), [filePath]);
     const toolbarSeat = phonePage && !isEditorSelected && !(displayMode === 'diff' && changesReview.controller.strip.total > 0);
-    const phoneToolbar = toolbarSeat && !findHoldsBottom && selectionBarPath !== filePath;
+    // After a phone Ask is sent, the working capsule holds the bottom edge until the turn settles.
+    const askCapsuleHoldsBottom = usePhoneAskSheet()?.phase === 'working';
+    const phoneToolbar = toolbarSeat && !findHoldsBottom && selectionBarPath !== filePath && !askCapsuleHoldsBottom;
     const pdfZoom = fileView.pdfZoom ?? 'fit-width';
     const pdfPosition = fileView.pdfPosition ?? null;
     const pdfControl = React.useMemo(() => ({
@@ -1621,6 +1628,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     filePath={filePath}
                     breadcrumbRoot={props.breadcrumbRoot}
                     onOpenFolder={props.onOpenFolder ?? (props.onRevealInFilesTree ? (folder) => props.onRevealInFilesTree?.(folder) : undefined)}
+                    writing={deleted ? null : editorAttribution.writing}
                     attribution={deleted ? null : editorAttribution.agentName || attributionUpdatedAt !== null ? {
                         agentName: editorAttribution.agentName,
                         requesterName: editorAttribution.requesterName,

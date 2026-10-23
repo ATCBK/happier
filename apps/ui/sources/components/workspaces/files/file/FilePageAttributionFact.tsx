@@ -41,6 +41,7 @@ export const FilePageAttributionFact = React.memo(function FilePageAttributionFa
     agentName: string | null;
     requesterName: string | null;
     updatedAt: number | null;
+    writing?: Readonly<{ agentName: string; line: number | null }> | null;
     /** The fact follows others on the line: it brings its own " · ". */
     separated?: boolean;
     testID?: string;
@@ -51,8 +52,10 @@ export const FilePageAttributionFact = React.memo(function FilePageAttributionFa
     const readNextRefresh = React.useCallback((nowMs: number) => (
         updatedAt === null ? null : readRelativeTimeShortRefreshAtMs(updatedAt, nowMs)
     ), [updatedAt]);
-    const nowMs = useSessionListRuntimeDeadlineNowMs(readNextRefresh, updatedAt !== null);
-    const resolved = resolveFilePageAttributionText({ agentName: props.agentName, requesterName: props.requesterName, updatedAt, nowMs });
+    const nowMs = useSessionListRuntimeDeadlineNowMs(readNextRefresh, updatedAt !== null && !props.writing);
+    const resolved = props.writing ? { key: 'writing', text: [t('files.agentWritingThisFile', { agent: props.writing.agentName }),
+        props.writing.line === null ? null : t('files.blame.line', { line: props.writing.line })].filter(Boolean).join(' · ') }
+        : resolveFilePageAttributionText({ agentName: props.agentName, requesterName: props.requesterName, updatedAt, nowMs });
     if (!resolved) return null;
     const textStyle = DETAILS_TAB_HEADER_METRICS[phone ? 'phone' : 'pane'].meta;
     const fresh = resolved.key === 'justNow';
@@ -64,7 +67,7 @@ export const FilePageAttributionFact = React.memo(function FilePageAttributionFa
                     accessibilityElementsHidden importantForAccessibility="no">{' · '}</Text>
             ) : null}
             <WordCrossFade wordKey={resolved.key}>
-                <Text testID={props.testID ?? 'file-page-attribution'} numberOfLines={1}
+                <Text testID={props.testID ?? (props.writing ? 'file-page-writing' : 'file-page-attribution')} numberOfLines={1}
                     style={[textStyle, styles.text, { color: fresh ? theme.colors.text.primary : theme.colors.text.secondary }]}>
                     {resolved.text}
                 </Text>
