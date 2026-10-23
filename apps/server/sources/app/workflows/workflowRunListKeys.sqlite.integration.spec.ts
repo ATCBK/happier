@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { WorkflowRunSummaryV1Schema } from "@happier-dev/protocol/workflows/workflowProgressV1";
 import { WorkflowRunRecipientCensusResponseV1Schema } from "@happier-dev/protocol/workflows/workflowRunKeyV1";
-import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, sealEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
 import * as privacyKit from "privacy-kit";
 import tweetnacl from "tweetnacl";
@@ -11,7 +11,7 @@ import { logger } from "@/utils/logging/log";
 import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAcceptedSnapshot";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
-import { getWorkflowRun, listWorkflowRuns, summarizeWorkflowRuns } from "./workflowRunService";
+import { getWorkflowRun, listWorkflowRunInvocations, listWorkflowRuns, summarizeWorkflowRuns } from "./workflowRunService";
 
 // Native database boundary only: all SQL, snapshots, policy and keys stay real.
 type NativeDatabaseBoundary = Pick<typeof db, "$transaction" | "$executeRawUnsafe">;
@@ -274,7 +274,7 @@ it.each(["plain", "e2ee"] as const)("projects %s collection keys without per-Run
     if (envelopes.length) await db.workflowRunDataKeyEnvelope.createMany({ data: envelopes });
     const keysByRunId = new Map(envelopes.map(row => [row.runId, privacyKit.encodeBase64(row.encryptedDataKey)]));
     // Logging is an external diagnostics sink; authorization, keys and database work stay real.
-    const info = vi.spyOn(logger, "debug").mockImplementation(() => {});
+    const trace = vi.spyOn(logger, "trace").mockImplementation(() => {});
     try {
         const page = await listWorkflowRuns({ accountId: owner.id, runIds, pageByteLimit: 1_000_000 });
         expect(new Set(page.runs.map(run => WorkflowRunSummaryV1Schema.parse(run).id))).toEqual(new Set(runIds));
@@ -286,13 +286,13 @@ it.each(["plain", "e2ee"] as const)("projects %s collection keys without per-Run
                 recipients: [{ recipientAccountId: owner.id, encryptedDataKey: key }],
             });
         }
-        const phases = info.mock.calls.map(([record]) => record !== null && typeof record === "object"
+        const phases = trace.mock.calls.map(([record]) => record !== null && typeof record === "object"
             && "phase" in record ? record.phase : null);
         // These are the expensive N+1 reads observed in the live Voice latency trace.
         // Capture and fresh readmission are page-batched, never one read per Run.
         expect(phases.filter(phase => phase === "db.WorkflowRunDataKeyEnvelope.findMany")).toHaveLength(2);
         expect(phases.filter(phase => phase === "db.AutomationRun.findUnique")).toHaveLength(0);
-    } finally { info.mockRestore(); }
+    } finally { trace.mockRestore(); }
 });
 
 it.each((["mode", "change-cursor", "deletion"] as const).flatMap(change => [
@@ -378,4 +378,49 @@ it.each([undefined, "membership"] as const)("keeps %s exact list continuation ac
         await expect(listWorkflowRuns({ ...request, cursor: first.nextCursor,
             projection: projection ? undefined : "membership" })).rejects.toMatchObject({ code: "invalid_input" });
     } finally { debug.mockRestore(); }
+});
+
+it("pages only selected parent histories through SQLite JSON membership, retaining retry history and cursor scope", async () => {
+    const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+    const runId = crypto.randomUUID();
+    const rootId = crypto.randomUUID();
+    const firstParentId = crypto.randomUUID();
+    const secondParentId = crypto.randomUUID();
+    const firstReply = crypto.randomUUID();
+    const secondReply = crypto.randomUUID();
+    const retriedReply = crypto.randomUUID();
+    await db.automationRun.create({ data: { id: runId, accountId: owner.id, originKind: "direct", causeKind: null,
+        state: "running", scheduledAt: new Date(), dueAt: new Date(), workflowCustodyState: "pending",
+        workflowAcceptedSnapshotEnvelope: "unopened accepted" } });
+    const rows = [[rootId, null, 0], [firstParentId, rootId, 1], [secondParentId, rootId, 2],
+        [firstReply, firstParentId, 3], [secondReply, secondParentId, 4], [retriedReply, firstParentId, 5]] as const;
+    const envelopes = new Map<string, string>();
+    for (const [id, parentRecordId, sequence] of rows) {
+        const attempt = id === retriedReply ? 1 : 0;
+        const memberOrdinal = id === secondParentId ? 1 : 0;
+        const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+            mode: "plain", binding: { v: 1, purpose: "invocation_progress", accountId: owner.id, runId,
+                recordId: id, sequence: String(sequence), parentRecordId, memberOrdinal: String(memberOrdinal), attempt: String(attempt) },
+            progress: { kind: "happier.workflow-progress.v1", invocationPath: { blockId: sequence === 0 ? "$root" : "work", scope: [] },
+                blockKind: sequence === 0 ? "root" : "step", attempt: String(attempt), logicalInvocationRecordId: attempt ? firstReply : id,
+                ...(attempt ? { previousAttemptRecordId: firstReply } : {}) },
+        }));
+        envelopes.set(id, contentEnvelope);
+        await db.workflowRunInvocation.create({ data: { id, runId, parentRecordId, sequence: BigInt(sequence),
+            memberOrdinal: BigInt(memberOrdinal), attempt: BigInt(attempt), lifecycle: id === firstReply ? "superseded" : "completed", contentEnvelope } });
+    }
+    const request = { accountId: owner.id, runId, parentRecordIds: [secondParentId, firstParentId],
+        limit: 1, progressEnvelopes: true as const, pageByteLimit: 1_000_000 };
+    const first = await listWorkflowRunInvocations(request);
+    const second = await listWorkflowRunInvocations({ ...request, parentRecordIds: [...request.parentRecordIds].reverse(), cursor: first.nextCursor });
+    const third = await listWorkflowRunInvocations({ ...request, cursor: second.nextCursor });
+    expect([first, second, third].flatMap(page => page.invocations.map(row => row.id))).toEqual([firstReply, secondReply, retriedReply]);
+    expect(first.progressEnvelopesByInvocationId).toEqual({ [firstReply]: envelopes.get(firstReply) });
+    expect(third.nextCursor).toBeUndefined();
+    await expect(listWorkflowRunInvocations({ ...request, parentRecordIds: [firstParentId], cursor: first.nextCursor }))
+        .rejects.toMatchObject({ code: "invalid_input" });
+    expect((await listWorkflowRunInvocations({ ...request, parentRecordIds: ["absent"] })).invocations).toEqual([]);
+    const current = await listWorkflowRunInvocations({ ...request, parentRecordIds: undefined,
+        parentRecordId: firstParentId, memberOrdinal: "0" });
+    expect(current.invocations.map(row => row.id)).toEqual([retriedReply]);
 });

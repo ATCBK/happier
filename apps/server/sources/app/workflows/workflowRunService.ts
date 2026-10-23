@@ -33,7 +33,7 @@ import { applyAutomationRunTerminalEffectsTx } from "@/app/automations/automatio
 import { readRetainedAutomationRunExecutionInputForWorkflowAdmission, validateAutomationStoredContentEnvelopeOuterForMode } from "@/app/automations/automationStoredContentRead";
 import { db } from "@/storage/db";
 import { afterTx, inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
-import { isPrismaErrorCode, prismaRuntime } from "@/storage/prisma";
+import { getDbProviderFromEnv, isPrismaErrorCode, prismaRuntime } from "@/storage/prisma";
 import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
 import { readSnapshotWithCurrentAdmission } from '@/storage/readSnapshotWithCurrentAdmission';
 
@@ -490,6 +490,16 @@ export async function resolveAutomationWorkflowAcceptedSnapshot(params: Readonly
 }>) {
     if (!Number.isSafeInteger(params.expectedAttempt) || params.expectedAttempt < 0) throw new WorkflowRunServiceError("invalid_input");
     return await inTx(async (tx) => {
+        // Only unresolved snapshots have a prospective audience. Rejoin keeps
+        // the frozen Team even when current grants require a new choice.
+        const unresolved = await tx.automationRun.findFirst({ where: {
+            id: params.runId, accountId: params.accountId, workflowAcceptedSnapshotEnvelope: null,
+        }, select: { id: true } });
+        if (unresolved) await withWorkflowRunAccess(() => acquireWorkflowPublicationLocksInTx(tx, {
+            accountId: params.accountId, runIds: [params.runId],
+            admission: { sourceArtifactId: params.sourceArtifactId ?? null, authentication: params.authentication,
+                ...(params.visibleTeamId === undefined ? {} : { visibleTeamId: params.visibleTeamId }) },
+        }));
         const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         const predecessor = readRetainedAutomationRunExecutionInputForWorkflowAdmission({ raw: params.definitionEnvelope, mode });
         if (predecessor === null) {
@@ -1580,15 +1590,25 @@ export async function completeWorkflowInvocationReview(input: WorkflowReviewMuta
 
 /**
  * Pages invocation history or newest direct-member attempts. The internal
- * storage-only `progressEnvelopes` flag (history pages only) adds the private
+ * storage-only `progressEnvelopes` flag adds the private
  * `progressEnvelopesByInvocationId` sidecar for exactly the page's rows so the
- * Action host can aggregate Run usage in O(pages) reads; its members count
+ * Action host can open only selected scope/round rows or aggregate Run usage;
+ * its members count
  * against the same response-byte boundary and it is part of the cursor binding.
  */
-export async function listWorkflowRunInvocations(params: PageOptions & Readonly<{ accountId: string; runId: string; parentRecordId?: string; lifecycles?: readonly WorkflowInvocationLifecycleV1[]; progressEnvelopes?: true }>) {
+export async function listWorkflowRunInvocations(params: PageOptions & Readonly<{ accountId: string; runId: string; invocationId?: string; parentRecordId?: string; parentRecordIds?: readonly string[]; memberOrdinal?: string; lifecycles?: readonly WorkflowInvocationLifecycleV1[]; progressEnvelopes?: true }>) {
     if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit <= 0)) throw new WorkflowRunServiceError("invalid_input");
-    if (params.progressEnvelopes && params.parentRecordId !== undefined) throw new WorkflowRunServiceError("invalid_input");
-    const queryKey = JSON.stringify({ runId: params.runId, parentRecordId: params.parentRecordId ?? null, lifecycles: [...(params.lifecycles ?? [])].sort(), ...(params.progressEnvelopes ? { progressEnvelopes: true } : {}) });
+    if (params.invocationId !== undefined && (!params.invocationId || params.parentRecordId !== undefined
+        || params.parentRecordIds !== undefined || params.memberOrdinal !== undefined || params.lifecycles !== undefined)) throw new WorkflowRunServiceError("invalid_input");
+    if (params.parentRecordIds !== undefined && (params.parentRecordIds.length === 0 || params.parentRecordId !== undefined
+        || params.memberOrdinal !== undefined || params.parentRecordIds.some(id => !id))) throw new WorkflowRunServiceError("invalid_input");
+    if (params.memberOrdinal !== undefined && (params.parentRecordId === undefined
+        || !/^(0|[1-9][0-9]*)$/.test(params.memberOrdinal) || BigInt(params.memberOrdinal) > MAX_DATABASE_BIGINT)) throw new WorkflowRunServiceError("invalid_input");
+    const queryKey = JSON.stringify({ runId: params.runId, parentRecordId: params.parentRecordId ?? null, lifecycles: [...(params.lifecycles ?? [])].sort(),
+        ...(params.invocationId !== undefined ? { invocationId: params.invocationId } : {}),
+        ...(params.parentRecordIds !== undefined ? { parentRecordIds: [...new Set(params.parentRecordIds)].sort() } : {}),
+        ...(params.memberOrdinal !== undefined ? { memberOrdinal: params.memberOrdinal } : {}),
+        ...(params.progressEnvelopes ? { progressEnvelopes: true } : {}) });
     const decoded = params.cursor ? decodeKeysetCursorV1(params.cursor, queryKey) : null;
     const afterSequence = decoded?.status === "ok" ? readKeysetCursorTextV1(decoded.parts[0]) : null;
     const afterId = decoded?.status === "ok" ? readKeysetCursorIdV1(decoded.parts[1]) : null;
@@ -1598,11 +1618,32 @@ export async function listWorkflowRunInvocations(params: PageOptions & Readonly<
         const mode = keyCensus.encryptionMode;
         const run = await tx.automationRun.findFirst({ where: { id: params.runId, accountId: keyCensus.ownerAccountId, workflowCustodyState: { not: null } }, select: { revision: true } });
         if (!run) throw new WorkflowRunServiceError("run_not_found");
+        // Both history and newest-member windows disclose the same admitted
+        // progress sidecar and spend the same exact response-byte budget.
+        const discloseProgressEnvelope = (row: InvocationRow): [string, string] => {
+            assertWorkflowStoredEnvelopeOuterForMode({ raw: row.contentEnvelope, mode, binding: { v: 1, purpose: "invocation_progress", accountId: keyCensus.ownerAccountId, runId: params.runId, recordId: row.id, sequence: row.sequence.toString(), parentRecordId: row.parentRecordId, memberOrdinal: row.memberOrdinal.toString(), attempt: row.attempt.toString() } });
+            return [row.id, row.contentEnvelope];
+        };
+        const invocationPage = (rows: readonly InvocationRow[], nextCursor?: string) => ({
+            invocations: rows.map(projectInvocation),
+            ...(params.progressEnvelopes ? { progressEnvelopesByInvocationId: Object.fromEntries(rows.map(discloseProgressEnvelope)) } : {}),
+            ...(nextCursor ? { nextCursor } : {}),
+            parentRevision: run.revision, keyCensus,
+        });
+        const serializeMembers = (row: InvocationRow) => params.progressEnvelopes
+            ? [JSON.stringify(projectInvocation(row)), `${JSON.stringify(row.id)}:${JSON.stringify(row.contentEnvelope)}`]
+            : [JSON.stringify(projectInvocation(row))];
+        if (params.parentRecordId !== undefined && params.memberOrdinal !== undefined) {
+            const row = await readCurrentWorkflowRunInvocationRowInTx(tx, { runId: params.runId,
+                parentRecordId: params.parentRecordId, memberOrdinal: BigInt(params.memberOrdinal) });
+            const candidates = row && (afterSequence === null || row.memberOrdinal > BigInt(afterSequence))
+                && (!params.lifecycles || params.lifecycles.includes(row.lifecycle)) ? [row] : [];
+            const page = appendBoundedPage({ existing: [], existingBytes: 2, candidates,
+                byteLimit: params.pageByteLimit, serializeMembers, emptyPage: () => invocationPage([]),
+                nextCursorFor: () => "", hasMoreAfter: () => false });
+            return invocationPage(page.rows);
+        }
         if (params.parentRecordId !== undefined) {
-            const indexPage = (rows: readonly InvocationRow[], nextCursor?: string) => ({
-                invocations: rows.map(projectInvocation), parentRevision: run.revision, keyCensus,
-                ...(nextCursor ? { nextCursor } : {}),
-            });
             const wanted = params.limit ?? Number.POSITIVE_INFINITY;
             let pageAfterOrdinal = afterSequence === null ? null : BigInt(afterSequence);
             let collected: InvocationRow[] = [];
@@ -1657,24 +1698,24 @@ export async function listWorkflowRunInvocations(params: PageOptions & Readonly<
                     existingBytes: collectedBytes,
                     candidates,
                     byteLimit: params.pageByteLimit,
-                    serializeMembers: (row) => [JSON.stringify(projectInvocation(row))],
-                    emptyPage: (nextCursor) => indexPage([], nextCursor),
+                    serializeMembers,
+                    emptyPage: (nextCursor) => invocationPage([], nextCursor),
                     nextCursorFor: (row) => encodeKeysetCursorV1({ queryKey, parts: [row.memberOrdinal.toString(), row.id] }),
                     hasMoreAfter: (candidateIndex) => candidateIndex < candidates.length - 1 || batchHasMore,
                 });
                 if (bounded.shortened) {
                     const last = bounded.rows.at(-1);
-                    return indexPage(bounded.rows, last ? encodeKeysetCursorV1({ queryKey, parts: [last.memberOrdinal.toString(), last.id] }) : undefined);
+                    return invocationPage(bounded.rows, last ? encodeKeysetCursorV1({ queryKey, parts: [last.memberOrdinal.toString(), last.id] }) : undefined);
                 }
                 collected = bounded.rows;
                 collectedBytes = bounded.bytes;
                 const lastExamined = examined.at(-1);
                 if (collected.length >= wanted) {
                     const last = collected.at(-1);
-                    return indexPage(collected, batchHasMore && last ? encodeKeysetCursorV1({ queryKey, parts: [last.memberOrdinal.toString(), last.id] }) : undefined);
+                    return invocationPage(collected, batchHasMore && last ? encodeKeysetCursorV1({ queryKey, parts: [last.memberOrdinal.toString(), last.id] }) : undefined);
                 }
-                if (!batchHasMore) return indexPage(collected);
-                if (!lastExamined) return indexPage(collected);
+                if (!batchHasMore) return invocationPage(collected);
+                if (!lastExamined) return invocationPage(collected);
                 pageAfterOrdinal = lastExamined.memberOrdinal;
             }
         }
@@ -1683,23 +1724,33 @@ export async function listWorkflowRunInvocations(params: PageOptions & Readonly<
         let pageAfterId = afterId;
         let collected: InvocationRow[] = [];
         let collectedBytes = 2;
-        // Disclosed sidecar bytes pass the same Account-mode outer check as the
-        // exact detail read.
-        const discloseProgressEnvelope = (row: InvocationRow): [string, string] => {
-            assertWorkflowStoredEnvelopeOuterForMode({ raw: row.contentEnvelope, mode, binding: { v: 1, purpose: "invocation_progress", accountId: keyCensus.ownerAccountId, runId: params.runId, recordId: row.id, sequence: row.sequence.toString(), parentRecordId: row.parentRecordId, memberOrdinal: row.memberOrdinal.toString(), attempt: row.attempt.toString() } });
-            return [row.id, row.contentEnvelope];
-        };
-        const historyPage = (rows: readonly InvocationRow[], nextCursor?: string) => ({
-            invocations: rows.map(projectInvocation),
-            ...(params.progressEnvelopes ? { progressEnvelopesByInvocationId: Object.fromEntries(rows.map(discloseProgressEnvelope)) as Record<string, string> } : {}),
-            ...(nextCursor ? { nextCursor } : {}),
-            parentRevision: run.revision,
-            keyCensus,
-        });
+        const id = workflowRunSqlIdentifier;
+        const provider = getDbProviderFromEnv(process.env, "postgres");
+        const textType = prismaRuntime.raw(provider === "mysql" ? "CHAR" : "TEXT");
+        const parentRecordIds = params.parentRecordIds;
+        const selectedParents = parentRecordIds === undefined ? undefined
+            : provider === "postgres" || provider === "pglite"
+                ? prismaRuntime.sql`${id("parentRecordId")} = ANY(${[...parentRecordIds]}::text[])`
+                : provider === "mysql"
+                    ? prismaRuntime.sql`${id("parentRecordId")} IN (SELECT selected.id FROM JSON_TABLE(${JSON.stringify(parentRecordIds)}, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) selected)`
+                    : prismaRuntime.sql`${id("parentRecordId")} IN (SELECT value FROM json_each(${JSON.stringify(parentRecordIds)}))`;
         for (;;) {
             const batchSize = Math.min(wanted - collected.length, WORKFLOW_PAGE_DATABASE_BATCH_ROWS);
-            const rows = await tx.workflowRunInvocation.findMany({ where: {
+            // A selected set of parents is a history filter (including retries),
+            // not a second newest-attempt projection. Bind the caller-sized set
+            // once: 35k short ids fit the HTTP budget but exceed PostgreSQL's
+            // 32767 bind parameters. Only the bounded page ids acquire bodies.
+            const selectedIds = selectedParents === undefined ? undefined : await tx.$queryRaw<Array<{ id: string }>>(prismaRuntime.sql`
+                    SELECT ${id("id")} FROM ${id("WorkflowRunInvocation")}
+                    WHERE ${id("runId")} = ${params.runId} AND ${selectedParents}
+                    ${params.lifecycles ? prismaRuntime.sql`AND CAST(${id("lifecycle")} AS ${textType}) IN (${prismaRuntime.join([...params.lifecycles])})` : prismaRuntime.empty}
+                    ${pageAfterSequence !== null && pageAfterId ? prismaRuntime.sql`AND (${id("sequence")} > ${pageAfterSequence}
+                        OR (${id("sequence")} = ${pageAfterSequence} AND ${id("id")} > ${pageAfterId}))` : prismaRuntime.empty}
+                    ORDER BY ${id("sequence")}, ${id("id")} LIMIT ${batchSize + 1}`);
+            const rows = selectedIds?.length === 0 ? [] : await tx.workflowRunInvocation.findMany({ where: {
             runId: params.runId,
+            ...(selectedIds === undefined ? {} : { id: { in: selectedIds.map(row => row.id) } }),
+            ...(params.invocationId !== undefined ? { id: params.invocationId } : {}),
             ...(params.lifecycles ? { lifecycle: { in: [...params.lifecycles] } } : {}),
             ...(pageAfterSequence !== null && pageAfterId ? { OR: [{ sequence: { gt: pageAfterSequence } }, { sequence: pageAfterSequence, id: { gt: pageAfterId } }] } : {}),
             }, orderBy: [{ sequence: "asc" }, { id: "asc" }], take: batchSize + 1, select: invocationSelect }) as InvocationRow[];
@@ -1710,29 +1761,37 @@ export async function listWorkflowRunInvocations(params: PageOptions & Readonly<
                 existingBytes: collectedBytes,
                 candidates,
                 byteLimit: params.pageByteLimit,
-                serializeMembers: (row) => params.progressEnvelopes
-                    ? [JSON.stringify(projectInvocation(row)), `${JSON.stringify(row.id)}:${JSON.stringify(row.contentEnvelope)}`]
-                    : [JSON.stringify(projectInvocation(row))],
-                emptyPage: (nextCursor) => historyPage([], nextCursor),
+                serializeMembers,
+                emptyPage: (nextCursor) => invocationPage([], nextCursor),
                 nextCursorFor: (row) => encodeKeysetCursorV1({ queryKey, parts: [row.sequence.toString(), row.id] }),
                 hasMoreAfter: (candidateIndex) => candidateIndex < candidates.length - 1 || batchHasMore,
             });
             if (bounded.shortened) {
                 const last = bounded.rows.at(-1);
-                return historyPage(bounded.rows, last ? encodeKeysetCursorV1({ queryKey, parts: [last.sequence.toString(), last.id] }) : undefined);
+                return invocationPage(bounded.rows, last ? encodeKeysetCursorV1({ queryKey, parts: [last.sequence.toString(), last.id] }) : undefined);
             }
             collected = bounded.rows;
             collectedBytes = bounded.bytes;
             if (collected.length >= wanted || !batchHasMore) {
                 const last = collected.at(-1);
-                return historyPage(collected, batchHasMore && last ? encodeKeysetCursorV1({ queryKey, parts: [last.sequence.toString(), last.id] }) : undefined);
+                return invocationPage(collected, batchHasMore && last ? encodeKeysetCursorV1({ queryKey, parts: [last.sequence.toString(), last.id] }) : undefined);
             }
             const last = candidates.at(-1);
-            if (!last) return historyPage(collected);
+            if (!last) return invocationPage(collected);
             pageAfterSequence = last.sequence;
             pageAfterId = last.id;
         }
     }, { isolationLevel: "ReadCommitted", transactionClass: "workflow-list-run-invocations" });
+}
+
+/** One greatest-attempt query shared by current detail and exact member lists. */
+async function readCurrentWorkflowRunInvocationRowInTx(tx: Tx, params: Readonly<{
+    runId: string; parentRecordId: string; memberOrdinal: bigint;
+}>): Promise<InvocationRow | null> {
+    return await tx.workflowRunInvocation.findFirst({
+        where: { runId: params.runId, parentRecordId: params.parentRecordId, memberOrdinal: params.memberOrdinal },
+        orderBy: [{ attempt: "desc" }, { id: "desc" }], select: invocationSelect,
+    }) as InvocationRow | null;
 }
 
 export async function getWorkflowRunInvocation(params: Readonly<{ accountId: string; runId: string; invocationId: string }>) {
@@ -1766,11 +1825,7 @@ export async function getCurrentWorkflowRunInvocation(params: Readonly<{
             select: { revision: true },
         });
         if (!run) throw new WorkflowRunServiceError("run_not_found");
-        const row = await tx.workflowRunInvocation.findFirst({
-            where: { runId: params.runId, parentRecordId: params.parentRecordId, memberOrdinal: params.memberOrdinal },
-            orderBy: [{ attempt: "desc" }, { id: "desc" }],
-            select: invocationSelect,
-        }) as InvocationRow | null;
+        const row = await readCurrentWorkflowRunInvocationRowInTx(tx, params);
         if (!row) return { invocation: null, parentRevision: run.revision, keyCensus };
         assertWorkflowStoredEnvelopeOuterForMode({
             raw: row.contentEnvelope,
