@@ -44,7 +44,12 @@ type DerivedReachability = {
 // A row's descriptive verdict is derived again only when its own inputs change.
 // Scope, request failure, revocation and withdrawal remain live checks on every read.
 let derivedReachability = new WeakMap<MachinePresence, DerivedReachability>();
-const listeners = new Set<() => void>();
+export type MachineRequestReachabilityChange = Readonly<{
+    scope: MachineReachabilityScope;
+    /** Absence means the whole Account's observation changed (withdrawal or retirement). */
+    machineIds?: readonly string[];
+}>;
+const listeners = new Set<(change: MachineRequestReachabilityChange | null) => void>();
 const recoveryListeners = new Set<(scope: MachineReachabilityScope, machineId: string) => void>();
 let revision = 0;
 
@@ -79,9 +84,9 @@ function readObservation(state: ScopeReachability | undefined, machineId: string
     return state && id ? (route ? state.direct : state.relay).get(id) ?? null : null;
 }
 
-function publishReachabilityChange(): void {
+function publishReachabilityChange(change: MachineRequestReachabilityChange | null): void {
     revision += 1;
-    for (const listener of listeners) listener();
+    for (const listener of listeners) listener(change);
 }
 
 /** Called by the existing Account socket's transport-withdrawal edge. Reconnect alone is not a presence observation. */
@@ -89,7 +94,7 @@ export function withdrawMachinePresenceForScope(scope: MachineReachabilityScope)
     const normalized = normalizeScope(scope);
     if (!normalized) return;
     ensureScope(normalized).observedSinceWithdrawal = new Set();
-    publishReachabilityChange();
+    publishReachabilityChange({ scope: normalized });
 }
 
 /** Capture before an HTTP read so a pre-withdrawal response cannot restore old presence. */
@@ -99,11 +104,11 @@ export function captureMachinePresenceObservation(scope: MachineReachabilityScop
     const captured = state?.observedSinceWithdrawal;
     return machineIds => {
         if (!captured || state?.observedSinceWithdrawal !== captured) return;
-        let changed = false;
+        const changedMachineIds: string[] = [];
         for (const machineId of machineIds) {
-            if (!captured.has(machineId)) { captured.add(machineId); changed = true; }
+            if (!captured.has(machineId)) { captured.add(machineId); changedMachineIds.push(machineId); }
         }
-        if (changed) publishReachabilityChange();
+        if (changedMachineIds.length > 0 && normalized) publishReachabilityChange({ scope: normalized, machineIds: changedMachineIds });
     };
 }
 
@@ -123,8 +128,7 @@ function recordMachineRequestObservation(
     observations.set(id, { outcome, observedAtMs });
     // Retain freshness for late-result ordering without reopening automatic readers.
     if (previous?.outcome === outcome) return;
-    revision += 1;
-    for (const listener of listeners) listener();
+    publishReachabilityChange({ scope: normalized, machineIds: [id] });
 }
 
 export function recordMachineRequestFailed(input: MachineRequestObservationInput): void {
@@ -145,7 +149,7 @@ export function readMachineRequestReachabilityObservation(
     return normalized ? readObservation(readScope(normalized), machineId, route) : null;
 }
 
-export function subscribeMachineRequestReachability(listener: () => void): () => void {
+export function subscribeMachineRequestReachability(listener: (change: MachineRequestReachabilityChange | null) => void): () => void {
     listeners.add(listener);
     return () => listeners.delete(listener);
 }
@@ -227,8 +231,7 @@ export function clearMachineRequestReachabilityForMachine(scope: MachineReachabi
     const directChanged = state?.direct.delete(id) ?? false;
     retireEmptyScope(normalized, state);
     if (changed || directChanged) {
-        revision += 1;
-        for (const listener of listeners) listener();
+        publishReachabilityChange({ scope: normalized, machineIds: [id] });
     }
     for (const listener of recoveryListeners) listener(scope, machineId);
 }
@@ -241,8 +244,7 @@ export function clearMachineRequestReachabilityForScope(scope: MachineReachabili
     state.relay.clear();
     state.direct.clear();
     retireEmptyScope(normalizedScope, state);
-    revision += 1;
-    for (const listener of listeners) listener();
+    publishReachabilityChange({ scope: normalizedScope });
 }
 
 export function clearMachineRequestReachabilityForTest(): void {
@@ -257,6 +259,5 @@ export function clearMachineRequestReachabilityForTest(): void {
     }
     scopes.clear();
     if (!changed) return;
-    revision += 1;
-    for (const listener of listeners) listener();
+    publishReachabilityChange(null);
 }

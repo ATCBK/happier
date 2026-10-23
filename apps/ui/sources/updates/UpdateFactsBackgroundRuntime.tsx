@@ -26,7 +26,8 @@ export function UpdateFactsBackgroundRuntime(props: Readonly<{ enabled: boolean 
     const readSelectableIds = React.useCallback((nowMs: number) => readMachines()
         .filter(machine => isMachineSelectableForFleet(accountScope, machine, nowMs))
         .map(machine => machine.id).sort(), [accountScope, readMachines]);
-    const machineIds = useMachinePresenceSnapshot(readMachines, readSelectableIds, sameMachineIds);
+    const targets = React.useMemo(() => [{ serverId }], [serverId]);
+    const machineIds = useMachinePresenceSnapshot(readMachines, readSelectableIds, targets, sameMachineIds);
     useMachineUpdateFactsBackground({ serverId, accountId: accountScope?.accountId,
         machineIds, enabled: props.enabled });
     return null;

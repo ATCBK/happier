@@ -195,7 +195,9 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         params.selectedMachineId && params.selectedMachine
             ? resolveMachineReachability(scope, params.selectedMachine, nowMs) : 'unknown'
     ), [params.selectedMachineId, params.selectedMachine, scope]);
-    const selectedMachineReachability = useMachinePresenceSnapshot(readPresenceMachines, readReachability);
+    const presenceTargets = React.useMemo(() => [{ serverId: scope?.serverId, machineIds: params.selectedMachineId ? [params.selectedMachineId] : [] }],
+        [scope?.serverId, params.selectedMachineId]);
+    const selectedMachineReachability = useMachinePresenceSnapshot(readPresenceMachines, readReachability, presenceTargets);
     const selectedMachineOnline = selectedMachineReachability === 'reachable';
 
     const selectedMachineSpawnReadiness = React.useMemo(() => {

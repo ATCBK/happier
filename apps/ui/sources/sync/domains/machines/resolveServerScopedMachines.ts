@@ -206,6 +206,19 @@ export function resolveServerScopedMachines<T extends MachineLike>(params: Param
     return resolveServerScopedMachineInventory(params, resolveScopeId).machines;
 }
 
+/** Select requested rows after scope resolution, keeping the first matching inventory row. */
+export function selectMachineInventoryRowsById<T extends Readonly<{ id: string }>>(
+    machines: readonly T[] | null | undefined,
+    machineIds: readonly string[],
+): readonly (T | null)[] {
+    if (machineIds.length <= 1) return machineIds.map(id => id ? machines?.find(machine => machine.id === id) ?? null : null);
+    const byId = new Map<string, T>();
+    for (const machine of machines ?? []) {
+        if (!byId.has(machine.id)) byId.set(machine.id, machine);
+    }
+    return machineIds.map(id => id ? byId.get(id) ?? null : null);
+}
+
 /**
  * Looks up one requested machine after server scope resolution. It deliberately
  * does not choose another machine when the requested id is absent.

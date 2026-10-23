@@ -154,6 +154,9 @@ describe('machine reachability', () => {
         expect(resolveMachineReachability(scope, machine, 48)).toBe('unknown');
         captureMachinePresenceObservation(scope)([machine.id]);
         expect(resolveMachineReachability(scope, machine, 48)).toBe('reachable');
+        listener.mockClear();
+        captureMachinePresenceObservation(scope)([machine.id, 'newly-observed']);
+        expect(listener).toHaveBeenCalledExactlyOnceWith({ scope, machineIds: ['newly-observed'] });
         unsubscribe();
     });
 

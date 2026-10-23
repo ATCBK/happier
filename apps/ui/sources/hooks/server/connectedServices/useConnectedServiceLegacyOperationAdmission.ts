@@ -60,7 +60,8 @@ export function useConnectedAccountOperationAdmission(): (
         }
         return firstSelectableId;
     }, [readMachines, scope]);
-    const machineId = useMachinePresenceSnapshot(readMachines, readMachineId);
+    const targets = React.useMemo(() => [{ serverId }], [serverId]);
+    const machineId = useMachinePresenceSnapshot(readMachines, readMachineId, targets);
     const lifetime = React.useMemo(() => ({ controller: new AbortController() }), [activeServerGeneration, machineId, serverId]);
     React.useEffect(() => {
         if (lifetime.controller.signal.aborted) lifetime.controller = new AbortController();

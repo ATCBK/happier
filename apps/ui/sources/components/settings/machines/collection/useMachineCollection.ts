@@ -14,5 +14,6 @@ export function useMachineCollection(input: Omit<Parameters<typeof buildMachineC
     }), [groups, groupedByHome, query, managedByServerId, presetsByServerId, teamNamesByServerId, awaitingConsent]);
     // Heartbeats retain semantic inventory identity. Presence recovery still has
     // to refresh labels; unchanged projections keep unrelated rows quiet.
-    return useMachinePresenceSnapshot(readMachines, readCollection, areSessionValuesDeepEqual);
+    const targets = React.useMemo(() => groups.map(group => ({ serverId: group.serverId, machineIds: group.machines.map(machine => machine.id) })), [groups]);
+    return useMachinePresenceSnapshot(readMachines, readCollection, targets, areSessionValuesDeepEqual);
 }

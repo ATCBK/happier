@@ -17,7 +17,7 @@ import { serverAccountScopedResourceKey, type ServerAccountScopeLifetime } from 
 import { isMachineSelectableForFleet, resolveFleetMachineAvailability } from '@/sync/domains/machines/administration/fleetUnion';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceSnapshot } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
-import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { resolveServerScopedMachines, selectMachineInventoryRowsById } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { captureServerProfileScopeResolver, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { getInstallablesRegistryEntries } from '@/capabilities/installablesRegistry';
@@ -71,14 +71,15 @@ function useInventoryMachineFacts(serverId: string, machineIds: readonly string[
             machineListByServerId: state.machineListByServerId,
             machineListStatusByServerId: state.machineListStatusByServerId,
         }, resolveScopeId);
-        return machineIds.map(id => machines?.find(machine => machine.id === id) ?? null);
+        return selectMachineInventoryRowsById(machines, machineIds);
     }, [activeServerId, machineIds, serverId]);
     const readFacts = React.useCallback((nowMs: number) => {
         const resolveScopeId = captureServerProfileScopeResolver();
         const scope = lifetime?.isCurrent() ? lifetime.scope : null;
         return readMachines(resolveScopeId).map(machine => Boolean(machine && isMachineSelectableForFleet(scope, machine, nowMs, resolveScopeId)));
     }, [lifetime, readMachines]);
-    return useMachinePresenceSnapshot(readMachines, readFacts, shallow);
+    const targets = React.useMemo(() => [{ serverId: serverId || activeServerId, machineIds }], [serverId, activeServerId, machineIds]);
+    return useMachinePresenceSnapshot(readMachines, readFacts, targets, shallow);
 }
 
 function hydrate(lifetime: ServerAccountScopeLifetime, machineId: string): void {

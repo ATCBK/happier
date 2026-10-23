@@ -32,6 +32,51 @@ function setMachines(machines: Machine[]) {
 }
 
 describe('always-on Machine resource attention', () => {
+    it('does not read active fleet resources for foreign Home arrivals', async () => {
+        let resourceReads = 0;
+        const fixture = Array.from({ length: 128 }, (_, index) => new Proxy(
+            resourceMachine(`active-${index}`, index === 0 ? 'needs_you' : 'calm'),
+            { get(target, property, receiver) {
+                if (property === 'daemonState') resourceReads += 1;
+                return Reflect.get(target, property, receiver);
+            } },
+        ));
+        const serverId = setMachines(fixture);
+        storage.getState().applyMachines(fixture, true, { sourceServerId: serverId });
+        let renders = 0;
+        const hook = await renderHook(() => { renders += 1; return useMachineResourceFleetAttention(); });
+        try {
+            expect(resourceReads).toBeGreaterThan(0);
+            const summary = hook.getCurrent();
+            const beforeRenders = renders;
+            resourceReads = 0;
+            for (let index = 0; index < 8; index += 1) await act(async () => {
+                storage.getState().applyMachines([resourceMachine(`foreign-${index}`, 'calm')], false,
+                    { sourceServerId: 'foreign-home' });
+            });
+            expect(hook.getCurrent()).toBe(summary);
+            expect(renders).toBe(beforeRenders);
+            expect(resourceReads).toBe(0);
+        } finally { await hook.unmount(); }
+    });
+
+    it('suppresses equal payloads at the canonical Machine producer', async () => {
+        const fixture = Array.from({ length: 128 }, (_, index) => resourceMachine(`active-${index}`, 'calm'));
+        const serverId = setMachines(fixture);
+        storage.getState().applyMachines(fixture, true, { sourceServerId: serverId });
+        const hook = await renderHook(() => useMachineResourceFleetAttention());
+        let notifications = 0;
+        const stop = storage.subscribe(() => { notifications += 1; });
+        try {
+            const summary = hook.getCurrent();
+            for (let index = 0; index < 8; index += 1) await act(async () => {
+                storage.getState().applyMachines(structuredClone(fixture), true, { sourceServerId: serverId });
+            });
+            expect(notifications).toBe(0);
+            expect(hook.getCurrent()).toBe(summary);
+        } finally { stop(); await hook.unmount(); }
+    });
+
     it('holds the snapshot across repeated React reads until the presence clock publishes expiry', async () => {
         vi.useFakeTimers();
         vi.stubEnv('EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS', '60000');

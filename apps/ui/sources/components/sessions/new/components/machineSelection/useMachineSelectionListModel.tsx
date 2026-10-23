@@ -383,7 +383,9 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
     )), [params.groups, scopeForServer]);
     // The same owner that admits requests wakes the row's label, disabled state
     // and buckets on recovery/withdrawal/expiry without rebuilding on heartbeats.
-    const presenceKey = useMachinePresenceSnapshot(readPresenceMachines, readPresence);
+    const presenceTargets = React.useMemo(() => params.groups.map(group => ({ serverId: group.serverId,
+        machineIds: group.machines.map(machine => machine.id) })), [params.groups]);
+    const presenceKey = useMachinePresenceSnapshot(readPresenceMachines, readPresence, presenceTargets);
 
     // The row handlers are BEHAVIOUR, not data, so they are held in a ref and
     // invoked through stable wrappers instead of being memo dependencies.

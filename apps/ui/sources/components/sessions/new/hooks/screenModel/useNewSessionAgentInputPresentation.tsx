@@ -110,7 +110,9 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     const readReachability = React.useCallback((nowMs: number) => (
         params.selectedMachine ? resolveMachineReachability(scope, params.selectedMachine, nowMs) : 'unknown'
     ), [params.selectedMachine, scope]);
-    const selectedMachineReachability = useMachinePresenceSnapshot(readPresenceMachines, readReachability);
+    const presenceTargets = React.useMemo(() => [{ serverId: params.targetServerId,
+        machineIds: params.selectedMachine ? [params.selectedMachine.id] : [] }], [params.targetServerId, params.selectedMachine?.id]);
+    const selectedMachineReachability = useMachinePresenceSnapshot(readPresenceMachines, readReachability, presenceTargets);
     const selectedMachineReadinessStatus = params.selectedMachineSpawnReadiness?.status;
     const canAttemptSpawn = canAttemptMachineSpawn({
         scope,

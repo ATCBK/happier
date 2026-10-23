@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { shallow } from 'zustand/shallow';
 import type { MachineResourceReasonV1 } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
@@ -19,6 +20,19 @@ export type MachineResourceFleetAttention = Readonly<{
     lastAutomaticActionAt: number | null;
     headline: Readonly<{ machineKey: MachineResourceKey; reason: MachineResourceReasonV1 }> | null;
 }>;
+
+function sameFleetAttention(previous: MachineResourceFleetAttention, next: MachineResourceFleetAttention): boolean {
+    return shallow(previous.accountScope, next.accountScope)
+        && previous.lastAutomaticActionAt === next.lastAutomaticActionAt
+        && shallow(previous.reportingMachineKeys, next.reportingMachineKeys)
+        && previous.needsYou.length === next.needsYou.length
+        && previous.needsYou.every((key, index) => shallow(key, next.needsYou[index]))
+        && previous.look.length === next.look.length
+        && previous.look.every((entry, index) => shallow(entry, next.look[index]))
+        && shallow(previous.headline?.machineKey, next.headline?.machineKey)
+        // Admitted Reason V1 fields are primitives; preserve the typed projection.
+        && shallow(previous.headline?.reason, next.headline?.reason);
+}
 
 export function useMachineResourceFleetAttention(): MachineResourceFleetAttention {
     const { serverId } = useActiveServerSnapshot();
@@ -45,11 +59,10 @@ export function useMachineResourceFleetAttention(): MachineResourceFleetAttentio
             }
             if (entry.lastAutomaticAction) lastAutomaticActionAt = Math.max(lastAutomaticActionAt ?? 0, entry.lastAutomaticAction.at);
         }
-        // Only the published consumer projection participates in subscription equality.
-        return JSON.stringify({ accountScope: scope, needsYou, look, reportingMachineKeys: attention.reportingMachineKeys, lastAutomaticActionAt, headline });
+        return { accountScope: scope, needsYou, look, reportingMachineKeys: attention.reportingMachineKeys, lastAutomaticActionAt, headline };
     }, [readMachines, serverId, scope]);
     // Share presence's source-cached snapshot and expiry subscription. React's
     // consistency reads must not sample a new wall time before that source wakes.
-    const signature = useMachinePresenceSnapshot(readMachines, readSnapshot);
-    return React.useMemo(() => JSON.parse(signature) as MachineResourceFleetAttention, [signature]);
+    const targets = React.useMemo(() => [{ serverId }], [serverId]);
+    return useMachinePresenceSnapshot(readMachines, readSnapshot, targets, sameFleetAttention);
 }
