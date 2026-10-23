@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, View, type StyleProp, type ViewStyle } from 'react-native';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -11,6 +11,7 @@ import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedbac
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { Typography } from '@/constants/Typography';
+import { readCoarsePrimaryPointer } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { resolveInactiveSessionToolCallFailure } from '@/components/tools/shell/permissions/resolveInactiveSessionToolCallFailure';
 
@@ -223,7 +224,11 @@ export const ToolCallsGroupExpandMoreChrome = React.memo(function ToolCallsGroup
         <HappierPressable
             testID="transcript-tool-calls-preview-more"
             onPress={props.onExpand}
-            style={({ pressed }) => [chromeStyles.previewMore, pressed && chromeStyles.previewMorePressed]}
+            style={({ pressed }) => [
+                chromeStyles.previewMore,
+                Platform.OS === 'web' && !readCoarsePrimaryPointer() ? chromeStyles.previewMoreDesktop : null,
+                pressed && chromeStyles.previewMorePressed,
+            ]}
         >
             <Text style={chromeStyles.previewMoreText}>
                 {t('session.toolCallsCollapsedPreviewMore', { count: props.hiddenCount })}
@@ -287,6 +292,9 @@ const chromeStyles = StyleSheet.create((theme) => ({
         paddingTop: theme.space.s6,
         paddingBottom: theme.space.s6,
         alignSelf: 'flex-start',
+    },
+    previewMoreDesktop: {
+        paddingTop: theme.space.s2,
     },
     previewMorePressed: {
         opacity: motionTokens.press.opacitySubtle,

@@ -577,8 +577,13 @@ export function estimateTranscriptRowHeightFromContent(params: Readonly<{
     // `getEstimatedItemSize` is called against. Their calibration is what accumulation gaps are
     // made of.
     if (item.kind === 'tool-group-tool') return unitRowHeights?.tool;
-    if (item.kind === 'tool-group-expand') return unitRowHeights?.expand;
-    if (item.kind === 'tool-group-header') return unitRowHeights?.header;
+    if (item.kind === 'tool-group-expand') return params.platformIsWeb && unitRowHeights ? 26 : unitRowHeights?.expand;
+    if (item.kind === 'tool-group-header') {
+        if (params.platformIsWeb && toolCallsGroupChromeVariant !== 'cards') {
+            return toolCallsGroupChromeVariant === 'feed_background' ? 34 : 28;
+        }
+        return unitRowHeights?.header;
+    }
     if (item.kind === 'tool-group-footer') {
         return toolCallsGroupChromeVariant === 'feed' && item.hasVisibleTools ? 22 : unitRowHeights?.footer;
     }
