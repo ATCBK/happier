@@ -35,7 +35,8 @@ import type { HappyMcpSessionClient } from './startHappyServer';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
-it('dispatches an ordinary task through the production daemon/native composition for an authored Agent', async () => {
+it.each(['account_depth', 'account_agent', 'account_ceiling', 'policy_read_unavailable', 'workflow_preflight', 'ordinary_run_authority', 'home_authority'] as const)(
+  'dispatches through the production daemon/native composition for an authored Agent (%s)', async scenario => {
   let installed: Parameters<typeof controlServer.startDaemonControlServer>[0] | null = null;
   // The listener and Home HTTP are system boundaries; startup, request admission,
   // dependency construction, source snapshots and native Agent activation stay real.
@@ -177,6 +178,7 @@ it('dispatches an ordinary task through the production daemon/native composition
         modelId: 'fixture-model', connectedServices: null }),
     }, onManagerCreated: created => { manager = created; },
   });
+  let failNextPolicyRead = false;
   const authority = await createSessionDaemonAuthorityFixture({ sessionId: h.sessionId, retainedAgent: h.retainedAgent,
     execute: async operation => {
       const reply = await h.dispatch(operation);
@@ -189,7 +191,13 @@ it('dispatches an ordinary task through the production daemon/native composition
           ...(details?.success ? { details: details.data } : {}) } : {}) });
       return reply.result.outcome;
     },
-    dispatchService: request => h.dispatch(request.operation, request.context.executionRunSnapshotId),
+    dispatchService: async request => {
+      if (failNextPolicyRead && request.operation.kind === 'agent_start.policy.read') {
+        failNextPolicyRead = false;
+        return { ok: false, error: { code: 'requester_agent_start_policy_unavailable', message: 'Fixture policy read unavailable' } };
+      }
+      return await h.dispatch(request.operation, request.context.executionRunSnapshotId);
+    },
   });
   const runtime = createHappierMcpServer(host, { authorityScope: 'session', sessionCredentials: h.f.bootstrap.credentials,
     actionsSettingsProvider: createScopedRuntimeActionSettingsProvider(normalizeActionsSettingsV1({})),
@@ -210,50 +218,75 @@ it('dispatches an ordinary task through the production daemon/native composition
       return reply.isError ? { ok: false, ...z.object({ errorCode: z.string(), error: z.optional(z.string()), details: z.optional(z.unknown()) }).parse(payload) }
         : { ok: true, result: payload };
     };
-    accountPolicy = {};
-    policyVersion++;
-    await h.f.createBootstrap();
-    const workflowRequester = await h.replaceRequesterRuntime();
-    settingsChangeDuringProfileRead = true;
-    try {
-      // Workflow's installed startup callback uses this same daemon entry point.
-      // An invalid directory is the no-effect neighbor immediately after policy
-      // preparation, so this cannot launch or create a leaf Session.
-      const leaf = await executeSpawnSessionRequest({ options: { directory: '',
-        requesterSessionBootstrap: workflowRequester.bootstrap },
-        requesterSessionRuntimeContext: workflowRequester,
-        credentials: workflowRequester.bootstrap.credentials, api: workflowRequester.api,
-        connectedServicesMaterializationBaseDir: h.cwd,
-        connectedServiceRefreshCoordinator: null, connectedServiceQuotasCoordinator: null,
-        connectedServiceRuntimeRegistry: workflowRequester.connectedServiceRuntimeRegistry,
-        pidToTrackedSession: h.pidToTrackedSession, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(),
-        pidToSpawnWebhookTimeout: new Map(), spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
-        resolveCanonicalTrackedSessionId: () => { throw new Error('Unexpected leaf launch'); },
-        onChildExited: () => { throw new Error('Unexpected leaf launch'); },
-      });
-      expect.soft(leaf).toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST });
-      expect.soft(profileReads).toBe(0);
-    } finally { settingsChangeDuringProfileRead = false; }
-    const refusePolicy = async (policy: Record<string, unknown>, input: Record<string, unknown>, errorCode: string) => {
+    const workflowRequester = h.requester;
+    const setAccountPolicy = async (policy: Record<string, unknown>) => {
       accountPolicy = policy;
       policyVersion++;
-      await h.f.createBootstrap();
-      const requester = await h.replaceRequesterRuntime();
-      expect(requester.readAccountSettingsSnapshot().settings).toMatchObject(policy);
+      expect(await workflowRequester.bootstrap.refreshAccountSettings(policyVersion)).toBe(true);
+      expect(workflowRequester.readAccountSettingsSnapshot().settings).toMatchObject(policy);
+    };
+    await setAccountPolicy({});
+    if (scenario === 'workflow_preflight') {
+      settingsChangeDuringProfileRead = true;
+      try {
+        // Workflow's installed startup callback uses this same daemon entry point.
+        // The canonical environment guard immediately after policy preparation
+        // keeps this regression independent of later launch/default resolution.
+        const spawnLeaf = (profileId?: string) => executeSpawnSessionRequest({ options: { directory: h.cwd,
+          environmentVariables: { 'BAD=KEY': 'fixture' }, backendTarget: { kind: 'backend', backendId: 'codex' },
+          ...(profileId ? { profileId } : {}),
+          requesterSessionBootstrap: workflowRequester.bootstrap },
+          requesterSessionRuntimeContext: workflowRequester,
+          credentials: workflowRequester.bootstrap.credentials, api: workflowRequester.api,
+          connectedServicesMaterializationBaseDir: h.cwd,
+          connectedServiceRefreshCoordinator: null, connectedServiceQuotasCoordinator: null,
+          connectedServiceRuntimeRegistry: workflowRequester.connectedServiceRuntimeRegistry,
+          pidToTrackedSession: h.pidToTrackedSession, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(),
+          pidToSpawnWebhookTimeout: new Map(), spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
+          resolveCanonicalTrackedSessionId: () => { throw new Error('Unexpected leaf launch'); },
+          onChildExited: () => { throw new Error('Unexpected leaf launch'); },
+        });
+        const leaf = await spawnLeaf();
+        expect.soft(leaf, JSON.stringify(leaf)).toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_ENVIRONMENT_VARIABLES });
+        expect.soft(profileReads).toBe(0);
+        // An explicitly selected Launch Profile must still use its catalog and
+        // refuse when that preparation cannot publish a current observation.
+        expect.soft(await spawnLeaf('unavailable-profile')).toMatchObject({ type: 'error',
+          errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE });
+        expect.soft(profileReads).toBe(1);
+      } finally { settingsChangeDuringProfileRead = false; }
+      return;
+    }
+    const refusePolicy = async (policy: Record<string, unknown>, input: Record<string, unknown>, errorCode: string) => {
+      await setAccountPolicy(policy);
       const refused = await start(input);
-      expect.soft(refused, JSON.stringify(refused)).toMatchObject({ ok: false, errorCode,
+      expect.soft(refused, JSON.stringify({ refused, daemonOutcomes })).toMatchObject({ ok: false, errorCode,
         details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
       expect.soft(manager?.listPublicForRequest({}, h.sessionId) ?? []).toHaveLength(0);
     };
-    await refusePolicy({ workDepthLimit: 0 }, request, 'work_depth_exceeded');
-    await refusePolicy({ sessionAgentStartAllowListsV1: { v: 1, allowedRoleIds: null,
-      allowedAgentTargetKeys: [] } }, request, 'policy_denied_field');
-    await refusePolicy({ sessionAgentSpawnPolicyV1: { v: 1, permissionCeiling: 'read-only' } },
-      { ...request, intent: 'delegate', permissionMode: 'workspace_write' }, 'policy_denied_field');
-    accountPolicy = {};
-    policyVersion++;
-    await h.f.createBootstrap();
-    await h.replaceRequesterRuntime();
+    if (scenario === 'account_depth') {
+      await refusePolicy({ workDepthLimit: 0 }, request, 'work_depth_exceeded');
+      return;
+    }
+    if (scenario === 'account_agent') {
+      await refusePolicy({ sessionAgentStartAllowListsV1: { v: 1, allowedRoleIds: null,
+        allowedAgentTargetKeys: [] } }, request, 'policy_denied_field');
+      return;
+    }
+    if (scenario === 'account_ceiling') {
+      await refusePolicy({ sessionAgentSpawnPolicyV1: { v: 1, permissionCeiling: 'read-only' } },
+        { ...request, intent: 'delegate', permissionMode: 'workspace_write' }, 'policy_denied_field');
+      return;
+    }
+    // A failed MCP policy read must not become default spawn policy merely
+    // because the subsequent shared-context read succeeds.
+    if (scenario === 'policy_read_unavailable') {
+      await setAccountPolicy({ sessionAgentSpawnPolicyV1: { v: 1, permissionCeiling: 'read-only' } });
+      failNextPolicyRead = true;
+      expect.soft(await start({ ...request, intent: 'delegate', permissionMode: 'workspace_write' })).toMatchObject({ ok: false });
+      expect.soft(manager?.listPublicForRequest({}, h.sessionId) ?? []).toHaveLength(0);
+      return;
+    }
     const result = await start(request);
     const localObservations = await Promise.all(localRpc.mock.results.map(async (row, index) => ({
       method: localRpc.mock.calls[index]?.[0],
@@ -273,21 +306,24 @@ it('dispatches an ordinary task through the production daemon/native composition
         details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
       expect(manager?.listPublicForRequest({}, h.sessionId)).toHaveLength(1);
     };
-    await refuse({ ...request, sessionId: 'foreign-session' }, 'unsupported_action');
-    await refuse({ ...request, roleId: 'missing-role' }, 'role_target_unavailable');
-    turnDepth = 4;
-    await refuse(request, 'work_depth_exceeded');
-    turnDepth = 0;
-    permission = 'read-only';
-    // Task intent is intrinsically read-only. Use the adjacent shared delegate
-    // contract so this is a valid write request refused by the caller ceiling.
-    await refuse({ ...request, intent: 'delegate', permissionMode: 'workspace_write' }, 'permission_exceeds_ceiling');
-    permission = 'yolo';
-    const unknownAgent = await start({ ...request, backendTarget: { kind: 'agent',
-      identity: { pluginId: 'acme.unadmitted', localId: 'agent' } } });
-    expect(unknownAgent, JSON.stringify(unknownAgent)).toMatchObject({ ok: false,
-      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
-    expect(manager?.listPublicForRequest({}, h.sessionId)).toHaveLength(1);
+    if (scenario === 'ordinary_run_authority') {
+      await refuse({ ...request, sessionId: 'foreign-session' }, 'unsupported_action');
+      await refuse({ ...request, roleId: 'missing-role' }, 'role_target_unavailable');
+      turnDepth = 4;
+      await refuse(request, 'work_depth_exceeded');
+      turnDepth = 0;
+      permission = 'read-only';
+      // Task intent is intrinsically read-only. Use the adjacent shared delegate
+      // contract so this is a valid write request refused by the caller ceiling.
+      await refuse({ ...request, intent: 'delegate', permissionMode: 'workspace_write' }, 'permission_exceeds_ceiling');
+      permission = 'yolo';
+      const unknownAgent = await start({ ...request, backendTarget: { kind: 'agent',
+        identity: { pluginId: 'acme.unadmitted', localId: 'agent' } } });
+      expect(unknownAgent, JSON.stringify(unknownAgent)).toMatchObject({ ok: false,
+        details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
+      expect(manager?.listPublicForRequest({}, h.sessionId)).toHaveLength(1);
+      return;
+    }
     authorizedMachineId = 'foreign-machine';
     const foreignMachine = await start(request);
     expect(foreignMachine, JSON.stringify(foreignMachine)).toMatchObject({ ok: false });
