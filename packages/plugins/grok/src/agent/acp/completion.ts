@@ -1,3 +1,6 @@
+import { redactBugReportSensitiveText, type PluginDiagnosticData } from '@happier-dev/plugin-sdk';
+import { parseProviderResetAt } from '@happier-dev/plugin-sdk/connected-accounts';
+import { classifyProviderLimitEvidence } from '@happier-dev/plugin-sdk/first-party/connected-accounts';
 import type { AgentAcpExtensionContext } from '@happier-dev/plugin-sdk/agents/runtime';
 
 export const GROK_PROMPT_COMPLETE_METHODS = Object.freeze([
@@ -24,7 +27,7 @@ function readExactIdentifier(value: unknown): string | null {
 export type GrokPromptCompletionOutcome =
   | Readonly<{ kind: 'completed'; stopReason: 'end_turn' | 'max_tokens' | 'max_turn_requests' }>
   | Readonly<{ kind: 'cancelled' }>
-  | Readonly<{ kind: 'failed'; message: string }>
+  | Readonly<{ kind: 'failed'; message: string; diagnostic?: PluginDiagnosticData }>
   | Readonly<{ kind: 'ignored' }>;
 
 function formatAgentResult(value: unknown): string | null {
@@ -34,7 +37,7 @@ function formatAgentResult(value: unknown): string | null {
     if (rendered.length > 16_384) {
       return null;
     }
-    return rendered.slice(0, 1_000).trim();
+    return redactBugReportSensitiveText(rendered).slice(0, 1_000).trim();
   } catch {
     return null;
   }
@@ -76,10 +79,23 @@ export function translateGrokPromptCompletion(params: unknown): Readonly<{
   if (!summary) return { sessionId, promptId, outcome: { kind: 'ignored' } };
   const detail = formatAgentResult(record.agentResult);
   if (detail === null) return { sessionId, promptId, outcome: { kind: 'ignored' } };
+  const limitCategory = stopReason === 'rate_limit'
+    ? 'rate_limit' : classifyProviderLimitEvidence(record.agentResult).category;
+  const result = asRecord(record.agentResult);
+  const limitDiagnostic: PluginDiagnosticData | null = limitCategory === 'usage_limit' || limitCategory === 'rate_limit'
+    ? { code: 'provider_usage_limit', severity: 'error', details: {
+        v: 1, source: 'usage_limit', usageLimit: {
+          v: 1, limitCategory, quotaScope: 'unknown', recoverability: 'wait',
+          ...parseProviderResetAt({ body: record.agentResult, headers: result?.headers, nowMs: Date.now() }),
+        },
+      } }
+    : null;
   return {
     sessionId,
     promptId,
-    outcome: { kind: 'failed', message: detail ? `${summary}: ${detail}` : summary },
+    outcome: { kind: 'failed', message: detail ? `${summary}: ${detail}` : summary,
+      ...(limitDiagnostic ? { diagnostic: limitDiagnostic } : {}),
+    },
   };
 }
 
@@ -105,7 +121,7 @@ export function handleGrokPromptComplete(
     ? { kind: 'completed' as const }
     : notification.outcome.kind === 'cancelled'
       ? { kind: 'cancelled' as const }
-      : { kind: 'failed' as const, message: notification.outcome.message };
+      : notification.outcome;
   return context.currentTurn.submitCompletionEvidence({
     providerSessionId: notification.sessionId,
     promptId: notification.promptId,

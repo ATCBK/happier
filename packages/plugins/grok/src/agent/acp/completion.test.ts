@@ -8,6 +8,13 @@ import {
 } from './completion.js';
 
 describe('Grok prompt completion', () => {
+  it('redacts provider secrets before returning failed completion evidence', () => {
+    const translated = translateGrokPromptCompletion({ sessionId: 'provider-1', promptId: 'turn-1',
+      stopReason: 'error', agentResult: { token: 'private-provider-token', message: 'request rejected' },
+    });
+    expect(JSON.stringify(translated)).not.toContain('private-provider-token');
+  });
+
   it('publishes exact canonical completion evidence for both supported spellings', () => {
     const submitCompletionEvidence = vi.fn(() => true);
     expect(GROK_PROMPT_COMPLETE_METHOD).toBe('x.ai/session/prompt_complete');
@@ -34,7 +41,12 @@ describe('Grok prompt completion', () => {
       sessionId: 'provider-1', promptId: 'turn-1', stopReason: 'rate_limit', agentResult: { retry: true },
     })).toEqual({
       sessionId: 'provider-1', promptId: 'turn-1',
-      outcome: { kind: 'failed', message: 'Grok prompt was rate limited: {"retry":true}' },
+      outcome: { kind: 'failed', message: 'Grok prompt was rate limited: {"retry":true}',
+        diagnostic: { code: 'provider_usage_limit', severity: 'error', details: {
+          v: 1, source: 'usage_limit', usageLimit: { v: 1, limitCategory: 'rate_limit', quotaScope: 'unknown',
+            recoverability: 'wait', resetAtMs: null, retryAfterMs: null },
+        } },
+      },
     });
     const submitCompletionEvidence = vi.fn(() => true);
     expect(handleGrokPromptComplete({

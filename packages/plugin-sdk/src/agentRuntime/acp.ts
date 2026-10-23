@@ -1,5 +1,6 @@
 import type { PluginAgentAcpTransport, PluginAgentAcpSkillsSessionDeliveryV2 } from '@happier-dev/protocol';
 
+import type { PluginDiagnosticData } from '../diagnostics.js';
 import type { JsonValue, PluginContributionRef } from '../identity.js';
 import type {
   AgentAcpMcpInputPolicy,
@@ -35,7 +36,7 @@ export type AgentAcpHistorySession = Readonly<{
 export type AgentAcpCompletionEvidenceOutcome =
   | Readonly<{ kind: 'completed' }>
   | Readonly<{ kind: 'cancelled' }>
-  | Readonly<{ kind: 'failed'; message?: string }>;
+  | Readonly<{ kind: 'failed'; message?: string; diagnostic?: PluginDiagnosticData }>;
 
 export type AgentAcpExtensionContext = Readonly<{
   method: string;
