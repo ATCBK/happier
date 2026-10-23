@@ -1,13 +1,12 @@
-import { createHash } from 'node:crypto';
 import type { AccountEncryptionMigrateArtifactsDirective } from '@happier-dev/protocol/account/encryptionMigrate';
 import type { ArtifactBlobStoredContentV1, ArtifactBlobAccountEncryptionStageV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
 import { artifactBlobCandidateStorageKey, artifactBlobConversionUploadPrefix, artifactBlobRejectedUploadReuseKey, completeArtifactBlobCandidateCustodyInTx, openArtifactBlobBytes, prepareArtifactBlobWrite, discardArtifactBlobCandidate, type ArtifactBlobRow, type PreparedArtifactBlobWrite } from './artifactBlobService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { preparePrivateBinaryConversion, privateBinaryContentDigest as digest } from '@/storage/privateFiles/privateBinaryConversion';
 
 const stagePrefix = artifactBlobConversionUploadPrefix;
-const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 export const artifactConversionBlobKey = artifactBlobCandidateStorageKey;
 export const artifactConversionBlobCustody = (row: ArtifactBlobRow) => `${stagePrefix}${row.artifactId}:${row.id}:${row.encryptionMode}:${row.storedSizeBytes}`;
 export type PreparedArtifactAccountEncryptionConversionBlob = Readonly<{
@@ -58,12 +57,10 @@ export async function prepareArtifactAccountEncryptionConversionBlobs(input: Rea
         if (!source) continue; // The signed transaction reports the incomplete inventory without mutating it.
         const storageKey = artifactConversionBlobKey(item.artifactId, blob.blobId, blob.content.uploadId);
         if (source.storageKey === storageKey) {
-            const bytes = await openArtifactBlobBytes(input.accountId, source);
-            const contentSha256 = digest(bytes);
-            if (contentSha256 === blob.content.contentSha256) result.set(`${item.artifactId}/${blob.blobId}`, {
-                source, expectedContentSha256: blob.expectedContentSha256,
-                target: { accountId: input.accountId, row: source, contentSha256, sizeBytes: bytes.byteLength, candidate: false },
-            });
+            const prepared = await preparePrivateBinaryConversion({ accountId: input.accountId, source, target: source,
+                stage: blob.content, expectedContentSha256: blob.expectedContentSha256,
+                open: row => openArtifactBlobBytes(input.accountId, row) });
+            if (prepared) result.set(`${item.artifactId}/${blob.blobId}`, prepared);
             continue; // The signed post-state owner additionally checks versions, mode and every retained reference.
         }
         const custody = await db.uploadedFile.findFirst({ where: { accountId: input.accountId, path: storageKey,
@@ -74,11 +71,10 @@ export async function prepareArtifactAccountEncryptionConversionBlobs(input: Rea
         if (encryptionMode !== (blob.content.t === 'plain' ? 'plain' : 'e2ee') || !/^\d+$/.test(parts[4] ?? '')) continue;
         const row: ArtifactBlobRow = { id: blob.blobId, artifactId: item.artifactId, storageKey,
             encryptionMode, storedSizeBytes: BigInt(parts[4]!) };
-        const [sourceBytes, targetBytes] = await Promise.all([openArtifactBlobBytes(input.accountId, source), openArtifactBlobBytes(input.accountId, row)]);
-        const contentSha256 = digest(targetBytes);
-        if (digest(sourceBytes) !== blob.expectedContentSha256 || contentSha256 !== blob.content.contentSha256) continue;
-        result.set(`${item.artifactId}/${blob.blobId}`, { source, expectedContentSha256: blob.expectedContentSha256,
-            target: { accountId: input.accountId, row, contentSha256, sizeBytes: targetBytes.byteLength, candidate: true } });
+        const prepared = await preparePrivateBinaryConversion({ accountId: input.accountId, source, target: row,
+            stage: blob.content, expectedContentSha256: blob.expectedContentSha256,
+            open: row => openArtifactBlobBytes(input.accountId, row) });
+        if (prepared) result.set(`${item.artifactId}/${blob.blobId}`, prepared);
     }
     return result;
 }

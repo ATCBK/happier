@@ -1,19 +1,23 @@
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
 import { db } from '@/storage/db';
-import type { Tx } from '@/storage/inTx';
-import { deletePrivateFile } from '@/storage/blob/files';
+import { inTx, type Tx } from '@/storage/inTx';
+import { deletePrivateFile, writePrivateFile } from '@/storage/blob/files';
 
 // Existing Artifact prefix bytes are retained: they already identify physical
 // UploadedFile custody independently of an Artifact's content/encryption mode.
 export const artifactBlobWritingUploadPrefix = 'artifact-blob-writing-v1:';
 export const artifactBlobRejectedUploadPrefix = 'artifact-blob-rejected-v1:';
 export const artifactBlobConversionUploadPrefix = 'artifact-blob-conversion-v1:';
+export const discussionAttachmentWritingUploadPrefix = 'discussion-attachment-writing-v1:';
+export const discussionAttachmentRejectedUploadPrefix = 'discussion-attachment-rejected-v1:';
+export const discussionAttachmentConversionUploadPrefix = 'discussion-attachment-conversion-v1:';
 export const publicProfilePictureWritingReuseKey = 'public-profile-picture-writing-v1:';
 export const publicProfilePictureRejectedReuseKey = 'public-profile-picture-rejected-v1:';
 export const publicProfilePictureAppliedReuseKey = 'public-profile-picture-applied-v1:';
 
-const pendingPrefixes = [artifactBlobWritingUploadPrefix, publicProfilePictureWritingReuseKey];
+const pendingPrefixes = [artifactBlobWritingUploadPrefix, discussionAttachmentWritingUploadPrefix, publicProfilePictureWritingReuseKey];
 const privatePrefixes = [...pendingPrefixes, artifactBlobRejectedUploadPrefix, artifactBlobConversionUploadPrefix,
+    discussionAttachmentRejectedUploadPrefix, discussionAttachmentConversionUploadPrefix,
     publicProfilePictureRejectedReuseKey, publicProfilePictureAppliedReuseKey];
 
 /** Physical erasure routing has one owner; domain envelopes never choose a file backend. */
@@ -64,4 +68,28 @@ export async function deleteAccountPrivateFileUpload(input: Readonly<{
 }>): Promise<void> {
     await deletePrivateFile(input.path);
     await db.uploadedFile.deleteMany({ where: input });
+}
+
+/** Retain an exact rejected candidate locator before attempting private deletion. */
+export async function discardAccountPrivateFileCandidate(input: Readonly<{
+    accountId: string; path: string; rejectedReuseKey: string;
+}>): Promise<void> {
+    const custody = await db.uploadedFile.upsert({
+        where: { accountId_path: { accountId: input.accountId, path: input.path } },
+        create: { accountId: input.accountId, path: input.path, reuseKey: input.rejectedReuseKey },
+        update: { reuseKey: input.rejectedReuseKey },
+    });
+    await deleteAccountPrivateFileUpload({ id: custody.id, accountId: input.accountId, path: custody.path });
+}
+
+/** Capture before external IO; a failed write retains exact private cleanup custody. */
+export async function writeAccountPrivateFileCandidate(input: Readonly<{
+    accountId: string; path: string; writingReuseKey: string; rejectedReuseKey: string; bytes: Uint8Array;
+}>): Promise<void> {
+    const captured = await inTx(tx => captureAccountPrivateFileUploadInTx(tx, {
+        accountId: input.accountId, path: input.path, reuseKey: input.writingReuseKey,
+    }));
+    if (!captured) throw new Error('Private upload Account is unavailable');
+    try { await writePrivateFile(input.path, input.bytes); }
+    catch (error) { await discardAccountPrivateFileCandidate(input); throw error; }
 }

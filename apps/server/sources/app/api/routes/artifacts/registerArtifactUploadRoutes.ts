@@ -3,7 +3,8 @@ import { readFile, rm } from 'node:fs/promises';
 import { z } from 'zod/mini';
 import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 import { type ArtifactBlobUploadInitV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
-import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, decodeArtifactUploadMetadataV1 } from '@happier-dev/transfers';
+import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, decodeArtifactUploadMetadataV1, readBinaryUploadFrameV1, BinaryUploadFrameErrorV1 } from '@happier-dev/transfers';
+import { encodeBase64 } from 'privacy-kit';
 import { TransferSessionStore, createTransferSessionLifecycle, readFiniteTransferConfig } from '@happier-dev/transfers/node';
 import { inReadSnapshot } from '@/storage/inTx';
 import { resolveArtifactAccessInTx } from '@/app/artifacts/artifactAccessService';
@@ -67,35 +68,20 @@ export function registerArtifactUploadRoutes(app: Fastify): void {
             reply.raw.once('finish', () => reply.raw.off('close', onResponseClose));
             try {
                 if (!(request.body instanceof Readable)) throw new UploadRefusal({ statusCode: 415, body: { error: 'artifact_upload_media_type_required' } });
-                const prefix: Buffer[] = [];
-                let prefixBytes = 0;
-                let metadata: ArtifactBlobUploadInitV1 | null = null;
                 let index = 0;
-                const writeBytes = async (bytes: Buffer) => {
+                const writeBytes = async (bytes: Uint8Array) => {
                     if (!uploadId || canceled) throw new Error('Artifact upload canceled');
                     for (let offset = 0; offset < bytes.length; offset += config.chunkSizeBytes) {
                         const chunk = await lifecycle.writeUploadTransferChunk({ uploadId, index,
-                            contentBase64: bytes.subarray(offset, offset + config.chunkSizeBytes).toString('base64') });
+                            contentBase64: encodeBase64(bytes.subarray(offset, offset + config.chunkSizeBytes)) });
                         if (!chunk.success) throw new Error('Artifact upload chunk refused');
                         index += 1;
                     }
                 };
-                const stream: AsyncIterable<unknown> = request.body;
-                for await (const value of stream) {
-                    if (!Buffer.isBuffer(value)) throw new Error('Artifact upload bytes unavailable');
-                    let bytes = value;
-                    if (!metadata) {
-                        const separator = bytes.indexOf(10);
-                        const part = separator < 0 ? bytes : bytes.subarray(0, separator);
-                        prefixBytes += part.length;
-                        // Only metadata inherits the existing API JSON boundary, never the file bytes.
-                        if (prefixBytes > SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1) throw new UploadRefusal({
-                            statusCode: 413, body: { error: 'artifact_upload_metadata_too_large' },
-                        });
-                        prefix.push(part);
-                        if (separator < 0) continue;
-                        metadata = decodeArtifactUploadMetadataV1(Buffer.concat(prefix));
-                        prefix.length = 0;
+                await readBinaryUploadFrameV1(request.body, {
+                    metadataMaxBytes: SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1,
+                    decodeMetadata: decodeArtifactUploadMetadataV1,
+                    onMetadata: async metadata => {
                         await admitDestination(request.userId, metadata);
                         const destination = metadata;
                         const session = await lifecycle.openUploadTransferSession({ target: {
@@ -105,8 +91,8 @@ export function registerArtifactUploadRoutes(app: Fastify): void {
                                 try {
                                     if (canceled) throw new Error('Artifact upload canceled');
                                     const bytes = await readFile(tempPath);
-                                    const content = destination.t === 'plain' ? { t: 'plain' as const, v: bytes.toString('base64') }
-                                        : { t: 'encrypted' as const, c: bytes.toString('base64') };
+                                    const content = destination.t === 'plain' ? { t: 'plain' as const, v: encodeBase64(bytes) }
+                                        : { t: 'encrypted' as const, c: encodeBase64(bytes) };
                                     let result: ArtifactUploadHttpResult;
                                     if (destination.kind === 'encryption-conversion') {
                                         const stage = await stageArtifactBlobAccountEncryptionConversion({ accountId: request.userId,
@@ -132,10 +118,10 @@ export function registerArtifactUploadRoutes(app: Fastify): void {
                             },
                         } });
                         uploadId = session.uploadId;
-                        bytes = bytes.subarray(separator + 1);
-                    }
-                    await writeBytes(bytes);
-                }
+                        return [{ storedSizeBytes: metadata.sizeBytes }];
+                    },
+                    onSegment: async (_index, chunks) => { for await (const bytes of chunks) await writeBytes(bytes); },
+                });
                 if (!uploadId || canceled) throw new Error('Artifact upload incomplete');
                 const finalized = await lifecycle.finalizeUploadTransferSession({ uploadId });
                 if (!finalized.success) throw new Error('Artifact upload incomplete');
@@ -145,7 +131,10 @@ export function registerArtifactUploadRoutes(app: Fastify): void {
                 return reply.code(result.statusCode).send(result.body);
             } catch (error) {
                 await cancelStage();
-                const refusal = error instanceof UploadRefusal ? error.response : { statusCode: 400, body: { error: 'artifact_upload_failed' } };
+                const refusal = error instanceof UploadRefusal ? error.response
+                    : error instanceof BinaryUploadFrameErrorV1 && error.code === 'metadata_too_large'
+                        ? { statusCode: 413, body: { error: 'artifact_upload_metadata_too_large' } }
+                        : { statusCode: 400, body: { error: 'artifact_upload_failed' } };
                 return reply.code(refusal.statusCode).send(refusal.body);
             } finally {
                 request.raw.off('aborted', onAbort);

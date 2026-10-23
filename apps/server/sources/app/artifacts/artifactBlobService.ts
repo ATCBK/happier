@@ -1,28 +1,21 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { z } from 'zod/mini';
 import * as privacyKit from 'privacy-kit';
 import { ArtifactBlobReferenceV1Schema, type ArtifactBlobStoredContentV1, type ArtifactBlobWriteV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { db } from '@/storage/db';
 import { inTx, type Tx } from '@/storage/inTx';
 import { readSnapshotWithCurrentAdmission } from '@/storage/readSnapshotWithCurrentAdmission';
-import { deletePrivateFile, readPrivateFile, writePrivateFile } from '@/storage/blob/files';
+import { deletePrivateFile } from '@/storage/blob/files';
 import { normalizePrivateFileKey } from '@/storage/privateFiles/privateFileKeys';
-import { encryptBytes, decryptBytes } from '@/modules/encrypt';
-import { readEncryptionFeatureEnv } from '@/app/features/catalog/readFeatureEnv';
+import { storePrivateBinaryContent, openPrivateBinaryContent } from '@/storage/privateFiles/privateBinaryContent';
 import { readArtifactForCallerInTx, readmitArtifactContentInTx } from './artifactAccessService';
 import { artifactBlobRejectedUploadPrefix, artifactBlobWritingUploadPrefix,
-    captureAccountPrivateFileUploadInTx, settleAccountPrivateFileUploadInTx,
-    isAccountPrivateFileUploadActiveInTx, deleteAccountPrivateFileUpload } from '@/storage/privateFiles/accountPrivateFileCustody';
+    writeAccountPrivateFileCandidate, settleAccountPrivateFileUploadInTx,
+    isAccountPrivateFileUploadActiveInTx, deleteAccountPrivateFileUpload, discardAccountPrivateFileCandidate } from '@/storage/privateFiles/accountPrivateFileCustody';
 import { log } from '@/utils/logging/log';
 
 export { artifactBlobConversionUploadPrefix, artifactBlobWritingUploadPrefix } from '@/storage/privateFiles/accountPrivateFileCustody';
 
-const PlainBlobFileSchema = createStoredReadSchema(z.discriminatedUnion('t', [
-    z.strictObject({ t: z.literal('plain'), v: z.string() }),
-    z.strictObject({ t: z.literal('sealed_v1'), c: z.string() }),
-]));
 export type ArtifactBlobRow = Readonly<{ id: string; artifactId: string; storageKey: string; encryptionMode: string; storedSizeBytes: bigint }>;
 export type PreparedArtifactBlobWrite = Readonly<{
     accountId: string; row: ArtifactBlobRow; bytes: Uint8Array; candidate: boolean;
@@ -35,21 +28,8 @@ export const artifactBlobCandidateStorageKey = (artifactId: string, blobId: stri
     normalizePrivateFileKey(`artifacts/${artifactId}/${blobId}/${uploadId}`);
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
-function storeBlobBytes(accountId: string, artifactId: string, blobId: string, content: ArtifactBlobStoredContentV1): Uint8Array {
-    const bytes = new Uint8Array(privacyKit.decodeBase64(content.t === 'plain' ? content.v : content.c));
-    if (content.t === 'encrypted') return bytes;
-    const wrapper = readEncryptionFeatureEnv(process.env).plainAccountArtifactsAtRest === 'none'
-        ? content : { t: 'sealed_v1', c: privacyKit.encodeBase64(encryptBytes(blobPath(accountId, artifactId, blobId), bytes)) };
-    return new TextEncoder().encode(JSON.stringify(wrapper));
-}
-
 export async function openArtifactBlobBytes(accountId: string, row: ArtifactBlobRow): Promise<Uint8Array> {
-    const stored = await readPrivateFile(row.storageKey);
-    if (row.encryptionMode === 'e2ee') return stored;
-    if (row.encryptionMode !== 'plain') throw new Error('Artifact blob mode is unavailable');
-    const parsed = PlainBlobFileSchema.parse(JSON.parse(new TextDecoder().decode(stored)));
-    return parsed.t === 'plain' ? new Uint8Array(privacyKit.decodeBase64(parsed.v))
-        : new Uint8Array(decryptBytes(blobPath(accountId, row.artifactId, row.id), privacyKit.decodeBase64(parsed.c)));
+    return openPrivateBinaryContent(blobPath(accountId, row.artifactId, row.id), row);
 }
 
 /** Unique candidate paths prevent rejected/replayed uploads from overwriting retained bytes. */
@@ -59,20 +39,16 @@ export async function prepareArtifactBlobWrite(input: Readonly<{ accountId: stri
         return row ? { accountId: input.accountId, row, bytes: await openArtifactBlobBytes(input.accountId, row), candidate: false } : null;
     }
     const storageKey = artifactBlobCandidateStorageKey(input.artifactId, input.blob.blobId, randomUUID());
-    const stored = storeBlobBytes(input.accountId, input.artifactId, input.blob.blobId, input.blob.content);
+    const stored = storePrivateBinaryContent(blobPath(input.accountId, input.artifactId, input.blob.blobId), input.blob.content);
     const prepared: PreparedArtifactBlobWrite = { accountId: input.accountId,
         row: { id: input.blob.blobId, artifactId: input.artifactId, storageKey,
         encryptionMode: input.blob.content.t === 'plain' ? 'plain' : 'e2ee', storedSizeBytes: BigInt(stored.byteLength) },
         bytes: new Uint8Array(privacyKit.decodeBase64(input.blob.content.t === 'plain' ? input.blob.content.v : input.blob.content.c)), candidate: true };
     // Capture every candidate before IO, not just conversion stages. The Account
     // fence orders admission against erasure even when another API replica owns it.
-    await inTx(async tx => {
-        const custody = await captureAccountPrivateFileUploadInTx(tx, { accountId: input.accountId, path: storageKey,
-            reuseKey: `${artifactBlobWritingUploadPrefix}${input.artifactId}` });
-        if (!custody) throw new Error('Artifact upload Account is unavailable');
-    });
-    try { await writePrivateFile(storageKey, stored); }
-    catch (error) { await discardArtifactBlobCandidate(prepared); throw error; }
+    await writeAccountPrivateFileCandidate({ accountId: input.accountId, path: storageKey, bytes: stored,
+        writingReuseKey: `${artifactBlobWritingUploadPrefix}${input.artifactId}`,
+        rejectedReuseKey: artifactBlobRejectedUploadReuseKey(input.artifactId) });
     return prepared;
 }
 
@@ -138,13 +114,8 @@ export async function discardArtifactBlobCandidate(prepared: PreparedArtifactBlo
     if (!prepared?.candidate) return;
     // Capture before deletion: failed candidates may have no Artifact parent,
     // and a storage outage must not lose the only exact private locator.
-    const custody = await db.uploadedFile.upsert({
-        where: { accountId_path: { accountId: prepared.accountId, path: prepared.row.storageKey } },
-        create: { accountId: prepared.accountId, path: prepared.row.storageKey,
-            reuseKey: artifactBlobRejectedUploadReuseKey(prepared.row.artifactId) },
-        update: { reuseKey: artifactBlobRejectedUploadReuseKey(prepared.row.artifactId) },
-    });
-    await deleteAccountPrivateFileUpload({ id: custody.id, accountId: prepared.accountId, path: custody.path });
+    await discardAccountPrivateFileCandidate({ accountId: prepared.accountId, path: prepared.row.storageKey,
+        rejectedReuseKey: artifactBlobRejectedUploadReuseKey(prepared.row.artifactId) });
 }
 
 /** Retry rejected private deletion at the next upload; Account erasure also consumes this custody. */
