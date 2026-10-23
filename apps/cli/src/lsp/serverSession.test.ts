@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createServerSession } from './serverSession';
+import { createProcessActionOwnerAdapters } from '@/daemon/processes/actions/processActionOwnerAdapters';
 import { createStablePluginExecService } from '@/plugins/runtime/invocation/services/exec';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import type { LanguageServerDefinition } from './languageServerDefinitions';
@@ -31,6 +32,62 @@ async function fixture(rootPath: string, options: Record<string, unknown> = {}) 
     return { session, protocols, messages };
 }
 describe('language server session', () => {
+    it('starts a stopped language server again through its retained Processes owner and replays open buffers', async () => {
+        await withTempDir('happier-lsp-process-restart-', async root => {
+            const { session, protocols } = await fixture(root);
+            const owners = createProcessActionOwnerAdapters({});
+            try {
+                await session.open({ path: 'a.ts', languageId: 'typescript', text: 'editor buffer', version: 7, unsaved: true });
+                await session.open({ path: 'b.ts', languageId: 'typescript', text: 'second buffer', version: 2, unsaved: false });
+                await session.start();
+                const generation = session.status().generation;
+                const source = session.readProcessRoots()[0]!;
+                const retained = { ...source, start: { startTimeMs: 1 }, ownerCreatedAtMs: source.ownerCreatedAtMs! };
+                await owners.stopOwner(retained, {});
+                await protocols[0].wait();
+                expect(session.status().state).toBe('stopped');
+                await expect(session.query({ path: 'a.ts', kind: 'hover', position: { line: 0, character: 0 } }))
+                    .rejects.toMatchObject({ code: 'session_unavailable' });
+                expect(await owners.startOwner(retained, { verifyCurrent: async () => false }))
+                    .toMatchObject({ status: 'refused', reasonCode: 'access_denied' });
+                expect(await owners.startOwner(retained, {})).toEqual({ status: 'started' });
+                expect(session.status()).toMatchObject({ state: 'ready' });
+                expect(session.status().generation).not.toBe(generation);
+                for (const [path, text, version] of [['a.ts', 'editor buffer', 7], ['b.ts', 'second buffer', 2]] as const) {
+                    expect(await session.query({ path, kind: 'hover', position: { line: 0, character: 0 } }))
+                        .toMatchObject({ version, value: { contents: { value: text } } });
+                }
+                expect(session.document('a.ts')).toMatchObject({ unsaved: true });
+                // A stale Start again must not stop a replacement generation.
+                expect(await owners.startOwner(retained, {})).toMatchObject({ status: 'refused' });
+                expect(protocols).toHaveLength(2);
+                const current = { ...session.readProcessRoots()[0]!, start: { startTimeMs: 2 }, ownerCreatedAtMs: 0 };
+                await owners.stopOwner(current, {});
+                await session.close('a.ts');
+                await session.close('b.ts');
+                expect(await owners.startOwner(current, {})).toMatchObject({ status: 'refused' });
+                expect(protocols).toHaveLength(2);
+            } finally { await session.dispose(); }
+        });
+    });
+
+    it('reports a failed Processes start without claiming the server started', async () => {
+        await withTempDir('happier-lsp-process-restart-failure-', async root => {
+            const behavior = { failInitialize: false };
+            const { session } = await fixture(root, behavior);
+            const owners = createProcessActionOwnerAdapters({});
+            try {
+                await session.open({ path: 'a.ts', languageId: 'typescript', text: 'buffer', version: 1, unsaved: false });
+                await session.start();
+                const root = { ...session.readProcessRoots()[0]!, start: { startTimeMs: 1 }, ownerCreatedAtMs: 0 };
+                await owners.stopOwner(root, {});
+                behavior.failInitialize = true;
+                expect(await owners.startOwner(root, {})).toMatchObject({ status: 'refused', reasonCode: 'start_failed' });
+                expect(session.status()).toMatchObject({ state: 'unavailable', reason: 'start_failed' });
+            } finally { await session.dispose(); }
+        });
+    });
+
     it('starts on query, answers registration before serving, and opts diagnostics in only on Check problems', async () => {
         await withTempDir('happier-lsp-session-', async (root) => {
             const { session, protocols, messages } = await fixture(root);

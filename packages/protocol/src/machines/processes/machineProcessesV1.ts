@@ -57,6 +57,7 @@ export const ProcessRowV1Schema = lazyZodSchema(() => z.strictObject({
 export type ProcessRowV1 = z.infer<typeof ProcessRowV1Schema>;
 export const OwnerRowV1Schema = lazyZodSchema(() => z.strictObject({
   rowId: id(), owner: ProcessOwnerRefV1Schema, state: z.enum(['running', 'stopping', 'stopped']),
+  canStartAgain: z.optional(z.boolean()),
   totals: MachineProcessesTotalsV1Schema, members: z.array(ProcessRowV1Schema),
   requester: z.optional(z.strictObject({ accountId: id(), displayName: z.string() })),
   ceiling: z.optional(z.strictObject({ limitBytes: bytes().check(z.positive()), usedBytes: z.optional(bytes()), observedAtMs: z.optional(bytes()),

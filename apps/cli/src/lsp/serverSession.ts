@@ -231,7 +231,16 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                     // Processes joins this live custody source to its native census and owner tag.
                     processRoot = { owner: processOwner, pid, live: true, ownerCreatedAtMs,
                         ...(requesterWorkAttributionV1 ? { requesterWorkAttributionV1 } : {}),
-                        workspacePath: options.workspaceRoot, stop: async () => { if (protocol === opened) await stop(); } };
+                        workspacePath: options.workspaceRoot, stop: async () => { if (protocol === opened) await stop(); },
+                        async startAgain() {
+                            // Retained Processes refs may outlive the native child, but cannot
+                            // restart a replacement generation or a session with no holders.
+                            if (disposed || stopping || generation !== nativeGeneration || documents.size === 0)
+                                return { status: 'refused', reasonCode: 'original_start_unavailable' };
+                            await session.restart();
+                            return state === 'ready' ? { status: 'started' }
+                                : { status: 'refused', reasonCode: reason ?? 'start_failed' };
+                        } };
                     invalidateProcessLaunchDiscovery();
                 }
                 void opened.wait().then(() => {

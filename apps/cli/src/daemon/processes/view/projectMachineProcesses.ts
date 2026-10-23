@@ -147,7 +147,12 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
                 const native = index.byPid.get(root.pid);
                 return root.live && native && processOwnerKey(root.owner) === ownerKey && root.state === 'stopping' && equalProcessStart(root.start, native.start);
             });
-            const owner: OwnerRowV1 = owners.get(ownerKey) ?? { rowId: ownerKey, owner: resolved.owner, state: stopping ? 'stopping' : 'running', members: [], totals: zero,
+            const owner: OwnerRowV1 = owners.get(ownerKey) ?? { rowId: ownerKey, owner: resolved.owner, state: stopping ? 'stopping' : 'running',
+                canStartAgain: read.roots.some(root => {
+                    const native = index.byPid.get(root.pid);
+                    return root.live && !!root.startAgain && native && processOwnerKey(root.owner) === ownerKey
+                        && equalProcessStart(root.start, native.start);
+                }), members: [], totals: zero,
                 ...(displayIdentity && displayIdentity.accountId !== requester.custodianAccountId ? { requester: displayIdentity } : {}) };
             if (!owners.has(ownerKey)) {
                 const root = read.roots.find(candidate => candidate.live && candidate.owner.kind === 'session'

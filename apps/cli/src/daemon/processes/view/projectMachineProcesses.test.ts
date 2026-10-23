@@ -28,6 +28,21 @@ it('classifies a language-server service by its owner even when its binary is ts
         .owners.flatMap(owner => owner.members).find(row => row.pid === 21)).toMatchObject({ role: 'type_checker' });
 });
 
+it('offers Start again only for the exact live root with a retained start owner', () => {
+    const read = setup();
+    const owner = { kind: 'service' as const, serviceId: 'lsp:fixture:0123456789ab' };
+    const root = { owner, pid: 21, start: read.snapshot.rows.find(row => row.pid === 21)!.start,
+        live: true, ownerCreatedAtMs: 0, ownerCreatedStartTimeMs: 0 };
+    for (const restartable of [false, true]) {
+        const roots = [...read.roots, { ...root, ...(restartable ? { startAgain: async () => ({ status: 'started' as const }) } : {}) }];
+        const current = { ...read, roots, rows: resolveProcessOwnership({ snapshot: read.snapshot, roots,
+            daemonPrincipal: read.snapshot.rows[0].principal, daemonScopeKey: scope, platform: 'linux' }) };
+        const answer = projectMachineProcesses(current, request, { accountId: 'owner', custodianAccountId: 'owner' }, options);
+        expect(answer.owners.find(row => row.owner.kind === 'service')).toHaveProperty('canStartAgain', restartable);
+        expect(MachineProcessesAnswerV1Schema.safeParse(answer).success).toBe(true);
+    }
+});
+
 it('preserves existing tool and catalog display names beside native identity without enriching external rows', () => {
     const read = setup();
     const snapshot = { ...read.snapshot, rows: [
