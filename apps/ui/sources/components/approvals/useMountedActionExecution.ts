@@ -12,6 +12,7 @@ import type { SystemTaskRunner } from '@/components/systemTasks/types';
 
 const onExecuted = () => {};
 const retired = (): ActionExecuteResult => ({ ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' });
+type MountedExecutorOptions = Omit<NonNullable<Parameters<typeof createFrontDoorActionExecute>[1]>, 'onBlockingApprovalPending'>;
 
 /** Reconnect a mounted author's original public Action to its typed approval result. */
 export function useMountedActionExecution(scopeOrHome: ServerAccountScope | string | null | undefined,
@@ -19,7 +20,7 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
         /** Retain this mounted invocation's private operands/target across approval. */
         retainInvocation?: true;
         /** Existing local delivery ports; admission and approval presentation stay with this owner. */
-        executorOptions?: Omit<NonNullable<Parameters<typeof createFrontDoorActionExecute>[1]>, 'onBlockingApprovalPending'>;
+        executorOptions?: MountedExecutorOptions;
     }>) {
     const { binding, resolution } = useServerCredentialAccountScopeBinding(typeof scopeOrHome === 'string' ? scopeOrHome : scopeOrHome?.serverId ?? null);
     const scope = typeof scopeOrHome === 'string' ? binding?.scope : scopeOrHome;
@@ -59,15 +60,19 @@ export function useMountedActionExecution(scopeOrHome: ServerAccountScope | stri
     }), [approval.requestApproval, binding, isCurrent, lifetime, options?.executorOptions, options?.onApprovalPending, options?.runner]);
     const frontDoor = React.useMemo(() => createFrontDoorActionExecute(undefined, frontDoorOptions), [frontDoorOptions]);
     const execute = React.useCallback(async (actionId: ActionId, input: unknown,
-        operation?: UiActionOperation & Readonly<{ retainInvocation?: true }>): Promise<ActionExecuteResult> => {
+        operation?: UiActionOperation & Readonly<{ retainInvocation?: true; executorOptions?: MountedExecutorOptions }>): Promise<ActionExecuteResult> => {
         if (!binding || !scope || !isCurrent()) return retired();
         const cancellation = mergeAbortSignals([lifetime.controller.signal, operation?.signal]);
         try {
         // The admitted input includes the draft's original CAS. Never recapture it after approval.
         // Await the initial operation directly: later retirement cannot retract a durable ACK.
-        const invoke = (operation?.retainInvocation ?? options?.retainInvocation)
-            ? createFrontDoorActionExecute(undefined, { ...frontDoorOptions,
-                hostActionApprovalLifetime: { actionId, signal: cancellation.signal, surface: 'ui' },
+        // Per-invocation delivery ports cannot be reconstructed from a serialized approval input.
+        const retainInvocation = Boolean(operation?.executorOptions) || (operation?.retainInvocation ?? options?.retainInvocation);
+        const invoke = retainInvocation
+            ? createFrontDoorActionExecute(undefined, { ...frontDoorOptions, ...operation?.executorOptions,
+                ...(retainInvocation ? {
+                    hostActionApprovalLifetime: { actionId, signal: cancellation.signal, surface: 'ui' as const },
+                } : {}),
             }) : frontDoor;
         const result = await invoke(actionId, input, {
             surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
