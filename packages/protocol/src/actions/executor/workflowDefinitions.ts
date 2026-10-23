@@ -40,7 +40,7 @@ export type WorkflowDefinitionArtifactHeaderRow = Readonly<{
   provenance?: ArtifactRevisionProvenanceV1;
 }>;
 export type WorkflowDefinitionArtifactOperations = Readonly<{
-  read: (artifactId: string, options?: Readonly<{ signal?: AbortSignal }>) => Promise<Readonly<{
+  read: (artifactId: string, options?: Readonly<{ signal?: AbortSignal; fresh?: boolean }>) => Promise<Readonly<{
     artifactId: string; header: Readonly<Record<string, unknown>>; body: ArtifactBodyV1 | null; revision: WorkflowArtifactRevisionV1;
     ownerAccountId: string; access: ArtifactCallerAccessV1;
     shared?: boolean;

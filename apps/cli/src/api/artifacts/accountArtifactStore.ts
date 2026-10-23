@@ -546,14 +546,14 @@ export function createAccountArtifactStore(params: Readonly<{
     prepareRecipients?: boolean;
     /** Ordinary Artifact reads do not publish native widget audience admission. */
     includeSharedAudience?: boolean;
-  }>): Promise<AccountArtifact | null> => {
+  }>): Promise<AccountArtifact> => {
     options?.signal?.throwIfAborted();
     const codec = await timeWebLatencyPhase('artifact.read.open', () => openStored(stored, undefined, options));
     const { header, body, provenance } = await timeWebLatencyPhase('artifact.read.decode', async () => ({
       header: decode(codec, stored.header), body: decodeBody(codec, stored.body),
       provenance: readProvenance(await openProvenanceCodec(stored), stored.provenance, stored.id, stored.bodyVersion),
     }));
-    if (!header || typeof header !== 'object' || Array.isArray(header)) return null;
+    if (!header || typeof header !== 'object' || Array.isArray(header)) throw new ArtifactEncryptionMaterialUnavailableError();
     requireBodyForArtifactKind(header as Readonly<Record<string, unknown>>, body);
     if (options?.prepareRecipients !== false) await timeWebLatencyPhase('artifact.read.recipients', () =>
       prepare(stored, codec, options?.signal, options?.authorizationHeaders));
@@ -647,8 +647,9 @@ export function createAccountArtifactStore(params: Readonly<{
     readAccountMode?: () => Promise<ConnectedServiceAccountEncryptionMode>): Promise<AccountArtifactHeader[]> => {
     const items: AccountArtifactHeader[] = [];
     for (const raw of rows) {
-      // Resolved codec promises only yield microtasks. Let publisher-proof
-      // filesystem reads, lease HTTP and cancellation run between row decodes.
+      // MITIGATION: Inbox notice discovery still opens coarse-other headers.
+      // N1-L3/Artifact query ownership must narrow that source before removing
+      // fairness for publisher filesystem reads, lease HTTP and cancellation.
       await yieldToEventLoop();
       options.signal?.throwIfAborted();
       if (!raw || typeof raw !== 'object') continue;
@@ -789,7 +790,6 @@ export function createAccountArtifactStore(params: Readonly<{
       const stored = await readStoredArtifact(artifactId, options);
       if (!stored) return null;
       const artifact = await projectStoredArtifact(stored, options);
-      if (!artifact) return null;
       return { artifact, update: (content: Pick<AccountArtifact, 'header'> & Readonly<{ body: ArtifactBodyV1 }>) => update({ ...content,
         artifactId: stored.id, expectedRevision: { headerVersion: stored.headerVersion, bodyVersion: stored.bodyVersion },
         ...(options?.signal ? { signal: options.signal } : {}) }, stored) };

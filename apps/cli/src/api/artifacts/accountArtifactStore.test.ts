@@ -13,6 +13,7 @@ import { ArtifactActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/a
 import { ArtifactBlobWriteV1Schema, type ArtifactBlobReadResponseV1 } from '@happier-dev/protocol';
 import { decryptWithDataKeyResult, decryptWithDataKey, encryptWithDataKey } from '@/api/encryption';
 import { createCliArtifactActions } from '@/session/actions/artifactActions';
+import { createCliInboxReadAction } from '@/session/actions/inboxActions';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -37,6 +38,12 @@ import { classifyServerEndpointError } from '@/api/client/classifyServerEndpoint
 import { acquireRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
+import { readSettings, writeSettings } from '@/persistence';
+import { readCurrentMachineInstallation } from '@/daemon/identity/currentMachineInstallation';
+import { createDefaultPluginInstallationPublisherHeader } from '@/plugins/installations/publisherProof';
+import { configuration } from '@/configuration';
+import { readOrCreateInstallationIdentity } from '@/daemon/identity/store';
+import { AccountNoticeArtifactBodyV1Schema, AccountNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 
 // The ordinary-Artifact Home fixtures below expose Account "owner" with no legacy Role settings.
 // Keep the real Role deletion policy even when a scenario only reads or restores an Artifact.
@@ -440,9 +447,10 @@ describe('createAccountArtifactStore', () => {
         const cursor = url.searchParams.get('cursor');
         const lastId = cursor ? JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')).id : undefined;
         const start = lastId === undefined ? 0 : rows.findIndex(row => row.id === lastId) + 1;
-        result = listAudience === 'empty' ? [] : rows.slice(start, start + Number(url.searchParams.get('limit') ?? 500)).map(({ body, ...row }) =>
+        const items = listAudience === 'empty' ? [] : rows.slice(start, start + Number(url.searchParams.get('limit') ?? 500)).map(({ body, ...row }) =>
           ({ ...row, ...(listAudience === 'shared' ? { ownerAccountId: 'foreign-owner', access: 'view' } : {}),
             ...(url.searchParams.get('includeBody') ? { body } : {}) }));
+        result = url.searchParams.has('kind') ? { items, hasUnclassified: false } : items;
       } else if (request.method === 'POST' && url.pathname === '/v1/artifacts/read') {
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -578,6 +586,31 @@ describe('createAccountArtifactStore', () => {
     expect(await store.read('required-doc')).toBeNull();
   });
 
+  it.each(['plain', 'e2ee'] as const)('keeps malformed decoded %s headers distinct from definitive Artifact absence', async mode => {
+    const machineKey = new Uint8Array(randomBytes(32));
+    const credentials = mode === 'plain' ? { token: 'token', encryption: null }
+      : { token: 'token', encryption: { type: 'dataKey' as const, machineKey, publicKey: x25519.getPublicKey(machineKey) } };
+    const resource = await createResourceDataKey({ credentials, mode });
+    const seal = (value: unknown) => resource.mode === 'plain' ? encodePlainArtifactStoredContent(value)
+      : encodeBase64(encryptWithDataKey(value, resource.dataKey), 'base64');
+    const store = createAccountArtifactStore({ credentials, getAccountEncryptionMode: async () => mode });
+    const read = () => store.read('required-doc', { prepareRecipients: false });
+    const readForUpdate = () => store.readForUpdate('required-doc', { prepareRecipients: false });
+    for (const header of [null, 'invalid', 1, []]) {
+      mockGet.mockResolvedValue({ status: 200, data: {
+        id: 'required-doc', ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+        dataEncryptionKey: resource.dataEncryptionKey ?? ARTIFACT_PLAIN_DATA_KEY_MARKER,
+        header: seal(header), body: seal({ body: 'Retained content' }),
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+      } });
+      for (const readArtifact of [read, readForUpdate]) {
+        await expect(readArtifact()).rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
+      }
+    }
+    mockGet.mockResolvedValue({ status: 404, data: { error: 'not_found' } });
+    for (const readArtifact of [read, readForUpdate]) expect(await readArtifact()).toBeNull();
+  });
+
   it.each([
     ['read', 'Failed to get artifact'],
     ['readHeader', 'Failed to get artifacts'],
@@ -590,6 +623,31 @@ describe('createAccountArtifactStore', () => {
     await expect(request).rejects.toMatchObject({ code: 'artifact_read_unavailable', status: 500 });
   });
 
+  it('opens only an exact header admitted by fresh authority after recipient preparation', async () => {
+    const secret = randomBytes(32);
+    const dataKey = randomBytes(32);
+    const credentials = { token: 'token', encryption: { type: 'dataKey' as const,
+      publicKey: x25519.getPublicKey(secret), machineKey: secret } };
+    let currentMode: 'plain' | 'e2ee' = 'e2ee';
+    const store = createAccountArtifactStore({ credentials,
+      getAccountEncryptionMode: async options => options?.usage === 'fresh-authority' ? currentMode : 'e2ee' });
+    const stored = { id: 'selected', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'e2ee',
+      header: encodeBase64(encryptWithDataKey({ kind: 'memory_doc.v1', title: 'Private memory' }, dataKey)),
+      body: 'unreadable-body-envelope', dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({
+        dataKey, recipientPublicKey: credentials.encryption.publicKey, randomBytes })),
+      headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+    mockGet.mockImplementation(async (url: string) => {
+      if (url.endsWith('/recipients')) {
+        currentMode = 'plain';
+        return { status: 200, data: { artifactId: stored.id, ownerAccountId: stored.ownerAccountId,
+          access: stored.access, encryptionMode: stored.encryptionMode, dataEncryptionKey: stored.dataEncryptionKey,
+          callerDataEncryptionKey: stored.dataEncryptionKey, recipients: [] } };
+      }
+      return { status: 200, data: new URL(url).pathname === '/v1/artifacts' ? [stored] : stored };
+    });
+    await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
+  });
+
   it.each(['plain', 'e2ee'] as const)('opens only an exact %s header while retaining mode, recipient and cancellation checks', async mode => {
     const secret = randomBytes(32);
     const dataKey = randomBytes(32);
@@ -597,24 +655,61 @@ describe('createAccountArtifactStore', () => {
       type: 'dataKey' as const, publicKey: x25519.getPublicKey(secret), machineKey: secret,
     } };
     let accountMode = mode;
-    const store = createAccountArtifactStore({ credentials, getAccountEncryptionMode: async () => accountMode });
+    const store = createAccountArtifactStore({ credentials,
+      // The subscribed identity stays held; only final authority sees a mode change.
+      getAccountEncryptionMode: async options => options?.usage === 'fresh-authority' ? accountMode : mode });
     const header = { v: 1, kind: 'memory_doc.v1', title: 'Selected memory' };
     const stored = { id: 'selected', ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
       header: mode === 'plain' ? encodePlainArtifactStoredContent(header) : encodeBase64(encryptWithDataKey(header, dataKey)),
       body: 'unreadable-body-envelope', dataEncryptionKey: mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER
         : encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey, recipientPublicKey: credentials.encryption!.publicKey, randomBytes })),
       headerVersion: 2, bodyVersion: 3, seq: 4, createdAt: 1, updatedAt: 2 };
-    mockGet.mockImplementation(async (url: string) => ({ status: 200, data: new URL(url).pathname === '/v1/artifacts'
-      ? [{ ...stored, body: undefined }, { ...stored, id: 'unrelated', encryptionMode: 'invalid', header: 'locked' }]
-      : url.endsWith('/recipients')
-      ? { artifactId: stored.id, ownerAccountId: stored.ownerAccountId, access: stored.access, encryptionMode: mode,
-        dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: stored.dataEncryptionKey, recipients: [] } : stored }));
+    let storedBody: unknown = stored.body;
+    let storedBodyVersion: unknown = stored.bodyVersion;
+    let onRecipientRead: (() => void) | undefined;
+    mockGet.mockImplementation(async (url: string) => {
+      if (new URL(url).pathname === '/v1/artifacts') return { status: 200,
+        data: [{ ...stored, body: undefined }, { ...stored, id: 'unrelated', encryptionMode: 'invalid', header: 'locked' }] };
+      if (url.endsWith('/recipients')) {
+        onRecipientRead?.();
+        return { status: 200, data: { artifactId: stored.id, ownerAccountId: stored.ownerAccountId,
+          access: stored.access, encryptionMode: mode, dataEncryptionKey: stored.dataEncryptionKey,
+          callerDataEncryptionKey: stored.dataEncryptionKey, recipients: [] } };
+      }
+      return { status: 200, data: { ...stored, body: storedBody, bodyVersion: storedBodyVersion } };
+    });
     expect(await store.readHeader('selected', { prepareRecipients: false })).toMatchObject({ artifactId: 'selected', header, headerVersion: 2, bodyVersion: 3 });
     expect(mockGet.mock.calls.some(([url]) => String(url).endsWith('/recipients'))).toBe(false);
     expect(mockPost).not.toHaveBeenCalled();
-    expect(await store.readHeader('selected')).toMatchObject({ artifactId: 'selected', header, headerVersion: 2, bodyVersion: 3 });
-    expect(mockGet.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/artifacts/selected')).toBe(false);
+    const readHeader = store.createHeaderReader();
+    expect(await readHeader('selected')).toMatchObject({ artifactId: 'selected', header, headerVersion: 2, bodyVersion: 3 });
+    expect(mockGet.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts/selected')).toHaveLength(2);
+    expect(mockGet.mock.calls.filter(([url]) => new URL(String(url)).pathname === '/v1/artifacts')).toEqual([]);
+    const currentHeader = { ...header, title: 'Current memory' };
+    stored.header = mode === 'plain' ? encodePlainArtifactStoredContent(currentHeader) : encodeBase64(encryptWithDataKey(currentHeader, dataKey));
+    expect(await readHeader('selected')).toMatchObject({ header: currentHeader });
+    stored.header = mode === 'plain' ? encodePlainArtifactStoredContent(header) : encodeBase64(encryptWithDataKey(header, dataKey));
     await expect(store.read('selected')).rejects.toMatchObject({ code: 'artifact_encryption_material_unavailable' });
+    storedBody = { invalid: 'body envelope' };
+    storedBodyVersion = undefined;
+    const headerWithoutBody = await readHeader('selected');
+    expect(headerWithoutBody).toMatchObject({ artifactId: 'selected', header });
+    expect(headerWithoutBody).not.toHaveProperty('bodyVersion');
+    await expect(store.read('selected')).rejects.toMatchObject({ code: 'artifact_read_invalid' });
+    mockGet.mockResolvedValueOnce({ status: 200, data: null });
+    await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_invalid' });
+    mockGet.mockResolvedValueOnce({ status: 200, data: { ...stored, id: 'other' } });
+    await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_invalid' });
+    const body = { body: 'Other private content' };
+    mockGet.mockResolvedValueOnce({ status: 200, data: { ...stored, id: 'other',
+      body: mode === 'plain' ? encodePlainArtifactStoredContent(body) : encodeBase64(encryptWithDataKey(body, dataKey)) } });
+    await expect(store.read('selected')).rejects.toMatchObject({ code: 'artifact_read_invalid' });
+    if (mode === 'e2ee') {
+      onRecipientRead = () => { accountMode = 'plain'; };
+      await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
+      onRecipientRead = undefined;
+      accountMode = mode;
+    }
     accountMode = mode === 'plain' ? 'e2ee' : 'plain';
     await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
     // Recipients follow the actual owner's mode, independently of their own Account.
@@ -623,7 +718,13 @@ describe('createAccountArtifactStore', () => {
     const controller = new AbortController();
     controller.abort(new Error('cancelled'));
     await expect(store.readHeader('selected', { signal: controller.signal })).rejects.toThrow('cancelled');
-    mockGet.mockResolvedValueOnce({ status: 200, data: [] });
+    const duringRead = new AbortController();
+    mockGet.mockImplementationOnce(async () => {
+      duringRead.abort(new Error('cancelled'));
+      return { status: 200, data: stored };
+    });
+    await expect(store.readHeader('selected', { signal: duringRead.signal })).rejects.toThrow('cancelled');
+    mockGet.mockResolvedValueOnce({ status: 404, data: { error: 'not_found' } });
     expect(await store.readHeader('selected')).toBeNull();
     mockGet.mockResolvedValueOnce({ status: 503, data: { error: 'unavailable' } });
     await expect(store.readHeader('selected')).rejects.toMatchObject({ code: 'artifact_read_unavailable', status: 503 });
@@ -801,7 +902,7 @@ describe('createAccountArtifactStore', () => {
       const data = request.method === 'DELETE' ? {}
         : request.method === 'POST' ? { id: 'create', success: true, headerVersion: 2, bodyVersion: 2 }
         : path === '/v1/artifacts/storage/usage' ? usage
-        : path === '/v1/artifacts' ? [row] : row;
+        : path === '/v1/artifacts' ? [row] : { ...row, id: decodeURIComponent(path.slice('/v1/artifacts/'.length)) };
       const respond = () => { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)); };
       // The update's prerequisite read is fast; its write exercises the slow path.
       if (request.method === 'GET' && path === '/v1/artifacts/update') { respond(); return; }
@@ -1411,6 +1512,101 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       expect(new URL(url).searchParams.has('search')).toBe(false);
       expect(new URL(url).searchParams.has('kind')).toBe(false);
       expect(new URL(url).searchParams.has('sort')).toBe(false);
+    }
+  });
+
+  it.each([
+    ['plain', 'publisher proof'], ['e2ee', 'publisher proof'],
+    ['plain', 'cancellation'], ['e2ee', 'cancellation'],
+  ] as const)('lets %s headless Inbox header reads make room for %s before selected body HTTP', async (mode, competingWork) => {
+    const previousSettings = await readSettings();
+    let pendingProof: Promise<string | null> | undefined;
+    let pendingCancellation: Promise<void> | undefined;
+    try {
+      await writeSettings({ schemaVersion: 6, onboardingCompleted: true,
+        machineIdByServerId: { [configuration.activeServerId]: 'publisher-machine' } });
+      // Prepare the real local installation before testing reads competing with
+      // page projection. Only the remote Artifact HTTP response is substituted.
+      expect((await readSettings()).machineId).toBe('publisher-machine');
+      await readOrCreateInstallationIdentity();
+      expect(await readCurrentMachineInstallation()).not.toBeNull();
+      const machineKey = new Uint8Array(randomBytes(32));
+      const credentials = mode === 'plain' ? { token: 'token', encryption: null }
+        : { token: 'token', encryption: { type: 'dataKey' as const, machineKey, publicKey: x25519.getPublicKey(machineKey) } };
+      const resource = await createResourceDataKey({ credentials, mode });
+      const encode = (value: unknown) => resource.mode === 'plain' ? encodePlainArtifactStoredContent(value)
+        : encodeBase64(encryptWithDataKey(value, resource.dataKey));
+      const header = encode({ kind: 'document.v1', title: 'Unrelated document' });
+      const rows = Array.from({ length: 499 }, (_, index) => ({
+        id: `artifact-${index}`, ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+        header, dataEncryptionKey: resource.dataEncryptionKey ?? ARTIFACT_PLAIN_DATA_KEY_MARKER,
+        headerVersion: 1, seq: index, createdAt: 1, updatedAt: 1000 - index,
+      }));
+      const artifactId = '11111111-1111-4111-8111-111111111111';
+      const content = AccountNoticeArtifactBodyV1Schema.parse({ v: 1,
+        source: { kind: 'plugin', pluginId: 'qa.notice', itemId: 'stable-item' },
+        type: 'update', resolved: false, body: 'Saved notice' });
+      const notice = { ...rows[0], id: artifactId, seq: 499, updatedAt: 1, publicAudience: 'none',
+        header: encode(AccountNoticeArtifactHeaderV1Schema.parse({ ...content, kind: 'account_notice.v1', status: 'open', title: 'Notice' })),
+        body: encode({ body: JSON.stringify(content) }), bodyVersion: 1 };
+      rows.push(notice);
+      const controller = new AbortController();
+      mockGet.mockImplementation(async (rawUrl: string) => {
+        const url = new URL(rawUrl);
+        expect(url.pathname).toBe('/v1/artifacts');
+        expect(url.searchParams.get('kind')).toBe('other');
+        expect(url.searchParams.has('includeBody')).toBe(false);
+        if (competingWork === 'cancellation' && !pendingCancellation) {
+          // The external abort arrives on the native loop while the response's
+          // already-resolved mode/codec promises are opening its headers.
+          pendingCancellation = new Promise(resolve => setImmediate(() => {
+            controller.abort(new Error('Inbox cancelled'));
+            resolve();
+          }));
+        }
+        return { status: 200, data: { items: url.searchParams.has('cursor') ? [] : rows,
+          hasUnclassified: false } };
+      });
+      const store = createAccountArtifactStore({ credentials, getAccountEncryptionMode: async () => mode });
+      let proofFinished = false;
+      let proofFinishedBeforeBody = false;
+      let bodyReads = 0;
+      mockPost.mockImplementation(async (rawUrl: string, input: unknown) => {
+        bodyReads += 1;
+        expect(new URL(rawUrl).pathname).toBe('/v1/artifacts/read');
+        expect(ArtifactReadBatchInputV1Schema.parse(input).artifactIds).toEqual([artifactId]);
+        proofFinishedBeforeBody = proofFinished;
+        return { status: 200, data: ArtifactReadBatchResponseV1Schema.parse({ items: [
+          { artifactId, ok: true, artifact: notice, recipientCensus: mode === 'plain' ? null : {
+            artifactId, ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+            dataEncryptionKey: notice.dataEncryptionKey, callerDataEncryptionKey: notice.dataEncryptionKey, recipients: [],
+          } },
+        ] }) };
+      });
+      if (competingWork === 'publisher proof') {
+        pendingProof = createDefaultPluginInstallationPublisherHeader({ method: 'POST',
+          path: '/v3/automations/runs/projection-run/heartbeat',
+          body: { machineId: 'publisher-machine', attempt: 1, leaseDurationMs: 30_000 },
+        }).then(header => { proofFinished = true; return header; });
+      }
+      const readInbox = createCliInboxReadAction({ store, accountId: 'owner', serverId: 'notice-home' });
+      const result = readInbox({ actionId: 'inbox.get', input: {},
+        context: { surface: 'cli', expectedAccountId: 'owner', signal: controller.signal } });
+      if (competingWork === 'cancellation') {
+        await expect(result).rejects.toThrow('Inbox cancelled');
+        expect(bodyReads).toBe(0);
+        return;
+      }
+      const inbox = await result;
+      expect(proofFinishedBeforeBody, 'publisher filesystem reads must progress before Inbox starts selected body HTTP').toBe(true);
+      expect(await pendingProof).toEqual(expect.any(String));
+      expect(inbox).toMatchObject({ accountNoticeIds: [artifactId], items: [
+        { title: 'Notice', source: { id: artifactId, serverId: 'notice-home' } },
+      ], coverage: { sources: expect.arrayContaining([{ source: 'notices', status: 'complete' }]) } });
+    } finally {
+      await pendingProof;
+      await pendingCancellation;
+      await writeSettings(previousSettings);
     }
   });
 

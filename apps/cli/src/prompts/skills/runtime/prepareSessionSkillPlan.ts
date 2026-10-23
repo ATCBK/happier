@@ -27,6 +27,7 @@ export async function prepareSessionSkillPlan(input: Readonly<{
   const selectedById = new Map(input.selected.items.map(item => [item.id, item]));
   const contents = new Map<string, SkillLibraryContent>();
   const unreadable = new Set<string>();
+  const missing = new Set<string>();
   const items: SkillLibraryItemV1[] = [];
   // Previews supply their complete choice inventory. Runners already know
   // demand from Reach/Session selection and open those exact references.
@@ -50,13 +51,24 @@ export async function prepareSessionSkillPlan(input: Readonly<{
     return Promise.all(artifactItems.map(async item => {
       if (!selectedById.get(item.skillId)?.selected) return null;
       let content: SkillLibraryContent | null = null;
-      try { const artifactContent = await input.artifacts.read(item.skillId, { signal: input.signal }); content = artifactContent ? readSkillArtifactContent(artifactContent) : null; }
+      try {
+        const artifactContent = await input.artifacts.read(item.skillId, { signal: input.signal });
+        // A confirmed missing Artifact makes retained rules/Session references
+        // inert. Failed reads and malformed existing content remain unavailable.
+        if (!artifactContent) missing.add(item.skillId);
+        else {
+          const title = artifactContent.header.title;
+          if (typeof title === 'string' && title.trim()) item.name = title;
+          content = readSkillArtifactContent(artifactContent);
+        }
+      }
       catch { content = null; }
       await input.assertCurrent();
       return content;
     }));
   });
   for (const [index, item] of artifactItems.entries()) {
+    if (missing.has(item.skillId)) continue;
     const content = opened[index];
     if (!content && selectedById.get(item.skillId)?.selected) unreadable.add(item.skillId);
     if (content) { contents.set(item.skillId, content); items.push(content.item); }

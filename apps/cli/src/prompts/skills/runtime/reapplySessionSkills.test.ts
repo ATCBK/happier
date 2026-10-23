@@ -118,7 +118,26 @@ describe('reapplySessionSkills', () => {
     expect(await readFile(join(applied.delivery!.skillsRoot, 'sample', 'references', 'note.md'), 'utf8')).toBe('Supporting file');
   });
 
-  it.each(['missing', 'unreadable'] as const)('preserves the live folder and applied plan when a selected Artifact becomes %s', async failure => {
+  it('withdraws a deleted Artifact from the live folder and applied plan after native acknowledgement', async () => {
+    const { input, transports } = await fixture();
+    const initial = await resolveRunnerSkills(input, transports);
+    let applied = initial;
+    const result = await reapplySessionSkills({ readInput: () => input,
+      runtime: { refreshSkills: async ({ skills }) => {
+        expect(skills.pluginRoot).toBe(initial.delivery!.pluginRoot);
+        expect(skills.items).toEqual([]);
+        expect(applied).toBe(initial);
+        return { kind: 'applied' };
+      } }, onApplied: value => { applied = value; } }, { ...transports,
+      artifacts: { list: async () => ({ items: [], coverage: 'complete' }), read: async () => null } });
+    expect(result).toEqual({ applied: 'live' });
+    expect(applied.delivery!.items).toEqual([]);
+    expect(applied.plan.items).not.toContainEqual(expect.objectContaining({ skillId: 'library' }));
+    expect(JSON.parse(await readFile(join(applied.delivery!.pluginRoot, 'session.json'), 'utf8')).items).toEqual([]);
+    await expect(readFile(join(applied.delivery!.skillsRoot, 'sample', 'SKILL.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves the live folder and applied plan when a selected Artifact becomes unreadable', async () => {
     const { input, transports } = await fixture();
     const initial = await resolveRunnerSkills(input, transports);
     const before = await readFile(join(initial.delivery!.pluginRoot, 'session.json'), 'utf8');
@@ -127,7 +146,6 @@ describe('reapplySessionSkills', () => {
       runtime: { refreshSkills: async () => { throw new Error('must_not_reload'); } },
       onApplied: value => { applied = value; } }, { ...transports,
       artifacts: { list: async () => ({ items: [], coverage: 'complete' }), read: async () => {
-        if (failure === 'missing') return null;
         throw new Error('body_unavailable');
       } } });
     expect(await readFile(join(initial.delivery!.pluginRoot, 'session.json'), 'utf8')).toBe(before);

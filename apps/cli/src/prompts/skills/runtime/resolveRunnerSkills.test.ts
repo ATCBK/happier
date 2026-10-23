@@ -487,7 +487,60 @@ describe('runner skill resolution', () => {
       skillSelectionV1: { v: 1, forceIncludeSkillIds: ['bad'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
     } }, { artifacts, ensureSessionDir: value => f.store.ensureSkillSessionDir(value) });
     expect(result.delivery?.items).toEqual([expect.objectContaining({ skillId: 'library' })]);
-    expect(result.plan.items.find(item => item.skillId === 'bad')).toMatchObject({ state: 'unavailable', reason: 'content_unreadable' });
+    const name = fault === 'header' ? 'bad' : 'Display title';
+    expect(result.plan.items.find(item => item.skillId === 'bad')).toMatchObject({ name, state: 'unavailable', reason: 'content_unreadable' });
+    const notices: unknown[] = [];
+    await publishRunnerSkillNotice({ enqueueSessionEventCommitted: async event => {
+      notices.push(event); return { persisted: true as const, delivered: false as const };
+    } }, result);
+    expect(notices.map(readSessionCapabilityNoticeV1)).toEqual([{ v: 1, items: [
+      { kind: 'skill', name, itemId: 'bad', code: 'skills_unavailable', detail: 'content_unreadable' },
+    ] }]);
+  });
+  it('keeps a deleted skill inert on resume and live reapply despite leftover rules and Session selection', async () => {
+    const { input, store } = await fixture();
+    // Artifact persistence is the boundary; deletion, selection, preparation,
+    // materialization and notice publication use their real owning logic.
+    const persisted = new Map([['library', bundle('library', 'sample')]]);
+    const artifacts: SkillArtifactStore = {
+      list: async () => { throw new Error('Runner must read exact demand'); },
+      read: async id => persisted.get(id) ?? null,
+    };
+    const actions = createSkillActionExecuteV1({ randomId: () => 'unused',
+      store: {
+        list: async () => ({ items: [], coverage: 'complete' }),
+        read: async id => { const artifact = persisted.get(id);
+          return artifact ? { id, header: artifact.header, body: artifact.body, owned: true, revision: artifact.revision } : null; },
+        create: async () => { throw new Error('No create requested'); },
+        update: async () => { throw new Error('No update requested'); },
+        delete: async ({ artifactId }) => { persisted.delete(artifactId); },
+      },
+      skillRules: { serverId: 'home', assertCurrent() {}, listSkills: async () => [],
+        ruleWriteContext: () => ({ nowMs: 1, newId: () => 'unused' }),
+        readCatalog: async () => ({ catalog: input.accountSnapshot!.promptLibraryCatalog! }),
+        writeRecord: async () => { throw new Error('Rules write unavailable'); } },
+      includeInSession: async () => ({ ok: true }),
+    });
+    const selectedInput = { ...input, sessionMetadata: { skillSelectionV1: {
+      v: 1, forceIncludeSkillIds: ['library'], forceExcludeSkillIds: [], excludeNativeSkillNames: [],
+    } } };
+    const transports = { artifacts, ensureSessionDir: (value: Parameters<typeof store.ensureSkillSessionDir>[0]) => store.ensureSkillSessionDir(value) };
+    const initial = await resolveRunnerSkills(selectedInput, transports);
+    expect(initial.delivery?.items).toEqual([expect.objectContaining({ skillId: 'library' })]);
+    expect(await actions('skills.delete', { skillId: 'library', expectedRevision: '1:1' }, { surface: 'ui' }))
+      .toEqual({ deleted: true, rulesLeft: true });
+    const notices: unknown[] = [];
+    for (const lifecycle of ['reapply', 'start'] as const) {
+      const result = await resolveRunnerSkills({ ...selectedInput, lifecycle }, transports);
+      expect(result.plan.items).not.toContainEqual(expect.objectContaining({ skillId: 'library' }));
+      expect(result.unavailable).toBeUndefined();
+      expect(result.delivery?.items ?? []).toEqual([]);
+      await publishRunnerSkillNotice({ enqueueSessionEventCommitted: async event => {
+        notices.push(event); return { persisted: true as const, delivered: false as const };
+      } }, result);
+    }
+    expect(await readdir(initial.delivery!.skillsRoot)).toEqual([]);
+    expect(notices).toEqual([]);
   });
   it('uses the same realpath preparation as MCP for linked workspace roots without matching a sibling prefix', async () => {
     const { input, artifacts, store, home, directory } = await fixture();
