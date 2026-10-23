@@ -51,6 +51,46 @@ describe('action operation canonical execution observer', () => {
     expect(store.list(scope).items).toHaveLength(2);
   });
 
+  it('continues a finite Project Action past approval before projecting its operation receipt', async () => {
+    const store = createActionOperationStore();
+    let operationNumber = 0;
+    let executionCount = 0;
+    const runner = createActionOperationRunner({
+      store,
+      generateOperationId: () => `project-approval-${operationNumber++}`,
+      resolveAction: actionId => ({
+        actionId,
+        title: 'Run project script',
+        operation: { version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'current' } },
+      }),
+    });
+    const terminalResult = { exitCode: 0 };
+    const request = {
+      actionId: 'projects.script.run',
+      scope,
+      requestId: 'approved-project-request',
+      input: { workspaceRefId: 'workspace', cwd: '/project' },
+      execute: async (context: Parameters<Parameters<typeof runner.observe>[0]['execute']>[0]) => {
+        context.publishOwnerUpdate({ domainRef: { kind: 'projectCommand', purpose: 'script', serverId: 'home',
+          machineId: scope.machineId, workspaceRefId: 'workspace', cwd: '/project' } });
+        return ++executionCount === 1
+          ? { ok: true as const, result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId: 'projects.script.run' } }
+          : { ok: true as const, result: terminalResult };
+      },
+    };
+
+    await expect(runner.observe(request)).resolves.toMatchObject({
+      ok: true,
+      result: { kind: 'approval_request_created', actionId: 'projects.script.run' },
+    });
+    await expect(runner.observe(request)).resolves.toEqual({ ok: true, result: terminalResult });
+    await expect(runner.observe(request)).resolves.toMatchObject({
+      ok: true,
+      result: { operation: { state: 'succeeded', result: terminalResult } },
+    });
+    expect(executionCount).toBe(2);
+  });
+
   it.each([
     'machines.managed.delete',
     'machines.managed.power.set',

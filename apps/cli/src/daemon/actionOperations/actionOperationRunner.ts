@@ -343,16 +343,16 @@ export function createActionOperationRunner(deps: Readonly<{
         if (existing.setupReview) invocation.resumeSetupReview();
         return await invocation.response;
       }
-      if (isFiniteProjectCommand(action.actionId) && existing.domainRef?.kind === 'projectCommand') {
-        return { ok: true, result: { operation: existing } };
-      }
-      const settled = terminalResult(existing);
       // Deferred approval is an intermediate result from the generic Action
       // executor, not the tracked Action's terminal effect. Retain its receipt as
       // history, but never let it preempt the approved continuation or delegate
       // that generic distinction to per-Action re-entry policy.
       const pendingApproval = existing.state === 'succeeded'
         && ActionApprovalRequestCreatedResultSchema.safeParse(existing.result).success;
+      if (!pendingApproval && isFiniteProjectCommand(action.actionId) && existing.domainRef?.kind === 'projectCommand') {
+        return { ok: true, result: { operation: existing } };
+      }
+      const settled = terminalResult(existing);
       const reentry = pendingApproval
         ? 'fresh'
         : action.operationReentry?.(existing) ?? (settled ? 'replay' : 'refuse');
@@ -362,8 +362,8 @@ export function createActionOperationRunner(deps: Readonly<{
       if (reentry !== 'fresh') {
         return { ok: false, errorCode: 'action_operation_unavailable', error: 'action_operation_unavailable' };
       }
-      // A declaration-owned explicit retry starts a new receipt while retaining
-      // the prior terminal or uncertain evidence as history.
+      // A fresh re-entry starts a new receipt while retaining the prior approval,
+      // terminal, or uncertain evidence as history.
     }
     // Final retirement closes only new finite admission. Exact request replay
     // above still observes the original retained invocation and its Stop owner.
