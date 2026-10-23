@@ -121,6 +121,17 @@ it('rejoins only the original completed Workflow turn when retained reply anchor
   socket.emit('ephemeral', { type: 'session-message-reply-pending-v1', v: 1, sessionId, requestLocalId: localId });
   await expect(waitingForCustody).resolves.toMatchObject({ ok: true, result: { kind: 'final_text', text: 'QA-FIN80 CHILD DONE' }, replyOutcome: outcome });
   onNativeTranscriptRead = undefined;
+  // A reclaimed observer may first see C2 after C3 has replaced the native
+  // result reference with its committed Discussion publication reference.
+  outcome = { kind: 'answer', publicationRef: { kind: 'discussion',
+    discussion: { serverId: 'home', discussionId: 'discussion-1' }, messageId: 'published-answer' } };
+  await expect(observe()).resolves.toMatchObject({ ok: true,
+    result: { kind: 'final_text', text: 'QA-FIN80 CHILD DONE', messageRef: { messageId: 'retained-row-5' } }, replyOutcome: outcome });
+  acceptedTurnId = 'later-turn';
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
+  acceptedTurnId = turnId;
+  discussionWorkflow = false;
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'fulfilled', outcome } });
   outcome = undefined;
   discussionWorkflow = false;
   const recover = createWorkflowInvocationRecoveryObserver({ credentials: { token: 'token', encryption: null },

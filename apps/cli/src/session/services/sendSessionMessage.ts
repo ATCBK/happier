@@ -950,6 +950,7 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
         let replyOutcome: SessionMessageReplyOutcomeV1 | undefined;
         let originalHasNoReply = false;
         let requiresDiscussionReplyOutcome = false;
+        let publishedDiscussionAnswer = false;
         let acceptedTurnId: string | undefined;
         if (params.reply) {
           const original = await readOriginalReply({ credentials: params.reply.credentials,
@@ -961,10 +962,13 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
           requiresDiscussionReplyOutcome = original.status === 'available'
             && Boolean(original.progress.workflow && original.progress.discussion);
           replyOutcome = original.status === 'available' ? original.progress.outcome : undefined;
-          acceptedTurnId = original.status === 'available' && !replyOutcome ? original.progress.acceptedTurnId : undefined;
+          publishedDiscussionAnswer = requiresDiscussionReplyOutcome
+            && replyOutcome?.kind === 'answer' && 'publicationRef' in replyOutcome;
+          acceptedTurnId = original.status === 'available' && (!replyOutcome || publishedDiscussionAnswer)
+            ? original.progress.acceptedTurnId : undefined;
           if (replyOutcome) {
             params.reply.onOutcome(replyOutcome);
-            if (!('result' in replyOutcome)) {
+            if (!('result' in replyOutcome) && !publishedDiscussionAnswer) {
               return { kind: 'fulfilled', outcome: replyOutcome };
             }
           }
@@ -979,8 +983,11 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
         // completion without reply custody. Discussion Workflow success must
         // carry C2's independent fact into the immutable terminal invocation;
         // its existing custody wake reopens the original before completion.
+        // Reclaim can first see an already-published C2 answer. Keep that fact
+        // while recovering text only from this original's accepted native turn.
         if (acceptedTurnId && (outcome.kind === 'failed' || outcome.kind === 'cancelled'
-          || outcome.kind === 'completed' && outcome.finalAssistantText !== null && !requiresDiscussionReplyOutcome)) return outcome;
+          || outcome.kind === 'completed' && outcome.finalAssistantText !== null
+            && (!requiresDiscussionReplyOutcome || publishedDiscussionAnswer))) return outcome;
         if (replyOutcome && 'result' in replyOutcome
           && replyOutcome.result.sessionId === params.sessionId
           && outcome.kind === 'completed' && outcome.finalAssistantMessageId === replyOutcome.result.messageId) {
