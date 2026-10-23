@@ -51,7 +51,8 @@
  * Establish the closure's membership from `git ls-tree -r --name-only HEAD
  * <path>` at the moment you commit — never from a filename, an artifact count,
  * or an earlier note in a comment, each of which has already drifted here.
- * Packaged plugin.json and executable bytes are ignored publication outputs.
+ * Packaged executable bytes are ignored publication outputs. Some plugin.json
+ * files remain tracked; the same semantic check validates every present copy.
  *
  * `apps/cli/AGENTS.md` ("Generated bundled-plugin artifacts") owns this rule;
  * this note points at it rather than restating a second copy.
@@ -262,7 +263,6 @@ type GeneratorWorkspaceDependencies = Readonly<{
     CliCommonWorkspacesModule,
     | 'bundleWorkspacePackage'
     | 'resolveWorkspaceBundlesFromPackageJson'
-    | 'sanitizeBundledPackageJson'
   >>;
   protocol: Readonly<Pick<
     ProtocolWorkspaceModule,
@@ -367,7 +367,6 @@ async function loadGeneratorWorkspaceDependencies(): Promise<GeneratorWorkspaceD
     cliCommonWorkspaces: Object.freeze({
       bundleWorkspacePackage: cliCommonWorkspaces.bundleWorkspacePackage,
       resolveWorkspaceBundlesFromPackageJson: cliCommonWorkspaces.resolveWorkspaceBundlesFromPackageJson,
-      sanitizeBundledPackageJson: cliCommonWorkspaces.sanitizeBundledPackageJson,
     }),
     protocol: Object.freeze({
       BackendSurfaceOperationCatalogV1: protocolBackendSurface.BackendSurfaceOperationCatalogV1,
@@ -509,11 +508,6 @@ type BundledPluginSourceProjectionFacts = Readonly<{
   releasedFlatSessionMetadataRuntimeDescriptorReader?: ReleasedFlatSessionMetadataRuntimeDescriptorReaderContributionDescriptor;
   builtInLegacyConnectedAccountCompatibility?:
     readonly BuiltInLegacyConnectedAccountCompatibilitySource[];
-}>;
-type BundledPackagedFile = Readonly<{
-  relativePath: string;
-  byteLength: number;
-  digest: string;
 }>;
 type ReleasedFlatSessionMetadataRuntimeDescriptorReaderProjectionDescriptor =
   | ProviderSessionIdRuntimeDescriptorReaderContributionDescriptor
@@ -1850,16 +1844,22 @@ async function normalizeBundledSourceManifest(params: Readonly<{
 
 async function synchronizeSerializedPluginManifest(params: Readonly<{
   packageRoot: string;
+  packageName: string;
   manifest: PluginManifestJson;
   mode: Mode;
-  dependencies: GeneratorWorkspaceDependencies;
 }>): Promise<void> {
   const manifestSerializer = await loadPluginManifestSerializerModule();
-  const manifest = await normalizeBundledSourceManifest(params);
-  const serializedManifest = manifestSerializer.serializeCanonicalPluginManifest(manifest);
+  const serializedManifest = manifestSerializer.serializeCanonicalPluginManifest(params.manifest);
   const manifestPath = resolve(params.packageRoot, BUNDLED_PLUGIN_MANIFEST_ARTIFACT_PATH);
   if (params.mode === 'check') {
-    assertGeneratedOutputMatches(manifestPath, serializedManifest);
+    try {
+      assertGeneratedOutputMatches(manifestPath, serializedManifest);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${detail}. Run node --conditions=happier-source --experimental-strip-types `
+        + 'apps/cli/scripts/build-owned/generateBundledPluginEntries.ts --mode write --package-artifacts '
+        + `--workspace ${params.packageName}`);
+    }
     return;
   }
   writeFileAtomic(manifestPath, serializedManifest);
@@ -1884,8 +1884,9 @@ export async function prepareBundledPluginUiManifestForWorkspaceBuild(params: Re
   await withWorkspaceBundleLock(async () => {
     await withTypescriptModuleInspectionSession(async () => {
       const dependencies = await loadGeneratorWorkspaceDependencies();
-      const manifest = await loadPluginManifest(params.repoRoot, pluginPackageId, dependencies);
-      await synchronizeSerializedPluginManifest({ packageRoot, manifest, mode: 'write', dependencies });
+      const manifest = await normalizeBundledSourceManifest({ packageRoot,
+        manifest: await loadPluginManifest(params.repoRoot, pluginPackageId, dependencies), dependencies });
+      await synchronizeSerializedPluginManifest({ packageRoot, packageName: params.packageName, manifest, mode: 'write' });
     });
   }, {
     lockPath: resolveWorkspaceBundleLockPath(params.repoRoot),
@@ -1956,12 +1957,11 @@ function comparePortablePathCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function collectBundledArtifactFiles(
+function collectBundledArtifactPaths(
   packageRoot: string,
   packageFileEntries: readonly string[],
-  installedBytesByRelativePath: ReadonlyMap<string, Uint8Array> = new Map(),
-): readonly BundledPackagedFile[] {
-  const files = new Map<string, BundledPackagedFile>();
+): ReadonlySet<string> {
+  const files = new Set<string>();
   const visit = (path: string): void => {
     const relativePath = normalizeBundledArtifactRelativePath(packageRoot, path);
     const stat = lstatSync(path);
@@ -1975,16 +1975,9 @@ function collectBundledArtifactFiles(
       return;
     }
     if (!stat.isFile()) throw new Error(`Bundled artifact contains unsupported file type '${relativePath}'`);
-    // TypeScript's incremental compiler cache is not a shipped runtime input.
-    // Binding it would let an otherwise byte-identical rebuild disable the
-    // plugin even though every executable and declared resource stayed exact.
+    // TypeScript's incremental compiler state is not shipped runtime membership.
     if (relativePath.endsWith('.tsbuildinfo')) return;
-    const bytes = installedBytesByRelativePath.get(relativePath) ?? readFileSync(path);
-    files.set(relativePath, Object.freeze({
-      relativePath,
-      byteLength: bytes.byteLength,
-      digest: sha256Digest(bytes),
-    }));
+    files.add(relativePath);
   };
   for (const entry of packageFileEntries) {
     if (
@@ -2000,9 +1993,7 @@ function collectBundledArtifactFiles(
     if (!existsSync(path)) throw new Error(`Bundled artifact package file is missing: '${entry}'`);
     visit(path);
   }
-  return Object.freeze([...files.values()].sort((left, right) => (
-    comparePortablePathCodeUnits(left.relativePath, right.relativePath)
-  )));
+  return files;
 }
 
 function normalizeDeclaredBundledPackagePath(value: string, label: string): string {
@@ -2407,14 +2398,6 @@ async function prepareBundledPluginPackageArtifacts(params: Readonly<{
     ...(existsSync(resolve(params.packageRoot, 'README.md')) ? ['README.md'] : []),
     'package.json',
   ])];
-  const installedPackageJsonBytes = Buffer.from(
-    `${JSON.stringify(
-      params.dependencies.cliCommonWorkspaces.sanitizeBundledPackageJson(packageJsonForArtifact),
-      null,
-      2,
-    )}\n`,
-    'utf8',
-  );
   const packageEntryRelativePath = resolveBundledPackageEntryRelativePath(
     params.packageJson,
     params.manifest.id,
@@ -2449,28 +2432,17 @@ async function prepareBundledPluginPackageArtifacts(params: Readonly<{
   } else {
     writeFileAtomic(installedManifestPath, installedManifestBytes.toString('utf8'));
   }
-  const installedFileOverrides = new Map<string, Buffer>([
-    ['package.json', installedPackageJsonBytes],
-    ...stagedRuntimeFiles,
-  ]);
-  const files = collectBundledArtifactFiles(
-    params.packageRoot,
-    selectedEntries,
-    installedFileOverrides,
-  );
-  const fileByPath = new Map(files.map((file) => [file.relativePath, file]));
-  const packageJsonFile = fileByPath.get('package.json');
-  if (!packageJsonFile) throw new Error(`Bundled package '${params.manifest.id}' artifact omits package.json`);
-  const installedManifestFile = fileByPath.get(BUNDLED_PLUGIN_MANIFEST_ARTIFACT_PATH);
-  if (!installedManifestFile) {
+  const files = collectBundledArtifactPaths(params.packageRoot, selectedEntries);
+  if (!files.has('package.json')) throw new Error(`Bundled package '${params.manifest.id}' artifact omits package.json`);
+  if (!files.has(BUNDLED_PLUGIN_MANIFEST_ARTIFACT_PATH)) {
     throw new Error(
       `Bundled package '${params.manifest.id}' artifact omits '${BUNDLED_PLUGIN_MANIFEST_ARTIFACT_PATH}'`,
     );
   }
-  if (!fileByPath.has(packageEntryRelativePath)) {
+  if (!files.has(packageEntryRelativePath)) {
     throw new Error(`Bundled package '${params.manifest.id}' artifact omits package root export '${packageEntryRelativePath}'`);
   }
-  if (daemonRelativePath && !fileByPath.has(daemonRelativePath)) {
+  if (daemonRelativePath && !files.has(daemonRelativePath)) {
     throw new Error(`Bundled package '${params.manifest.id}' artifact omits daemon entry '${daemonRelativePath}'`);
   }
   for (const [index, resource] of resources.entries()) {
@@ -2482,7 +2454,7 @@ async function prepareBundledPluginPackageArtifacts(params: Readonly<{
       throw new Error(`Bundled package '${params.manifest.id}' has invalid resource path at index ${String(index)}`);
     }
     const resourcePath = resource.path.replace(/^\.\//u, '');
-    if (!fileByPath.has(resourcePath)) {
+    if (!files.has(resourcePath)) {
       throw new Error(`Bundled package '${params.manifest.id}' artifact omits resource '${resourcePath}'`);
     }
   }
@@ -2865,21 +2837,20 @@ async function collectBundledPluginSourcePackages(
         params.dependencies,
       );
       const dependencies = await params.dependencies;
-      if (params.synchronizeSerializedManifest) {
+      const manifest = await normalizeBundledSourceManifest({ packageRoot, manifest: sourceManifest, dependencies });
+      // Package publication materializes its declarations. The existing strict
+      // CI/package check also covers present serialized outputs (including
+      // tracked plugin.json files), without requiring ignored artifacts in a
+      // clean source checkout. Source writes derive and leave those peers alone.
+      if (params.synchronizeSerializedManifest || (params.mode === 'check'
+        && existsSync(resolve(packageRoot, BUNDLED_PLUGIN_MANIFEST_ARTIFACT_PATH)))) {
         await synchronizeSerializedPluginManifest({
           packageRoot,
-          manifest: sourceManifest,
+          packageName,
+          manifest,
           mode: params.mode,
-          dependencies,
         });
       }
-      const manifest = params.synchronizeSerializedManifest
-        ? readCommittedBundledPluginManifest(
-          packageRoot,
-          packageName,
-          dependencies.protocol,
-        )
-        : await normalizeBundledSourceManifest({ packageRoot, manifest: sourceManifest, dependencies });
       assertNoBundledAgentManifestUiBehavior(manifest, packageName);
       const sourceProjectionFacts: BundledPluginSourceProjectionFacts = params.daemonProjectionsOnly ? {} : await readSourceProjectionFacts({
         repoRoot: params.repoRoot,
@@ -4376,7 +4347,7 @@ async function generateBundledPluginEntries(
         cliOutPath,
         new Set(),
       );
-      const sourceResult = !options.packageArtifacts ? await collectBundledPluginSourcePackages({
+      const sourceResult = await collectBundledPluginSourcePackages({
         repoRoot: options.rootDir,
         // Selected declarations already passed the same source admission above.
         // Reuse those facts instead of starting a second inspection graph.
@@ -4384,18 +4355,18 @@ async function generateBundledPluginEntries(
         mode: options.mode,
         dependencies,
         synchronizeSerializedManifest: false,
-      }) : undefined;
+      });
       return await publishBundledPluginSemanticProjection(
           options,
           dependencies,
           publicationLease,
           !options.targetOwnedOnly ? [{ outPath: cliOutPath, out: cliOut }] : [],
           failures,
-          sourceResult ? {
+          {
             pluginPackages: [...selectedPluginPackages, ...sourceResult.sourcePluginPackages]
               .sort((a, b) => a.packageName.localeCompare(b.packageName)),
             failures: sourceResult.failures,
-          } : undefined,
+          },
         );
     }
     return failures;

@@ -1,15 +1,14 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPackageLayoutSandbox, writeBundledPluginSourceInputs, writeCliBundledHostPackage } from '../__tests__/testkit/packageLayoutSandbox';
 import { renderCliBundledAgentRegistrationBindingsTs } from './bundledPlugins/registry';
 import { PLUGIN_MANIFEST as CUSTOM_ACP_MANIFEST } from '../../../../packages/plugins/custom-acp/src/manifest';
 
-describe('bundled generator preparation process boundary', () => {
-  it('publishes and checks semantic projections from authored dependencies without internal dist', async () => {
+async function createSourceGeneratorFixture() {
     const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-source-generator-');
     const sourceRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
     // CLI source imports consume transfers and its peer-mediation dependency.
@@ -99,28 +98,108 @@ describe('bundled generator preparation process boundary', () => {
       const { brand: _brand, resources: _resources, ...unrelatedManifest } = manifest;
       writeFileSync(join(unrelatedRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({ ...unrelatedManifest, id: 'happier.unrelated', contributes: {} })};`);
       const generator = join(happyCliDir, 'scripts/build-owned/generateBundledPluginEntries.ts');
-      const run = (mode: 'write' | 'check') => promisify(execFile)(process.execPath,
-        ['--conditions=happier-source', '--import', sourceOnlyLoader, '--experimental-strip-types', generator, '--root', repoRoot,
-          ...(mode === 'check' ? ['--scope', 'projections'] : []), '--workspace', 'plugins-selected', '--mode', mode],
+      const run = (mode: 'write' | 'check', options: Readonly<{ packageArtifacts?: boolean; workspace?: string; preload?: string }> = {}) => promisify(execFile)(process.execPath,
+        ['--conditions=happier-source', '--import', sourceOnlyLoader, ...(options.preload ? ['--import', options.preload] : []),
+          '--experimental-strip-types', generator, '--root', repoRoot,
+          ...(mode === 'check' && !options.packageArtifacts ? ['--scope', 'projections'] : []),
+          ...(options.packageArtifacts ? ['--package-artifacts'] : []),
+          '--workspace', options.workspace ?? 'plugins-selected', '--mode', mode],
         { cwd: repoRoot, env: { ...process.env, HAPPIER_DEV_TARGET_EXECUTION: '0',
           // Keep the no-dist assertion active in the real inspection children too.
           NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${JSON.stringify(pathToFileURL(sourceOnlyLoader).href)}`,
         }, encoding: 'utf8' });
       await run('write');
-      expect(existsSync(join(packageRoot, '.happier-plugin'))).toBe(false);
-      for (const name of sourceWorkspaces) {
-        expect(existsSync(join(repoRoot, 'packages', name, 'dist'))).toBe(false);
-      }
       const projection = join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
       const published = readFileSync(projection, 'utf8');
-      expect(published).toContain('happier.selected');
-      await run('check');
+      return { repoRoot, packageRoot, sourceWorkspaces, projection, published, manifest, run, cleanup };
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+}
+
+describe('bundled generator preparation process boundary', () => {
+  let fixture: Awaited<ReturnType<typeof createSourceGeneratorFixture>>;
+
+  // Each real process boundary gets the existing test budget. Four sequential
+  // inspections otherwise exhaust it even while every child makes progress.
+  beforeAll(async () => {
+    fixture = await createSourceGeneratorFixture();
+  }, 120_000);
+
+  afterAll(() => fixture?.cleanup());
+
+  it('publishes and checks semantic projections from authored dependencies without internal dist', async () => {
+    const { repoRoot, packageRoot, sourceWorkspaces, published, run } = fixture;
+    expect(existsSync(join(packageRoot, '.happier-plugin'))).toBe(false);
+    for (const name of sourceWorkspaces) {
+      expect(existsSync(join(repoRoot, 'packages', name, 'dist'))).toBe(false);
+    }
+    expect(published).toContain('happier.selected');
+    await run('check');
+  }, 120_000);
+
+  it('rejects a stale semantic projection', async () => {
+    const { projection, published, run } = fixture;
+    try {
       writeFileSync(projection, `${published}\nexport const drift = true;\n`);
       await expect(run('check')).rejects.toThrow(/differs/u);
+    } finally {
       writeFileSync(projection, published);
-      writeFileSync(join(packageRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify({ ...manifest, schemaVersion: 99 })};`);
+    }
+  }, 120_000);
+
+  it('checks packaged resource membership without reading payload bytes', async () => {
+    const { repoRoot, run } = fixture;
+    const packageRoot = writeBundledPluginSourceInputs({ repoRoot, pluginId: 'resource-only' });
+    const manifest = {
+      schemaVersion: 2, id: 'happier.resource-only', version: '0.0.0', displayName: 'Resource only',
+      runtime: { apiVersion: 1 }, contributes: {
+        resources: [{ id: 'payload', kind: 'asset', path: 'assets/payload.bin', contentType: 'application/octet-stream' }],
+      },
+    };
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+      name: '@happier-dev/plugins-resource-only', version: '0.0.0', type: 'module', files: ['dist', 'assets'],
+    }));
+    mkdirSync(join(packageRoot, 'assets'), { recursive: true });
+    mkdirSync(join(packageRoot, 'dist'), { recursive: true });
+    const payloadPath = join(packageRoot, 'assets/payload.bin');
+    writeFileSync(payloadPath, 'packaged payload\n');
+    writeFileSync(join(packageRoot, 'dist/index.js'), 'export {};\n');
+    writeFileSync(join(packageRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};`);
+    writeFileSync(join(packageRoot, 'src/index.ts'), "export { PLUGIN_MANIFEST as manifest } from './manifest.js'; export function activate() {}\n");
+    const readsPath = join(repoRoot, 'payload-reads.log');
+    const preload = join(repoRoot, 'observe-payload-reads.mjs');
+    // Observe the real generator's filesystem boundary in its private process.
+    writeFileSync(preload, `
+      import fs from 'node:fs';
+      import { syncBuiltinESMExports } from 'node:module';
+      const read = fs.readFileSync;
+      fs.readFileSync = (path, ...args) => {
+        if (String(path) === ${JSON.stringify(payloadPath)}) fs.appendFileSync(${JSON.stringify(readsPath)}, 'read\\n');
+        return read(path, ...args);
+      };
+      syncBuiltinESMExports();
+    `);
+    const options = { packageArtifacts: true, workspace: 'plugins-resource-only', preload };
+    await run('write', options);
+    expect(existsSync(readsPath) ? readFileSync(readsPath, 'utf8') : '').toBe('');
+    expect(readFileSync(payloadPath, 'utf8')).toBe('packaged payload\n');
+    rmSync(payloadPath);
+    await expect(run('check', options)).rejects.toThrow(/payload\.bin/u);
+  }, 120_000);
+
+  it('rejects an invalid authored manifest without replacing the projection', async () => {
+    const { packageRoot, manifest, projection, run } = fixture;
+    const currentProjection = readFileSync(projection, 'utf8');
+    const manifestPath = join(packageRoot, 'src/manifest.ts');
+    const authoredManifest = readFileSync(manifestPath, 'utf8');
+    try {
+      writeFileSync(manifestPath, `export const PLUGIN_MANIFEST = ${JSON.stringify({ ...manifest, schemaVersion: 99 })};`);
       await expect(run('check')).rejects.toThrow(/Invalid PLUGIN_MANIFEST/u);
-      expect(readFileSync(projection, 'utf8')).toBe(published);
-    } finally { cleanup(); }
+      expect(readFileSync(projection, 'utf8')).toBe(currentProjection);
+    } finally {
+      writeFileSync(manifestPath, authoredManifest);
+    }
   }, 120_000);
 });

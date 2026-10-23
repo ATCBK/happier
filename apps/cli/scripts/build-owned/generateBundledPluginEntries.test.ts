@@ -42,6 +42,7 @@ import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY } from '../../../../pack
 import type { BundledPluginPackage } from './bundledPlugins/projectionFacts.ts';
 import { renderCliBundledAgentRegistrationBindingsTs } from './bundledPlugins/registry.ts';
 import { runAgentSkillDeliveryContract } from '@happier-dev/plugin-sdk/testing';
+import { serializeCanonicalPluginManifest } from '../../src/plugins/manifest/serialize';
 
 const generatorSource = readFileSync(new URL('./generateBundledPluginEntries.ts', import.meta.url), 'utf8');
 const registryRendererSource = readFileSync(new URL('./bundledPlugins/registry.ts', import.meta.url), 'utf8');
@@ -1022,7 +1023,7 @@ describe('CLI bundled plugin registry projection', () => {
     }]));
   }
 
-  it('scoped ordinary publication projects authored declarations despite stale package artifacts', async () => {
+  it.each([false, true])('scoped publication projects authored peers despite stale package artifacts (packageArtifacts=%s)', async (packageArtifacts) => {
     const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-authored-projection-');
     const packages = ['inspector', 'neighbor'];
     for (const id of packages) {
@@ -1036,18 +1037,37 @@ describe('CLI bundled plugin registry projection', () => {
         hostAccess: { required: [], optional: [] }, contributes: {},
       })};`);
       mkdirSync(join(packageRoot, '.happier-plugin'), { recursive: true });
-      writeFileSync(join(packageRoot, '.happier-plugin/plugin.json'), '{"schemaVersion":0}');
+      writeFileSync(join(packageRoot, '.happier-plugin/plugin.json'), JSON.stringify({
+        schemaVersion: 2, id: `happier.${id}`, version: '0.0.0', displayName: `Stale ${id}`,
+        engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
+        hostAccess: { required: [], optional: [] }, contributes: {},
+      }));
     }
     writeRetainedCatalogAgent(repoRoot, happyCliDir);
     writeCliBundledHostPackage({ happyCliDir, bundledDependencies: [...packages, 'fixture-acp'].map(id => `@happier-dev/plugins-${id}`) });
     try {
-      await main(['--root', repoRoot, '--mode', 'write', '--workspace', 'plugins-inspector']);
+      await main(['--root', repoRoot, '--mode', 'write', '--workspace', 'plugins-inspector',
+        ...(packageArtifacts ? ['--package-artifacts'] : [])]);
       for (const id of packages) {
         expect(JSON.parse(readFileSync(join(happyCliDir, `assets/bundled-plugin-manifests/${id}.json`), 'utf8')))
           .toMatchObject({ id: `happier.${id}`, displayName: `Authored ${id}` });
-        expect(readFileSync(join(repoRoot, `packages/plugins/${id}/.happier-plugin/plugin.json`), 'utf8'))
-          .toBe('{"schemaVersion":0}');
+        expect(JSON.parse(readFileSync(join(repoRoot, `packages/plugins/${id}/.happier-plugin/plugin.json`), 'utf8')))
+          .toMatchObject({ displayName: packageArtifacts && id === 'inspector' ? `Authored ${id}` : `Stale ${id}` });
       }
+      // Governance must also reject drift in a committed/installed serialized
+      // peer even when its source-derived host projection is already current.
+      await expect(main(['--root', repoRoot, '--mode', 'check', '--scope', 'projections', '--workspace', 'plugins-inspector']))
+        .rejects.toThrow(/plugin\.json.*Run .*generateBundledPluginEntries\.ts.*--package-artifacts/u);
+      // Repair serialized declarations using the canonical serializer and the
+      // real source projection already emitted above, then prove check recovery.
+      for (const id of [...packages, 'fixture-acp']) {
+        const ingestion = ingestPluginManifestV2(JSON.parse(readFileSync(join(happyCliDir,
+          `assets/bundled-plugin-manifests/${id}.json`), 'utf8')));
+        if (!ingestion.ok) throw new Error(JSON.stringify(ingestion.diagnostics));
+        writeFileSync(join(repoRoot, `packages/plugins/${id}/.happier-plugin/plugin.json`),
+          serializeCanonicalPluginManifest(ingestion.manifest));
+      }
+      await main(['--root', repoRoot, '--mode', 'check', '--scope', 'projections', '--workspace', 'plugins-inspector']);
     } finally { cleanup(); }
   });
 
