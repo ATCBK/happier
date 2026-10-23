@@ -49,7 +49,7 @@ afterEach(async () => {
 it.each([
     ['session.open', 'manager'], ['session.stop', 'manager'],
     ['session.open', 'person'], ['session.stop', 'person'],
-] as const)('admits only current manager metadata phases under the original signed %s root (%s)', async (actionId, actor) => {
+] as const)('enforces Session scope and current manager metadata phases under the original signed %s root (%s)', async (actionId, actor) => {
     const fixture = await createFixture();
     const caller = await db.session.create({ data: { accountId: fixture.account.id,
         tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
@@ -103,11 +103,18 @@ it.each([
                     requestId: authorization.binding.requestId, method, path, body, privateKey: fixture.keyPair.secretKey }),
             });
         };
-        expect(await verify('GET', undefined)).not.toBeNull();
-        expect(await verify('PATCH', patch)).not.toBeNull();
-        await db.session.update({ where: { id: child.id }, data: { metadataLayoutVersion: 1,
+        const refusedChildResume = actionId === 'session.open' && actor === 'manager';
+        if (refusedChildResume) {
+            expect(await verify('GET', undefined)).toBeNull();
+            expect(await verify('PATCH', patch)).toBeNull();
+        } else {
+            expect(await verify('GET', undefined)).not.toBeNull();
+            expect(await verify('PATCH', patch)).not.toBeNull();
+        }
+        const previousMetadata = { metadataLayoutVersion: 1,
             metadata: patch.sharedMetadata.ciphertext, ownerMetadata: JSON.stringify(previousOwner),
-            metadataVersion: 0, agentStateVersion: 0 } });
+            metadataVersion: 0, agentStateVersion: 0 };
+        await db.session.update({ where: { id: child.id }, data: previousMetadata });
         const path = `/v2/sessions/${child.id}`;
         const applied = await app.inject({ method: 'PATCH', url: path, payload: patch, headers: {
             ...buildAccountStoredContentCompatibilityHttpHeadersV1(CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION),
@@ -118,6 +125,14 @@ it.each([
                 effectActionId: actionId, target: authorization.binding.target, installationId: fixture.machine.installationId!,
                 requestId: authorization.binding.requestId, method: 'PATCH', path, body: patch, privateKey: fixture.keyPair.secretKey }),
         } });
+        if (refusedChildResume) {
+            expect(applied.statusCode, applied.body).toBe(401);
+            await expect(db.session.findUniqueOrThrow({ where: { id: child.id }, select: {
+                metadataLayoutVersion: true, metadata: true, ownerMetadata: true,
+                metadataVersion: true, agentStateVersion: true,
+            } })).resolves.toEqual(previousMetadata);
+            return;
+        }
         expect(applied.statusCode, applied.body).toBe(200);
         const persisted = await db.session.findUniqueOrThrow({ where: { id: child.id } });
         expect(JSON.parse(persisted.ownerMetadata!)).toEqual(nextOwner);
@@ -230,8 +245,11 @@ it.each([
         expect((await invoke(operation === 'archive' ? 'unarchive' : 'archive')).statusCode).not.toBe(200);
         const outsider = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' } });
         const outsiderSession = await db.session.create({ data: { accountId: outsider.id,
-            tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}', active: false } });
-        expect((await invoke(operation, outsiderSession.id)).statusCode).toBe(403);
+            tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}', active: false,
+            archivedAt: actionId === 'session.unarchive' ? new Date(456) : null } });
+        expect((await invoke(operation, outsiderSession.id)).statusCode).toBe(401);
+        await expect(db.session.findUniqueOrThrow({ where: { id: outsiderSession.id },
+            select: { archivedAt: true } })).resolves.toEqual({ archivedAt: outsiderSession.archivedAt });
         if (actionId === 'session.archive') {
             await db.session.update({ where: { id: child.id }, data: { active: true, archivedAt: null } });
             expect((await invoke(operation)).statusCode).toBe(409);
