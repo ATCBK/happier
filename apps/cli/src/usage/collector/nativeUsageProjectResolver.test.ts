@@ -7,6 +7,7 @@ import { ProjectAccountOrganizationV1Schema, ProjectAccountRowMutationRequestV1S
     StoredProjectAccountRowPayloadV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { mockProjectAccountRowsHttpBoundary } from '@/workspaces/projectAccountRows.testkit';
 import { createNativeUsageProjectResolver } from './nativeUsageProjectResolver';
 import { FeaturesResponseSchema, UsageEventIngestRequestSchema } from '@happier-dev/protocol';
 import { createPiExternalSessionsContribution } from '../../../../../packages/plugins/pi/src/agent/externalSessions/contribution';
@@ -23,18 +24,11 @@ const authority = { serverId: 'home', accountId: 'account', machineId: 'machine'
 const token = `header.${Buffer.from(JSON.stringify({ sub: authority.accountId })).toString('base64url')}.signature`;
 // HTTP is the Account persistence boundary; the real mode, cipher, mutation, and ref owners run beneath it.
 function accountBoundary(rows: ProjectAccountRowV1[]) {
-    vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 0 } });
-    return vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
-        expect(url.startsWith('https://home.test/')).toBe(true);
-        if (url.endsWith('/list')) return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [...rows] } };
-        const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
-        const accepted = request.mutations.map(mutation => ({ key: mutation.key,
-            revision: mutation.expectedRevision === 'absent' ? 0 : mutation.expectedRevision + 1, content: mutation.content }));
-        for (const row of accepted) {
-            const index = rows.findIndex(existing => JSON.stringify(existing.key) === JSON.stringify(row.key));
-            if (index < 0) rows.push(row); else rows[index] = row;
-        }
-        return { status: 200, data: { status: 'updated', cursor: 1, rows: accepted } };
+    const boundary = mockProjectAccountRowsHttpBoundary(rows);
+    const transport = boundary.getMockImplementation()!;
+    return boundary.mockImplementation(async (...args) => {
+        expect(args[0].startsWith('https://home.test/')).toBe(true);
+        return await transport(...args);
     });
 }
 async function fixture(run: (resolve: ReturnType<typeof createNativeUsageProjectResolver>) => Promise<void>,
@@ -102,7 +96,7 @@ describe('native accounting Account Project resolution', () => {
         const transport = accountBoundary([]);
         const canonicalBoundary = transport.getMockImplementation()!;
         transport.mockImplementation(async (url, body, config) => {
-            if (url.endsWith('/list')) return await canonicalBoundary(url, body, config);
+            if (!url.endsWith('/mutate')) return await canonicalBoundary(url, body, config);
             const request = ProjectAccountRowMutationRequestV1Schema.parse(body);
             return { status: 200, data: { status: 'updated', cursor: 1,
                 rows: request.mutations.map(mutation => ({ key: mutation.key, revision: 99, content: mutation.content })) } };
