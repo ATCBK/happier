@@ -15,6 +15,8 @@ import { PUBLIC_RELEASE_RING_IDS } from '@happier-dev/release-runtime/releaseRin
 import type { BundledPackagedRuntimeCustodyV1 } from '@happier-dev/protocol';
 import { projectPath, projectPathFromModuleUrl } from '@/projectPath';
 import { isEmbeddedBunBundlePath } from '@/packagedRuntime/js/isEmbeddedBunBundlePath';
+import { defaultCanImportFirstPartyPluginSource } from './firstPartySourceRuntime';
+export { defaultCanImportFirstPartyPluginSource } from './firstPartySourceRuntime';
 import {
   isRunnerSnapshotRuntimeRoot,
   resolveRunnerSnapshotBackingRuntimeRootFromPath,
@@ -44,12 +46,6 @@ const MANAGED_CLI_SHIM_INSTALLS = new Map(
 
 function normalizePathLike(pathLike: string): string {
   return String(pathLike ?? '').trim().replaceAll('\\', '/');
-}
-
-/** Actual source loading is distinct from a compiled module in a source checkout. */
-export function defaultCanImportFirstPartyPluginSource(): boolean {
-  const currentModulePath = normalizePathLike(fileURLToPath(import.meta.url));
-  return currentModulePath.endsWith('/src/packagedRuntime/resolvePackagedRuntimeEntrypoint.ts');
 }
 
 /** A compiled source runtime retains the source role, but never imports moving TS.
