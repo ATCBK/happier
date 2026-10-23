@@ -1905,14 +1905,6 @@ export async function runPermissionModePromptLoop(opts: {
       }
       if (!isAbortLikeError(error) && !isRuntimeTurnFailureAlreadySurfaced(error)) {
         await opts.onPromptFailure?.(error);
-        await publishPromptLoopAgentMessage(opts, { type: 'message', message: opts.formatPromptErrorMessage(error) });
-        if (currentCheckpointMessageId) {
-          await publishPromptLoopAgentMessage(
-            opts,
-            { type: 'turn_failed', id: currentCheckpointMessageId },
-            randomUUID(),
-          );
-        }
         handledPreTurnFailure = !beganTurn;
       }
     } finally {
