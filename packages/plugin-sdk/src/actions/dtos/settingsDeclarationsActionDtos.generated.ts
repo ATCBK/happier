@@ -158,12 +158,51 @@ export type SettingsDeclarationsActionInputById = {
             kind: 'account_settings_history_purge';
             versions: number[];
         } | {
+            kind: 'account_settings_history_restore';
+            historyVersion: number;
+            expectedSettingsVersion: number;
+        } | {
+            kind: 'account_encryption_mode_convert';
+            toMode: 'plain' | 'e2ee';
+        } | {
             kind: 'model_pack';
             packId: string;
             machineId?: string | undefined;
         } | {
             kind: 'voice_preview';
             voiceId: string;
+        } | {
+            kind: 'voice_credential_source';
+            credentialSlotId: string;
+            expectedSettingsVersion: number;
+            selection: {
+                kind: 'none';
+            } | {
+                kind: 'savedSecret';
+            } | {
+                kind: 'connectedAccount';
+                target: {
+                    kind: 'account';
+                    account: {
+                        service: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        accountId: string;
+                    };
+                } | {
+                    kind: 'group';
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    } | {
+                        pluginId: 'happier';
+                        localId: 'mcp-sign-in';
+                    };
+                    groupId: string;
+                };
+            };
+            expectedContractDigest?: string | undefined;
         } | {
             kind: 'diagnostics_enabled';
             enabled: boolean;

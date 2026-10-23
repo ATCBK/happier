@@ -532,6 +532,8 @@ export type DiscussionActionInputById = {
     };
     readonly "discussion.read": {
         discussionId: string;
+        messageId?: string | undefined;
+        localId?: string | undefined;
         beforeSeq?: number | undefined;
         afterSeq?: number | undefined;
         throughSeq?: number | undefined;
