@@ -14,6 +14,9 @@ export type SessionAccessApprovalActionId =
     | 'session.access.grant.set'
     | 'session.access.grant.remove'
     | 'session.access.context.set'
+    | 'session.access.encryption.prepare'
+    | 'session.access.encryption.reprepare'
+    | 'session.access.layout.update'
     | 'session.public_link.create'
     | 'session.public_link.remove';
 

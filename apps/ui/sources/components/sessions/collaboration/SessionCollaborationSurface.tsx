@@ -354,6 +354,7 @@ function SessionCollaborationNamedAccessPane(props: PaneProps) {
     const access = useLiveSessionAccessEditorController({
         scope: props.scope,
         sessionId: props.sessionId,
+        detailsDemanded: props.shareOpen,
         metadataLayoutVersion: session ? readSessionMetadataLayoutVersion(session.metadataLayoutVersion) : null,
     });
     // The controller stays the single owner of the query; this only replays the

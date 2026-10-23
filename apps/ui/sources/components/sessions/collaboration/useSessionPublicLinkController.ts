@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SharingAuthoritySession } from '@/sync/domains/social/sessionSharingMutationAuthority';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { SessionAccessApiError, SessionAccessApprovalPendingError, createSessionAccessClient } from '@/sync/api/session/sessionAccessApi';
-import { migrateSessionForSharing } from '@/components/sessions/access/migrateSessionForSharing';
+import { migrateSessionForSharing } from '@/sync/ops/sessions/migrateSessionForSharing';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import {
     mergeSessionPublicLinkWithCachedBearer,

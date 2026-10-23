@@ -519,6 +519,12 @@ describe('SessionCollaborationSurface', () => {
         expect(screen.findByTestId('session-collaboration-mode:access')).toBeNull();
         // The access editor is not built until the card is pressed.
         expect(screen.findByTestId('session-access-editor:collaboration')).toBeNull();
+        // The visible card reads grants, but the closed editor has no demand
+        // for encryption recipients, Team candidates, or candidate policy.
+        await vi.waitFor(() => expect(transport.requests.some(request => request.path === '/v2/sessions/access-grants/list')).toBe(true));
+        expect(transport.requests.filter(request => request.path.endsWith('/data-key/envelopes')
+            || request.path === '/v1/teams/list'
+            || request.path === '/v2/sessions/access-candidates/inspect')).toHaveLength(0);
     });
 
     it('lands a Responsible focus request on the Responsible row in the foot block', async () => {
