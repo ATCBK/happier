@@ -297,11 +297,14 @@ describe('composer suggestion picker — host wiring', () => {
         };
         const host = composerReferenceHost(); // This provider declares @ only.
         const actions = { listSlashCommands: () => [] };
-        const hook = await renderHook((props: { query: string | null; host: ComposerReferenceSearchHost; actions: typeof actions; skills: SkillComposerSource }) => {
+        const initialProps: { query: string | null; host: ComposerReferenceSearchHost; actions: typeof actions; skills: SkillComposerSource } = {
+            query: '$project', host, actions, skills: skillSource,
+        };
+        const hook = await renderHook((props: typeof initialProps) => {
             const source = useSessionComposerSuggestions({ sessionId: SESSION_ID, kinds: SESSION_COMPOSER_SUGGESTION_KINDS,
                 composerReferenceHost: props.host, actionController: props.actions, skillSource: props.skills });
             return useActiveSuggestions(props.query, source);
-        }, { initialProps: { query: '$project', host, actions, skills: skillSource } });
+        }, { initialProps });
         await flushHookEffects();
         expect(read).toHaveBeenCalledTimes(1);
         // Scale the publication contract: unrelated @ providers and slash
