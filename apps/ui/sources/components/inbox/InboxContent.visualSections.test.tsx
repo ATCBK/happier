@@ -389,6 +389,9 @@ describe('InboxContent rows, attention sources and popover (ORC R-10, lab inbox-
     });
 
     it('updates an unchanged Automation attention row age on the shared clock and keeps its open target', async () => {
+        // Relative-date deadlines use timeouts; keep that genuine clock boundary under fake time too.
+        vi.useRealTimers();
+        vi.useFakeTimers({ now: NOW, toFake: ['Date', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
         const { InboxContent } = await import('./InboxContent');
         const run = createAutomationRunFixture({ id: 'aging-run', state: 'failed', finishedAt: NOW - 60_000 });
         const route = `/workflows/runs/${run.id}?target=occurrence&automationId=${run.automationId}&serverId=server-a` as const;
