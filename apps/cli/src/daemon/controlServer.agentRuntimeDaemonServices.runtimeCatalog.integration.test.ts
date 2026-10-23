@@ -41,6 +41,15 @@ import { openSessionTeamCredentialProviderBinding } from '@/providers/broker/ses
 import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
 import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { ProviderModelBindingSourceV1Schema } from '@happier-dev/protocol/providers/binding-compatibility';
+import { registerManagedActivityRpcHandlers } from '@/api/machine/rpcHandlers.managedActivity';
+import type { RpcHandler, RpcHandlerContext } from '@/api/rpc/types';
+import { MANAGED_ACTIVITY_READ_RPC_METHOD } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { createManagedActivityInventory } from './lifecycle/managedActivity';
+import { createSessionLiveWorkProducer } from './lifecycle/sessionLiveWorkProducer';
+import type { SessionInputLiveWork } from '@/agent/runtime/session/input/_types';
+import { createDeferred } from '@/testkit/async/deferred';
+import { authorizeRunnerAgentTurnAdmission } from './agentRuntime/runnerAgentTurnAdmission';
+import { writeSessionMarker, updateSessionMarkerActiveTurn, readSessionMarkerForPid, removeSessionMarker } from './sessionRegistry';
 
 type RecordAdmission = NonNullable<
   Parameters<typeof createDaemonControlApp>[0][
@@ -75,6 +84,105 @@ function createRetainedAgent() {
 }
 
 describe('daemon control server: runner-scoped Agent runtime services', () => {
+  it.each(['busy', 'unknown', 'temporary', 'handoff', 'shutdown', 'retired'] as const)(
+    'retains an opened Session first turn across a managed activity probe: %s', async (outcome) => {
+    const sessionId = 'session-managed-probe-first-turn';
+    const retainedAgent = createRetainedAgent();
+    const runner = { pid: 2241, processStartTimeMs: 1_717_171_717_600,
+      processCommandHash: 'a'.repeat(64), snapshotIdentity: 'snapshot:managed-probe' };
+    const authorityPath = await createAgentRuntimeDaemonServiceAuthorityPath({
+      happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing });
+    const authority = await publishAgentRuntimeDaemonServiceAuthority({
+      happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+      path: authorityPath, sessionId, runner, retainedAgent, httpPort: 46_005,
+      capability: capabilityA, readPluginHardRevocationRevision: async () => 0 });
+    const tracked: TrackedSession = { startedBy: 'daemon', pid: runner.pid, sessionRunnerPid: runner.pid,
+      happySessionId: sessionId, processStartTimeMs: runner.processStartTimeMs, processCommandHash: runner.processCommandHash,
+      agentRuntimeDaemonServiceAuthorityFilePath: authorityPath, agentRuntimeDaemonServiceCapabilityHash: authority.capabilityDigest,
+      runnerAgentSourceCustodyV1: retainedAgent.sourceCustody,
+      runnerAgentInvocationContext: { cwd: '/workspace', environment: {}, providerBindingActive: false } };
+    await writeSessionMarker({ pid: runner.pid, happySessionId: sessionId, startedBy: 'daemon', cwd: '/workspace' });
+    let handoffQuiescing = false;
+    const admissionDrain = createDaemonAdmissionDrain({ isPluginHandoffQuiescing: () => handoffQuiescing });
+    const activityEntered = createDeferred<void>();
+    const activityReply = createDeferred<SessionInputLiveWork>();
+    // The Session RPC is the transport boundary. The probe, inventory, drain,
+    // control ingress, turn decision and durable marker consumer remain real.
+    const sessions = createSessionLiveWorkProducer({ readSessions: () => [tracked],
+      readActivity: async () => { activityEntered.resolve(); return await activityReply.promise; } });
+    const activity = createManagedActivityInventory({ producers: [sessions] });
+    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+    registerManagedActivityRpcHandlers({ activity, admissionDrain, validateCurrentTarget: async () => true,
+      rpcHandlerManager: { registerHandler<TRequest, TResponse>(method: string, handler: RpcHandler<TRequest, TResponse>) {
+        handlers.set(method, (raw, context) => handler(raw as TRequest, context));
+      } } });
+    const context: RpcHandlerContext = { signal: new AbortController().signal,
+      machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'guest',
+        installationId: 'guest-installation', role: 'manage', encryptionMode: 'plain' },
+      verifyMachineAdmissionCurrent: async () => true };
+    const app = createDaemonControlApp({ getChildren: () => [tracked], machineId: 'guest', admissionDrain,
+      stopSession: async () => ({ status: 'not_found' as const }), spawnSession: async () => ({ type: 'success' as const, sessionId }),
+      requestShutdown() {}, onHappySessionWebhook() {}, controlToken: 'control-token',
+      agentRuntimeDaemonServices: { dispatch: async (request, subject) => {
+        if (request.operation.kind !== 'turn.admission.authorize') throw new Error('Unexpected operation');
+        return await authorizeRunnerAgentTurnAdmission({ retainedAgent: subject.retainedAgent, witness: request.operation.witness });
+      } }, recordAgentRuntimeDaemonServiceAdmission: (session, admission) => updateSessionMarkerActiveTurn({
+        pid: session.sessionRunnerPid ?? session.pid, sessionId, activeTurnId: admission.turnId,
+        agentRuntimeDaemonServiceActiveAdmission: admission }) });
+    const waitSubscriptions = vi.spyOn(admissionDrain, 'subscribe');
+    try {
+      const probe = handlers.get(MANAGED_ACTIVITY_READ_RPC_METHOD)!({ homeId: 'home', managedId: 'managed', expectedRevision: 1,
+        controller: { machineId: 'controller', installationId: 'controller-installation' } }, context);
+      await activityEntered.promise;
+      if (outcome === 'temporary') admissionDrain.beginTemporaryDrain();
+      if (outcome === 'handoff') { handoffQuiescing = true; admissionDrain.notifyPluginHandoffChanged(); }
+      expect(admissionDrain.isQuiescing()).toBe(true);
+      let completed = false;
+      const firstTurn = app.inject({ method: 'POST', url: AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+        headers: { 'x-happier-daemon-token': capabilityA }, payload: { v: 1, context: { token: capabilityA, sessionId },
+          operation: { kind: 'turn.admission.authorize', requestId: 'first-turn',
+            witness: { turnId: 'turn-1', inputId: 'input-1', userMessageSeq: 1, userMessageSeqs: [1] } } } })
+        .then(response => { completed = true; return response; });
+      // Observe entry into the real event wait (or the old premature response),
+      // without a sleep that could pass before authority-file IO completes.
+      await vi.waitFor(() => expect(waitSubscriptions.mock.calls.length > 0 || completed).toBe(true));
+      expect(completed).toBe(false);
+      if (outcome === 'shutdown') admissionDrain.beginShutdown();
+      if (outcome === 'retired') delete tracked.agentRuntimeDaemonServiceCapabilityHash;
+      activityReply.resolve(outcome === 'unknown' ? { session: 'unknown', input: 'unknown' }
+        : { session: 'settled', input: 'active', agents: 'settled', attention: 'settled' });
+      expect(await probe).toMatchObject({ kind: outcome === 'unknown' ? 'unknown' : 'busy' });
+      if (outcome === 'temporary' || outcome === 'handoff') {
+        expect(admissionDrain.isQuiescing()).toBe(true);
+        expect(completed).toBe(false);
+        if (outcome === 'temporary') admissionDrain.resume();
+        else { handoffQuiescing = false; admissionDrain.notifyPluginHandoffChanged(); }
+      }
+      const response = await firstTurn;
+      if (outcome === 'shutdown' || outcome === 'retired') {
+        expect(response.statusCode, response.body).toBe(outcome === 'shutdown' ? 503 : 403);
+        expect(response.json()).toMatchObject(outcome === 'shutdown'
+          ? { ok: false, errorCode: 'daemon_shutting_down' }
+          : { ok: false, error: { code: 'agent_runtime_daemon_service_forbidden' } });
+        expect((await readSessionMarkerForPid(runner.pid))?.agentRuntimeDaemonServiceActiveAdmission).toBeUndefined();
+        return;
+      }
+      expect(response.statusCode, response.body).toBe(200);
+      expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(response.json())).toMatchObject({
+        ok: true, result: { kind: 'turn.admission', status: 'admitted', witness: { turnId: 'turn-1' } } });
+      expect(await readSessionMarkerForPid(runner.pid)).toMatchObject({
+        agentRuntimeDaemonServiceActiveAdmission: { turnId: 'turn-1', inputId: 'input-1' } });
+      expect(tracked.activeTurnId).toBe('turn-1');
+    } finally {
+      activityReply.resolve({ session: 'unknown', input: 'unknown' });
+      admissionDrain.beginShutdown();
+      waitSubscriptions.mockRestore();
+      await app.close(); activity.dispose();
+      await removeSessionMarker(runner.pid);
+      await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ happyHomeDir: configuration.happyHomeDir,
+        publicReleaseRing: configuration.publicReleaseRing, path: authorityPath, capabilityDigest: authority.capabilityDigest });
+    }
+  });
   it.each(['team_credential_provider_selection_not_current', 'resource_unavailable', 'broker_unavailable'] as const)(
     'preserves a real Team selection refusal (%s) from the broker producer through the runner client', async code => {
     const fixture = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
@@ -329,7 +437,7 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
     }
   });
 
-  it('authorizes the current runner past a retained predecessor and parks new work while keeping accepted service reads open', async () => {
+  it('authorizes the current runner past a retained predecessor and reports handoff draining separately from shutdown', async () => {
     const sessionId = 'session-drain-admission';
     const retainedAgent = createRetainedAgent();
     const runner = { pid: 2237, processStartTimeMs: 1_717_171_717_300,
@@ -356,7 +464,8 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       sessionRunnerPid: runner.pid - 1,
       agentRuntimeDaemonServiceCapabilityHash: hashAgentRuntimeSessionBridgeToken(capabilityB),
     };
-    const admissionDrain = createDaemonAdmissionDrain();
+    let handoffQuiescing = false;
+    const admissionDrain = createDaemonAdmissionDrain({ isPluginHandoffQuiescing: () => handoffQuiescing });
     const app = createDaemonControlApp({ getChildren: () => [predecessor, tracked], machineId: 'machine-1',
       stopSession: async () => ({ status: 'not_found' as const }),
       spawnSession: async () => ({ type: 'success' as const, sessionId: 'unused' }),
@@ -376,11 +485,15 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       // No internal dispatcher is substituted. The real private authority gets
       // through ingress to the unavailable-service boundary when admission is open.
       for (const operation of [turn, managedProcess]) expect((await send(operation)).statusCode).toBe(501);
-      admissionDrain.beginTemporaryDrain();
-      for (const operation of [turn, managedProcess]) expect((await send(operation)).statusCode).toBe(503);
-      expect((await send({ kind: 'managed_server.endpoint.release', requestId: 'release-request',
-        pluginId: retainedAgent.pluginId, instanceId: 'accepted-instance', projectionToken: 'b'.repeat(64) })).statusCode).toBe(501);
-      admissionDrain.resume();
+      handoffQuiescing = true;
+      admissionDrain.notifyPluginHandoffChanged();
+      const response = await send({ kind: 'managed_server.endpoint.release', requestId: 'release-request',
+        pluginId: retainedAgent.pluginId, instanceId: 'accepted-instance', projectionToken: 'b'.repeat(64) });
+      expect(response.statusCode).toBe(503);
+      expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(response.json())).toMatchObject({
+        ok: false, error: { code: 'daemon_draining' } });
+      handoffQuiescing = false;
+      admissionDrain.notifyPluginHandoffChanged();
       for (const operation of [turn, managedProcess]) expect((await send(operation)).statusCode).toBe(501);
       admissionDrain.beginShutdown();
       admissionDrain.resume();

@@ -1,6 +1,7 @@
 import {
   AgentSessionRunnerBindingV1Schema,
 } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
+import type { AgentRuntimeDaemonServiceRequestV1, AgentRuntimeDaemonServiceResponseV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 
 export type RunnerAgentNewTurnAdmissionDecision =
   | Readonly<{ status: 'admitted' }>
@@ -41,4 +42,15 @@ export async function authorizeRunnerAgentNewTurn(
   return evaluateRunnerAgentNewTurnAdmission({
     retainedAgent: input.retainedAgent,
   });
+}
+
+/** The private service publishes the same retained-Agent decision with its exact input witness. */
+export async function authorizeRunnerAgentTurnAdmission(input: Readonly<{
+  retainedAgent: unknown;
+  witness: Extract<AgentRuntimeDaemonServiceRequestV1['operation'], { kind: 'turn.admission.authorize' }>['witness'];
+}>): Promise<AgentRuntimeDaemonServiceResponseV1> {
+  const decision = await authorizeRunnerAgentNewTurn(input);
+  return { ok: true, result: decision.status === 'admitted'
+    ? { kind: 'turn.admission', status: 'admitted', witness: input.witness }
+    : { kind: 'turn.admission', status: 'denied', reason: decision.reason } };
 }

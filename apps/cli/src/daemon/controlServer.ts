@@ -12,7 +12,7 @@ import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-
 import { configuration } from '@/configuration';
 import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 import { DoctorSnapshotResourceVitalsSchema, type DoctorSnapshotResourceVitals } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
-import { createDaemonAdmissionDrain, EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema, type DaemonAdmissionDrain } from './lifecycle/admissionDrain';
+import { createDaemonAdmissionDrain, EXECUTION_RUN_ADMISSION_PATH, ExecutionRunDaemonAdmissionResponseSchema, waitForDaemonAdmission, type DaemonAdmissionDrain } from './lifecycle/admissionDrain';
 import { AUTHORITY_CEILING_HEADER_V1, resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
 import { waitForTerminalPresentUserPolicyRefresh, type TerminalPresentUserPolicyScope } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
 import { logger } from '@/ui/logger';
@@ -3072,9 +3072,12 @@ export function createDaemonControlApp({
       || request.body.operation.kind === 'mcp.plugin.materialize'
       || request.body.operation.kind === 'session.input.admit'
       || request.body.operation.kind === 'managed_server.supervision.authorize';
-    if (releasesNewWork ? isDaemonQuiescing() : admissionDrain.isPublicationQuiescing()) {
+    if (releasesNewWork ? admissionDrain.isFinalShutdown() : admissionDrain.isPublicationQuiescing()) {
       reply.code(503);
-      return daemonShuttingDownResponse();
+      return admissionDrain.isFinalShutdown() ? daemonShuttingDownResponse() : {
+        ok: false as const,
+        error: { code: 'daemon_draining', message: 'Daemon is draining' },
+      };
     }
     if (!agentRuntimeDaemonServices) {
       reply.code(501);
@@ -3225,6 +3228,25 @@ export function createDaemonControlApp({
     reply.raw.once('close', onClientClose);
     let result: AgentRuntimeDaemonServiceResponseV1;
     try {
+      // A managed activity probe can overlap an already opening/open Session.
+      // Keep its request in the incumbent drain lifetime rather than turning
+      // that reversible closure into a terminal pre-effect input refusal.
+      while (releasesNewWork && isDaemonQuiescing()) {
+        try {
+          await waitForDaemonAdmission(admissionDrain, requestLifetime.signal);
+        } catch (error) {
+          if (!admissionDrain.isFinalShutdown()) throw error;
+          reply.code(503);
+          return daemonShuttingDownResponse();
+        }
+        if (!await isCurrent()) {
+          reply.code(403);
+          return { ok: false as const, error: {
+            code: 'agent_runtime_daemon_service_forbidden',
+            message: 'Agent runtime daemon service request is forbidden',
+          } };
+        }
+      }
       result = await agentRuntimeDaemonServices.dispatch(
         request.body,
         trackedAuthority

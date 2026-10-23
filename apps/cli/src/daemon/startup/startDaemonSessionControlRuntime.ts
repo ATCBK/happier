@@ -559,7 +559,7 @@ import {
   awaitTrackedRunnerAgentSessionOpen,
   recordTrackedRunnerAgentSessionOpenAttestation,
 } from '../agentRuntime/runnerAgentSessionOpenAttestation';
-import { authorizeRunnerAgentNewTurn } from '../agentRuntime/runnerAgentTurnAdmission';
+import { authorizeRunnerAgentNewTurn, authorizeRunnerAgentTurnAdmission } from '../agentRuntime/runnerAgentTurnAdmission';
 import { createRunnerAgentDaemonFacetService } from '../agentRuntime/runnerAgentDaemonFacetService';
 import {
   createRunnerDaemonPluginServicesHost,
@@ -17596,27 +17596,7 @@ export async function startDaemonSessionControlRuntime(
             };
           }
           if (request.operation.kind === 'turn.admission.authorize') {
-            const decision = await authorizeRunnerAgentNewTurn({
-              retainedAgent,
-            });
-            if (decision.status === 'admitted') {
-              return {
-                ok: true as const,
-                result: {
-                  kind: 'turn.admission' as const,
-                  status: 'admitted' as const,
-                  witness: request.operation.witness,
-                },
-              };
-            }
-            return {
-              ok: true as const,
-              result: {
-                kind: 'turn.admission' as const,
-                status: 'denied' as const,
-                reason: decision.reason,
-              },
-            };
+            return await authorizeRunnerAgentTurnAdmission({ retainedAgent, witness: request.operation.witness });
           }
           if (request.operation.kind === 'session.open.attest') {
             const tracked = trackedSession;

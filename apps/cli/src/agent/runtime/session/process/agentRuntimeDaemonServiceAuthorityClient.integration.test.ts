@@ -1043,6 +1043,7 @@ describe('current Agent runtime daemon service authority client', () => {
     for (const [status, code, effectCode, diagnosticCode] of [
       [503, 'agent_runtime_daemon_service_admission_custody_unavailable', 'native_agent_privileged_effect_outcome_unknown', 'agent_runtime_daemon_service_admission_custody_unavailable'],
       [403, 'agent_runtime_daemon_service_forbidden', 'native_agent_privileged_effect_authority_unavailable', 'agent_runtime_daemon_service_forbidden'],
+      [503, 'daemon_draining', 'native_agent_privileged_effect_authority_unavailable', 'daemon_draining'],
       [503, 'private-response-body', 'native_agent_privileged_effect_authority_unavailable', 'mcp_request_auth_unavailable'],
     ] as const) {
       vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: false,

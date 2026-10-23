@@ -43,7 +43,7 @@ const McpRequestAuthDiagnosticCodeSchema = z.union([McpRequestAuthFailureCodeSch
   'execution_run_contribution_snapshot_unavailable',
   'agent_runtime_daemon_service_forbidden', 'agent_runtime_daemon_service_unavailable',
   'agent_runtime_daemon_service_admission_custody_unavailable', 'agent_runtime_daemon_service_admission_invalid',
-  'agent_runtime_daemon_service_generation_not_current', 'daemon_shutting_down',
+  'agent_runtime_daemon_service_generation_not_current', 'daemon_shutting_down', 'daemon_draining',
   'requester_session_not_current', 'requester_session_custody_mismatch',
   'requester_account_context_unavailable', 'project_requester_home_unavailable',
   'AbortError', 'TimeoutError', 'TypeError', 'RangeError', 'SyntaxError',
