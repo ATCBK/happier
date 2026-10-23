@@ -41,8 +41,10 @@ it('rejoins only the original completed Workflow turn when retained reply anchor
   let finalAssistantMessageSeq: number | null | undefined = null;
   let endSeqInclusive: number | undefined;
   let outcome: SessionMessageReplyOutcomeV1 | undefined;
+  let discussionWorkflow = false;
   let invocation = workflowInvocation;
   let answerVisible = true;
+  let onNativeTranscriptRead: (() => void) | undefined;
   const socket = Object.assign(new EventEmitter(), {
     connected: false, connect: vi.fn(), disconnect: vi.fn(), close: vi.fn(),
   });
@@ -69,6 +71,9 @@ it('rejoins only the original completed Workflow turn when retained reply anchor
       recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } } };
     if (url.endsWith('/reply')) return { status: 200, data: { v: 1, status: 'available', progress: {
       v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId, ...(outcome ? { outcome } : {}),
+      ...(discussionWorkflow ? { workflow: { purpose: 'invocation', ...workflowInvocation }, discussion: {
+        discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId,
+      } } : {}),
     } } };
     if (url.includes('/messages/by-local-id/')) return { status: 200, data: { message: input } };
     if (url.endsWith('/turns')) return { status: 200, data: { v: 1, sessionId, updatedAt: 20, turns: [{
@@ -80,13 +85,16 @@ it('rejoins only the original completed Workflow turn when retained reply anchor
         invocationRecordId: '00000000-0000-4000-8000-000000000004' },
       transcriptAnchors: { startUserMessageSeq: 10, userMessageSeqs: [10], finalAssistantMessageSeq: 12 },
     }] } };
-    if (url.includes('/messages?')) return { status: 200, data: { messages: [input,
+    if (url.includes('/messages?')) {
+      onNativeTranscriptRead?.();
+      return { status: 200, data: { messages: [input,
       ...(answerVisible ? [assistant(5, 'QA-FIN80 CHILD DONE', turnId)] : []),
       assistant(6, 'Other child', turnId, {}, 'sidechain'),
       assistant(7, 'Unfinished checkpoint', turnId, { runtimeEventKind: 'streaming',
         happierStreamSegmentV1: { segmentKind: 'assistant', segmentState: 'streaming' } }),
       assistant(12, 'Wrong later answer', 'later-turn'),
-    ] } };
+      ] } };
+    }
     if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session:
       createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', metadata: '{}', active: false }) } };
     throw new Error(`unexpected_retained_read:${url}`);
@@ -100,6 +108,21 @@ it('rejoins only the original completed Workflow turn when retained reply anchor
     messageRef: { messageId: 'retained-row-5' } } });
   if (!result.ok) throw new Error('retained_input_unavailable');
   expect(classifyWorkflowSessionInputResult(result.result)).toMatchObject({ kind: 'completed', result: 'QA-FIN80 CHILD DONE' });
+  // A Discussion Workflow needs the original C2 fact in its immutable terminal
+  // row. Native prose alone may still recover the ordinary retained turn above.
+  discussionWorkflow = true;
+  await expect(observe()).resolves.toMatchObject({ ok: true, result: { kind: 'pending' } });
+  let nativeTranscriptRead = () => {};
+  const nativeRead = new Promise<void>(resolve => { nativeTranscriptRead = resolve; });
+  onNativeTranscriptRead = nativeTranscriptRead;
+  const waitingForCustody = observeWorkflowSessionInputResult({ credentials: { token: 'token', encryption: null }, sessionId, localId });
+  await nativeRead;
+  outcome = { kind: 'answer', result: { sessionId, messageId: 'retained-row-5' } };
+  socket.emit('ephemeral', { type: 'session-message-reply-pending-v1', v: 1, sessionId, requestLocalId: localId });
+  await expect(waitingForCustody).resolves.toMatchObject({ ok: true, result: { kind: 'final_text', text: 'QA-FIN80 CHILD DONE' }, replyOutcome: outcome });
+  onNativeTranscriptRead = undefined;
+  outcome = undefined;
+  discussionWorkflow = false;
   const recover = createWorkflowInvocationRecoveryObserver({ credentials: { token: 'token', encryption: null },
     machineId: 'machine-1', now: () => 0, actionExecutor: { execute: async () => { throw new Error('No detached Run'); } } });
   await expect(recover({ terminalParent: true, cancellationRequested: true,

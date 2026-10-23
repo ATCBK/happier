@@ -1,18 +1,18 @@
 import axios from 'axios';
 import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createActionExecutor, encodeV2SessionListCursorV2, API_TOKEN_FULL_GRANT_V1, wrapApiTokenEncryptionAccessV1,
+import { createActionExecutor, encodeV2SessionListCursorV2, API_TOKEN_FULL_GRANT_V1, normalizeActionsSettingsV1, wrapApiTokenEncryptionAccessV1,
   deriveAccountMachineKeyFromRecoverySecret, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol';
 import { formatAccountApiTokenCredentialV1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { createPlainSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { sealSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
-import { ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
+import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER, ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { createAccountEncryptionCurrentnessFixture, createSessionNotificationContextFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
-import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionListQueryResponseV1Schema, SessionRuntimeManagedSubtreeListResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SESSION_LIST_PAGE_MAX_LIMIT, SessionListQueryV1Schema, type SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
@@ -30,6 +30,18 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { seedTestServerProfile } from '@/testkit/serverProfiles';
+import { createCliActionExecutorHarness } from './createCliActionExecutorHarness';
+import { createRestrictedCurrentSessionListActionDependency } from './sessionListActionDependency';
+import { createSessionAccountActionExecutor } from '@/mcp/runtime/createSessionAccountActionExecutor';
+import { resolveActionCurrentSessionScopeFailure } from '@happier-dev/protocol/actions/executor/sessionListAccess';
+import { createHappierMcpServer } from '@/mcp/createHappierMcpServer';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { createSessionDaemonAuthorityFixture } from '@/mcp/runtime/sessionDaemonAuthority.testkit';
+import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -38,6 +50,123 @@ describe('CLI Session target composition', () => {
   const sessionId = 'c111111111111111111111111';
   const managerId = 'c222222222222222222222222';
   const context = { surface: 'cli', authority: 'present_user', serverId: 'srv_target_home' } as const;
+
+  it('resolves restricted native targets only through the server-proved own subtree', async () => {
+    const credentials = { token: 'restricted-runtime', encryption: null };
+    const { viewer: _viewer, ...parent } = createSessionNotificationContextFixture(sessionId);
+    const { viewer: _childViewer, ...child } = createSessionNotificationContextFixture(managerId);
+    let detached = false;
+    const queries: SessionListQueryV1[] = [];
+    vi.spyOn(axios, 'get').mockImplementation(async () => { throw new Error('No Account or foreign detail authority'); });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      expect(String(url)).toBe(`${home}/v2/sessions/query`);
+      const query = SessionListQueryV1Schema.parse(body);
+      queries.push(query);
+      expect(query.underSessionId).toBe(sessionId);
+      return { status: 200, data: SessionRuntimeManagedSubtreeListResponseV1Schema.parse({ sessions: query.storage === 'archived' ? [] : [
+        { ...parent, encryptionMode: 'plain', metadata: '{}' },
+        ...(!detached ? [{ ...child, encryptionMode: 'plain', metadata: '{}', manager: { sessionId } }] : []),
+      ], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }) };
+    });
+    const sessionList = createRestrictedCurrentSessionListActionDependency({ credentials, sessionId,
+      serverId: context.serverId, serverHttpBaseUrl: home, material: { mode: 'plain' } });
+    const harness = createCliActionExecutorHarness({ token: credentials.token, sessionId, mode: 'plain', ctx: null,
+      serverId: context.serverId, serverHttpBaseUrl: home,
+      getCurrentSessionMetadata: () => ({ machineId: 'machine', path: '/repo' }),
+      getCurrentSessionBackendTarget: () => ({ kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }),
+    }, { sessionList });
+    const executor = createSessionAccountActionExecutor({ base: harness.executor, client: {
+      sessionId, getServerBinding: () => ({ serverId: context.serverId, serverUrl: home }), updateMetadata() {},
+      rpcHandlerManager: { invokeLocal: async () => null, registerHandler() {} },
+    } });
+    const nativeContext = { surface: 'agent', authority: 'account_automation', defaultSessionId: sessionId,
+      sessionListAccess: 'current_session', actionCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 },
+      callerPermissionMode: 'default',
+    } as const;
+    const callerContext = { ...nativeContext, agentStartContext: {
+      caller: nativeContext.actionCaller, baseline: { machineId: 'machine', directory: '/repo' }, roles: {},
+      ledSubtreeSessionIds: [], workDepthLimit: 4, callerPermissionCeiling: 'default' as const,
+    } };
+    await expect(executor.execute('session.list', { underSessionId: sessionId }, nativeContext))
+      .resolves.toMatchObject({ ok: true, result: { sessions: [{ id: sessionId }, { id: managerId }] } });
+    // Exercise the actual native composition, including its dependency overrides
+    // and caller stamping; the harness-only owner path above cannot prove those.
+    const runtime = createHappierMcpServer({ sessionId,
+      getServerBinding: () => ({ serverId: context.serverId, serverUrl: home }),
+      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+      updateMetadata() {}, getMetadataSnapshot: () => createTestMetadata({ machineId: 'machine', path: '/repo', flavor: 'codex' }),
+      getBackendTarget: () => ({ kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }),
+      getPermissionMode: () => 'default',
+      getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0,
+      getActiveTurnPermissionWitness: () => ({ turnId: 'target-turn', causalPermissionAuthority: {
+        kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default',
+      } }),
+    }, { authorityScope: 'session', sessionCredentials: credentials, sessionList });
+    const mcpClient = new Client({ name: 'native-target-composition', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await runtime.mcp.connect(serverTransport);
+      await mcpClient.connect(clientTransport);
+      const listing = await runtime.executeTool({ toolName: 'action_execute', args: {
+        actionId: 'session.list', input: { underSessionId: sessionId },
+      } });
+      expect(listing, JSON.stringify(listing)).toMatchObject({ ok: true, result: { sessions: [{ id: sessionId }, { id: managerId }] } });
+      for (const target of [{ selector: 'workers', of: sessionId }, managerId, { selector: 'self', of: managerId }]) {
+        const response = CallToolResultSchema.parse(await mcpClient.callTool({ name: 'action_execute', arguments: {
+          actionId: 'session.targets.resolve', input: { actionId: 'session.goal.get', target },
+        } }));
+        const content = response.content.find(entry => entry.type === 'text');
+        if (content?.type !== 'text') throw new Error('Missing native target response');
+        expect.soft(JSON.parse(content.text), content.text).toMatchObject({ coverage: 'complete',
+          addresses: [{ serverId: context.serverId, sessionId: managerId }] });
+      }
+    } finally { await mcpClient.close(); await runtime.mcp.close(); }
+    const beforeForeignList = queries.length;
+    for (const input of [{ underSessionId: managerId }, { query: {
+      v: 1, storage: 'active', includeInactive: true, scope: 'all_accessible', attention: 'any',
+      audiences: [], tagIds: [], underSessionId: managerId,
+    } }]) {
+      await expect(executor.execute('session.list', input, nativeContext))
+        .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    }
+    expect(queries).toHaveLength(beforeForeignList);
+    for (const target of [managerId, { selector: 'workers' }] as const) {
+      await expect(executor.execute('session.targets.resolve', { actionId: 'session.goal.get', target }, {
+        ...nativeContext, agentStartContext: { ...callerContext.agentStartContext,
+          caller: { ...nativeContext.actionCaller, sessionId: 'foreign-session' } },
+      })).resolves.toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [] } });
+    }
+    expect(queries).toHaveLength(beforeForeignList);
+    for (const target of [{ selector: 'workers' }, managerId, { selector: 'self', of: managerId }] as const) {
+      await expect.soft(executor.execute('session.targets.resolve', { actionId: 'session.goal.get', target }, nativeContext))
+        .resolves.toMatchObject({ ok: true, result: { coverage: 'complete', addresses: [{ serverId: context.serverId, sessionId: managerId }] } });
+    }
+    // START authority remains current-Session-only. READ membership comes from
+    // the fresh restricted subtree proof, not the empty captured start corpus.
+    await expect.soft(resolveActionCurrentSessionScopeFailure('session.activity.get', { sessionId: managerId },
+      callerContext, { sessionId: 'current_session' }, harness.deps)).resolves.toBeNull();
+    await expect.soft(executor.execute('session.targets.resolve', { actionId: 'session.goal.get',
+      target: { selector: 'manager', of: managerId } }, nativeContext))
+      .resolves.toMatchObject({ ok: true, result: { coverage: 'complete', addresses: [{ sessionId }] } });
+    // Private rule membership cannot be declared complete from subtree facts.
+    await expect(executor.execute('session.targets.resolve', { actionId: 'session.goal.get',
+      target: { selector: 'followers', of: managerId } }, nativeContext))
+      .resolves.toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [] } });
+    await expect(executor.execute('session.targets.resolve', { actionId: 'session.goal.get',
+      target: { selector: 'self', of: 'foreign-session' } }, nativeContext))
+      .resolves.toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [] } });
+    await expect(createActionExecutor(harness.deps).execute('session.targets.resolve', { actionId: 'session.goal.get',
+      target: managerId }, { ...nativeContext, serverId: 'other-home' }))
+      .resolves.toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [] } });
+    detached = true;
+    await expect(executor.execute('session.targets.resolve', { actionId: 'session.goal.get',
+      target: managerId }, nativeContext))
+      .resolves.toMatchObject({ ok: true, result: { coverage: 'unavailable', addresses: [] } });
+    await expect(resolveActionCurrentSessionScopeFailure('session.activity.get', { sessionId: managerId },
+      callerContext, { sessionId: 'current_session' }, harness.deps))
+      .resolves.toMatchObject({ ok: false, details: { cause: 'target_outside_led_subtree' } });
+    expect.soft(queries.length).toBeGreaterThan(0);
+  });
 
   it('evaluates one Follow source without reading the corpus, preserving match, miss and unknown', async () => {
     const { deps } = setup(null);
@@ -51,6 +180,80 @@ describe('CLI Session target composition', () => {
     expect(await read({ ...filter, underSessionId: managerId })).toMatchObject({ coverage: 'partial', matches: [],
       unavailable: [{ source: { kind: 'session', sessionId } }] });
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it('previews targets through native MCP and signed daemon reads under the preview root', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'native-target-preview-root-' }, async () => {
+      const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23));
+      const { deps, credentials, session, get } = setup(null, { privateKey: keys.secretKey, installationId: 'installation' });
+      const childId = 'c666666666666666666666666';
+      const child = { ...createSessionNotificationContextFixture(childId), ...session, id: childId, manager: { sessionId } };
+      const homeGet = get.getMockImplementation()!;
+      const rejectedEffects: unknown[] = [];
+      // Home HTTP is the boundary: signed read effects must retain the admitted
+      // root (verifyCommon's effect_family), not impersonate the previewed Action.
+      get.mockImplementation(async (url, config) => {
+        const effect = config?.headers?.[EXTERNAL_ACTION_EFFECT_ACTION_HEADER];
+        if (effect && effect !== 'session.targets.resolve') {
+          rejectedEffects.push(effect);
+          throw Object.assign(new Error('Signed root mismatch'), { response: { status: 401 } });
+        }
+        if (String(url).endsWith(`/v2/sessions/${childId}`)) return { status: 200, data: { session: child } };
+        return homeGet(url, config);
+      });
+      vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+        expect(String(url)).toBe(`${home}/v2/sessions/query`);
+        const query = SessionListQueryV1Schema.parse(body);
+        return { status: 200, data: SessionListQueryResponseV1Schema.parse({
+          sessions: query.storage === 'active' ? [child] : [], nextCursor: null, hasNext: false,
+          attentionNextCursor: null, attentionHasNext: false,
+        }) };
+      });
+      const daemon = createDaemonSessionAccountActionExecutor({ serverId: context.serverId,
+        serverHttpBaseUrl: home, token: credentials.token, credentials,
+        createExecutor: () => createActionExecutor(deps),
+        prepareExternalActionAuthorization: async ({ operation }) => {
+          const target = { kind: 'machine' as const, machineId: 'machine-selected' };
+          return { target, authorization: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'native-preview-proof', binding: {
+            accountId: 'account-1', authentication: { kind: 'account', tokenEpoch: 1 }, accountEncryptionMode: 'plain',
+            serverIdentityId: context.serverId, custodianAccountId: 'account-1', machineId: target.machineId,
+            installationId: 'installation', actionId: operation.actionId, requestId: operation.requestId, target,
+            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(ExternalActionRequestEnvelopeSchema.parse({ v: 1, target,
+              requestId: operation.requestId, input: operation.input })),
+          } }) };
+        },
+      });
+      const authority = await createSessionDaemonAuthorityFixture({ sessionId,
+        execute: operation => daemon(operation, { sessionId, isCurrent: async () => true }),
+      });
+      const witness = { turnId: 'preview-turn', inputId: 'preview-input', userMessageSeq: 1, userMessageSeqs: [1],
+        agentStartCaller: { kind: 'session' as const, sessionId, starterDepth: 0, turnDepth: 0 } };
+      const runtime = createHappierMcpServer({ sessionId,
+        getServerBinding: () => ({ serverId: context.serverId, serverUrl: home }),
+        rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+        updateMetadata() {}, getWorkDepth: () => 0, getHostTurnWorkDepth: () => 0,
+        getActiveTurnAdmissionWitness: () => witness,
+        getActiveTurnPermissionWitness: () => ({ ...witness, causalPermissionAuthority: {
+          kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default',
+        } }),
+      }, { credentials, actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1 }) } });
+      const mcpClient = new Client({ name: 'signed-native-target-composition', version: '1' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      try {
+        await runtime.mcp.connect(serverTransport);
+        await mcpClient.connect(clientTransport);
+        for (const target of [childId, { selector: 'workers', of: sessionId }, { selector: 'self', of: childId }]) {
+          const response = CallToolResultSchema.parse(await mcpClient.callTool({ name: 'action_execute', arguments: {
+            actionId: 'session.targets.resolve', input: { actionId: 'session.goal.get', target },
+          } }));
+          const content = response.content.find(entry => entry.type === 'text');
+          if (content?.type !== 'text') throw new Error('Missing signed native target response');
+          expect.soft(JSON.parse(content.text), JSON.stringify({ target, response: content.text })).toMatchObject({ coverage: 'complete',
+            addresses: [{ serverId: context.serverId, sessionId: childId }] });
+        }
+        expect.soft(rejectedEffects).toEqual([]);
+      } finally { await mcpClient.close(); await runtime.mcp.close(); await authority.close(); }
+    });
   });
 
   it('reads Following and private rules through the portable Home of a fixed local profile', async () => {

@@ -9,7 +9,7 @@ import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/proto
 import { computeExternalActionRequestEnvelopeDigestV1, verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { executeExternalAction } from '@/daemon/externalActions/executeExternalAction';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
-import { sendSessionMessage } from './sendSessionMessage';
+import { sendSessionMessage, waitForSessionInputResult } from './sendSessionMessage';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { ApiMachineClient } from '@/api/apiMachine';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
@@ -405,6 +405,26 @@ describe('target Session input authoring through HTTP', () => {
     }), { status: 200 })));
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps signed wait target reads and cancellation under the original requester', async () => {
+    const observer = new AbortController();
+    const read = http.get.getMockImplementation()!;
+    const observedSignals: Array<AbortSignal | undefined> = [];
+    http.get.mockImplementation(async (url: string, config?: { headers?: Record<string, string>; signal?: AbortSignal }) => {
+      if (config?.headers?.Authorization !== 'Original-requester-proof') return { status: 401, data: { error: 'invalid_token' } };
+      observedSignals.push(config.signal);
+      const response = await read(url, config);
+      if (url.endsWith(`/v2/sessions/${sessionId}`)) observer.abort();
+      return response;
+    });
+    const result = await waitForSessionInputResult({ credentials, idOrPrefix: sessionId, localId: 'native-input',
+      resolveAuthorizationHeaders: () => ({ Authorization: 'Original-requester-proof' }), signal: observer.signal,
+      observation: { kind: 'no_deadline' },
+    });
+    expect(result).toMatchObject({ ok: false, code: 'cancelled' });
+    expect(observedSignals.length).toBeGreaterThan(0);
+    expect(observedSignals.every(signal => signal === observer.signal)).toBe(true);
+  });
 
   it.each(['complete', 'cancel'] as const)('keeps protected Send lookup under its caller lifecycle: %s', async outcome => {
     vi.useFakeTimers();

@@ -949,6 +949,7 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
       try {
         let replyOutcome: SessionMessageReplyOutcomeV1 | undefined;
         let originalHasNoReply = false;
+        let requiresDiscussionReplyOutcome = false;
         let acceptedTurnId: string | undefined;
         if (params.reply) {
           const original = await readOriginalReply({ credentials: params.reply.credentials,
@@ -957,6 +958,8 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
           // Historical inputs have no obligation; unavailable custody never
           // authorizes falling back to an unrelated or merely later final.
           originalHasNoReply = original.status === 'none';
+          requiresDiscussionReplyOutcome = original.status === 'available'
+            && Boolean(original.progress.workflow && original.progress.discussion);
           replyOutcome = original.status === 'available' ? original.progress.outcome : undefined;
           acceptedTurnId = original.status === 'available' && !replyOutcome ? original.progress.acceptedTurnId : undefined;
           if (replyOutcome) {
@@ -972,11 +975,12 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
             && replyOutcome.result.sessionId === params.sessionId
             ? { resultMessageId: replyOutcome.result.messageId } : {}) });
         if ((!params.reply || originalHasNoReply) && outcome.kind !== 'missing') return outcome;
-        // The original accepted Workflow turn can remain observable after its
-        // runner exits without fulfilling reply custody. Reuse the same exact
-        // result reader; explicit pass/failure/cancellation above stays final.
+        // Ordinary retained Workflow turns can recover from exact native
+        // completion without reply custody. Discussion Workflow success must
+        // carry C2's independent fact into the immutable terminal invocation;
+        // its existing custody wake reopens the original before completion.
         if (acceptedTurnId && (outcome.kind === 'failed' || outcome.kind === 'cancelled'
-          || outcome.kind === 'completed' && outcome.finalAssistantText !== null)) return outcome;
+          || outcome.kind === 'completed' && outcome.finalAssistantText !== null && !requiresDiscussionReplyOutcome)) return outcome;
         if (replyOutcome && 'result' in replyOutcome
           && replyOutcome.result.sessionId === params.sessionId
           && outcome.kind === 'completed' && outcome.finalAssistantMessageId === replyOutcome.result.messageId) {
@@ -1237,6 +1241,8 @@ export async function waitForSessionInputResult(params: WaitForSessionInputResul
     const sessionTarget = await resolveSessionTransportContext({
       credentials: params.credentials,
       idOrPrefix: params.idOrPrefix,
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
       ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
     });
     if (!sessionTarget.ok) {
