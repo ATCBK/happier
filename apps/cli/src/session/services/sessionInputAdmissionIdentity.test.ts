@@ -115,13 +115,13 @@ describe('derivePluginSessionInputLocalIdV1', () => {
     });
   });
 
-  it('builds causal cross-Session admission from the active host turn witness', () => {
+  it.each([undefined, { discussionId: 'discussion', messageId: 'question', throughSeq: 3,
+    participantSessionId: 'source-session' }])('builds causal cross-Session admission retaining its Discussion witness (%j)', discussionAddressing => {
+    const sourceSession = { sourceSessionId: 'source-session', sourceTurnId: 'source-turn', sourceInputId: 'source-input',
+      via: 'mcp' as const, ...(discussionAddressing ? { discussionAddressing } : {}) };
     expect(buildCausalSessionInputAdmissionV1({
-      sourceSessionId: 'source-session',
-      sourceTurnId: 'source-turn',
-      sourceInputId: 'source-input',
+      ...sourceSession,
       callerDepth: 3,
-      via: 'mcp',
       causalPermissionAuthority: {
         kind: 'admittedSessionInputV1',
         admittedPermissionCeiling: 'read-only',
@@ -138,12 +138,7 @@ describe('derivePluginSessionInputLocalIdV1', () => {
         v: 1,
         producer: 'happierMcp',
         caller: { kind: 'host' },
-        sourceSession: {
-          sourceSessionId: 'source-session',
-          sourceTurnId: 'source-turn',
-          sourceInputId: 'source-input',
-          via: 'mcp',
-        },
+        sourceSession,
         permission: { requestedPermissionCeiling: 'read-only' },
       },
     });
