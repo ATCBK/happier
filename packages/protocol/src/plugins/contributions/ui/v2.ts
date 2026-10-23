@@ -501,33 +501,41 @@ function createPluginUiViewBindingSchemaV2() {
     }));
   const inlineVariants = Object.values(PLUGIN_UI_INLINE_SURFACE_SLOTS_V1)
     .filter((slot) => isPluginUiAuthoredViewInlineSurfaceRoleV1(slot.role))
-    .flatMap((slot) => Object.keys(slot.targets).map((targetKind) => {
-      const common = {
-      ...PluginUiViewInlineCommonShapeV2,
-      container: z.literal(slot.role),
-      target: PluginUiViewTargetSchemaByKindV1[targetKind as keyof typeof PluginUiViewTargetSchemaByKindV1],
-      ...(slot.role === 'widget'
-        ? { home: z.optional(PluginUiWidgetHomeV1Schema), sizeDeclaration: WidgetSizeDeclarationV1Schema,
-            publicPresentation: z.optional(WidgetPublicSnapshotPresentationV1Schema) }
-        : {}),
-      ...(slot.role === 'widget'
-        ? { connectedAccountPurposeBindings: z.optional(z.array(WidgetConnectedAccountPurposeBindingV1Schema)),
-            resources: z.optional(z.array(asProtocolZod(PluginContributionIdentityV1Schema))) }
-        : {}),
-      ...(slot.role === 'widget' && targetKind === 'session'
-        ? { inputs: InputHintsSchema, inputSchema: PluginJsonSchemaV2Schema, sessionInputPath: InputPathSchema }
-        : {}),
-      };
+    .map((slot) => {
+      if (slot.role !== 'widget') {
+        const role = slot.role;
+        return Object.keys(slot.targets).map((targetKind) => z.strictObject({
+          ...PluginUiViewInlineCommonShapeV2,
+          container: z.literal(role),
+          target: PluginUiViewTargetSchemaByKindV1[targetKind as keyof typeof PluginUiViewTargetSchemaByKindV1],
+        }));
+      }
+      const role = slot.role;
+      const widgetShape = <TTarget extends keyof typeof slot.targets>(targetKind: TTarget) => ({
+        ...PluginUiViewInlineCommonShapeV2,
+        container: z.literal(role),
+        target: PluginUiViewTargetSchemaByKindV1[targetKind],
+        home: z.optional(PluginUiWidgetHomeV1Schema),
+        sizeDeclaration: WidgetSizeDeclarationV1Schema,
+        publicPresentation: z.optional(WidgetPublicSnapshotPresentationV1Schema),
+        connectedAccountPurposeBindings: z.optional(z.array(WidgetConnectedAccountPurposeBindingV1Schema)),
+        resources: z.optional(z.array(asProtocolZod(PluginContributionIdentityV1Schema))),
+      });
+      const session = z.strictObject({
+        ...widgetShape('session'), inputs: InputHintsSchema, inputSchema: PluginJsonSchemaV2Schema, sessionInputPath: InputPathSchema,
+      });
+      const app = widgetShape('app');
       // Preserve the value-schema requirement in authoring JSON Schema too:
       // an App widget either has no inputs or declares inputs plus their schema.
-      if (slot.role === 'widget' && targetKind === 'app') {
-        return z.union([
-          z.strictObject({ ...common, inputs: z.optional(z.never()), inputSchema: zMini.optional(PluginJsonSchemaV2Schema) }),
-          z.strictObject({ ...common, inputs: InputHintsSchema, inputSchema: PluginJsonSchemaV2Schema }),
-        ]);
-      }
-      return z.strictObject(common);
-    }));
+      const byTarget = {
+        session,
+        app: z.union([
+          z.strictObject({ ...app, inputs: z.optional(z.never()), inputSchema: zMini.optional(PluginJsonSchemaV2Schema) }),
+          z.strictObject({ ...app, inputs: InputHintsSchema, inputSchema: PluginJsonSchemaV2Schema }),
+        ]),
+      } satisfies Record<keyof typeof slot.targets, z.core.$ZodType>;
+      return Object.values(byTarget);
+    }).flat();
   const variants = [...destinationVariants, ...inlineVariants];
   const [first, second, ...remaining] = variants;
   if (!first || !second) {
@@ -540,12 +548,7 @@ function createPluginUiViewBindingSchemaV2() {
 // until use before capturing their presentation schema through the reverse edge.
 const PluginUiViewV2SchemaRaw = lazyZodSchema(() => {
   const schema = createPluginUiViewBindingSchemaV2();
-  // Registry mapping widens conditional widget fields away. Retain their
-  // admitted types for this refinement without widening the schema's output.
-  return schema.check(z.superRefine((view: z.output<typeof schema> & Partial<Pick<
-      PluginUiViewInlineBindingV2,
-      'inputs' | 'inputSchema' | 'connectedAccountPurposeBindings' | 'resources'
-    >>, ctx) => {
+  return schema.check(z.superRefine((view, ctx) => {
   if (view.container === 'widget') {
     const inputs = 'inputs' in view ? view.inputs : undefined;
     const inputSchema = 'inputSchema' in view ? view.inputSchema : undefined;
