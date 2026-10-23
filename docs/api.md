@@ -2479,12 +2479,22 @@ Artifact bytes and grants. See the
   owners in a read-only transaction. Key holders still verify bindings and use
   the existing fenced envelope commit when preparation is needed.
   Startup publishes the complete header inventory first, then uses this read
-  only for Launch Profiles and actionable approvals. Other document bodies
-  remain lazy. Missing details are skipped; other refusals and incomplete
+  for missing bodies of open approvals and Account notices. Launch Profiles
+  and other document bodies use their own presented or exact-reference demand.
+  Missing details are skipped; other refusals and incomplete
   responses fail the refresh. Refusals retain the incumbent read classification:
   an unreadable owner detail has status 500 and remains retryable; a granted
   caller's status 409 detail refusal ends the current retry cycle. Recipient
   preparation refusals retain their existing access-API retry behavior.
+  The explicit closed `{artifactIds,projection:'headers'}` request returns
+  `{projection:'headers',items}` through the same access and final readmission
+  owner. Successful items contain the admitted header, current body revision,
+  private revision metadata and public-audience fact, with no body or recipient
+  census. The separate strict response schema rejects those extra disclosures.
+  Warm inventory catch-up selects only identities named by Artifact changes;
+  a missing identity removes its retained row, while any other per-id refusal
+  fails catch-up without advancing the persisted cursor. A lost cursor still
+  requires the existing complete paged header inventory.
   Current 0.3 client and server update together;
   this is not a released or mixed-component availability claim.
 - `GET /v1/artifacts/:id`, authenticated lists and selected-detail reads return the same
