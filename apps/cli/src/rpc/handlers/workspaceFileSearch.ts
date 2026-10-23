@@ -42,6 +42,11 @@ export function registerWorkspaceFileSearchHandler(
 
             const contextLines = request.contextLines ?? 2;
             const files: WorkspaceFileSearchFileV1[] = [];
+            const responseOverheadBytes = {
+                complete: responseBytes({ ok: true, files: [], hasMore: false, coverage: 'complete' }),
+                partial: responseBytes({ ok: true, files: [], hasMore: false, coverage: 'partial' }),
+            };
+            let filesBytes = 0;
             let active: ActiveFile | null = null;
             let coverage: 'complete' | 'partial' = 'complete';
             let hasMore = false;
@@ -75,15 +80,20 @@ export function registerWorkspaceFileSearchHandler(
                         const file = { path, matches: active.matches };
                         // Reserve the longer boolean representation so both an
                         // exhausted scan and an early-stopped page fit the ceiling.
-                        const envelope = { ok: true, files: [file], hasMore: false, coverage };
-                        if (responseBytes(envelope) > WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES) {
+                        const fileBytes = responseBytes(file);
+                        const overheadBytes = responseOverheadBytes[coverage];
+                        const separatorBytes = files.length > 0 ? 1 : 0;
+                        if (overheadBytes + fileBytes > WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES) {
                             coverage = 'partial'; // An indivisible oversized file is skipped whole.
-                        } else if (responseBytes({ ...envelope, files: [...files, file] }) > WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES) {
+                        } else if (overheadBytes + filesBytes + separatorBytes + fileBytes > WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES) {
                             hasMore = true;
                             coverage = 'partial';
                             active = null;
                             return false;
-                        } else files.push(file);
+                        } else {
+                            files.push(file);
+                            filesBytes += separatorBytes + fileBytes;
+                        }
                     }
                     active = null;
                     return true;

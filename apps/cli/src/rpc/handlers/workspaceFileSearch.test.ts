@@ -137,6 +137,30 @@ describe('workspace file content search through the registered daemon owner', ()
         expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES);
     });
 
+    it('budgets a thousand matching files with serialization proportional to the returned page', async () => {
+        const count = 1000;
+        await Promise.all(Array.from({ length: count }, (_, index) =>
+            writeFile(join(root, `match-${index}.txt`), 'needle café 😀\n')));
+        const stringify = JSON.stringify;
+        let serializedBytes = 0;
+        // Observe actual JSON byte work while leaving native rg and every
+        // admission/projection real. Re-serializing growing prefixes is costly
+        // even when the transport payload itself stays below its real ceiling.
+        vi.spyOn(JSON, 'stringify').mockImplementation((value, replacer, space) => {
+            const result = stringify(value, replacer, space);
+            if (value && typeof value === 'object' && ('files' in value || 'matches' in value || 'column16' in value)) {
+                serializedBytes += Buffer.byteLength(result);
+            }
+            return result;
+        });
+        const result = DaemonWorkspaceFileSearchResponseSchema.parse(await handler({ rootPath: root, query: 'needle', contextLines: 0 }));
+        expect(result).toMatchObject({ ok: true, hasMore: false, coverage: 'complete' });
+        if (!result.ok) throw new Error('Expected a complete search');
+        expect(result.files).toHaveLength(count);
+        const wireBytes = Buffer.byteLength(stringify(result));
+        expect(serializedBytes).toBeLessThanOrEqual(wireBytes * 4);
+    });
+
     it('skips non-UTF-8 lines with partial coverage and never converts a byte bag to text', async () => {
         await writeFile(join(root, 'invalid.txt'), Buffer.from([0xff, ...Buffer.from(' needle\n')]));
         await writeFile(join(root, 'text.txt'), 'needle\n');
