@@ -3,11 +3,31 @@ import { describe, expect, it } from 'vitest';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 import { t } from '@/text';
-import { resolveExecutionRunSelectionLabel } from './resolveExecutionRunSelectionLabel';
+import { resolveExecutionRunSelectionLabel, resolveRunNativeModelLabel } from './resolveExecutionRunSelectionLabel';
+import { buildScmDiffSummaryModelProfiles } from '@happier-dev/protocol/actions/settings/scmDiffSummaryModels';
+import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 describe('resolveExecutionRunSelectionLabel', () => {
   const label = (connectionId: string) =>
     connectionId === 'pc_gateway' ? 'Main gateway' : null;
+
+  it('uses the admitted Machine model title only for the Run’s exact Agent target', () => {
+    const profiles = [
+      ...buildScmDiffSummaryModelProfiles({ backendTarget: { kind: 'backend', backendId: 'claude' },
+        models: [{ id: 'gpt-6-luna', name: 'Other Agent model', capabilities: { structuredOutput: 'supported' } }] }),
+      ...buildScmDiffSummaryModelProfiles({ backendTarget: { kind: 'backend', backendId: 'codex' },
+        models: [{ id: 'gpt-6-luna', name: 'GPT-6-Luna', capabilities: { structuredOutput: 'supported' } }] }),
+    ];
+    const native = resolveRunNativeModelLabel({ kind: 'builtInAgent', agentId: 'codex' }, profiles);
+    expect(resolveExecutionRunSelectionLabel({ source: 'explicit', modelId: 'gpt-6-luna' }, label, null, native))
+      .toBe(`${t('runPage.menu.selectionExplicit')} · GPT-6-Luna`);
+    expect(resolveRunNativeModelLabel({ kind: 'builtInAgent', agentId: 'claude' }, profiles)('gpt-6-luna')).toBe('Other Agent model');
+    expect(resolveRunNativeModelLabel({ kind: 'builtInAgent', agentId: 'codex' }, profiles)('missing-model')).toBeNull();
+    expect(resolveRunNativeModelLabel(null, profiles)('gpt-6-luna')).toBeNull();
+    expect(resolveRunNativeModelLabel({ kind: 'builtInAgent', agentId: 'codex' }, profiles, {
+      modelSelection: { agentTargetKey: 'agent:codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_gateway'), modelId: 'gpt-6-luna' },
+    })('gpt-6-luna')).toBeNull();
+  });
 
   it('says an inherited Run follows the session and names its route and model', () => {
     expect(
@@ -112,19 +132,25 @@ describe('resolveExecutionRunSelectionLabel', () => {
         runId: 'run-native', callId: 'call-native', sidechainId: 'side-native', intent: 'delegate',
         backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'read_only',
         retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 1,
-        resolvedSelection: { source: 'inherited', modelId: 'sonnet', connectedServices: { v: 2, bindingsByServiceId: {
+        resolvedSelection: { source: 'inherited', modelId: 'gpt-6-luna', connectedServices: { v: 2, bindingsByServiceId: {
           'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'opaque-account-id' },
         } } },
       });
-      const screen = await renderScreen(React.createElement(SessionExecutionRunInfoCard, { run, serverId: runHome }));
+      const nativeModelCatalog = buildScmDiffSummaryModelProfiles({ backendTarget: readBackendTargetRefV2(run.backendTarget),
+        models: [{ id: 'gpt-6-luna', name: 'GPT-6-Luna' }] });
+      const screen = await renderScreen(React.createElement(SessionExecutionRunInfoCard, { run, serverId: runHome, nativeModelCatalog }));
       await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('Run account'));
       expect(screen.getTextContent()).not.toContain('Wrong active account');
       expect(screen.getTextContent()).not.toContain('opaque-account-id');
+      expect(screen.getTextContent()).toContain('GPT-6-Luna');
+      expect(screen.getTextContent()).not.toContain('gpt-6-luna');
       const { ExecutionRunRow } = await import('./ExecutionRunRow');
-      const row = await renderScreen(React.createElement(ExecutionRunRow, { run, serverId: runHome }));
+      const row = await renderScreen(React.createElement(ExecutionRunRow, { run, serverId: runHome, nativeModelCatalog }));
       await waitForHomeGovernance(() => expect(row.getTextContent()).toContain('Run account'));
       expect(row.getTextContent()).not.toContain('Wrong active account');
       expect(row.getTextContent()).not.toContain('opaque-account-id');
+      expect(row.getTextContent()).toContain('GPT-6-Luna');
+      expect(row.getTextContent()).not.toContain('gpt-6-luna');
     } finally {
       standardCleanup();
       await account.reset();

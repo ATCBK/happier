@@ -67,6 +67,7 @@ export function useAgentModelChoices(params: Readonly<{
     purpose?: AgentModelChoicePurpose;
     machineId?: string | null;
     serverId?: string | null;
+    cwd?: string | null;
     defaultBackendTarget?: BackendTargetRefV2 | null;
     /** A mounted result still observes its selected model when its picker is hidden. */
     observeSelection?: boolean;
@@ -177,6 +178,7 @@ export function useAgentModelChoices(params: Readonly<{
     const probe = useNewSessionPreflightModelsState({ backendTarget: probeTarget,
         runtimeCarrierAgentId: probeEntry?.agentId, selectedMachineId: params.machineId ?? null,
         capabilityServerId: params.serverId ?? '',
+        cwd: params.cwd,
         enabled: purpose === 'runner' && observing && Boolean(params.machineId) && (probeEntry?.kind !== 'configuredBackend' || catalogReady),
     });
     const projected = projectAgentModelChoices({ purpose, ...catalogInput, selected: selectedModelSelection,

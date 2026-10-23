@@ -90,6 +90,11 @@ import { useSetting } from '@/sync/domains/state/storage';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { sendExecutionRunResultToSession } from './sendExecutionRunResultToSession';
 import { resolveExecutionRunVisibleMessages } from '@/sync/domains/session/subagents/visibleMessages/resolveSessionSubagentVisibleMessages';
+import { useAgentModelChoices } from '@/components/settings/pickers/useAgentModelChoices';
+import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { encodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
+import { resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
 
 type LoadState =
     | { status: 'loading' }
@@ -659,6 +664,22 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         void load();
     }, [load]);
     const machine = useExecutionRunMachineName(session?.metadata ?? (props.workspace ? { machineId: props.workspace.machineId } : null));
+    const sessionMachine = useSessionMachineTarget(props.sessionId, explicitServerId);
+    const modelRun = state.status === 'loaded' && loadedRunAddressRef.current === runAddressKey ? state.run : null;
+    const nativeModelId = modelRun?.resolvedSelection?.modelSelection?.providerConnectionId || modelRun?.resolvedSelection?.teamCredentialModel
+        ? null : modelRun?.resolvedSelection?.modelSelection?.modelId ?? modelRun?.resolvedSelection?.modelId ?? modelRun?.requestedConfiguration?.modelId;
+    const nativeModelTarget = React.useMemo(() => modelRun ? readBackendTargetRefV2(modelRun.backendTarget) : null, [modelRun?.backendTarget]);
+    const nativeModelValue = nativeModelId && nativeModelTarget
+        ? encodeScmDiffSummaryModelOverride({ backendTargetKey: buildBackendTargetKeyV2(nativeModelTarget), modelId: nativeModelId }) : '';
+    // The visible header needs its selected model's title. Reuse the picker catalog's exact host
+    // and checkout observation; cards and rows never start discovery for display on their own.
+    const nativeModelChoices = useAgentModelChoices({ value: nativeModelValue, purpose: 'runner',
+        defaultBackendTarget: nativeModelTarget, serverId: pendingScopeServerId,
+        machineId: props.sessionId === null ? props.workspace?.machineId : sessionMachine?.machineId,
+        cwd: props.sessionId === null ? props.workspace?.cwd : sessionMachine?.basePath,
+        observeSelection: props.showInfoCard !== false && Boolean(nativeModelId && modelRun
+            && !resolveRunNativeModelLabel(nativeModelTarget)(nativeModelId)),
+    });
     // Show in transcript (⋯): the session transcript owns the jump; this surface only names the
     // Run's row. Offered where the transcript sits beside the Run (the Details tab); the phone
     // route has no reveal owner for it yet.
@@ -819,6 +840,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         run={state.run}
                         serverId={explicitServerId}
                         acpCatalogSnapshot={acpCatalogSnapshot}
+                        nativeModelCatalog={nativeModelChoices.catalogProfiles}
                         hostSessionId={props.sessionId}
                         daemonProcessLine={daemonProcessLine}
                         originTitle={discussionOriginTitle}

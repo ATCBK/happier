@@ -15,7 +15,7 @@ import {
 import { ExecutionRunAgentMark } from '@/components/sessions/runs/ExecutionRunAgentMark';
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { resolveExecutionRunTitle } from '@/components/sessions/runs/resolveExecutionRunTitle';
-import { resolveExecutionRunSelectionLabel, resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
+import { resolveExecutionRunSelectionLabel, resolveRunNativeModelLabel, type RunNativeModelCatalog } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
 import { useExecutionRunSourceLabel } from '@/components/sessions/runs/useExecutionRunSourceLabel';
 import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
 import { ExecutionRunActionsMenu, type ExecutionRunMenuFact } from '@/components/sessions/runs/details/ExecutionRunActionsMenu';
@@ -114,6 +114,7 @@ const RunElapsed = React.memo((props: Readonly<{ startedAtMs: number }>) => {
 export const SessionExecutionRunInfoCard = React.memo((props: Readonly<{
     run: ExecutionRunPublicState;
     serverId?: string | null;
+    nativeModelCatalog?: RunNativeModelCatalog;
     acpCatalogSnapshot?: AcpCatalogSnapshotV1;
     hostSessionId?: string | null;
     daemonProcessLine?: string | null;
@@ -145,7 +146,7 @@ export const SessionExecutionRunInfoCard = React.memo((props: Readonly<{
         ?? props.run.resolvedSelection?.modelId
         ?? props.run.requestedConfiguration?.modelId)?.trim() || null;
     const agentLabel = resolveExecutionRunBackendLabel(props.run.backendTarget, props.acpCatalogSnapshot);
-    const nativeModelLabel = resolveRunNativeModelLabel(props.run.backendTarget);
+    const nativeModelLabel = resolveRunNativeModelLabel(props.run.backendTarget, props.nativeModelCatalog, props.run.resolvedSelection);
     const providerConnections = useProviderSettingsForServer(props.serverId ?? undefined).connections;
     const resolvedSourceLabel = useExecutionRunSourceLabel(props.run.resolvedSelection, props.serverId);
     // D9: "Inherit session · <route> · <model>" or "Chosen for this run · …" when the host recorded it.

@@ -1,6 +1,7 @@
 import type { ExecutionRunResolvedSelection } from '@happier-dev/protocol/execution/runs/requestedConfiguration';
 
-import { readBackendTargetRefV2, type BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { buildBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import type { ScmDiffSummaryCatalogProfile } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 
 import { isBundledAgentId } from '@/agents/catalog/catalog';
 import { resolveSessionModelLabel } from '@/sync/domains/models/modelOptions';
@@ -12,6 +13,8 @@ const PROVENANCE_KEY = {
   independent: 'runPage.menu.selectionIndependent',
   retained: 'runPage.menu.selectionRetained',
 } as const satisfies Record<ExecutionRunResolvedSelection['source'], string>;
+
+export type RunNativeModelCatalog = readonly Pick<ScmDiffSummaryCatalogProfile, 'title' | 'modelSelector'>[];
 
 /**
  * Where a Run's model came from and what it runs through, from the host's resolved launch record
@@ -47,17 +50,29 @@ export function resolveExecutionRunSelectionLabel(
 }
 
 /**
- * The native-model title resolver for a Run's recorded Agent: the same catalog lookup every
- * Session surface uses, null for a configured backend or an unknown id (callers keep the id then).
+ * The native-model title resolver for a Run's recorded Agent. Callers pass the catalog already
+ * admitted for that Run's Home and Machine; only its exact Agent target may name the model.
+ * Without an observed title, keep the shared Session static-catalog fallback.
  */
-export function resolveRunNativeModelLabel(backendTarget: BackendTargetRefV2Input | null | undefined) {
+export function resolveRunNativeModelLabel(
+  backendTarget: BackendTargetRefV2Input | null | undefined,
+  catalogProfiles?: RunNativeModelCatalog,
+  selection?: Pick<ExecutionRunResolvedSelection, 'modelSelection' | 'teamCredentialModel'>,
+) {
   let agentId: string | null = null;
+  let targetKey: string | null = null;
   try {
     const target = backendTarget ? readBackendTargetRefV2(backendTarget) : null;
+    targetKey = target ? buildBackendTargetKeyV2(target) : null;
     agentId = target && !target.configuredBackendId ? target.backendId : null;
   } catch {
     agentId = null;
   }
-  return (modelId: string): string | null =>
-    agentId && isBundledAgentId(agentId) ? resolveSessionModelLabel(agentId, null, modelId) : null;
+  return (modelId: string): string | null => {
+    if (selection?.modelSelection?.providerConnectionId || selection?.teamCredentialModel) return null;
+    const observed = targetKey ? catalogProfiles?.find(profile => profile.modelSelector?.backendTargetKey === targetKey
+      && profile.modelSelector.modelId === modelId) : null;
+    return observed?.title.trim()
+      || (agentId && isBundledAgentId(agentId) ? resolveSessionModelLabel(agentId, null, modelId) : null);
+  };
 }

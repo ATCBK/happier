@@ -15,7 +15,7 @@ import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactive
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { t } from '@/text';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
-import { resolveExecutionRunSelectionLabel, resolveRunNativeModelLabel } from './resolveExecutionRunSelectionLabel';
+import { resolveExecutionRunSelectionLabel, resolveRunNativeModelLabel, type RunNativeModelCatalog } from './resolveExecutionRunSelectionLabel';
 import { useExecutionRunSourceLabel } from './useExecutionRunSourceLabel';
 import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
 
@@ -29,13 +29,14 @@ function ExecutionRunScopedSubtitle(props: Readonly<{
     selection: NonNullable<ExecutionRunPublicState['resolvedSelection']>;
     serverId: string;
     subtitle: string;
+    nativeModelCatalog?: RunNativeModelCatalog;
 }>) {
     const { theme } = useUnistyles();
     const connections = useProviderSettingsForServer(props.serverId).connections;
     const sourceLabel = useExecutionRunSourceLabel(props.selection, props.serverId);
     const selectionLabel = resolveExecutionRunSelectionLabel(props.selection, (connectionId) => (
         connections.find(connection => connection.id === connectionId)?.displayName ?? null
-    ), sourceLabel, resolveRunNativeModelLabel(props.backendTarget));
+    ), sourceLabel, resolveRunNativeModelLabel(props.backendTarget, props.nativeModelCatalog, props.selection));
     return <Text style={[styles.subtitle, { color: theme.colors.text.secondary }]} numberOfLines={1}>
         {[selectionLabel, props.subtitle].filter(Boolean).join(' · ')}
     </Text>;
@@ -46,6 +47,7 @@ export const ExecutionRunRow = React.memo((props: Readonly<{
     onPress?: () => void;
     subtitle?: string;
     serverId?: string | null;
+    nativeModelCatalog?: RunNativeModelCatalog;
     rightAccessory?: React.ReactNode;
     selected?: boolean;
 }>) => {
@@ -54,7 +56,8 @@ export const ExecutionRunRow = React.memo((props: Readonly<{
     const actionable = typeof onPress === 'function';
     const interactiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const subtitle = typeof props.subtitle === 'string' ? props.subtitle : run.runId;
-    const selectionLabel = resolveExecutionRunSelectionLabel(run.resolvedSelection, () => null, null, resolveRunNativeModelLabel(run.backendTarget));
+    const selectionLabel = resolveExecutionRunSelectionLabel(run.resolvedSelection, () => null, null,
+        resolveRunNativeModelLabel(run.backendTarget, props.nativeModelCatalog, run.resolvedSelection));
     const backendLabel = resolveExecutionRunBackendLabel(run.backendTarget);
     // The run's state in the roster's words (sessionAgentActivityPresentation) and the shared tone (I3).
     const activityStatus = readExecutionRunAgentActivityStatus(run.status);
@@ -113,7 +116,7 @@ export const ExecutionRunRow = React.memo((props: Readonly<{
                 </View>
             </View>
             {run.resolvedSelection && props.serverId ? (
-                <ExecutionRunScopedSubtitle backendTarget={run.backendTarget} selection={run.resolvedSelection} serverId={props.serverId} subtitle={subtitle} />
+                <ExecutionRunScopedSubtitle backendTarget={run.backendTarget} selection={run.resolvedSelection} serverId={props.serverId} subtitle={subtitle} nativeModelCatalog={props.nativeModelCatalog} />
             ) : (
                 <Text style={[styles.subtitle, { color: theme.colors.text.secondary }]} numberOfLines={1}>
                     {[selectionLabel, subtitle].filter(Boolean).join(' · ')}

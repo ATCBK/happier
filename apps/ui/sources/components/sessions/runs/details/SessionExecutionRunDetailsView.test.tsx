@@ -370,6 +370,37 @@ afterEach(async () => {
 });
 
 describe('SessionExecutionRunDetailsView — real Home, transcript and interaction owners', () => {
+    it('names a discovered native model from the exact Home, Machine and checkout catalog in the Run header', async () => {
+        const { buildDynamicModelProbeCacheKey } = await import('@/sync/domains/models/dynamicModelProbeCacheKey');
+        const { writeDynamicModelProbeCacheSuccess, resetDynamicModelProbeCacheForTests } = await import('@/sync/domains/models/dynamicModelProbeCache');
+        const { buildBackendTargetKeyV2, readBackendTargetRefV2 } = await import('@happier-dev/protocol/backends/targets/backendTargetRefV2');
+        const targetKey = buildBackendTargetKeyV2(readBackendTargetRefV2(runState.backendTarget));
+        const write = (homeId: string, cwd: string, name: string) => writeDynamicModelProbeCacheSuccess(
+            buildDynamicModelProbeCacheKey({ serverId: homeId, machineId: 'm1', targetKey, providerConnectionId: null, cwd })!,
+            { availableModels: [{ id: 'gpt-6-luna', name, capabilities: { structuredOutput: 'supported' } }], supportsFreeform: false });
+        resetDynamicModelProbeCacheForTests();
+        try {
+            write(serverId, '/other-checkout', 'Wrong checkout model');
+            write('another-home', '/repo', 'Wrong Home model');
+            write(serverId, '/repo', 'GPT-6-Luna');
+            runState = liveRun({ resolvedSelection: { source: 'explicit', modelId: 'gpt-6-luna' } });
+            await mount();
+            await loaded();
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('GPT-6-Luna'));
+            expect(screen.getTextContent()).not.toContain('gpt-6-luna');
+            expect(screen.getTextContent()).not.toContain('Wrong checkout model');
+            expect(screen.getTextContent()).not.toContain('Wrong Home model');
+            await act(async () => publishMarker());
+            expect(screen.getTextContent()).toContain('GPT-6-Luna');
+            // The already-admitted catalog supplies this display; no discovery request is required.
+            expect(boundary.requests.filter(request => request.method === RPC_METHODS.CAPABILITIES_DETECT)
+                .flatMap(request => (request.payload as { requests?: Array<{ id: string }> }).requests ?? [])
+                .filter(request => request.id.includes('models'))).toEqual([]);
+        } finally {
+            standardCleanup();
+            resetDynamicModelProbeCacheForTests();
+        }
+    });
     it('reads and replies to a detached Run through its exact Machine without Session input', async () => {
         runState = liveRun();
         latestToolResult = { text: 'The selected line is safe.' };
