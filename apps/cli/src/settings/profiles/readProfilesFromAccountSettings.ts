@@ -206,7 +206,7 @@ export async function readAccountLaunchProfiles(settings: unknown, credentials: 
     };
     await assertCurrent();
     const { readAuthoringMemoryLastUsedProfile } = await import('./readAuthoringMemoryLastUsedProfile');
-    const catalog = profileCatalog ?? await (await import('./hydrateProfileCatalog')).refreshActiveProfileCatalog({ credentials, signal, operationContext });
+    const catalog = profileCatalog ?? await (await import('./hydrateProfileCatalog')).reobserveActiveProfileCatalog({ credentials, signal, operationContext });
     await assertCurrent();
     const captured = readSnapshot();
     if (!captured) throw new ProfileCatalogUnavailableError('unavailable');

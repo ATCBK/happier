@@ -1,8 +1,11 @@
 import axios from 'axios';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { AccountSettingsV2UpdateRequestSchema, AccountSettingsV2HistoryMutationRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
-import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { ProfileRecordV1Schema, ProfileRowsListResponseV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
+import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import { ProfileTransferMutationV1Schema, type ProfileTransferRowReadResponseV1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
@@ -16,9 +19,121 @@ import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secret
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import * as persistence from '@/persistence';
 import { refreshDemandedActiveProfileCatalog } from './hydrateProfileCatalog';
-import { createCliActionInventoryDeps } from '@/session/actions/cliActionDeps/createCliActionInventoryDeps';
 
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+
+it.each([
+  { state: 'active', custody: 'daemon' }, { state: 'absent', custody: 'daemon' },
+  { state: 'active', custody: 'requester' }, { state: 'absent', custody: 'requester' },
+] as const)('reads current launch Profiles without maintenance while retaining activation ($state, $custody)', async ({ state, custody }) => {
+  const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: `profile-current-${state}-${custody}` })).toString('base64url')}.signature`, encryption: null };
+  const record = ProfileRecordV1Schema.parse({ v: 1, id: 'focused', enabled: true, promptStack: [], secretBindings: {},
+    definition: { kind: 'inline', profile: { v: 2, id: 'focused', name: 'Fresh', createdAt: 1, updatedAt: 1 } } });
+  const controlRecord = { v: 1 as const, phase: 'active' as const, sourceSettingsVersion: 7, migratedLogicalRevision: 7,
+    inventory: [{ kind: 'account_row' as const, id: record.id, revision: 1 }] };
+  const activeCatalog: ProfileCatalogSnapshotV1 = { status: 'ready', source: 'destination', authority: 'active',
+    records: [{ record, revision: 1 }], diagnostics: [], referenceGuardRevision: 0,
+    control: { record: controlRecord, revision: 1 }, controlRevision: 1 };
+  let control: ProfileTransferRowReadResponseV1 = state === 'active'
+    ? { status: 'present', revision: 1, content: { t: 'plain', v: controlRecord } } : { status: 'absent' };
+  let rows: Extract<ReturnType<typeof ProfileRowsListResponseV1Schema.parse>, { status: 'listed' }>['rows'] = state === 'active'
+    ? [{ id: record.id, revision: 2, content: { t: 'plain', v: record } }] : [];
+  const requests: string[] = [];
+  const catalogSourceRequests: string[] = [];
+  const mutations: ReturnType<typeof ProfileTransferMutationV1Schema.parse>[] = [];
+  let authoringMemoryObserved = false;
+  let revokeAfterPage = false;
+  let revoked = false;
+  let boundaryError: unknown;
+  const server = createServer(async (request, response) => {
+    const path = request.url;
+    requests.push(`${request.method} ${path}`);
+    response.setHeader('Content-Type', 'application/json');
+    try {
+      if (path === '/v1/account/encryption/currentness') {
+        response.statusCode = revoked ? 401 : 200;
+        response.end(JSON.stringify(revoked ? { error: 'unauthorized' } : { mode: 'plain', version: 1,
+          settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+      } else if (path === '/v1/account/entity-rows/profiles') {
+        if (revokeAfterPage) revoked = true;
+        response.end(JSON.stringify({ status: 'listed', rows, nextCursor: null, complete: true,
+          diagnostics: [], referenceGuardRevision: rows.length ? 0 : 'absent', transferControl: control }));
+      } else if (path === '/v1/account/entity-rows/profiles/reference-guard') {
+        response.end(JSON.stringify({ status: 'ready', revision: rows.length ? 0 : 'absent' }));
+      } else if (path === '/v1/account/entity-rows/profiles/transfer' && request.method === 'POST') {
+        let body = '';
+        for await (const chunk of request) body += String(chunk);
+        const mutation = ProfileTransferMutationV1Schema.parse(JSON.parse(body));
+        mutations.push(mutation);
+        if (mutation.operation === 'prepare') rows = mutation.imports.map(row => ({ id: row.id, revision: 0, content: row.content }));
+        control = { status: 'present', revision: mutation.operation === 'prepare' ? 1 : 2, content: mutation.content };
+        response.end(JSON.stringify({ status: 'updated', revision: control.revision, cursor: control.revision }));
+      } else if (path === '/v1/account/entity-rows/profiles/transfer') {
+        response.end(JSON.stringify(control));
+      } else if (path === '/v2/account/settings' && request.method === 'GET') {
+        if (!authoringMemoryObserved) catalogSourceRequests.push(path);
+        response.end(JSON.stringify({ version: 7, content: { t: 'plain', v: state === 'absent'
+          ? { profiles: [{ v: 2, id: 'focused', name: 'Fresh', createdAt: 1, updatedAt: 1 }] } : {} } }));
+      } else if (path === '/v1/account/encryption') {
+        response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+      } else if (path === '/v1/account/authoring-memory/lastUsedProfile') {
+        authoringMemoryObserved = true;
+        response.end(JSON.stringify({ status: 'present', revision: 1, content: { t: 'plain', v: 'focused' } }));
+      } else if (path?.startsWith('/v1/artifacts')) {
+        response.end(JSON.stringify([]));
+      } else {
+        // Optional cleanup may stay pending without undoing admitted activation.
+        response.statusCode = request.method === 'POST' ? 503 : 404;
+        response.end(JSON.stringify({ error: 'unsupported' }));
+      }
+    } catch (error) {
+      boundaryError = error;
+      response.statusCode = 500;
+      response.end(JSON.stringify({ error: 'invalid-fixture-request' }));
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    await runWithServerHttpBaseUrl(base, async () => {
+      const settings = accountSettingsParse({});
+      const snapshot = { source: 'network' as const, settings, rawSettings: {}, settingsVersion: 7, loadedAtMs: 1,
+        settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
+        ...(state === 'active' ? { profileCatalog: activeCatalog } : {}) };
+      // Requester admission is the custody boundary; final Account-mode proof
+      // remains actual HTTP after the private page and reference reads.
+      const operationContext = custody === 'requester' ? createInvocationSavedSecretOperationContextV1({
+        credentials, snapshot, serverHttpBaseUrl: base, isCurrent: async () => true,
+      }) : undefined;
+      setActiveAccountSettingsSnapshot(operationContext ? { ...snapshot, scopeKey: 'foreign-daemon',
+        profileCatalog: state === 'absent' ? activeCatalog : undefined } : snapshot);
+      const daemonSnapshot = getActiveAccountSettingsSnapshot();
+      const read = () => readAccountLaunchProfiles(settings, credentials, undefined, undefined, operationContext);
+      expect((await read()).profiles.find(profile => profile.id === 'focused')).toMatchObject({ name: 'Fresh',
+        profileRecordRevision: state === 'active' ? 2 : 0 });
+      expect(boundaryError).toBeUndefined();
+      expect(requests.some(path => path.startsWith('GET /v1/artifacts'))).toBe(true);
+      if (state === 'absent') expect(mutations.map(mutation => mutation.operation)).toEqual(['prepare', 'activate']);
+      else {
+        expect(mutations).toEqual([]);
+        // The separate Authoring Memory owner still inspects its retained
+        // Settings source after its row. Catalog reobservation must not do so.
+        expect(catalogSourceRequests).toEqual([]);
+        expect(requests.filter(path => path.startsWith('GET /v2/account/settings/history')
+          || path.startsWith('GET /v1/account/entity-rows/') && !path.startsWith('GET /v1/account/entity-rows/profiles'))).toEqual([]);
+        revokeAfterPage = true;
+        await expect(read()).rejects.toMatchObject({ code: 'profile_catalog_unavailable' });
+        expect(revoked).toBe(true);
+        expect((operationContext ? operationContext.readSnapshot() : getActiveAccountSettingsSnapshot())?.profileCatalog)
+          .not.toMatchObject({ status: 'ready' });
+      }
+      if (operationContext) expect(getActiveAccountSettingsSnapshot()).toBe(daemonSnapshot);
+    });
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
 
 describe('CLI Profile catalog hydration', () => {
   it('reobserves a demanded catalog when an Account row wake overtakes its final admission read', async () => {
@@ -107,6 +222,7 @@ describe('CLI Profile catalog hydration', () => {
     const profiles = await readAccountLaunchProfiles(accountSettingsParse({}), credentials, undefined, undefined, operationContext);
     expect(profiles.visibleProfiles.find(profile => profile.id === 'bob-row')).toMatchObject({ name: 'Bob', enabled: true });
     expect(getActiveAccountSettingsSnapshot()).toBe(before);
+    const { createCliActionInventoryDeps } = await import('@/session/actions/cliActionDeps/createCliActionInventoryDeps');
     const inventory = createCliActionInventoryDeps({ token: credentials.token, credentials, savedSecretOperationContext: operationContext,
       sessionId: 'requester-profile-session', mode: 'plain', ctx: null });
     expect(await inventory.spawnProfilesList?.({})).toMatchObject({ coverage: 'complete', items: expect.arrayContaining([

@@ -22,8 +22,18 @@ const reloadAfterPending = new Set<string>();
 /** Demand-load one existing Account lifetime; newer preference revisions do not retire it. */
 export function refreshActiveProfileCatalog(input: Readonly<{ credentials: StoredCredentials; signal?: AbortSignal;
   operationContext?: SavedSecretOperationContextV1 }>): Promise<ProfileCatalogSnapshotV1> {
+  return refreshProfileCatalogInHome(input, false);
+}
+
+/** Current launch reads reobserve active rows without resuming optional source/history cleanup. */
+export function reobserveActiveProfileCatalog(input: Parameters<typeof refreshActiveProfileCatalog>[0]): Promise<ProfileCatalogSnapshotV1> {
+  const catalog = (input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot())?.profileCatalog;
+  return refreshProfileCatalogInHome(input, catalog?.status === 'ready' && catalog.source === 'destination' && catalog.authority === 'active');
+}
+
+function refreshProfileCatalogInHome(input: Parameters<typeof refreshActiveProfileCatalog>[0], reobserve: boolean): Promise<ProfileCatalogSnapshotV1> {
   return input.operationContext ? runWithServerHttpBaseUrl(input.operationContext.serverHttpBaseUrl,
-    () => refreshCapturedProfileCatalog(input)) : refreshCapturedProfileCatalog(input);
+    () => refreshCapturedProfileCatalog(input, reobserve)) : refreshCapturedProfileCatalog(input, reobserve);
 }
 
 function refreshCapturedProfileCatalog(input: Parameters<typeof refreshActiveProfileCatalog>[0], reobserve = false): Promise<ProfileCatalogSnapshotV1> {
