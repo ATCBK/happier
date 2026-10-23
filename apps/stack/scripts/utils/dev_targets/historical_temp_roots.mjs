@@ -35,9 +35,9 @@ function inspectTree(path, countedInodes = new Set(), ownerUid = process.getuid(
   return { info, newestMtimeMs, bytes, identities, ownedRootActive };
 }
 
-function collectProcessReferences(procRoot, ownerUid) {
+function collectProcessReferences(procRoot, ownerUid, { bindingsOnly = false, processIds } = {}) {
   const paths = [], identities = new Set();
-  for (const pid of readdirSync(procRoot).filter(name => /^\d+$/.test(name))) {
+  for (const pid of processIds ?? readdirSync(procRoot).filter(name => /^\d+$/.test(name))) {
     const processRoot = join(procRoot, pid);
     let matchingOwnerUid = false;
     try {
@@ -50,6 +50,7 @@ function collectProcessReferences(procRoot, ownerUid) {
       if (/^State:\s+Z/m.test(status) || /^Kthread:\s+1/m.test(status)) continue;
       const addPath = path => {
         paths.push(path.replace(/ \(deleted\)$/, ''));
+        if (bindingsOnly) return;
         try { identities.add(identity(statSync(path))); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
       };
@@ -63,6 +64,7 @@ function collectProcessReferences(procRoot, ownerUid) {
           }
         }
       }
+      if (bindingsOnly) continue;
       for (const link of [join(processRoot, 'cwd'), ...readdirSync(join(processRoot, 'fd')).map(fd => join(processRoot, 'fd', fd))]) {
         try {
           addPath(readlinkSync(link));
@@ -87,8 +89,8 @@ function collectProcessReferences(procRoot, ownerUid) {
   return { paths, identities };
 }
 
-function processReferences(procRoot, ownerUid) {
-  try { return collectProcessReferences(procRoot, ownerUid); }
+function processReferences(procRoot, ownerUid, { bindingsOnly = false, processIds } = {}) {
+  try { return collectProcessReferences(procRoot, ownerUid, { bindingsOnly, processIds }); }
   catch (error) {
     // Nondumpable same-UID processes still hold real references. Acquire one
     // complete read-only observation with existing noninteractive authorization,
@@ -96,8 +98,9 @@ function processReferences(procRoot, ownerUid) {
     // Unknown UID/visibility remains closed, and deletion keeps the caller's UID.
     if (!error.canRetryPrivilegedReferences || procRoot !== '/proc' || ownerUid !== process.getuid()) throw error;
     const result = spawnSync('sudo', ['-n', '--', process.execPath, fileURLToPath(import.meta.url),
-      '--observe-process-references', String(ownerUid)], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: Infinity,
+      bindingsOnly ? '--observe-temp-bindings' : '--observe-process-references', String(ownerUid)], {
+      encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: Infinity,
+      input: processIds === undefined ? '' : JSON.stringify(processIds),
     });
     if (result.error || result.status !== 0) throw error;
     // Only paths, inode identities and explicitly selected non-secret temp
@@ -187,10 +190,40 @@ export function reapHistoricalTempRoots(tempParent, procRoot = '/proc', {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv[2] === '--observe-process-references') {
+  if (process.argv[2] === '--test-temp-users') {
+    try {
+      // Reuse the native custody census. The observer is born after this
+      // snapshot and never becomes a consumer merely by inheriting bindings.
+      const processIds = process.argv.includes('--census') ? readFileSync(0, 'utf8').split('\n').filter(line => line.trim()).map(line => {
+        const match = /^(\d+)\s+\d+\s+\S+\s+\d+$/.exec(line.trim());
+        if (!match) throw new Error('process custody census unavailable');
+        return match[1];
+      }) : undefined;
+      if (processIds?.length === 0) throw new Error('process custody census unavailable');
+      const references = processReferences('/proc', process.getuid(), { bindingsOnly: true, processIds });
+      const users = new Set();
+      for (const path of references.paths) {
+        // Native cleanup consumers match exact roots; a binding below a root
+        // retains its ancestors too. Never emit unrelated environment values.
+        for (let directory = path; ; directory = dirname(directory)) {
+          if (!/[\r\n]/.test(directory)) users.add(directory);
+          if (dirname(directory) === directory) break;
+        }
+      }
+      process.stdout.write([...users].join('\n') + '\n');
+    } catch (error) {
+      console.error(`[preferred-execution] temporary custody observation unavailable: ${error.message}`);
+      process.exitCode = 2;
+    }
+  } else if (['--observe-process-references', '--observe-temp-bindings'].includes(process.argv[2])) {
     const ownerUid = Number(process.argv[3]);
     if (process.argv.length !== 4 || !Number.isSafeInteger(ownerUid) || ownerUid < 0) throw new Error('process reference owner UID unavailable');
-    const references = collectProcessReferences('/proc', ownerUid);
+    const bindingsOnly = process.argv[2] === '--observe-temp-bindings';
+    const request = bindingsOnly ? readFileSync(0, 'utf8').trim() : '';
+    const processIds = request ? JSON.parse(request) : undefined;
+    if (processIds !== undefined && (!Array.isArray(processIds) || !processIds.length
+      || !processIds.every(pid => typeof pid === 'string' && /^\d+$/.test(pid)))) throw new Error('process custody census unavailable');
+    const references = collectProcessReferences('/proc', ownerUid, { bindingsOnly, processIds });
     process.stdout.write(JSON.stringify({ paths: references.paths, identities: [...references.identities] }) + '\n');
   } else console.error(JSON.stringify(reapHistoricalTempRoots(process.argv[2])));
 }

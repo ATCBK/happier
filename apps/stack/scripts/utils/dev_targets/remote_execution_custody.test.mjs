@@ -13,11 +13,64 @@ const custody = new URL('./remote_execution_custody.sh', import.meta.url).pathna
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 const tempHelper = new URL('../../../../../scripts/testing/process/temporaryDirectories.mjs', import.meta.url).href;
 
+test('unrelated nondumpable process does not veto abandoned scratch while a live command keeps its root', { skip: process.platform !== 'linux' }, async t => {
+  if (spawnSync('sudo', ['-n', 'true']).status !== 0) return t.skip('noninteractive procfs observation unavailable');
+  if (spawnSync('python3', ['--version']).status !== 0) return t.skip('native nondumpable fixture requires python3');
+  const { root } = await createTempFixture(t, { prefix: 'hstack-temp-nondumpable-' });
+  const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+  const identity = new URL('../proc/native_process_identity.sh', import.meta.url).pathname;
+  const token = spawnSync('/bin/bash', ['-c', '. "$1"; heavyweight_process_token "$2"', 'identity', identity, String(process.pid)], { encoding: 'utf8' }).stdout.trim();
+  const directories = Array.from({ length: 8 }, (_, index) => join(root, `happier-stack-unit-abandoned-${index}`));
+  const held = join(root, 'happier-stack-unit-held');
+  for (const directory of [...directories, held]) {
+    await mkdir(directory);
+    await writeFile(join(directory, '.happier-test-temp-owner'), `happier-test-temp-v1\n${bootId}\n2147483647\n${token}\n2147483647\n`);
+  }
+  const heldChild = join(held, 'child');
+  await mkdir(heldChild);
+  const fixtures = [
+    spawn('python3', ['-u', '-c', 'import ctypes,sys\nassert ctypes.CDLL(None).prctl(4,0,0,0,0)==0\nprint("ready",flush=True)\nsys.stdin.read()'], { stdio: ['pipe', 'pipe', 'pipe'] }),
+    spawn(process.execPath, ['-e', 'process.stdin.resume();process.stdin.on("end",()=>process.exit(0));console.log("ready")'], {
+      env: { ...process.env, TMPDIR: heldChild }, stdio: ['pipe', 'pipe', 'pipe'],
+    }),
+  ];
+  await Promise.all(fixtures.map(async child => {
+    const closed = once(child, 'close');
+    t.after(async () => { child.stdin.end(); await closed; });
+    await once(child.stdout, 'data');
+  }));
+  const result = spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], {
+    env: { ...process.env, TMPDIR: root }, encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  let reclaimed = 0;
+  for (const directory of directories) {
+    try { await access(directory); } catch (error) { if (error.code !== 'ENOENT') throw error; reclaimed++; }
+  }
+  assert.equal(reclaimed, directories.length, 'one unrelated nondumpable process must not veto the abandoned-root batch');
+  await access(held);
+  // A readable holder must protect the same ancestor as the denied-read
+  // collector. Scope only the OS census, keeping real procfs binding reads.
+  const readableEnv = await processCensusEnv(root, [fixtures[1].pid]);
+  const readable = spawnSync('/bin/bash', [custody, 'reap-test-temp-roots', '-', '-'], {
+    env: { ...readableEnv, TMPDIR: root }, encoding: 'utf8',
+  });
+  assert.equal(readable.status, 0, readable.stderr);
+  await access(held);
+  // The fallback observer inherits its caller's environment unless custody
+  // removes those bindings. It must not retain its own finished command root.
+  const commandEnv = { ...process.env };
+  delete commandEnv.TMPDIR;
+  const command = spawnSync('/bin/bash', [custody, 'run', join(root, 'worker-home/remote-exec/completed.pid'), 'completed',
+    process.execPath, '-e', 'console.log(process.env.TMPDIR)'], { env: commandEnv, encoding: 'utf8' });
+  assert.equal(command.status, 0, command.stderr);
+  await assert.rejects(access(command.stdout.trim()), { code: 'ENOENT' }, 'the observer must not retain finished private scratch');
+});
+
 async function processCensusEnv(root, pids) {
   if (process.platform !== 'linux') return { ...process.env };
-  // Scope only the OS census to the fixture's known processes. Unrelated
-  // same-UID jobs can legitimately have unreadable environments, in which
-  // case production must retain scratch. Keep real /proc and group checks.
+  // Scope only the OS census to the fixture's known processes. Denied host
+  // reads have a separate native contract above. Keep real /proc/group checks.
   writeFakeBin({ root, name: 'ps', content: `#!/bin/sh
 if [ "$*" = '-eo pid=,pgid=,stat=,uid=' ]; then
   exec /bin/ps -p ${pids.join(',')} -o pid=,pgid=,stat=,uid=

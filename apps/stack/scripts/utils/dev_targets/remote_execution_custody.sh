@@ -113,40 +113,10 @@ cancel_record() {
 }
 
 read_test_temp_root_users() {
-  local observed_pid observed_group observed_state observed_uid binding observed_token
-  test_temp_root_users=
-  while read -r observed_pid observed_group observed_state observed_uid; do
-    [ "$observed_uid" = "$UID" ] || continue
-    case "$observed_state" in Z*) continue ;; esac
-    # Recheck terminal state after the census. An older process can receive a
-    # binding through IPC and exec without changing its kernel birth token.
-    heavyweight_read_process_token "$observed_pid"
-    case "$heavyweight_process_state" in Z|X|x) continue ;; esac
-    # Read only the explicit non-secret custody binding. Unknown visibility for
-    # a live process in this account means no deletion, never guessed absence.
-    if ! {
-      while IFS= read -r -d '' binding; do
-        case "$binding" in HAPPIER_TEST_TEMP_ROOTS=*) test_temp_root_users="$test_temp_root_users
-${binding#HAPPIER_TEST_TEMP_ROOTS=}" ;;
-        TMPDIR=/*) test_temp_root_users="$test_temp_root_users
-${binding#TMPDIR=}" ;; esac
-      done < "/proc/$observed_pid/environ"
-    } 2>/dev/null; then
-      [ ! -d "/proc/$observed_pid" ] && continue
-      # Terminal tasks no longer hold scratch. Unknown live bindings retain it
-      # regardless of birth time, including processes that received it later.
-      heavyweight_read_process_token "$observed_pid"
-      case "$heavyweight_process_state" in Z|X|x) continue ;; esac
-      observed_token=$heavyweight_process_token_value
-      case "$observed_token:$2" in
-        *[!0-9:]*|:*|*:)
-          printf '[preferred-execution] retaining temporary scratch: process %s identity is unavailable after environment inspection failed\n' "$observed_pid" >&2
-          return 1 ;;
-      esac
-      printf '[preferred-execution] retaining temporary scratch: live process %s (state=%s, start=%s, creator=%s) has an unreadable environment\n' "$observed_pid" "$heavyweight_process_state" "$observed_token" "$2" >&2
-      return 1
-    fi
-  done <<< "$1"
+  # One owner observes native and historical custody. Query only bindings for
+  # native teardown; same-UID denial reuses its read-only privileged observer.
+  # The probe is not a consumer and must not publish inherited temp bindings.
+  test_temp_root_users=$(TMPDIR= HAPPIER_TEST_TEMP_ROOTS= node "${BASH_SOURCE[0]%/*}/historical_temp_roots.mjs" --test-temp-users --census <<< "$1")
 }
 
 reap_test_temp_roots() {
@@ -171,7 +141,7 @@ reap_test_temp_roots() {
     [ "$owner_pid" -gt 1 ] && [ "$owner_group" -gt 1 ] || continue
     [ "$owner_boot" = "$boot_id" ] || continue
     heavyweight_process_is_current "$owner_pid" "$owner_token" && continue
-    read_test_temp_root_users "$snapshot" "$owner_token" || continue
+    read_test_temp_root_users "$snapshot" || continue
     printf '%s\n' "$test_temp_root_users" | grep -Fx -- "$directory" >/dev/null && continue
     # A live descendant remains an owner after its creator dies. Shared or
     # recycled groups are retained conservatively; no process is signaled.
@@ -179,7 +149,7 @@ reap_test_temp_roots() {
     # Recheck the group immediately before removal, rather than trusting an
     # earlier process snapshot while a dispatch or another reaper runs.
     snapshot=$(ps -eo pid=,pgid=,stat=,uid=) || return 0
-    read_test_temp_root_users "$snapshot" "$owner_token" || continue
+    read_test_temp_root_users "$snapshot" || continue
     printf '%s\n' "$test_temp_root_users" | grep -Fx -- "$directory" >/dev/null && continue
     printf '%s\n' "$snapshot" | awk -v group="$owner_group" '$2 == group && $3 !~ /^Z/ {found=1} END {exit !found}' && continue
     heavyweight_process_is_current "$owner_pid" "$owner_token" && continue
@@ -206,7 +176,7 @@ if [ "$mode" = test-temp-users ]; then
   snapshot=$(ps -eo pid=,pgid=,stat=,uid=) || exit 2
   owner_token=$(sed -n '4p' "$pid_file/.happier-test-temp-owner" 2>/dev/null)
   case "$owner_token" in ''|*[!0-9]*) exit 2 ;; esac
-  read_test_temp_root_users "$snapshot" "$owner_token" || exit 2
+  read_test_temp_root_users "$snapshot" || exit 2
   printf '%s\n' "$test_temp_root_users"
   exit 0
 fi
@@ -266,7 +236,7 @@ cleanup() {
     case "$command_temp_token" in ''|*[!0-9]*) return ;; esac
     case "$command_temp" in *$'\n'*|*$'\r'*) return ;; esac
     snapshot=$(ps -eo pid=,pgid=,stat=,uid=) || return
-    read_test_temp_root_users "$snapshot" "$command_temp_token" || return
+    read_test_temp_root_users "$snapshot" || return
     while IFS= read -r binding; do
       case "$binding" in "$command_temp"|"$command_temp"/*) return ;; esac
     done <<< "$test_temp_root_users"
