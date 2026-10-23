@@ -5,6 +5,8 @@ import { Server } from 'socket.io';
 import { describe, expect, it } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { createPromptBundleInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { SpawnCapabilitiesPreviewSuccessV1Schema, SessionCapabilitiesGetOutputV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import { PromptLibraryCatalogKeyV1Schema, PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
@@ -75,6 +77,11 @@ describe('Session capabilities composed Account and Machine seam', () => {
       let relayMethodNotFound = false;
       let relayRequestTimeout = false;
       let waitForDetection: (() => Promise<void>) | undefined;
+      const skillArtifacts: Array<Readonly<{ id: string; header: string; body: string;
+        ownerAccountId: string; access: 'owner'; encryptionMode: 'plain'; dataEncryptionKey: string;
+        headerVersion: number; bodyVersion: number; seq: number; createdAt: number; updatedAt: number }>> = [];
+      const skillReads = { inventory: 0, bodies: 0 };
+      let addressedSkillUnavailable = false;
       const server = createServer((request, response) => { void (async () => {
         const path = new URL(request.url ?? '/', 'http://fixture.test').pathname;
         let text = ''; for await (const chunk of request) text += String(chunk);
@@ -99,7 +106,18 @@ describe('Session capabilities composed Account and Machine seam', () => {
         }
         else if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) result = { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
           key, revision: 1, content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) };
-        else if (path === '/v1/artifacts') result = [];
+        else if (path === '/v1/artifacts') {
+          skillReads.inventory++;
+          skillReads.bodies += skillArtifacts.length;
+          result = new URL(request.url!, 'http://fixture.test').searchParams.has('kind')
+            ? { items: skillArtifacts, hasUnclassified: false } : skillArtifacts;
+        }
+        else if (path.startsWith('/v1/artifacts/')) {
+          const artifact = skillArtifacts.find(item => path === `/v1/artifacts/${item.id}`);
+          if (addressedSkillUnavailable) { status = 503; result = { error: 'artifact_content_unavailable' }; }
+          else if (artifact) { skillReads.bodies++; result = artifact; }
+          else { status = 404; result = { error: 'not_found' }; }
+        }
         else if (path === `/v1/machines/${machineId}`) result = { machine: { id: machineId, kind: 'persistent', active: machineOnline,
           storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, revokedAt: null, replacedByMachineId: null } };
         else if (path === `/v2/sessions/${sessionId}` && request.method === 'GET') {
@@ -276,6 +294,36 @@ describe('Session capabilities composed Account and Machine seam', () => {
           expect((await cancelledReads).map(result => result.ok)).toEqual([false, false, false]);
         } finally { releaseCancelledDetection(); await cancelledReads; waitForDetection = undefined; }
         machineOnline = false;
+        for (let index = 0; index < 139; index++) await createPromptBundleInLibrary({ store: {
+          read: async () => null, update: async () => { throw new Error('Unexpected fixture update'); },
+          create: async ({ header, body }) => {
+            const id = `skill-${index}`;
+            skillArtifacts.push({ id, header: encodePlainArtifactStoredContent(header),
+              body: encodePlainArtifactStoredContent({ body }), ownerAccountId: 'capabilities-account',
+              access: 'owner', encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+              headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+            return id;
+          },
+        }, request: { title: 'review', bundleSchemaId: 'skills.skill_md_v1', entries: [{ path: 'SKILL.md',
+          contentKind: 'utf8', contentBase64: Buffer.from('---\nname: review\n---\nReview a change.').toString('base64') }] } });
+        for (const id of ['happier:happier', 'skill-0']) {
+          skillReads.inventory = 0; skillReads.bodies = 0;
+          expect(await executor.execute('session.capabilities.set', { sessionId, kind: 'skill', id, state: 'on' }, context))
+            .toMatchObject({ ok: true, result: { ok: true } });
+          expect(persistedMetadata()).toMatchObject({ skillSelectionV1: { forceIncludeSkillIds: expect.arrayContaining([id]) } });
+          expect(skillReads).toEqual({ inventory: 0, bodies: id === 'happier:happier' ? 0 : 1 });
+        }
+        // Names still require the complete catalog; ambiguous and missing names never write.
+        addressedSkillUnavailable = true;
+        expect(await executor.execute('session.capabilities.set', { sessionId, kind: 'skill', id: 'happier', state: 'off' }, context))
+          .toMatchObject({ ok: true, result: { ok: true } });
+        addressedSkillUnavailable = false;
+        const beforeNameRefusal = persistedMetadata();
+        for (const id of ['review', 'missing-skill']) {
+          expect(await executor.execute('session.capabilities.set', { sessionId, kind: 'skill', id, state: 'on' }, context))
+            .toMatchObject({ ok: true, result: { ok: false, code: 'not_found' } });
+          expect(persistedMetadata()).toEqual(beforeNameRefusal);
+        }
         const changed = await executor.execute('session.capabilities.set', { sessionId, kind: 'mcp_server', id: 'linear', state: 'on' }, context);
         expect(changed, JSON.stringify({ changed, failures: failures.map(error => error instanceof Error ? error.message : error) }))
           .toMatchObject({ ok: true, result: { ok: true, previous: 'inherit', applyTiming: { t: 'session_not_running' } } });

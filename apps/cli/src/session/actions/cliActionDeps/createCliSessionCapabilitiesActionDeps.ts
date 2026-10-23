@@ -109,6 +109,15 @@ export function createCliSessionCapabilitiesActionDeps(params: Readonly<{
         // Native overlay ids are desired exact names, so saving Off stays Account-only while the Machine is offline.
         if (input.kind === 'native_skill') return input.id;
         if (input.kind === 'skill') {
+          // Opaque ids need only their addressed content. Names still require
+          // the complete catalog to preserve duplicate-name refusal.
+          const addressed = await params.skillRules.listSkills(context.signal, [input.id]).catch(() => {
+            // A failed addressed read cannot replace the existing name-catalog
+            // result or its available-only plugin-source semantics.
+            context.signal?.throwIfAborted();
+            return [];
+          });
+          if (addressed.some(item => item.id === input.id)) return input.id;
           return resolveSessionCapabilityItemIdentityV1(await params.skillRules.listSkills(context.signal), input.id);
         }
         if (!params.operationContext) await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking' });
