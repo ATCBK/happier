@@ -15,6 +15,8 @@ import { fetchAndApplySessions } from './sessionSnapshot';
 import { parseDecryptedSessionMetadata } from './parsePlainSessionPayload';
 import { flushActivityUpdates, handleUpdateContainer } from '../socket/socket';
 import { registerSessionRealtimeTranscriptConsumer } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { getScopedSessionByIdEncryption } from '@/sync/runtime/orchestration/serverScopedRpc/fetchSessionByIdWithServerScope';
 
 const currentness = {
     mode: 'e2ee', version: 1, updatedAt: 1,
@@ -75,10 +77,51 @@ afterEach(() => {
 });
 
 describe('Session hydration publication', () => {
-    it('publishes concurrent by-ID hydration completions together before their reads resolve', async () => {
+    it('publishes ready plain by-ID hydration completions together without a publication timer', async () => {
+        storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const ids = Array.from({ length: 6 }, (_, index) => `concurrent-hydration-${index}`);
+        const publications: string[][] = [];
+        const unsubscribe = storage.subscribe((next, previous) => {
+            if (next.sessions !== previous.sessions) publications.push(Object.keys(next.sessions));
+        });
+        const hydration = Promise.all(ids.map(id => fetchAndApplySessionById({
+            serverId, sessionId: id, includeTurnsProjection: false, accessProjectionVersion: 1,
+            credentials: { token: 't' },
+            accountCurrentness: { mode: 'plain', version: 1, updatedAt: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null },
+            encryption: getScopedSessionByIdEncryption(null), sessionDataKeys: new Map(),
+            applySessions: storage.getState().applySessions,
+            getExistingSession: sessionId => storage.getState().sessions[sessionId],
+            log: { log: () => {} },
+            request: async () => jsonResponse({ session: createPlainSessionCurrentProjectionRecordFixture({ id }) }),
+        }).then(result => {
+            expect(result.ok).toBe(true);
+            expect(result.session).toBe(storage.getState().sessions[id]);
+            return result;
+        })));
+        try {
+            // HTTP and decoder microtasks finish, but no publication timeout advances.
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(publications).toHaveLength(1);
+            expect(Object.keys(storage.getState().sessions)).toHaveLength(ids.length);
+            await vi.runAllTimersAsync();
+            const results = await hydration;
+            expect(results).toHaveLength(ids.length);
+            expect(publications).toHaveLength(1);
+            expect([...publications[0]].sort()).toEqual([...ids].sort());
+        } finally {
+            await vi.runAllTimersAsync();
+            await hydration;
+            vi.useRealTimers();
+            unsubscribe();
+        }
+    });
+
+    it('publishes concurrent E2EE by-ID hydration completions together', async () => {
         const { row, params } = await createHydrationContext();
         storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
-        const ids = Array.from({ length: 6 }, (_, index) => `concurrent-hydration-${index}`);
+        const ids = Array.from({ length: 6 }, (_, index) => `concurrent-encrypted-hydration-${index}`);
         const publications: string[][] = [];
         const unsubscribe = storage.subscribe((next, previous) => {
             if (next.sessions !== previous.sessions) publications.push(Object.keys(next.sessions));
@@ -87,17 +130,11 @@ describe('Session hydration publication', () => {
             const results = await Promise.all(ids.map(id => fetchAndApplySessionById({
                 ...params, sessionId: id, includeTurnsProjection: false,
                 request: async () => jsonResponse({ session: { ...row, id } }),
-            }).then(result => {
-                expect(result.ok).toBe(true);
-                expect(result.session).toBe(storage.getState().sessions[id]);
-                return result;
             })));
-            expect(results).toHaveLength(ids.length);
+            expect(results.every(result => result.ok)).toBe(true);
             expect(publications).toHaveLength(1);
             expect([...publications[0]].sort()).toEqual([...ids].sort());
-        } finally {
-            unsubscribe();
-        }
+        } finally { unsubscribe(); }
     });
 
     it('rechecks a retired exact reader before its queued publication and lets the next reader recover', async () => {
