@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { SocketRpcRequestIdSchema } from '@happier-dev/protocol/socketRpc';
 import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
 import { encrypt, decrypt, encodeBase64, decodeBase64 } from '@/api/encryption';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
@@ -95,7 +96,7 @@ describe('RPC completion diagnostics', () => {
         expect(events.map(([message]) => message)).toEqual([
             '[RPC] Request received', '[RPC] Request admitted', '[RPC] Request completed',
         ]);
-        const hashed = `sha256:${createHash('sha256').update(requestId).digest('hex')}`;
+        const hashed = `sha256:${createHash('sha256').update(SocketRpcRequestIdSchema.parse(requestId)).digest('hex')}`;
         for (const [, metadata] of events) expect(metadata).toMatchObject({ requestId: hashed, method: 'demo' });
         expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
     });
