@@ -5,20 +5,118 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { useWorkflowExistingSessionOptions } from './useWorkflowExistingSessionOptions';
 
 describe('Workflow existing Session options', () => {
-    it('keeps current hydrated options while detailed acquisition is disabled', async () => {
+    it('does no detailed option work across Session arrivals while closed, then reads current options on open and reopen', async () => {
+        const previous = storage.getState();
+        let nameReads = 0;
+        let eligibilityReads = 0;
+        const session = (index: number) => createSessionFixture({ id: `closed-cost-${index}`, serverId: 'home-a', metadata: {
+            ...createSessionFixture().metadata!, flavor: 'claude', claudeSessionId: `resume-${index}`,
+            claudeTranscriptPath: '/tmp/transcript.jsonl', machineId: 'machine-a', path: '/repo', name: `Session ${index}`,
+        } });
+        const sessions = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => {
+            const value = session(index);
+            Object.defineProperty(value.metadata, 'name', { enumerable: true, get: () => { nameReads += 1; return `Session ${index}`; } });
+            Object.defineProperty(value, 'metadataUnavailable', { enumerable: true, get: () => { eligibilityReads += 1; return false; } });
+            return [value.id, value];
+        }));
+        storage.setState({ isDataReady: true, sessions, sessionListRowsByServerId: {} });
+        const hook = await renderHook(({ enabled }) => useWorkflowExistingSessionOptions({
+            serverId: 'home-a', machineId: 'machine-a', enabled,
+        }), { initialProps: { enabled: false } });
+        try {
+            nameReads = 0;
+            eligibilityReads = 0;
+            await act(async () => {
+                for (let index = 1000; index < 1005; index += 1) storage.setState(state => ({
+                    sessions: { ...state.sessions, [`closed-cost-${index}`]: session(index) },
+                }));
+            });
+            expect(nameReads).toBe(0);
+            expect(eligibilityReads).toBe(0);
+            expect(hook.getCurrent().existingSessions).toEqual([]);
+            await hook.rerender({ enabled: true });
+            expect(hook.getCurrent().existingSessions).toHaveLength(1005);
+            expect(nameReads).toBeGreaterThan(0);
+            expect(eligibilityReads).toBeGreaterThan(0);
+            await hook.rerender({ enabled: false });
+            nameReads = 0;
+            eligibilityReads = 0;
+            await act(async () => { storage.setState(state => ({ sessions: {
+                ...state.sessions, 'closed-cost-1005': session(1005),
+            } })); });
+            expect(nameReads).toBe(0);
+            expect(eligibilityReads).toBe(0);
+            expect(hook.getCurrent().sessionDropCandidates).toEqual([]);
+            await hook.rerender({ enabled: true });
+            expect(hook.getCurrent().existingSessions).toHaveLength(1006);
+        } finally { await hook.unmount(); storage.setState(previous); }
+    });
+    it.each([false, true])('does no hydrated-option work for unrelated publications (chooser enabled: %s)', async (enabled) => {
+        const previous = storage.getState();
+        let nameReads = 0;
+        const sessions = Object.fromEntries(Array.from({ length: 1000 }, (_, index) => {
+            const session = createSessionFixture({ id: `cost-${index}`, serverId: 'home-a', metadata: {
+                ...createSessionFixture().metadata!, flavor: 'claude', claudeSessionId: `resume-${index}`,
+                claudeTranscriptPath: '/tmp/transcript.jsonl', machineId: 'machine-a', path: '/repo',
+            } });
+            // Count real display projection work without replacing candidacy, target or label logic.
+            Object.defineProperty(session.metadata, 'name', { enumerable: true, get: () => { nameReads += 1; return `Session ${index}`; } });
+            return [session.id, session];
+        }));
+        storage.setState({ isDataReady: true, sessions });
+        const hook = await renderHook(() => useWorkflowExistingSessionOptions({ serverId: 'home-a', machineId: 'machine-a', enabled }));
+        try {
+            expect(hook.getCurrent().existingSessions).toHaveLength(enabled ? 1000 : 0);
+            if (enabled) expect(nameReads).toBeGreaterThan(0);
+            else expect(nameReads).toBe(0);
+            nameReads = 0;
+            const before = hook.getCurrent();
+            await act(async () => {
+                for (let index = 0; index < 20; index += 1) storage.getState().applyLocalSettings({
+                    uiFontScale: index % 2 === 0 ? 1.1 : 1.2,
+                }, { persist: false });
+            });
+            expect(nameReads).toBe(0);
+            expect(hook.getCurrent()).toBe(before);
+        } finally {
+            await hook.unmount();
+            storage.getState().applyLocalSettings({ uiFontScale: previous.localSettings.uiFontScale }, { persist: false });
+            storage.setState(previous);
+        }
+    });
+
+    it('keeps current hydrated options while demanded', async () => {
         const previous = storage.getState();
         const session = createSessionFixture({ id: 'closed-summary', serverId: 'home-a', metadata: {
             ...createSessionFixture().metadata!, flavor: 'claude', claudeSessionId: 'resume-id',
             claudeTranscriptPath: '/tmp/transcript.jsonl', machineId: 'machine-a', path: '/repo', name: 'Original',
         } });
         storage.setState({ isDataReady: true, sessions: { [session.id]: session } });
-        const hook = await renderHook(() => useWorkflowExistingSessionOptions({ serverId: 'home-a', machineId: 'machine-a', enabled: false }));
+        const hook = await renderHook(() => useWorkflowExistingSessionOptions({ serverId: 'home-a', machineId: 'machine-a', enabled: true }));
         try {
             expect(hook.getCurrent().existingSessions).toMatchObject([{ sessionId: session.id, label: 'Original' }]);
             await act(async () => { storage.setState({ sessions: { [session.id]: {
                 ...session, metadata: { ...session.metadata!, name: 'Current summary' },
             } } }); });
             expect(hook.getCurrent().existingSessions).toMatchObject([{ sessionId: session.id, label: 'Current summary' }]);
+        } finally { await hook.unmount(); storage.setState(previous); }
+    });
+
+    it('refreshes the canonical list-row target without requiring a hydrated Session write', async () => {
+        const previous = storage.getState();
+        const session = createSessionFixture({ id: 'target-projection', serverId: 'home-a', metadata: {
+            ...createSessionFixture().metadata!, flavor: 'claude', claudeSessionId: 'resume-id',
+            claudeTranscriptPath: '/tmp/transcript.jsonl', machineId: 'machine-a', path: '/repo', name: 'Target',
+        } });
+        storage.setState({ isDataReady: true, sessions: { [session.id]: session }, sessionListRowsByServerId: {} });
+        const hook = await renderHook(() => useWorkflowExistingSessionOptions({ serverId: 'home-a', machineId: 'machine-a', enabled: true }));
+        try {
+            expect(hook.getCurrent().existingSessions).toMatchObject([{ sessionId: session.id, machineId: 'machine-a' }]);
+            await act(async () => { storage.setState({ sessionListRowsByServerId: { 'home-a': {
+                [session.id]: { ...session, metadata: { ...session.metadata!, machineId: 'machine-b' } },
+            } } }); });
+            expect(hook.getCurrent().existingSessions).toEqual([]);
+            expect(hook.getCurrent().sessionDropCandidates).toMatchObject([{ sessionId: session.id, machineId: 'machine-b' }]);
         } finally { await hook.unmount(); storage.setState(previous); }
     });
     it('does not recheck Session candidacy on unrelated store publications', async () => {

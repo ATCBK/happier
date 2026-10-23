@@ -276,6 +276,80 @@ const OPEN_SETTINGS_GROUPS: ReadonlyMap<string, boolean> = new Map([
     ['where', true], ['agent', true], ['conversation', true], ['inputs', true],
 ]);
 
+it('keeps closed workflow and step summaries on the exact admitted Home name without chooser options', async () => {
+    const harness = await loadHarness();
+    const { WorkflowInspector } = await import('../editor/WorkflowInspector');
+    const { WorkflowAccountLifetimeProvider } = await import('../workflowAccountScope');
+    const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+    const { createSessionFixture } = await import('@/dev/testkit');
+    const homes = await serveAccountHomes({ homes: [
+        { key: 'addressed', serverUrl: 'https://workflow-summary-addressed.test', accountId: 'summary-addressed' },
+        { key: 'focused', serverUrl: 'https://workflow-summary-focused.test', accountId: 'summary-focused' },
+    ], route: request => ['/v2/sessions', '/v2/sessions/active', '/v2/sessions/archived'].includes(request.path)
+        ? Response.json({ sessions: [], nextCursor: null, hasNext: false }) : undefined });
+    bindingBoundaries.push(() => homes.dispose());
+    const serverId = homes.homes.addressed!.id;
+    const sessionId = 'selected-summary';
+    const addressed = createSessionFixture({ id: sessionId, serverId, metadata: {
+        ...createSessionFixture().metadata!, name: 'Addressed name', machineId: 'machine-1',
+    } });
+    const focused = { ...addressed, serverId: homes.homes.focused!.id, metadata: { ...addressed.metadata!, name: 'Wrong Home name' } };
+    getStorage().setState({ isDataReady: true, sessions: { [sessionId]: focused },
+        sessionListRowsByServerId: { [serverId]: { [sessionId]: addressed }, [focused.serverId!]: { [sessionId]: focused } } });
+    const draft = harness.setWorkflowDefaultField(buildDraft(harness), 'conversation', { kind: 'existing_session', sessionId });
+    let bound = false;
+    let firstBinding: ReturnType<typeof useServerCredentialAccountScopeBinding>['binding'] = null;
+    function Summary({ admitted, retained = false }: { admitted: boolean; retained?: boolean }) {
+        const { binding } = useServerCredentialAccountScopeBinding(serverId);
+        bound = Boolean(binding);
+        if (binding && !firstBinding) firstBinding = binding;
+        const props = { draft, onChange: () => {}, existingSessions: [{ sessionId, machineId: 'machine-1', label: 'Stale option name' }],
+            machineName: 'Studio', documentEditable: false };
+        return <WorkflowAccountLifetimeProvider value={admitted ? (retained ? firstBinding : binding) ?? null : null}>
+            <WorkflowInspector {...props} subject={{ kind: 'workflow' }} presentation="pane" testIDPrefix="closed-default" />
+            <WorkflowInspector {...props} subject={{ kind: 'block', blockId: 'analyze' }} presentation="popover" testIDPrefix="closed-step" />
+        </WorkflowAccountLifetimeProvider>;
+    }
+    const screen = await renderScreen(<Summary admitted />);
+    await waitForHomeGovernance(() => expect(bound).toBe(true));
+    expect(screen.getTextContent()).toContain('Addressed name');
+    expect(screen.getTextContent()).not.toContain('Wrong Home name');
+    expect(screen.getTextContent()).not.toContain('Stale option name');
+    await act(async () => { getStorage().setState(state => ({ sessionListRowsByServerId: {
+        ...state.sessionListRowsByServerId, [serverId]: { [sessionId]: { ...addressed, metadata: { ...addressed.metadata!, name: 'Current addressed name' } } },
+    } })); });
+    expect(screen.getTextContent()).toContain('Current addressed name');
+    expect(screen.getTextContent()).not.toContain('Wrong Home name');
+    expect(screen.getTextContent()).not.toContain('Stale option name');
+    const locked = { ...addressed, metadata: null, ownerMetadataView: null, encryptionMode: 'e2ee' as const,
+        encryptedContentAvailability: 'encrypted_content_unavailable' as const };
+    await act(async () => { getStorage().setState(state => ({ sessionListRowsByServerId: {
+        ...state.sessionListRowsByServerId, [serverId]: { [sessionId]: locked },
+    } })); });
+    expect(screen.getTextContent()).not.toContain('Current addressed name');
+    expect(screen.getTextContent()).not.toContain('Stale option name');
+    expect(screen.getTextContent()).not.toContain('Wrong Home name');
+    await act(async () => { getStorage().setState(state => ({ sessionListRowsByServerId: {
+        ...state.sessionListRowsByServerId, [serverId]: {},
+    } })); });
+    expect(screen.getTextContent()).not.toContain('Stale option name');
+    expect(screen.getTextContent()).not.toContain('Wrong Home name');
+    await act(async () => { getStorage().setState(state => ({ sessionListRowsByServerId: {
+        ...state.sessionListRowsByServerId, [serverId]: { [sessionId]: addressed },
+    } })); });
+    await screen.update(<Summary admitted retained />);
+    await act(async () => { await homes.switchAccount('addressed', 'summary-replacement'); });
+    await waitForHomeGovernance(() => expect(firstBinding?.isCurrent()).toBe(false));
+    expect(screen.getTextContent()).not.toContain('Addressed name');
+    expect(screen.getTextContent()).not.toContain('Stale option name');
+    expect(screen.getTextContent()).not.toContain('Wrong Home name');
+    await screen.update(<Summary admitted={false} />);
+    expect(screen.getTextContent()).not.toContain('Current addressed name');
+    expect(screen.getTextContent()).not.toContain('Wrong Home name');
+    expect(screen.getTextContent()).not.toContain('Stale option name');
+    await screen.unmount();
+});
+
 async function renderBody(
     harness: Harness,
     overrides: Record<string, unknown> = {},

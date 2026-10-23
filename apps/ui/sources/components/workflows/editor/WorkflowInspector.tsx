@@ -37,7 +37,7 @@ import type { WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEdito
 import type { Machine } from '@/sync/domains/state/storageTypes';
 
 import type { WorkflowRunAsTarget, WorkflowRunAsTargetKind } from '../run/workflowRunAsTargets';
-import { formatWorkflowContinuitySummary, WorkflowContinuityControls } from './WorkflowContinuityControls';
+import { formatWorkflowContinuitySummary, useWorkflowContinuedSessionLabel, WorkflowContinuityControls } from './WorkflowContinuityControls';
 import { WorkflowFinalOutputEditor } from './WorkflowFinalOutputEditor';
 import { WorkflowInputsEditor } from './WorkflowInputsEditor';
 import { formatWorkflowFieldLabel } from './WorkflowStepDataEditor';
@@ -128,6 +128,7 @@ export function WorkflowInspector(props: WorkflowInspectorProps): React.ReactEle
 /** Workflow subject: the Workflow settings groups, each a summary until it needs to be open. */
 function WorkflowSettingsContent(props: WorkflowInspectorProps): React.ReactElement {
     const { draft, onChange, testIDPrefix } = props;
+    const continuedSessionLabel = useWorkflowContinuedSessionLabel(draft.defaults.conversation);
     const readOnly = props.documentEditable === false;
     const defaultAuthoringValues = React.useMemo(() => resolveWorkflowStepSelectionV1({ defaults: draft.defaults, purpose: 'authoring' }).selection, [draft.defaults]);
     const executionTarget = props.executionTarget ?? 'session';
@@ -282,6 +283,7 @@ function WorkflowSettingsContent(props: WorkflowInspectorProps): React.ReactElem
                 summary={formatWorkflowContinuitySummary({
                     draft,
                     conversation: draft.defaults.conversation,
+                    sessionLabel: continuedSessionLabel,
                     workspace: draft.defaults.workspace,
                     ...(props.existingSessions === undefined ? {} : { existingSessions: props.existingSessions }),
                 })}
@@ -292,6 +294,7 @@ function WorkflowSettingsContent(props: WorkflowInspectorProps): React.ReactElem
                 <SectionContentRow testID={`${testIDPrefix}-defaults-continuity-row`}>
                     {readOnly ? <Text style={workflowEditorStyles.metaText}>{formatWorkflowContinuitySummary({
                         draft, conversation: draft.defaults.conversation, workspace: draft.defaults.workspace,
+                        sessionLabel: continuedSessionLabel,
                         existingSessions: props.existingSessions,
                     })}</Text> : <WorkflowContinuityControls
                         draft={draft}

@@ -48,7 +48,7 @@ import { SessionAuthoringControls } from '@/components/sessions/authoring/contro
 import type { WorkflowRunAsTargetKind } from '../run/workflowRunAsTargets';
 import { findWorkflowActionSpec } from '@/components/workflows/presentation/workflowActionCatalog';
 import { formatWorkflowConditionSentence, WorkflowConditionEditor } from './WorkflowConditionEditor';
-import { formatWorkflowContinuitySummary, WorkflowContinuityControls } from './WorkflowContinuityControls';
+import { formatWorkflowContinuitySummary, useWorkflowContinuedSessionLabel, WorkflowContinuityControls } from './WorkflowContinuityControls';
 import { formatWorkflowGroupSentence, WorkflowGroupOptions } from './WorkflowGroupEditor';
 import type { WorkflowInspectorProps } from './WorkflowInspector';
 import { formatWorkflowLoopSentence, WorkflowLoopOptions } from './WorkflowLoopEditor';
@@ -507,10 +507,12 @@ function StepMainPage(props: WorkflowInspectorProps & Readonly<{
         testIDPrefix: `${testIDPrefix}-control`,
     });
     const effectiveExecution = resolveEffectiveWorkflowStepExecution(draft, step);
+    const continuedSessionLabel = useWorkflowContinuedSessionLabel(effectiveExecution.conversation);
     if (props.documentEditable === false) return <>
         <ItemGroup title={t('workflows.page.sections.conversationTitle')}><SectionContentRow>
             <Text style={workflowEditorStyles.metaText}>{formatWorkflowContinuitySummary({ draft,
-                conversation: effectiveExecution.conversation, workspace: effectiveExecution.workspace, existingSessions: props.existingSessions })}</Text>
+                conversation: effectiveExecution.conversation, workspace: effectiveExecution.workspace, existingSessions: props.existingSessions,
+                sessionLabel: continuedSessionLabel })}</Text>
         </SectionContentRow></ItemGroup>
         <ItemGroup title={t('workflows.page.sections.agentTitle')}>
             <SessionAuthoringControls presentation="fields" disabled fields={SESSION_AUTHORING_CONTROL_FIELD_IDS}

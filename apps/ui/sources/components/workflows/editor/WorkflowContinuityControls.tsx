@@ -60,9 +60,13 @@ function blockLabelOf(draft: WorkflowEditorDraft, blockId: string): string {
  * display-name selection), or `null` while this device cannot read that Session.
  */
 export function useWorkflowContinuedSessionLabel(conversation: WorkflowConversationSelection | undefined): string | null {
-    const sessionId = conversation?.kind === 'existing_session' ? conversation.sessionId : '';
-    const source = useSessionDisplayNameSource(sessionId);
-    return sessionId.length === 0 || source === null ? null : getSessionName(source);
+    const focusedLifetime = useActiveServerAccountScopeLifetime();
+    const addressedLifetime = useWorkflowAccountLifetime();
+    const lifetime = addressedLifetime === undefined ? focusedLifetime : addressedLifetime;
+    const current = lifetime?.isCurrent() === true;
+    const sessionId = current && conversation?.kind === 'existing_session' ? conversation.sessionId : '';
+    const source = useSessionDisplayNameSource(sessionId, lifetime?.scope.serverId ?? null);
+    return !current || sessionId.length === 0 || source === null ? null : getSessionName(source);
 }
 
 /** One conversation choice in words: the same label in the field, its summary and the settings group line. */
@@ -84,8 +88,8 @@ export function formatWorkflowConversationLabel(params: Readonly<{
             return t('workflows.page.inspector.continues', {
                 // A recorded Session this host cannot list (imported, or no longer
                 // offered here) stays visible by its exact identity, never hidden.
-                session: params.existingSessions?.find((option) => option.sessionId === conversation.sessionId)?.label
-                    ?? params.sessionLabel
+                session: (params.sessionLabel !== undefined ? params.sessionLabel
+                    : params.existingSessions?.find((option) => option.sessionId === conversation.sessionId)?.label)
                     ?? t('workflows.conversation.existingSessionById', { sessionId: conversation.sessionId }),
             });
     }
@@ -115,6 +119,7 @@ export function formatWorkflowContinuitySummary(params: Readonly<{
     conversation: WorkflowConversationSelection | undefined;
     workspace: WorkflowWorkspaceSelection | undefined;
     existingSessions?: readonly WorkflowExistingSessionOption[];
+    sessionLabel?: string | null;
 }>): string {
     return `${formatWorkflowConversationLabel(params)} · ${formatWorkflowWorkspaceLabel(params.draft, params.workspace)}`;
 }
@@ -266,6 +271,7 @@ export function WorkflowContinuityControls(props: Readonly<{
     const [bindingRefusal, setBindingRefusal] = React.useState<string | null>(null);
     const recordedSession = props.conversation?.kind === 'existing_session' ? props.conversation : null;
     const recordedSessionLabel = useWorkflowContinuedSessionLabel(props.conversation);
+    const inheritedSessionLabel = useWorkflowContinuedSessionLabel(props.inherited?.conversation);
     const existingSessionStep = React.useMemo<SelectionListStep>(() => ({
         id: `${testIDPrefix}-conversation-existing-session`,
         inputPlaceholder: t('sessionsList.searchSessionsPlaceholder'),
@@ -295,7 +301,8 @@ export function WorkflowContinuityControls(props: Readonly<{
         conversationItems.push({
             id: DEFAULT_OPTION_ID,
             title: t('workflows.page.inspector.workflowDefault', {
-                value: formatWorkflowConversationLabel({ draft, conversation: props.inherited?.conversation, existingSessions }),
+                value: formatWorkflowConversationLabel({ draft, conversation: props.inherited?.conversation, existingSessions,
+                    sessionLabel: inheritedSessionLabel }),
             }),
             testID: `${testIDPrefix}-conversation-option-default`,
         });

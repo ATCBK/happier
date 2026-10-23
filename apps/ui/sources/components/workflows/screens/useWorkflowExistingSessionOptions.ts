@@ -37,6 +37,9 @@ type AcquisitionStatus = Readonly<{ acquisition: object | null; status: 'loading
 
 const NO_OPTIONS: readonly WorkflowExistingSessionOption[] = [];
 const NO_ROWS: readonly SessionListRenderableSession[] = [];
+const NO_SESSION_OPTIONS: WorkflowSessionOptions = { existingSessions: NO_OPTIONS, sessionDropCandidates: NO_OPTIONS };
+const selectNoRows = () => NO_ROWS;
+const selectNoOptions = () => NO_SESSION_OPTIONS;
 
 function createUnopenedRowsSelector(serverId: string | null) {
     let previous = NO_ROWS;
@@ -125,7 +128,7 @@ function createOptionsSelector(serverId: string | null, machineId: string | null
 export function useWorkflowExistingSessionOptions(params: Readonly<{
     serverId: string | null;
     machineId: string | null;
-    /** Demand for detailed acquisition; closed controls retain the current option projection. */
+    /** Demand for the full chooser/drop projection; visible recorded labels use the exact Session reader. */
     enabled?: boolean;
 }>): WorkflowSessionOptionsState {
     const { serverId, machineId } = params;
@@ -165,7 +168,7 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
     }, [acquisition, binding, enabled, retries]);
     const inventoryStatus = !binding ? 'ready' : inventory.acquisition === acquisition ? inventory.status : 'loading';
 
-    const unopenedSelector = React.useMemo(() => createUnopenedRowsSelector(serverId), [serverId]);
+    const unopenedSelector = React.useMemo(() => enabled ? createUnopenedRowsSelector(serverId) : selectNoRows, [enabled, serverId]);
     const unopenedRows = getStorage()(unopenedSelector);
     const settings = getStorage()(state => unopenedRows.length > 0 ? state.settings : null);
     // Only the displayed option projection is local. Session inventory, paging,
@@ -283,7 +286,7 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
     // of this server: the drop target needs them to state *why* a Session on
     // another Machine is refused (07 J19), while the picker offers only the
     // Where Machine's.
-    const selector = React.useMemo(() => createOptionsSelector(serverId, machineId), [serverId, machineId]);
+    const selector = React.useMemo(() => enabled ? createOptionsSelector(serverId, machineId) : selectNoOptions, [enabled, serverId, machineId]);
     const hydrated = getStorage()(selector);
     return React.useMemo<WorkflowSessionOptionsState>(() => {
         const ids = new Set(unopenedRows.map(row => row.id));
