@@ -14,6 +14,7 @@ import { detectGitRepo, getGitSnapshot } from './repository.js';
 import { createRealGitScmBackendRuntimeServices, runWithGitScmCommandRunner, runWithRealGitScmRuntime } from './testkit/scmRuntime.test-support.js';
 
 import { gitDiffFile } from './operations/readOperations.js';
+import { runScmCommand as runHostScmCommand } from '../../../../apps/cli/src/scm/runtime';
 
 const readSnapshot = (input: Parameters<typeof getGitSnapshot>[0]) => runWithRealGitScmRuntime(() => getGitSnapshot(input));
 const readFileDiff = (input: Parameters<typeof gitDiffFile>[0]) => runWithRealGitScmRuntime(() => gitDiffFile(input));
@@ -62,6 +63,60 @@ describe('Git repository worktree status enrichment', () => {
 
     afterEach(async () => {
         await Promise.all(cleanups.map((cleanup) => cleanup().catch(() => undefined)));
+    });
+
+    it.each([false, true])('reads one-file snapshot metadata without repeated Git processes (linked worktree: %s)', async (linked) => {
+        const repoRoot = await initRepoWithCommit('git-snapshot-process-count-');
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
+        const worktreeRoot = linked ? await makeTempDir('git-snapshot-process-linked-') : repoRoot;
+        if (linked) {
+            cleanups.push(() => rm(worktreeRoot, { recursive: true, force: true }));
+            await runGit(repoRoot, ['worktree', 'add', '-b', 'linked', worktreeRoot]);
+        }
+        await writeFile(join(worktreeRoot, 'README.md'), 'changed\n');
+        const observedCommands: string[][] = [];
+        const response = await runWithRealGitScmRuntime(() => runWithGitScmCommandRunner(async (input) => {
+            observedCommands.push([...input.args]);
+            return runHostScmCommand({ ...input, bin: input.command, args: [...input.args] });
+        }, async () => {
+            const detection = await detectGitRepo({ cwd: worktreeRoot });
+            return getGitSnapshot({ context: { cwd: worktreeRoot, detection, projectKey: `test:${worktreeRoot}` },
+                request: { operationStateVersion: 1 } });
+        }));
+        expect(response).toMatchObject({ success: true, snapshot: { operationState: null,
+            entries: [{ path: 'README.md', stats: { pendingAdded: 1, pendingRemoved: 1 } }],
+            branch: { head: linked ? 'linked' : 'main' } } });
+        expect(response.snapshot?.repo.worktrees.find(worktree => worktree.branch === 'main')?.isMain).toBe(true);
+        // Real plugin → SDK → CLI process execution, including repository detection.
+        expect(observedCommands).toHaveLength(9);
+    });
+
+    it.each(([['merge', false], ['rebase', false], ['merge', true]] as const).filter(([, newlineCheckout]) => !newlineCheckout || process.platform !== 'win32'))('keeps in-progress %s facts when reading snapshot metadata in batches (newline checkout: %s)', async (operation, newlineCheckout) => {
+        const repoRoot = await initRepoWithCommit(`git-snapshot-operation-${newlineCheckout ? '\n' : ''}`);
+        cleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
+        await runGit(repoRoot, ['checkout', '-b', 'feature']);
+        await writeFile(join(repoRoot, 'README.md'), 'feature\n');
+        await runGit(repoRoot, ['commit', '-am', 'feature']);
+        await runGit(repoRoot, ['checkout', 'main']);
+        await writeFile(join(repoRoot, 'README.md'), 'main\n');
+        await runGit(repoRoot, ['commit', '-am', 'main']);
+        let checkoutRoot = repoRoot;
+        if (newlineCheckout) {
+            checkoutRoot = await makeTempDir('git-snapshot-operation-linked-');
+            cleanups.push(() => rm(checkoutRoot, { recursive: true, force: true }));
+            await runGit(repoRoot, ['worktree', 'add', '-b', 'operation', checkoutRoot]);
+            expect(await runGit(checkoutRoot, ['rev-parse', '--git-path', 'MERGE_HEAD'])).toContain('\n');
+        }
+        if (operation === 'rebase') await runGit(checkoutRoot, ['checkout', 'feature']);
+        await expect(runGit(checkoutRoot, operation === 'merge' ? ['merge', 'feature'] : ['rebase', 'main'])).rejects.toThrow();
+        const response = await readSnapshot({ context: buildContext(checkoutRoot), request: { operationStateVersion: 1 } });
+        expect(response).toMatchObject({ success: true, snapshot: { hasConflicts: true, operationState: {
+            kind: operation, canContinue: false, canAbort: true, unresolvedCount: 1,
+            conflicts: [{ path: 'README.md', kind: 'both_modified' }],
+        } } });
+        expect(response.snapshot?.operationState?.headOid).toBe(await runGit(checkoutRoot, ['rev-parse', 'HEAD']));
+        expect(response.snapshot?.operationState?.baseOid).toBeTruthy();
+        if (operation === 'rebase') expect(response.snapshot?.operationState?.replayCommit).toBeTruthy();
     });
 
     it.each([false, true])('requires hosting runtime services only when the repository has a remote ($0)', async (hasRemote) => {
