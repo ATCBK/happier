@@ -324,9 +324,25 @@ describe('voice session lifecycle edge contracts', () => {
             } } });
             const controller = createVoiceSessionLifecycleController();
             controller.setConfiguredProviderId('local_conversation');
+            const { createVoiceContinuationProjection } = await import('@/voice/transcript/voiceContinuationProjection');
+            const { voiceConversationBindingResolver } = await import('@/voice/binding/VoiceConversationBindingResolver');
+            const continuation = createVoiceContinuationProjection();
+            const notes: string[] = [];
+            const unsubscribeContinuation = controller.subscribe(() => {
+                const snapshot = controller.getSnapshot();
+                const binding = snapshot.sessionId ? voiceConversationBindingResolver.resolveByControlSessionId({
+                    controlSessionId: snapshot.sessionId, adapterId: snapshot.adapterId,
+                }) : null;
+                const note = continuation.update({ snapshot, binding, deviceId: 'local-device', sessionSeq: 0 });
+                if (note) {
+                    notes.push(note.localId);
+                    continuation.settle(note, true);
+                }
+            });
             try {
                 await controller.toggle(target);
                 expect(controller.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+                expect(notes).toHaveLength(1);
                 await vi.waitFor(() => expect(machineRpcWithServerScope.mock.calls.some(([request]) =>
                     request.method === RPC_METHODS.DAEMON_VOICE_INFERENCE_MODELS_WARM)).toBe(true));
                 const coordinator = localVoiceSpeechOutputBoundary.getAudioSessionCoordinator();
@@ -353,12 +369,13 @@ describe('voice session lifecycle edge contracts', () => {
                 expect(controller.getSnapshot()).toEqual({
                     adapterId: null, sessionId: null, status: 'disconnected', mode: 'idle', canStop: false,
                 });
+                expect(notes).toHaveLength(1);
                 await controller.retry('another-session');
                 expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(1);
                 const dictation = voiceCaptureAdmissionController.acquire('dictation');
                 expect(dictation.status).toBe('acquired');
                 if (dictation.status === 'acquired') dictation.lease.release();
-            } finally { releaseWarm(); await controller.dispose(); }
+            } finally { unsubscribeContinuation(); releaseWarm(); await controller.dispose(); }
             return;
         }
         const { getVoiceSessionEndedAttempt, setVoiceSessionSnapshot } = await import('./voiceSessionStore');
@@ -777,7 +794,8 @@ describe('voice session lifecycle edge contracts', () => {
                 await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(2), { timeout: 60_000 });
                 await vi.waitFor(() => expect(controller.getSnapshot().status).toBe('connected'));
                 expect(controller.getSnapshot().sessionId).toBe(initialControlSessionId);
-                expect(localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1);
+                expect(localVoiceAgentRpc.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP))
+                    .toEqual([{ method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP, input: { runId: initialRun?.runId } }]);
                 setDisclosure(mode);
                 await vi.waitFor(() => expect(localVoiceSpeechOutputBoundary.fileRecording.start).toHaveBeenCalledTimes(3), { timeout: 60_000 });
                 await vi.waitFor(() => expect(localVoiceAgentRpc.readRetainedRun()).not.toBeNull(), { timeout: 60_000 });
