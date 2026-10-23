@@ -1208,9 +1208,14 @@ The runner retains the per-Session `settledAt` anchor; reconstructing the daemon
 inventory does not restart it. Retained PTYs expose their own last-activity time.
 Inventory subscribers receive owner invalidations even when another owner keeps
 the aggregate busy, through the existing change-or-deadline wait primitive.
-Healthy-process heartbeat checks re-observe that same live Session work with an
-observation invalidation: unchanged health does not restart the aggregate idle
-interval. Discovered active/unknown work and material lifecycle edges still do.
+Healthy-process heartbeat checks retain process and terminal supervision, but
+do not invalidate Session work: process presence proves no work-state change.
+Actual host activity and lifecycle notifications still invalidate the inventory;
+explicit reads, including final eligibility checks, query fresh live Session
+work. Unavailable coverage remains unknown until a real notification or read
+recovers it; a healthy process alone cannot authorize idle. Passive daemon-state
+publication is not fresh decision authority: Guard, idle confirmation and storage
+eligibility retain their explicit live reads.
 
 Guard eligibility reads drafts through the Session's current requester-qualified
 Home credentials, scanning the canonical V2 Account draft listing for all of that
