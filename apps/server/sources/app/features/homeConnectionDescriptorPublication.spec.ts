@@ -439,9 +439,9 @@ describe("home connection descriptor production read path", () => {
         );
     });
 
-    it("advances a shared-DB Home's private descriptor across a port change without adopting another publisher's revision", async () => {
-        const oldOrigin = "http://qa.localhost:3016";
-        const newOrigin = "http://qa.localhost:3023";
+    it("advances a shared-DB Home's retained descriptor across an HTTPS-to-loopback-HTTP move", async () => {
+        const oldOrigin = "https://qa.localhost";
+        const newOrigin = "http://qa.localhost:3030";
         const oldEnv = { ...env, HAPPIER_DB_PROVIDER: "postgres",
             HAPPIER_STACK_SHARED_DB_SOURCE_STACK: "dev",
             HAPPIER_CANONICAL_SERVER_URL: oldOrigin, HAPPIER_PUBLIC_SERVER_URL: oldOrigin };
@@ -452,12 +452,17 @@ describe("home connection descriptor production read path", () => {
                 contentKey: `v1:n:${"b".repeat(64)}` }),
             compareAndSetSimpleCache: async () => { throw new Error("Must not mutate shared continuity"); },
         };
+        const retainedStore = createHomeConnectionDescriptorContinuityStoreForServer(oldEnv, dependencies)!;
+        await retainedStore.write({ revision: 60, contentKey: createHomeConnectionDescriptorContentKey({
+            homeServerIdentityId: "srv_home", canonicalServerUrl: oldOrigin,
+            endpoints: [{ kind: "https", url: oldOrigin }],
+        }) });
         const oldDescriptor = await readHomeConnectionDescriptor({
             env: oldEnv,
-            continuityStore: createHomeConnectionDescriptorContinuityStoreForServer(oldEnv, dependencies)!,
+            continuityStore: retainedStore,
             visibility: "authenticated", resolveIrohEndpointState: inactiveIroh,
         });
-        expect(oldDescriptor).toMatchObject({ canonicalServerUrl: oldOrigin, revision: 1 });
+        expect(oldDescriptor).toMatchObject({ canonicalServerUrl: oldOrigin, revision: 60 });
         restart();
         sharedRevision = 99;
         const movedEnv = { ...oldEnv, HAPPIER_CANONICAL_SERVER_URL: newOrigin, HAPPIER_PUBLIC_SERVER_URL: newOrigin };
@@ -466,7 +471,7 @@ describe("home connection descriptor production read path", () => {
             continuityStore: createHomeConnectionDescriptorContinuityStoreForServer(movedEnv, dependencies)!,
             visibility: "authenticated", resolveIrohEndpointState: inactiveIroh,
         });
-        expect(moved).toEqual({ ...oldDescriptor, canonicalServerUrl: newOrigin, revision: 2,
+        expect(moved).toEqual({ ...oldDescriptor, canonicalServerUrl: newOrigin, revision: 61,
             endpoints: [{ kind: "https", url: newOrigin }] });
         restart();
         expect(await readHomeConnectionDescriptor({ env: movedEnv,
