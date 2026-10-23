@@ -154,7 +154,9 @@ export function CodeBlock({
         {content}
       </HappierTextSelectabilityScope>
       {copyLabel ? (
+        // Copying supports the page's task; it is never the page's primary action.
         <Button
+          variant="secondary"
           title={behavior.copied ? (copiedLabel ?? copyLabel) : copyLabel}
           onPress={behavior.copy}
         />
