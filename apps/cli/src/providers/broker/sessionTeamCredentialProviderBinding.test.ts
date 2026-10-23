@@ -18,6 +18,7 @@ import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/
 import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 import { logger } from '@/ui/logger';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerApplicationServer';
 
 import {
@@ -688,7 +689,7 @@ describe('Session Team credential Provider binding', () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it.each(['missing declaration', 'non-204', 'cancelled', 'selection changed'] as const)(
+  it.each(['missing declaration', 'non-204', 'non-204 unknown reason', 'cancelled', 'selection changed'] as const)(
     'does not publish Team custody when endpoint discovery is %s', async (failure) => {
       const diagnostic = vi.spyOn(logger, 'warnLocalFile');
       onTestFinished(() => diagnostic.mockRestore());
@@ -703,9 +704,10 @@ describe('Session Team credential Provider binding', () => {
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => {
         discoveryFinished = true;
         if (failure === 'cancelled') controller.abort(new Error('cancelled-during-endpoint-discovery'));
-        return new Response(null, { status: failure === 'non-204' ? 403 : 204,
+        return new Response(null, { status: failure.startsWith('non-204') ? 403 : 204,
           headers: failure === 'missing declaration' ? {} : { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1',
-            ...(failure === 'non-204' ? { [PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]: 'resource_unavailable' } : {}) } });
+            ...(failure.startsWith('non-204') ? { [PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]:
+              failure === 'non-204' ? 'resource_unavailable' : 'private-unknown-reason' } : {}) } });
       }));
       const refused = await openSessionTeamCredentialProviderBinding({
         sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex',
@@ -720,11 +722,18 @@ describe('Session Team credential Provider binding', () => {
             endpoint: { endpointId: 'b'.repeat(64) } } }),
         openTunnel: async () => ({ localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'direct', retire, close }),
       }).then(() => null, (error: unknown) => error);
-      if (failure === 'missing declaration' || failure === 'non-204') {
+      if (failure === 'missing declaration' || failure.startsWith('non-204')) {
         expect(refused).toBeInstanceOf(SessionTeamCredentialLaunchUnavailableError);
-        expect(refused).toMatchObject({ code: 'provider_endpoint_unavailable' });
+        const code = failure === 'missing declaration' ? 'provider_endpoint_unavailable'
+          : failure === 'non-204' ? 'resource_unavailable' : 'broker_unavailable';
+        expect(refused).toMatchObject({ code });
+        if (failure.startsWith('non-204')) {
+          const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: refused });
+          expect(issue).toMatchObject({ source: 'team_credential', code });
+          expect(JSON.stringify({ issue, refused })).not.toContain('private-unknown-reason');
+        }
         expect(diagnostic).toHaveBeenCalledWith(expect.any(String), {
-          httpStatus: failure === 'non-204' ? 403 : 204,
+          httpStatus: failure.startsWith('non-204') ? 403 : 204,
           hasEndpointPath: failure !== 'missing declaration',
           brokerReasonCode: failure === 'non-204' ? 'resource_unavailable' : null,
         });

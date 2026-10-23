@@ -7,6 +7,7 @@ import {
 
 import { connectPeerTcpTunnelTcp } from '../mediation/tunnel/open';
 import { resolveCliIrohEndpointKeyPath } from './irohEndpointIdentity';
+import { MachineCarrierError } from './machineCarrier';
 import type {
   MachineCarrierTransportConnection,
   MachineCarrierTransportOpenInput,
@@ -276,7 +277,16 @@ export async function createDaemonMachineIrohRuntime(input: Readonly<{
       ...(parsedRemote.relayUrls ? { relayUrls: parsedRemote.relayUrls } : {}),
       handshakeJson: JSON.stringify(transportInput.handshake),
       ...(transportInput.handshakeProvider ? {
-        handshakeProvider: async () => JSON.stringify(await transportInput.handshakeProvider!()),
+        handshakeProvider: async () => {
+          try {
+            return JSON.stringify(await transportInput.handshakeProvider!());
+          } catch (error) {
+            // Only an explicit, typed admission refusal becomes HTTP. Cancellation
+            // and unclassified boundary failures retain their existing custody.
+            if (error instanceof MachineCarrierError && error.httpRefusal) return JSON.stringify(error.httpRefusal);
+            throw error;
+          }
+        },
       } : {}),
       capProfile: 'machineBulk',
     });

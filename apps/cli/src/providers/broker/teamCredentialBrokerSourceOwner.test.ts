@@ -231,6 +231,24 @@ function request(
 }
 
 describe('Team credential broker source owner', () => {
+  it('retains the failed Connected Services prerequisite in the typed refusal and safe log', async () => {
+    const harness = sourceCustodyHarness();
+    const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    try {
+      harness.revokeSource();
+      await expect(harness.acquire(new AbortController().signal)).resolves.toEqual({
+        ok: false, reasonCode: 'source_unavailable', sourceOpenFailureReason: 'resource_not_current',
+      });
+      expect(diagnostics).toHaveBeenCalledWith('[provider-broker-source]', {
+        stage: 'source_open', code: 'projection_unavailable', reason: 'resource_not_current',
+      });
+      expect(harness.childRequest).not.toHaveBeenCalled();
+    } finally {
+      diagnostics.mockRestore();
+      await harness.managed.dispose();
+    }
+  });
+
   it.each(['acquire', 'request', 'cleanup'] as const)('keeps sibling custody when a caller closes during %s source revalidation', async (phase) => {
     const harness = sourceCustodyHarness();
     const caller = new AbortController();

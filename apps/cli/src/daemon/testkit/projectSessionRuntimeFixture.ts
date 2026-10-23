@@ -18,6 +18,7 @@ import type { StoredCredentials } from '@/persistence';
 export async function createProjectSessionRuntimeFixture(options: Readonly<{
   serverId?: string; serverUrl?: string; accountSettings?: Readonly<Record<string, unknown>>; boundSessionId?: string;
   credentials?: StoredCredentials;
+  machineAccess?: Readonly<{ custodianAccountId: string; role: 'use' | 'manage' }>;
 }> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'project-session-runtime-'));
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL']);
@@ -47,9 +48,9 @@ export async function createProjectSessionRuntimeFixture(options: Readonly<{
     if (sessionId) return { status: 200, data: { session: createSessionRecordFixture({ id: sessionId,
       encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine' }), dataEncryptionKey: null, share: null }) } };
     if (url.endsWith('/v1/machines/machine/access')) return { status: current ? 200 : 403, data: current
-      ? MachineAccessGrantsListResponseV1Schema.parse({ machineId: 'machine', custodian: { accountId: 'requester', displayName: 'Requester' },
-        access: { custodian: { accountId: 'requester', displayName: 'Requester' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-        canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [] })
+      ? MachineAccessGrantsListResponseV1Schema.parse({ machineId: 'machine', custodian: { accountId: options.machineAccess?.custodianAccountId ?? 'requester', displayName: 'Requester' },
+        access: { custodian: { accountId: options.machineAccess?.custodianAccountId ?? 'requester', displayName: 'Requester' }, role: options.machineAccess?.role ?? 'manage', resourceMode: 'plain', accessState: 'ready' },
+        canManage: (options.machineAccess?.role ?? 'manage') === 'manage', grants: [], ownDirectGrant: false, ownAccessSources: [] })
       : { kind: 'refused', code: 'access_denied' } };
     if (url.endsWith('/v1/machines/machine')) return { status: 200, data: { machine: {
       id: 'machine', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,

@@ -7,7 +7,6 @@ import type { ManagedServiceRequest } from '@happier-dev/plugin-sdk/managed-serv
 import { ProviderPublicHeadersV1Schema } from '@happier-dev/protocol/providers/public-headers';
 import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1, TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_ENVELOPE_MAX_BYTES_V1, TeamCredentialProviderBrokerApplicationCarrierRequestV1Schema } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
-import type { TeamCredentialUsageLimitDenialV1 } from '@happier-dev/protocol/teams';
 
 import { startFirstBytesLocalCapabilityProxy, type FirstBytesLocalCapabilityProxy } from '@/daemon/peer/mediation/loopback/firstBytesLocalCapability';
 import type {
@@ -19,6 +18,7 @@ import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER, PROVIDER_BROKER_PRIVATE_
     PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER } from './providerBrokerPrivateProtocol';
 import { logger } from '@/ui/logger';
 import { ProviderBrokerApplicationPhaseError } from './providerBrokerApplicationFailureContext';
+import { providerBrokerApplicationFailureBody, type ProviderBrokerApplicationFailure } from './providerBrokerApplicationFailure';
 export { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerPrivateProtocol';
 
 export type ProviderBrokerApplicationStreamTarget = Readonly<{
@@ -69,52 +69,6 @@ type ProviderBrokerApplicationFailureReply = Readonly<{
         send(payload?: unknown): unknown;
     }>;
 }>;
-
-type ProviderBrokerApplicationFailure = Extract<Awaited<ReturnType<ProviderBrokerRequestHandler>>, { ok: false }>;
-
-/**
- * The refusal an Agent can actually show. Providers' own error bodies share
- * this outer shape (`error.type` / `error.message`), so a refused brokered
- * request lands in the transcript as a named reason with its recovery facts
- * instead of an empty 403. It carries only the recipient-safe exhaustion
- * facts the headers already disclose.
- */
-export type ProviderBrokerApplicationFailureBodyV1 = Readonly<{
-    type: 'error';
-    error: Readonly<{
-        type: 'permission_error';
-        code: ProviderBrokerApplicationFailure['reasonCode'];
-        /**
-         * The resource the recipient selected for this Session. It is already
-         * theirs to see in the picker, and it is what lets the Session runtime
-         * attribute the refusal to one shared credential instead of the Agent.
-         */
-        resourceId?: string;
-        message: string;
-        usageLimit?: TeamCredentialUsageLimitDenialV1;
-    }>;
-}>;
-
-function providerBrokerApplicationFailureBody(
-    response: ProviderBrokerApplicationFailure,
-    resourceId: string | undefined,
-): ProviderBrokerApplicationFailureBodyV1 {
-    const usageLimit = response.reasonCode === 'team_credential_usage_limit' ? response.usageLimit : undefined;
-    const message = usageLimit
-        ? `Happier refused this request: the shared credential's ${usageLimit.metric} limit is reached `
-            + `(${usageLimit.remaining} remaining, resets ${usageLimit.resetsAtUtc}).`
-        : `Happier refused this request: ${response.reasonCode}.`;
-    return {
-        type: 'error',
-        error: {
-            type: 'permission_error',
-            code: response.reasonCode,
-            ...(resourceId ? { resourceId } : {}),
-            message,
-            ...(usageLimit ? { usageLimit } : {}),
-        },
-    };
-}
 
 export function writeProviderBrokerApplicationFailure(
     reply: ProviderBrokerApplicationFailureReply,
@@ -210,7 +164,8 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
         context?: ProviderBrokerAuthenticatedStreamContext,
     ) => {
         if (!response.ok) {
-            logger.warnLocalFile('[provider-broker-application]', { stage: 'application_response', applicationRequestId, code: response.reasonCode });
+            logger.warnLocalFile('[provider-broker-application]', { stage: 'application_response', applicationRequestId, code: response.reasonCode,
+                ...(response.sourceOpenFailureReason ? { sourceOpenFailureReason: response.sourceOpenFailureReason } : {}) });
             return writeProviderBrokerApplicationFailure(
                 reply,
                 response,
@@ -240,6 +195,7 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
         requestSignal.addEventListener('abort', cancelBody, { once: true });
         return reply.send(Readable.from((async function* () {
             let completed = false;
+            let responseBytes = 0;
             try {
                 while (true) {
                     const next = await reader.read();
@@ -247,9 +203,17 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
                         completed = true;
                         return;
                     }
+                    responseBytes += next.value.byteLength;
                     yield Buffer.from(next.value);
                 }
             } finally {
+                try {
+                    logger.infoFile('[provider-broker-application]', {
+                        stage: 'response_body', applicationRequestId,
+                        outcome: cancellationRequested ? 'cancelled' : completed ? 'completed' : 'failed',
+                        responseBytes,
+                    });
+                } catch { /* File diagnostics cannot affect streaming or cleanup. */ }
                 reply.raw.off('close', cancelBody);
                 requestSignal.removeEventListener('abort', cancelBody);
                 if (!completed) await reader.cancel().catch(() => undefined);

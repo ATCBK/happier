@@ -49,6 +49,8 @@ export type ClassifyPrimarySessionRuntimeIssueInput = Readonly<{
   cause?: PrimarySessionRuntimeIssueCause | null;
   error?: unknown;
   occurredAt?: number | null;
+  /** Closed host evidence from this exact Session turn, independent of Agent error formatting. */
+  teamCredentialDenial?: SessionRuntimeTeamCredentialDenialDetailsV1 | null;
 }>;
 
 const causeSourceMap = {
@@ -524,7 +526,8 @@ export function classifyPrimarySessionRuntimeIssue(
   const agentProcessExitAfterSwitch = readProviderProcessExitAfterSwitchDetails(input.error);
   // A shared Team credential refusing the request is the fact the member has to
   // act on, so it outranks the Agent-shaped cause that carried it.
-  const teamCredentialDenial = readTeamCredentialDenial(input.error);
+  const teamCredentialDenial = input.teamCredentialDenial
+    ? { details: input.teamCredentialDenial } : readTeamCredentialDenial(input.error);
   const teamCredential = teamCredentialDenial?.details ?? null;
   const startupFailureCode = !teamCredentialDenial && input.cause === 'session_error'
     && errorCode.kind === 'string' ? readAgentStartupFailureCode(errorCode.value) : null;

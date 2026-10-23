@@ -134,7 +134,7 @@ describe('Connected Services Team credential broker source', () => {
         retireAll: async () => 0,
       },
     });
-    expect(await open(request())).toBeNull();
+    expect(await open(request())).toEqual({ unavailable: 'source_selection_unavailable' });
     expect(resolveBindingIntentSelection).not.toHaveBeenCalled();
     expect(acquire).not.toHaveBeenCalled();
   });
@@ -225,15 +225,16 @@ describe('Connected Services Team credential broker source', () => {
 
     const opened = await open(request());
     expect(opened).not.toBeNull();
+    if ('unavailable' in opened) throw new Error('Expected current source');
     readResource.mockRejectedValueOnce(new Error('Home unreachable'));
     // The shared operation owner denies an uncertain read without retiring custody;
     // the next authoritative read can recover the same operation.
-    await expect(opened!.sourceCurrentness.isCurrent()).resolves.toBe(false);
+    await expect(opened.sourceCurrentness.isCurrent()).resolves.toBe(false);
     revision = 8;
-    await expect(opened!.sourceCurrentness.isCurrent()).resolves.toBe(true);
+    await expect(opened.sourceCurrentness.isCurrent()).resolves.toBe(true);
     // A real withdrawal of the resource still ends the operation.
     readResource.mockImplementation(async () => resource({ revision, enabled: false }));
-    await expect(opened!.sourceCurrentness.isCurrent()).resolves.toBe(false);
+    await expect(opened.sourceCurrentness.isCurrent()).resolves.toBe(false);
     expect(cleanup).not.toHaveBeenCalled();
   });
 
@@ -262,7 +263,7 @@ describe('Connected Services Team credential broker source', () => {
       custody,
     });
 
-    await expect(open(request())).resolves.toBeNull();
+    await expect(open(request())).resolves.toEqual({ unavailable: 'managed_custody_unavailable' });
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
@@ -292,7 +293,9 @@ describe('Connected Services Team credential broker source', () => {
       ? { ...source, target: { ...source.target, account: { ...source.target.account,
         ...(mismatch === 'service' ? { service: { pluginId: 'foreign', localId: 'openai-codex' } } : { accountId: 'different-account' }),
       } } } : source;
-    await expect(open({ ...requested, application, source: wrongSource })).resolves.toBeNull();
+    await expect(open({ ...requested, application, source: wrongSource })).resolves.toEqual({
+      unavailable: 'source_selection_unavailable',
+    });
     expect(custody.acquire).not.toHaveBeenCalled();
   });
 
@@ -367,6 +370,7 @@ describe('Connected Services Team credential broker source', () => {
     const opened = await open({ ...request(), source: poolSource, application: {
       ...request().application, endpointTemplateId: 'cliproxyapi-anthropic', protocol: 'anthropic',
     } });
+    if ('unavailable' in opened) throw new Error('Expected current Pool source');
     expect(opened?.sourceCurrentness.sourceMember).toEqual({
       kind: 'connected_account',
       service: selectedAccount.service,

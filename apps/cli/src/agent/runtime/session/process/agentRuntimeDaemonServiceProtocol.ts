@@ -22,6 +22,7 @@ import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/action
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { TeamCredentialRouteV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { SessionRuntimeTeamCredentialDenialDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
 import { WorkflowProjectTargetV1Schema } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
 import { McpRequestAuthOpenV1Schema, McpRequestAuthCloseV1Schema, McpRequestAuthResultV1Schema, McpRequestAuthClosedV1Schema } from '@/mcp/runtime/mcpRequestAuth';
@@ -272,6 +273,11 @@ export const AgentRuntimeDaemonServiceRequestV1Schema = z.strictObject({
       bindingId: OpaqueIdSchema,
     }),
     z.strictObject({
+      kind: z.literal('provider_broker.refusal.read'),
+      requestId: OpaqueIdSchema,
+      turnId: OpaqueIdSchema,
+    }),
+    z.strictObject({
       kind: z.literal('managed_server.supervision.authorize'),
       requestId: OpaqueIdSchema,
       contributionId: OpaqueIdSchema,
@@ -398,6 +404,10 @@ export const AgentRuntimeDaemonServiceResponseV1Schema =
         z.strictObject({
           kind: z.literal('provider_broker.binding.closed'),
           status: z.literal('closed'),
+        }),
+        z.strictObject({
+          kind: z.literal('provider_broker.refusal'),
+          denial: z.nullable(asHostProtocolZod(SessionRuntimeTeamCredentialDenialDetailsV1Schema)),
         }),
         z.strictObject({
           kind: z.literal('turn.admission'),

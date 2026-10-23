@@ -94,6 +94,7 @@ async function requestThroughApplicationTarget(input: Readonly<{
   authority?: SignedProviderBrokerRouteGrantV1;
   /** Overrides the default small JSON body; used to probe the ingress limit. */
   body?: string;
+  onData?: (chunk: Buffer) => void;
 }>): Promise<string> {
   const body = input.body ?? JSON.stringify({ model: 'gpt-5', messages: [{ role: 'user', content: 'hello' }] });
   const request = [
@@ -117,7 +118,10 @@ async function requestThroughApplicationTarget(input: Readonly<{
       // so the application owns closing only after the streamed result lands.
       socket.write(request, 'utf8');
     });
-    socket.on('data', (chunk: Buffer) => chunks.push(chunk));
+    socket.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+      input.onData?.(chunk);
+    });
     socket.once('error', reject);
     socket.once('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
   });
@@ -152,6 +156,68 @@ async function closeApplicationTarget(input: Readonly<{
 }
 
 describe('Provider broker target application integration', () => {
+  it.each(['completed', 'failed'] as const)('records response-body %s after upstream headers without replaying the request', async outcome => {
+    const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const warnings = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    const content = 'private upstream response sentinel';
+    let upstreamRequests = 0;
+    let failUpstream = () => {};
+    const upstream = createServer((_request, reply) => {
+      upstreamRequests++;
+      reply.writeHead(200, { 'content-type': 'text/event-stream' });
+      reply.write(content);
+      if (outcome === 'completed') reply.end();
+      else failUpstream = () => reply.destroy(new Error('private upstream exception sentinel'));
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('upstream did not listen');
+    const upstreamUrl = `http://127.0.0.1:${address.port}`;
+    const server = await startProviderBrokerApplicationServer({ handler: createProviderBrokerRequestHandler({
+      resolveTrustRoots: () => [{ keyId: 'home-1', publicKey: Buffer.from(signingKey.publicKey).toString('base64url') }],
+      nowMs: () => 200,
+      resolveRequestPolicy: async () => ({ resourceRevision: 7, sourceRevision: payload.sourceRevision,
+        application: payload.application,
+        source: TeamCredentialSourceBindingV1Schema.parse({ v: 1, kind: 'provider_connection',
+          connectionId: 'pc_source', connectionSecurityFingerprint: 'connection-security:v1:source', credentialSlotId: 'apiKey' }),
+        policy: null,
+        modelCatalog: { models: [{ id: 'gpt-5' }], resolveCanonicalModelId: id => id } }),
+      createRequestId: () => 'broker-request-stream',
+      admit: async () => ({ ok: true, access: { endpointUrl: () => upstreamUrl,
+        request: async request => {
+          const response = await fetch(`${upstreamUrl}${request.pathAndQuery}`, {
+            method: request.method, body: request.body ? new TextDecoder().decode(request.body) : undefined, signal: request.signal,
+          });
+          return { ok: response.ok, status: response.status, statusText: response.statusText,
+            headers: Object.fromEntries(response.headers), body: response.body };
+        } } }),
+    }) });
+    try {
+      const target = await server.createStreamTarget({ authenticatedRemoteEndpointId: payload.initiator.endpointId,
+        authority: signedAuthority(), expected: expectedBinding });
+      const response = await requestThroughApplicationTarget({ ...target,
+        onData: chunk => { if (chunk.includes(content)) failUpstream(); } });
+      expect(response).toContain(content);
+      await vi.waitFor(() => expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', {
+        stage: 'response_body', applicationRequestId: 'req-1', outcome,
+        responseBytes: Buffer.byteLength(content),
+      }));
+      // A diagnostic must add zero upstream requests or per-chunk log records.
+      expect(upstreamRequests).toBe(1);
+      expect(diagnostics.mock.calls.filter(([, record]) => record && typeof record === 'object'
+        && 'stage' in record && record.stage === 'response_body')).toHaveLength(1);
+      const records = [...diagnostics.mock.calls, ...warnings.mock.calls]
+        .filter(([marker]) => marker === '[provider-broker-application]');
+      expect(JSON.stringify(records)).not.toContain('private upstream');
+    } finally {
+      await server.close();
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      diagnostics.mockRestore();
+      warnings.mockRestore();
+    }
+  });
+
   it('correlates consecutive Team requests through policy, admission and upstream status without payloads', async () => {
     const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     let effects = 0;
@@ -456,6 +522,7 @@ describe('Provider broker target application integration', () => {
   });
 
   it('admits a large inference body through the real transport and request policy and cancels upstream', async () => {
+    const diagnostics = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     const input = 'x'.repeat(8 * 1024 * 1024);
     let admittedInput: unknown;
     let upstreamCancelled = false;
@@ -532,10 +599,15 @@ describe('Provider broker target application integration', () => {
         socket.once('error', reject);
       });
       await vi.waitFor(() => expect(upstreamCancelled).toBe(true));
+      await vi.waitFor(() => expect(diagnostics.mock.calls
+        .filter(([, record]) => record && typeof record === 'object' && 'stage' in record && record.stage === 'response_body')
+        .map(([, record]) => record && typeof record === 'object' && 'outcome' in record ? record.outcome : null))
+        .toEqual(['completed', 'cancelled']));
     } finally {
       await server.close();
       upstream.closeAllConnections();
       await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+      diagnostics.mockRestore();
     }
   });
 

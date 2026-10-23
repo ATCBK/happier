@@ -1,5 +1,5 @@
 import type { PeerTcpTunnelStreamConnection } from '@happier-dev/peer-transport';
-import { MACHINE_ALPN } from '@happier-dev/iroh-native/node';
+import { MACHINE_ALPN, type IrohNodeMachineHttpHandshakeRefusal } from '@happier-dev/iroh-native/node';
 import { IrohMachineHandshakeV1Schema } from '@happier-dev/protocol/connectivity/iroh/machineHandshakeV1';
 import type { IrohProviderBrokerHandshake } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import type { IrohMachineCarrierFlowV1, PeerFlowKindV1, RunnerBrokerReadinessRequestV1 } from '@happier-dev/protocol';
@@ -15,7 +15,9 @@ export const MACHINE_CARRIER_UNAVAILABLE_CODE = 'machine_carrier_unavailable' as
 export const MACHINE_CARRIER_ROUTE_MISMATCH_CODE = 'machine_carrier_route_mismatch' as const;
 
 export class MachineCarrierError extends Error {
-    constructor(readonly code: string, message: string) { super(message); this.name = 'MachineCarrierError'; }
+    constructor(readonly code: string, message: string, readonly httpRefusal?: IrohNodeMachineHttpHandshakeRefusal) {
+        super(message); this.name = 'MachineCarrierError';
+    }
 }
 
 export function machineCarrierUnavailableError(): MachineCarrierError {

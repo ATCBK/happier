@@ -51,7 +51,8 @@ export async function openDaemonSessionTeamCredentialProviderBinding(input: Bind
   const openTunnel = dependencies.runtime
     ? createProviderBrokerMachineCarrierTunnelOpen({ accountId,
         localMachineId: dependencies.machineId, runtime: dependencies.runtime,
-        resolveTrustRoots: dependencies.resolveTrustRoots })
+        resolveTrustRoots: dependencies.resolveTrustRoots,
+        beginSessionApplicationRequest: sessionId => sessionId === input.sessionId ? input.beginBrokerRequest?.() : undefined })
     : undefined;
   const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
     happyHomeDir: dependencies.happyHomeDir, controller: dependencies.controller,

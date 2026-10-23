@@ -34,6 +34,7 @@ import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_PRIVATE_ENDPOINT_PA
 import type { SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import type { TeamCredentialBrokerApplicationFailureCodeV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 import { logger } from '@/ui/logger';
+import type { TeamCredentialBrokerSourceOpenFailureReason } from './teamCredentialBrokerSourceOwner';
 
 async function requestProviderAccess(
     access: ManagedProviderEndpointHttpAccess,
@@ -107,7 +108,9 @@ export type ProviderBrokerApplicationStreamLifetime = Readonly<{
         application: ProviderBrokerApplicationBindingV1;
         modelId: string;
         sourceRevision: string;
-    }>): Promise<Readonly<{ access: ManagedProviderEndpointHttpAccess; sourceMemberKey: string }> | null>;
+    }>): Promise<Readonly<{ access: ManagedProviderEndpointHttpAccess; sourceMemberKey: string }>
+        | Readonly<{ ok: false; reasonCode: 'resource_unavailable';
+            sourceOpenFailureReason?: TeamCredentialBrokerSourceOpenFailureReason }> | null>;
     /** Releases this stream's joined view. The operation keeps serving its
      * other streams and the ones it has not opened yet. */
     close(): Promise<void>;
@@ -166,6 +169,7 @@ export type ProviderBrokerRequestHandlerResult =
         ok: false;
         reasonCode: TeamCredentialBrokerApplicationFailureCodeV1;
         usageLimit?: TeamCredentialUsageLimitDenialV1;
+        sourceOpenFailureReason?: TeamCredentialBrokerSourceOpenFailureReason;
     }>;
 
 export type ProviderBrokerRequestHandler = (input: Readonly<{
@@ -614,6 +618,7 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
                     modelId, sourceRevision: policySnapshot.sourceRevision,
                 }));
             if (!selected) return { ok: false, reasonCode: 'resource_unavailable' };
+            if ('reasonCode' in selected) return selected;
             const current = await authorize();
             if (!current.ok) return current;
             request.signal?.throwIfAborted();

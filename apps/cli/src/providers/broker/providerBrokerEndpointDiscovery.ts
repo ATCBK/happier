@@ -57,6 +57,7 @@ export function createProviderBrokerEndpointDiscovery() {
       });
     } catch { /* Diagnostic failure must not replace the refusal. */ }
     signal.throwIfAborted();
+    if (error instanceof SessionTeamCredentialLaunchUnavailableError) throw error;
     throw new SessionTeamCredentialLaunchUnavailableError('provider_endpoint_unavailable');
   };
   return {

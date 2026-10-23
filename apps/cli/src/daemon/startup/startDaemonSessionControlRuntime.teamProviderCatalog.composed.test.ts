@@ -1,8 +1,10 @@
 import axios from 'axios';
-import { createServer } from 'node:http';
+import { createServer, request as requestHttp } from 'node:http';
 import { join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import tweetnacl from 'tweetnacl';
 import { MACHINE_CONTROL_TIMEOUT_MS } from '@happier-dev/iroh-native';
+import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
 import { createProviderBrokerRouteGrantSigningInputV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
 import { afterEach, expect, it, onTestFailed, onTestFinished, vi } from 'vitest';
@@ -15,7 +17,7 @@ import type { startDaemonControlServer } from '@/daemon/controlServer';
 import { createInstalledProjectAgentDaemonFixture } from '@/daemon/testkit/installedProjectAgentDaemonFixture';
 import { openSessionTeamCredentialProviderBinding } from '@/providers/broker/sessionTeamCredentialProviderBinding';
 import { resolveTeamCredentialModelCompatibility } from '@/providers/broker/teamCredentialModelCompatibility';
-import { PROVIDER_BROKER_ENDPOINT_PATH_HEADER, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH } from '@/providers/broker/providerBrokerPrivateProtocol';
+import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER, PROVIDER_BROKER_ENDPOINT_PATH_HEADER, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH } from '@/providers/broker/providerBrokerPrivateProtocol';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 // Parse the real broker producer with the exact plugin-open consumer, not a
@@ -23,8 +25,11 @@ import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSe
 import { parseCodexProviderBindingEngineConfigV1 } from '../../../../../packages/plugins/codex/src/agent/providerBinding/runtimeConfig';
 import { configuration } from '@/configuration';
 import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemonServiceAuthority,
-  removeAgentRuntimeDaemonServiceAuthorityIfOwned } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
-import { openCurrentRunnerTeamCredentialProviderBinding } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
+  readCurrentRunnerAgentRuntimeDaemonServiceAuthority, removeAgentRuntimeDaemonServiceAuthorityIfOwned } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
+import { openCurrentRunnerTeamCredentialProviderBinding, readCurrentRunnerTeamCredentialBrokerDenial } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
+import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
+import type { SessionTurnMutationV1 } from '@happier-dev/protocol';
+import { presentSessionTeamCredentialDenial } from '../../../../ui/sources/components/sessions/presentation/sessionTeamCredentialDenialPresentation';
 import { classifyPrimarySessionRuntimeIssue, readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { AGENT_RUNTIME_DAEMON_SERVICES_PATH } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { logger } from '@/ui/logger';
@@ -39,6 +44,15 @@ import { TEAM_CREDENTIAL_ACTION_PATHS_V1 } from '@happier-dev/protocol/teams/cre
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
+import * as processIdentity from '@/daemon/processIdentity';
+import { hashProcessCommand, writeSessionMarker } from '@/daemon/sessionRegistry';
+import { createRunnerAgentSessionRuntimeSource } from '@/agent/runtime/session/process/runnerAgentSessionRuntimeSource';
+import { resolveCliEngineRegistry } from '@/agent/runtime/registry/engineRegistry/registry';
+import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
+import { applyRunnerMcpSessionContext } from '@/mcp/runtime/applyRunnerMcpSessionContext';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { ensureSkillSessionDirHttp } from '@/daemon/controlClient';
+import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 
 const nativeFetch = fetch;
 const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null, port: 0,
@@ -64,6 +78,132 @@ vi.mock('@/daemon/controlServer', async importOriginal => {
   } };
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); boundary.control = null; });
+
+it.each(['direct', 'wrapped'] as const)('prepares grantee host input through readiness-issued authority and diagnoses a mis-bound Home (%s)', async mode => {
+  const debug = vi.spyOn(logger, 'debug');
+  const command = `${process.execPath} ${resolve(__dirname, '../../..', 'src/index.ts')} codex --started-by daemon`;
+  // Install the OS boundary before production readiness captures its adapter.
+  vi.spyOn(processIdentity, 'readProcessIdentityByPid').mockResolvedValue({ pid: process.pid,
+    processStartTimeMs: 1, command });
+  const h = await createInstalledProjectAgentDaemonFixture(() => boundary.control, 'codex', false, undefined, undefined,
+    { machineAccess: { custodianAccountId: 'custodian', role: 'use' } });
+  const requester = h.requester;
+  expect(requester.bootstrap.savedSecretOperationContext.machineAdmission).toMatchObject({
+    actorAccountId: 'requester', custodianAccountId: 'custodian',
+  });
+  expect(requester.bootstrap.allowNativeAccountCredentials).toBe(false);
+  expect(vi.mocked(axios.post)).toHaveBeenCalledWith('https://session-home.test/v1/machines/machine/admission/verify',
+    expect.objectContaining({ context: expect.objectContaining({ actorAccountId: 'requester', custodianAccountId: 'custodian', role: 'use' }) }),
+    expect.anything());
+  h.tracked.spawnOptions = { ...h.tracked.spawnOptions, existingSessionId: h.sessionId, teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' },
+    teamId: 'team', resourceId: 'resource', expectedResourceRevision: 2, deliveryMode: 'brokered' }] };
+  h.runner.processCommandHash = hashProcessCommand(command);
+  h.tracked.processCommandHash = h.runner.processCommandHash;
+  if (mode === 'wrapped') {
+    // The launcher keeps exit custody; only the reported runner receives daemon authority.
+    h.pidToTrackedSession.clear();
+    h.tracked.pid = 999_123_455;
+    h.tracked.processStartTimeMs = 0;
+    h.tracked.processCommandHash = hashProcessCommand('fixture-wrapper');
+    h.tracked.runnerProcessIdentity = { ...h.runner, processCommand: command };
+    h.pidToTrackedSession.set(h.tracked.pid, h.tracked);
+  }
+  const metadata = createTestMetadata({ hostPid: process.pid, hostProcessStartTimeMs: h.runner.processStartTimeMs,
+    path: h.cwd, machineId: 'machine', startedBy: 'daemon', happyHomeDir: h.f.directory });
+  const path = await createAgentRuntimeDaemonServiceAuthorityPath({ happyHomeDir: h.f.directory,
+    publicReleaseRing: configuration.publicReleaseRing });
+  h.tracked.agentRuntimeDaemonServiceAuthorityFilePath = path;
+  h.pidToAwaiter.set(h.tracked.pid, () => {});
+  await writeSessionMarker({ pid: process.pid, happySessionId: h.sessionId, startedBy: 'daemon', cwd: h.cwd,
+    processStartTimeMs: h.runner.processStartTimeMs, processCommandHash: h.runner.processCommandHash, processCommand: command,
+    agentRuntimeDaemonServiceAuthorityFilePath: path });
+  // The real readiness handler publishes authority before acknowledging the runner.
+  const ready = await nativeFetch(`http://127.0.0.1:${boundary.port}/session-started`, { method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-happier-daemon-token': boundary.control!.controlToken },
+    body: JSON.stringify({ sessionId: h.sessionId, metadata }) });
+  const readinessErrors = debug.mock.calls.filter(([label]) => String(label).startsWith('[DAEMON RUN] Canonical Session startup readiness failed'))
+    .map(([label, error]) => `${label}: ${error instanceof Error ? error.message : ''}`);
+  expect(ready.status, `${await ready.text()}: ${readinessErrors.join('; ')}`).toBe(200);
+  expect(h.tracked.agentRuntimeDaemonServiceCapabilityHash).toBeTruthy();
+  const issued = await readCurrentRunnerAgentRuntimeDaemonServiceAuthority({ happyHomeDir: h.f.directory,
+    publicReleaseRing: configuration.publicReleaseRing, path, expectedSessionId: h.sessionId });
+  if (!issued) throw new Error('Missing readiness authority');
+  const expectedAuthority = { happyHomeDir: h.f.directory, publicReleaseRing: configuration.publicReleaseRing,
+    path, sessionId: h.sessionId, runner: issued.runner, retainedAgent: issued.retainedAgent };
+  expect(requester.bootstrap.attribution.accountId).toBe('requester');
+  expect(requester.bootstrap.credentials.token).not.toBe('custodian-token');
+  const homeFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', (url: Parameters<typeof fetch>[0], init?: RequestInit) =>
+    new URL(String(url)).hostname === '127.0.0.1' ? nativeFetch(url, init) : homeFetch(url, init));
+  const source = await createRunnerAgentSessionRuntimeSource({ happyHomeDir: h.f.directory,
+    publicReleaseRing: configuration.publicReleaseRing, authorityFilePath: path, expectedSessionId: h.sessionId,
+    occurrenceId: 'qb174-runner' });
+  if (!source) throw new Error('Readiness did not issue consumable runner authority');
+  onTestFinished(() => source.retire?.());
+  const engines = await resolveCliEngineRegistry({ happyHomeDir: h.f.directory, backendId: 'codex',
+    requireRunnerAgentSessionRuntimeSource: true, runnerAgentSessionRuntimeSource: source });
+  const resolution = await engines.resolveForBackendId('codex');
+  if (!resolution) throw new Error('Missing admitted Codex engine');
+  const plan = await resolution.engineAdapter.runtimeCore.createSessionRuntime({ credentials: requester.bootstrap.credentials,
+    directory: h.cwd, backendTarget: { kind: 'backend', backendId: 'codex' } });
+  const bridge = plan.deps?.sessionLoopLifecycleDeps?.daemonTurnContributionsBridge;
+  const snapshot = requester.readAccountSettingsSnapshot();
+  if (!snapshot) throw new Error('Missing captured requester settings');
+  const session = applyRunnerMcpSessionContext({ sessionId: h.sessionId,
+    getServerBinding: () => ({ serverId: 'session-home', serverUrl: requester.bootstrap.serverHttpBaseUrl }),
+    rpcHandlerManager: new RpcHandlerManager({ scopePrefix: h.sessionId, encryptionMode: 'plain' }), updateMetadata() {},
+    enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: true }),
+  }, { getPluginMcpPort: () => bridge?.pluginMcp ?? null });
+  boundary.responseBody = null;
+  const prepared = await resolveRunnerMcpServers({ session, credentials: requester.bootstrap.credentials,
+    operationContext: requester.bootstrap.savedSecretOperationContext,
+    accountSettings: snapshot.settings, accountSettingsSnapshot: { ...snapshot, mcpServerCatalog: { status: 'ready',
+      authority: 'active', catalog: { v: 1, servers: [], bindings: [] }, revision: 1, diagnostics: [] } },
+    machineId: 'machine', directory: h.cwd, agentId: 'codex', agentAcceptsUserMcp: true,
+    includeHappierMcpServer: false, sessionMetadata: metadata });
+  onTestFinished(() => prepared.happierMcpServer.stop());
+  expect(prepared.mcpServers).toEqual({});
+  // An empty result alone would also pass if engine composition dropped the port.
+  // Require the real daemon producer's strict response through the runner consumer.
+  expect(boundary.responseBody).toMatchObject({ ok: true,
+    result: { kind: 'mcp.plugin.materialized', servers: [] } });
+  // Materialize through the same real authenticated control app used in host input setup.
+  const files = [{ path: 'SKILL.md', contentKind: 'utf8' as const, contentBase64: Buffer.from('---\nname: sample\ndescription: Test\n---\nSkill body').toString('base64') }];
+  const skill = await ensureSkillSessionDirHttp({ ownerKey: h.sessionId, items: [{ skillId: 'sample', name: 'sample',
+    digest: computePromptBundleDigestV1({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: files }), files }], nativeDisables: [] },
+    { target: { pid: process.pid, httpPort: boundary.port, controlToken: boundary.control!.controlToken } },
+    { pid: process.pid, metadata });
+  expect(await readFile(join(skill.skillsRoot, 'sample', 'SKILL.md'), 'utf8')).toContain('Skill body');
+  // A wrong Home must remain refused, with one closed diagnostic and no transport effect.
+  const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+  const requests = vi.spyOn(globalThis, 'fetch');
+  const wrongHome = join(h.f.directory, 'different-home');
+  await openCurrentRunnerTeamCredentialProviderBinding({ authority: { ...expectedAuthority, happyHomeDir: wrongHome },
+    operation: { kind: 'provider_broker.binding.open',
+      resourceId: 'resource', expectedResourceRevision: 2, agentTargetKey: 'agent:codex', modelId: 'model' } })
+    .then(() => { throw new Error('Wrong Home was admitted'); }, error => expect(error).toMatchObject({
+      code: 'native_agent_privileged_effect_authority_unavailable' }));
+  expect(requests).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith('[AgentRuntime] Daemon service authority refused', {
+    sessionId: h.sessionId, checkpoint: 'authority_read', code: 'native_agent_privileged_effect_authority_unavailable',
+  });
+  expect(log.mock.calls.filter(([label]) => label === '[AgentRuntime] Daemon service authority refused')).toHaveLength(1);
+  h.tracked.agentRuntimeRunnerRestartDisposition = 'runner_authority_unavailable';
+  await openCurrentRunnerTeamCredentialProviderBinding({ authority: expectedAuthority,
+    operation: { kind: 'provider_broker.binding.open', resourceId: 'resource', expectedResourceRevision: 2,
+      agentTargetKey: 'agent:codex', modelId: 'model' } }).then(() => { throw new Error('Retired authority was admitted'); },
+      error => expect(error).toMatchObject({ code: 'native_agent_privileged_effect_authority_unavailable' }));
+  delete h.tracked.agentRuntimeRunnerRestartDisposition;
+  expect(log).toHaveBeenCalledWith('[AgentRuntime] Daemon service authority refused', {
+    sessionId: h.sessionId, checkpoint: 'daemon_response', operation: 'provider_broker.binding.open',
+    httpStatus: 403, code: 'agent_runtime_daemon_service_forbidden',
+  });
+  const diagnostics = log.mock.calls.filter(([label]) => label === '[AgentRuntime] Daemon service authority refused');
+  expect(diagnostics).toHaveLength(2);
+  for (const privateValue of [path, h.f.directory, requester.bootstrap.credentials.token, 'custodian-token']) {
+    expect(JSON.stringify(diagnostics)).not.toContain(privateValue);
+  }
+}, 180_000);
 
 it.each(['before readiness', 'after readiness', 'replacement pid', 'replacement birth', 'wrapped runner', 'retired Account'] as const)(
   'retires only the departed runner metadata through daemon exit tracking (%s)', async scenario => {
@@ -116,8 +256,9 @@ it.each(['before readiness', 'after readiness', 'replacement pid', 'replacement 
     }
   });
 
-it.each(['ready', 'requester Home', 'binding not current', 'missing declaration', 'non-204', 'socket closed', 'refresh refused', 'slow catalog', 'slow refresh'] as const)(
+it.each(['ready', 'requester Home', 'admission refused', 'binding not current', 'missing declaration', 'non-204', 'typed non-204', 'unknown non-204', 'socket closed', 'refresh refused', 'slow catalog', 'slow refresh'] as const)(
   'opens the real Codex Team binder with the tracked recipient catalog, never custodian consent (%s)', async metadata => {
+  const httpRefusal = metadata === 'non-204' || metadata === 'typed non-204' || metadata === 'unknown non-204';
   let h: Awaited<ReturnType<typeof createInstalledProjectAgentDaemonFixture>>;
   let model: TeamCredentialProviderModelCatalogEntryV1;
   let brokerOpens = 0;
@@ -128,6 +269,8 @@ it.each(['ready', 'requester Home', 'binding not current', 'missing declaration'
   let brokerEndpoint: import('@happier-dev/protocol').IrohEndpointDescriptorV1 | undefined;
   let workerRuntime: DaemonMachineIrohRuntime | undefined;
   let dropRequesterContext = false;
+  let laterRefusal = false;
+  let holdNextRefresh: (() => Promise<void>) | undefined;
   let daemonAccount: 'custodian' | 'requester' = 'custodian';
   const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(91));
   const signedBrokerResponse = (request: ProviderBrokerOpenRequestV1) => {
@@ -149,13 +292,16 @@ it.each(['ready', 'requester Home', 'binding not current', 'missing declaration'
   const cleanup: Array<() => Promise<void>> = [];
   onTestFinished(async () => { for (const close of cleanup.reverse()) await close(); });
   const warnings = vi.spyOn(logger, 'warnLocalFile');
+  if (metadata === 'requester Home') onTestFailed(() => console.error('Later Team broker admission', {
+    brokerOpens, catalogReads, laterRefusal,
+  }));
   if (metadata === 'slow catalog') onTestFailed(() => console.error('Team native discovery', {
     catalogReads, brokerOpens, warnings: warnings.mock.calls.filter(([label]) =>
       label === '[ProviderBroker] Endpoint discovery refused' || label === '[ProviderBroker] Machine stream admission refused'),
   }));
   h = await createInstalledProjectAgentDaemonFixture(() => boundary.control, 'codex', false, undefined, undefined, {
     openTeamCredentialProviderBinding: async input => {
-      if (metadata === 'requester Home') {
+      if (metadata === 'requester Home' || metadata === 'admission refused') {
         return await openDaemonSessionTeamCredentialProviderBinding({ ...input,
           ...(dropRequesterContext ? { providerSettingsOperationContext: undefined } : {}),
         }, { machineId: 'machine', accountId: daemonAccount, serverId: 'session-home', happyHomeDir: h.f.directory,
@@ -250,7 +396,7 @@ it.each(['ready', 'requester Home', 'binding not current', 'missing declaration'
     return get(url, options);
   });
   const fetchBoundary = vi.mocked(fetch).getMockImplementation()!;
-  if (metadata === 'requester Home') {
+  if (metadata === 'requester Home' || metadata === 'admission refused') {
     const post = vi.mocked(axios.post).getMockImplementation()!;
     vi.mocked(axios.post).mockImplementation(async (url, data, options) => {
       const path = new URL(String(url)).pathname;
@@ -270,12 +416,20 @@ it.each(['ready', 'requester Home', 'binding not current', 'missing declaration'
       if (path === PROVIDER_BROKER_OPEN_HTTP_PATH_V1) {
         expect(options?.headers?.Authorization).toBe(`Bearer ${h.requester.bootstrap.credentials.token}`);
         brokerOpens++;
-        return { status: 200, data: signedBrokerResponse(ProviderBrokerOpenRequestV1Schema.parse(data)) };
+        if (metadata === 'admission refused') return { status: 200, data: { ok: false, reasonCode: 'broker_unavailable' } };
+        const request = ProviderBrokerOpenRequestV1Schema.parse(data);
+        if (request.refreshAuthority) {
+          const heldRefresh = holdNextRefresh;
+          holdNextRefresh = undefined;
+          await heldRefresh?.();
+          if (laterRefusal) return { status: 200, data: { ok: false, reasonCode: 'resource_forbidden' } };
+        }
+        return { status: 200, data: signedBrokerResponse(request) };
       }
       return post(url, data, options);
     });
   }
-  if (metadata === 'slow catalog' || metadata === 'slow refresh' || metadata === 'refresh refused' || metadata === 'requester Home') {
+  if (metadata === 'slow catalog' || metadata === 'slow refresh' || metadata === 'refresh refused' || metadata === 'requester Home' || metadata === 'admission refused') {
     // The target HTTP service is the external boundary. Keep real signed
     // cross-Account admission, native Iroh and capability gating in the path.
     const http = createServer((request, response) => {
@@ -325,8 +479,12 @@ it.each(['ready', 'requester Home', 'binding not current', 'missing declaration'
       if (metadata === 'socket closed' || metadata === 'refresh refused') {
         throw new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) });
       }
-      return new Response(null, { status: metadata === 'non-204' ? 403 : 204,
-        headers: metadata === 'missing declaration' ? {} : { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' } });
+      return new Response(null, { status: httpRefusal ? 403 : 204,
+        headers: metadata === 'missing declaration' ? {} : {
+          [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1',
+          ...(metadata === 'typed non-204' ? { [PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]: 'session_not_active' } : {}),
+          ...(metadata === 'unknown non-204' ? { [PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER]: 'private-unknown-reason' } : {}),
+        } });
     }
     return fetchBoundary(url, options);
   });
@@ -346,6 +504,15 @@ it.each(['ready', 'requester Home', 'binding not current', 'missing declaration'
     kind: 'provider_broker.binding.open', resourceId: 'resource', expectedResourceRevision: 2,
     agentTargetKey, modelId: model.descriptor.id } });
   try {
+  if (metadata === 'admission refused') {
+    const refusal = await openThroughRunner().then(() => null, (error: unknown) => error);
+    expect(refusal).toMatchObject({ code: 'broker_unavailable' });
+    expect(boundary.responseBody).toMatchObject({ ok: false, error: { code: 'broker_unavailable' } });
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: refusal }))
+      .toMatchObject({ source: 'team_credential', code: 'broker_unavailable' });
+    expect(brokerOpens).toBe(1);
+    return;
+  }
   if (metadata === 'requester Home') {
     const opened = await openThroughRunner();
     expect(opened.providerBinding).toMatchObject({ source: { kind: 'team_resource', resourceId: 'resource' },
@@ -353,6 +520,74 @@ it.each(['ready', 'requester Home', 'binding not current', 'missing declaration'
     expect(parseCodexProviderBindingEngineConfigV1(opened.providerBinding)).not.toBeNull();
     expect(catalogReads).toBeGreaterThan(0);
     expect(brokerOpens).toBeGreaterThan(0);
+    const credential = opened.environmentOverlay.find(entry => entry.name === 'HAPPIER_CODEX_PROVIDER_API_KEY')?.value;
+    if (!credential) throw new Error('Missing scoped native carrier credential');
+    // Fresh admission belongs to each native TCP stream. Never reuse the
+    // already-admitted endpoint-discovery connection for this request.
+    const requestApplication = () => new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const request = requestHttp(opened.providerBinding.upstream.normalizedUrl, {
+        agent: false,
+        headers: { authorization: `Bearer ${credential}`, [MACHINE_HTTP_LOCAL_CAPABILITY_HEADER]: credential },
+      }, response => {
+        const chunks: Buffer[] = [];
+        response.on('data', chunk => { chunks.push(Buffer.from(chunk)); });
+        response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+        response.on('error', reject);
+      });
+      request.on('error', reject);
+      request.end();
+    });
+    h.tracked.activeTurnId = 'later-refusal-turn';
+    laterRefusal = true;
+    const beforeRefusal = brokerOpens;
+    const denied = await requestApplication().catch(() => null);
+    // Older loaded native addons can collapse this refusal into a socket
+    // close. Host evidence must survive either Agent-visible boundary outcome.
+    expect(brokerOpens).toBe(beforeRefusal + 1);
+    expect(await readCurrentRunnerTeamCredentialBrokerDenial({ authority, turnId: 'another-turn' })).toBeNull();
+    const mutations: SessionTurnMutationV1[] = [];
+    const lifecycle = createSessionTurnLifecycle({
+      session: { sessionId: h.sessionId, enqueueSessionTurnMutation: async mutation => { mutations.push(mutation); } },
+      readTeamCredentialDenial: turnId => readCurrentRunnerTeamCredentialBrokerDenial({ authority, turnId }),
+    });
+    lifecycle.observeRuntimeEvent({ sequence: 0, sessionId: h.sessionId, emittedAtMs: 100,
+      kind: 'turn-start', turnId: 'later-refusal-turn', startedBy: 'host' });
+    lifecycle.observeRuntimeEvent({ sequence: 1, sessionId: h.sessionId, emittedAtMs: 101,
+      kind: 'turn-failed', turnId: 'later-refusal-turn',
+      diagnostic: { code: 'session_error', severity: 'error', message: 'Codex app-server turn failed.' } });
+    await lifecycle.drainAcceptedLifecycle();
+    const failure = mutations.find(mutation => mutation.action === 'fail');
+    expect(failure).toMatchObject({ issue: { source: 'team_credential',
+      teamCredential: { resourceId: 'resource', reasonCode: 'resource_forbidden' } } });
+    if (failure?.action !== 'fail') throw new Error('Missing failed Session turn');
+    expect(presentSessionTeamCredentialDenial({ issue: failure.issue,
+      resolveResourceDisplayName: () => 'Shared Pool' })).toMatchObject({ resourceId: 'resource',
+        action: 'choose-model', body: expect.stringContaining('Shared Pool') });
+    lifecycle.observeRuntimeEvent({ sequence: 2, sessionId: h.sessionId, emittedAtMs: 102,
+      kind: 'turn-start', turnId: 'later-refusal-turn', startedBy: 'host' });
+    lifecycle.observeRuntimeEvent({ sequence: 3, sessionId: h.sessionId, emittedAtMs: 103,
+      kind: 'turn-cancelled', turnId: 'later-refusal-turn', cause: 'user' });
+    await lifecycle.drainAcceptedLifecycle();
+    expect(mutations.at(-1)?.action).toBe('cancel');
+    laterRefusal = false;
+    const accepted = await requestApplication();
+    expect(accepted.status).toBe(204);
+    expect(await readCurrentRunnerTeamCredentialBrokerDenial({ authority, turnId: 'later-refusal-turn' })).toBeNull();
+    // A Home read that outlives this turn cannot attribute its denial to the successor.
+    let notifyRefreshStarted = () => {};
+    let releaseRefresh = () => {};
+    const refreshStarted = new Promise<void>(resolve => { notifyRefreshStarted = resolve; });
+    const refreshReleased = new Promise<void>(resolve => { releaseRefresh = resolve; });
+    holdNextRefresh = async () => { notifyRefreshStarted(); await refreshReleased; };
+    laterRefusal = true;
+    const lateRequest = requestApplication();
+    try {
+      await refreshStarted;
+      h.tracked.activeTurnId = 'successor-turn';
+    } finally { releaseRefresh(); }
+    await lateRequest.catch(() => null);
+    expect(await readCurrentRunnerTeamCredentialBrokerDenial({ authority, turnId: 'successor-turn' })).toBeNull();
+    laterRefusal = false;
     const priorBrokerOpens = brokerOpens;
     // Deliberately remove the requester binding once. This is the original
     // mis-wiring: a valid Team selection disappears in the custodian catalog.
@@ -390,19 +625,27 @@ it.each(['ready', 'requester Home', 'binding not current', 'missing declaration'
       discoveryElapsedMs: expect.any(Number),
       refreshOutcome: metadata === 'refresh refused' ? 'refused' : 'not_requested',
       ...(metadata === 'refresh refused' ? { refreshElapsedMs: expect.any(Number) } : {}),
-      ...(metadata === 'socket closed' || metadata === 'refresh refused' ? {} : { httpStatus: metadata === 'non-204' ? 403 : 204 }),
+      ...(metadata === 'socket closed' || metadata === 'refresh refused' ? {} : { httpStatus: httpRefusal ? 403 : 204 }),
     })]);
     const discoveryRecord = warnings.mock.calls.find(([label]) => label === '[ProviderBroker] Endpoint discovery refused')?.[1];
     if (metadata === 'socket closed' || metadata === 'refresh refused') expect(discoveryRecord).not.toHaveProperty('httpStatus');
-    for (const privateValue of ['synthetic-consumer-token', 'source-owner', 'requester', 'other side closed']) {
+    for (const privateValue of ['synthetic-consumer-token', 'source-owner', 'requester', 'other side closed', 'private-unknown-reason']) {
       expect(JSON.stringify(discoveryRecord)).not.toContain(privateValue);
     }
     expect(boundary.responseStatus).toBe(200);
+    // The canonical endpoint reader distinguishes a broker HTTP refusal from
+    // an unavailable endpoint projection (204 without its declaration).
+    const expectedCode = metadata === 'typed non-204' ? 'session_not_active'
+      : httpRefusal ? 'broker_unavailable' : 'provider_endpoint_unavailable';
     expect(boundary.responseBody).toEqual({ ok: false,
-      error: { code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' } });
-    expect(refused).toMatchObject({ code: 'provider_endpoint_unavailable', message: 'provider_endpoint_unavailable' });
+      error: { code: expectedCode, message: expectedCode } });
+    expect(refused).toMatchObject({ code: expectedCode, message: expectedCode });
+    if (httpRefusal) {
+      expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: refused }))
+        .toMatchObject({ source: 'team_credential', code: expectedCode });
+    }
     expect(readSessionPreparationFailureDiagnostic(refused)).toEqual({
-      originalCode: 'provider_endpoint_unavailable', reason: 'unknown', contextSource: 'unknown' });
+      originalCode: expectedCode, reason: 'unknown', contextSource: 'unknown' });
     return;
   }
   const opened = await openThroughRunner();

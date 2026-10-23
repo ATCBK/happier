@@ -16,6 +16,7 @@ import type {
 } from './agentRuntimeRunnerProtocol';
 import { createProviderErrorV1, ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/errors';
 import type { SessionInputEnqueueResultV1 } from '@happier-dev/protocol';
+import type { SessionRuntimeTeamCredentialDenialDetailsV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { TeamCredentialErrorCodeV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import {
   HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY,
@@ -43,6 +44,27 @@ import { logger } from '@/ui/logger';
 
 export const RUNNER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_TRANSITION_CODE =
   'runner_agent_runtime_daemon_service_authority_transition';
+
+export async function readCurrentRunnerTeamCredentialBrokerDenial(
+  input: Readonly<{
+    authority: AgentRuntimeDaemonServiceAuthorityExpectedInput;
+    turnId: string;
+    signal?: AbortSignal;
+  }>,
+): Promise<SessionRuntimeTeamCredentialDenialDetailsV1 | null> {
+  const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({
+    authority: input.authority,
+    signal: input.signal,
+    createRequest: token => ({
+      v: 1,
+      context: { token, sessionId: input.authority.sessionId },
+      operation: { kind: 'provider_broker.refusal.read', requestId: randomUUID(), turnId: input.turnId },
+    }),
+  });
+  return response.ok && response.result.kind === 'provider_broker.refusal'
+    ? response.result.denial
+    : null;
+}
 
 /** The existing Session capability selects the policy's Account and source. */
 export async function readCurrentRunnerAgentStartPolicyV1(

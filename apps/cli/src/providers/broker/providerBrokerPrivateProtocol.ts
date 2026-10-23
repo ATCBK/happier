@@ -61,7 +61,8 @@ export async function readProviderBrokerEndpointUrl(input: Readonly<{
       httpStatus: response.status, hasEndpointPath: declaredPath !== null,
       brokerReasonCode: brokerReason.success ? brokerReason.data : null,
     });
-    throw new SessionTeamCredentialLaunchUnavailableError('provider_endpoint_unavailable');
+    throw new SessionTeamCredentialLaunchUnavailableError(response.status === 204
+      ? 'provider_endpoint_unavailable' : brokerReason.success ? brokerReason.data : 'broker_unavailable');
   }
   const path = normalizeProviderOriginRelativePathSyntax(declaredPath);
   input.signal.throwIfAborted();

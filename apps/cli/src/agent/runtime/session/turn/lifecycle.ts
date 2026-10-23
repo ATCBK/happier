@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
-import type { AgentSessionRuntimeEvent, SessionRuntimeIssueV1, SessionTurnFactsV1 } from '@happier-dev/protocol';
+import type { AgentSessionRuntimeEvent, SessionRuntimeIssueV1, SessionTurnFactsV1, SessionRuntimeTeamCredentialDenialDetailsV1 } from '@happier-dev/protocol';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { logger } from '@/ui/logger';
 
 import type { RuntimeSessionTurnMutationV1 } from '@/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox';
 
@@ -23,6 +24,7 @@ type SessionTurnLifecycleParams = Readonly<{
     readTurnFacts?: () => SessionTurnFactsV1;
     /** Exact native start cause, not the mutable active input of a later steer. */
     readStartingInput?: (turnId: string) => Readonly<{ inputId: string; turnId: string }> | null;
+    readTeamCredentialDenial?: (turnId: string) => Promise<SessionRuntimeTeamCredentialDenialDetailsV1 | null>;
     onTurnFactsChanged?: (input: Readonly<{ turnId: string; facts: SessionTurnFactsV1 | null }>) => void;
     onAcceptedTurnFailure?: (event: Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>, issue: SessionRuntimeIssueV1) => Promise<void>;
     onAcceptedTurnLifecycle?: (input: Readonly<{
@@ -124,13 +126,29 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
     ): void {
         const enqueue = params.session.enqueueSessionTurnMutation;
         if (!enqueue) return;
+        const enqueueResolvedMutation = async () => {
+            if (mutation.action === 'fail' && params.readTeamCredentialDenial) {
+                try {
+                    const denial = await params.readTeamCredentialDenial(mutation.turnId);
+                    if (denial) mutation = { ...mutation, issue: classifyPrimarySessionRuntimeIssue({
+                        provider: params.agentId, cause: 'session_error', error: failedEvent?.diagnostic,
+                        occurredAt: mutation.issue.occurredAt, agentTurnId: mutation.issue.agentTurnId,
+                        teamCredentialDenial: denial,
+                    }) };
+                } catch {
+                    // A failed evidence read cannot suppress the native terminal outcome.
+                    logger.debug('[session-turn] Broker refusal evidence unavailable');
+                }
+            }
+            return await enqueue.call(params.session, mutation);
+        };
 
         if (!params.onAcceptedTurnLifecycle) {
             acceptedLifecycleTail = acceptedLifecycleTail.then(async () => {
                 try {
                     // Construction has no daemon turn-marker callback, but its
                     // begin must still enter durable custody before its terminal.
-                    await enqueue.call(params.session, mutation);
+                    await enqueueResolvedMutation();
                 } catch {
                     // Mutation persistence is best-effort; runtime lifecycle observation must keep progressing.
                     return;
@@ -147,7 +165,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                 if (!markerPublished) return;
                 turnsWithMarkerButNoAcceptedBegin.add(acceptedLifecycle.turnId);
                 try {
-                    await enqueue.call(params.session, mutation);
+                    await enqueueResolvedMutation();
                     turnsWithMarkerButNoAcceptedBegin.delete(acceptedLifecycle.turnId);
                 } catch {
                     // The durable marker remains exact exit authority. Do not allow later rows or
@@ -161,7 +179,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
             }
             let admission: void | Readonly<{ terminalStatusOverride: 'failed' }>;
             try {
-                admission = await enqueue.call(params.session, mutation);
+                admission = await enqueueResolvedMutation();
             } catch {
                 return;
             }

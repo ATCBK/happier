@@ -26,14 +26,15 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
   accountActionCredentials?: StoredCredentials;
   requesterCredentials?: StoredCredentials;
   prepareProject?: boolean;
+  machineAccess?: NonNullable<Parameters<typeof createProjectSessionRuntimeFixture>[0]>['machineAccess'];
 }> = {}) {
   const f = await createProjectSessionRuntimeFixture(options.accountActionCredentials
-    ? { serverId: 'session-home', serverUrl: 'https://session-home.test',
+    ? { serverId: 'session-home', serverUrl: 'https://session-home.test', machineAccess: options.machineAccess,
       // Account decision ingress may proceed directly over RPC. Original
       // CLI Run ingress remains unwaived and must retain setup review.
       accountSettings: { actionsSettingsV1: setActionApprovalOverride({ settings: { v: 1, actions: {} },
         actionId: 'projects.prepare', surface: 'rpc', approvalRequired: false }) } }
-    : { serverId: 'session-home', serverUrl: 'https://session-home.test', credentials: options.requesterCredentials });
+    : { serverId: 'session-home', serverUrl: 'https://session-home.test', credentials: options.requesterCredentials, machineAccess: options.machineAccess });
   let accountActionCredentials: StoredCredentials | undefined;
   let accountActionSettings: Awaited<ReturnType<typeof bootstrapAccountSettingsContext>> | undefined;
   if (options.accountActionCredentials) {
@@ -54,20 +55,24 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
   let trust: ProjectTrustContentV1 | null = null;
   let trustWrites = 0;
   const accountReads: unknown[] = [];
-  vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body, requestOptions) => {
     if (String(url).endsWith('/v1/machines/machine/admission/verify')) {
       if (!body || typeof body !== 'object' || !('context' in body) || !('purpose' in body) || !('proof' in body)) throw new Error('Missing requester admission proof');
       // Home HTTP is the boundary; custody uses the real signer and proof verifier.
-      const valid = verifyMachineInstallationProof({ publicKey: f.installation.publicKey,
+      const context = SocketRpcMachineAdmissionContextV1Schema.parse(body.context);
+      const custodianAccountId = options.machineAccess?.custodianAccountId ?? 'requester';
+      const valid = context.actorAccountId === 'requester' && context.custodianAccountId === custodianAccountId
+        && context.role === (options.machineAccess?.role ?? 'manage')
+        && verifyMachineInstallationProof({ publicKey: f.installation.publicKey,
         proof: body.proof as Parameters<typeof verifyMachineInstallationProof>[0]['proof'], payload: {
-          version: 1, accountId: 'requester', machineId: 'machine', installationId: f.installation.installationId,
-          rpcAdmission: { context: SocketRpcMachineAdmissionContextV1Schema.parse(body.context),
+          version: 1, accountId: custodianAccountId, machineId: 'machine', installationId: f.installation.installationId,
+          rpcAdmission: { context,
             purpose: RequesterSessionCurrentnessPurposeV1Schema.parse(body.purpose) } } });
       return { status: valid && f.isHomeCurrent() ? 200 : 403, data: valid && f.isHomeCurrent() ? { v: 1, ok: true } : { error: 'access_denied' } };
     }
-    accountReads.push(options?.headers?.Authorization);
+    accountReads.push(requestOptions?.headers?.Authorization);
     if (String(url).endsWith('/project-trust/read')) {
-      if (String(options?.headers?.[EXTERNAL_ACTION_EFFECT_ACTION_HEADER] ?? '').startsWith('execution.run.')) {
+      if (String(requestOptions?.headers?.[EXTERNAL_ACTION_EFFECT_ACTION_HEADER] ?? '').startsWith('execution.run.')) {
         return { status: 403, data: { error: 'forbidden' } };
       }
       const project = ProjectTrustReadRequestV1Schema.parse(body).project;
@@ -82,8 +87,8 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
     if (String(url).endsWith('/project-rows/list')) {
       // Account topology is read with the admitted requester's bearer. A signed
       // execution root alone does not authorize this Account-private endpoint.
-      if (options?.headers?.Authorization !== `Bearer ${f.bootstrap.credentials.token}`
-        && (!accountActionCredentials || options?.headers?.Authorization !== `Bearer ${accountActionCredentials.token}`)) {
+      if (requestOptions?.headers?.Authorization !== `Bearer ${f.bootstrap.credentials.token}`
+        && (!accountActionCredentials || requestOptions?.headers?.Authorization !== `Bearer ${accountActionCredentials.token}`)) {
         return { status: 403, data: { error: 'forbidden' } };
       }
       const key = { kind: 'workspace-ref', serverId: 'session-home', id: 'workspace' };

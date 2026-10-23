@@ -7,8 +7,8 @@ import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/cont
 
 /**
  * The Team-credential broker refuses inside the Agent's own provider call, so
- * the only thing the Session runtime ever sees is the Agent's rendering of the
- * loopback broker's typed 403 body. These cases pin that a refusal reaches the
+ * host retains exact-turn evidence independently of Agent error formatting.
+ * Agents that preserve the typed 403 still use the existing ingress. These cases pin that a refusal reaches the
  * member as a named Team-credential denial with its recovery facts instead of a
  * generic Agent failure.
  */

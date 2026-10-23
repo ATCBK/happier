@@ -870,6 +870,7 @@ describe('startDaemonProviderBrokerRuntime', () => {
       access: accessA,
       sourceMemberKey: 'connected-account:A',
     });
+    if (!first || 'reasonCode' in first) throw new Error('Expected first Pool source');
     await first?.access.request({
       pathAndQuery: '/v1/responses',
       method: 'POST',
@@ -881,6 +882,7 @@ describe('startDaemonProviderBrokerRuntime', () => {
       access: accessB,
       sourceMemberKey: 'connected-account:B',
     });
+    if (!second || 'reasonCode' in second) throw new Error('Expected replacement Pool source');
     expect(ownerAcquire).toHaveBeenCalledTimes(3);
     expect(retireA).toHaveBeenCalledOnce();
     expect(cleanupA).toHaveBeenCalledOnce();
@@ -962,6 +964,7 @@ describe('startDaemonProviderBrokerRuntime', () => {
     expect(await first.acquireSource(acquireInput)).not.toBeNull();
     const secondAccess = await second.acquireSource(acquireInput);
     expect(secondAccess).not.toBeNull();
+    if (!secondAccess || 'reasonCode' in secondAccess) throw new Error('Expected surviving stream source');
 
     await first.close();
     expect(opened[0]?.cleanup).toHaveBeenCalledOnce();
@@ -1240,7 +1243,9 @@ function startBrokerAdmission(
 }
 
 describe('Provider-broker release after grant expiry (machine/1 admission + broker runtime)', () => {
-  it('retains a failed exact source open through the resource-test application response', async () => {
+  it.each(['resource_test', 'private'] as const)('retains a failed exact source open through the %s application response', async (ingress) => {
+    const diagnostics = vi.spyOn(logger, 'warnLocalFile');
+    closeTasks.push(async () => { diagnostics.mockRestore(); });
     const unused = (): never => { throw new Error('Source refusal reached a Provider effect'); };
     const custody = createManagedProviderExplicitStartCustody({ machineId: 'broker-machine', happyHomeDir: '/unreached-source' });
     const bindings = createConnectedAccountPurposeBindingOwner({
@@ -1266,7 +1271,10 @@ describe('Provider-broker release after grant expiry (machine/1 admission + brok
       application: authority.payload.application, source };
     const runtime = await startDaemonProviderBrokerRuntime({
       machineId: 'broker-machine', resolveTrustRoots: () => homeTrustRoots, nowMs: () => 150,
-      createRequestId: () => 'source-refusal', resolveRequestPolicy: async () => null, admitRequest: unused, authorizeModelCatalog: unused,
+      createRequestId: () => 'source-refusal', resolveRequestPolicy: async () => ({ resourceRevision: 7,
+        sourceRevision: authority.payload.sourceRevision, application: binding.application, source, policy: null,
+        modelCatalog: { models: [{ id: 'gpt-5' }], resolveCanonicalModelId: id => id } }),
+      admitRequest: unused, authorizeModelCatalog: async () => ({ ok: true }),
       resolveResourceTestRequestPolicy: async () => ({ resourceRevision: 7, application: binding.application, policy: null,
         modelCatalog: { models: [{ id: 'gpt-5' }], resolveCanonicalModelId: id => id } }),
       admitResourceTestRequest: async () => ({ ok: true, resourceId: binding.resourceId, resourceRevision: 7,
@@ -1276,7 +1284,8 @@ describe('Provider-broker release after grant expiry (machine/1 admission + brok
     closeTasks.push(runtime.close);
     // Relay authorization is the already-authenticated transport boundary;
     // the real relay/route composition separately verifies its signature.
-    const target = await runtime.resolveExternalProviderBrokerApplicationTarget({ binding, relayAuthorization: {
+    const target = ingress === 'private' ? await startBrokerAdmission(runtime, 150)()
+      : await runtime.resolveExternalProviderBrokerApplicationTarget({ binding, relayAuthorization: {
       payload: { v: 2, grantId: 'test-grant', accountId: 'custodian-account', targetMachineId: 'broker-machine',
         flowKind: 'provider_broker', routeKind: 'server_relay', tunnelId: 'test-tunnel', relaySocketId: 'test-relay',
         providerBroker: binding, capProfileId: 'server-relay-v1', maxFrameBytes: 65_536, maxIdleMs: 10_000,
@@ -1284,14 +1293,21 @@ describe('Provider-broker release after grant expiry (machine/1 admission + brok
       signature: { alg: 'Ed25519', keyId: 'home', valueBase64Url: 'AA' },
     } });
     if (!target) throw new Error('Resource-test application target absent');
-    const response = await rawRequestThroughApplicationTarget({ ...target, method: 'POST',
+    const response = ingress === 'private' ? await rawRequestThroughApplicationTarget({ ...target, method: 'GET',
+      path: PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH, headers: { [PROVIDER_BROKER_MODEL_ID_HEADER]: 'gpt-5' } })
+      : await rawRequestThroughApplicationTarget({ ...target, method: 'POST',
       path: TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1,
       body: JSON.stringify({ v: 1, kind: 'resource_test', teamId: binding.teamId, resourceId: binding.resourceId,
         requestId: binding.requestId, route: 'responses', method: 'POST', pathAndQuery: '/v1/responses',
         bodyBase64: Buffer.from(JSON.stringify({ model: 'gpt-5', input: 'hello' })).toString('base64') }),
     });
     expect(response).toContain('HTTP/1.1 403');
-    expect(response).toContain('x-happier-provider-broker-error-code: source_unavailable');
+    const code = ingress === 'private' ? 'resource_unavailable' : 'source_unavailable';
+    expect(response).toContain(`x-happier-provider-broker-error-code: ${code}`);
+    expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', expect.objectContaining({
+      stage: 'application_response', code, sourceOpenFailureReason: 'resource_not_current',
+    }));
+    expect(response).not.toContain('resource_not_current');
   });
 
   it.each(['unavailable', 'cancelled'] as const)('admits the personal carrier before private source acquisition (%s Home read)', async outcome => {

@@ -30,6 +30,7 @@ import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification
 import { getSharedTerminalProcessRegistry } from '../local/services/inventory/terminalRegistry';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { issueMcpRequestAuthCapability } from '@/mcp/runtime/issueMcpRequestAuthCapability';
+import { createSessionBrokerApplicationEvidence } from '@/providers/broker/sessionBrokerApplicationEvidence';
 import { readMcpRequestAuthFailureCode, readMcpRequestAuthDiagnosticCode } from '@/mcp/runtime/mcpRequestAuth';
 import { createDaemonRunnerPluginMcp } from '../agentRuntime/runnerPluginMcp';
 import { createGuardLeftBehindActionExecutor } from '../guard/actions';
@@ -2528,6 +2529,7 @@ export async function startDaemonSessionControlRuntime(
         modelId: string;
         consumer?: import('@happier-dev/protocol').ProviderBrokerConsumerV1;
         providerSettingsOperationContext?: SavedSecretOperationContextV1;
+        beginBrokerRequest?: () => import('@/providers/broker/providerBrokerApplicationFailure').SessionBrokerApplicationOutcomeRecorder | undefined;
         signal: AbortSignal;
       }>,
     ) => Promise<
@@ -17697,6 +17699,11 @@ export async function startDaemonSessionControlRuntime(
                 error: { code: providerError.data.code, message: providerError.data.code } } : unavailable();
             }
           }
+          if (request.operation.kind === 'provider_broker.refusal.read') {
+            return { ok: true as const, result: { kind: 'provider_broker.refusal' as const,
+              denial: trackedSession?.activeTurnId === request.operation.turnId
+                ? trackedSession.teamCredentialBrokerEvidence?.readDenial(request.operation.turnId) ?? null : null } };
+          }
           if (request.operation.kind === 'provider_broker.binding.open') {
             const tracked = trackedSession;
             const operation = request.operation;
@@ -17777,6 +17784,14 @@ export async function startDaemonSessionControlRuntime(
                   agentId: consumerAgentId,
                   agentTargetKey: operation.agentTargetKey,
                   modelId: operation.modelId,
+                  beginBrokerRequest: () => {
+                    if (operation.consumer?.kind === 'execution_run') return undefined;
+                    const evidence = tracked.teamCredentialBrokerEvidence ??= createSessionBrokerApplicationEvidence({
+                      readActiveTurnId: () => tracked.activeTurnId ?? null,
+                      isCurrent: () => params.pidToTrackedSession.get(tracked.pid) === tracked,
+                    });
+                    return evidence.beginRequest();
+                  },
                   ...(operation.consumer
                     ? { consumer: operation.consumer }
                     : {}),

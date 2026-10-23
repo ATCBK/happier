@@ -30,6 +30,24 @@ const createOpenedTeamProviderBindingResponse = (resourceId: string) => ({
 });
 
 describe('Agent runtime daemon provider binding service protocol', () => {
+  it('carries a turn-scoped closed Team credential refusal without private broker facts', () => {
+    const request = {
+      v: 1,
+      context: { token: 'A'.repeat(43), sessionId: 'session-1' },
+      operation: { kind: 'provider_broker.refusal.read', requestId: 'request-1', turnId: 'turn-1' },
+    };
+    expect(AgentRuntimeDaemonServiceRequestV1Schema.parse(request)).toEqual(request);
+    const denial = { v: 1, resourceId: 'resource-1', reasonCode: 'resource_forbidden' };
+    const response = { ok: true, result: { kind: 'provider_broker.refusal', denial } };
+    expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(response)).toEqual(response);
+    expect(AgentRuntimeDaemonServiceResponseV1Schema.parse({
+      ok: true, result: { kind: 'provider_broker.refusal', denial: null },
+    })).toEqual({ ok: true, result: { kind: 'provider_broker.refusal', denial: null } });
+    expect(AgentRuntimeDaemonServiceResponseV1Schema.safeParse({
+      ...response, result: { ...response.result, denial: { ...denial, memberId: 'private-member' } },
+    }).success).toBe(false);
+  });
+
   it('uses the canonical Team provider binding resource-id boundary', () => {
     const maximumLengthResponse = createOpenedTeamProviderBindingResponse(
       'r'.repeat(256),

@@ -53,6 +53,7 @@ import {
     dispatchCurrentRunnerDaemonPluginService,
     isCurrentRunnerAgentRuntimeDaemonServiceAuthorityTransition,
     openCurrentRunnerTeamCredentialProviderBinding,
+    readCurrentRunnerTeamCredentialBrokerDenial,
     resolveCurrentAgentRuntimeDaemonTurnContributions,
 } from './agentRuntimeDaemonServiceAuthorityClient';
 import { loadRetainedAgentRuntimeLeaf } from '@/plugins/runtime/runner/loadRetainedAgentRuntimeLeaf';
@@ -227,6 +228,10 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
     const requireClaimed = () => requireClaimedRunnerSource(claimed);
     const daemonTurnContributionsBridge:
         DaemonAgentRuntimeTurnContributionsBridge = Object.freeze({
+            async readTeamCredentialDenial(params) {
+                const bridge = requireClaimed().daemonTurnContributionsBridge;
+                return await bridge?.readTeamCredentialDenial?.(params) ?? null;
+            },
             pluginMcp: {
                 async prepare(input: Parameters<import('@/mcp/runtime/pluginMcpPort').PluginMcpPort['prepare']>[0]) {
                     const port = requireClaimed().daemonTurnContributionsBridge?.pluginMcp;
@@ -1113,11 +1118,20 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
     const retireSourceOnAbort = () => {
         void retireSource().catch(() => undefined);
     };
+    let hasSessionTeamCredentialBinding = false;
     const daemonTurnContributionsBridge:
         DaemonAgentRuntimeTurnContributionsBridge =
             Object.freeze({
                 pluginMcp: pluginMcp.port,
                 mcpRequestAuth,
+                async readTeamCredentialDenial(params) {
+                    if (!hasSessionTeamCredentialBinding || params.sessionId !== expectedAuthority.sessionId) return null;
+                    return await readCurrentRunnerTeamCredentialBrokerDenial({
+                        authority: expectedAuthority,
+                        turnId: params.turnId,
+                        ...(params.signal ? { signal: params.signal } : {}),
+                    });
+                },
                 async admitSessionInput(params) {
                     if (
                         params.sessionId !== expectedAuthority.sessionId
@@ -1824,6 +1838,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                 signal: params.signal,
             });
             const bindingId = result.bindingId;
+            if (params.consumer?.kind !== 'execution_run') hasSessionTeamCredentialBinding = true;
             return {
                 providerBinding: result.providerBinding,
                 environmentOverlay: result.environmentOverlay,

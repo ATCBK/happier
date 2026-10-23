@@ -12,6 +12,7 @@ import type {
     SessionPendingEnqueueByMachineRequestV1,
     SessionPendingExecutionRunEnqueueByMachineRequestV2,
 } from '@happier-dev/protocol';
+import type { SessionRuntimeTeamCredentialDenialDetailsV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 type DaemonAgentRuntimePromptContributions = Extract<
     AgentRuntimeDaemonTurnContributionsResultV1,
@@ -37,6 +38,11 @@ type DaemonAgentRuntimeAgentCompositionContributions = Extract<
 export type DaemonAgentRuntimeTurnContributionsBridge = Readonly<{
     pluginMcp?: import('@/mcp/runtime/pluginMcpPort').PluginMcpPort;
     mcpRequestAuth?: import('@/mcp/runtime/mcpRequestAuth').McpRequestAuthPort;
+    readTeamCredentialDenial?(params: Readonly<{
+        sessionId: string;
+        turnId: string;
+        signal?: AbortSignal;
+    }>): Promise<SessionRuntimeTeamCredentialDenialDetailsV1 | null>;
     admitSessionInput?(params: Readonly<{
         sessionId: string;
         request: SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2;

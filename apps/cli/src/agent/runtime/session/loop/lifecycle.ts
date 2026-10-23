@@ -7,7 +7,7 @@ import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { isRecord } from '@happier-dev/plugin-sdk';
 import { validatePluginHookPayloadV1 } from '@happier-dev/protocol/plugins/hooks';
-import type { AgentSessionRuntimeEvent, ProviderBoundModelRef, SessionModelTransitionResultV1, SessionTurnFactsV1, SessionRolePromptContextV1 } from '@happier-dev/protocol';
+import type { AgentSessionRuntimeEvent, ProviderBoundModelRef, SessionModelTransitionResultV1, SessionTurnFactsV1, SessionRolePromptContextV1, SessionRuntimeTeamCredentialDenialDetailsV1 } from '@happier-dev/protocol';
 import type { render } from 'ink';
 import type React from 'react';
 
@@ -163,6 +163,7 @@ export async function runHostSessionRuntimePlan(plan: HostSessionRuntimePlan): P
 
 export type SessionLoopLifecycleDeps = Readonly<{
   daemonTurnContributionsBridge?: DaemonAgentRuntimeTurnContributionsBridge;
+  readTeamCredentialDenial?: (turnId: string) => Promise<SessionRuntimeTeamCredentialDenialDetailsV1 | null>;
   cleanupBackendRunResourcesFn?: typeof cleanupBackendRunResources;
   createRuntimeOverrideSynchronizersFn?: typeof createRuntimeOverrideSynchronizers;
   runPermissionModePromptLoopFn?: typeof runPermissionModePromptLoop;
@@ -596,6 +597,10 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       readQuestionWaitTurnId: () => params.session.readQuestionWaitTurnId?.() ?? null,
     },
     agentId: params.policyAgentId,
+    ...(params.deps.readTeamCredentialDenial || daemonTurnContributionsBridge?.readTeamCredentialDenial ? {
+      readTeamCredentialDenial: params.deps.readTeamCredentialDenial ?? (async (turnId: string) =>
+        await daemonTurnContributionsBridge?.readTeamCredentialDenial?.({ sessionId: params.session.sessionId, turnId }) ?? null),
+    } : {}),
     readTurnFacts: () => preparedTurnFacts ?? stampTurnFacts({
       sessionWorkDepth: params.session.getWorkDepth?.() ?? 0, hostContextOnly: true,
     }),

@@ -25,6 +25,8 @@ import {
 } from './machineCarrier';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_CLOSE_REQUEST_ID_HEADER } from '@/providers/broker/providerBrokerPrivateProtocol';
 import { logger } from '@/ui/logger';
+import { providerBrokerApplicationFailureBody, type SessionBrokerApplicationOutcomeRecorder } from '@/providers/broker/providerBrokerApplicationFailure';
+import { SessionRuntimeTeamCredentialDenialDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 type BrokerReleasePhase = 'public_listener_withdrawal' | 'private_control_dial'
   | 'delete_dispatched' | 'response_received' | 'private_control_close';
@@ -79,6 +81,7 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
   resolveTrustRoots: () => readonly DirectRouteGrantTrustRoot[];
   nowMs?: () => number;
   fetchImpl?: typeof fetch;
+  beginSessionApplicationRequest?: (sessionId: string) => SessionBrokerApplicationOutcomeRecorder | undefined;
 }>): (request: Readonly<{
   brokerOpen: Extract<BrokerOpenResponse, { ok: true }>;
   refreshBrokerOpen?: (signal?: AbortSignal) => Promise<BrokerOpenResponse>;
@@ -143,9 +146,20 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
         if (!refreshBrokerOpen) {
           throw new MachineCarrierError('broker_fresh_handshake_unavailable', 'Fresh Provider broker admission is unavailable.');
         }
+        const recordOutcome = payload.v === 1 && payload.consumer.kind === 'session'
+          ? input.beginSessionApplicationRequest?.(payload.consumer.sessionId) : undefined;
         const freshOpen = BrokerOpenResponseSchema.parse(await refreshBrokerOpen(signal));
         if (!freshOpen.ok) {
-          throw new MachineCarrierError(freshOpen.reasonCode, 'Provider broker authority refresh was rejected.');
+          signal?.throwIfAborted();
+          const body = providerBrokerApplicationFailureBody(freshOpen, payload.v === 1 ? payload.resourceId : undefined);
+          if (recordOutcome && payload.v === 1) recordOutcome(SessionRuntimeTeamCredentialDenialDetailsV1Schema.parse({
+            v: 1, resourceId: payload.resourceId, reasonCode: body.error.code,
+            ...(body.error.usageLimit ? { usageLimit: body.error.usageLimit } : {}),
+          }));
+          throw new MachineCarrierError(freshOpen.reasonCode, 'Provider broker authority refresh was rejected.', {
+            kind: 'http_refusal',
+            responseBody: JSON.stringify(body),
+          });
         }
         const freshAuthority = freshOpen.authority;
         if (
@@ -161,6 +175,7 @@ export function createProviderBrokerMachineCarrierTunnelOpen(input: Readonly<{
           throw new MachineCarrierError(verified.reasonCode, 'Fresh Provider broker authority was rejected.');
         }
         signal?.throwIfAborted();
+        recordOutcome?.(null);
         return IrohProviderBrokerHandshakeSchema.parse({
           v: payload.v,
           kind: 'provider_broker',

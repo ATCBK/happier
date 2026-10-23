@@ -14,6 +14,8 @@ import { createRequesterSessionRuntimeContextResolver, releaseUnretainedRequeste
   resolveRequesterSessionBootstrapFromCustody } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { startDaemonSessionControlRuntime } from '@/daemon/startup/startDaemonSessionControlRuntime';
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
+import { createOnHappySessionWebhook } from '@/daemon/sessions/onHappySessionWebhook';
+import { createSkillStore } from '@/prompts/skills/store/skillStore';
 import { createInstalledProjectAgentLaunchFixture } from './installedProjectAgentLaunchFixture';
 
 export async function createInstalledProjectAgentDaemonFixture(readControl: () => Parameters<typeof startDaemonControlServer>[0] | null, bundledAgentId?: string, unassociated = false,
@@ -22,12 +24,14 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
   requesterOptions?: Pick<Parameters<typeof createRequesterSessionRuntimeContext>[0], 'resolveQualifiedConnectedAccountV4Support'>
     & Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'resolveCurrentMachineExecutionOriginContext' | 'processEnv' | 'openTeamCredentialProviderBinding'>
     & Partial<Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'credentials'>>
+    & Pick<NonNullable<Parameters<typeof createInstalledProjectAgentLaunchFixture>[0]>, 'machineAccess'>
     & { requesterCredentials?: StoredCredentials }) {
   const daemonCredentials = requesterOptions?.credentials ?? { token: 'custodian-token', encryption: null };
   const accountActionCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester',
     provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
   const fixture = await createInstalledProjectAgentLaunchFixture(unassociated
-    ? { prepareProject: false, requesterCredentials: requesterOptions?.requesterCredentials } : { accountActionCredentials });
+    ? { prepareProject: false, requesterCredentials: requesterOptions?.requesterCredentials, machineAccess: requesterOptions?.machineAccess }
+    : { accountActionCredentials, machineAccess: requesterOptions?.machineAccess });
   const { f, machine } = fixture;
   const signal: AbortSignal = fixture.signal;
   const runtimeController = controller ?? createPluginReloadController({ happyHomeDir: f.directory });
@@ -77,24 +81,33 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
       return bootstrap;
     },
   });
+  const deviceLocalSecretStorage = await readOrCreateDeviceLocalSecretStorage({ path: join(f.directory, 'fixture-device-secret') });
+  const pidToAwaiter = new Map<number, (tracked: TrackedSession) => void>();
+  const skillStore = createSkillStore({ happyHomeDir: f.directory });
+  onTestFinished(async () => {
+    await skillStore.releaseSkillSessionDirs(sessionId);
+    await skillStore.collectSkillCache({ libraryDigests: [] });
+  });
   const daemon = await startDaemonSessionControlRuntime({ machineId: 'machine', serverId: 'session-home', serverBaseUrl: 'https://session-home.test',
+    skillStore,
     resolveCurrentMachineExecutionOriginContext: requesterOptions?.resolveCurrentMachineExecutionOriginContext,
     openTeamCredentialProviderBinding: requesterOptions?.openTeamCredentialProviderBinding,
     externalActionAccountId: 'custodian', credentials: daemonCredentials, api: {} as never,
-    deviceLocalSecretStorage: await readOrCreateDeviceLocalSecretStorage({ path: join(f.directory, 'fixture-device-secret') }),
+    deviceLocalSecretStorage,
     pluginRuntimeController: plugin.controller, connectedServiceRuntimeRegistry,
     daemonSessionMutationCustody: { stageTranscriptMessage: async () => { throw new Error('No transcript mutation'); },
       stageTranscriptEvent: async () => ({ persisted: true, delivered: true }) },
     connectedServicesMaterializationBaseDir: join(f.directory, 'connected-services'),
     getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
-    pidToTrackedSession, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
+    pidToTrackedSession, pidToAwaiter, pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
     getApiMachineForSessions: () => machine, spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
     resolveRequesterSessionRuntimeContext: resolveRequesterRuntime,
     releaseRequesterSessionRuntimeContext: async context => {
       await releaseUnretainedRequesterSessionRuntimeContext(context,
         [...pidToTrackedSession.values()].map(session => session.requesterSessionRuntimeContext));
     },
-    connectedServicesRestartRequestedPids: new Set(), beforeShutdown: async () => {}, onHappySessionWebhook: async () => {},
+    connectedServicesRestartRequestedPids: new Set(), beforeShutdown: async () => {},
+    onHappySessionWebhook: createOnHappySessionWebhook({ pidToTrackedSession, pidToAwaiter, deviceLocalSecretStorage }),
     requestShutdown() {}, processEnv: { NODE_ENV: 'test', ...requesterOptions?.processEnv } });
   onTestFinished(() => daemon.stopControlServer());
   createRequesterRuntime = async bootstrap => {
@@ -112,7 +125,7 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
     return context;
   };
   const requester = await resolveRequesterRuntime(sessionId, f.bootstrap.attribution);
-  if (!requester) throw new Error('Missing requester runtime');
+  if (!requester) throw new Error(`Missing requester runtime (${requesterRecoveryStage})`);
   const services = readControl()?.agentRuntimeDaemonServices;
   if (!services) throw new Error('Missing production private dispatcher');
   let sequence = 0;
@@ -122,7 +135,7 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
     { sessionId, runner, retainedAgent, trackedSession: tracked, invocationContext: tracked.runnerAgentInvocationContext!,
       isCurrent: async () => true, signal }));
   const operationBase = (invocationId = 'cold-invocation') => ({ invocationId, requestId: `request-${++sequence}` });
-  return { ...fixture, signal, cwd, dispatch, operationBase, sessionId, retainedAgent, requester, runner, tracked, plugin, pidToTrackedSession, daemon,
+  return { ...fixture, signal, cwd, dispatch, operationBase, sessionId, retainedAgent, requester, runner, tracked, plugin, pidToTrackedSession, pidToAwaiter, daemon,
     resolveRequesterRuntime,
     readRequesterRecoveryStage: () => requesterRecoveryStage,
     async replaceRequesterRuntime() {

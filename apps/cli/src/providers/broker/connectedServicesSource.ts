@@ -9,7 +9,7 @@ import {
 import { resolveManagedProviderPurposeBindingSnapshot } from '@/providers/managed/resolvePurposeBindingSnapshot';
 import type { ConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import type { ManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
-import type { TeamCredentialBrokerSourceOpenInput } from './teamCredentialBrokerSourceOwner';
+import type { TeamCredentialBrokerSourceOpenInput, TeamCredentialBrokerSourceOpenFailureReason } from './teamCredentialBrokerSourceOwner';
 import { acquireBrokerSourceOperation } from './brokerSourceOperationAcquisition';
 import {
   isCLIProxyAPIBrokerApplication,
@@ -103,7 +103,7 @@ export function createConnectedServicesBrokerSourceOpen(input: Readonly<{
     isCurrent(): Promise<boolean>;
   }>;
   retire(): Promise<void>;
-}> | null> {
+}> | Readonly<{ unavailable: TeamCredentialBrokerSourceOpenFailureReason }>> {
   return async (request) => {
     const readsResourceCurrent = async (
       signal: AbortSignal,
@@ -123,7 +123,8 @@ export function createConnectedServicesBrokerSourceOpen(input: Readonly<{
       input.resolveBindingIntentSelection,
       request,
     );
-    if (!chosen || !await readsResourceCurrent(request.signal)) return null;
+    if (!chosen) return { unavailable: 'source_selection_unavailable' };
+    if (!await readsResourceCurrent(request.signal)) return { unavailable: 'resource_not_current' };
     const { family, purpose, selection, sourceMember } = chosen;
     const exactTarget = Object.freeze({
       kind: 'account' as const,
@@ -154,7 +155,8 @@ export function createConnectedServicesBrokerSourceOpen(input: Readonly<{
       }),
       signal: request.signal,
     }).catch(() => null);
-    if (!purposeBindings || !await readsResourceCurrent(request.signal)) return null;
+    if (!purposeBindings) return { unavailable: 'purpose_binding_unavailable' };
+    if (!await readsResourceCurrent(request.signal)) return { unavailable: 'resource_not_current' };
 
     const acquired = await acquireBrokerSourceOperation({
       custody: input.custody,
@@ -172,7 +174,7 @@ export function createConnectedServicesBrokerSourceOpen(input: Readonly<{
         : {}),
       callerSignal: request.signal,
     });
-    if (!acquired) return null;
+    if (!acquired) return { unavailable: 'managed_custody_unavailable' };
     const { projection, retire, revalidateAuthorization } = acquired;
     return Object.freeze({
       projection,

@@ -98,6 +98,13 @@ export type TeamCredentialBrokerSourceOpenInput = ExactSourceOpenInput<
   TeamCredentialSourceBindingV1
 >;
 
+/** Host-private prerequisite facts, never part of a broker HTTP response. */
+export type TeamCredentialBrokerSourceOpenFailureReason =
+  | 'source_selection_unavailable'
+  | 'resource_not_current'
+  | 'purpose_binding_unavailable'
+  | 'managed_custody_unavailable';
+
 export type TeamCredentialBrokerSourceAcquireResult =
   | Readonly<{
       ok: true;
@@ -109,6 +116,7 @@ export type TeamCredentialBrokerSourceAcquireResult =
     }>
   | Readonly<{
       ok: false;
+      sourceOpenFailureReason?: TeamCredentialBrokerSourceOpenFailureReason;
       reasonCode:
         | 'source_invalid'
         | 'source_unavailable'
@@ -149,7 +157,7 @@ type SourceOpenResult = Promise<Readonly<{
   projection: ManagedProviderEndpointAccessProjection;
   sourceCurrentness: Pick<TeamCredentialSourceCurrentness, 'sourceMember' | 'isCurrent'>;
   retire(): Promise<void>;
-}> | null>;
+}> | Readonly<{ unavailable: TeamCredentialBrokerSourceOpenFailureReason }> | null>;
 
 function validOperation(operation: TeamCredentialBrokerOperation): boolean {
   if (operation.kind === 'session') {
@@ -305,11 +313,14 @@ export function createTeamCredentialBrokerSourceOwner(input: Readonly<{
           reasonCode: 'source_unavailable' as const,
         });
       }
-      if (!opened) {
-        logger.warnLocalFile('[provider-broker-source]', { stage: 'source_open', code: 'projection_unavailable' });
+      if (!opened || 'unavailable' in opened) {
+        const sourceOpenFailureReason = opened?.unavailable;
+        logger.warnLocalFile('[provider-broker-source]', { stage: 'source_open', code: 'projection_unavailable',
+          ...(sourceOpenFailureReason ? { reason: sourceOpenFailureReason } : {}) });
         return Object.freeze({
           ok: false as const,
           reasonCode: 'source_unavailable' as const,
+          ...(sourceOpenFailureReason ? { sourceOpenFailureReason } : {}),
         });
       }
       const { projection, sourceCurrentness } = opened;

@@ -49,7 +49,8 @@ import {
 
 function brokerSourceAcquisitionFailure(failure: Extract<TeamCredentialBrokerSourceAcquireResult, { ok: false }>) {
   return { ok: false as const,
-    reasonCode: failure.reasonCode === 'broker_machine_mismatch' ? 'broker_unavailable' as const : failure.reasonCode };
+    reasonCode: failure.reasonCode === 'broker_machine_mismatch' ? 'broker_unavailable' as const : failure.reasonCode,
+    ...(failure.sourceOpenFailureReason ? { sourceOpenFailureReason: failure.sourceOpenFailureReason } : {}) };
 }
 
 type SelectedProviderBrokerRequestAdmission = ProviderBrokerRequestAdmission & Readonly<{
@@ -344,7 +345,7 @@ export function createPrivateProviderBrokerStreamLifetime(input: Readonly<{
       }
       if (source.kind === 'connected_pool') {
         bindingKey ??= nextBindingKey;
-        let result: Readonly<{ access: ManagedProviderEndpointHttpAccess; sourceMemberKey: string }> | null = null;
+        let result: Awaited<ReturnType<ProviderBrokerApplicationStreamLifetime['acquireSource']>> = null;
         const refresh = async (): Promise<void> => {
           if (retired) return;
           let acquired = await input.sourceOwner.acquire({
@@ -389,6 +390,9 @@ export function createPrivateProviderBrokerStreamLifetime(input: Readonly<{
               await (retired ? releaseProjection(acquired) : retireAcquired(acquired))
                 .catch(() => undefined);
             }
+            if (!retired && acquired && !acquired.ok) {
+              result = { ...brokerSourceAcquisitionFailure(acquired), reasonCode: 'resource_unavailable' };
+            }
             return;
           }
           const previous = currentPoolSource;
@@ -420,8 +424,11 @@ export function createPrivateProviderBrokerStreamLifetime(input: Readonly<{
       }
       const acquired = await projectionPromise;
       if (retired || !acquired?.ok || !acquired.projection.isCurrent()) {
+        const failure = !retired && acquired && !acquired.ok
+          ? { ...brokerSourceAcquisitionFailure(acquired), reasonCode: 'resource_unavailable' as const }
+          : null;
         await close();
-        return null;
+        return failure;
       }
       selectedResult ??= Object.freeze({
         access: acquired.projection.access,
@@ -639,6 +646,7 @@ export async function startDaemonProviderBrokerRuntime(input: Readonly<{
           sourceRevision: request.expectedSourceRevision,
         }));
       if (!selected) return unavailable;
+      if ('reasonCode' in selected) return selected;
       // A Pool that switched members between admission and acquisition must
       // not forward under a member the Home did not admit.
       if (selected.sourceMemberKey !== sourceMemberKey) {

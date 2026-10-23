@@ -32,6 +32,7 @@ import { createDaemonMachineIrohRuntime } from '@/daemon/peer/iroh/daemonMachine
 import { createDaemonPluginChangeService } from '@/plugins/daemon/changeService';
 import { createDaemonNpmPluginChangePreparer } from '@/plugins/daemon/npmChangePreparer';
 import { createProviderBrokerMachineCarrierTunnelOpen } from '@/daemon/peer/iroh/providerBrokerMachineCarrierTunnelOpen';
+import { createSessionBrokerApplicationEvidence } from '@/providers/broker/sessionBrokerApplicationEvidence';
 import { resolvePeerMediationTrustRoots } from '@/daemon/peer/mediation/resolvePeerMediationTrustRoots';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { openExactSessionTeamCredentialProviderBinding } from '@/providers/broker/sessionTeamCredentialProviderBinding';
@@ -636,6 +637,11 @@ export async function createProductionEphemeralRunnerApplication(input: Readonly
         throw new Error('runner_provider_trust_roots_unavailable');
       }
       const trustRoots = resolvePeerMediationTrustRoots(featureSnapshot, Date.now());
+      let activeBrokerTurnId: string | null = null;
+      const brokerEvidence = createSessionBrokerApplicationEvidence({
+        readActiveTurnId: () => activeBrokerTurnId,
+        isCurrent: () => !runtimeEnded && !postMaterializationSignal.aborted,
+      });
       let openProviderTunnel: ReturnType<typeof createProviderBrokerMachineCarrierTunnelOpen>;
       try {
         openProviderTunnel = createProviderBrokerMachineCarrierTunnelOpen({
@@ -643,6 +649,7 @@ export async function createProductionEphemeralRunnerApplication(input: Readonly
           localMachineId: materialized.principal.machineId,
           runtime: providerMachineRuntime,
           resolveTrustRoots: () => trustRoots,
+          beginSessionApplicationRequest: sessionId => sessionId === binding.sessionId ? brokerEvidence.beginRequest() : undefined,
         });
       } catch (error) {
         await disposeBeforeMachineClient().catch(() => undefined);
@@ -1011,8 +1018,17 @@ export async function createProductionEphemeralRunnerApplication(input: Readonly
         try {
           await runHostSessionRuntimePlan({
             ...plan,
+            deps: { ...plan.deps, sessionLoopLifecycleDeps: { ...plan.deps?.sessionLoopLifecycleDeps,
+              readTeamCredentialDenial: async turnId => brokerEvidence.readDenial(turnId),
+            } },
             config: {
               ...plan.config,
+              publishHostRuntimeEvent: event => {
+                if (event.kind === 'turn-start') activeBrokerTurnId = event.turnId;
+                else if ((event.kind === 'turn-complete' || event.kind === 'turn-cancelled' || event.kind === 'turn-failed')
+                  && event.turnId === activeBrokerTurnId) activeBrokerTurnId = null;
+                plan.config.publishHostRuntimeEvent?.(event);
+              },
               processLifecycleOwnership: 'caller',
               runtimeActionSettingsProvider: actionsSettingsProvider,
               runtimeAuthority: {
