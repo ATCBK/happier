@@ -187,7 +187,9 @@ export const LIMA_PLUGIN = definePlugin({
       inputSchema: LIMA_ROLE_SCHEMAS.putFileInput, resultSchema: MachineProvisionerPutFileResultV1Schema,
       async run(input, context) {
         try {
-          const result = await (await provider(context)).putFile(input.resource, input.guestPath, decodePrivateBytes(input.bytesBase64),
+          // The shared role schema has already admitted the bounded encoding.
+          // Do not re-encode another full fragment solely to validate it again.
+          const result = await (await provider(context)).putFile(input.resource, input.guestPath, Buffer.from(input.bytesBase64, 'base64'),
             input.mode === undefined ? undefined : `0${input.mode.toString(8).padStart(3, '0')}`);
           return result.kind === 'written' ? { kind: 'confirmed' as const } : { kind: 'unknown' as const };
         } catch (error) {

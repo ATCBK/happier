@@ -550,7 +550,8 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
         },
         putFile: async (request) => {
             const result = MachineProvisionerPutFileResultV1Schema.parse(await invoke('putFile', {
-                resource: correlation.resource.value, guestPath: request.path, bytesBase64: Buffer.from(request.bytes).toString('base64'),
+                resource: correlation.resource.value, guestPath: request.path,
+                bytesBase64: Buffer.from(request.bytes.buffer, request.bytes.byteOffset, request.bytes.byteLength).toString('base64'),
             }, request));
             if (result.kind !== 'confirmed') throw new ManagedMachineControllerError(result.code ?? 'provider_unavailable');
         },

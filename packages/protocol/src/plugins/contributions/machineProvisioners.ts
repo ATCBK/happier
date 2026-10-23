@@ -2,6 +2,7 @@ import { z } from 'zod/mini';
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 import * as mini from 'zod/mini';
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
+import { EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES } from '../../actions/externalActionLimits.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
 import { PluginContributionIdentityV1Schema, PluginContributionLocalIdSchema } from '../contributionIdentity.js';
 import { PluginActionIconV2Schema, type PluginActionContributionV2 } from '../actions/v2.js';
@@ -415,9 +416,14 @@ const closedRole = { policy: 'closed' } as const;
 const roleString = defineProtocolString({ minLength: 1 });
 const roleBoolean = defineProtocolUnion([defineProtocolLiteral(true), defineProtocolLiteral(false)]);
 const roleBase64Character = '[A-Za-z0-9+/]';
+/** A native file Action carries one fragment within the incumbent Action body
+ * budget. The host reserves its actual JSON metadata before encoding bytes;
+ * this is a per-call memory boundary, never a maximum installer/archive size. */
+export const MACHINE_PROVISIONER_PUT_FILE_BASE64_MAX_LENGTH_V1 = EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES;
 // Unroll each fixed-width group: a nested {4} repetition exhausts V8's regexp
 // stack on release archives. The final assertion also rejects a trailing newline.
-const roleBase64 = defineProtocolString({ pattern: `^(?:${roleBase64Character.repeat(4)})*(?:${roleBase64Character.repeat(2)}==|${roleBase64Character.repeat(3)}=)?$(?![\\s\\S])` });
+const roleBase64Pattern = `^(?:${roleBase64Character.repeat(4)})*(?:${roleBase64Character.repeat(2)}==|${roleBase64Character.repeat(3)}=)?$(?![\\s\\S])`;
+const roleBase64 = defineProtocolString({ pattern: roleBase64Pattern });
 const roleRef = PluginContributionIdentityV1Schema;
 /** Read-only exact cleanup evidence; retryable is native idempotency evidence,
  * never independent admission to replay an effect. */
@@ -478,6 +484,8 @@ export function defineMachineProvisionerSchemas<TLaunchInput, TLaunch, TResource
     execInput: defineProtocolObject({ resource: schemas.resource, argv: defineProtocolArray(defineProtocolString(), { minItems: 1 }),
       inputBase64: roleBase64.optional(), timeoutMs: defineProtocolNumber({ integer: true, minimum: 0 }).nullable().optional(),
       processConfig: defineProtocolObject({ environment: defineProtocolObject({ HOME: roleString, HAPPIER_HOME_DIR: roleString }, closed) }, closed).optional() }, closed),
-    putFileInput: defineProtocolObject({ resource: schemas.resource, guestPath: defineProtocolString({ minLength: 1 }), bytesBase64: roleBase64, mode: defineProtocolNumber({ integer: true, minimum: 0 }).optional() }, closed),
+    putFileInput: defineProtocolObject({ resource: schemas.resource, guestPath: defineProtocolString({ minLength: 1 }),
+      bytesBase64: defineProtocolString({ pattern: roleBase64Pattern, maxLength: MACHINE_PROVISIONER_PUT_FILE_BASE64_MAX_LENGTH_V1 }),
+      mode: defineProtocolNumber({ integer: true, minimum: 0 }).optional() }, closed),
   });
 }

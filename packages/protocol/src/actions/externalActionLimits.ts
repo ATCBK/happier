@@ -1,5 +1,8 @@
 import { measureSerializedValidatedStrictPluginJsonUtf8Bytes } from '../plugins/contributions/strictJsonValue.js';
 
+/** Shared finite HTTP request ceiling for both public Action API origins. */
+export const EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
+
 /** Maximum serialized UTF-8 bytes for one complete public Action response envelope. */
 export const EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES = 24_000_000;
 

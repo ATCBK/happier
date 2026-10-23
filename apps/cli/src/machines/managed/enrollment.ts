@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { readFile, readdir } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import type { ResolvedHomeTarget } from '@happier-dev/cli-common/homeTarget';
 import { resolveManagedCliReleaseChannelSync } from '@happier-dev/cli-common/firstPartyRuntime';
@@ -15,6 +15,7 @@ import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/ma
 import type { SavedSecretRefV1 } from '@happier-dev/protocol';
 import { ManagedMachineControllerError } from './controllerErrors';
 import { REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS, TERMINAL_AUTH_POLL_INTERVAL_MS, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
+import { deliverManagedNativeFile } from './nativeFileDelivery';
 
 export type ManagedNativeBootstrapIO = Readonly<{
   /** Buffered stdout/stderr/status is sufficient; output observers are optional. */
@@ -193,7 +194,8 @@ export async function runManagedMachineEnrollment(input: Readonly<{
           if (mkdirResult.status !== 0) throw new SystemTaskExecutionError('remote_command_failed', 'Native payload staging failed.');
           for (const entry of await readdir(localPath, { withFileTypes: true })) {
             if (!entry.isFile()) throw new SystemTaskExecutionError('invalid_payload', 'The binary payload archive was not a regular file.');
-            await putFile({ path: `${archiveRoot}/${entry.name}`, bytes: await readFile(join(localPath, entry.name)), signal: copySignal });
+            await deliverManagedNativeFile({ localPath: join(localPath, entry.name), guestPath: `${archiveRoot}/${entry.name}`,
+              resource: correlation.resource.value, signal: copySignal }, { exec, putFile });
           }
         },
       });

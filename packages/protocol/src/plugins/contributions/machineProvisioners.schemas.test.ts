@@ -514,7 +514,7 @@ describe('public machine provisioner role schemas', () => {
   it('admits binary native bootstrap payloads through executable and portable role schemas', () => {
     const native = defineProtocolObject({ name: defineProtocolString() }, { policy: 'closed' });
     const roles = defineMachineProvisionerSchemas({ launch: native, resource: native });
-    // A release archive crosses this boundary as one file, not a small control message.
+    // A file fragment is binary data, not a small control message.
     const bytesBase64 = Buffer.alloc(8 * 1024 * 1024, 0xa5).toString('base64');
     const request = { resource: { name: 'guest' }, guestPath: '/tmp/happier.tar.gz', bytesBase64 };
     expect(roles.putFileInput.safeParse(request).success).toBe(true);
@@ -527,6 +527,13 @@ describe('public machine provisioner role schemas', () => {
       expect(roles.putFileInput.safeParse(malformed).success).toBe(false);
       expect(compilePluginJsonSchema(roles.putFileInput.jsonSchema)(malformed)).toBe(false);
     }
+    const maximum = provisioners.MACHINE_PROVISIONER_PUT_FILE_BASE64_MAX_LENGTH_V1;
+    const boundary = { ...request, bytesBase64: 'A'.repeat(maximum) };
+    expect(roles.putFileInput.safeParse(boundary).success).toBe(true);
+    expect(compilePluginJsonSchema(roles.putFileInput.jsonSchema)(boundary)).toBe(true);
+    const oversized = { ...request, bytesBase64: `${boundary.bytesBase64}AAAA` };
+    expect(roles.putFileInput.safeParse(oversized).success).toBe(false);
+    expect(compilePluginJsonSchema(roles.putFileInput.jsonSchema)(oversized)).toBe(false);
   });
   it('accepts an explicit native bootstrap credential without publishing private material', () => {
     const native = defineProtocolObject({}, { policy: 'closed' });

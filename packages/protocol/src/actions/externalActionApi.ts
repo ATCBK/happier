@@ -51,6 +51,7 @@ import {
   EXTERNAL_ACTION_ACTION_ID_MAX_LENGTH,
   EXTERNAL_ACTION_REQUEST_ID_MAX_LENGTH_V1,
   EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
+  EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES,
   isExternalActionResultWithinResponseEnvelopeLimitV1,
   measureExternalActionResultResponseEnvelopeUtf8BytesV1,
 } from './externalActionLimits.js';
@@ -59,12 +60,10 @@ export {
   EXTERNAL_ACTION_ACTION_ID_MAX_LENGTH,
   EXTERNAL_ACTION_REQUEST_ID_MAX_LENGTH_V1,
   EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
+  EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES,
   isExternalActionResultWithinResponseEnvelopeLimitV1,
   measureExternalActionResultResponseEnvelopeUtf8BytesV1,
 };
-
-/** Shared finite HTTP request ceiling for both public Action API origins. */
-export const EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 
 /**
  * Minimum Socket.IO capacity for a server-to-daemon Action request. This

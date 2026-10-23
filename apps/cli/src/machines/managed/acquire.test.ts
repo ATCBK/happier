@@ -3,7 +3,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
-import { createPublicKey, generateKeyPairSync } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync, randomBytes } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import * as filesystem from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -59,6 +60,7 @@ import * as privateFiles from '@/daemon/privateBearerFile';
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES } from '@happier-dev/protocol/actions/externalActionApi';
 import { verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { sealQualifiedConnectedAccountContentEnvelope } from '@happier-dev/protocol';
 import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
@@ -123,7 +125,7 @@ function driver() {
     return createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId: 'home', controller, runtimeRegistry, ...accountInputs });
 }
 describe('creation environment stage', () => {
-    it.each(['recover', 'expire', 'late-confirmation', 'install-recover', 'install-expire'] as const)('keeps Create truthful when controller Home currentness is unavailable during installation or after guest enrollment (%s)', async scenario => {
+    const runHomeRecoveryScenario = async (scenario: 'recover' | 'expire' | 'late-confirmation' | 'install-recover' | 'install-expire' | 'payload-memory') => {
         const root = await filesystem.mkdtemp(join(tmpdir(), 'managed-controller-home-recovery-'));
         const guestHome = join(root, 'guest');
         const payload = join(root, 'payload');
@@ -167,6 +169,20 @@ describe('creation environment stage', () => {
             await filesystem.mkdir(join(root, 'servers', homeId), { recursive: true });
             await filesystem.mkdir(guestHome);
             await filesystem.mkdir(payload);
+            const deliveries: { bytes: number; bodyBytes: number; memory: NodeJS.MemoryUsage }[] = [];
+            const baselineMemory = process.memoryUsage();
+            let expectedPayloadDigest = '';
+            if (scenario === 'payload-memory') {
+                // Synthetic operator fixture, not a product payload build. Repeated
+                // incompressible blocks exceed gzip's window and produce a real large tar.
+                const block = randomBytes(1024 * 1024);
+                const digest = createHash('sha256');
+                const file = await filesystem.open(join(payload, 'large.dat'), 'w');
+                try {
+                    for (let index = 0; index < 192; index++) { await file.write(block); digest.update(block); }
+                } finally { await file.close(); }
+                expectedPayloadDigest = digest.digest('hex');
+            }
             await writeFile(join(root, 'settings.json'), JSON.stringify({ schemaVersion: 5, onboardingCompleted: true, activeServerId: homeId,
                 servers: { [homeId]: { id: homeId, name: 'Test Home', serverUrl, webappUrl: serverUrl,
                     homeConnectionDescriptor: descriptor, createdAt: 1, updatedAt: 1, lastUsedAt: 1 } } }));
@@ -191,6 +207,9 @@ describe('creation environment stage', () => {
                 onNativeRole: async (role, body) => {
                     if (role === 'putFile' && isJsonObject(body)
                         && typeof body.guestPath === 'string' && typeof body.bytesBase64 === 'string') {
+                        if (scenario === 'payload-memory') deliveries.push({ bytes: Buffer.byteLength(body.bytesBase64, 'base64'),
+                            bodyBytes: Buffer.byteLength(JSON.stringify({ ...body, bytesBase64: '' })) + body.bytesBase64.length,
+                            memory: process.memoryUsage() });
                         await filesystem.mkdir(dirname(body.guestPath), { recursive: true });
                         await writeFile(body.guestPath, Buffer.from(body.bytesBase64, 'base64'));
                     }
@@ -248,7 +267,7 @@ describe('creation environment stage', () => {
                 const domain = found.kind === 'found' ? found.operation.domainRef : undefined;
                 if (domain?.kind === 'managedMachine' && domain.bootstrapTask?.prompt) taskId = domain.bootstrapTask.id;
                 return taskId;
-            }, { timeout: 20_000 }).not.toBe('');
+            }, { timeout: scenario === 'payload-memory' ? 120_000 : 20_000 }).not.toBe('');
             const { getLiveSystemTasksRunnerAdapter } = await import('@/capabilities/systemTasks/liveSystemTasksRunner');
             await getLiveSystemTasksRunnerAdapter().respond({ taskId, answer: { approved: true } });
             await work;
@@ -258,6 +277,15 @@ describe('creation environment stage', () => {
             expect(unavailableReads).toBe(scenario === 'expire' ? 2 : scenario === 'recover' || scenario === 'install-recover' ? 1 : 0);
             if (scenario === 'expire' && found.kind === 'found') expect(found.operation.settledAt).toBeUndefined();
             expect(retained.enrolledMachineId).toBe('enrolled-guest');
+            if (scenario === 'payload-memory') {
+                const digest = createHash('sha256');
+                for await (const bytes of createReadStream(join(guestHome, '.happier/cli/current/large.dat'))) digest.update(bytes);
+                expect(digest.digest('hex')).toBe(expectedPayloadDigest);
+                // The real Action body ceiling must include base64, not raw bytes.
+                expect(Math.max(...deliveries.map(delivery => delivery.bytes))).toBeLessThanOrEqual(Math.floor(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES / 4) * 3);
+                expect(Math.max(...deliveries.map(delivery => delivery.bodyBytes))).toBeLessThanOrEqual(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES);
+                expect(deliveries.length).toBeGreaterThan(1);
+            }
         } finally {
             vi.restoreAllMocks();
             vi.unstubAllEnvs();
@@ -268,7 +296,11 @@ describe('creation environment stage', () => {
             await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
             await filesystem.rm(root, { recursive: true, force: true });
         }
-    });
+    };
+    it.each(['recover', 'expire', 'late-confirmation', 'install-recover', 'install-expire'] as const)(
+        'keeps Create truthful when controller Home currentness is unavailable during installation or after guest enrollment (%s)', runHomeRecoveryScenario);
+    it('bounds the payload-memory Action body and preserves a large guest payload through real enrollment',
+        () => runHomeRecoveryScenario('payload-memory'), 180_000);
     it.each(['succeeded', 'skipped'] as const)('retains the original first message across failed setup until exact paid row becomes %s', async state => {
         let retained = ManagedMachineV1Schema.parse({ ...machine, allocation: 'bound', enrolledMachineId: 'guest',
             preset: { id: 'preset', revision: 4 }, environmentSetup: { environment: { setupScript: 'echo admitted' }, state: 'pending' },

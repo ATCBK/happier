@@ -97,6 +97,9 @@ export const defineMachineProvisionerSchemas: <LI, LO, RI, RO, C extends true | 
   resourceInput: ProtocolComposableSchema<Readonly<{ resource: RI }>, Readonly<{ resource: RO }>>;
   powerInput: ProtocolComposableSchema<Readonly<{ resource: RI; intent: MachineProvisionerNativeIntentV1 }>, Readonly<{ resource: RO; intent: MachineProvisionerNativeIntentV1 }>>;
   execInput: ProtocolComposableSchema<Readonly<{ resource: RI; argv: readonly string[]; inputBase64?: string; timeoutMs?: number | null; processConfig?: Readonly<{ environment: Readonly<{ HOME: string; HAPPIER_HOME_DIR: string }> }> }>, Readonly<{ resource: RO; argv: readonly string[]; inputBase64?: string; timeoutMs?: number | null; processConfig?: Readonly<{ environment: Readonly<{ HOME: string; HAPPIER_HOME_DIR: string }> }> }>>;
+  /** One bounded fragment at a host-selected private path. Host assembly owns
+   * atomic publication of the complete archive; confirmed means all bytes of
+   * this fragment were written, including native process settlement. */
   putFileInput: ProtocolComposableSchema<Readonly<{ resource: RI; guestPath: string; bytesBase64: string; mode?: number }>, Readonly<{ resource: RO; guestPath: string; bytesBase64: string; mode?: number }>>;
 }> = /* @__PURE__ */ projectProtocolValue(canonical.defineMachineProvisionerSchemas);
 
