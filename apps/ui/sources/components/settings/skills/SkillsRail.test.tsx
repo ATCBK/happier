@@ -41,6 +41,27 @@ it('retains row render locality when one of 139 listed skills changes', async ()
     } finally { await screen.unmount(); render.mockRestore(); await home.dispose(); }
 });
 
+it('re-evaluates a retained row time status when its parent renders after the existing usage boundary', async () => {
+    const home = await createSkillsSurfaceHarness('https://skills-rail-usage-boundary.test');
+    const now = Date.now();
+    const days30 = 30 * 86_400_000;
+    const items = [skill('aging', { lastUsedAt: now - days30 + 500 }), skill('edited')];
+    const observed = now - days30 - 1;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+        const screen = await renderScreen(<SkillsList variant="page" library={library(items, { usageObservedSince: observed })} />);
+        try {
+            const status = () => screen.findAll(node => node.props.testID === 'skills.rail.row.aging'
+                && Object.hasOwn(node.props, 'status'))[0]?.props.status;
+            expect(status()).toBeNull();
+            clock.mockReturnValue(now + 1000);
+            await screen.update(<SkillsList variant="page" library={library([items[0]!, { ...items[1]!, description: 'Changed' }],
+                { usageObservedSince: observed })} />);
+            expect(status()).toMatchObject({ kind: 'unused' });
+        } finally { await screen.unmount(); }
+    } finally { clock.mockRestore(); await home.dispose(); }
+});
+
 it('moves rendered rows from use groups to personal folders, filters by the route Machine and clears that filter', async () => {
     const home = await createSkillsSurfaceHarness('https://skills-rail-groups.test', [{ key: 'folders', value: { v: 1,
         folders: [{ id: 'writing', name: 'Writing', parentId: null }] } }]);

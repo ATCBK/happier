@@ -5,7 +5,9 @@ import { useMountedActionExecution } from '@/components/approvals/useMountedActi
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
-import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
+import { usePromptLibraryCatalogSelection } from '@/sync/store/usePromptLibraryCatalog';
+import { useShallow } from 'zustand/react/shallow';
+import type { PromptLibraryCatalogValueSnapshot } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { resolveSkillsFirstVisit } from './firstRunEligibility';
 import { buildSkillsFirstRunSelection, skillsFirstRunTurnOnInput } from './skillsFirstRunSelection';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
@@ -17,13 +19,13 @@ export const SKILLS_CHOOSE_ROUTE = SETTINGS_ROUTES.skillsChoose;
 export function useSkillsFirstRun(items: readonly SkillListItemV1[]) {
   const scope = useAccountSettingsScope();
   const scopeKey = scope ? `${scope.serverId}:${scope.accountId}` : null;
-  const catalog = usePromptLibraryCatalogValue('skill-rules', scope);
   const execution = useMountedActionExecution(scope);
   const decidedAt = useLocalSetting('skillsFirstRunDecidedAt');
   const selection = React.useMemo(() => buildSkillsFirstRunSelection(items), [items]);
-  const firstVisit = React.useMemo(() => catalog.status === 'ready' && catalog.value
+  const selectFirstVisit = React.useCallback((catalog: PromptLibraryCatalogValueSnapshot<'skill-rules'>) => catalog.status === 'ready' && catalog.value
     ? resolveSkillsFirstVisit(items, { rules: catalog.value.rules, decidedAt }) : null,
-  [items, catalog.status, catalog.value, decidedAt]);
+  [items, decidedAt]);
+  const firstVisit = usePromptLibraryCatalogSelection('skill-rules', useShallow(selectFirstVisit), scope);
   const [choices, setChoices] = React.useState<Readonly<{ scopeKey: string | null; values: ReadonlyMap<string, boolean> }>>(
     () => ({ scopeKey, values: new Map() }));
   const selectedIds = React.useMemo(() => {

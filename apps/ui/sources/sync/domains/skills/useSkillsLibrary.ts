@@ -12,7 +12,8 @@ import { skillUsageObservedSinceV1 } from '@happier-dev/protocol/prompts/library
 import { isMigratedReachRuleIdV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 import { resolveArtifactOrganizationHeaderV1 } from '@happier-dev/protocol/artifacts/artifactOrganizationV1';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
-import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
+import { usePromptLibraryCatalogSelection } from '@/sync/store/usePromptLibraryCatalog';
+import type { PromptLibraryCatalogValueSnapshot } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { refreshPromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
@@ -128,6 +129,11 @@ const emptyItems: readonly SkillListItemV1[] = Object.freeze([]);
 const emptyUnavailableItems: readonly SkillUnavailableItemV1[] = Object.freeze(
   [],
 );
+const readRules = (snapshot: PromptLibraryCatalogValueSnapshot<'skill-rules'>) => snapshot.value;
+const readRulesError = (snapshot: PromptLibraryCatalogValueSnapshot<'skill-rules'>) =>
+  snapshot.status === 'unavailable' ? snapshot.reason ?? 'library_unavailable' : null;
+const readUsage = (snapshot: PromptLibraryCatalogValueSnapshot<'skill-usage'>) => snapshot.status === 'ready' ? snapshot.value : null;
+const readFolders = (snapshot: PromptLibraryCatalogValueSnapshot<'folders'>) => snapshot.value;
 
 function contentKey(skills: readonly string[]): string {
   return JSON.stringify([...skills].sort());
@@ -166,9 +172,10 @@ export function useSkillsLibrary(
   const skillRevisions = getStorage()(state => state.artifactSkillRevisions);
   const inventoryReady = getStorage()(state => state.isDataReady && state.artifactsLoaded && state.artifactInventoryUnreadyCount === 0);
   const inventoryComplete = inventoryReady && areServerAccountScopesEqual(scope, activeScope);
-  const rules = usePromptLibraryCatalogValue('skill-rules', scope);
-  const usage = usePromptLibraryCatalogValue('skill-usage', scope);
-  const folders = usePromptLibraryCatalogValue('folders', scope);
+  const rules = usePromptLibraryCatalogSelection('skill-rules', readRules, scope);
+  const rulesError = usePromptLibraryCatalogSelection('skill-rules', readRulesError, scope);
+  const usage = usePromptLibraryCatalogSelection('skill-usage', readUsage, scope);
+  const folders = usePromptLibraryCatalogSelection('folders', readFolders, scope);
   const declarations = useAppShellPluginUiDeclarationSources();
   const readsActiveScope = areServerAccountScopesEqual(scope, activeScope);
   const pluginRevision = readsActiveScope ? declarations.skillSourceIdentity : EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY;
@@ -200,7 +207,7 @@ export function useSkillsLibrary(
   }, [scope]);
   // skills.list refreshes unavailable rules through this same catalog owner.
   // Starting it on failure would reopen loading and cancel its own invocation.
-  const canRead = Boolean(scopeKey) && ready && pluginSourcesReady && rules.status !== 'unavailable';
+  const canRead = Boolean(scopeKey) && ready && pluginSourcesReady && rulesError === null;
   const readKey = JSON.stringify([
     scopeKey,
     binding?.revision,
@@ -319,17 +326,17 @@ export function useSkillsLibrary(
     return reconcile(
       snapshot.items,
       snapshot.items.map((item) => {
-        const current = rules.value?.rules.filter(
+        const current = rules?.rules.filter(
           (rule) => rule.skillId === item.skillId,
         ) ?? item.rules;
         const { lastUsedAt: previousUse, ...withoutUse } = item;
-        const lastUsedAt = usage.status === 'ready' && usage.value && Object.hasOwn(usage.value.lastUsedAt, item.skillId)
-          ? usage.value.lastUsedAt[item.skillId] : undefined;
+        const lastUsedAt = usage && Object.hasOwn(usage.lastUsedAt, item.skillId)
+          ? usage.lastUsedAt[item.skillId] : undefined;
         const migratedFromContext = current.some(rule => isMigratedReachRuleIdV1(rule.id));
         // The Action already resolved the safe owned-legacy fallback. Live personal
         // placement (including explicit null) overrides it through the same owner.
         const personalFolderId = resolveArtifactOrganizationHeaderV1({ artifactId: item.skillId,
-          artifactHeadersById: folders.value?.artifactHeadersById, header: {}, owned: false }).folderId;
+          artifactHeadersById: folders?.artifactHeadersById, header: {}, owned: false }).folderId;
         const folderId = isReadOnlySkillProvenanceV1(item.provenance) ? null
           : personalFolderId === undefined ? item.folderId : personalFolderId;
         return JSON.stringify(item.rules) === JSON.stringify(current) && previousUse === lastUsedAt
@@ -337,17 +344,17 @@ export function useSkillsLibrary(
           : { ...withoutUse, rules: current, migratedFromContext, folderId, ...(lastUsedAt === undefined ? {} : { lastUsedAt }) };
       }),
     );
-  }, [snapshot, rules.value, usage.status, usage.value, folders.value]);
+  }, [snapshot, rules, usage, folders]);
   const status: SkillsLibraryStatus =
-    rules.status === 'unavailable'
+    rulesError !== null
       ? 'unavailable'
       : !pluginSourcesReady ? 'loading'
       : state.scopeKey === scopeKey
         ? state.status
         : 'loading';
   const errorCode =
-    rules.status === 'unavailable'
-      ? (rules.reason ?? 'library_unavailable')
+    rulesError !== null
+      ? rulesError
       : state.errorCode;
   return React.useMemo(
     () => ({
@@ -359,10 +366,7 @@ export function useSkillsLibrary(
         snapshot !== null && (status !== 'ready' || inventoryComplete
           && (snapshot.key !== sourceKey || snapshot.pluginRevision !== pluginRevision)),
       errorCode: status === 'unavailable' ? errorCode : null,
-      usageObservedSince:
-        usage.status === 'ready'
-          ? skillUsageObservedSinceV1(usage.value)
-          : null,
+      usageObservedSince: skillUsageObservedSinceV1(usage),
       retry,
     }),
     [
@@ -375,8 +379,7 @@ export function useSkillsLibrary(
       inventoryComplete,
       errorCode,
       retry,
-      usage.status,
-      usage.value,
+      usage,
     ],
   );
 }

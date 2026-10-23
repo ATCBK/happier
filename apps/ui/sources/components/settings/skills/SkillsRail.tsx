@@ -9,7 +9,7 @@ import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
-import { pickMostBlockingCapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { pickMostBlockingCapabilityStatus, type CapabilityStatusKind } from '@/components/capabilities/status/capabilityStatusPresentation';
 import { shortWhereItsOn } from '@/components/capabilities/where/whereItsOnPresentation';
 import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
 import { IconButton } from '@/components/ui/buttons/IconButton';
@@ -38,7 +38,8 @@ import {
   useSkillsLibrary,
   type SkillsLibrary,
 } from '@/sync/domains/skills/useSkillsLibrary';
-import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
+import { usePromptLibraryCatalogSelection } from '@/sync/store/usePromptLibraryCatalog';
+import type { PromptLibraryCatalogValueSnapshot } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { useOpenSkillAddModal } from './add/useOpenSkillAddModal';
@@ -66,6 +67,7 @@ function readParam(value: string | string[] | undefined): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
+const readFolders = (snapshot: PromptLibraryCatalogValueSnapshot<'folders'>) => snapshot.value;
 
 function selectedSkillId(pathname: string): string | null {
   if (!pathname.startsWith(`${SKILLS_COLLECTION_ROUTE}/`)) return null;
@@ -95,6 +97,38 @@ export const SkillsRail = React.memo(function SkillsRail(
 ) {
   const library = useSkillsLibrary();
   return <SkillsList variant={props.variant} library={library} />;
+});
+
+/** Derive row props only when this admitted item or its displayed context changes. */
+const SkillListRow = React.memo(function SkillListRow(props: Readonly<{
+  item: SkillListItemV1;
+  names: ReturnType<typeof useWhereItsOnNames>['names'];
+  installedPlugins: Parameters<typeof skillSource>[2];
+  rail: boolean;
+  selected: boolean | undefined;
+  statusKind: CapabilityStatusKind | null;
+  open: (href: string) => void;
+}>) {
+  const { item, names } = props;
+  return (
+    <CapabilityRow
+      testID={`skills.rail.row.${item.skillId}`}
+      title={item.name}
+      description={item.description}
+      whereSummary={shortWhereItsOn(item.rules, names)}
+      facts={{
+        presentation: 'row',
+        source: skillSource(item, names.machineName, props.installedPlugins),
+        trust: item.trust,
+        cost: { tokensWhenUsed: item.cost.bodyTokens },
+      }}
+      status={props.statusKind ? { kind: props.statusKind } : null}
+      density={props.rail ? 'rail' : 'page'}
+      selected={props.selected}
+      onPress={() => props.open(skillHref(item.skillId))}
+      onPreviewChange={(active) => setPreviewedSkill(active ? item.skillId : null)}
+    />
+  );
 });
 
 export const SkillsList = React.memo(function SkillsList(
@@ -137,7 +171,7 @@ export const SkillsList = React.memo(function SkillsList(
     [library.items, machineFilter, query, searchable],
   );
   const groups = React.useMemo(() => groupSkillsByUse(visible), [visible]);
-  const { value: folders } = usePromptLibraryCatalogValue('folders');
+  const folders = usePromptLibraryCatalogSelection('folders', readFolders);
   // Folder groups replace In use / Off once the person files a skill in a folder (IR-83).
   const folderGroups = React.useMemo(
     () => groupSkillsByFolder(visible, folders),
@@ -194,25 +228,15 @@ export const SkillsList = React.memo(function SkillsList(
   }, [pathname, router]);
 
   const renderRow = (item: SkillListItemV1) => (
-    <CapabilityRow
+    <SkillListRow
       key={item.skillId}
-      testID={`skills.rail.row.${item.skillId}`}
-      title={item.name}
-      description={item.description}
-      whereSummary={shortWhereItsOn(item.rules, names)}
-      facts={{
-        presentation: 'row',
-        source: skillSource(item, names.machineName, pluginUiProjection?.installedPackagesById),
-        trust: item.trust,
-        cost: { tokensWhenUsed: item.cost.bodyTokens },
-      }}
-      status={pickMostBlockingCapabilityStatus(skillStatus(item, { nowMs: Date.now(), usageObservedSince: library.usageObservedSince }), 'row')}
-      density={rail ? 'rail' : 'page'}
+      item={item}
+      names={names}
+      installedPlugins={pluginUiProjection?.installedPackagesById}
+      statusKind={pickMostBlockingCapabilityStatus(skillStatus(item, { nowMs: Date.now(), usageObservedSince: library.usageObservedSince }), 'row')?.kind ?? null}
+      rail={rail}
       selected={rail ? selectedId === item.skillId : undefined}
-      onPress={() => open(skillHref(item.skillId))}
-      onPreviewChange={(active) =>
-        setPreviewedSkill(active ? item.skillId : null)
-      }
+      open={open}
     />
   );
 

@@ -32,6 +32,10 @@ const [{ usePluginSettingsScreenState }, { usePromptLibraryCatalogValue }] = awa
     import('@/components/settings/plugins/model/usePluginSettingsScreenState'), import('@/sync/store/usePromptLibraryCatalog'),
 ]);
 const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const { useRegistrySourceRevision } = await import('./useRegistrySourceRevision');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getPromptLibraryCatalogSnapshot, getPromptLibraryCatalogValue, beginPromptLibraryCatalogRowsLoad,
+    applyPromptLibraryCatalogRowsSnapshot, applyPromptLibraryCatalogAcknowledgedRecord } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 
 async function setupHome(suffix: string) {
     const serverUrl = `https://registry-refresh-${suffix}.test`;
@@ -68,6 +72,29 @@ async function setup(suffix: string, refresh = true) {
 }
 
 describe('registry item last-known reads through the Account and HTTP owners', () => {
+    it('renders registry observers only for changed source facts, not read freshness', async () => {
+        const { fixture } = await setupHome('source-render-cost');
+        let renders = 0;
+        const hook = await renderHook(() => { renders++; return useRegistrySourceRevision(); });
+        const scope = storage.getState().settingsScope!;
+        await waitForHomeGovernance(() => expect(getPromptLibraryCatalogValue(scope, 'registry-sources').status).toBe('ready'));
+        const received = getPromptLibraryCatalogSnapshot(scope)!;
+        const before = { renders, revision: hook.getCurrent(), requests: fixture.requests.length };
+        for (let i = 0; i < 5; i++) {
+            await act(async () => beginPromptLibraryCatalogRowsLoad(scope, ['registry-sources']));
+            await act(async () => applyPromptLibraryCatalogRowsSnapshot(scope, ['registry-sources'], received, true));
+        }
+        expect(renders - before.renders).toBe(0);
+        expect(hook.getCurrent()).toBe(before.revision);
+        expect(fixture.requests).toHaveLength(before.requests);
+        const row = received.catalog.status === 'ready' || received.catalog.status === 'partial'
+            ? received.catalog.rows.find(row => row.record.key === 'registry-sources') : null;
+        if (!row) throw new Error('Expected received registry source row');
+        await act(async () => applyPromptLibraryCatalogAcknowledgedRecord(scope, row.record, row.revision + 1, true));
+        expect(renders - before.renders).toBe(1);
+        expect(hook.getCurrent()).not.toBe(before.revision);
+        await hook.unmount();
+    });
     it('reads the first skills.sh detail through the real mounted Action before the source catalog is warm', async () => {
         const { createPromptRegistrySkillFixture } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
         const { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/registries');

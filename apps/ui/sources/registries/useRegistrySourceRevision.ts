@@ -1,13 +1,15 @@
 import * as React from 'react';
-import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
+import { usePromptLibraryCatalogSelection } from '@/sync/store/usePromptLibraryCatalog';
+import type { PromptLibraryCatalogValueSnapshot } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { projectPluginRegistrySources } from './pluginRegistrySources';
 
+const readRevision = (snapshot: PromptLibraryCatalogValueSnapshot<'registry-sources'>) => snapshot.revision;
 /** Existing Account row and declaration publication jointly invalidate registry reads. */
 export function useRegistrySourceRevision(): string {
-    const catalog = usePromptLibraryCatalogValue('registry-sources');
+    const revision = usePromptLibraryCatalogSelection('registry-sources', readRevision);
     const registrySourcesById = useAppShellPluginUiProjection(value => value.pluginUiProjection?.registrySourcesById);
-    return React.useMemo(() => JSON.stringify([catalog.revision,
+    return React.useMemo(() => JSON.stringify([revision,
         projectPluginRegistrySources(registrySourcesById ? { registrySourcesById } : null),
-    ]), [catalog.revision, registrySourcesById]);
+    ]), [revision, registrySourcesById]);
 }

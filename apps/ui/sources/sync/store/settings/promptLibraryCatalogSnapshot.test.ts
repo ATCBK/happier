@@ -7,6 +7,17 @@ const scope = { serverId: 'home', accountId: 'account' };
 const catalog = { status: 'ready' as const, rows: [{ record: { key: 'folders' as const,
     value: { v: 1 as const, folders: [{ id: 'folder', name: 'Folder' }] } }, revision: 3 }], tombstones: [], diagnostics: [] };
 describe('Prompt library scoped publications', () => {
+    it('retains drafted rule values when only their read authority enters loading', () => {
+        const projection = { catalog: { ...catalog, rows: [{ revision: 1, record: { key: 'skill-rules' as const,
+            value: { v: 1 as const, rules: [] } } }] }, rawSettings: {}, sourceSettingsVersion: 1 };
+        applyPromptLibraryCatalogSnapshot(scope, projection, true);
+        publishPromptLibrarySkillRulesDraft(scope, 'skill', [{ id: 'pending-rule', target: { t: 'allMachines' },
+            enabled: true, createdAt: 1, updatedAt: 1 }]);
+        const before = getPromptLibraryCatalogValue(scope, 'skill-rules').value;
+        beginPromptLibraryCatalogRowsLoad(scope, ['skill-rules']);
+        expect(getPromptLibraryCatalogValue(scope, 'skill-rules').status).toBe('loading');
+        expect(getPromptLibraryCatalogValue(scope, 'skill-rules').value).toBe(before);
+    });
     it('publishes a pending row transition once while repeated wakes await that same read', () => {
         const record = { key: 'skill-rules' as const, value: { v: 1 as const,
             rules: Array.from({ length: 139 }, (_, i) => ({ id: `rule-${i}`, skillId: `skill-${i}`,

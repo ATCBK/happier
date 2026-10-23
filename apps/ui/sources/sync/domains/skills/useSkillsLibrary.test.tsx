@@ -18,7 +18,8 @@ const nativeScan = vi.hoisted(() => vi.fn<(input: unknown) => Promise<unknown>>(
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: nativeScan }));
 const { storage } = await import('@/sync/domains/state/storage');
 const { observePromptLibraryCatalog, resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
-const { getPromptLibraryCatalogValue, resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
+const { getPromptLibraryCatalogValue, getPromptLibraryCatalogSnapshot, beginPromptLibraryCatalogRowsLoad,
+    applyPromptLibraryCatalogRowsSnapshot, resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { useSkillsLibrary, readSkillsLibraryItems } = await import('./useSkillsLibrary');
 const { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiDeclarationSources } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
@@ -26,7 +27,7 @@ const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains
 const { useSkillsFirstRun } = await import('@/components/settings/skills/firstRun/useSkillsFirstRun');
 const { useReachProjection } = await import('@/sync/domains/capabilities/reach/useReachProjection');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
+const { adoptHomeProfile, setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
 const { SkillFoundListResultV1Schema, SKILL_MACHINE_ACTION_OUTPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1');
 
 afterEach(() => {
@@ -116,6 +117,32 @@ it('does not rerender the real library for executable-only AppShell updates', as
         expect(library?.items).toBe(retainedItems);
         expect(home.requests).toHaveLength(reads);
     } finally { await screen.unmount(); await home.dispose(); }
+});
+
+it('does not render read-only Skills observers for unchanged rule freshness transitions', async () => {
+    const home = await createSeededSkillsHome('https://skills-rule-freshness-cost.test', { skills: [{ id: 'stable-rules' }],
+        records: [{ key: 'skill-rules', value: { v: 1, rules: [{ id: 'returning-rule', skillId: 'stable-rules',
+            target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 }] } }] });
+    let libraryRenders = 0;
+    let firstRunRenders = 0;
+    const library = await renderHook(() => { libraryRenders++; return useSkillsLibrary(); });
+    await vi.waitFor(() => expect(library.getCurrent().status).toBe('ready'));
+    const items = library.getCurrent().items;
+    const firstRun = await renderHook(() => { firstRunRenders++; return useSkillsFirstRun(items); });
+    try {
+        await flushHookEffects();
+        expect(firstRun.getCurrent().firstVisit).toBeNull();
+        const scope = library.getCurrent().scope!;
+        const received = getPromptLibraryCatalogSnapshot(scope)!;
+        const before = { library: libraryRenders, firstRun: firstRunRenders, reads: home.requests.length };
+        for (let i = 0; i < 5; i++) {
+            await act(async () => beginPromptLibraryCatalogRowsLoad(scope, ['skill-rules']));
+            await act(async () => applyPromptLibraryCatalogRowsSnapshot(scope, ['skill-rules'], received, true));
+        }
+        expect(libraryRenders - before.library).toBe(0);
+        expect(firstRunRenders - before.firstRun).toBe(0);
+        expect(home.requests).toHaveLength(before.reads);
+    } finally { await firstRun.unmount(); await library.unmount(); await home.dispose(); }
 });
 
 it('does not serialize unchanged Skills declarations when the real library observes a new declaration publication', async () => {
@@ -383,6 +410,7 @@ it('publishes the rail library and rules while native inventory is pending, then
         canonicalServerUrl: 'https://skills-pending-native.test', revision: 1,
         endpoints: [{ kind: 'https', url: 'https://skills-pending-native.test' }] } });
     if (!qualifiedHome.serverIdentityId) throw new Error('Expected qualified Home');
+    await setActiveServerId(qualifiedHome.id);
     const scope = { serverId: qualifiedHome.serverIdentityId, accountId: 'artifact-account' };
     const header = PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2', title: 'rail-skill', bundleSchemaId: 'skills.skill_md_v1' });
     const body = PromptBundleBodyV1Schema.parse({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [{ path: 'SKILL.md', contentKind: 'utf8',
@@ -396,7 +424,7 @@ it('publishes the rail library and rules while native inventory is pending, then
     const scan = createDefaultActionExecutor().execute('skills.found.list', { machineId: 'native-machine' }, {
         serverId: scope.serverId, surface: 'ui', authority: 'present_user',
     }).finally(() => { scanSettled = true; });
-    storage.setState({ settingsScope: scope, profileScope: scope, isDataReady: true, artifactsLoaded: false, machines: {},
+    storage.setState({ settingsScope: scope, profileScope: scope, isDataReady: true, artifactsLoaded: false, machines: {}, machineDisplayById: {},
         machineListByServerId: { [scope.serverId]: [] }, machineListStatusByServerId: { [scope.serverId]: 'loading' } });
     const hook = await renderHook(() => ({ library: useSkillsLibrary(), reach: useReachProjection('skill', 'rail-skill') }));
     try {
@@ -409,8 +437,10 @@ it('publishes the rail library and rules while native inventory is pending, then
         const readsBeforeMachine = libraryReads;
         const machine = createMachineFixture({ id: 'native-machine', active: true, activeAt: Date.now() });
         machine.metadata = { ...machine.metadata!, platform: 'linux', agentInventory: { checkedAt: 2, installedAgentIds: ['codex'] } };
-        await act(async () => storage.setState({ machines: { [machine.id]: machine },
-            machineListByServerId: { [scope.serverId]: [machine] }, machineListStatusByServerId: { [scope.serverId]: 'idle' } }));
+        await act(async () => {
+            storage.getState().applyMachines([machine], true, { sourceServerId: scope.serverId, sourceAccountId: scope.accountId });
+            storage.getState().markMachineListSettled(scope.serverId);
+        });
         await vi.waitFor(() => expect(hook.getCurrent().reach).toMatchObject([{ machineId: machine.id, agents: [{ agentId: 'codex', enabled: true }] }]));
         expect(hook.getCurrent().library.items).toBe(rows);
         expect(libraryReads).toBe(readsBeforeMachine);
@@ -497,7 +527,7 @@ it.each([false, true])('starts cold content before rules and preserves revision 
     await home.boundary.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({ id: 'cold-skill',
         header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: JSON.stringify(body) }),
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER }) });
-    storage.setState({ isDataReady: true, artifactsLoaded: false, artifacts: {} });
+    storage.setState({ isDataReady: true, artifactsLoaded: false, artifacts: {}, artifactSkillRevisions: {}, artifactInventoryUnreadyCount: 0 });
     const hook = await renderHook(() => useSkillsLibrary());
     try {
         // The real Action must reach the content transport while the rules census is held.

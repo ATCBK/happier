@@ -3,12 +3,12 @@ import { PromptLibraryRecordV1Schema, type PromptLibraryCatalogKeyV1 } from '@ha
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { observePromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { getPromptLibraryCatalogValue, subscribePromptLibraryCatalogSnapshots, type PromptLibraryValueV1 } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
+import { getPromptLibraryCatalogValue, subscribePromptLibraryCatalogSnapshots, type PromptLibraryCatalogValueSnapshot, type PromptLibraryValueV1 } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { writePromptLibraryRecord } from '@/sync/api/account/apiPromptLibraryCatalog';
 
 const unavailableScope = Object.freeze({ status: 'unavailable', value: null, revision: 'absent',
     sourceSettingsVersion: null, stale: true, reason: 'scope-unavailable' } as const);
-export function usePromptLibraryCatalogValue<K extends PromptLibraryCatalogKeyV1>(key: K, requestedScope?: ServerAccountScope | null) {
+function usePromptLibraryCatalogSource<K extends PromptLibraryCatalogKeyV1>(key: K, requestedScope?: ServerAccountScope | null) {
     const activeScope = useAccountSettingsScope();
     const scope = requestedScope === undefined ? activeScope : requestedScope;
     const explicitlyUnavailable = requestedScope === null;
@@ -18,6 +18,19 @@ export function usePromptLibraryCatalogValue<K extends PromptLibraryCatalogKeyV1
     React.useEffect(() => captured ? observePromptLibraryCatalog(captured) : undefined, [captured]);
     const read = React.useCallback(() => explicitlyUnavailable ? unavailableScope : getPromptLibraryCatalogValue(captured, key),
         [captured, explicitlyUnavailable, key]);
+    return { captured, read };
+}
+
+/** Read-only observers select displayed facts; writers retain the complete authority/CAS snapshot. */
+export function usePromptLibraryCatalogSelection<K extends PromptLibraryCatalogKeyV1, T>(key: K,
+    select: (snapshot: PromptLibraryCatalogValueSnapshot<K>) => T, requestedScope?: ServerAccountScope | null): T {
+    const { read } = usePromptLibraryCatalogSource(key, requestedScope);
+    const readSelection = React.useCallback(() => select(read()), [read, select]);
+    return React.useSyncExternalStore(subscribePromptLibraryCatalogSnapshots, readSelection, readSelection);
+}
+
+export function usePromptLibraryCatalogValue<K extends PromptLibraryCatalogKeyV1>(key: K, requestedScope?: ServerAccountScope | null) {
+    const { captured, read } = usePromptLibraryCatalogSource(key, requestedScope);
     const snapshot = React.useSyncExternalStore(subscribePromptLibraryCatalogSnapshots, read, read);
     const write = React.useCallback(async (value: PromptLibraryValueV1<K>) => {
         if (!captured || snapshot.status !== 'ready' || snapshot.stale) throw new Error('Prompt library catalog is unavailable');

@@ -39,7 +39,9 @@ function withSkillRuleDrafts(snapshot: StoredSnapshot, drafts = snapshot.skillRu
     if (!base?.value || !drafts?.size) return { ...snapshot, skillRuleDrafts: drafts, skillRulesView: base };
     const rules = [...base.value.rules.filter(rule => !drafts.has(rule.skillId)),
         ...[...drafts].flatMap(([skillId, rules]) => rules.map(rule => ({ ...rule, skillId })))];
-    const next = { ...base, value: { ...base.value, rules } };
+    const value = { ...base.value, rules };
+    const previousValue = snapshot.skillRulesView?.value;
+    const next = { ...base, value: previousValue && JSON.stringify(previousValue) === JSON.stringify(value) ? previousValue : value };
     const view = snapshot.skillRulesView && JSON.stringify(snapshot.skillRulesView) === JSON.stringify(next) ? snapshot.skillRulesView : next;
     return { ...snapshot, skillRuleDrafts: drafts, skillRulesView: view };
 }
