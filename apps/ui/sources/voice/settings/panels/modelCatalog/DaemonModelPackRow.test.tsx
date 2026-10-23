@@ -6,10 +6,11 @@ import 'fake-indexeddb/auto';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
 import { t } from '@/text';
 import { listModelPackCatalogEntries } from '@happier-dev/protocol';
-import { DaemonVoiceInferenceModelStatusSchema, DaemonVoiceInferenceModelsListResponseSchema,
-    DaemonVoiceInferenceModelsStatusResponseSchema, DaemonVoiceInferenceModelsInstallResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
+import { DaemonVoiceInferenceModelStatusSchema,
+    DaemonVoiceInferenceModelsInstallResponseSchema } from '@happier-dev/protocol/daemon/voiceInference';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { answerVoiceModelCatalogRpcRequest } from '@/dev/testkit/harness/voiceModelCatalogRpcBoundary';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
@@ -202,8 +203,8 @@ describe('DaemonModelPackRow', () => {
             runtimeSupported: true, installState: 'not_installed', progress: null, lastError: null, updatedAtMs: 0,
         });
         reply = request => {
-            if (request.method.endsWith(':daemon.voiceInference.models.list')) return DaemonVoiceInferenceModelsListResponseSchema.parse({ ok: true, models: [status] });
-            if (request.method.endsWith(':daemon.voiceInference.models.status')) return DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [] });
+            const catalog = answerVoiceModelCatalogRpcRequest(request, [status]);
+            if (catalog) return catalog;
             if (request.method.endsWith(':daemon.voiceInference.models.install')) return DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: false, error: 'daemon model request failed', errorCode: 'internal_error' });
             throw new Error(`Unexpected model RPC: ${request.method}`);
         };
@@ -223,8 +224,8 @@ describe('DaemonModelPackRow', () => {
             runtimeSupported: true, installState: 'installed', progress: null, lastError: null, updatedAtMs: 0,
         });
         reply = request => {
-            if (request.method.endsWith(':daemon.voiceInference.models.list')) return DaemonVoiceInferenceModelsListResponseSchema.parse({ ok: true, models: [status] });
-            if (request.method.endsWith(':daemon.voiceInference.models.status')) return DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [] });
+            const catalog = answerVoiceModelCatalogRpcRequest(request, [status]);
+            if (catalog) return catalog;
             throw new Error(`Unexpected model RPC: ${request.method}`);
         };
         const screen = await renderScreen(<SelectedRowOwner packId={canonicalPackId} kind="tts_sherpa" anchored />);

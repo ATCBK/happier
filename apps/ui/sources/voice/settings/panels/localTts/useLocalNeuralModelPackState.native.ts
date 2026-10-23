@@ -5,7 +5,13 @@ import { t } from '@/text';
 import type { ModelPackRowStatus } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 import { isModelPackCancellation } from '@/voice/modelPacks/installer/network';
 import { findRunningModelPackInstall, getModelPackInstallSummary } from '@/voice/modelPacks/installer.native';
-import { invokeVoiceDeviceModelPackOperation } from '@/voice/settings/voiceDeviceModelPackOperation.native';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { resumeActionExecutionResult } from '@/components/approvals/actionApprovalContinuation';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
+import { useVoiceSttSettingRefs } from '@/voice/settings/useVoiceSttSettingRefs';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { describeModelPackInstallError } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
@@ -18,12 +24,20 @@ type RunningInstall = NonNullable<Awaited<ReturnType<typeof findRunningModelPack
 /** Native STT and TTS share settings state; consent and installer admission live in the operation owner. */
 export function useLocalNeuralModelPackState(params: {
   packId: string;
-  manifestUrl: string | null;
   role?: 'stt_sherpa' | 'tts_sherpa';
   enabled?: boolean;
+  /** Publication controls observation only; manual preparation is admitted by its Action owner. */
+  readEnabled?: boolean;
 }) {
   const role = params.role ?? 'tts_sherpa';
   const enabled = params.enabled ?? true;
+  const readEnabled = params.readEnabled ?? true;
+  const settingsScope = useAccountSettingsScope();
+  const sttSettings = useVoiceSttSettingRefs();
+  const approval = useActionApprovalContinuation({
+    scopeKey: JSON.stringify(settingsScope), serverId: settingsScope?.serverId ?? '',
+    onExecuted: () => {}, openOnRequest: true,
+  });
   const selectionRef = React.useRef({ packId: params.packId, role, enabled });
   React.useLayoutEffect(() => {
     // Suspended replacement renders must not retarget a committed operation.
@@ -44,7 +58,7 @@ export function useLocalNeuralModelPackState(params: {
     && selectionRef.current.role === role, [enabled, params.packId, role]);
 
   const refreshInstallState = React.useCallback(async () => {
-    if (!isCurrent()) return;
+    if (!isCurrent() || !readEnabled) return;
     const accountLifetime = captureActiveServerAccountScopeCurrentness();
     try {
       const summary = await getModelPackInstallSummary({ packId: params.packId });
@@ -62,7 +76,7 @@ export function useLocalNeuralModelPackState(params: {
       setModelStatus((cur) => cur === 'downloading' ? cur : 'idle');
       setUpdateCheckedRemote(null);
     }
-  }, [isCurrent, params.packId]);
+  }, [isCurrent, params.packId, readEnabled]);
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -106,26 +120,55 @@ export function useLocalNeuralModelPackState(params: {
         setModelStatus('downloading');
         setDownloadProgress(null);
       }
-      const result = following ? await following.follow({ signal: controller.signal,
-        onProgress: progress => { if (current()) setDownloadProgress(progress); },
-      }).then(() => ({ status: 'completed' as const })) : await invokeVoiceDeviceModelPackOperation({
-        operation, packId: params.packId, role, manifestUrl: params.manifestUrl,
-        signal: controller.signal, isCurrent: current,
-        onDownloadStarted: () => {
-          if (!current()) return;
-          setModelStatus('downloading');
-          setDownloadProgress(null);
+      let operationError: unknown;
+      const setting = role === 'stt_sherpa'
+        ? sttSettings[operation === 'prepare' ? 'sttPrepareModel' : operation === 'remove' ? 'sttRemoveModel' : 'sttUpdateModel']
+        : VOICE_CONVERSATIONS_SETTINGS.settings[operation === 'prepare' ? 'ttsPrepareModel' : operation === 'remove' ? 'ttsRemoveModel' : 'ttsUpdateModel'];
+      const execute = createFrontDoorActionExecute(undefined, {
+        hostActionApprovalLifetime: { actionId: 'settings.invoke', signal: controller.signal, surface: 'ui' },
+        onBlockingApprovalPending: ({ artifactId, signal }) => {
+          if (!current() || !('scope' in accountLifetime)) return;
+          approval.requestApproval({ artifactId, scope: accountLifetime.scope, signal,
+            refreshAfterExecution: false, onExecuted: async () => 'ignored' });
         },
-        onProgress: (progress) => { if (current()) setDownloadProgress(progress); },
-        onUpdateChecked: (status) => {
-          if (!current()) return;
-          checkedUpdateAvailable = status.updateAvailable;
-          setUpdateCheckedRemote(status);
+        voiceModelPackPresentation: {
+          isCurrent: current,
+          onError: error => { operationError = error; },
+          onDownloadStarted: () => {
+            if (!current()) return;
+            setModelStatus('downloading');
+            setDownloadProgress(null);
+          },
+          onProgress: progress => { if (current()) setDownloadProgress(progress); },
+          onUpdateChecked: status => {
+            if (!current()) return;
+            checkedUpdateAvailable = status.updateAvailable;
+            setUpdateCheckedRemote(status);
+          },
         },
       });
+      const invoke = async () => {
+        if (!('scope' in accountLifetime)) return { status: 'cancelled' as const };
+        const actionInput = { anchor: setting.anchor, input: { kind: 'model_pack' as const, packId: params.packId } };
+        const initial = await execute('settings.invoke', actionInput, {
+          surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+          serverId: accountLifetime.scope.serverId, expectedAccountId: accountLifetime.scope.accountId,
+          signal: controller.signal,
+        });
+        const result = await resumeActionExecutionResult({ result: initial, actionId: 'settings.invoke',
+          actionInput, scope: accountLifetime.scope, signal: controller.signal, onApprovalPending: approval.requestApproval });
+        if (operationError !== undefined) throw operationError;
+        return result.ok ? SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(result.result)
+          : { status: 'cancelled' as const };
+      };
+      const result = following ? await following.follow({ signal: controller.signal,
+        onProgress: progress => { if (current()) setDownloadProgress(progress); },
+      }).then(() => ({ status: 'completed' as const })) : await invoke();
       if (!current()) return;
       if (result.status === 'unavailable') {
-        if (result.reason === 'model_manifest_unavailable') {
+        if (result.reason === 'model_runtime_unsupported') {
+          await Modal.alert(t('common.error'), t('settingsVoice.local.kokoro.alerts.runtimeUnsupported.body'));
+        } else if (result.reason === 'model_manifest_unavailable') {
           await Modal.alert(t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
             t('settingsVoice.local.kokoro.alerts.missingManifest.body'));
         } else if (result.reason === 'model_not_installed') {
@@ -182,7 +225,7 @@ export function useLocalNeuralModelPackState(params: {
         }
       }
     }
-  }, [installed, isCurrent, params.manifestUrl, params.packId, refreshInstallState, role]);
+  }, [approval.requestApproval, installed, isCurrent, params.packId, refreshInstallState, role, sttSettings]);
 
   const runOperationRef = React.useRef(runOperation);
   React.useLayoutEffect(() => { runOperationRef.current = runOperation; }, [runOperation]);
@@ -196,13 +239,13 @@ export function useLocalNeuralModelPackState(params: {
     setInstallSummary(null);
     setUpdateCheckedRemote(null);
     fireAndForget((async () => {
-      if (!isCurrent()) return;
+      if (!isCurrent() || !readEnabled) return;
       const running = await findRunningModelPackInstall({ packId: params.packId, kind: role });
       if (!isCurrent()) return;
       if (running) await runOperationRef.current('prepare', running);
       else await refreshInstallState();
     })(), { tag: 'useLocalNeuralModelPackState.followRunningInstall' });
-  }, [isCurrent, params.packId, refreshInstallState, role]);
+  }, [isCurrent, params.packId, readEnabled, refreshInstallState, role]);
 
   const prepareModel = React.useCallback(() => runOperation('prepare'), [runOperation]);
   const cancelPrepare = React.useCallback(() => { prepareAbortRef.current?.abort(); }, []);

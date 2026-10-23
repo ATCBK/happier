@@ -48,6 +48,7 @@ vi.mock('react-native-unistyles', async () => {
 });
 vi.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 vi.mock('@hugeicons/react-native', () => ({ HugeiconsIcon: () => null }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 // Credential settings never starts the unavailable vendor conversation SDK.
 vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: () => { throw new Error('Unexpected ElevenLabs conversation start'); } } }));
 vi.mock('@/utils/web/radixCjs', async () => {
@@ -511,6 +512,72 @@ afterEach(async () => {
 });
 
 describe('VoiceCredentialSourceField → admitted Account purpose transaction', () => {
+  it('refuses the exact source operation before either write while adjacent Settings writes remain allowed', async () => {
+    account!.replaceSettings(settingsParse({ ...account!.persistedSettings, actionsSettingsV1: {
+      v: 1, actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } },
+    } }));
+    await renderField();
+    const receipt = await choose(optionId(codexTarget));
+    expect(account!.settingsWrites).toEqual([]);
+    expect(writes).toEqual([]);
+    expect(binding()).toBeUndefined();
+    expect(purposes.bindings).toEqual([]);
+    expect(revision).toBe(9);
+    expect(receipt).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const { PROMPTS_CONTEXT_SETTINGS } = await import('@/components/settings/prompts/context/promptsContextSettings');
+    const adjacent = await createDefaultActionExecutor().execute('settings.set', {
+      anchor: PROMPTS_CONTEXT_SETTINGS.settings.memoryUseInNewSessions.anchor, value: false,
+    }, { surface: 'ui', authority: 'present_user', serverId: account!.scope.serverId,
+      expectedAccountId: account!.scope.accountId, actionCaller: { kind: 'host' } });
+    expect(adjacent.ok).toBe(true);
+    expect(account!.persistedSettings.memoryUseInNewSessions).toBe(false);
+  });
+  it('lets an Agent select and clear sources through the public declaration and versioned Settings read', async () => {
+    await renderField();
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const { SettingsDeclarationActionOutputSchemasV1 } = await import('@happier-dev/protocol/actions/settingsDeclarationActionFamily');
+    const { PROMPTS_CONTEXT_SETTINGS } = await import('@/components/settings/prompts/context/promptsContextSettings');
+    const executor = createDefaultActionExecutor();
+    const context = { surface: 'agent' as const, authority: 'account_automation' as const,
+      serverId: account!.scope.serverId, expectedAccountId: account!.scope.accountId,
+      actionCaller: { kind: 'host' as const } };
+    const missingTarget = await executor.execute('settings.invoke', {
+      anchor: `voiceConversations.provider.${buildQualifiedPluginContributionKey(contribution)}.credentialSource`,
+      input: { kind: 'voice_credential_source', credentialSlotId: credentials.slot.id,
+        expectedSettingsVersion: storage.getState().settingsVersion,
+        selection: { kind: 'connectedAccount', target: { ...codexTarget,
+          account: { ...codexTarget.account, accountId: 'missing-account' } } },
+      },
+    }, context);
+    expect(missingTarget.ok).toBe(true);
+    expect(account!.settingsWrites).toEqual([]);
+    expect(writes).toEqual([]);
+    if (!missingTarget.ok) throw new Error('Expected typed source unavailability');
+    expect(SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(missingTarget.result))
+      .toMatchObject({ status: 'unavailable', reason: 'credential_source_unavailable' });
+    for (const selection of [{ kind: 'connectedAccount', target: codexTarget }, { kind: 'savedSecret' }, { kind: 'none' }] as const) {
+      const version = await executor.execute('settings.get', {
+        anchor: PROMPTS_CONTEXT_SETTINGS.settings.memoryUseInNewSessions.anchor, includeVersion: true,
+      }, context);
+      expect(version.ok).toBe(true);
+      if (!version.ok) throw new Error('Expected public versioned Settings read');
+      const snapshot = SettingsDeclarationActionOutputSchemasV1['settings.get'].parse(version.result);
+      const result = await executor.execute('settings.invoke', {
+        anchor: `voiceConversations.provider.${buildQualifiedPluginContributionKey(contribution)}.credentialSource`,
+        input: { kind: 'voice_credential_source', credentialSlotId: credentials.slot.id,
+          expectedSettingsVersion: snapshot.settingsVersion, selection },
+      }, context);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('Expected public source selection');
+      expect(SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(result.result))
+        .toMatchObject({ status: 'completed', value: { status: 'applied', selection } });
+      expect(binding()).toMatchObject({ credentialSource: { kind: selection.kind } });
+      if (selection.kind === 'connectedAccount') assertAccountSelection();
+      else expect(purposes.bindings).toEqual([]);
+    }
+    expect(writes.map(write => write.expectedRevision)).toEqual([9, 10, 11]);
+  });
   it('renders only the canonical source selector for a Connected Account-only declared conversation and persists its exact binding', async () => {
     const connectedOnly = VoiceProviderContributionSchema.parse({ ...declaration,
       credentials: { ...credentials, sources: credentials.sources.filter(source => source.kind === 'connectedAccount') },

@@ -114,6 +114,7 @@ const sherpaNative = { initialize: nativeInitialize, cancelInitialization: nativ
 const getOptionalHappierSherpaNativeModule = () => nativeAvailable ? sherpaNative : null;
 vi.mock('@happier-dev/sherpa-native', () => ({ getOptionalHappierSherpaNativeModule }));
 // Node selects portable sentinels; bind complete real native exports, not policy.
+vi.mock('@/voice/settings/voiceDeviceModelPackOperation', () => import('@/voice/settings/voiceDeviceModelPackOperation.native'));
 vi.mock('@/voice/kokoro/runtime/synthesizeKokoroWav', () => import('@/voice/kokoro/runtime/synthesizeKokoroWav.native'));
 vi.mock('@/voice/kokoro/assets/readInstalledKokoroVoices', () => import('@/voice/kokoro/assets/readInstalledKokoroVoices.native'));
 const nativeRequire = createRequire(import.meta.url);

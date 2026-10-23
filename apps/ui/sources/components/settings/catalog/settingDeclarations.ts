@@ -409,12 +409,16 @@ export function builtInSettingUiDeclaration(anchor: string, labelVariant?: strin
 }
 
 /** Picker preferences have portable value owners without pretending to be searchable page rows. */
-export function readBuiltInAccountSettingUiRef(anchor: string): SettingRef | null {
+export function readBuiltInAccountSettingUiRef(anchor: string, ownerBinding?: Readonly<{
+    owner: string;
+    storage: Extract<SettingStorageBinding, { scope: 'account'; kind: 'owner' }>;
+}>): SettingRef | null {
     const portable = readBuiltInSettingDeclarationV1(anchor);
     const labels = portableLabelsByAnchor.get(anchor);
     if (!portable || !labels || portable.operation) return null;
-    const declaration = projectPortableDeclaration(anchor, {});
-    if (declaration.storage?.scope !== 'account' || !('key' in declaration.storage)) return null;
+    if (ownerBinding && portable.storage?.owner !== ownerBinding.owner) return null;
+    const declaration = projectPortableDeclaration(anchor, ownerBinding ? { storage: ownerBinding.storage } : {});
+    if (declaration.storage?.scope !== 'account' || !('key' in declaration.storage) && !ownerBinding) return null;
     return { ...declaration, anchor, sectionId: portable.sectionId,
         sectionTitleKey: labels.sectionTitleKey, featureId: labels.featureId };
 }

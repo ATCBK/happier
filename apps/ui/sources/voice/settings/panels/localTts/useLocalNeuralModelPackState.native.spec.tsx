@@ -1,9 +1,12 @@
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
 import { KOKORO_DEFAULT_TTS_PACK_ID } from '@happier-dev/protocol/voice/modelPacks/catalog';
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 const boundary = createVoiceSpeechOutputBoundary({ getAccount: () => {
   throw new Error('Device model preparation must not dispatch a daemon RPC');
 } });
@@ -18,17 +21,46 @@ const { t } = await import('@/text');
 const alert = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
 
 const { useLocalNeuralModelPackState } = await import('./useLocalNeuralModelPackState.native');
-const input = { packId: KOKORO_DEFAULT_TTS_PACK_ID, manifestUrl: null };
+const { createVoiceSettingsAccountTestHarness } = await import('../voiceSettingsAccountTestHarness');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+const input = { packId: KOKORO_DEFAULT_TTS_PACK_ID };
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 
 describe('useLocalNeuralModelPackState (native)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     ({ filesystem } = boundary.reset());
     boundary.platform.value = 'ios';
     boundary.setNativeAvailable(false);
     alert.mockClear();
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({
+      actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.invoke': ['ui'], 'settings.set': ['ui'] } },
+      voice: { providerId: 'local_conversation', providers: { local_conversation: { schemaVersion: 1, config: {
+        stt: { provider: 'local_neural', localNeural: { execution: 'device', assetId: input.packId } },
+        tts: { provider: 'local_neural', localNeural: { execution: 'device', assetId: input.packId } },
+      } } } },
+    }));
   });
-  afterEach(() => { standardCleanup(); boundary.disposeNativeSdkBridge(); vi.unstubAllGlobals(); });
+  afterEach(async () => { standardCleanup(); boundary.disposeNativeSdkBridge(); vi.unstubAllGlobals(); await account.dispose(); });
   afterAll(async () => { alert.mockRestore(); await boundary.disposeAudioSession(); });
+
+  it('refuses manual native model operations through disabled settings.invoke without blocking an adjacent setting', async () => {
+    const fetch = vi.fn(async () => { throw new Error('A refused model operation must not download'); });
+    vi.stubGlobal('fetch', fetch);
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } }, approvalWaivedSurfaces: { 'settings.set': ['ui'] } } }));
+    const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: input });
+    await act(async () => { await hook.getCurrent().prepareModel(); });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(alert).not.toHaveBeenCalled();
+    expect(filesystem.files.size).toBe(0);
+    expect(boundary.native.initialize).not.toHaveBeenCalled();
+    const adjacent = await createDefaultActionExecutor().execute('settings.set', { anchor: 'voicePrivacy.recentMessagesCount', value: 7 }, {
+      surface: 'ui', authority: 'present_user', serverId: account.scope.serverId, expectedAccountId: account.scope.accountId,
+    });
+    expect(adjacent, JSON.stringify(adjacent)).toMatchObject({ ok: true });
+    expect(account.persistedSettings.voice.privacy.recentMessagesCount).toBe(7);
+  });
 
   it('warns when native storage becomes unavailable, falls back, and recovers on a later refresh', async () => {
     const manifest = { packId: input.packId, kind: 'tts_sherpa', model: 'kokoro', version: '1',
@@ -64,12 +96,18 @@ describe('useLocalNeuralModelPackState (native)', () => {
     }
   });
 
-  it('surfaces prepare errors via Modal.alert', async () => {
-    const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: input });
+  it('admits manual preparation with observation disabled and keeps installed-state visibility unchanged', async () => {
+    const manifest = { packId: input.packId, kind: 'tts_sherpa', model: 'kokoro', version: '1',
+      files: [{ path: 'model.bin', url: 'https://example.test/model.bin', sha256: 'a'.repeat(64), sizeBytes: 1 }] };
+    filesystem.files.set(`${filesystem.root}/${input.packId}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
+    filesystem.files.set(`${filesystem.root}/${input.packId}/model.bin`, new Uint8Array([1]));
+    const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: { ...input, readEnabled: false } });
     await act(async () => { await hook.getCurrent().prepareModel(); });
-    expect(hook.getCurrent().modelStatus).toBe('error');
-    expect(alert).toHaveBeenCalledWith(t('common.error'), 'kokoro_native_module_unavailable', undefined);
-    expect(filesystem.files.size).toBe(0);
+    expect(hook.getCurrent().modelStatus).toBe('idle');
+    expect(hook.getCurrent().installed).toBe(false);
+    expect(hook.getCurrent().installSummary).toBeNull();
+    expect(alert).toHaveBeenCalledWith(t('common.error'), t('settingsVoice.local.kokoro.alerts.runtimeUnsupported.body'), undefined);
+    expect(filesystem.files.get(`${filesystem.root}/${input.packId}/model.bin`)).toEqual(new Uint8Array([1]));
   });
 
   it('settles a cancelled download back to idle instead of pinning downloading', async () => {
@@ -108,7 +146,7 @@ describe('useLocalNeuralModelPackState (native)', () => {
         signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
       })));
     const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: {
-      ...input, role, manifestUrl: 'https://example.test/manifest.json',
+      ...input, role,
     } });
     expect(hook.getCurrent().installSummary?.partialBytes).toBe(1);
     let operation!: Promise<void>;
@@ -128,7 +166,7 @@ describe('useLocalNeuralModelPackState (native)', () => {
       files: [{ path: 'model.bin', url: 'https://example.test/model.bin', sha256: 'a'.repeat(64), sizeBytes: 1 }] };
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(manifest)));
     const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: {
-      ...input, role, manifestUrl: 'https://example.test/manifest.json',
+      ...input, role,
     } });
     const BaseFile = filesystem.fs.File;
     class StorageFailureFile extends BaseFile {
@@ -158,7 +196,7 @@ describe('useLocalNeuralModelPackState (native)', () => {
     filesystem.files.set(`${filesystem.root}/${input.packId}/model.bin`, new Uint8Array([1]));
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network_offline'); }));
     const hook = await renderHook(useLocalNeuralModelPackState, { initialProps: {
-      ...input, role, manifestUrl: 'https://example.test/manifest.json',
+      ...input, role,
     } });
     expect(hook.getCurrent().modelStatus).toBe('ready');
     await act(async () => { hook.getCurrent().checkForUpdates(); });

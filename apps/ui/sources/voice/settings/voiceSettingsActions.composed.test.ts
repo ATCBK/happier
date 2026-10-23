@@ -1,8 +1,10 @@
 import 'fake-indexeddb/auto';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { AccountSettingsStoredContentEnvelopeSchema } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
-import { createDeferred, standardCleanup } from '@/dev/testkit';
+import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { SpeechOptions } from 'expo-speech';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
 
@@ -20,6 +22,64 @@ const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 
 describe('Voice declarations through the default Settings Action and Account persistence', () => {
+    it('does not prime the browser audio graph for a refused TTS sample', async () => {
+        speech.reset();
+        const platform = speech.platform.value;
+        speech.platform.value = 'web';
+        onTestFinished(() => { speech.platform.value = platform; vi.unstubAllGlobals(); });
+        const { resetWebAudioContextForTests } = await import('@/voice/output/webAudioContext');
+        resetWebAudioContextForTests();
+        onTestFinished(resetWebAudioContextForTests);
+        const createContext = vi.fn();
+        const start = vi.fn();
+        vi.stubGlobal('AudioContext', class {
+            constructor() { createContext(); }
+            resume() {}
+            createBuffer() { return {}; }
+            createBufferSource() { return { connect() {}, disconnect() {}, start }; }
+        });
+        const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: 'local_conversation' },
+            actionsSettingsV1: { v: 1, actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } } } }));
+        onTestFinished(account.dispose);
+        const { readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+        const { LocalVoiceTtsGroup } = await import('./panels/localTts/LocalVoiceTtsGroup');
+        const cfg = readLocalConversationVoiceSettings(account.settings.voice);
+        const screen = await renderScreen(React.createElement(LocalVoiceTtsGroup, { cfgTts: cfg.tts,
+            voice: account.settings.voice, setVoice: () => {}, setTts: () => {}, networkTimeoutMs: cfg.networkTimeoutMs }));
+        onTestFinished(screen.unmount);
+        await act(async () => { screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.onPress(); });
+        await vi.waitFor(() => expect(screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.disabled).toBe(false));
+        expect(createContext).not.toHaveBeenCalled();
+        expect(start).not.toHaveBeenCalled();
+    });
+    it('refuses the mounted local TTS sample without audio while an adjacent Voice setting remains writable', async () => {
+        speech.reset();
+        const account = await createVoiceSettingsAccountTestHarness(settingsParse({ voice: { providerId: 'local_conversation',
+            providers: { local_conversation: { schemaVersion: 1, config: { tts: { provider: 'device' } } } } },
+            actionsSettingsV1: { v: 1, actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } } } }));
+        onTestFinished(account.dispose);
+        const { readLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+        const { LocalVoiceTtsGroup } = await import('./panels/localTts/LocalVoiceTtsGroup');
+        const cfg = readLocalConversationVoiceSettings(account.settings.voice);
+        const screen = await renderScreen(React.createElement(LocalVoiceTtsGroup, { cfgTts: cfg.tts,
+            voice: account.settings.voice, setVoice: () => {}, setTts: () => {}, networkTimeoutMs: cfg.networkTimeoutMs }));
+        onTestFinished(screen.unmount);
+        await act(async () => { screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.onPress(); });
+        await vi.waitFor(() => expect(screen.findByTestId('settings.voice.local.testTts')?.props.disabled).toBe(false));
+        expect(speech.expoSpeechSpeak).not.toHaveBeenCalled();
+        expect(speech.nativeSynthesize).not.toHaveBeenCalled();
+        expect(speech.encodedAudio.start).not.toHaveBeenCalled();
+        expect(account.writes).toHaveLength(0);
+        expect(await createDefaultActionExecutor().execute('settings.set', { anchor: 'voicePrivacy.recentMessagesCount', value: 9 }, {
+            surface: 'ui', authority: 'present_user', serverId: account.scope.serverId, expectedAccountId: account.scope.accountId,
+        })).toMatchObject({ ok: true });
+        expect(account.persistedSettings.voice.privacy.recentMessagesCount).toBe(9);
+        account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1, actions: {} } }));
+        speech.expoSpeechSpeak.mockImplementation((_text, options) => options.onDone?.());
+        await act(async () => { screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.onPress(); });
+        await vi.waitFor(() => expect(speech.expoSpeechSpeak).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(screen.findAllByTestId('settings.voice.local.testTts')[0]!.props.disabled).toBe(false));
+    });
     it('lists and retries the selected local-neural voice catalog for Agents without starting playback', async () => {
         const { filesystem } = speech.reset();
         const { parseModelPackManifest } = await import('@happier-dev/protocol/voice/modelPacks/manifest');

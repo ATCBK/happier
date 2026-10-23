@@ -376,8 +376,14 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         }
         if ('key' in parsed && parsed.key !== undefined) return refuse('setting_key_unsupported');
         const page = declarations.find((candidate) => Object.values(candidate.settings).some((ref) => ref.anchor === parsed.anchor));
+        // A mounted compound editor is an invocation, not a searchable scalar control.
+        // Its private binding is acquired only for the captured host intent after admission.
+        const mountedVoiceBinding = !page && owner.mutationServices?.voiceSettingsEdit
+            && readBuiltInSettingDeclarationV1(parsed.anchor)?.storage?.owner === 'voiceSettingsEditBinding'
+            ? { owner: 'voiceSettingsEditBinding', storage: (await import('@/voice/settings/voiceSettingBinding')).voiceSettingsEditBinding }
+            : undefined;
         const ref = page ? Object.values(page.settings).find((candidate) => candidate.anchor === parsed.anchor)
-            : readBuiltInAccountSettingUiRef(parsed.anchor);
+            : readBuiltInAccountSettingUiRef(parsed.anchor, mountedVoiceBinding);
         const pageId = page?.pageId ?? readBuiltInSettingDeclarationV1(parsed.anchor)?.pageId;
         if (!pageId || !ref) return refuse('setting_not_found');
         const versionedRead = actionId === 'settings.get' && SettingsDeclarationActionInputSchemasV1['settings.get'].parse(input).includeVersion === true;

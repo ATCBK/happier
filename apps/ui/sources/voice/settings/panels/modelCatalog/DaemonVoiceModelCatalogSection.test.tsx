@@ -13,8 +13,11 @@ import {
 import { pressTestInstanceAsync, renderScreen, createDeferred } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { answerVoiceModelCatalogRpcRequest } from '@/dev/testkit/harness/voiceModelCatalogRpcBoundary';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createAccountSettingsHttpBoundary } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -28,6 +31,14 @@ let respond: Parameters<typeof installSessionActionRpcBoundary>[0];
 const requests = installSessionActionRpcBoundary((request, context) => respond(request, context));
 const { DaemonVoiceModelCatalogSection } = await import('./DaemonVoiceModelCatalogSection');
 const { useDaemonVoiceModelCatalogState } = await import('./useDaemonVoiceModelCatalogState');
+const { VoiceSpeechModelsSection } = await import('../VoiceSpeechModelsSection');
+const { storage } = await import('@/sync/domains/state/storage');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { readLocalConversationVoiceSettings, writeLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+const { parseLocalVoiceSttSettings } = await import('@/voice/local/localVoiceSettings');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const { useApplyVoiceSettingsEdit } = await import('@/sync/store/settingsWriters');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 const MACHINE = 'catalog-section-machine';
 
 function chooseNativeConfirmation(accepted: boolean) {
@@ -49,8 +60,8 @@ function status(packId: string, overrides: Partial<DaemonVoiceInferenceModelStat
 
 function catalogReply(models: readonly DaemonVoiceInferenceModelStatus[]) {
     respond = request => {
-        if (request.method.endsWith(':daemon.voiceInference.models.list')) return DaemonVoiceInferenceModelsListResponseSchema.parse({ ok: true, models });
-        if (request.method.endsWith(':daemon.voiceInference.models.status')) return DaemonVoiceInferenceModelsStatusResponseSchema.parse({ ok: true, models: [] });
+        const catalog = answerVoiceModelCatalogRpcRequest(request, models);
+        if (catalog) return catalog;
         if (request.method.endsWith(':daemon.voiceInference.models.remove')) return DaemonVoiceInferenceModelsRemoveResponseSchema.parse({ ok: true });
         throw new Error(`Unexpected model RPC: ${request.method}`);
     };
@@ -73,6 +84,7 @@ describe('DaemonVoiceModelCatalogSection', () => {
         catalogReply([]);
         const scope = await account.restore({
             settings: { experiments: true, featureToggles: { 'voice.agent': true, 'execution.runs': true, 'voice.daemonInference': true },
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } },
                 voice: { executionMachine: { mode: 'fixed', machineId: MACHINE } } },
             machines: [createMachineFixture({ id: MACHINE, activeAt: Date.now() })],
             features: createRootLayoutFeaturesResponse({ features: {
@@ -91,6 +103,64 @@ describe('DaemonVoiceModelCatalogSection', () => {
             grants: [], ownDirectGrant: false, ownAccessSources: [] } });
     });
     afterEach(async () => { await account.reset(); vi.restoreAllMocks(); });
+
+    it('refuses a manual default-pack choice when settings.invoke is disabled', async () => {
+        const packId = listModelPackCatalogEntries('stt_sherpa')[0]!.packId;
+        catalogReply([status(packId)]);
+        const scope = storage.getState().settingsScope!;
+        const before = storage.getState().settings;
+        const local = readLocalConversationVoiceSettings(before.voice);
+        const voice = writeLocalConversationVoiceSettings({ ...before.voice, providerId: 'local_conversation' }, {
+            ...local, stt: { ...local.stt, provider: 'local_neural', localNeural: {
+                ...parseLocalVoiceSttSettings(local.stt).localNeural, assetId: 'another-selected-pack', execution: 'daemon',
+            } },
+        });
+        const settings = settingsParse({ ...before, ...normalizeVoiceSettingsLocalDelta({ voice }, before), actionsSettingsV1: { v: 1,
+            actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } },
+            approvalWaivedSurfaces: { 'settings.set': ['ui'] } } });
+        storage.setState({ settings });
+        let persisted = settings;
+        const http = createAccountSettingsHttpBoundary({ serverUrl: 'https://provider-settings-account.test',
+            initialAccounts: [{ accountId: scope.accountId, snapshot: { version: storage.getState().settingsVersion!,
+                content: { t: 'plain', v: settings } } }] });
+        account.home.answer(scope.serverId, '/v2/account/settings', { select: async (input, request) => {
+            const response = http.handle(request.url, request.init);
+            if (!response) throw new Error('Expected Account Settings HTTP request');
+            const body = await response.json();
+            if (request.init?.method === 'POST' && body.success) {
+                const mutation = AccountSettingsV2UpdateRequestSchema.parse(input);
+                if (!mutation.content || mutation.content.t !== 'plain') throw new Error('Expected Plain Account Settings');
+                persisted = settingsParse(mutation.content.v);
+            }
+            return { status: response.status, body };
+        } });
+        let pendingEdit: Promise<void> | undefined;
+        function MountedSection() {
+            const current = React.useSyncExternalStore(storage.subscribe, () => storage.getState().settings.voice);
+            const applyEdit = useApplyVoiceSettingsEdit();
+            return <VoiceSpeechModelsSection voice={current} setVoice={next => { pendingEdit = applyEdit(current, next); }} />;
+        }
+        const screen = await renderScreen(<MountedSection />);
+        await vi.waitFor(() => expect(modelRows(screen.tree).some(row => row.props.testID === `voice-model-row-${packId}`)).toBe(true));
+        expect(await createDefaultActionExecutor().execute('settings.set', { anchor: 'voicePrivacy.recentMessagesCount', value: 9 }, {
+            surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId,
+        })).toMatchObject({ ok: true });
+        expect(persisted.voice.privacy.recentMessagesCount).toBe(9);
+        const beforeChoice = persisted.voice;
+        const row = modelRows(screen.tree).find(row => row.props.testID === `voice-model-row-${packId}`)!;
+        await act(async () => { await row.props.onPress(); await pendingEdit; });
+        expect(persisted.voice).toEqual(beforeChoice);
+        expect(storage.getState().settings.voice).toEqual(beforeChoice);
+        expect(requests.filter(request => /\.(install|remove|license\.accept)$/.test(request.method))).toHaveLength(0);
+        const allowed = settingsParse({ ...storage.getState().settings, actionsSettingsV1: { v: 1,
+            approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } } });
+        await act(async () => { storage.setState({ settings: allowed }); });
+        http.replaceAccountSettings(scope.accountId, { version: storage.getState().settingsVersion!, content: { t: 'plain', v: allowed } });
+        await act(async () => { await row.props.onPress(); });
+        await vi.waitFor(() => expect(parseLocalVoiceSttSettings(
+            readLocalConversationVoiceSettings(persisted.voice).stt,
+        ).localNeural.assetId).toBe(packId));
+    });
 
     it('shows a loading status row before the daemon status resolves', async () => {
         const pending = createDeferred<unknown>();
@@ -200,7 +270,7 @@ describe('DaemonVoiceModelCatalogSection', () => {
         const tree = await renderSection();
         await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-row-${packId}` }).props.onPress).toBeTypeOf('function'));
         await pressTestInstanceAsync(tree.root.findByProps({ testID: `voice-model-row-${packId}` }));
-        expect(nativeAlert).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledOnce());
         expect(nativeAlert).toHaveBeenCalledWith(review.licenseTitle, review.licenseText,
             expect.arrayContaining([expect.objectContaining({ style: 'cancel' }), expect.objectContaining({ style: 'default', text: expect.any(String) })]),
             { cancelable: false });
@@ -221,7 +291,7 @@ describe('DaemonVoiceModelCatalogSection', () => {
         const tree = await renderSection({ selectedSttPackId: packId });
         await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-remove-${packId}` })).toBeTruthy());
         await pressTestInstanceAsync(tree.root.findByProps({ testID: `voice-model-remove-${packId}` }));
-        expect(nativeAlert).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledOnce());
         expect(nativeAlert).toHaveBeenCalledWith(expect.any(String), expect.any(String),
             expect.arrayContaining([expect.objectContaining({ style: 'destructive' })]), { cancelable: false });
         await act(async () => chooseNativeConfirmation(accepted));
@@ -236,7 +306,7 @@ describe('DaemonVoiceModelCatalogSection', () => {
         const tree = await renderSection();
         await vi.waitFor(() => expect(tree.root.findByProps({ testID: `voice-model-remove-${sttPack}` })).toBeTruthy());
         await act(async () => { void tree.root.findByProps({ testID: `voice-model-remove-${sttPack}` }).props.onPress(); });
-        expect(nativeAlert).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalledOnce());
         const row = tree.root.findByProps({ testID: `voice-model-row-${ttsPack}` });
         const remove = tree.root.findByProps({ testID: `voice-model-remove-${ttsPack}` });
         expect(row.props.onPress ?? row.props.onClick).toBeUndefined();

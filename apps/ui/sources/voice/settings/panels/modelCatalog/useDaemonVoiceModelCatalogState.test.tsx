@@ -13,6 +13,7 @@ import {
 import { createDeferred, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { answerVoiceModelCatalogRpcRequest } from '@/dev/testkit/harness/voiceModelCatalogRpcBoundary';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { CurrentUiContextSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui';
@@ -69,8 +70,8 @@ const settle = () => flushHookEffects({ cycles: 20, turns: 5 });
 
 function catalogReply(models: readonly DaemonVoiceInferenceModelStatus[] = [status()]) {
     respond = request => {
-        if (request.method.endsWith('.list')) return modelList(models);
-        if (request.method.endsWith('.status')) return modelStatus([]);
+        const catalog = answerVoiceModelCatalogRpcRequest(request, models);
+        if (catalog) return catalog;
         if (request.method.endsWith('.install')) {
             const { packId } = DaemonVoiceInferenceModelsInstallRequestSchema.parse(request.params);
             return DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: true, model: status(packId, { installState: 'installed' }) });
@@ -132,6 +133,7 @@ describe('useDaemonVoiceModelCatalogState', () => {
         catalogReply();
         const scope = await account.restore({
             settings: { experiments: true, featureToggles: { 'voice.agent': true, 'execution.runs': true, 'voice.daemonInference': true },
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } },
                 voice: { executionMachine: { mode: 'fixed', machineId: 'machine-a' } } },
             machines: ['machine-a', 'machine-b'].map(id => createMachineFixture({ id, activeAt: Date.now() })),
             features: createRootLayoutFeaturesResponse({ features: {
@@ -152,6 +154,25 @@ describe('useDaemonVoiceModelCatalogState', () => {
         }
     });
     afterEach(async () => { vi.useRealTimers(); await account.reset(); vi.restoreAllMocks(); });
+
+    it('refuses manual model mutations when settings.invoke is disabled while settings.set remains admitted', async () => {
+        const scope = storage.getState().settingsScope!;
+        const settings = settingsParse({ ...storage.getState().settings, actionsSettingsV1: { v: 1,
+            actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } },
+            approvalWaivedSurfaces: { 'settings.set': ['ui'] } } });
+        storage.setState({ settings });
+        account.home.answer(scope.serverId, 'GET /v2/account/settings', { body: { version: 1, content: { t: 'plain', v: settings } } });
+        const tree = await mount({ refreshKey: 'machine-a' });
+        await act(async () => { await state(tree).install(STT_PACK); });
+        expect(mutations()).toHaveLength(0);
+        expect(nativeAlert).not.toHaveBeenCalled();
+        const adjacent = await createDefaultActionExecutor().execute('settings.set', {
+            anchor: 'voicePrivacy.recentMessagesCount', value: 7,
+        }, { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId });
+        expect(adjacent, JSON.stringify(adjacent)).toMatchObject({ ok: true });
+        expect(storage.getState().settings.voice.privacy.recentMessagesCount).toBe(7);
+        await act(async () => { tree.unmount(); });
+    });
 
     it('retires unanswered catalog reads on unmount and can load the same Machine again', async () => {
         const signals: AbortSignal[] = [];
@@ -261,7 +282,10 @@ describe('useDaemonVoiceModelCatalogState', () => {
         await settle();
         const owners = () => screen.tree.root.findAllByType('State').map(node => node.props);
         const actions: Promise<void>[] = [];
-        await act(async () => { for (const owner of owners()) actions.push(owner.install(STT_PACK)); });
+        for (const [index, owner] of owners().entries()) {
+            await act(async () => { actions.push(owner.install(STT_PACK)); });
+            await vi.waitFor(() => expect(observedSignals).toHaveLength(index + 1));
+        }
         await settle();
         const executor = createDefaultActionExecutor();
         const context = { surface: 'agent' as const, serverId: storage.getState().settingsScope!.serverId };
@@ -549,12 +573,15 @@ describe('useDaemonVoiceModelCatalogState', () => {
     it('polls until an installing pack reports installed', async () => {
         vi.useFakeTimers();
         let lists = 0;
+        let current = status();
         respond = request => {
-            if (request.method.endsWith('.status')) return modelStatus([]);
-            if (request.method.endsWith('.install')) return DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: true, model: status(STT_PACK, { installState: 'installing' }) });
-            return modelList([status(STT_PACK, ++lists === 1 ? {} : lists === 2
+            if (request.method.endsWith('.list')) current = status(STT_PACK, ++lists === 1 ? {} : lists === 2
                 ? { installState: 'installing', progress: { phase: 'downloading', progress: 0.5, bytesDownloaded: 50, totalBytes: 100, message: null } }
-                : { installState: 'installed' })]);
+                : { installState: 'installed' });
+            const catalog = answerVoiceModelCatalogRpcRequest(request, [current]);
+            if (catalog) return catalog;
+            if (request.method.endsWith('.install')) return DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: true, model: status(STT_PACK, { installState: 'installing' }) });
+            throw new Error(`Unexpected model RPC: ${request.method}`);
         };
         const tree = await mount();
         const { action } = await start(tree);
@@ -661,8 +688,12 @@ describe('useDaemonVoiceModelCatalogState', () => {
 
     it('does not accept or install through a stale license review after machine replacement', async () => {
         const model = externalStatus(true);
-        respond = request => request.method.endsWith('.status') ? modelStatus([])
-            : modelList([request.method.startsWith('machine-b:') ? { ...model, installState: 'installed' } : model]);
+        respond = request => {
+            const catalog = answerVoiceModelCatalogRpcRequest(request,
+                [request.method.startsWith('machine-b:') ? { ...model, installState: 'installed' } : model]);
+            if (catalog) return catalog;
+            throw new Error(`Unexpected model RPC: ${request.method}`);
+        };
         const tree = await mount({ refreshKey: 'machine-a' });
         const { action } = await start(tree, 'install', EXTERNAL_PACK);
         expect(nativeAlert).toHaveBeenCalledOnce();
@@ -678,9 +709,16 @@ describe('useDaemonVoiceModelCatalogState', () => {
     it('settles a completed mutation without waiting for a slow status refresh', async () => {
         const pending = createDeferred<unknown>();
         let lists = 0;
-        respond = request => request.method.endsWith('.status') ? modelStatus([])
-            : request.method.endsWith('.install') ? DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: false, error: 'daemon model request failed', errorCode: 'internal_error' })
-                : ++lists === 1 ? modelList([status()]) : pending.promise;
+        let mutationFailed = false;
+        respond = request => {
+            if (request.method.endsWith('.status')) return mutationFailed
+                ? pending.promise.then(value => DaemonVoiceInferenceModelsStatusResponseSchema.parse(value)) : modelStatus([status()]);
+            if (request.method.endsWith('.install')) {
+                mutationFailed = true;
+                return DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: false, error: 'daemon model request failed', errorCode: 'internal_error' });
+            }
+            return ++lists === 1 ? modelList([status()]) : pending.promise;
+        };
         const tree = await mount();
         const { action } = await start(tree);
         let settled = false;
@@ -710,9 +748,16 @@ describe('useDaemonVoiceModelCatalogState', () => {
     it('clears a retained install failure when authoritative status later reports installed', async () => {
         const pending = createDeferred<unknown>();
         let lists = 0;
-        respond = request => request.method.endsWith('.status') ? modelStatus([])
-            : request.method.endsWith('.install') ? DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: false, error: 'daemon model request failed', errorCode: 'request_timeout' })
-                : ++lists === 1 ? modelList([status()]) : pending.promise;
+        let mutationFailed = false;
+        respond = request => {
+            if (request.method.endsWith('.status')) return mutationFailed
+                ? pending.promise.then(value => DaemonVoiceInferenceModelsStatusResponseSchema.parse(value)) : modelStatus([status()]);
+            if (request.method.endsWith('.install')) {
+                mutationFailed = true;
+                return DaemonVoiceInferenceModelsInstallResponseSchema.parse({ ok: false, error: 'daemon model request failed', errorCode: 'request_timeout' });
+            }
+            return ++lists === 1 ? modelList([status()]) : pending.promise;
+        };
         const tree = await mount();
         const { action } = await start(tree);
         await act(async () => action);

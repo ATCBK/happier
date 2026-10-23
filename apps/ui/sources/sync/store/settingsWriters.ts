@@ -8,8 +8,7 @@ import type {
 } from '../domains/settings/settings';
 import { settingsDefaults, settingsParse } from '../domains/settings/settings';
 import type { VoiceSettings } from '../domains/settings/voiceSettings';
-import { normalizeVoiceSettingsLocalDelta } from '../domains/settings/voiceSettingsPersistence';
-import { rebaseVoiceSettingsEdit, voiceSettingsEditRegistry } from '@/voice/settings/voiceSettingsEdit';
+import { voiceSettingsEditRegistry } from '@/voice/settings/voiceSettingsEdit';
 import { captureConversationLanguagePreferenceOwner } from '@/voice/settings/language/conversationLanguage';
 import type { AiLaunchProfile } from '@happier-dev/protocol/profiles/read';
 import type { ProfileLegacyCloneSourceV1, ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
@@ -36,6 +35,7 @@ import { BUILT_IN_SETTINGS_DECLARATIONS_V1 } from '@happier-dev/protocol/actions
 import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 
 async function persistAccountSettingsOnce(
   expectedSettingsScope: AccountSettingsScope | null,
@@ -125,6 +125,7 @@ export function useApplySettings(): (change: SettingsWrite) => void {
 /** Voice editors submit their change, not a stale replacement of the Account-owned profile. */
 export function useApplyVoiceSettingsEdit(): (before: VoiceSettings, next: VoiceSettings) => Promise<void> {
   const expectedScope = useAccountSettingsScope();
+  const { execute } = useMountedActionExecution(expectedScope, { openOnRequest: true });
   const providerId = getStorage()((state) => state.settings.voice.providerId);
   const registryRevision = React.useSyncExternalStore(
     voiceSettingsEditRegistry.subscribe ?? (() => () => {}),
@@ -140,15 +141,11 @@ export function useApplyVoiceSettingsEdit(): (before: VoiceSettings, next: Voice
     if (!expectedScope || !areAccountSettingsScopesEqual(expectedScope, current.settingsScope)) {
       throw new Error('Account settings scope changed');
     }
-    await persistAccountSettingsOnce(expectedScope, current.settingsVersion, (raw) => {
-      const settings = settingsParse(raw);
-      if (before.assistantLanguage !== next.assistantLanguage && !languageOwnerIsCurrent(settings.voice)) {
-        throw new Error('voice_settings_provider_changed');
-      }
-      const voice = rebaseVoiceSettingsEdit(settings.voice, before, next);
-      return { ...raw, ...normalizeVoiceSettingsLocalDelta({ voice }, settings) };
-    });
-  }, [expectedScope, languageOwnerIsCurrent]);
+    requireActionSuccess(await execute('settings.set', { anchor: 'voiceConversations.edit', value: null }, {
+      retainInvocation: true,
+      executorOptions: { voiceSettingsEdit: { before, next, isLanguageOwnerCurrent: languageOwnerIsCurrent } },
+    }));
+  }, [execute, expectedScope, languageOwnerIsCurrent]);
 }
 
 export function useApplyAuthoringMemoryDelta(): (delta: AuthoringMemoryDelta) => Promise<void> {

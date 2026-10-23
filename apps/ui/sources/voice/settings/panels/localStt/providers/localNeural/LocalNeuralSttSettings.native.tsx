@@ -18,7 +18,6 @@ import type { VoiceDaemonRouteDiagnosticReason } from '@/voice/settings/voicePro
 import { t } from '@/text';
 import { useLocalNeuralModelPackState } from '@/voice/settings/panels/localTts/useLocalNeuralModelPackState.native';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
-import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
 import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
 import { getSherpaStreamingSttPackOptions } from '@/voice/sherpa/stt/sherpaStreamingSttPacks';
 import { DaemonVoiceInferenceExecutionDropdown } from '@/voice/settings/panels/daemonInference/DaemonVoiceInferenceExecutionDropdown';
@@ -65,7 +64,6 @@ export function LocalNeuralSttSettings(props: {
   const { modelStatus, downloadProgress: progress, installed, installSummary, updateCheckedRemote,
     prepareModel, cancelPrepare, clearAssets, checkForUpdates } = useLocalNeuralModelPackState({
     packId: effectivePackId ?? '',
-    manifestUrl: resolveModelPackManifestUrl({ packId: effectivePackId }),
     role: 'stt_sherpa',
     enabled: !usesDaemonExecution && props.cfg.provider === 'local_neural' && Boolean(effectivePackId),
   });

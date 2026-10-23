@@ -1,13 +1,13 @@
 import React from 'react';
+import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { findAllHostTestInstances, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpeechOutputBoundary';
 import { readLocalConversationVoiceSettings, voiceSettingsDefaults, voiceSettingsParse, writeLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
-import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { settingsParse } from '@/sync/domains/settings/settings';
-import { storage } from '@/sync/domains/state/storage';
+import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
 import { createDeferred } from '@/dev/testkit';
 import { t } from '@/text';
 import { Modal } from '@/modal';
@@ -22,11 +22,10 @@ vi.mock('react-native', async () => {
   return createReactNativeWebMock();
 });
 
-let voiceBeforeTest: ReturnType<typeof voiceSettingsParse> | null = null;
+let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 
 function storeVoiceForTest(voice: ReturnType<typeof voiceSettingsParse>) {
-  if (!voiceBeforeTest) voiceBeforeTest = voiceSettingsParse(storage.getState().settings.voice);
-  storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice }, storage.getState().settings));
+  account.replaceVoice(voice);
 }
 
 async function renderTtsGroup() {
@@ -64,39 +63,45 @@ function neuralSampleFixture() {
 }
 
 describe('LocalVoiceTtsGroup', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
     speechBoundary.expoSpeechSpeak.mockReset();
     speechBoundary.expoSpeechStop.mockReset();
   });
   afterEach(async () => {
     await standardCleanup();
     await act(async () => { localNeuralTtsPreviewController.stop(); });
-    if (voiceBeforeTest) {
-      storage.getState().applySettingsLocal(normalizeVoiceSettingsLocalDelta({ voice: voiceBeforeTest }, storage.getState().settings));
-      voiceBeforeTest = null;
-    }
+    await account.dispose();
   });
   afterAll(async () => { await speechBoundary.disposeAudioSession(); });
 
   it('uses the localized row title as the accessible name of its switch', async () => {
     const screen = await renderTtsGroup();
-    const switches = findAllHostTestInstances(screen.tree.root, node => (
-      (node.props.accessibilityRole ?? node.props.role) === 'switch'
-    ));
+    const switches = findAllHostTestInstances(screen.tree.root, node => {
+      if ((node.props.accessibilityRole ?? node.props.role) !== 'switch') return false;
+      for (let parent = node.parent; parent; parent = parent.parent) {
+        if (parent.props.importantForAccessibility === 'no-hide-descendants'
+          || parent.props.accessibilityElementsHidden === true || parent.props['aria-hidden'] === true) return false;
+      }
+      return true;
+    });
     expect(switches).toHaveLength(1);
     expect(switches[0].props.accessibilityLabel ?? switches[0].props['aria-label']).toBe(t('settingsVoice.local.autoSpeak'));
   });
 
   it('shows a speaking status until the device speech operation settles', async () => {
     let finishSpeech: (() => void) | undefined;
+    const started = createDeferred<void>();
     speechBoundary.expoSpeechSpeak.mockImplementation((_text, options) => {
       finishSpeech = () => options?.onDone?.();
+      started.resolve();
     });
     const screen = await renderTtsGroup();
     expect(screen.getTextContent()).toContain(t('settingsVoice.local.testTtsSubtitle'));
 
     await screen.pressByTestIdAsync('settings.voice.local.testTts');
     await act(async () => {
+      await started.promise;
       expect(finishSpeech).toBeTypeOf('function');
     });
     expect(screen.getTextContent()).toContain(t('settingsVoice.local.speaking'));

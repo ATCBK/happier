@@ -8,7 +8,6 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { Modal } from '@/modal';
 import { useSettings } from '@/sync/domains/state/storage';
 import { useAcpCatalog } from '@/sync/store/useAcpCatalog';
 import { BackendTargetKeyV2Schema, parseBackendTargetKeyV2, type PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -20,7 +19,11 @@ import {
 } from '@/sync/domains/settings/voiceSettings';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { resetGlobalVoiceAgentPersistence } from '@/voice/agent/resetGlobalVoiceAgentPersistence';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import {
   applyVoiceMemoryRestoreChoice,
   resolveVoiceMemoryRestoreChoice,
@@ -37,6 +40,8 @@ export function VoiceAgentMemorySection(props: Readonly<{
   voice: VoiceSettings;
   setVoice: (next: VoiceSettings) => void;
 }>) {
+  const scope = useAccountSettingsScope();
+  const { execute } = useMountedActionExecution(scope, { openOnRequest: true });
   const voiceAgentEnabled = useFeatureEnabled('voice.agent');
   const accountSettings = useSettings();
   const { snapshot: acpCatalog } = useAcpCatalog();
@@ -79,15 +84,14 @@ export function VoiceAgentMemorySection(props: Readonly<{
   ];
   const resuming = restoreChoice === 'provider_resume';
   const forget = () => {
-    fireAndForget((async () => {
-      const confirmed = await Modal.confirm(
-        t('settingsVoice.local.conversation.resetVoiceAgent.title'),
-        t('settingsVoice.local.conversation.resetVoiceAgent.confirmBody'),
-        { confirmText: t('common.reset') },
-      );
-      if (!confirmed) return;
-      await resetGlobalVoiceAgentPersistence();
-    })(), { tag: 'VoiceAgentMemorySection.confirm.forget' });
+    const pending = (async () => {
+      const result = await execute('settings.invoke', { anchor: VOICE_PRIVACY_SETTINGS.settings.forgetVoiceAgentMemory.anchor });
+      if (!result.ok && presentActionTurnedOffNoticeIfOff(result, 'settings.invoke')) return;
+      if (!result.ok && isActionApprovalDeclinedErrorCode(result.errorCode)) return;
+      requireActionSuccess(result);
+    })();
+    fireAndForget(pending, { tag: 'VoiceAgentMemorySection.confirm.forget' });
+    return pending;
   };
 
   return (

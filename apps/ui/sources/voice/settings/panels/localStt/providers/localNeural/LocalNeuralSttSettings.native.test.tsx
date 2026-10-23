@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
 import { getDefaultModelPackId } from '@happier-dev/protocol/voice/modelPacks/catalog';
@@ -18,10 +19,16 @@ const nativeDialogs = vi.hoisted(() => ({
   alert: vi.fn<typeof import('react-native')['Alert']['alert']>(),
   prompt: vi.fn<typeof import('react-native')['Alert']['prompt']>(),
 }));
+const route = vi.hoisted(() => ({ pathname: '/' }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router'))
+  .createExpoRouterMock({ pathname: () => route.pathname }).module);
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('react-native', async () =>
   (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock(
     { platformOS: 'ios' }, { Alert: nativeDialogs }));
-afterEach(() => { standardCleanup(); vi.unstubAllGlobals(); });
+let account: Awaited<ReturnType<typeof import('../../../voiceSettingsAccountTestHarness')['createVoiceSettingsAccountTestHarness']>>;
+afterEach(async () => { standardCleanup(); vi.unstubAllGlobals(); await account.dispose(); });
 
 vi.mock('react-native-unistyles', async () => {
   const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -32,16 +39,29 @@ vi.mock('@expo/vector-icons', async () =>
   (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 vi.mock('expo-file-system', () => filesystem.fs);
+// Node selects portable sentinels; bind the complete native implementation.
+vi.mock('@/voice/settings/voiceDeviceModelPackOperation', () => import('@/voice/settings/voiceDeviceModelPackOperation.native'));
 
 // Load the real owner graph during collection, outside rendered interaction timeouts.
 const { LocalNeuralSttSettings } = await import('./LocalNeuralSttSettings.native');
+const { createVoiceSettingsAccountTestHarness } = await import('../../../voiceSettingsAccountTestHarness');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { voiceSettingsParse } = await import('@/sync/domains/settings/voiceSettings');
+const { SETTINGS_ROUTES } = await import('@/components/settings/catalog/routes');
 
 describe('LocalNeuralSttSettings native model download accessory', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     filesystem.files.clear();
     download = requested();
     nativeDialogs.alert.mockClear();
     nativeDialogs.prompt.mockClear();
+    route.pathname = '/';
+    account = await createVoiceSettingsAccountTestHarness(settingsParse({
+      actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } },
+      voice: { providerId: 'local_conversation', providers: { local_conversation: { schemaVersion: 1, config: {
+        stt: { provider: 'local_neural', localNeural: { assetId: packId, execution: 'device' } },
+      } } } },
+    }));
     vi.stubGlobal('fetch', vi.fn((_url: string, options: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
         const signal = options.signal;
@@ -51,7 +71,18 @@ describe('LocalNeuralSttSettings native model download accessory', () => {
       })));
   });
 
-  it('keeps download cancellation outside the row with named button semantics', async () => {
+  it.each(['conversation', 'dictation'] as const)('keeps %s download cancellation outside the row with named button semantics', async purpose => {
+    if (purpose === 'dictation') {
+      route.pathname = SETTINGS_ROUTES.voiceDictation;
+      // Conversation STT is deliberately different: its Action cannot prepare this Dictation pack.
+      account.replaceVoice(voiceSettingsParse({ ...account.settings.voice,
+        providers: { ...account.settings.voice.providers, local_conversation: { schemaVersion: 1, config: {
+          stt: { provider: 'device' },
+        } } },
+        dictation: { ...account.settings.voice.dictation, sttBinding: 'explicit', stt: { provider: 'local_neural',
+          localNeural: { assetId: packId, execution: 'device' } } },
+      }));
+    }
     const setCfg = vi.fn();
     const { tree } = await renderScreen(<LocalNeuralSttSettings
       cfg={{
@@ -77,7 +108,8 @@ describe('LocalNeuralSttSettings native model download accessory', () => {
       findModelRow()?.props.onPress();
       await Promise.resolve();
     });
-    const signal = await download.promise;
+    let signal!: AbortSignal;
+    await act(async () => { signal = await download.promise; });
 
     const modelRow = findModelRow();
     expect(modelRow).toBeTruthy();

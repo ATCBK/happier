@@ -6,6 +6,10 @@ vi.mock('socket.io-client', async original =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { Modal } from '@/modal';
+
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
@@ -19,6 +23,7 @@ import {
 const initialStorage = storage.getState();
 let account: Awaited<ReturnType<typeof createVoiceSettingsAccountTestHarness>>;
 beforeEach(async () => {
+  vi.mocked(Modal.confirm).mockReset().mockResolvedValue(true);
   account = await createVoiceSettingsAccountTestHarness(settingsParse({
     experiments: true, featureToggles: { 'voice.agent': true, 'execution.runs': true },
   }));
@@ -47,6 +52,49 @@ async function render(voice: VoiceSettings, setVoice = vi.fn()) {
 }
 
 describe('VoiceAgentMemorySection', () => {
+  it('quietly leaves memory unchanged when the user declines an explicit Action Ask', async () => {
+    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent', epoch: 3 } });
+    account.replaceVoice(voice);
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: {
+      v: 1, actions: { 'settings.invoke': { approvalRequiredSurfaces: ['ui'] } },
+    } }));
+    const screen = await render(voice);
+    let pending!: Promise<void>;
+    await act(async () => { pending = screen.findAllByTestId('settings.voice.memory.forget')[0]!.props.onPress(); });
+    await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+    await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'reject');
+    await act(async () => { await pending; });
+    expect(Modal.confirm).not.toHaveBeenCalled();
+    expect(readLocalConversationVoiceSettings(account.settings.voice).agent.transcript.epoch).toBe(3);
+  });
+  it.each([true, false])('keeps the admitted Forget confirmation (confirmed: %s)', async confirmed => {
+    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent', epoch: 3 } });
+    account.replaceVoice(voice);
+    vi.mocked(Modal.confirm).mockResolvedValueOnce(confirmed);
+    const screen = await render(voice);
+    await act(async () => { await screen.findAllByTestId('settings.voice.memory.forget')[0]!.props.onPress(); });
+    expect(Modal.confirm).toHaveBeenCalledOnce();
+    expect(readLocalConversationVoiceSettings(account.settings.voice).agent.transcript.epoch).toBe(confirmed ? 4 : 3);
+  });
+  it('refuses Forget through Action policy before confirmation or transcript invalidation', async () => {
+    const voice = voiceWithAgent({ transcript: { persistenceMode: 'persistent', epoch: 3 } });
+    account.replaceVoice(voice);
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: {
+      v: 1, actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } },
+    } }));
+    const { VoiceAgentMemorySection } = await import('./VoiceAgentMemorySection');
+    const screen = await renderScreen(React.createElement(VoiceAgentMemorySection, { voice, setVoice: () => {} }));
+    const before = account.writes.length;
+    await act(async () => { await screen.findAllByTestId('settings.voice.memory.forget')[0]!.props.onPress(); });
+    expect(Modal.confirm).not.toHaveBeenCalled();
+    expect(readLocalConversationVoiceSettings(account.settings.voice).agent.transcript.epoch).toBe(3);
+    expect(account.writes).toHaveLength(before);
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    expect(await createDefaultActionExecutor().execute('settings.set', { anchor: 'voicePrivacy.recentMessagesCount', value: 9 }, {
+      surface: 'ui', authority: 'present_user', serverId: account.scope.serverId, expectedAccountId: account.scope.accountId,
+    })).toMatchObject({ ok: true });
+    expect(account.persistedSettings.voice.privacy.recentMessagesCount).toBe(9);
+  });
   it('shows how memory is restored even when nothing is remembered, locked until Remember is on', async () => {
     const screen = await render(voiceWithAgent({}));
 

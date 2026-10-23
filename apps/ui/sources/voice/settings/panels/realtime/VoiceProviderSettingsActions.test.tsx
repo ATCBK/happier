@@ -264,6 +264,31 @@ describe('VoiceProviderSettingsActions', () => {
     })).toBe('agent_created'));
   });
 
+  it('refuses a mounted contributed operation before provider confirmation or effects while adjacent settings writes remain allowed', async () => {
+    accountFixture.replaceSettings(settingsParse({ ...accountFixture.settings, actionsSettingsV1: {
+      v: 1, actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } },
+    } }));
+    const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = mountActionView(<VoiceProviderSettingsActions providerId={PROVIDER_ID}
+      owner={owner} actions={[action]} placement={{ kind: 'afterField', fieldId: 'agentId' }} />); });
+    const before = accountFixture.writes.length;
+    await act(async () => { tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress(); });
+    expect(hasConfirmation()).toBe(false);
+    expect(provider.fetch).not.toHaveBeenCalled();
+    expect(accountFixture.writes).toHaveLength(before);
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    expect(await createDefaultActionExecutor().execute('settings.set', { anchor: 'voicePrivacy.recentMessagesCount', value: 9 }, {
+      surface: 'ui', authority: 'present_user', serverId: accountFixture.scope.serverId, expectedAccountId: accountFixture.scope.accountId,
+    })).toMatchObject({ ok: true });
+    expect(accountFixture.persistedSettings.voice.privacy.recentMessagesCount).toBe(9);
+    accountFixture.replaceSettings(settingsParse({ ...accountFixture.settings, actionsSettingsV1: { v: 1, actions: {} } }));
+    await flushHookEffects();
+    await act(async () => { tree.root.findByProps({ testID: 'voice-settings-action-create-agent' }).props.onPress(); });
+    await waitForConfirmation(1);
+    await act(async () => { humanConfirmations[0]!(); await vi.waitFor(() => expect(state.mutationApplied).toBe(true)); });
+  });
+
   it('leaves the provider and settings untouched when the human declines an agent operation', async () => {
     const { invokeVoiceProviderSettingsAction } = await import('@/voice/settings/voiceProviderSettingsActionInvoker');
     let pending!: ReturnType<typeof invokeVoiceProviderSettingsAction>;
@@ -282,7 +307,9 @@ describe('VoiceProviderSettingsActions', () => {
     await act(async () => { pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action }); });
     await waitForConfirmation(1);
     await act(async () => humanConfirmations[0]!());
-    expect(await pending).toEqual({ status: 'unavailable', reason: 'internal_error' });
+    const result = await pending;
+    expect(result).toMatchObject({ status: 'unavailable', reason: 'internal_error' });
+    expect(JSON.stringify(result)).not.toContain('private_provider_payload');
     expect(state.mutationApplied).toBe(false);
   });
 
@@ -309,6 +336,8 @@ describe('VoiceProviderSettingsActions', () => {
     await act(async () => { pending = invokeVoiceProviderSettingsAction({ providerId: PROVIDER_ID, owner, declaration: action,
       isCurrent: capturedAccount.accountLifetime.isCurrent }); });
     await waitForConfirmation(1);
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    await TokenStorage.removeCredentialsForServerUrl(capturedAccount.endpointUrl);
     const replacementAccount = await createVoiceSettingsAccountTestHarness(settingsParse({}));
     onTestFinished(() => replacementAccount.dispose());
     expect(capturedAccount.accountLifetime.isCurrent()).toBe(false);
@@ -413,6 +442,16 @@ describe('VoiceProviderSettingsActions', () => {
   });
 
   it('renders from the declaration and applies the bounded patch through one-shot Account Settings CAS', async () => {
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const { SettingsDeclarationActionOutputSchemasV1 } = await import('@happier-dev/protocol/actions/settingsDeclarationActionFamily');
+    const listed = await createDefaultActionExecutor().execute('settings.list', { pageId: 'voiceConversations' }, {
+      surface: 'ui', authority: 'present_user', serverId: accountFixture.scope.serverId, expectedAccountId: accountFixture.scope.accountId,
+    });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) throw new Error(listed.errorCode);
+    const declared = SettingsDeclarationActionOutputSchemasV1['settings.list'].parse(listed.result).items
+      .find(item => item.anchor === `voiceConversations.provider.${PROVIDER_ID}.action.create-agent`);
+    expect(declared).toMatchObject({ operation: { actionId: 'settings.invoke' } });
     const { VoiceProviderSettingsActions } = await import('./VoiceProviderSettingsActions');
     let tree!: renderer.ReactTestRenderer;
     await act(async () => {
@@ -423,15 +462,20 @@ describe('VoiceProviderSettingsActions', () => {
         placement={{ kind: 'afterField', fieldId: 'agentId' }}
       />);
     });
+    await flushHookEffects();
     const row = tree.root.findByProps({ testID: 'voice-settings-action-create-agent' });
     expect(row.props.title).toBe('Create agent');
     await act(async () => {
       row.props.onPress();
     });
     await waitForConfirmation(1);
+    // The admitted Action confirms the producer's declaration, not caller-supplied row props.
+    const confirmation = provider.entry.declaration.settings?.actions?.find(candidate => candidate.id === action.id)?.confirmation;
+    if (!confirmation || confirmation.kind !== 'required') throw new Error('Expected producer confirmation');
+    const text = (value: string | Readonly<{ key: string; fallback: string }>) => typeof value === 'string' ? value : value.fallback;
     expect(modalTree.root.findAllByType(CustomModal).find(node => node.props.visible)?.props.config).toMatchObject({
-      props: { description: 'Creates the agent.', confirmLabel: 'Create' },
-      chrome: { title: 'Create?', testID: 'app-shell-transient-interaction-dialog' },
+      props: { description: text(confirmation.description), confirmLabel: text(confirmation.confirmLabel) },
+      chrome: { title: text(confirmation.title), testID: 'app-shell-transient-interaction-dialog' },
     });
     await act(async () => {
       humanConfirmations[0]!();

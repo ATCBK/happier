@@ -6,6 +6,8 @@ import { checkModelPackUpdateAvailable, ensureModelPackInstalled, getModelPackIn
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { prepareKokoroTts } from '@/voice/kokoro/runtime/synthesizeKokoroWav';
+import { isKokoroRuntimeSupported } from '@/voice/kokoro/runtime/kokoroSupport';
+import { getModelPackCatalogEntry, isPublishedModelPackCatalogEntry } from '@happier-dev/protocol/voice/modelPacks/catalog';
 import { confirmDiscardPartialDownload, readPartialDownloadBytes } from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 import type { VoiceDeviceModelPackOperationInput } from './voiceDeviceModelPackOperation';
 
@@ -37,6 +39,13 @@ export async function invokeVoiceDeviceModelPackOperation(input: VoiceDeviceMode
         return await isCurrent() ? { status: 'completed' } : { status: 'cancelled' };
     }
     if (input.operation === 'prepare' && input.role === 'tts_sherpa') {
+        const catalogEntry = getModelPackCatalogEntry(input.packId);
+        if (catalogEntry && !isPublishedModelPackCatalogEntry(catalogEntry) || !isKokoroRuntimeSupported()) {
+            return { status: 'unavailable', reason: 'model_runtime_unsupported' };
+        }
+        if (!resolveModelPackManifestUrl({ packId: input.packId })) {
+            return { status: 'unavailable', reason: 'model_manifest_unavailable' };
+        }
         // The settings UI prepares the installed runtime as well as its files.
         input.onDownloadStarted?.();
         await prepareKokoroTts({ assetSetId: input.packId, timeoutMs: null, signal,

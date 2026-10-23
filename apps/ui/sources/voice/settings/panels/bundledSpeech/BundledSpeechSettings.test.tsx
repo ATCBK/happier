@@ -633,10 +633,25 @@ describe('BundledSpeechSettings', () => {
     });
 
     const actionResponse = createDeferred<{ patch: { model: string } }>();
+    const patchApplied = createDeferred<void>();
+    const unsubscribe = storage.subscribe(snapshot => {
+      if (readVoiceProviderSettingsConfig(snapshot.settings.voice, providerId)?.model === 'speech-2') {
+        unsubscribe();
+        patchApplied.resolve();
+      }
+    });
+    onTestFinished(unsubscribe);
     executeSettingsAction.mockImplementationOnce(() => actionResponse.promise);
     await act(async () => action.props.onPress());
     await vi.waitFor(() => expect(action.props.loading).toBe(true));
-    await act(async () => actionResponse.resolve({ patch: { model: 'speech-2' } }));
+    await vi.waitFor(() => expect(rendered.tree.findByTestId('app-shell-confirmation-confirm')).not.toBeNull());
+    await rendered.tree.pressByTestIdAsync('app-shell-confirmation-confirm');
+    await vi.waitFor(() => expect(executeSettingsAction).toHaveBeenCalledOnce());
+    await act(async () => {
+      actionResponse.resolve({ patch: { model: 'speech-2' } });
+    });
+    await patchApplied.promise;
+    await flushHookEffects();
     await vi.waitFor(() => {
       expect(action.props.loading).toBe(false);
       expect(readVoiceProviderSettingsConfig(account.persistedSettings.voice, providerId)).toEqual({ model: 'speech-2' });

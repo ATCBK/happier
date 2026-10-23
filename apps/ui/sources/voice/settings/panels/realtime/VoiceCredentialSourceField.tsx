@@ -7,8 +7,8 @@ import type {
   VoiceCredentialSourceSelection,
   VoiceProviderContribution,
 } from '@happier-dev/protocol';
-import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { qualifyPluginContributionReferenceV1 } from '@happier-dev/protocol/plugins/contribution-identity';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 import {
   DropdownMenu,
@@ -27,11 +27,13 @@ import { resolveQualifiedConnectedServiceRegistryDisplayName } from '@/component
 import { getConnectedAccountAuthentication } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { presentQualifiedConnectedAccountTarget } from '@/sync/domains/connectedServices/qualifiedConnectedAccountTargetPresentation';
 import {
-  mutateScopedAccountVoiceCredentialSource,
+  voiceCredentialSourceMutationContractDigest,
   resolveAccountVoiceCredentialSourceSelection,
 } from '@/voice/credentials/accountVoiceCredential';
 import { resolveVoiceConnectedAccountTargetEligibility } from '@/voice/credentials/sourceEligibility';
-import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegistry';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { voiceCredentialSourceSettingAnchor } from '@/voice/settings/voiceContributedSettingsDeclarations';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
@@ -43,7 +45,6 @@ type SourceRow = Readonly<{
 }>;
 
 const NONE_SELECTION = Object.freeze({ kind: 'none' as const });
-const voiceProviderRegistry = createDefaultVoiceProviderRegistry();
 
 export type VoiceCredentialSourceFieldStatus = Readonly<{
   selection: VoiceCredentialSourceSelection;
@@ -84,6 +85,7 @@ export function VoiceCredentialSourceField(props: Readonly<{
   const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
   const settingsVersion = useSettingsVersion();
   const expectedSettingsScope = useAccountSettingsScope();
+  const sourceAction = useMountedActionExecution(expectedSettingsScope, { openOnRequest: true });
   const purposes = useConnectedAccountCatalog('purposes', expectedSettingsScope);
   const connectedPurposes = purposes.status === 'ready' && !purposes.stale ? purposes.value : null;
   const savedSecretCatalog = useSavedSecretCatalog();
@@ -320,28 +322,28 @@ export function VoiceCredentialSourceField(props: Readonly<{
       const operation = mutationOperationRef.current + 1;
       mutationOperationRef.current = operation;
       setMutationOutcomeUnknown(false);
-      const mutation = mutateScopedAccountVoiceCredentialSource({
-        scope: expectedSettingsScope,
-        mutation: {
-          contribution: props.contribution,
-          credentialSlotId: props.credentials.slot.id,
-          selection: row.selection,
-          expectedSettingsVersion: settingsVersion,
-        },
-        expectedDeclaration: props.declaration,
-        resolveCurrentDeclaration: (contribution) => {
-          if (props.isCurrent?.() === false) return null;
-          const providerId = buildQualifiedPluginContributionKey(contribution);
-          const current = voiceProviderRegistry.get(providerId);
-          return current?.kind === 'voice.conversation-provider.v1'
-            || current?.kind === 'voice.speech-engine.v1'
-            ? current.declaration ?? null
-            : null;
-        },
+      const selectedMutation = {
+        contribution: props.contribution,
+        credentialSlotId: props.credentials.slot.id,
+        selection: row.selection,
+        expectedSettingsVersion: settingsVersion,
+      };
+      const anchor = voiceCredentialSourceSettingAnchor(props.contribution, props.declaration);
+      const expectedContractDigest = voiceCredentialSourceMutationContractDigest(props.declaration, selectedMutation);
+      if (!anchor || !expectedContractDigest) return;
+      const mutation = sourceAction.execute('settings.invoke', { anchor, input: {
+        kind: 'voice_credential_source', credentialSlotId: props.credentials.slot.id,
+        selection: row.selection, expectedSettingsVersion: settingsVersion, expectedContractDigest,
+      } }, { retainInvocation: true, isPluginSettingsIntentCurrent: props.isCurrent }).then(result => {
+        if (!result.ok) {
+          presentActionTurnedOffNoticeIfOff(result, 'settings.invoke');
+          return result;
+        }
+        return SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(result.result).value;
       });
       fireAndForget(mutation.then((result) => {
         if (
-          result.status === 'outcomeUnknown'
+          result && typeof result === 'object' && 'status' in result && result.status === 'outcomeUnknown'
           && mountedRef.current
           && mutationOperationRef.current === operation
           && props.isCurrent?.() !== false

@@ -347,6 +347,15 @@ function voiceCredentialSourceMutationContractKey(
   }
 }
 
+/** Value-free fingerprint of the existing normalized slot, purpose and selected-source contract. */
+export function voiceCredentialSourceMutationContractDigest(
+  declaration: VoiceProviderContribution,
+  mutation: AccountSettingsVoiceCredentialSourceMutation,
+): string | null {
+  const key = voiceCredentialSourceMutationContractKey(declaration, mutation);
+  return key === null ? null : `sha256:${bytesToHex(sha256(utf8ToBytes(key)))}`;
+}
+
 function staleVoiceCredentialSourceMutation(
   mutation: AccountSettingsVoiceCredentialSourceMutation,
   currentSettingsVersion = mutation.expectedSettingsVersion,

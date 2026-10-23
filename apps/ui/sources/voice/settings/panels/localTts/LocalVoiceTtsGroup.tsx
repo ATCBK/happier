@@ -7,12 +7,16 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Modal } from '@/modal';
-import { storage } from '@/sync/domains/state/storage';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import type { VoiceLocalTtsSettings } from '@/sync/domains/settings/voiceLocalTtsSettings';
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { t } from '@/text';
 import { describeTtsSampleFailure } from '@/voice/settings/panels/localTts/ttsSampleFailureMessage';
-import { primeWebAudioPlayback } from '@/voice/output/webAudioContext';
 import { getLocalTtsProviderSpec, useLocalTtsProviderSpecs } from '@/voice/settings/panels/localTts/providers/registry';
 import type { VoiceDaemonRouteDiagnosticReason } from '@/voice/settings/voiceProviderLocalAvailability';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -43,6 +47,8 @@ export function LocalVoiceTtsGroup(props: {
   daemonRouteDiagnosticReason?: VoiceDaemonRouteDiagnosticReason | null;
 }) {
   const searchPrerequisite = useVoiceSettingsSearchPrerequisite();
+  const scope = useAccountSettingsScope();
+  const { execute } = useMountedActionExecution(scope, { openOnRequest: true });
   const { theme } = useUnistyles();
   const providerSpecs = useLocalTtsProviderSpecs();
   const declarations = useVoiceContributedSettingsDeclarations('voiceConversations');
@@ -132,18 +138,15 @@ export function LocalVoiceTtsGroup(props: {
           tooltip={t('settingsVoice.local.testTts')}
           disabled={testStatus === 'speaking'}
           onPress={() => {
-          primeWebAudioPlayback();
           fireAndForget((async () => {
             try {
               if (testStatus === 'speaking') return;
               setTestStatus('speaking');
-              const operation = VOICE_CONVERSATIONS_SETTINGS.settings.testTts.operation;
-              if (!operation || operation.kind !== 'invoke') throw new Error('voice_tts_test_operation_unavailable');
-              const result = await operation.invoke({
-                isCurrent: () => true,
-                readSettings: async () => storage.getState().settings,
-                mutateSettings: async () => { throw new Error('TTS sample must not mutate settings'); },
-              });
+              const outcome = await execute('settings.invoke', { anchor: VOICE_CONVERSATIONS_SETTINGS.settings.testTts.anchor });
+              if (!outcome.ok && presentActionTurnedOffNoticeIfOff(outcome, 'settings.invoke')) return;
+              if (!outcome.ok && isActionApprovalDeclinedErrorCode(outcome.errorCode)) return;
+              requireActionSuccess(outcome);
+              const result = SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(outcome.result);
               if (result.status === 'unavailable') throw new Error(result.reason ?? 'voice_tts_provider_unavailable');
             } catch (err) {
               fireAndForget(Promise.resolve().then(() => Modal.alert(t('common.error'), describeTtsSampleFailure(err instanceof Error ? err.message : null))), {

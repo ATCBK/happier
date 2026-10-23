@@ -660,6 +660,10 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
 }
 
   function buildDefaultActionExecutor(opts?: Readonly<{
+  /** One captured Voice editor intent; never serialized into Action input or approval. */
+  voiceSettingsEdit?: import('@/components/settings/catalog/settingDeclarations').SettingsMutationServices['voiceSettingsEdit'];
+  /** Mounted model-pack progress presentation; Action policy owns admission. */
+  voiceModelPackPresentation?: import('@/components/settings/catalog/settingDeclarations').SettingsMutationServices['voiceModelPackPresentation'];
   /** Captured profile candidate; Settings admission remains in the shared executor. */
   publicProfileAtmosphereDraft?: import('@/components/settings/catalog/settingDeclarations').SettingsMutationServices['publicProfileAtmosphereDraft'];
   /** Fresh invocation's exact Session admission objects; never serialized or shared by cached executors. */
@@ -1265,6 +1269,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         return true;
       },
       mutationServices: { readAgentCatalog: createVoiceAgentSettingsCatalogReader(accountContext ?? null),
+        ...(accountContext && opts?.voiceSettingsEdit ? { voiceSettingsEdit: opts.voiceSettingsEdit } : {}),
+        ...(accountContext && opts?.voiceModelPackPresentation ? { voiceModelPackPresentation: opts.voiceModelPackPresentation } : {}),
         ...(accountContext ? createAtmosphereSettingServices(accountContext) : {}),
         ...(accountContext && opts?.publicProfileAtmosphereDraft ? { publicProfileAtmosphereDraft: opts.publicProfileAtmosphereDraft } : {}),
         ...(accountContext ? { readConnectedAccountPurposes: async (signal?: AbortSignal) => {

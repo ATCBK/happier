@@ -11,8 +11,22 @@ import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/acc
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { SettingValue } from '@/components/settings/catalog/settingDeclarations';
 import { readBundledSpeechSettingsDescriptorFromEntry } from './panels/bundledSpeech/descriptor';
+import { buildQualifiedPluginContributionKey, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
+import type { VoiceProviderContribution } from '@happier-dev/protocol/plugins/contributions/voice';
 
 export const voiceSettingsDeclarationRegistry = createDefaultVoiceProviderRegistry();
+
+function voiceSettingsPageIds(roles: readonly string[], conversation: boolean): SettingsPageId[] {
+    const pages: SettingsPageId[] = [];
+    if (roles.includes('dictation_stt')) pages.push('voiceDictation');
+    if (conversation || roles.includes('conversation_stt') || roles.includes('conversation_tts')) pages.push('voiceConversations');
+    return pages;
+}
+
+export function voiceCredentialSourceSettingAnchor(contribution: PluginContributionIdentityV1, declaration: VoiceProviderContribution): string | null {
+    const page = voiceSettingsPageIds(declaration.roles, declaration.kind === 'conversation')[0];
+    return page ? `${page}.provider.${buildQualifiedPluginContributionKey(contribution)}.credentialSource` : null;
+}
 
 function record(value: unknown): value is Readonly<Record<string, unknown>> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -112,10 +126,10 @@ export function getVoiceContributedSettingsDeclarations(
 ) {
     return registry.list().flatMap((entry) => {
         const descriptor = entry.providerSettings;
-        if (!descriptor) return [];
         const declaration = 'declaration' in entry ? entry.declaration : undefined;
+        if (!descriptor && !declaration?.credentials) return [];
         const endpointConsent = readBundledSpeechSettingsDescriptorFromEntry(entry.providerId, entry)?.endpointConsent;
-        const presentationFields = descriptor.presentation
+        const presentationFields = descriptor?.presentation
             ? parseRealtimeSettingsDescriptor(entry.providerId, descriptor.presentation)?.fields.flatMap((field) => [
                 field, ...(Array.isArray(field.subfields) ? field.subfields as readonly RealtimeSettingsFieldDescriptor[] : []),
             ]) ?? []
@@ -141,7 +155,7 @@ export function getVoiceContributedSettingsDeclarations(
                 fields[`provider.${entry.providerId}.${path}.${operationId}`] = {
                     titleKey: 'settingsVoice.providerSectionTitle',
                     title: `${label(title)} · ${String(tLoose(operationTitle[operation]))}`,
-                    operation: { kind: 'invoke', requiresHumanInteraction: operation === 'preview', requiresApproval: operation === 'preview',
+                    operation: { kind: 'invoke', requiresHumanInteraction: operation === 'preview', requiresApproval: operation === 'preview', uiConfirmation: 'direct',
                         invoke: async context => {
                             const { invokeVoiceCatalogSettingsOperation } = await import('./voiceCatalogSettingsOperation');
                             return invokeVoiceCatalogSettingsOperation(entry, registry, operation, context);
@@ -150,11 +164,11 @@ export function getVoiceContributedSettingsDeclarations(
                 };
             }
         };
-        for (const field of descriptor.fields) {
+        for (const field of descriptor?.fields ?? []) {
             if (!field.presentation?.control || field.presentation.hidden) continue;
             add(field.id, field.title, field.description, Boolean(field.secret));
         }
-        for (const field of descriptor.presentation?.fields ?? []) {
+        for (const field of descriptor?.presentation?.fields ?? []) {
             // Welcome is the shared Voice Greeting, not provider configuration.
             if (field.kind === 'welcome') continue;
             add(field.path, field.titleKey ?? fields[`provider.${entry.providerId}.${field.path}`]?.title ?? field.path, field.subtitleKey);
@@ -165,14 +179,14 @@ export function getVoiceContributedSettingsDeclarations(
         }
         if (entry.kind === 'voice.speech-engine.v1') for (const catalog of entry.declaration?.catalogs ?? []) {
             if (catalog.kind === 'voices') addCatalogOperations(catalog.settingFieldId,
-                descriptor.fields.find(field => field.id === catalog.settingFieldId)?.title ?? catalog.settingFieldId);
+                descriptor?.fields.find(field => field.id === catalog.settingFieldId)?.title ?? catalog.settingFieldId);
         }
-        for (const action of declaration?.settings?.actions ?? []) {
+        if (descriptor) for (const action of declaration?.settings?.actions ?? []) {
             fields[`provider.${entry.providerId}.action.${action.id}`] = {
                 titleKey: 'settingsVoice.providerSectionTitle', title: label(action.title),
                 ...(declaration ? { contribution: { pluginId: entry.pluginId, localId: declaration.id } } : {}),
                 operation: {
-                    kind: 'invoke', requiresHumanInteraction: true,
+                    kind: 'invoke', requiresHumanInteraction: true, uiConfirmation: 'direct',
                     invoke: async ({ signal, isCurrent }) => {
                         if (!isCurrent()) return { status: 'unavailable', reason: 'provider_retired' };
                         if (registry.get(entry.providerId)?.providerSettings !== descriptor) return { status: 'unavailable', reason: 'provider_retired' };
@@ -184,25 +198,29 @@ export function getVoiceContributedSettingsDeclarations(
                 },
             };
         }
-        if (descriptor.connectedServicesBinding) {
+        if (descriptor?.connectedServicesBinding) {
             const binding = descriptor.connectedServicesBinding;
             fields[`provider.${entry.providerId}.${binding.id}`] = { titleKey: 'settingsVoice.providerSectionTitle', title: label(binding.title), description: binding.description ? label(binding.description) : undefined, sensitive: true, operation: { kind: 'interaction', requiresHumanInteraction: true } };
         }
-        const credential = descriptor.presentation?.credential;
+        const credential = descriptor?.presentation?.credential;
         const credentials = declaration?.credentials;
         if (credential?.kind === 'api_key' || credentials?.sources.some((source) => source.kind === 'savedSecret')) fields[`provider.${entry.providerId}.credential`] = {
             titleKey: 'settingsVoice.externalCredentials.apiKeyTitle',
             ...(credential?.kind === 'api_key' && credential.titleKey ? { title: label(credential.titleKey) } : {}), sensitive: true, operation: { kind: 'interaction', requiresHumanInteraction: true },
         };
         if (credentials?.sources.some((source) => source.kind === 'connectedAccount')) fields[`provider.${entry.providerId}.credentialSource`] = {
-            titleKey: 'settingsVoice.realtimeProviders.authentication.title', descriptionKey: 'settingsVoice.realtimeProviders.authentication.subtitle', sensitive: true, operation: { kind: 'interaction', requiresHumanInteraction: true },
+            titleKey: 'settingsVoice.realtimeProviders.authentication.title', descriptionKey: 'settingsVoice.realtimeProviders.authentication.subtitle', sensitive: true,
+            operation: { kind: 'invoke', requiresHumanInteraction: false, requiresApproval: false,
+                invoke: async context => {
+                    const { invokeVoiceCredentialSourceSettingsOperation } = await import('./voiceCredentialSourceSettingsOperation');
+                    return invokeVoiceCredentialSourceSettingsOperation(entry, registry, context);
+                },
+            },
         };
         if (declaration) for (const id of Object.keys(fields)) fields[id] = {
             ...fields[id]!, contribution: { pluginId: entry.pluginId, localId: declaration.id },
         };
-        const pages: SettingsPageId[] = [];
-        if (entry.roles.includes('dictation_stt')) pages.push('voiceDictation');
-        if (entry.kind === 'voice.conversation-provider.v1' || entry.roles.includes('conversation_stt') || entry.roles.includes('conversation_tts')) pages.push('voiceConversations');
+        const pages = voiceSettingsPageIds(entry.roles, entry.kind === 'voice.conversation-provider.v1');
         // The section carries the service's own name, so search says which service a control belongs to.
         const serviceTitle = declaration ? label(declaration.title) : String(tLoose(entry.selectionOptions?.[0]?.titleKey ?? 'settingsVoice.providerSectionTitle'));
         return pages.map((pageId) => defineSettingsPage({ pageId, sections: { [`provider.${entry.providerId}`]: {

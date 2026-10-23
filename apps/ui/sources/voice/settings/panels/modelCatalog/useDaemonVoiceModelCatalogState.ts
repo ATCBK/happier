@@ -3,8 +3,8 @@ import * as React from 'react';
 import type { DaemonVoiceInferenceModelStatus } from '@happier-dev/protocol/daemon/voiceInference';
 
 import { VOICE_RUNTIME_CONFIG_DEFAULTS } from '@/voice/runtime/voiceRuntimeConfigDefaults';
-import { buildModelCatalogRows } from './buildModelCatalogRows';
-import { invokeDaemonModelPackOperation } from './invokeDaemonModelPackOperation';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { VOICE_ADVANCED_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
 import {
     captureActiveServerAccountScopeCurrentness,
     captureActiveServerAccountScopeLifetime,
@@ -49,7 +49,7 @@ export type DaemonVoiceModelCatalogState = Readonly<{
 
 type DaemonVoiceModelCatalogClient = Pick<
     DaemonVoiceInferenceClient,
-    'listModels' | 'getModelsStatus' | 'installModel' | 'acceptModelPackLicense' | 'removeModel'
+    'listModels' | 'getModelsStatus'
 >;
 
 type CatalogActionState = Pick<DaemonVoiceModelCatalogState, 'actionPackId' | 'actionError'>;
@@ -82,6 +82,7 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
         [providedClient],
     );
     const settingsScope = useAccountSettingsScope();
+    const actions = useMountedActionExecution(settingsScope, { openOnRequest: true });
     const capturedAccount = captureActiveServerAccountScopeLifetime();
     const account = capturedAccount && areServerAccountScopesEqual(settingsScope, capturedAccount.scope)
         ? capturedAccount : null;
@@ -258,8 +259,9 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
             actionPackId: packId,
             actionError: null,
         }));
+        let refreshAfterAction = true;
         try {
-            await action(packId, () => actionStillOwnsState() && account.isCurrent(), actionAbortController.signal);
+            refreshAfterAction = await action(packId, () => actionStillOwnsState() && account.isCurrent(), actionAbortController.signal) !== false;
         } catch (error) {
             if (!actionStillOwnsState()) return;
             if (actionAbortController.signal.aborted) return;
@@ -281,19 +283,23 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
             // lifecycle phases. Do not keep the row visually/action-locked
             // while route discovery or a remote status request is slow; the
             // refresh owns its own error handling and stale-response guard.
-            if (account.isCurrent()) void refreshCatalog();
+            if (refreshAfterAction && account.isCurrent()) void refreshCatalog();
         }
     }, [enabled, machineScope, refreshCatalog, observation]);
 
     const mutate = React.useCallback((packId: string, operation: 'install' | 'remove') =>
         runAction(packId, operation, async (id, isCurrent, signal) => {
-            const groups = buildModelCatalogRows({ statuses: state.statuses,
-                statusUnavailable: state.errorCode !== null || state.loading,
-                selectedSttPackId: null, selectedTtsPackId: null });
-            const row = [...groups.stt, ...groups.tts].find(candidate => candidate.packId === id);
-            if (!row) return;
-            await invokeDaemonModelPackOperation({ operation, row, client, scope: machineScope, signal, isCurrent });
-        }), [client, machineScope, runAction, state.statuses, state.errorCode, state.loading]);
+            if (!isCurrent()) return false;
+            const failure: { error?: unknown } = {};
+            const result = await actions.execute('settings.invoke', {
+                anchor: VOICE_ADVANCED_SETTINGS.settings[operation === 'install' ? 'installSpeechModel' : 'removeSpeechModel'].anchor,
+                input: { kind: 'model_pack', packId: id, ...(machineScope ? { machineId: machineScope.machineId } : {}) },
+            }, { signal, executorOptions: { voiceModelPackPresentation: {
+                isCurrent, onError: error => { failure.error = error; },
+            } } });
+            if ('error' in failure) throw failure.error;
+            return result.ok;
+        }), [actions.execute, machineScope, runAction]);
     const install = React.useCallback((packId: string) => mutate(packId, 'install'), [mutate]);
     const remove = React.useCallback((packId: string) => mutate(packId, 'remove'), [mutate]);
 

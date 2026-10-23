@@ -13,7 +13,6 @@ import { useUnistyles } from 'react-native-unistyles';
 import { Item } from '@/components/ui/lists/Item';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { Modal } from '@/modal';
 import { t } from '@/text';
 import {
   getModelPackCatalogEntry,
@@ -76,8 +75,8 @@ export function LocalNeuralTtsSettings(props: {
   const { modelStatus, downloadProgress, installed, installSummary, updateCheckedRemote, prepareModel, cancelPrepare, clearAssets, checkForUpdates } =
     useLocalNeuralModelPackState({
       packId: effectiveAssetSetId,
-      manifestUrl,
-      enabled: !usesDaemonExecution && publicationAvailable,
+      enabled: !usesDaemonExecution,
+      readEnabled: publicationAvailable,
     });
 
   const deviceVoices = useLocalNeuralKokoroVoiceCatalog({ installSummary });
@@ -195,26 +194,7 @@ export function LocalNeuralTtsSettings(props: {
             subtitle={transferRow?.subtitle ?? t('settingsVoice.local.kokoro.model.subtitleNative')}
             subtitleLines={transferRow ? 0 : undefined}
             detail={modelDetail}
-            onPress={() => {
-              if (!runtimeSupported) {
-                fireAndForget((async () => {
-                  await Modal.alert(t('common.error'), t('settingsVoice.local.kokoro.alerts.runtimeUnsupported.body'));
-                })(), {
-                  tag: 'LocalNeuralTtsSettings.alert.runtimeUnsupported',
-                });
-                return;
-              }
-              if (!manifestUrl) {
-                fireAndForget((async () => {
-                  await Modal.alert(
-                    t('settingsVoice.local.kokoro.alerts.missingManifest.title'),
-                    t('settingsVoice.local.kokoro.alerts.missingManifest.body'),
-                  );
-                })(), { tag: 'LocalNeuralTtsSettings.alert.missingManifestUrl' });
-                return;
-              }
-              fireAndForget(prepareModel(), { tag: 'LocalNeuralTtsSettings.prepareModel' });
-            }}
+            onPress={prepareModel}
             rightElement={
               modelStatus === 'downloading' ? (
                 <IconButton

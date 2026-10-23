@@ -249,7 +249,11 @@ describe('LocalNeuralTtsSettings (native)', () => {
   });
 
   it('blocks model download when runtime is unsupported and surfaces a clear error', async () => {
+    await ensurePreviewAccount();
+    account!.replaceSettings(settingsParse({ ...account!.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { disabledSurfaces: ['ui'] } } } }));
     const nativeAlert = vi.spyOn(Alert, 'alert');
+    nativeAlert.mockClear();
     try {
       boundary.setNativeAvailable(false);
       const fetch = vi.fn();
@@ -275,6 +279,12 @@ describe('LocalNeuralTtsSettings (native)', () => {
       });
       await act(async () => {});
 
+      expect(nativeAlert).not.toHaveBeenCalled();
+      await act(async () => { account!.replaceSettings(settingsParse({ ...account!.settings, actionsSettingsV1: { v: 1,
+        approvalWaivedSurfaces: { 'settings.invoke': ['ui'] } } })); });
+      await act(async () => { await pressTestInstanceAsync(modelItem!); });
+      await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
+
       expect(fetch).not.toHaveBeenCalled();
       expect(sherpa.initialize).not.toHaveBeenCalled();
       expect(nativeAlert).toHaveBeenCalled();
@@ -285,6 +295,7 @@ describe('LocalNeuralTtsSettings (native)', () => {
   });
 
   it('downloads from the published canonical Kokoro manifest URL through model-pack state', async () => {
+    await ensurePreviewAccount();
     filesystem.files.clear();
     const requested = createDeferred<{ url: string; signal: AbortSignal }>();
     vi.stubGlobal('fetch', vi.fn((url: string, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
@@ -303,7 +314,8 @@ describe('LocalNeuralTtsSettings (native)', () => {
 
     const modelRow = screen.tree.root.findAll(node => node.props.title === t('settingsVoice.local.kokoro.model.title')
       && typeof node.props.onPress === 'function')[0]!;
-    await act(async () => { await pressTestInstanceAsync(modelRow); });
+    let preparing!: Promise<void>;
+    await act(async () => { preparing = modelRow.props.onPress(); });
     const request = await requested.promise;
     const url = new URL(request.url);
     expect(`${url.origin}${url.pathname}`).toBe('https://github.com/happier-dev/happier-assets/releases/download/model-packs/kokoro-82m-v1.0-onnx-q8-wasm__manifest.json');
@@ -317,6 +329,7 @@ describe('LocalNeuralTtsSettings (native)', () => {
     const settled = running!.follow({ signal: cancellation.signal });
     cancellation.abort();
     await expect(settled).rejects.toThrow();
+    await preparing;
     expect(request.signal.aborted).toBe(true);
   });
 
@@ -343,6 +356,7 @@ describe('LocalNeuralTtsSettings (native)', () => {
   });
 
   it('keeps download cancellation outside the model row with named button semantics', async () => {
+    await ensurePreviewAccount();
     filesystem.files.clear();
     const requested = createDeferred<AbortSignal>();
     vi.stubGlobal('fetch', vi.fn((_url: string, options: RequestInit) => new Promise<Response>((_resolve, reject) => {
@@ -365,7 +379,8 @@ describe('LocalNeuralTtsSettings (native)', () => {
       && typeof node.props.onPress === 'function'
       && node.props.rightElement !== undefined
     ))[0];
-    await act(async () => { await pressTestInstanceAsync(modelRow()!); });
+    let preparing!: Promise<void>;
+    await act(async () => { preparing = modelRow()!.props.onPress(); });
     const signal = await requested.promise;
     expect(modelRow()).toBeTruthy();
     expect(modelRow()?.props.rightElementOutsidePressable).toBe(true);
@@ -381,6 +396,7 @@ describe('LocalNeuralTtsSettings (native)', () => {
     });
     expect(stopPropagation).toHaveBeenCalledOnce();
     expect(signal.aborted).toBe(true);
+    await act(async () => { await preparing; });
     await vi.waitFor(() => expect(modelRow()?.props.rightElementOutsidePressable).toBe(false));
     expect(filesystem.files.size).toBe(0);
     expect(sherpa.initialize).not.toHaveBeenCalled();

@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { primeWebAudioPlayback } from '@/voice/output/webAudioContext';
 import { HAPPIER_PRIVACY_POLICY_URL } from '@/constants/legalUrls';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { getDefaultModelPackId, resolveCanonicalModelPackId } from '@happier-dev/protocol/voice/modelPacks/catalog';
@@ -49,7 +50,8 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
         || operation === 'diagnostics_session_opt_out' && input.kind === 'diagnostics_session'
         || operation === 'diagnostics_retry_shutdown' && input.kind === 'diagnostics_revocation'
         || operation === 'diagnostics_enabled' && input.kind === 'diagnostics_enabled')) return unavailable('operation_input_invalid');
-    const current = () => !context.signal?.aborted && context.isCurrent();
+    const modelPresentation = context.services?.voiceModelPackPresentation;
+    const current = () => !context.signal?.aborted && context.isCurrent() && (modelPresentation?.isCurrent() ?? true);
     if (!current()) return { status: 'cancelled' };
     const cancellation = cancelsModel && input?.kind === 'model_pack'
         ? captureVoiceModelCancellation(resolveCanonicalModelPackId(input.packId)) : null;
@@ -206,6 +208,7 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
             const interrupt = () => { if (preview) preview.finish(); else playback?.interrupt(); };
             context.signal?.addEventListener('abort', interrupt, { once: true });
             try {
+                primeWebAudioPlayback();
                 await spec.test({ cfgTts: previewTts, voice, networkTimeoutMs: cfg.networkTimeoutMs, sample: t('settingsVoice.local.testTtsSample'),
                     signal: context.signal, isCurrent: () => selectionCurrent() && (preview?.isCurrent() ?? true),
                     registerPlaybackStopper: preview?.registerPlaybackStopper ?? playback!.registerStopper.captureAttempt!() });
@@ -238,8 +241,11 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
         if (isRoleModel && execution === 'device') {
             if (!packId) return unavailable('model_pack_unselected');
             const { invokeVoiceDeviceModelPackOperation } = await import('./voiceDeviceModelPackOperation');
-            return invokeVoiceDeviceModelPackOperation({ operation: operation.endsWith('_remove') ? 'remove' : operation.endsWith('_update') ? 'update' : 'prepare',
-                packId, role, signal: context.signal, isCurrent: operationCurrent });
+            return await invokeVoiceDeviceModelPackOperation({ operation: operation.endsWith('_remove') ? 'remove' : operation.endsWith('_update') ? 'update' : 'prepare',
+                packId, role, signal: context.signal, isCurrent: operationCurrent,
+                onDownloadStarted: modelPresentation?.onDownloadStarted,
+                onProgress: modelPresentation?.onProgress,
+                onUpdateChecked: modelPresentation?.onUpdateChecked });
         }
         if (operation === 'readiness_inspect') {
             if (purpose === 'conversation' && !voice.providerId) return unavailable('provider_unselected');
@@ -274,6 +280,7 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
         return await invokeDaemonModelPackOperation({ operation: operation === 'model_remove' || operation.endsWith('_remove') ? 'remove' : 'install',
             row, client, scope, signal: context.signal, isCurrent: operationCurrent });
     } catch (error) {
+        modelPresentation?.onError?.(error);
         if (!current()) return { status: 'cancelled' };
         const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : null;
         // Error messages can contain provider/credential material; return only structural known codes.

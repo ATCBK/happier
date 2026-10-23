@@ -26,7 +26,7 @@ export function DaemonModelPackRow(props: Readonly<{
     actionInFlight: boolean;
     /** The catalog has one mutation owner, so every competing row is inert. */
     actionsDisabled?: boolean;
-    onSetDefault: (packId: string) => void;
+    onSetDefault: (packId: string) => Promise<void> | void;
     onInstall: (packId: string) => void;
     onRemove: (packId: string) => Promise<void> | void;
     onCancel?: () => void;
@@ -75,7 +75,11 @@ export function DaemonModelPackRow(props: Readonly<{
     const onPress = isUnknown || isUnsupported || props.actionsDisabled ? undefined : () => {
         if (props.actionInFlight) return;
         if (row.canInstall) props.onInstall(row.packId);
-        else if (canPromoteToDefault) props.onSetDefault(row.packId);
+        else if (canPromoteToDefault) {
+            const pending = props.onSetDefault(row.packId);
+            if (pending) fireAndForget(pending, { tag: 'DaemonModelPackRow.default' });
+            return pending;
+        }
     };
 
     return (

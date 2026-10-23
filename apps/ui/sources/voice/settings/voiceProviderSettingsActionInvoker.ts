@@ -33,6 +33,33 @@ function actionError(code: string): Error {
   return Object.assign(new Error(code), { code });
 }
 
+export type SafeSettingsActionFailureDiagnostic = Readonly<{
+  code?: string;
+  stage?: string;
+  responseFailure?: Readonly<{ kind: string; status: number; statusClass: string }>;
+}>;
+const SAFE_RESPONSE_FAILURE_KINDS = new Set([
+  'redirect', 'http_status', 'content_type', 'body_too_large', 'body_read_failed', 'json_projection_failed',
+]);
+const SAFE_STAGE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/iu;
+
+/** Only structural failure facts can cross the Settings Action; provider prose is never projected. */
+export function projectSafeSettingsActionFailure(error: unknown): SafeSettingsActionFailureDiagnostic {
+  if (!error || typeof error !== 'object') return {};
+  const code = readSafeSettingsActionErrorCode(error);
+  const stage = 'stage' in error && typeof error.stage === 'string' && SAFE_STAGE_PATTERN.test(error.stage)
+    ? error.stage : null;
+  const raw = 'responseFailure' in error ? error.responseFailure : null;
+  let responseFailure: SafeSettingsActionFailureDiagnostic['responseFailure'];
+  if (raw && typeof raw === 'object' && 'kind' in raw && typeof raw.kind === 'string'
+    && SAFE_RESPONSE_FAILURE_KINDS.has(raw.kind) && 'status' in raw && typeof raw.status === 'number'
+    && Number.isInteger(raw.status) && raw.status >= 100 && raw.status <= 599
+    && 'statusClass' in raw && raw.statusClass === `${Math.floor(raw.status / 100)}xx`) {
+    responseFailure = { kind: raw.kind, status: raw.status, statusClass: raw.statusClass };
+  }
+  return { ...(code ? { code } : {}), ...(stage ? { stage } : {}), ...(responseFailure ? { responseFailure } : {}) };
+}
+
 const SAFE_SETTINGS_ACTION_ERROR_CODES = new Set([
   'invalid_parameters',
   'credential_unavailable',
@@ -269,6 +296,8 @@ export async function invokeVoiceProviderSettingsAction(input: Readonly<{
     return { status: 'completed' as const };
   } catch (error) {
     const code = readSafeSettingsActionErrorCode(error) ?? 'internal_error';
-    return { status: code === 'plugin_settings_action_confirmation_declined' ? 'cancelled' as const : 'unavailable' as const, reason: code };
+    const diagnostic = projectSafeSettingsActionFailure(error);
+    return { status: code === 'plugin_settings_action_confirmation_declined' ? 'cancelled' as const : 'unavailable' as const,
+      reason: code, ...(Object.keys(diagnostic).length ? { value: diagnostic } : {}) };
   }
 }

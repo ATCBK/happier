@@ -10,7 +10,8 @@ import { DaemonVoiceModelCatalogSection } from '@/voice/settings/panels/modelCat
 import { useDaemonVoiceModelCatalogState } from '@/voice/settings/panels/modelCatalog/useDaemonVoiceModelCatalogState';
 import { SettingAnchor, SettingSection } from '@/components/settings/shell/SettingRow';
 import { VOICE_ADVANCED_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
-import { updateVoiceLocalConversationSetting } from '@/voice/settings/voiceSettingBinding';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
 import { t } from '@/text';
@@ -26,6 +27,8 @@ export function VoiceSpeechModelsSection(props: Readonly<{
 }>) {
   const executionMachine = useVoiceExecutionMachinePresentation();
   const machineId = executionMachine.machineId;
+  const scope = useAccountSettingsScope();
+  const actions = useMountedActionExecution(scope, { openOnRequest: true });
   const catalog = useDaemonVoiceModelCatalogState({ enabled: Boolean(machineId), refreshKey: machineId });
   if (!machineId) return (
     <SettingSection section={VOICE_ADVANCED_SETTINGS.sectionRefs.models}>
@@ -47,10 +50,11 @@ export function VoiceSpeechModelsSection(props: Readonly<{
       selectedSttPackId={stt.localNeural?.assetId ?? null}
       selectedTtsPackId={tts.localNeural?.assetId ?? null}
       catalogController={catalog}
-      onSelectDefault={(kind, packId) => {
-        const next = updateVoiceLocalConversationSetting(voice,
-          kind === 'stt_sherpa' ? 'stt.localNeural.assetId' : 'tts.localNeural.assetId', packId);
-        if (next) props.setVoice(next);
+      onSelectDefault={async (_kind, packId) => {
+        await actions.execute('settings.invoke', {
+          anchor: VOICE_ADVANCED_SETTINGS.settings.defaultSpeechModel.anchor,
+          input: { kind: 'model_pack', packId, machineId },
+        });
       }}
     />
     </SettingAnchor>

@@ -15,86 +15,14 @@ import {
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { useVoiceContributedSettingRefs } from '@/voice/settings/useVoiceContributedSettingRefs';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 
-import { settingsActionInvoker, isContextCurrent, isPressedProviderSelected, readSafeSettingsActionErrorCode, type VoiceProviderSettingsActionOwner } from '@/voice/settings/voiceProviderSettingsActionInvoker';
+import { isContextCurrent, isPressedProviderSelected, projectSafeSettingsActionFailure, type SafeSettingsActionFailureDiagnostic, type VoiceProviderSettingsActionOwner } from '@/voice/settings/voiceProviderSettingsActionInvoker';
 export type { VoiceProviderSettingsActionOwner } from '@/voice/settings/voiceProviderSettingsActionInvoker';
-
-const SAFE_RESPONSE_FAILURE_KINDS = new Set([
-  'redirect',
-  'http_status',
-  'content_type',
-  'body_too_large',
-  'body_read_failed',
-  'json_projection_failed',
-]);
-
-/**
- * Provider-declared failure stage. Admitted as a short opaque token so the
- * failing step is nameable without the host branching on plugin ids.
- */
-const SAFE_STAGE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/iu;
-
-/**
- * Host projection of a settings-action failure.
- *
- * It is an allowlist of structural facts and deliberately has no channel for
- * the provider's own response text. A provider error body is arbitrary prose:
- * it can legitimately echo user or startup instructions, tool definitions,
- * account/workspace/agent identifiers, and transcript fragments, none of which
- * are byte-identical to a registered credential and none of which a credential
- * scrubber can therefore remove. Anything the plugin attaches beyond these
- * fields is dropped rather than bounded, so no provider sentence can reach a
- * Happier log or a synchronized diagnostic.
- */
-type SafeSettingsActionFailureDiagnostic = Readonly<{
-  code?: string;
-  stage?: string;
-  responseFailure?: Readonly<{
-    kind: string;
-    status: number;
-    statusClass: string;
-  }>;
-}>;
-
-function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Readonly<Record<string, unknown>>
-    : null;
-}
-
-function projectSafeSettingsActionFailure(error: unknown): SafeSettingsActionFailureDiagnostic {
-  const record = readRecord(error);
-  if (!record) return Object.freeze({});
-  const code = readSafeSettingsActionErrorCode(error);
-  const stage = typeof record.stage === 'string' && SAFE_STAGE_PATTERN.test(record.stage)
-    ? record.stage
-    : null;
-  const rawResponseFailure = readRecord(record.responseFailure);
-  let responseFailure: SafeSettingsActionFailureDiagnostic['responseFailure'];
-  if (
-    rawResponseFailure
-    && typeof rawResponseFailure.kind === 'string'
-    && SAFE_RESPONSE_FAILURE_KINDS.has(rawResponseFailure.kind)
-    && typeof rawResponseFailure.status === 'number'
-    && Number.isInteger(rawResponseFailure.status)
-    && rawResponseFailure.status >= 100
-    && rawResponseFailure.status <= 599
-  ) {
-    const statusClass = `${Math.floor(rawResponseFailure.status / 100)}xx`;
-    if (rawResponseFailure.statusClass === statusClass) {
-      responseFailure = Object.freeze({
-        kind: rawResponseFailure.kind,
-        status: rawResponseFailure.status,
-        statusClass,
-      });
-    }
-  }
-  return Object.freeze({
-    ...(code ? { code } : {}),
-    ...(stage ? { stage } : {}),
-    ...(responseFailure ? { responseFailure } : {}),
-  });
-}
 
 /**
  * Localized remedies for the projected codes that name a setting the user can
@@ -152,6 +80,7 @@ export function VoiceProviderSettingsActions(props: Readonly<{
   const settingRef = useVoiceContributedSettingRefs(props.providerId);
   const registration = getExternalVoiceProviderRegistration(props.providerId);
   const settingsScope = useAccountSettingsScope();
+  const { execute } = useMountedActionExecution(settingsScope, { openOnRequest: true });
   const [busyActionIds, setBusyActionIds] = React.useState<ReadonlySet<string>>(() => new Set());
   const lifecycleRef = React.useRef(new AbortController());
   // Whether this panel is still on screen. `signal.aborted` cannot answer that:
@@ -203,14 +132,18 @@ export function VoiceProviderSettingsActions(props: Readonly<{
             setBusyActionIds((current) => new Set(current).add(action.id));
             fireAndForget((async () => {
               try {
-                await settingsActionInvoker.invoke({
-                  key: `${props.providerId}/${occurrenceId}/${action.id}`,
-                  declaration: action,
-                  userGesture: true,
-                  signal,
-                  isCurrent: () => isContextCurrent(context),
-                  context,
-                });
+                const setting = settingRef(`action.${action.id}`);
+                if (!setting) throw Object.assign(new Error('voice_provider_settings_action_unavailable'), { code: 'voice_provider_settings_action_unavailable' });
+                const outcome = await execute('settings.invoke', { anchor: setting.anchor }, { signal });
+                if (!outcome.ok && presentActionTurnedOffNoticeIfOff(outcome, 'settings.invoke')) return;
+                requireActionSuccess(outcome);
+                const result = SettingsDeclarationActionOutputSchemasV1['settings.invoke'].parse(outcome.result);
+                if (result.status === 'cancelled') return;
+                if (result.status !== 'completed') {
+                  const diagnostic = projectSafeSettingsActionFailure(result.value);
+                  throw Object.assign(new Error(result.reason ?? 'voice_provider_settings_action_unavailable'), diagnostic,
+                    { code: result.reason ?? 'voice_provider_settings_action_unavailable' });
+                }
               } catch (error) {
                 const code = (error as Readonly<{ code?: unknown }>)?.code;
                 // Every press that applies nothing is nameable, including the
@@ -219,6 +152,7 @@ export function VoiceProviderSettingsActions(props: Readonly<{
                 // anything else would make the row a placebo.
                 const outcome = code === 'plugin_settings_action_confirmation_declined'
                   || code === 'plugin_settings_action_cancelled'
+                  || isActionApprovalDeclinedErrorCode(code)
                   ? 'declined'
                   : !mountedRef.current
                     ? 'unmounted'

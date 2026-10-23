@@ -16,7 +16,7 @@ import { useDaemonVoiceModelCatalogState } from './useDaemonVoiceModelCatalogSta
 
 type ModelCatalogClient = Pick<
     DaemonVoiceInferenceClient,
-    'listModels' | 'getModelsStatus' | 'installModel' | 'acceptModelPackLicense' | 'removeModel'
+    'listModels' | 'getModelsStatus'
 >;
 
 export type DaemonVoiceModelCatalogController = ReturnType<typeof useDaemonVoiceModelCatalogState>;
@@ -61,7 +61,7 @@ function ModelCatalogGroup(props: Readonly<{
     description?: string;
     rows: readonly ModelCatalogRow[];
     actionPackId: string | null;
-    onSetDefault: (packId: string) => void;
+    onSetDefault: (packId: string) => Promise<void> | void;
     onInstall: (packId: string) => void;
     onRemove: (packId: string) => Promise<void> | void;
     onCancel: () => void;
@@ -91,15 +91,14 @@ function ModelCatalogGroup(props: Readonly<{
  * through the canonical catalog + daemon readiness hooks — no provider-name
  * branching; grouping and defaults come from the protocol catalog.
  *
- * Default selection is persisted by the parent through the canonical per-kind
- * default field (`stt`/`tts` local-neural `assetId`), supplied via
- * `selectedSttPackId` / `selectedTtsPackId` and written back via
- * `onSelectDefault`.
+ * The parent admits default selection through its Settings Action. The operation
+ * persists the canonical per-kind local-neural `assetId`, observed here through
+ * `selectedSttPackId` / `selectedTtsPackId`.
  */
 export function DaemonVoiceModelCatalogSection(props: Readonly<{
     selectedSttPackId: string | null;
     selectedTtsPackId: string | null;
-    onSelectDefault: (kind: ModelPackKind, packId: string) => void;
+    onSelectDefault: (kind: ModelPackKind, packId: string) => Promise<void> | void;
     client?: ModelCatalogClient;
     catalogController?: DaemonVoiceModelCatalogController;
 }>): React.ReactElement {
