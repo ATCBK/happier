@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
 import { findAllHostTestInstances } from '@/dev/testkit/render/renderScreen';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -16,6 +16,9 @@ import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixture
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { Dimensions } from 'react-native';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
+import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import type { MachineProvisionersListResultV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 
 const route = vi.hoisted(() => ({ replace: vi.fn() }));
 const nativeBoundary = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -48,7 +51,8 @@ beforeEach(async () => {
 });
 afterEach(() => { standardCleanup(); restoreViewport?.(); restoreViewport = undefined; });
 const defaultController = { machineId: 'host', installationId: 'installation' };
-const provisioner = { contribution: { pluginId: 'custom.compute', localId: 'vm' }, occurrenceId: 'occurrence', credentialPurposes: [], descriptor: {
+const provisioner: MachineProvisionersListResultV1['provisioners'][number] = {
+    contribution: { pluginId: 'custom.compute', localId: 'vm' }, occurrenceId: 'occurrence', credentialPurposes: [], descriptor: {
     id: 'vm', title: 'Virtual machine', icon: 'server', resourceKind: 'VM', schemaVersion: 1,
     launchSchema: { type: 'object', properties: { cpu: { type: 'integer', minimum: 1 } }, required: ['cpu'], additionalProperties: false },
     resourceSchema: { type: 'object', properties: {}, additionalProperties: false }, platforms: ['linux'], prerequisites: [],
@@ -57,6 +61,31 @@ const provisioner = { contribution: { pluginId: 'custom.compute', localId: 'vm' 
 } };
 
 describe('mounted managed configurator', () => {
+    it('keeps an in-flight options schema read through the merged projection reload for the same Action occurrence', async () => {
+        const action = PluginProjectedActionV2Schema.parse({ id: 'options', pluginId: provisioner.contribution.pluginId,
+            occurrenceId: 'options-occurrence', title: 'Native options', scopes: ['machine'], surfaces: ['cli', 'plugin'],
+            execution: { target: 'daemon' }, available: true, dangerLevel: 'safe' });
+        const projection = { ...EMPTY_PLUGIN_UI_PROJECTION,
+            actionsById: { [buildQualifiedPluginContributionKey({ pluginId: action.pluginId, localId: action.id })]: action } };
+        const binding = {
+            serverId: 'server-a', accountId: 'owner', revision: 1, scope: { serverId: 'server-a', accountId: 'owner' },
+            isCurrent: () => true, onRetire: () => ({ dispose() {} }),
+        } satisfies ServerCredentialAccountScopeBinding;
+        const signals: AbortSignal[] = [];
+        nativeBoundary.rpc.mockImplementation(async (request: { method: string; signal?: AbortSignal }) => {
+            if (request.method !== RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) return { ok: false, code: 'unsupported' };
+            if (request.signal) signals.push(request.signal);
+            return await new Promise(() => {});
+        });
+        const { useManagedProvisionerOptionsInput } = await import('./useManagedProvisionerOptionsInput');
+        const hook = await renderHook(({ projectionReady }: { projectionReady: boolean }) => useManagedProvisionerOptionsInput({
+            binding, controller: defaultController, provisioner, projection, projectionReady,
+        }), { initialProps: { projectionReady: true } });
+        expect(signals).toHaveLength(1);
+        await hook.rerender({ projectionReady: false });
+        expect(signals[0]?.aborted).toBe(false);
+        await hook.unmount();
+    });
     it('says why an unavailable provisioner cannot create here in the check\u2019s own words, with its next step', async () => {
         const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://unavailable-check.example',
             serverIdentityId: 'srv_unavailable_check', accountId: 'owner', currentAccount: true });
@@ -145,10 +174,12 @@ describe('mounted managed configurator', () => {
         storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
         const read = nativeBoundary.rpc.getMockImplementation();
         let schemaReads = 0;
+        const schemaReadSignals: AbortSignal[] = [];
         // The daemon takes the schema request and never answers it (a host under load).
-        nativeBoundary.rpc.mockImplementation(async (request: { method: string }) => {
+        nativeBoundary.rpc.mockImplementation(async (request: { method: string; signal?: AbortSignal }) => {
             if (request.method !== RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) return read?.(request);
             schemaReads++;
+            if (request.signal) schemaReadSignals.push(request.signal);
             return new Promise(() => {});
         });
         let checks = 0;
@@ -181,6 +212,10 @@ describe('mounted managed configurator', () => {
             expect(screen.getTextContent()).toContain(t('managedMachines.options.loading', { provider: 'Virtual machine' }));
             await act(async () => { await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS); });
             expect(screen.findByTestId('managed-config.error')).not.toBeNull();
+            // Retry also reloads the merged projection. Its temporary loading phase retains this
+            // exact Action occurrence and must not cancel the replacement schema read.
+            expect(schemaReadSignals).toHaveLength(2);
+            expect(schemaReadSignals[1]?.aborted).toBe(false);
             await screen.unmount();
         } finally { vi.useRealTimers(); }
     });

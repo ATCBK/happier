@@ -11,3 +11,12 @@ describe('brand mark', () => {
     expect(asset.readUInt32BE(16)).toBe(asset.readUInt32BE(20));
   });
 });
+
+describe('native process disclosure', () => {
+  it('declares the HOME value supplied to every Cua process', () => {
+    expect(PLUGIN_MANIFEST.hostAccess?.required).toContainEqual(expect.objectContaining({
+      capability: 'process',
+      scope: expect.objectContaining({ envKeys: ['HOME'] }),
+    }));
+  });
+});

@@ -155,7 +155,7 @@ export const CUA_PLUGIN = definePlugin({
     description: 'Exact Cua local and BYOC resources with private native bootstrap IO.',
     engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './.happier-plugin/daemon.js' },
     hostAccess: { required: [{ id: processAccess, capability: 'process', reason: 'Operate only the reviewed native Cua resource.',
-        scope: { executables: [{ kind: 'managedDependency', id: dependencyId }] } },
+        scope: { executables: [{ kind: 'managedDependency', id: dependencyId }], envKeys: ['HOME'] } },
         { id: 'cloud-account', capability: 'connectedAccounts', reason: 'Use only the captured native cloud setup.',
             scope: { serviceRefs: ['cloud-native'], operations: ['use'], materializationKinds: ['environment'] } },
         { id: 'cua-account', capability: 'connectedAccounts', reason: 'Use only the captured Cua login.',

@@ -40,7 +40,10 @@ export function useManagedProvisionerOptionsInput(input: Readonly<{
     const { binding, controller, provisioner, projection, projectionReady, projectionFailed, refreshKey } = input;
     const localId = provisioner?.descriptor.actions.options;
     const identity = localId && provisioner ? { pluginId: provisioner.contribution.pluginId, localId } : null;
-    const action = identity && projectionReady ? createPluginUiProjectedActionResolver(projection.actionsById)(identity) : null;
+    // A projection refresh retains the last current declaration while it revalidates. Keep the exact
+    // occurrence's schema read alive through that loading phase; the daemon still enforces occurrence
+    // currentness, and a changed occurrence below starts a replacement read.
+    const action = identity ? createPluginUiProjectedActionResolver(projection.actionsById)(identity) : null;
     const questionKey = JSON.stringify([binding?.scope, binding?.revision, controller, identity, refreshKey]);
     const key = JSON.stringify([questionKey, action?.occurrenceId]);
     const asking = !!identity && !!controller && !!binding?.isCurrent();
@@ -52,7 +55,7 @@ export function useManagedProvisionerOptionsInput(input: Readonly<{
     }, [asking, questionKey]);
     const [state, setState] = React.useState<Readonly<{ key: string; value: ManagedProvisionerOptionsInput }>>({ key: '', value: { kind: 'loading' } });
     React.useEffect(() => {
-        if (!binding?.isCurrent() || !controller || !identity || !projectionReady || !action) return;
+        if (!binding?.isCurrent() || !controller || !identity || !action) return;
         const abort = new AbortController();
         const retirement = binding.onRetire(() => { abort.abort(); setState({ key: '', value: { kind: 'loading' } }); });
         setState({ key, value: { kind: 'loading' } });
@@ -71,7 +74,7 @@ export function useManagedProvisionerOptionsInput(input: Readonly<{
         });
         return () => { abort.abort(); retirement.dispose(); };
     // A reloading projection hands out a new Action object for the same occurrence; only the occurrence restarts the read.
-    }, [binding, controller?.machineId, controller?.installationId, projectionReady, action?.occurrenceId, key]);
+    }, [binding, controller?.machineId, controller?.installationId, action?.occurrenceId, key]);
     if (!localId) return none;
     if (!binding?.isCurrent() || !controller) return controllerUnavailable;
     if (state.key === key && state.value.kind !== 'loading') return state.value;
