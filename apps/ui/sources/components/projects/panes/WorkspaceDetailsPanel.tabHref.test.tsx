@@ -18,11 +18,13 @@ vi.mock('@expo/vector-icons', async () => {
     return createExpoVectorIconsMock();
 });
 
+// Prepare the real module outside the route assertion's interaction budget.
+const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
+
 afterEach(standardCleanup);
 
 describe('workspace Details tab destinations', () => {
     it('keeps tabs without a shareable route local while preserving scoped file destinations', async () => {
-        const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
         const screen = await renderScreen(<AppPaneProvider><WorkspaceDetailsPanel
             workspaceRef={{ id: 'workspace-tab-href', serverId: 'home-test', machineId: 'machine-test', rootPath: '/repo', createdAtMs: 1 }}
             scopeId="project:workspace-tab-href" forceOverviewMode
