@@ -39,6 +39,7 @@ import { refreshActivePromptLibraryCatalogAfterChange } from '@/settings/prompts
 import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { createHttpStatusError } from '@/api/client/httpStatusError';
 
@@ -262,9 +263,10 @@ export async function mutateProjectAccountRows(input: ReadInput & Readonly<{
 }
 async function fetchSnapshot(input: ReadInput, mode: 'plain' | 'e2ee', selection: NonNullable<ProjectAccountRowsReadInput['selection']> = {}): Promise<ActiveProjectAccountRowsSnapshot> {
   const path = `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/${'key' in selection ? 'read' : 'list'}`;
-  const response = await axios.post(`${baseUrl(input)}${path}`, selection, {
-    headers: await requestHeaders(input, path, selection), validateStatus: () => true, ...(input.signal ? { signal: input.signal } : {}),
-  });
+  const admittedHeaders = await timeWebLatencyPhase('projectRows.requestAdmission', () => requestHeaders(input, path, selection));
+  const response = await timeWebLatencyPhase('projectRows.http', () => axios.post(`${baseUrl(input)}${path}`, selection, {
+    headers: admittedHeaders, validateStatus: () => true, ...(input.signal ? { signal: input.signal } : {}),
+  }));
   // The predecessor Home has no Project-row route. Keep unsupported distinct
   // from an empty census; explicit accepted Project addresses must still refuse.
   if (response.status === 404) throw rowError('project_account_rows_unsupported');
@@ -285,7 +287,7 @@ async function fetchSnapshot(input: ReadInput, mode: 'plain' | 'e2ee', selection
     if (result.status !== 'listed') throw rowError(`project_account_rows_${result.status}`);
     selectedRows = result.rows;
   }
-  await assertRequesterCurrent(input);
+  await timeWebLatencyPhase('projectRows.responseAdmission', () => assertRequesterCurrent(input));
   const rows = selectedRows.map(row => ({ key: row.key, revision: row.revision, payload: row.content === null ? null : openRow(row.key, row.content, mode, input) }));
   return projectSnapshotFromRows(rows, scopeKey(input));
 }
@@ -333,7 +335,7 @@ export async function readProjectAccountRowsObservation(input: ProjectAccountRow
     bound.authorization?.binding.actionId ?? '', bound.authorization?.binding.requestId, stage, operation);
   return await runWithServerHttpBaseUrl(baseUrl(bound), () => withSnapshotReadFailurePolicy(bound, async () => {
       input.signal?.throwIfAborted();
-      const mode = await trace('project_rows.mode', () => readMode(bound));
+      const mode = await timeWebLatencyPhase('projectRows.mode', () => trace('project_rows.mode', () => readMode(bound)));
       const snapshot = await trace('project_rows.fetch', () => fetchSnapshot(bound, mode, bound.selection));
       // Source-backed Projects take their current context from shared attachments;
       // the personal organization remains stored but is not their context layer.

@@ -71,6 +71,10 @@ import {
   rehydrateWorkspaceTargetMaterializationFromReceiptPath,
 } from '@/scm/workspace/workspaceExportMaterialization';
 
+// Prepare the real lazy transport during collection, before the held-response
+// overlap assertion starts. Source-module linking is not endpoint HTTP work.
+await import('@/api/api');
+
 /**
  * A destructive replacement proof is stamped for the handoff operation, while
  * the relationship it bootstraps is named by the canonical derivation of that

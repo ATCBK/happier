@@ -982,11 +982,12 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     request: WorkspaceSyncPrepareBetweenRequestV1,
     signal?: AbortSignal,
     context?: RpcHandlerContext,
+    admittedRoute?: Awaited<ReturnType<typeof currentRouteSnapshot>>,
   ): Promise<WorkspaceSyncPrepareBetweenResultV1> => withWebLatencyTrace(
     readWebLatencyTracePoint()?.requestId ?? context?.callerInputAuthorization?.binding.requestId ?? context?.transportRequestId,
     () => timeWebLatencyPhase('workspaceSync.prepareBetweenAtController', async () => {
     if (!runtime) throw controllerUnavailable();
-    const initial = await currentRouteSnapshot(request, signal, context);
+    const initial = admittedRoute ?? await currentRouteSnapshot(request, signal, context);
     const route = resolveWorkspaceSyncTransferRoute({ ...initial, ...request });
     if (!route.ok) return routeFailure(route);
     if (route.kind !== 'same_workspace' && !isProjectPreparation(context)) assertWorkspaceSyncRequesterBootstrapSupported({
@@ -994,14 +995,23 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     if (route.kind !== 'same_workspace' && route.controllerMachineId !== input.localMachineId) {
       throw compositionError('workspace_sync_controller_mismatch', 'Linked workspace route belongs to another controller');
     }
+    // No effect separates route admission from the first link. Carry that
+    // observation into its flush expectation; later links must observe changes
+    // made while the preceding copy ran. The controller still rechecks the
+    // expected definition, roots and requester at the queued physical effect.
+    let current = initial;
+    let hasFlushed = false;
     return await prepareWorkspaceSyncBetween({
       ...request,
       serverId: semanticServerId,
       initial,
-      readCurrent: async () => await currentRouteSnapshot(request, signal, context),
+      readCurrent: async () => {
+        if (hasFlushed) current = await currentRouteSnapshot(request, signal, context);
+        return current;
+      },
       flush: async (relationshipId, flushSignal) => {
+        hasFlushed = true;
         if (isProjectPreparation(context)) {
-          const current = await currentRouteSnapshot(request, flushSignal, context);
           const selected = current.relationships.find(row => row.relationshipId === relationshipId);
           if (!selected) throw compositionError('relationship_changed', 'The admitted relationship is unavailable');
           return await runtime!.managedWorkspaceSync.flush(relationshipId, flushSignal, {
@@ -1033,7 +1043,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     if (route.kind !== 'same_workspace' && !isProjectPreparation(context)) assertWorkspaceSyncRequesterBootstrapSupported({
       authorization: context?.callerInputAuthorization, ownerKind: 'relationship' });
     if (route.kind === 'same_workspace' || route.controllerMachineId === input.localMachineId) {
-      return await prepareBetweenAtController(request, signal, context);
+      return await prepareBetweenAtController(request, signal, context, snapshot);
     }
     try {
       if (isProjectPreparation(context)) {
