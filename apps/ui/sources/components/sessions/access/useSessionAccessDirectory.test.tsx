@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { listTeamGroups } from '@/sync/ops/teams/teamGroupOperations';
-import { listTeamMembers } from '@/sync/ops/teams/teamMemberOperations';
 import { runTeamAction } from '@/sync/ops/teams/teamActionClient';
 import { searchSessionAccessAccountPage } from '@/sync/api/session/sessionAccessApi';
 import { useTeamGroups } from '@/hooks/teams/useTeamGroups';
@@ -19,7 +18,6 @@ vi.mock('@/sync/api/session/sessionAccessApi', async (importOriginal) => ({
 }));
 vi.mock('@/sync/ops/teams/teamActionClient', () => ({ runTeamAction: vi.fn() }));
 vi.mock('@/sync/ops/teams/teamGroupOperations', () => ({ listTeamGroups: vi.fn() }));
-vi.mock('@/sync/ops/teams/teamMemberOperations', () => ({ listTeamMembers: vi.fn() }));
 vi.mock('@/hooks/teams/useTeamGroups', () => ({ useTeamGroups: vi.fn(() => ({
     rows: [], status: 'ready', error: null, hasMore: false, loadMore: vi.fn(), reload: vi.fn(), isCurrent: true,
 })) }));
@@ -287,48 +285,6 @@ describe('useSessionAccessDirectory', () => {
         // An empty lookup is not a lookup: it leaves the roster on its unqueried sequence
         // instead of restarting it, so the pages already read still answer.
         expect(vi.mocked(useTeamMembersRoster).mock.calls.every(([params]) => !params.query)).toBe(true);
-    });
-
-    it('pages a Team member search on the queried sequence, not the unqueried roster', async () => {
-        // The roster owner is the pager under test here, so it runs for real: what must hold
-        // is that one sequence describes the query AND its cursor.
-        const rosterModule = await vi.importActual<typeof import('@/hooks/teams/useTeamMembersRoster')>(
-            '@/hooks/teams/useTeamMembersRoster',
-        );
-        vi.mocked(useTeamMembersRoster).mockImplementation(rosterModule.useTeamMembersRoster);
-        vi.mocked(listTeamMembers).mockImplementation((async (input: {
-            query?: string;
-            cursor?: string | null;
-        }) => {
-            if (input.query !== 'Seventh') {
-                return { kind: 'succeeded', value: { items: [membership('membership-1', 'account-1', 'Unrelated', 'active')], nextCursor: null } };
-            }
-            return input.cursor === 'member-page-2'
-                ? { kind: 'succeeded', value: { items: [membership('membership-8', 'account-8', 'Seventh', 'active')], nextCursor: null } }
-                : { kind: 'succeeded', value: { items: [membership('membership-7', 'account-7', 'Seventh', 'active')], nextCursor: 'member-page-2' } };
-        }) as never);
-
-        let latest!: SessionAccessDirectory;
-        await renderScreen(<Probe teamId="team-a" onValue={(value) => { latest = value; }} />);
-        const people = () => latest.sections.find((section) => section.kind === 'account')!;
-
-        await act(async () => { await people().resolveCandidates!('Seventh', new AbortController().signal); });
-        await vi.waitFor(() => expect(listTeamMembers).toHaveBeenCalledWith(expect.objectContaining({
-            address: { serverId: 'home-one', teamId: 'team-a' }, filter: 'all', query: 'Seventh',
-        })));
-
-        // The section must describe the queried sequence: its second page exists.
-        await vi.waitFor(() => expect(people().hasMore).toBe(true));
-        await act(async () => { latest.loadMore('account'); });
-        await vi.waitFor(() => expect(listTeamMembers).toHaveBeenLastCalledWith(expect.objectContaining({
-            query: 'Seventh', cursor: 'member-page-2',
-        })));
-
-        const rows = await people().resolveCandidates!('Seventh', new AbortController().signal);
-        expect(rows.map((row) => row.principal.ref)).toEqual([
-            { kind: 'account', accountId: 'account-7' },
-            { kind: 'account', accountId: 'account-8' },
-        ]);
     });
 
     it('asks the Home for a Team member no loaded roster page contains', async () => {

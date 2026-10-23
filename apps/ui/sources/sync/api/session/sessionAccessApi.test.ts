@@ -64,7 +64,7 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
         if (path === '/v2/account/settings') return new Response(JSON.stringify({ content: null, version: 0 }));
         return request(String(url), init);
     }));
-    const currentSession = createPlainSessionCurrentProjectionRecordFixture({ metadata: {} });
+    const currentSession = createPlainSessionCurrentProjectionRecordFixture({ metadata: null });
     if (currentSession.ownerMetadata?.t !== 'plain') throw new Error('Expected the canonical owner fixture');
     const ownerMetadata = options?.accountEncryption === 'e2ee' ? sealSessionOwnerMetadataEnvelopeV1({
         material: { type: 'dataKey', machineKey: MANAGER_CONTENT_KEYS.secretKey },

@@ -211,7 +211,7 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
             machineKey: encodeBase64(MANAGER.keys.secretKey, 'base64'),
         },
     } as AuthCredentials : null;
-    const currentSession = createPlainSessionCurrentProjectionRecordFixture({ id: SESSION_ID, metadata: {}, metadataVersion: 4, agentStateVersion: 5 });
+    const currentSession = createPlainSessionCurrentProjectionRecordFixture({ id: SESSION_ID, metadata: null, metadataVersion: 4, agentStateVersion: 5 });
     if (currentSession.ownerMetadata?.t !== 'plain') throw new Error('Expected the canonical plain owner fixture');
     const currentOwnerMetadata = managerCredentials ? sealSessionOwnerMetadataEnvelopeV1({
         material: resolveAccountScopedCryptoMaterialFromCredentials(managerCredentials),
@@ -489,9 +489,9 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
         await vi.waitFor(() => expect(controller().model.encryption?.statusKey).toBe('ready'));
         const actionId = recipient === undefined ? 'session.access.encryption.prepare' : 'session.access.encryption.reprepare';
         const scope = createAccountSettingsScope(home.profile.id, MANAGER.accountId)!;
-        storage.getState().applySettingsForScope(scope, { ...settingsParse({}), actionsSettingsV1: {
+        storage.getState().applySettingsForScope(scope, settingsParse({ actionsSettingsV1: {
             v: 1, actions: { [actionId]: { disabledSurfaces: ['ui'] } },
-        } }, 2);
+        } }), 2);
         const reads = home.envelopeStates.length;
         home.state.envelopePages.push(
             { summary: { prepared: 0, pending: 1, invalid: 0, recipientKeyUnavailable: 0 }, items: [createRecipientEnvelopeItem()] },
@@ -1369,9 +1369,9 @@ describe('useLiveSessionAccessEditorController historical (0.2) Session', () => 
         await storePredecessorSession(home);
         const controller = await mountController(home.profile.id, { metadataLayoutVersion: 0 });
         const scope = createAccountSettingsScope(home.profile.id, MANAGER.accountId)!;
-        storage.getState().applySettingsForScope(scope, { ...settingsParse({}), actionsSettingsV1: {
+        storage.getState().applySettingsForScope(scope, settingsParse({ actionsSettingsV1: {
             v: 1, actions: { 'session.access.layout.update': { disabledSurfaces: ['ui'] } },
-        } }, 2);
+        } }), 2);
         await act(async () => { controller().actions.updateHistoricalLayout?.(); });
         await vi.waitFor(() => expect(controller().model.historicalLayout?.error).toBeDefined());
         expect(home.state.metadataPatches).toHaveLength(0);
@@ -1386,9 +1386,9 @@ describe('useLiveSessionAccessEditorController historical (0.2) Session', () => 
         await storePredecessorSession(home);
         const controller = await mountController(home.profile.id, { metadataLayoutVersion: 0 });
         const scope = createAccountSettingsScope(home.profile.id, MANAGER.accountId)!;
-        storage.getState().applySettingsForScope(scope, { ...settingsParse({}), actionsSettingsV1: {
+        storage.getState().applySettingsForScope(scope, settingsParse({ actionsSettingsV1: {
             v: 1, actions: { 'session.access.grant.set': { disabledSurfaces: ['ui'] } },
-        } }, 2);
+        } }), 2);
         await act(async () => { controller().actions.setAccessLevel({ kind: 'account', accountId: RECIPIENT_ID }, 'edit'); });
         // Wait for the attempted row to settle so an asynchronous pre-admission
         // migration cannot satisfy an early negative assertion.
