@@ -210,8 +210,8 @@ describe("Workflow Run live Team access (real SQLite)", () => {
             workflowCustodyState: "pending", workflowAcceptedSnapshotEnvelope: f.acceptedEnvelope,
         })) });
         // The diagnostics sink observes real database operations; all policy and storage remain real.
-        const debug = vi.spyOn(logger, "debug").mockImplementation(() => {});
-        const authorityReads = () => debug.mock.calls.flatMap(([record]) => record !== null && typeof record === "object"
+        const trace = vi.spyOn(logger, "trace").mockImplementation(() => {});
+        const authorityReads = () => trace.mock.calls.flatMap(([record]) => record !== null && typeof record === "object"
             && "phase" in record && typeof record.phase === "string"
             && /^db\.(?:TeamMembership|Artifact|ArtifactTeamGrant|ArtifactAccountGrant|ArtifactGroupGrant|TeamGroupMembership)\./u.test(record.phase)
             ? [record.phase] : []).sort();
@@ -219,7 +219,7 @@ describe("Workflow Run live Team access (real SQLite)", () => {
             const single = await inTx(tx => readWorkflowRunKeyProjectionsInTx(tx, { actorAccountId: f.viewer.id, runIds: [f.runId] }));
             const singleReads = authorityReads();
             expect(singleReads.length).toBeGreaterThan(0);
-            debug.mockClear();
+            trace.mockClear();
             const page = await inTx(tx => readWorkflowRunKeyProjectionsInTx(tx, { actorAccountId: f.viewer.id, runIds }));
             expect(new Set(page.keys())).toEqual(new Set(runIds));
             for (const runId of runIds) expect(page.get(runId)).toEqual({ ...single.get(f.runId), runId });
@@ -230,7 +230,7 @@ describe("Workflow Run live Team access (real SQLite)", () => {
             await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "suspended" } });
             await expect(inTx(tx => readWorkflowRunKeyProjectionsInTx(tx, { actorAccountId: f.viewer.id, runIds })))
                 .rejects.toMatchObject({ code: "run_not_found" });
-        } finally { debug.mockRestore(); }
+        } finally { trace.mockRestore(); }
     });
 
     it("keeps distinct Run owners, sources and frozen Teams separate in the same key batch", async () => {
