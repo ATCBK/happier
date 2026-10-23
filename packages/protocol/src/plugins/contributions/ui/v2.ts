@@ -536,7 +536,9 @@ function createPluginUiViewBindingSchemaV2() {
   return z.union([first, second, ...remaining]);
 }
 
-const PluginUiViewV2SchemaRaw = createPluginUiViewBindingSchemaV2().check(z.superRefine((view, ctx) => {
+// Public Widget snapshots reuse the declarative grammar in this module. Wait
+// until use before capturing their presentation schema through the reverse edge.
+const PluginUiViewV2SchemaRaw = lazyZodSchema(() => createPluginUiViewBindingSchemaV2().check(z.superRefine((view, ctx) => {
   if (view.container === 'widget') {
     const inputs = 'inputs' in view ? InputHintsSchema.safeParse(view.inputs) : null;
     const inputSchema = 'inputSchema' in view ? PluginJsonSchemaV2Schema.safeParse(view.inputSchema) : null;
@@ -566,7 +568,7 @@ const PluginUiViewV2SchemaRaw = createPluginUiViewBindingSchemaV2().check(z.supe
       path: issue.path,
     }));
   }
-}));
+})));
 
 /**
  * `Array#map` necessarily widens the dynamic Zod union above: the mapped

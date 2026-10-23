@@ -82,6 +82,7 @@ const InboxCanonicalItemSchema = lazyZodSchema(() => z.strictObject({
     z.strictObject({ kind: z.literal('approval'), serverId: z.string(), id: z.string() }),
     z.strictObject({ kind: z.literal('notice'), serverId: z.string(), id: z.string() }),
     z.strictObject({ kind: z.literal('workflow_run'), serverId: z.string(), id: z.string(), invocationId: z.optional(z.string()) }),
+    z.strictObject({ kind: z.literal('execution_run'), serverId: z.string(), id: z.string(), sessionId: z.string() }),
     z.strictObject({ kind: z.literal('automation_run'), serverId: z.string(), id: z.string(), automationId: z.string() }),
     z.strictObject({ kind: z.literal('discussion'), serverId: z.string(), id: z.string(), messageId: z.string() }),
   ]),

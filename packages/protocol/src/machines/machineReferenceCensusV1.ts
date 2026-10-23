@@ -38,27 +38,30 @@ export async function readMachineReferenceCensusV1(input: Readonly<{
   if (!input.machineId) return { homeId: input.homeId, machineId: null, coverage: 'partial', references, unavailable: ['target'] };
   const homes = new Set([input.homeId, ...(input.homeAliases ?? [])]);
   const matches = (homeId: string, machineId: string) => homes.has(homeId) && machineId === input.machineId;
-  const rows: Awaited<ReturnType<MachineReferenceCensusPortsV1['artifacts']['list']>>['items'][number][] = [];
   try {
     let cursor: string | undefined;
     do {
       input.signal?.throwIfAborted();
-      const page = await ports.artifacts.list({ includeBody: true, ...(cursor ? { cursor } : {}), signal: input.signal });
+      const page = await ports.artifacts.list({
+        limit: 500, kind: 'work-board.v1', coarseKind: 'work_board',
+        ...(cursor ? { cursor } : {}), signal: input.signal,
+      });
       if (page.coverage !== 'complete') unavailable.add('artifacts');
-      rows.push(...page.items);
+      for (const row of page.items) {
+        if (row.header.kind !== 'work-board.v1') continue;
+        try {
+          const artifact = await ports.artifacts.read(row.artifactId, { signal: input.signal, fresh: true });
+          if (!artifact) { unavailable.add('artifacts'); continue; }
+          const board = readWorkBoardArtifactV1({ artifactId: artifact.artifactId, header: artifact.header, body: artifact.body });
+          if (!board) { unavailable.add('artifacts'); continue; }
+          if (board.source.picked.some(ref => ref.kind === 'machine' && matches(ref.qualifiedId.serverId, ref.qualifiedId.id))) {
+            references.push({ kind: 'board', id: board.id, name: board.name });
+          }
+        } catch { unavailable.add('artifacts'); }
+      }
       if (page.nextCursor !== undefined && page.nextCursor === cursor) throw new Error('artifact_list_cursor_invalid');
       cursor = page.nextCursor;
     } while (cursor);
-    for (const row of rows) {
-      if (row.header.kind !== 'work-board.v1') continue;
-      try {
-        const board = readWorkBoardArtifactV1({ artifactId: row.artifactId, header: row.header, body: row.body ?? null });
-        if (!board) { unavailable.add('artifacts'); continue; }
-        if (board.source.picked.some(ref => ref.kind === 'machine' && matches(ref.qualifiedId.serverId, ref.qualifiedId.id))) {
-          references.push({ kind: 'board', id: board.id, name: board.name });
-        }
-      } catch { unavailable.add('artifacts'); }
-    }
   } catch { unavailable.add('artifacts'); }
   try {
     const settings = await ports.readSettings();
@@ -67,7 +70,16 @@ export async function readMachineReferenceCensusV1(input: Readonly<{
     if (catalog.status === 'partial') unavailable.add('profiles');
     const profileRows = catalog.source === 'destination' ? catalog.records.map(row => row.record)
       : Array.isArray(settings.profiles) ? settings.profiles : [];
-    const artifactsById = await loadAiLaunchProfileArtifacts(profileRows, ports.artifacts, input.signal);
+    const profileArtifactCoverage = { partial: false };
+    const artifactsById = await loadAiLaunchProfileArtifacts(profileRows, {
+      read: (artifactId, options) => ports.artifacts.read(artifactId, { ...options, fresh: true }),
+      list: async options => {
+        const page = await ports.artifacts.list({ ...options, kind: 'launch-profile.v1', coarseKind: 'other' });
+        if (page.coverage !== 'complete') profileArtifactCoverage.partial = true;
+        return page;
+      },
+    }, input.signal);
+    if (profileArtifactCoverage.partial) unavailable.add('profiles');
     const profiles = catalog.source === 'destination'
       ? readAiLaunchProfileRecords(profileRows, { artifactsById, includeShared: true })
       : readAiLaunchProfileCollection(profileRows, { artifactsById, includeShared: true });
