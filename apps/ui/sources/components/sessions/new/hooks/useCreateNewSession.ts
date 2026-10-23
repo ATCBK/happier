@@ -147,6 +147,8 @@ import type { NewSessionDraft } from '@/sync/domains/state/persistence';
 import { persistCreatedSessionAuthoringOrigin } from '@/components/sessions/new/modules/newSessionAuthoringOrigin';
 import type { ManagedMachineSelectionDraft, ManagedMachineAcquisitionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 import { managedMachineCreationIntent } from '@/sync/domains/state/newSessionManagedMachineDraft';
+import { getSessionDraftSnapshot } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import type { NewSessionPreparedInstructions } from '../modules/newSessionLaunchIntent';
 import { runManagedMachineCreation, type ManagedMachineCreationProgress } from '@/components/settings/machines/managed/managedMachineCreation';
 import { bindNewManagedMachineCreationScope } from '@/sync/ops/actions/managedCreationScopeBinding';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
@@ -264,6 +266,13 @@ function resolveStaticAgentId(params: Readonly<{
         return params.staticAgentId;
     }
     return isBundledAgentId(params.agentType) ? params.agentType : null;
+}
+
+function readLaunchIntent(params: Readonly<{
+    launchIntentSignature: string;
+    readLaunchIntentSignature?: (preparedInstructions?: NewSessionPreparedInstructions) => string;
+}>, preparedInstructions?: NewSessionPreparedInstructions): string {
+    return params.readLaunchIntentSignature?.(preparedInstructions) ?? params.launchIntentSignature;
 }
 
 function resolveNewSessionLaunchTargetServerId(params: Readonly<{
@@ -424,6 +433,8 @@ export function useCreateNewSession(params: Readonly<{
     disableDraftPersistence?: () => void;
     onLaunchAttemptChange?: (attempt: NewSessionLaunchAttempt | null) => void;
     launchIntentSignature: string;
+    /** The same authored identity, read from live composer input at Send. */
+    readLaunchIntentSignature?: (preparedInstructions?: NewSessionPreparedInstructions) => string;
     launchUserAttemptId?: string | null;
     onLaunchUserAttemptIdChange?: (userAttemptId: string | null) => void;
     /** Retains the original creation completion while the exact approval is pending. */
@@ -500,6 +511,7 @@ export function useCreateNewSession(params: Readonly<{
     launchUserAttemptIdForCurrentIntentRef.current = launchUserAttemptIdForCurrentIntent;
     const createInFlightRef = React.useRef(false);
     const launchAbortRef = React.useRef<AbortController | null>(null);
+    const launchAbortIntentRef = React.useRef<{ signature: string } | null>(null);
     const managedAcquisitionRef = React.useRef(params.managedMachineAcquisition ?? null);
     const managedAcquisitionPropRef = React.useRef(params.managedMachineAcquisition);
     if (managedAcquisitionPropRef.current !== params.managedMachineAcquisition) {
@@ -530,8 +542,16 @@ export function useCreateNewSession(params: Readonly<{
         serverId: params.targetAccountScope?.serverId ?? params.targetServerId ?? params.draftScope?.serverId ?? '',
         onExecuted: onManagedApprovalExecuted,
     });
+    // Compare against what Send read synchronously, rather than aborting from
+    // the previous render's cleanup when the first Starting render catches up.
+    React.useEffect(() => {
+        if (launchAbortIntentRef.current !== null && launchAbortIntentRef.current.signature !== launchIntentSignature) {
+            launchAbortRef.current?.abort();
+        }
+    }, [launchIntentSignature]);
     React.useEffect(() => () => { launchAbortRef.current?.abort(); }, [
-        launchIntentSignature, params.draftId, params.draftScope?.serverId, params.draftScope?.accountId,
+        params.draftId, params.draftScope?.serverId, params.draftScope?.accountId,
+        params.targetAccountScope?.serverId, params.targetAccountScope?.accountId,
     ]);
     // Keep the latest params available synchronously so event handlers can't observe
     // a stale snapshot in the window between rerender and effect flush.
@@ -565,6 +585,19 @@ export function useCreateNewSession(params: Readonly<{
             return;
         }
         let current = latestParamsRef.current;
+        const admitLaunchIntent = () => {
+            const signature = readLaunchIntent(current);
+            if (launchIntentSignatureRef.current !== signature) {
+                launchAttemptRef.current = null;
+                invalidatedLaunchUserAttemptIdRef.current = typeof current.launchUserAttemptId === 'string'
+                    ? current.launchUserAttemptId.trim() || null : null;
+                launchUserAttemptIdForCurrentIntentRef.current = null;
+            }
+            launchIntentSignatureRef.current = signature;
+            const admitted = { signature };
+            launchAbortIntentRef.current = admitted;
+            return admitted;
+        };
         const settings = storage.getState().settings;
         let managedCreation: SessionManagedCreationV1 | undefined;
         const submittedSessionName = current.getSessionName?.() ?? current.authoringDraft?.sessionName;
@@ -587,10 +620,23 @@ export function useCreateNewSession(params: Readonly<{
             const retained = readNewSessionDraftFromRepository({ scope: submittedDraftScope, draftId: submittedDraftId });
             if (retained) {
                 const live = retained.instructionsDraft;
-                writeNewSessionInstructionsToRepository({ scope: submittedDraftScope, draftId: submittedDraftId,
+                if (launchAbortIntentRef.current !== null && readLaunchIntent(latestParamsRef.current) !== launchAbortIntentRef.current.signature) {
+                    launchAbortRef.current?.abort();
+                    throw new Error('instructions_draft_retired');
+                }
+                const preparedInstructions = {
                     promptStack: submittedPromptStack,
                     instructionsDraft: live?.title === submittedInstructionsDraft.title && live.markdown === submittedInstructionsDraft.markdown
-                        ? null : live ?? null });
+                        ? null : live ?? null,
+                };
+                // Advance the same admitted identity before publishing our own
+                // body-to-reference normalization. A real intervening edit was
+                // checked above and cannot be adopted as part of this launch.
+                const preparedSignature = readLaunchIntent(latestParamsRef.current, preparedInstructions);
+                if (launchAbortIntentRef.current) launchAbortIntentRef.current.signature = preparedSignature;
+                launchIntentSignatureRef.current = preparedSignature;
+                writeNewSessionInstructionsToRepository({ scope: submittedDraftScope, draftId: submittedDraftId,
+                    ...preparedInstructions });
             }
             const latest = latestParamsRef.current;
             if (!retained || !mountedRef.current || latest.draftId !== submittedDraftId
@@ -618,7 +664,8 @@ export function useCreateNewSession(params: Readonly<{
             const submitted = current;
             const onManagedMachineEnrolled = submitted.onManagedMachineEnrolled;
             const managedDraft = current.managedMachineSelection;
-            const signature = current.launchIntentSignature;
+            const admittedIntent = admitLaunchIntent();
+            const signature = admittedIntent.signature;
             const scope = current.targetAccountScope ?? current.draftScope;
             const cancellation = new AbortController();
             launchAbortRef.current?.abort();
@@ -638,7 +685,7 @@ export function useCreateNewSession(params: Readonly<{
             cancellation.signal.addEventListener('abort', releaseAccount, { once: true });
             releaseManagedAccountOnRejection = releaseAccount;
             const isCurrent = () => mountedRef.current && !cancellation.signal.aborted
-                && latestParamsRef.current.launchIntentSignature === signature
+                && readLaunchIntent(latestParamsRef.current) === admittedIntent.signature
                 && sameStrictJsonValue(managedMachineCreationIntent(latestParamsRef.current.managedMachineSelection), managedMachineCreationIntent(managedDraft))
                 && areServerAccountScopesEqual(latestParamsRef.current.targetAccountScope ?? latestParamsRef.current.draftScope, scope)
                 && (account === null || account.accountLifetime.isCurrent());
@@ -1020,6 +1067,10 @@ export function useCreateNewSession(params: Readonly<{
             // capture, so reopening and clearing refer to that same authoring.
             current.flushComposerInput?.();
             current.flushAuthoringDraft?.();
+            const submittedIntent = admitLaunchIntent();
+            const sourceDraftExisted = current.draftScope && current.draftId
+                ? getSessionDraftSnapshot(current.draftScope, { kind: 'newSession', draftId: current.draftId }) !== null
+                : false;
             submittedDraftCurrentness = current.draftScope && current.draftId
                 ? captureNewSessionDraftWorkflowCurrentness({
                     scope: current.draftScope,
@@ -1505,8 +1556,6 @@ export function useCreateNewSession(params: Readonly<{
             }
 
             if (shouldSpawnForNewSessionLaunchAttempt(launchAttempt)) {
-                launchAttempt = markNewSessionLaunchAttemptSpawning(launchAttempt);
-                publishLaunchAttempt(launchAttempt);
                 if (!agentTarget) {
                     launchAttempt = markNewSessionLaunchAttemptFailed(launchAttempt, {
                         phase: 'spawning',
@@ -1532,6 +1581,10 @@ export function useCreateNewSession(params: Readonly<{
                         secretReferenceOverlay,
                     });
                 const spawnInput = { ...authoredSpawnInput, ...(managedCreation ? { managedCreation } : {}) };
+                // Readiness and strict input construction may refuse before dispatch.
+                // Publish spawning only after those synchronous admissions succeed.
+                launchAttempt = markNewSessionLaunchAttemptSpawning(launchAttempt);
+                publishLaunchAttempt(launchAttempt);
                 const releaseUserRequestLease = sync.acquireUserRequestLease();
                 for (const requestId of [launchAttempt.attemptId, spawnInput.creationKey]) {
                     actionOperationPresentationCoordinator.register({
@@ -1554,7 +1607,17 @@ export function useCreateNewSession(params: Readonly<{
                             actionRequestId: launchAttempt.attemptId,
                         }, {
                             scope: executionAccountScope,
-                            ...(capturedOrdinarySourceAccount ? { sourceAccountLifetime: capturedOrdinarySourceAccount.accountLifetime } : {}),
+                            ...(capturedOrdinarySourceAccount ? { sourceAccountLifetime: { isCurrent: () => {
+                                // A draft may disappear or live input may change without a
+                                // React commit before custody completes. Retire the same
+                                // invocation signal used by approvals and Account capture.
+                                if (readLaunchIntent(latestParamsRef.current) !== submittedIntent.signature
+                                    || (sourceDraftExisted && current.draftScope && current.draftId
+                                        && !getSessionDraftSnapshot(current.draftScope, { kind: 'newSession', draftId: current.draftId }))) {
+                                    sourceDraftCancellation.abort();
+                                }
+                                return capturedOrdinarySourceAccount?.accountLifetime.isCurrent() === true;
+                            } } } : {}),
                             machineHomeDir: typeof current.selectedMachine?.metadata?.homeDir === 'string'
                                 ? current.selectedMachine.metadata.homeDir
                                 : '',
@@ -1635,6 +1698,13 @@ export function useCreateNewSession(params: Readonly<{
                     // Retiring the local observer cannot reject an attempt the
                     // canonical daemon operation already owns.
                     const canonicalSettlementAdopted = adoptCanonicalActionOperationSettlement();
+                    if (!canonicalSettlementAdopted && mountedRef.current
+                        && !actionResult.ok && actionResult.errorCode === 'action_account_scope_changed') {
+                        // The custody owner refused dispatch, so there is no
+                        // canonical operation to settle this mounted composer.
+                        endLaunchAttemptWithoutSession();
+                        Modal.alert(t('common.error'), resolveSessionSpawnNewActionFailureMessage(actionResult));
+                    }
                     if (!canonicalSettlementAdopted && isLaunchScopeStillActive()
                         && actionResult.ok && actionResult.result.type === 'success') {
                         // A direct receipt still proves creation. Retire its local
@@ -1648,6 +1718,8 @@ export function useCreateNewSession(params: Readonly<{
                             retryable: false,
                         });
                         publishLaunchAttempt(launchAttempt);
+                    }
+                    if (mountedRef.current) {
                         current.setIsCreating(false);
                     }
                     return;
@@ -1737,7 +1809,7 @@ export function useCreateNewSession(params: Readonly<{
                             onRetry: actionResult.result.retryable ? () => { void handleCreateSession(opts); } : null,
                             shouldContinue: () => (
                                 isLaunchScopeStillActive()
-                                && latestParamsRef.current.launchIntentSignature === current.launchIntentSignature
+                                && readLaunchIntent(latestParamsRef.current) === submittedIntent.signature
                                 && areServerAccountScopesEqual(current.draftScope, latestParamsRef.current.draftScope)
                             ),
                         });
@@ -2201,6 +2273,7 @@ export function useCreateNewSession(params: Readonly<{
                 reportAfterCreatedSettlement({ status: 'rejected' });
             }
             createInFlightRef.current = false;
+            launchAbortIntentRef.current = null;
         }
     }, [applyAuthoringMemory, expectedSettingsScope, mountedRef, publishLaunchAttempt, managedApproval.requestApproval]);
 

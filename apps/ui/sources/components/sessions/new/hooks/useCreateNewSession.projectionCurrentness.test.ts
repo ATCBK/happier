@@ -9,6 +9,7 @@ import { createExistingSessionDirectoryPreflightResult, createSessionFixture } f
 import { AutomationDefinitionCreateRequestSchema, AutomationDefinitionDetailSchema, type AutomationDefinitionDetail } from '@happier-dev/protocol/automations/automationApiV3';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { configureConnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
@@ -31,6 +32,8 @@ import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSet
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 import { buildAcpConfigOptionOverridesV1 } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { buildNewSessionLaunchIntentSignature, type NewSessionPreparedInstructions } from '../modules/newSessionLaunchIntent';
+import type { TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol/teams';
 
 // Static owner imports can reach Socket.IO before runtime setup; replace only its external transport.
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -52,6 +55,8 @@ let spawnResult: ReturnType<typeof createDeferred<SessionSpawnNewResultV1>>;
 let authoringHttp: ReturnType<typeof createAuthoringMemoryHttpBoundary>;
 let instructionsArtifacts: ReturnType<typeof createArtifactStoreBoundary>;
 let instructionsCreateUnavailable = false;
+let instructionsCreateGate: ReturnType<typeof createDeferred<void>> | null = null;
+let instructionsCreateReached: ReturnType<typeof createDeferred<void>> | null = null;
 let restoreActionExecutorModuleLoader: (() => void) | undefined;
 let managedMachine: ManagedMachineV1 | null = null;
 let managedOperationSettled = false;
@@ -83,6 +88,8 @@ beforeEach(async () => {
     authoringHttp = createAuthoringMemoryHttpBoundary();
     instructionsArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
     instructionsCreateUnavailable = false;
+    instructionsCreateGate = null;
+    instructionsCreateReached = null;
     restoreActionExecutorModuleLoader = await installRealActionExecutorModuleLoader();
 });
 afterEach(async () => {
@@ -135,6 +142,10 @@ const runtime = installSessionPaneRuntimeTestHarness({
         }
         if (instructionsCreateUnavailable && requestUrl.pathname === '/v1/artifacts' && init?.method === 'POST') {
             return Response.json({ error: 'unavailable' }, { status: 503 });
+        }
+        if (requestUrl.pathname === '/v1/artifacts' && init?.method === 'POST' && instructionsCreateGate) {
+            instructionsCreateReached?.resolve();
+            await instructionsCreateGate.promise;
         }
         const artifactResponse = instructionsArtifacts.handle(`${requestUrl.pathname}${requestUrl.search}`, init);
         if (artifactResponse) return await artifactResponse;
@@ -193,7 +204,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
         return await authoringHttp.handle(url, init);
     },
     configureSocket: (socket) => {
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
         // Socket is the transport boundary; presence cleanup cannot write to a real unconnected engine.
         vi.spyOn(socket, 'emit').mockReturnValue(socket);
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
@@ -263,10 +274,11 @@ async function readCurrentProjection() {
 }
 
 async function mount(inputs: DaemonMergedProjectionInputs | null, authoringCommitPending = false,
-    overrides: Partial<Parameters<typeof useCreateNewSession>[0]> = {}) {
+    overrides: Partial<Parameters<typeof useCreateNewSession>[0]> = {},
+    projectParams: (params: Parameters<typeof useCreateNewSession>[0]) => Parameters<typeof useCreateNewSession>[0] = params => params) {
     const { storage } = await import('@/sync/domains/state/storageStore');
     const { useCreateNewSession: owner } = await import('./useCreateNewSession');
-    const machine = createMachineFixture({ id: 'm1' });
+    const machine = overrides.selectedMachine ?? createMachineFixture({ id: 'm1' });
     storage.getState().applyMachines([machine], true, { sourceServerId: runtime.serverId });
     if (managedMachine) storage.getState().applyMachines([createMachineFixture({ id: 'controller',
         isShared: managedMachine.custodianAccountId !== 'account-a', access: {
@@ -298,7 +310,7 @@ async function mount(inputs: DaemonMergedProjectionInputs | null, authoringCommi
         daemonMergedProjectionInputs: inputs,
         ...overrides,
     };
-    const hook = await renderHook((input: Parameters<typeof useCreateNewSession>[0]) => owner(input), { initialProps: params, wrapper: runtime.Wrapper });
+    const hook = await renderHook((input: Parameters<typeof useCreateNewSession>[0]) => owner(projectParams(input)), { initialProps: params, wrapper: runtime.Wrapper });
     return { ...hook, params };
 }
 
@@ -331,6 +343,228 @@ async function createManagedDraft(archiveEffect: 'keep' | 'stop' | 'delete' = 'k
 }
 
 describe('useCreateNewSession (projection currentness admission)', () => {
+    it.each(['Team currentness refresh', 'Team availability refresh', 'launch attempt persistence', 'Send composer flush', 'Send composer flush with retained attempt', 'Instructions materialization', 'Instructions edit during preparation',
+        'authored text edit', 'authored text edit without render', 'draft switch', 'draft deletion', 'Account scope change', 'Home change', 'unmount'] as const)(
+        'respects admitted authored intent through %s during custody', async cause => {
+        const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+        const { readSpawnAttemptCustodyState } = await import('@/sync/domains/session/spawn/spawnAttemptNonceStore');
+        const { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository, writeNewSessionInstructionsToRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        const { getSessionDraftSnapshot, subscribeSessionDraft, resetSessionDraftRepositoryForTests, deleteSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const { createNewSessionComposerDocumentOwner } = await import('@/components/sessions/composer/newSessionComposerDocumentOwner');
+        const { buildNewSessionAuthoringDraftFromPersistedDraft } = await import('@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters');
+        const { composeConnectedServiceTeamCredentialBindingIntents } = await import('../modules/connectedServicesNewSessionBindings');
+        const { applyTeamCredentialResourceCatalog, getTeamCredentialResourceCatalogSnapshot, subscribeTeamsSnapshots } = await import('@/sync/store/teams/teamsSnapshots');
+        const { ConnectedServiceBindingsV2Schema } = await import('@happier-dev/protocol/connect/connected-service-bindings');
+        const { captureNewSessionDraftLaunchCurrentness } = await import('../modules/newSessionDraftLifecycle');
+        const inputs = await readCurrentProjection();
+        const scope = { serverId: runtime.serverId, accountId: 'account-a' };
+        const draftId = 'b2571c5a-d42d-4b87-8aa0-62021ff18170';
+        const address = { kind: 'newSession', draftId } as const;
+        const teamAddress = { serverId: runtime.serverId, teamId: 'team-launch' };
+        const selection = { source: 'team_resource', resourceId: 'resource-launch', deliveryMode: 'brokered' } as const;
+        const bindings = ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId: { 'acme.review/auth': selection } });
+        const resource: TeamCredentialResourceCatalogEntryV1 = { id: selection.resourceId, teamId: teamAddress.teamId, displayName: 'Shared sign-in', resourceRevision: 3,
+            readiness: { kind: 'available' }, recoveryAction: null, mayBroker: true, mayReceiveDirect: false,
+            directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed', providerModels: [],
+            connectedServiceSelections: [selection], sourcePresentation: { kind: 'connected_service', service: connectedAccountDeclaration.service },
+        };
+        applyTeamCredentialResourceCatalog({ scope, address: teamAddress, resources: [resource], observedAt: 1 });
+        writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: { input: 'Original prompt', selectedMachineId: 'm1', selectedPath: '/tmp',
+            agentType: agentId, backendTarget: spawnTarget,
+            selectedProfileId: null, selectedSecretId: null, permissionMode: 'default', acpSessionModeId: null,
+            ...(cause.startsWith('Instructions') ? { instructionsDraft: { title: 'Launch instructions', markdown: 'Keep the authored requirements.' } } : {}), updatedAt: 1 } });
+        if (cause === 'Instructions edit during preparation') {
+            instructionsCreateGate = createDeferred<void>();
+            instructionsCreateReached = createDeferred<void>();
+        }
+        if (cause === 'Send composer flush with retained attempt') {
+            captureNewSessionDraftLaunchCurrentness({ scope, draftId, launchUserAttemptId: 'obsolete-attempt' });
+        }
+        const composer = createNewSessionComposerDocumentOwner({ scope,
+            ref: { kind: 'newSession', instanceId: draftId } });
+        const promptStore = createNewSessionPromptStore('Original prompt');
+        const initialDraft = readNewSessionDraftFromRepository({ scope, draftId });
+        if (!initialDraft) throw new Error('Expected seeded launch draft');
+        if (cause === 'Send composer flush with retained attempt') expect(initialDraft.launchUserAttemptId).toBe('obsolete-attempt');
+        const legacySignatures: string[] = [];
+        let currentSignature = '';
+        let readCurrentSignature = () => currentSignature;
+        let project: Parameters<typeof mount>[3];
+        project = params => {
+            const [, setCreating] = React.useState(false);
+            React.useSyncExternalStore(listener => subscribeSessionDraft(scope, address, listener), () => getSessionDraftSnapshot(scope, address));
+            const catalog = React.useSyncExternalStore(subscribeTeamsSnapshots, () => getTeamCredentialResourceCatalogSnapshot(scope, teamAddress));
+            const persisted = readNewSessionDraftFromRepository({ scope, draftId }) ?? initialDraft;
+            const [launchUserAttemptId, setLaunchUserAttemptId] = React.useState(persisted.launchUserAttemptId ?? null);
+            React.useEffect(() => { setLaunchUserAttemptId(persisted.launchUserAttemptId ?? null); }, [persisted.launchUserAttemptId]);
+            const teamCredentialBindings = composeConnectedServiceTeamCredentialBindingIntents({ consumer: identity,
+                declarations: [connectedAccountDeclaration], bindings, resources: catalog?.data ?? [] });
+            const draft = { ...buildNewSessionAuthoringDraftFromPersistedDraft(persisted), agentTarget,
+                connectedServices: SessionAuthoringValueV1Schema.shape.connectedServices.parse(bindings),
+                teamCredentialBindings: teamCredentialBindings.length > 0 ? teamCredentialBindings : undefined };
+            const signatureInput = { draft, composerDocumentRevision: composer.read().revision, machineId: 'm1',
+                managedMachineSelection: null, sourceContext: null, selectedSecretReferences: {}, targetServerId: params.targetServerId ?? null };
+            const { composerDocumentRevision: _revision, ...intent } = signatureInput;
+            const readLaunchIntentSignature = (preparedInstructions?: NewSessionPreparedInstructions) => {
+                const live = readNewSessionDraftFromRepository({ scope, draftId }) ?? initialDraft;
+                return buildNewSessionLaunchIntentSignature({ ...intent,
+                    draft: { ...draft, instructionsDraft: live.instructionsDraft, promptStack: live.promptStack, ...preparedInstructions },
+                    composerDocument: { ...composer.read().document, text: promptStore.getPrompt() } });
+            };
+            currentSignature = readLaunchIntentSignature();
+            readCurrentSignature = readLaunchIntentSignature;
+            legacySignatures.push(JSON.stringify(signatureInput));
+            return { ...params, authoringDraft: draft, launchIntentSignature: currentSignature, readLaunchIntentSignature,
+                launchUserAttemptId,
+                setIsCreating: value => { params.setIsCreating(value); setCreating(value); },
+                onLaunchUserAttemptIdChange: attemptId => {
+                    setLaunchUserAttemptId(attemptId);
+                    const retained = readNewSessionDraftFromRepository({ scope, draftId });
+                    if (retained) writeNewSessionDraftToRepository({ scope, draftId, draft: { ...retained,
+                        ...(attemptId ? { launchUserAttemptId: attemptId } : { launchUserAttemptId: undefined }), updatedAt: 2 } });
+                } };
+        };
+        const hook = await mount(inputs, false, { draftId, promptStore }, project);
+        if (cause.startsWith('Send composer flush')) promptStore.setPrompt('Text admitted by Send');
+        const locks = installWebLockManagerMock();
+        const request = navigator.locks.request.bind(navigator.locks);
+        const custodyReached = createDeferred<void>();
+        const releaseCustody = createDeferred<void>();
+        let changed = false;
+        let before = '';
+        let after = '';
+        let legacyBefore = '';
+        let legacyAfter = '';
+        const lockSpy = vi.spyOn(navigator.locks, 'request').mockImplementation(async (name, options, callback) => {
+            const result = await request(name, options, callback);
+            const custody = readSpawnAttemptCustodyState(scope);
+            if (!changed && name.startsWith('happier:session-spawn-attempts-v2:') && custody.status === 'valid'
+                && Object.values(custody.attempts).some(attempt => attempt.submissionState === 'submitted')) {
+                changed = true;
+                expect(spawnRequests).toEqual([]);
+                before = currentSignature;
+                legacyBefore = legacySignatures.at(-1)!;
+                custodyReached.resolve();
+                await releaseCustody.promise;
+            }
+            return result;
+        });
+        spawnResult.resolve({ type: 'error', code: 'target_unavailable', retryable: false });
+        let send: Promise<void> | undefined;
+        try {
+            await act(async () => { send = startCreation(hook, { initialMessage: 'skip' }); });
+            if (cause === 'Instructions edit during preparation') {
+                await instructionsCreateReached!.promise;
+                const edited = { title: 'Later instructions', markdown: 'Preserve this later edit.' };
+                await act(async () => { writeNewSessionInstructionsToRepository({ scope, draftId, instructionsDraft: edited }); });
+                instructionsCreateGate!.resolve();
+                await act(async () => { await send; });
+                expect(spawnRequests).toEqual([]);
+                expect(readNewSessionDraftFromRepository({ scope, draftId })?.instructionsDraft).toEqual(edited);
+                expect(hook.params.setIsCreating).toHaveBeenLastCalledWith(false);
+                return;
+            }
+            await custodyReached.promise;
+            if (cause === 'unmount') await hook.unmount();
+            else if (cause === 'draft switch') await hook.rerender({ ...hook.params, draftId: 'other-draft' });
+            else if (cause === 'Account scope change') await hook.rerender({ ...hook.params, draftScope: { ...scope, accountId: 'account-b' } });
+            else if (cause === 'Home change') await hook.rerender({ ...hook.params, targetServerId: 'other-home' });
+            else if (cause === 'authored text edit without render') promptStore.setPrompt('Different work after Send');
+            else await act(async () => {
+                if (cause === 'draft deletion') {
+                    expect(await deleteSessionDraft({ scope, address })).toBe(true);
+                } else if (cause === 'authored text edit') {
+                    promptStore.setPrompt('Different work after Send');
+                    await hook.rerender(hook.params);
+                } else if (cause === 'Team currentness refresh' || cause === 'Team availability refresh') {
+                    applyTeamCredentialResourceCatalog({ scope, address: teamAddress,
+                        resources: cause === 'Team availability refresh' ? [] : [resource], observedAt: 2, current: false });
+                } else {
+                    const retained = readNewSessionDraftFromRepository({ scope, draftId });
+                    if (!retained) throw new Error('Expected launch-owned draft');
+                    writeNewSessionDraftToRepository({ scope, draftId, draft: { ...retained, input: promptStore.getPrompt(), updatedAt: 3 } });
+                }
+            });
+            after = readCurrentSignature();
+            legacyAfter = legacySignatures.at(-1)!;
+            releaseCustody.resolve();
+            await act(async () => { await send; });
+            expect(changed).toBe(true);
+            const preserved = ['Team currentness refresh', 'Team availability refresh', 'launch attempt persistence', 'Send composer flush', 'Send composer flush with retained attempt', 'Instructions materialization'].includes(cause);
+            if (preserved) {
+                expect(legacyAfter === legacyBefore).toBe(cause === 'Team currentness refresh' || cause === 'launch attempt persistence' || cause === 'Instructions materialization');
+                const original = JSON.parse(legacyBefore) as { draft: Record<string, unknown>; composerDocumentRevision: number };
+                const refreshed = JSON.parse(legacyAfter) as typeof original;
+                const changedDraftFields = Object.keys({ ...original.draft, ...refreshed.draft }).filter(key =>
+                    JSON.stringify(original.draft[key]) !== JSON.stringify(refreshed.draft[key])).sort();
+                expect(changedDraftFields).toEqual(cause === 'Team availability refresh' ? ['teamCredentialBindings']
+                    : cause.startsWith('Send composer flush') ? ['displayText', 'prompt'] : []);
+                expect(original.composerDocumentRevision !== refreshed.composerDocumentRevision).toBe(cause.startsWith('Send composer flush'));
+                expect(before).toBe(after);
+            }
+            expect(spawnRequests).toHaveLength(preserved ? 1 : 0);
+            if (cause === 'Send composer flush with retained attempt') {
+                const { buildManualSessionCreationKey } = await import('@/sync/ops/actions/sessionSpawnNewAction');
+                expect(spawnRequests[0].creationKey).not.toBe(buildManualSessionCreationKey('obsolete-attempt'));
+            }
+            if (cause !== 'unmount') expect(hook.params.setIsCreating).toHaveBeenLastCalledWith(false);
+            expect(readSpawnAttemptCustodyState(scope)).toEqual({ status: 'missing' });
+        } finally { instructionsCreateGate?.resolve(); releaseCustody.resolve(); await send; lockSpy.mockRestore(); locks.restore(); await hook.unmount(); resetSessionDraftRepositoryForTests(); }
+    });
+    it.each(['refresh', 'retire'] as const)('settles a launch when its captured Account changes during custody: %s', async change => {
+        const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { readSpawnAttemptCustodyState } = await import('@/sync/domains/session/spawn/spawnAttemptNonceStore');
+        const { Modal } = await import('@/modal');
+        const attempts: Array<NewSessionLaunchAttempt | null> = [];
+        const settlements: unknown[] = [];
+        const scope = { serverId: runtime.serverId, accountId: 'account-a' };
+        const hook = await mount(await readCurrentProjection(), false, {
+            onLaunchAttemptChange: attempt => { attempts.push(attempt); },
+        });
+        hook.params.promptStore.setPrompt('Keep this launch draft');
+        const locks = installWebLockManagerMock();
+        const request = navigator.locks.request.bind(navigator.locks);
+        let changed = false;
+        const lockSpy = vi.spyOn(navigator.locks, 'request').mockImplementation(async (name, options, callback) => {
+            const result = await request(name, options, callback);
+            const state = readSpawnAttemptCustodyState(scope);
+            if (!changed && name.startsWith('happier:session-spawn-attempts-v2:')
+                && state.status === 'valid' && Object.values(state.attempts).some(attempt => attempt.submissionState === 'submitted')) {
+                changed = true;
+                expect(attempts.at(-1)).toMatchObject({ status: 'spawning', createdSessionId: null });
+                expect(hook.params.setIsCreating).toHaveBeenLastCalledWith(true);
+                expect(spawnRequests).toEqual([]);
+                if (change === 'refresh') {
+                    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-a', tokenEpoch: 0, jti: 'refreshed',
+                        provenance: AuthTokenProvenanceSchema.parse({ v: 1, kind: 'account', authority: 'present_user' }),
+                    })).toString('base64url')}.signature`;
+                    expect(await TokenStorage.setCredentialsForServerUrl('https://session-pane.test', { serverId: runtime.serverId }, { token })).toBe(true);
+                } else {
+                    await TokenStorage.removeCredentialsForServerUrl('https://session-pane.test', { serverId: runtime.serverId });
+                }
+            }
+            return result;
+        });
+        const alert = vi.mocked(Modal.alert);
+        alert.mockClear();
+        // A wrongly admitted request still settles; it cannot leave this regression hanging.
+        spawnResult.resolve({ type: 'error', code: 'target_unavailable', retryable: false });
+        try {
+            await act(async () => { await startCreation(hook, { onAfterCreatedSettled: value => { settlements.push(value); } }); });
+            expect(changed).toBe(true);
+            expect({ dispatches: spawnRequests.length, attempt: attempts.at(-1)?.status ?? null,
+                creating: vi.mocked(hook.params.setIsCreating).mock.calls.at(-1)?.[0] }).toEqual({
+                dispatches: change === 'refresh' ? 1 : 0, attempt: null, creating: false,
+            });
+            expect(readSpawnAttemptCustodyState(scope)).toEqual({ status: 'missing' });
+            expect(settlements).toEqual([{ status: 'rejected' }]);
+            expect(alert).toHaveBeenCalled();
+            expect(hook.params.promptStore.getPrompt()).toBe('Keep this launch draft');
+        } finally {
+            alert.mockClear(); lockSpy.mockRestore(); locks.restore(); await hook.unmount();
+        }
+    });
     it('keeps a retained managed draft readable before its Account scope and operation hydrate', async () => {
         const selection = await createManagedDraft();
         const hook = await mount(null, false, {
@@ -581,7 +815,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             expect(savedSecretImportRequests).not.toContain('/v1/account/saved-secrets/resources/materials');
         } finally { purposeRowReadGate?.resolve(); await hook.unmount(); }
     });
-    it('retains the authored draft and refuses spawn when inherited purpose authority withdraws before Send', async () => {
+    it.each(['before Send', 'during launch preparation'] as const)('retains the authored draft and refuses spawn when inherited purpose authority withdraws %s', async phase => {
         const inputs = await readCurrentProjection();
         const { storage } = await import('@/sync/domains/state/storageStore');
         const { applyConnectedAccountCatalogSnapshot } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
@@ -598,7 +832,23 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         }), { wrapper: runtime.Wrapper });
         const params = { agentNewSessionOptions: null,
             requireConnectedAccountDefaultsReady: defaults.getCurrent().requireConnectedAccountDefaultsReady };
-        const hook = await mount(inputs, false, params);
+        const attempts: NewSessionLaunchAttempt[] = [];
+        const hook = await mount(inputs, false, { ...params,
+            // An enrolled managed guest is an ordinary shared Machine target,
+            // with no new-machine selection or acquisition continuation.
+            selectedMachine: createMachineFixture({ id: 'm1', isShared: true, access: {
+                custodian: { accountId: 'guest-owner', displayName: 'Guest owner' },
+                role: 'use', resourceMode: 'plain', accessState: 'ready',
+            } }),
+            managedMachineSelection: null, managedMachineAcquisition: null,
+            onLaunchAttemptChange: attempt => {
+                if (!attempt) return;
+                attempts.push(attempt);
+                if (phase === 'during launch preparation' && attempt.status === 'idle') {
+                    applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'unavailable', reason: 'account-mode-mismatch' }, true);
+                }
+            },
+        });
         hook.params.promptStore.setPrompt('Keep this authored work');
         const settlements: unknown[] = [];
         try {
@@ -607,12 +857,14 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             // response, so the missing admission guard cannot hang the fixture.
             spawnResult.resolve({ type: 'error', code: 'target_unavailable', retryable: false });
             await act(async () => {
-                applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'unavailable', reason: 'account-mode-mismatch' }, true);
+                if (phase === 'before Send') applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'unavailable', reason: 'account-mode-mismatch' }, true);
                 const send = hook.getCurrent().handleCreateSession({ onAfterCreatedSettled: value => { settlements.push(value); } });
                 await send;
             });
             expect(spawnRequests).toEqual([]);
             expect(settlements).toEqual([{ status: 'rejected' }]);
+            expect(attempts.map(attempt => attempt.status)).not.toContain('spawning');
+            expect(hook.params.setIsCreating).not.toHaveBeenLastCalledWith(true);
             expect(hook.params.promptStore.getPrompt()).toBe('Keep this authored work');
         } finally { await hook.unmount(); await defaults.unmount(); }
     });
@@ -668,9 +920,10 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             // The completion callback owns its rerender act; an outer act would
             // defer its draft retirement until after the continuation checked it.
             await send;
-            expect(completedCallbacks).toEqual(['created-session']);
-            expect(launchFailures).toEqual([]);
-            expect(settlements).toEqual([{ status: 'accepted', sessionId: 'created-session' }]);
+            expect({ completedCallbacks, launchFailures, settlements }).toEqual({
+                completedCallbacks: ['created-session'], launchFailures: [],
+                settlements: [{ status: 'accepted', sessionId: 'created-session' }],
+            });
             expect(hook.getCurrent().managedMachineCreationProgress.kind).not.toBe('failed');
         } finally { await hook.unmount(); }
     });
@@ -698,7 +951,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             await hook.unmount();
             expect(cancelled).toBe(false);
             const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-            const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-a', jti: 'retired-follow-up' })).toString('base64url')}.signature`;
+            const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-b', jti: 'retired-follow-up' })).toString('base64url')}.signature`;
             await TokenStorage.setCredentialsForServerUrl('https://session-pane.test', { serverId: runtime.serverId }, { token });
             expect(cancelled).toBe(true);
         } finally { release.resolve(); await hook.unmount(); }
@@ -745,7 +998,7 @@ describe('useCreateNewSession (projection currentness admission)', () => {
         }
     });
 
-    it('retires the selected Stop binding when original Home credentials change after enrollment and before Session acceptance', async () => {
+    it('retires the selected Stop binding when the original Home Account is replaced after enrollment and before Session acceptance', async () => {
         const selection = await createManagedDraft('stop');
         managedMachine = { id: 'credential-paid', homeId: runtime.serverIdentityId, custodianAccountId: 'account-a',
             launch: selection.receipt.launch, controller: selection.receipt.controller, enrolledMachineId: 'm1', allocation: 'bound',
@@ -774,14 +1027,14 @@ describe('useCreateNewSession (projection currentness admission)', () => {
             await vi.waitFor(() => expect(spawnRequests).toHaveLength(1));
             expect(scopeRules.size).toBe(0);
 
-            // The selected binding awaits the actual Session receipt. Rotate the
-            // same Account's bearer through secure storage, without switching the
+            // The selected binding awaits the actual Session receipt. Replace the
+            // Account through secure storage, without switching the
             // focused Home: only the submitted Account's credential watch retires it.
             const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
             const focusedLifetime = captureActiveServerAccountScopeLifetime();
             if (!focusedLifetime) throw new Error('Expected the original Home Account lifetime');
             const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-            const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-a', jti: 'replacement-bearer' })).toString('base64url')}.signature`;
+            const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-b', jti: 'replacement-bearer' })).toString('base64url')}.signature`;
             await act(async () => {
                 expect(await TokenStorage.setCredentialsForServerUrl('https://session-pane.test', { serverId: runtime.serverId }, { token })).toBe(true);
             });

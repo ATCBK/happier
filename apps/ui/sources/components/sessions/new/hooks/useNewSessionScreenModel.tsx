@@ -117,7 +117,8 @@ import { useNewSessionActiveServerSource } from '@/components/sessions/new/hooks
 import { useNewSessionBackendTargetState } from '@/components/sessions/new/hooks/screenModel/useNewSessionBackendTargetState';
 import { useNewSessionMachinePathState } from '@/components/sessions/new/hooks/screenModel/useNewSessionMachinePathState';
 import { managedMachineCreationIntent, type ManagedMachineSelectionDraft, type ManagedMachineAcquisitionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
-import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { buildNewSessionLaunchIntentSignature, type NewSessionPreparedInstructions } from '../modules/newSessionLaunchIntent';
+import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { useMachinePoolGroups } from '@/components/sessions/new/hooks/machines/useMachinePoolGroups';
 import { invalidateMachinePoolProjection } from '@/sync/engine/machines/machinePoolProjection';
 import { useServerScopedMachineOptions } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
@@ -1117,7 +1118,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
         [draftScope?.serverId, sessions, targetServerId],
     );
 
-    const persistedTargetMatches = !persistedDraft?.targetServerId || persistedDraft.targetServerId === targetServerId;
+    const persistedTargetMatches = !persistedDraft?.targetServerId
+        || areServerProfileIdentifiersEquivalent(persistedDraft.targetServerId, targetServerId);
     const normalizedDirectoryKindParam = normalizeOptionalParam(directoryKindParam);
     const requestedDirectoryKind = normalizedDirectoryKindParam === 'managed' || normalizedDirectoryKindParam === 'path'
         ? normalizedDirectoryKindParam : null;
@@ -3070,9 +3072,23 @@ export function useNewSessionScreenModel(input?: Readonly<{
             );
         },
     };
-    const launchIntentSignature = React.useMemo(() => JSON.stringify({
-        draft: managedMachineSelection ? { ...effectiveCurrentAuthoringDraft, executionTarget: null } : effectiveCurrentAuthoringDraft,
-        composerDocumentRevision: newSessionComposerDocument.revision,
+    const launchInstructionsDraft = getInstructionsDraft();
+    const launchInstructionsPromptStack = getInstructionsPromptStack();
+    const readLaunchIntentSignature = React.useCallback((preparedInstructions?: NewSessionPreparedInstructions) => buildNewSessionLaunchIntentSignature({
+        draft: {
+            ...effectiveCurrentAuthoringDraft,
+            ...(managedMachineSelection ? { executionTarget: null } : {}),
+            sessionName: sessionNameStore.getPrompt(),
+            instructionsDraft: getInstructionsDraft(),
+            promptStack: getInstructionsPromptStack(),
+            ...preparedInstructions,
+        },
+        composerDocument: {
+            text: promptStore.getPrompt(),
+            structuredInputMentions: newSessionComposerDocument.structuredInputMentions,
+            composerAttachments: newSessionComposerDocument.attachments,
+        },
+        selectedTeamCredentialModel,
         machineId: managedMachineSelection ? null : selectedMachineId,
         managedMachineSelection: managedMachineCreationIntent(managedMachineSelection),
         sourceContext: sourceContextState.sourceContext,
@@ -3080,19 +3096,30 @@ export function useNewSessionScreenModel(input?: Readonly<{
         targetServerId: targetServerId ?? null,
     }), [
         effectiveCurrentAuthoringDraft,
-        newSessionComposerDocument.revision,
+        sessionNameStore,
+        getInstructionsDraft,
+        getInstructionsPromptStack,
+        launchInstructionsDraft,
+        launchInstructionsPromptStack,
+        promptStore,
+        newSessionComposerDocument.structuredInputMentions,
+        newSessionComposerDocument.attachments,
+        selectedTeamCredentialModel,
         selectedMachineId,
         managedMachineSelection,
         sourceContextState.sourceContext,
         selectedSecretIdByProfileIdByEnvVarName,
         targetServerId,
     ]);
+    const launchIntentPrompt = promptStore.getPrompt();
+    const launchIntentName = sessionNameStore.getPrompt();
+    const launchIntentSignature = React.useMemo(() => readLaunchIntentSignature(), [readLaunchIntentSignature, launchIntentPrompt, launchIntentName]);
     const previousLaunchIntentSignatureRef = React.useRef(launchIntentSignature);
     React.useEffect(() => {
-        if (previousLaunchIntentSignatureRef.current === launchIntentSignature) return;
+        if (isCreating || previousLaunchIntentSignatureRef.current === launchIntentSignature) return;
         previousLaunchIntentSignatureRef.current = launchIntentSignature;
         if (launchUserAttemptId) onLaunchUserAttemptIdChange(null);
-    }, [launchIntentSignature, launchUserAttemptId, onLaunchUserAttemptIdChange]);
+    }, [isCreating, launchIntentSignature, launchUserAttemptId, onLaunchUserAttemptIdChange]);
     const spawnBackendTarget = operationalBackendTarget;
     const existingTemporaryComputerActivationRef = temporaryComputerTargetScope !== null
         ? targetScopedDraft?.temporaryComputerActivationRef ?? null
@@ -3955,6 +3982,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         disableDraftPersistence,
         onLaunchAttemptChange: setPendingLaunchAttempt,
         launchIntentSignature,
+        readLaunchIntentSignature,
         launchUserAttemptId,
         onLaunchUserAttemptIdChange,
         onLaunchApprovalPending: launchApproval.request,

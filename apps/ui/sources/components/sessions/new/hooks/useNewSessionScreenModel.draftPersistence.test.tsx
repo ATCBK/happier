@@ -1917,6 +1917,42 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(signature.sourceContext).toEqual(sourceContext);
     });
 
+    it('retains launch identity through attempt persistence and reads live typed intent before another render', async () => {
+        const hook = await renderNewSessionScreenModel(() => {});
+        await settleNewSessionScreenModel();
+        const readArgs = () => {
+            // The test's mocked hook captures the real screen-model producer.
+            const args = useCreateNewSessionArgsRef.current as Parameters<typeof import('./useCreateNewSession').useCreateNewSession>[0] | null;
+            if (!args?.readLaunchIntentSignature) throw new Error('Expected the live launch intent reader');
+            return { ...args, readLaunchIntentSignature: args.readLaunchIntentSignature };
+        };
+        const signature = readArgs().readLaunchIntentSignature();
+        await act(async () => { readArgs().onLaunchUserAttemptIdChange?.('retained-user-attempt'); });
+        await settleNewSessionScreenModel();
+        expect(readArgs().readLaunchIntentSignature()).toBe(signature);
+        expect(readArgs().launchUserAttemptId).toBe('retained-user-attempt');
+
+        readArgs().promptStore.setPrompt('A different authored request');
+        expect(readArgs().readLaunchIntentSignature()).not.toBe(signature);
+        await hook.rerender();
+        await settleNewSessionScreenModel();
+        expect(readArgs().launchUserAttemptId).toBeNull();
+    });
+
+    it('reads an authored Bot name change in launch intent before another render', async () => {
+        Object.assign(persistedDraft, { initialSessionFacts: { bot: { kind: 'bot' } } });
+        try {
+            const hook = await renderNewSessionScreenModel(() => {});
+            await settleNewSessionScreenModel();
+            const creation = hook.getCurrent().botCreation;
+            const readIntent = useCreateNewSessionArgsRef.current?.readLaunchIntentSignature;
+            if (!creation || typeof readIntent !== 'function') throw new Error('Expected the authored Bot name and launch identity');
+            const before = readIntent();
+            creation.onSessionNameChange('A different Bot name');
+            expect(readIntent()).not.toBe(before);
+        } finally { Reflect.deleteProperty(persistedDraft, 'initialSessionFacts'); }
+    });
+
     it('uses the repository-selected access and Team context for both persistence and launch', async () => {
         persistedDraft.access = { grants: [{
             subject: { kind: 'account', accountId: 'alice' },
