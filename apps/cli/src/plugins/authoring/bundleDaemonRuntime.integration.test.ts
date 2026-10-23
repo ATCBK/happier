@@ -36,6 +36,45 @@ async function linkCanonicalPublicRuntimePackages(projectRoot: string): Promise<
 
 describe('bundlePluginDaemonRuntime', () => {
 
+  it('executes lazy dependency imports after an external plugin is installed away from its source', async () => {
+    const parentRoot = await mkdtemp(join(tmpdir(), 'happier-installed-plugin-lazy-'));
+    const projectRoot = join(parentRoot, 'author');
+    const installedRoot = join(parentRoot, 'installed');
+    const manifest = {
+      schemaVersion: 2, id: 'acme.lazy-parser', version: '1.0.0', displayName: 'Lazy parser',
+      engines: { happier: '^0.2.0' }, runtime: { apiVersion: 1 },
+      entrypoints: { development: './src/index.ts', daemon: './dist/index.js' }, contributes: {},
+    };
+    try {
+      await mkdir(join(projectRoot, 'src'), { recursive: true });
+      await mkdir(join(projectRoot, '.happier-plugin'), { recursive: true });
+      const dependency = join(projectRoot, 'node_modules', 'fixture-css');
+      await mkdir(dependency, { recursive: true });
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ type: 'module', dependencies: { 'fixture-css': '1.0.0' } }));
+      await writeFile(join(projectRoot, '.happier-plugin/plugin.json'), JSON.stringify(manifest));
+      await writeFile(join(dependency, 'package.json'), JSON.stringify({ name: 'fixture-css', version: '1.0.0',
+        type: 'module', exports: { import: './index.js', require: './index.cjs' } }));
+      await writeFile(join(dependency, 'index.js'), "export const generate = (text) => `import:${text}`;");
+      await writeFile(join(dependency, 'index.cjs'), "module.exports = { generate: (text) => `require:${text}` };");
+      await writeFile(join(projectRoot, 'src/shape.ts'), "import { generate } from 'fixture-css'; export function shape(text: string) { return [generate(text), require('fixture-css').generate(text)]; }");
+      await writeFile(join(projectRoot, 'src/index.ts'), `export const manifest = ${JSON.stringify(manifest)};
+export function activate() {}
+export async function parse(text: string) { return (await import('./shape.js')).shape(text); }
+`);
+      await bundlePluginDaemonRuntimeImplementation(projectRoot);
+      await mkdir(installedRoot, { recursive: true });
+      await cp(join(projectRoot, 'dist'), join(installedRoot, 'dist'), { recursive: true });
+      await cp(join(projectRoot, 'package.json'), join(installedRoot, 'package.json'));
+      const packed = await import(pathToFileURL(join(installedRoot, 'dist/index.js')).href) as Readonly<{
+        parse(text: string): Promise<readonly string[]>;
+      }>;
+      await expect(packed.parse('synthetic')).resolves.toEqual(['import:synthetic', 'require:synthetic']);
+      await expect(packed.parse('again')).resolves.toEqual(['import:again', 'require:again']);
+    } finally {
+      await rm(parentRoot, { recursive: true, force: true });
+    }
+  });
+
   it('builds the current public-authoring source into its declared daemon entry and activates its declared runtimes', async () => {
     const parentRoot = await mkdtemp(join(tmpdir(), 'happier-public-authoring-stage-'));
     const projectRoot = join(parentRoot, 'public-authoring');
