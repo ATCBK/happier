@@ -4,6 +4,54 @@ import { createScopedBatchResolutionSingleFlight } from './scopedResolutionSingl
 import { createDeferred } from '@/dev/testkit';
 
 describe('scoped batch pending reads', () => {
+    it('closes materialization for each physical chunk before the same borrower receives later chunks', async () => {
+        const reads = createScopedBatchResolutionSingleFlight<string>({ materializePhysicalChunks: true });
+        const later = createDeferred<void>();
+        const published: string[][] = [];
+        const destination = vi.fn((rows: readonly string[]) => { published.push([...rows]); });
+        const publications: Promise<void>[] = [];
+        const preparation = reads.reserve('details');
+        const result = preparation.run(['a', 'b'], async (_ids, _signal, publish) => {
+            publish(new Map([['a', 'A']]));
+            await later.promise;
+            publish(new Map([['b', 'B']]));
+            return new Map([['a', 'A'], ['b', 'B']]);
+        }, undefined, (_id, value, chunk) => {
+            if (!chunk) throw new Error('Expected physical completion context');
+            publications.push(chunk.publish(destination, Promise.resolve(value), destination));
+        });
+        try {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(published).toEqual([['A']]);
+            later.resolve();
+            await result;
+            await Promise.all(publications);
+            expect(published).toEqual([['A'], ['B']]);
+        } finally { later.resolve(); await result; }
+    });
+
+    it('closes a physical delivery when another overlapping borrower is cancelled during delivery', async () => {
+        const reads = createScopedBatchResolutionSingleFlight<string>({ materializePhysicalChunks: true });
+        const cancelled = new AbortController();
+        const destination = vi.fn((_rows: readonly string[]) => {});
+        const publications: Promise<void>[] = [];
+        const first = reads.reserve('details');
+        const second = reads.reserve('details', { signal: cancelled.signal });
+        const request = vi.fn(async () => new Map([['a', 'A']]));
+        const survivor = first.run(['a'], request, undefined, (_id, value, chunk) => {
+            if (!chunk) throw new Error('Expected physical completion context');
+            publications.push(chunk.publish(destination, Promise.resolve(value), destination));
+            cancelled.abort();
+        });
+        const departed = second.run(['a'], request).catch((error: unknown) => error);
+        await survivor;
+        expect(await departed).toMatchObject({ name: 'AbortError' });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(destination).toHaveBeenCalledExactlyOnceWith(['A']);
+        await Promise.all(publications);
+        expect(request).toHaveBeenCalledTimes(1);
+    });
+
     it.each([false, true])('keeps cancellation work linear with a surviving borrower (settled chunk: %s)', async settledChunk => {
         async function cancellationWork(size: number): Promise<number> {
             const reads = createScopedBatchResolutionSingleFlight<string>();

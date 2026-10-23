@@ -342,6 +342,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
     activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
     activeReadTransport?: CapturedServerReadTransport;
     applySessions: (sessions: AppliedSession[]) => void;
+    applySessionListRows?: Parameters<typeof fetchAndApplySessionById>[0]['applySessionListRows'];
     getExistingSession?: (sessionId: string) => Session | null | undefined;
     getCurrentSessionListRenderable?: (sessionId: string) => SessionListRenderableSession | null | undefined;
     log: { log: (message: string) => void };
@@ -373,7 +374,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             encryption: getScopedSessionByIdEncryption(params.activeEncryption ?? null),
             sessionDataKeys: params.sessionDataKeys, sessionDataKeyEnvelopes: params.sessionDataKeyEnvelopes,
             request: params.activeRequest,
-            applySessions: params.applySessions, getExistingSession: params.getExistingSession,
+            applySessions: params.applySessions, applySessionListRows: params.applySessionListRows, getExistingSession: params.getExistingSession,
             getCurrentSessionListRenderable: params.getCurrentSessionListRenderable,
             log: params.log, timeoutMs: params.timeoutMs,
             signal: params.signal,
@@ -424,6 +425,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             readTransport: params.authority?.readTransport ?? params.activeReadTransport,
             signal: params.signal,
             applySessions: params.applySessions,
+            applySessionListRows: params.applySessionListRows,
             getExistingSession: params.getExistingSession,
             getCurrentSessionListRenderable: params.getCurrentSessionListRenderable,
             log: params.log,
@@ -494,6 +496,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
         readTransport: params.authority?.readTransport ?? context.readTransport,
         signal: params.signal,
         applySessions: params.applySessions,
+        applySessionListRows: params.applySessionListRows,
         getExistingSession: params.getExistingSession,
         getCurrentSessionListRenderable: params.getCurrentSessionListRenderable,
         log: params.log,

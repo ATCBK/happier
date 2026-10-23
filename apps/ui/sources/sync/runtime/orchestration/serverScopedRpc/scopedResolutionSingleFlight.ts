@@ -70,7 +70,10 @@ function abortReason(signal: AbortSignal): unknown {
 
 /** Pending work only: parsing, admission, retry cadence and retained data belong to domain owners. */
 export type ScopedResolutionSingleFlight<T> = Readonly<{
-    run: (key: string, resolve: (signal: AbortSignal, onIssued: () => void) => Promise<T>, options?: ScopedPhysicalReadOptions) => Promise<T>;
+    run: (key: string, resolve: (signal: AbortSignal, onIssued: () => void) => Promise<T>, options?: ScopedPhysicalReadOptions & Readonly<{
+        onResolved?: (value: T, live: boolean) => void;
+        onPhysicalResolved?: (value: T, borrowers: number) => void;
+    }>) => Promise<T>;
     /** Forget joins after a write/wake without cancelling incumbent operations or their publication fences. */
     invalidate: (scope?: ReadPartitionScope) => void;
     reset: () => void;
@@ -78,7 +81,7 @@ export type ScopedResolutionSingleFlight<T> = Readonly<{
 
 export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleFlight<T> {
     type Flight = { result: Promise<T>; abort: AbortController; waiters: number; settled: boolean;
-        issued: boolean; issuanceListeners?: Set<() => void> };
+        issued: boolean; issuanceListeners?: Set<() => void>; resolutionListeners?: Set<() => void> };
     const defaultScope = {};
     const partitions = createReadPartitions<Map<string, Flight>>();
 
@@ -122,16 +125,24 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
                 const created = flight;
                 partition.set(key, created);
                 const finish = () => { created.settled = true; forget(created); };
-                void result.then(finish, finish);
+                void result.then(value => {
+                    if (created.resolutionListeners) for (const listener of created.resolutionListeners) listener();
+                    options.onPhysicalResolved?.(value, created.waiters);
+                    finish();
+                }, finish);
             }
             const read = flight;
             read.waiters += 1;
             return await new Promise<T>((accept, reject) => {
                 let left = false;
+                let resolutionExpected = false;
+                const expectResolution = options.onResolved ? () => { resolutionExpected = true; } : undefined;
+                if (expectResolution) (read.resolutionListeners ??= new Set()).add(expectResolution);
                 const leave = () => {
                     if (left) return;
                     left = true;
                     read.issuanceListeners?.delete(onIssued);
+                    if (expectResolution) read.resolutionListeners?.delete(expectResolution);
                     options.signal?.removeEventListener('abort', onAbort);
                     read.waiters -= 1;
                     if (read.waiters === 0 && !read.settled) {
@@ -155,9 +166,13 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
                 if (options.signal?.aborted) onAbort();
                 else if (read.issued) onIssued();
                 void read.result.then(value => {
-                    if (left) return;
+                    if (left) {
+                        if (resolutionExpected) options.onResolved?.(value, false);
+                        return;
+                    }
                     leave();
-                    accept(value);
+                    try { options.onResolved?.(value, true); accept(value); }
+                    catch (error) { reject(error); }
                 }, error => {
                     if (left) return;
                     leave();
@@ -177,10 +192,48 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
 type BatchRead<T> = (ids: readonly string[], signal: AbortSignal,
     publish: (values: ReadonlyMap<string, T>) => void) => Promise<ReadonlyMap<string, T>>;
 
+/** Finite work belonging to one delivered physical chunk, partitioned by its real destination. */
+export type ScopedBatchResolutionContext = Readonly<{
+    /** Register in onResolved; preparation must settle before awaiting this publication. */
+    publish<R>(destination: object, preparation: Promise<R | null>, apply: (entries: readonly R[]) => void | Promise<void>): Promise<void>;
+}>;
+
+function createBatchResolutionContext(ids: readonly string[]) {
+    let remainingIds = ids.length;
+    let remainingDeliveries = 0;
+    let close!: () => void;
+    const delivered = new Promise<void>(resolve => { close = resolve; });
+    const groups = new Map<object, { add: (preparation: Promise<unknown>) => Promise<void> }>();
+    const check = () => { if (remainingIds === 0 && remainingDeliveries === 0) close(); };
+    return {
+        expect(borrowers: number) { remainingIds -= 1; remainingDeliveries += borrowers; check(); },
+        delivered() { remainingDeliveries -= 1; check(); },
+        context: {
+            publish<R>(destination: object, preparation: Promise<R | null>, apply: (entries: readonly R[]) => void | Promise<void>): Promise<void> {
+                let group = groups.get(destination);
+                if (!group) {
+                    const work: Promise<R | null>[] = [];
+                    const publication = delivered.then(async () => {
+                        const results = await Promise.allSettled(work);
+                        await apply(results.flatMap(result => result.status === 'fulfilled' && result.value !== null ? [result.value] : []));
+                    });
+                    group = { add: pending => {
+                        // Each destination identifies one typed publication in this finite group.
+                        work.push(pending as Promise<R | null>);
+                        return publication;
+                    } };
+                    groups.set(destination, group);
+                }
+                return group.add(preparation);
+            },
+        } satisfies ScopedBatchResolutionContext,
+    };
+}
+
 export type ScopedBatchReadPreparation<T> = Readonly<{
     /** Settle this reservation once the caller has prepared its selected ids. */
     run: (ids: readonly string[], read: BatchRead<T>, signal?: AbortSignal,
-        onResolved?: (id: string, value: T) => void) => Promise<ReadonlyMap<string, T>>;
+        onResolved?: (id: string, value: T, context?: ScopedBatchResolutionContext) => void) => Promise<ReadonlyMap<string, T>>;
     /** A failed or abandoned preparation must not hold other ready readers. */
     release: () => void;
 }>;
@@ -196,11 +249,16 @@ export type ScopedBatchResolutionSingleFlight<T> = Readonly<{
 }>;
 
 /** Gathers ids at the same pending owner; each typed adapter keeps its existing wire/body budget. */
-export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolutionSingleFlight<T> {
+export function createScopedBatchResolutionSingleFlight<T>(configuration: Readonly<{ materializePhysicalChunks?: true }> = {}): ScopedBatchResolutionSingleFlight<T> {
+    // Session opening needs finite borrower completion. Other resource readers
+    // retain ordinary raw delivery without allocating materialization contexts.
+    const materializePhysicalChunks = configuration.materializePhysicalChunks === true;
     const defaultScope = {};
-    type Item = { id: string; signal: AbortSignal; read: BatchRead<T>; accept: (value: T) => void; reject: (error: unknown) => void };
+    type Resolved = { value: T; batch: ReturnType<typeof createBatchResolutionContext> };
+    type ItemResult = T | Resolved;
+    type Item = { id: string; signal: AbortSignal; read: BatchRead<T>; accept: (value: ItemResult) => void; reject: (error: unknown) => void };
     type Batch = { items: Item[]; preparations: number; scheduled: boolean };
-    type Partition = { reads: ScopedResolutionSingleFlight<T>; groups: Map<string, Batch>; users: number };
+    type Partition = { reads: ScopedResolutionSingleFlight<ItemResult>; groups: Map<string, Batch>; users: number };
     const partitions = createReadPartitions<Partition>();
 
     function acquire(options: ScopedReadOptions) {
@@ -208,7 +266,7 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
         const scope = options.fresh ? {} : options.scope ?? defaultScope;
         let partition = partitions.get(scope);
         if (!partition) {
-            partition = { reads: createScopedResolutionSingleFlight<T>(), groups: new Map(), users: 0 };
+            partition = { reads: createScopedResolutionSingleFlight<ItemResult>(), groups: new Map(), users: 0 };
             partitions.set(scope, partition);
         }
         const captured = partition;
@@ -273,6 +331,9 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
             // it. Settle its selected items now, retaining later items in this
             // same pending owner rather than holding every borrower at a barrier.
             const publish = (values: ReadonlyMap<string, T>) => {
+                const resolvedBatch = materializePhysicalChunks ? createBatchResolutionContext(
+                    [...values.keys()].filter(id => pending.has(id) && !pending.get(id)!.item.signal.aborted),
+                ) : undefined;
                 for (const [id, value] of values) {
                     const entry = pending.get(id);
                     if (!entry) continue;
@@ -282,17 +343,21 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
                     if (item.signal.aborted) item.reject(abortReason(item.signal));
                     else {
                         wanted -= 1;
-                        item.accept(value);
+                        item.accept(resolvedBatch ? { value, batch: resolvedBatch } : value);
                     }
                 }
                 cancelIfUnwanted();
             };
             const result = await first.read(items.map(item => item.id), abort.signal, publish);
+            if (pending.size > 0) {
+                const completed = new Map<string, T>();
+                // Map.has establishes presence even when T itself permits undefined.
+                for (const id of pending.keys()) if (result.has(id)) completed.set(id, result.get(id) as T);
+                publish(completed);
+            }
             for (const { item } of pending.values()) {
                 if (item.signal.aborted) item.reject(abortReason(item.signal));
-                else if (!result.has(item.id)) item.reject(new Error('Scoped batch omitted a requested resource'));
-                // Map.has establishes presence even when T itself permits undefined.
-                else item.accept(result.get(item.id) as T);
+                else item.reject(new Error('Scoped batch omitted a requested resource'));
             }
         } catch (error) {
             for (const { item } of pending.values()) item.reject(error);
@@ -304,19 +369,27 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
 
     async function run(acquisition: ReturnType<typeof acquire>, groupKey: string, batch: Batch,
         ids: readonly string[], read: BatchRead<T>, options: ScopedReadOptions, signal?: AbortSignal,
-        onResolved?: (id: string, value: T) => void) {
+        onResolved?: (id: string, value: T, context?: ScopedBatchResolutionContext) => void) {
         const invocation = new AbortController();
         const cancellation = mergeAbortSignals([invocation.signal, options.signal, signal]);
         try {
             throwIfAborted(cancellation.signal);
             const pending = Promise.all([...new Set(ids)].map(async id => {
-                let selected!: Promise<T>;
+                let selected!: Promise<ItemResult>;
                 const value = await acquisition.partition.reads.run(JSON.stringify([groupKey, id]), () => selected, {
                     signal: cancellation.signal,
+                    ...(materializePhysicalChunks ? {
+                        onPhysicalResolved: (result: ItemResult, borrowers: number) => (result as Resolved).batch.expect(borrowers),
+                        onResolved: (result: ItemResult, live: boolean) => {
+                            const resolved = result as Resolved;
+                            try { if (live) { throwIfAborted(cancellation.signal); onResolved?.(id, resolved.value, resolved.batch.context); } }
+                            finally { resolved.batch.delivered(); }
+                        },
+                    } : {}),
                     onPhysicalAcquire: signal => {
                         // Selection is synchronous: a ready flush may already
                         // be queued when another preparation settles its ids.
-                        selected = new Promise<T>((accept, reject) => {
+                        selected = new Promise<ItemResult>((accept, reject) => {
                             batch.items.push({ id, signal, read, accept, reject });
                         });
                         // The last borrower can leave before the deferred
@@ -326,8 +399,8 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
                     },
                 });
                 throwIfAborted(cancellation.signal);
-                onResolved?.(id, value);
-                return [id, value] as const;
+                if (!materializePhysicalChunks) onResolved?.(id, value as T);
+                return [id, materializePhysicalChunks ? (value as Resolved).value : value as T] as const;
             }));
             flushWhenPrepared(acquisition, groupKey, batch);
             const values = await pending;

@@ -3,10 +3,10 @@ import { SessionReadBatchRequestV1Schema, SessionReadBatchResponseV1Schema,
 import { createServerHttpRequestBodyItemBudgetV1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 import type { ServerAccountRequestAuthority } from './createServerRequestWithServerScope';
 import type { CapturedServerReadTransport } from './capturedServerReadTransport';
-import { createScopedBatchResolutionSingleFlight } from './scopedResolutionSingleFlight';
+import { createScopedBatchResolutionSingleFlight, type ScopedBatchResolutionContext } from './scopedResolutionSingleFlight';
 
 type SessionReadPart = SessionReadBatchResponseV1['results'][number];
-const sessionParts = createScopedBatchResolutionSingleFlight<SessionReadPart>();
+const sessionParts = createScopedBatchResolutionSingleFlight<SessionReadPart>({ materializePhysicalChunks: true });
 
 export class SessionPartsHttpError extends Error {
     constructor(readonly httpStatus: number, readonly body: unknown) {
@@ -32,7 +32,7 @@ export type SessionPartsReadOptions = Readonly<{
     retry?: 'none';
     assertCurrent: () => void;
     /** Validated parts from each settled physical batch, fenced per borrower. */
-    onResult?: (sessionId: string, part: SessionReadPart) => void;
+    onResult?: (sessionId: string, part: SessionReadPart, chunk: ScopedBatchResolutionContext) => void;
 }>;
 
 /** The one parsed Session-parts acquisition owner; admission and opening remain per borrower. */
@@ -103,7 +103,11 @@ export function prepareSessionPartsRead(params: Omit<SessionPartsReadOptions, 's
                         publish(completed);
                     }
                     return result;
-                }, undefined, (id, row) => { assertCurrent(); params.onResult?.(id, row); });
+                }, undefined, (id, row, chunk) => {
+                    assertCurrent();
+                    if (!chunk) throw new Error('Session physical chunk completion context is unavailable');
+                    params.onResult?.(id, row, chunk);
+                });
             } finally {
                 reservation.release();
                 assertCurrent();

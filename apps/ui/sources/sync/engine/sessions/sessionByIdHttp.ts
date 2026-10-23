@@ -2,6 +2,7 @@ import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/s
 import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 import { readSessionParts, SessionPartsHttpError, resetSessionPartsReadsForTests } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionBatchForAuthority';
 import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
+import type { ScopedBatchResolutionContext } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 
 type SessionByIdRequest = (path: string, init: RequestInit) => Promise<Response>;
 export type SessionByIdHttpRead = Readonly<{ ok: boolean; status: number; body: unknown;
@@ -19,6 +20,7 @@ export type SessionByIdHttpReadParams = Readonly<{
   signal?: AbortSignal;
   retry?: 'none';
   fresh?: boolean;
+  onBatch?: (chunk: ScopedBatchResolutionContext) => void;
 }>;
 
 /** Parsed transport observations only; callers retain access, crypto and publication admission. */
@@ -35,7 +37,8 @@ export async function readSessionByIdHttp(params: SessionByIdHttpReadParams): Pr
         const row = (await readSessionParts({ request: params.request, readTransport: params.readTransport,
           sessionIds: [params.sessionId], includeSnapshot: true, includeTurns: projection !== 'detail',
           includeMessages: false, accessProjectionVersion: params.accessProjectionVersion,
-          signal: cancellation.signal, fresh: params.fresh, retry: params.retry, assertCurrent: () => {} })).get(params.sessionId);
+          signal: cancellation.signal, fresh: params.fresh, retry: params.retry, assertCurrent: () => {},
+          onResult: (_id, _part, chunk) => params.onBatch?.(chunk) })).get(params.sessionId);
         const part = projection === 'turns' ? row?.turns ?? (row?.detail?.status !== 200 ? row?.detail : undefined) : row?.detail;
         if (!part) throw new Error('Incomplete Session parts response');
         return { ok: part.status === 200, status: part.status, body: part.body,

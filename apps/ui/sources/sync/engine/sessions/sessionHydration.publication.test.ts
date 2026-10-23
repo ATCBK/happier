@@ -10,13 +10,15 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { buildSessionListRenderableFromSession, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacingSession';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
-import { fetchAndApplySessionById } from './sessionById';
+import { fetchAndApplySessionById, type SessionListRowPublication } from './sessionById';
 import { fetchAndApplySessions } from './sessionSnapshot';
 import { parseDecryptedSessionMetadata } from './parsePlainSessionPayload';
 import { flushActivityUpdates, handleUpdateContainer } from '../socket/socket';
 import { registerSessionRealtimeTranscriptConsumer } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { getScopedSessionByIdEncryption } from '@/sync/runtime/orchestration/serverScopedRpc/fetchSessionByIdWithServerScope';
+import { createOperationAccountCurrentnessSource, getScopedSessionByIdEncryption } from '@/sync/runtime/orchestration/serverScopedRpc/fetchSessionByIdWithServerScope';
+import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 
 const currentness = {
     mode: 'e2ee', version: 1, updatedAt: 1,
@@ -77,30 +79,49 @@ afterEach(() => {
 });
 
 describe('Session hydration publication', () => {
-    it('publishes ready plain by-ID hydration completions together without a publication timer', async () => {
+    it('publishes one physical plain Session batch without a publication timer', async () => {
         storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         const ids = Array.from({ length: 6 }, (_, index) => `concurrent-hydration-${index}`);
+        const response = createDeferred<Response>();
+        const issued = createDeferred<void>();
+        const requests: Array<{ path: string; ids: readonly string[] }> = [];
+        const credentials = { token: 't' };
+        const readTransport = createCapturedServerReadTransport({ serverId, credentials, prepared: {
+            endpointUrl: 'https://home-publication.example', generation: 1,
+            request: async (path, init, _options, consume) => {
+                requests.push({ path, ids: JSON.parse(String(init?.body)).sessionIds });
+                issued.resolve();
+                return await consume(await response.promise);
+            },
+        } });
+        const directRequest = vi.fn(async () => { throw new Error('A captured Account read must use its batch transport'); });
         const publications: string[][] = [];
         const unsubscribe = storage.subscribe((next, previous) => {
             if (next.sessions !== previous.sessions) publications.push(Object.keys(next.sessions));
         });
         const hydration = Promise.all(ids.map(id => fetchAndApplySessionById({
             serverId, sessionId: id, includeTurnsProjection: false, accessProjectionVersion: 1,
-            credentials: { token: 't' },
+            credentials, readTransport,
             accountCurrentness: { mode: 'plain', version: 1, updatedAt: 1,
                 signingKeyFingerprint: null, contentKeyFingerprint: null },
             encryption: getScopedSessionByIdEncryption(null), sessionDataKeys: new Map(),
             applySessions: storage.getState().applySessions,
             getExistingSession: sessionId => storage.getState().sessions[sessionId],
             log: { log: () => {} },
-            request: async () => jsonResponse({ session: createPlainSessionCurrentProjectionRecordFixture({ id }) }),
+            request: directRequest,
         }).then(result => {
             expect(result.ok).toBe(true);
             expect(result.session).toBe(storage.getState().sessions[id]);
             return result;
         })));
         try {
+            await issued.promise;
+            expect(requests).toEqual([{ path: '/v2/sessions/read-batch', ids }]);
+            expect(directRequest).not.toHaveBeenCalled();
+            response.resolve(jsonResponse({ results: ids.map(id => ({ sessionId: id,
+                detail: { status: 200, body: { session: createPlainSessionCurrentProjectionRecordFixture({ id }) } },
+            })) }));
             // HTTP and decoder microtasks finish, but no publication timeout advances.
             await new Promise<void>(resolve => setImmediate(resolve));
             expect(publications).toHaveLength(1);
@@ -111,6 +132,7 @@ describe('Session hydration publication', () => {
             expect(publications).toHaveLength(1);
             expect([...publications[0]].sort()).toEqual([...ids].sort());
         } finally {
+            response.resolve(jsonResponse({ results: [] }));
             await vi.runAllTimersAsync();
             await hydration;
             vi.useRealTimers();
@@ -118,30 +140,125 @@ describe('Session hydration publication', () => {
         }
     });
 
-    it('publishes concurrent E2EE by-ID hydration completions together', async () => {
+    it('publishes one physical E2EE Session batch together', async () => {
         const { row, params } = await createHydrationContext();
         storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
         const ids = Array.from({ length: 6 }, (_, index) => `concurrent-encrypted-hydration-${index}`);
+        const read = vi.fn(async (_path: string, init?: RequestInit) => jsonResponse({ results:
+            (JSON.parse(String(init?.body)).sessionIds as string[]).map(id => ({
+                sessionId: id, detail: { status: 200, body: { session: { ...row, id } } },
+            })),
+        }));
+        const readTransport = createCapturedServerReadTransport({ serverId, credentials: params.credentials, prepared: {
+            endpointUrl: 'https://home-publication.example', generation: 1,
+            request: async (path, init, _options, consume) => await consume(await read(path, init)),
+        } });
         const publications: string[][] = [];
         const unsubscribe = storage.subscribe((next, previous) => {
             if (next.sessions !== previous.sessions) publications.push(Object.keys(next.sessions));
         });
         try {
             const results = await Promise.all(ids.map(id => fetchAndApplySessionById({
-                ...params, sessionId: id, includeTurnsProjection: false,
-                request: async () => jsonResponse({ session: { ...row, id } }),
+                ...params, sessionId: id, includeTurnsProjection: false, readTransport,
+                request: async () => { throw new Error('Expected captured Session batch'); },
             })));
             expect(results.every(result => result.ok)).toBe(true);
             expect(publications).toHaveLength(1);
             expect([...publications[0]].sort()).toEqual([...ids].sort());
+            expect(read).toHaveBeenCalledTimes(1);
         } finally { unsubscribe(); }
     });
 
-    it('rechecks a retired exact reader before its queued publication and lets the next reader recover', async () => {
+    it.each(['retirement', 'witness-withdrawal'] as const)('readmits a prepared physical-batch row after %s', async change => {
+        storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
+        const home = 'home-publication-final-fence';
+        const ids = ['prepared-then-retired', 'fresh-witness-pending'];
+        const credentials = { token: 't' };
+        const started = createDeferred<void>();
+        const currentnessResponse = createDeferred<Response>();
+        const controller = new AbortController();
+        const plainCurrentness = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        let rereads = 0;
+        const readyCurrentness = createOperationAccountCurrentnessSource({ credentials, serverId: home, initial: plainCurrentness,
+            request: async path => {
+                expect(path).toBe('/v1/account/encryption/currentness');
+                rereads++;
+                return jsonResponse(plainCurrentness);
+            },
+        });
+        const batches: string[][] = [];
+        const readTransport = createCapturedServerReadTransport({ serverId: home, credentials, prepared: {
+            endpointUrl: 'https://home-publication.example', generation: 1,
+            request: async (_path, init, _options, consume) => {
+                const selected = JSON.parse(String(init?.body)).sessionIds as string[];
+                batches.push(selected);
+                return await consume(jsonResponse({ results: selected.map(id => ({ sessionId: id,
+                    detail: { status: 200, body: { session: createPlainSessionCurrentProjectionRecordFixture({ id }) } },
+                })) }));
+            },
+        } });
+        const applySessionListRows = (rows: readonly SessionListRowPublication[]) => storage.getState().applyServerScopedSessionListRows(
+            home, rows.map(entry => entry.row), { source: 'rowOnly', mode: 'append' },
+        );
+        let publications = 0;
+        const unsubscribe = storage.subscribe((next, previous) => {
+            if (next.sessionListRowsByServerId[home] !== previous.sessionListRowsByServerId[home]) publications++;
+        });
+        const reads = ids.map((id, index) => fetchAndApplySessionById({
+            serverId: home, sessionId: id, credentials, readTransport, contentDemand: 'list-projection',
+            includeTurnsProjection: false, accessProjectionVersion: 1,
+            ...(index === 0 ? { signal: controller.signal, accountCurrentness: plainCurrentness,
+                ensureAccountCurrentness: readyCurrentness.ensureCurrent, isCurrent: readyCurrentness.isCurrent,
+            } : {}),
+            encryption: getScopedSessionByIdEncryption(null), sessionDataKeys: new Map(),
+            applySessions: storage.getState().applySessions, applySessionListRows, log: { log: () => {} },
+            request: async path => {
+                expect(path).toBe('/v1/account/encryption/currentness');
+                started.resolve();
+                return await currentnessResponse.promise;
+            },
+        }));
+        try {
+            await started.promise;
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(batches).toEqual([ids]);
+            expect(publications).toBe(0);
+            if (change === 'retirement') controller.abort();
+            else invalidateAccountEncryptionModeCache({ serverId: home, reason: 'transport-withdrawal' });
+            currentnessResponse.resolve(jsonResponse({ mode: 'plain', version: 1, updatedAt: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null,
+            }));
+            const results = await Promise.all(reads);
+            if (change === 'retirement') expect(results[0]).toMatchObject({ ok: false, errorCode: 'stale_response' });
+            else {
+                expect(results[0].ok).toBe(true);
+                expect(rereads).toBe(1);
+            }
+            expect(results[1].ok).toBe(true);
+            expect(Object.keys(storage.getState().sessionListRowsByServerId[home])).toEqual(change === 'retirement' ? [ids[1]] : ids);
+            expect(publications).toBe(1);
+        } finally {
+            currentnessResponse.resolve(jsonResponse({ mode: 'plain', version: 1, updatedAt: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null,
+            }));
+            await Promise.allSettled(reads);
+            readyCurrentness.dispose();
+            unsubscribe();
+        }
+    });
+
+    it('refuses a retired exact reader during opening and lets the next reader recover', async () => {
         const { row, params } = await createHydrationContext();
         storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
-        const scheduled = createDeferred<VoidFunction>();
-        const microtask = vi.spyOn(globalThis, 'queueMicrotask').mockImplementationOnce(callback => scheduled.resolve(callback));
+        const started = createDeferred<void>();
+        const release = createDeferred<void>();
+        const decrypt = nativeCrypto.decryptAsyncAES;
+        const native = vi.spyOn(nativeCrypto, 'decryptAsyncAES').mockImplementation(async (...args) => {
+            started.resolve();
+            await release.promise;
+            return await decrypt(...args);
+        });
         const controller = new AbortController();
         const publications = vi.fn();
         const unsubscribe = storage.subscribe(publications);
@@ -151,13 +268,13 @@ describe('Session hydration publication', () => {
                 prefetched: { detail: { status: 200, body: { session: row } } },
                 request: async () => jsonResponse({ session: row }),
             });
-            const publish = await scheduled.promise;
+            await started.promise;
             controller.abort();
-            publish();
+            release.resolve();
             expect(await hydration).toMatchObject({ ok: false, errorCode: 'stale_response' });
             expect(storage.getState().sessions[sessionId]).toBeUndefined();
             expect(publications).not.toHaveBeenCalled();
-            microtask.mockRestore();
+            native.mockRestore();
             const recovered = await fetchAndApplySessionById({
                 ...params, sessionId, includeTurnsProjection: false,
                 request: async () => jsonResponse({ session: row }),
@@ -166,30 +283,48 @@ describe('Session hydration publication', () => {
             expect(recovered.session).toBe(storage.getState().sessions[sessionId]);
             expect(publications).toHaveBeenCalledTimes(1);
         } finally {
-            microtask.mockRestore();
+            release.resolve();
+            native.mockRestore();
             unsubscribe();
         }
     });
 
-    it('publishes a completed exact read without waiting for an unrelated slow read', async () => {
+    it('publishes a completed physical batch without waiting for an unrelated slow physical batch', async () => {
         const { row, params } = await createHydrationContext();
         storage.setState({ sessions: {}, sessionListRowsByServerId: {} });
         const slowResponse = createDeferred<Response>();
+        const slowStarted = createDeferred<void>();
         const slowId = 'slow-hydration';
+        const requests: string[][] = [];
+        const readTransport = createCapturedServerReadTransport({ serverId, credentials: params.credentials, prepared: {
+            endpointUrl: 'https://home-publication.example', generation: 1,
+            request: async (_path, init, _options, consume) => {
+                const ids = JSON.parse(String(init?.body)).sessionIds as string[];
+                requests.push(ids);
+                if (ids.includes(slowId)) { slowStarted.resolve(); return await consume(await slowResponse.promise); }
+                return await consume(jsonResponse({ results: ids.map(id => ({ sessionId: id,
+                    detail: { status: 200, body: { session: { ...row, id } } },
+                })) }));
+            },
+        } });
         const slow = fetchAndApplySessionById({
-            ...params, sessionId: slowId, includeTurnsProjection: false,
-            request: () => slowResponse.promise,
+            ...params, sessionId: slowId, includeTurnsProjection: false, readTransport,
+            request: async () => { throw new Error('Expected captured Session batch'); },
         });
         try {
+            await slowStarted.promise;
             const fast = await fetchAndApplySessionById({
-                ...params, sessionId, includeTurnsProjection: false,
-                request: async () => jsonResponse({ session: row }),
+                ...params, sessionId, includeTurnsProjection: false, readTransport,
+                request: async () => { throw new Error('Expected captured Session batch'); },
             });
             expect(fast.ok).toBe(true);
             expect(fast.session).toBe(storage.getState().sessions[sessionId]);
             expect(storage.getState().sessions[slowId]).toBeUndefined();
+            expect(requests).toEqual([[slowId], [sessionId]]);
         } finally {
-            slowResponse.resolve(jsonResponse({ session: { ...row, id: slowId } }));
+            slowResponse.resolve(jsonResponse({ results: [{ sessionId: slowId,
+                detail: { status: 200, body: { session: { ...row, id: slowId } } },
+            }] }));
             expect((await slow).ok).toBe(true);
         }
     });
@@ -296,9 +431,12 @@ describe('Session hydration publication', () => {
         });
 
         expect(storage.getState().sessions[sessionId]).toBe(hydrated);
-        await vi.waitFor(() => expect(storage.getState().sessionListRowsByServerId[otherHome]?.[sessionId]).toMatchObject({
-            active: false, presence: 3,
-        }));
+        await vi.waitFor(() => {
+            const row = storage.getState().sessionListRowsByServerId[otherHome]?.[sessionId];
+            expect({ active: row?.active, presence: row?.presence, activeAt: row?.activeAt }).toEqual({
+                active: false, presence: 3, activeAt: 3,
+            });
+        });
     });
 
     it('preserves omitted presence only within its Home and never overrides explicit invalidation', async () => {
