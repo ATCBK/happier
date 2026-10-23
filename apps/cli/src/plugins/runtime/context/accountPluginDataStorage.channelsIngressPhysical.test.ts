@@ -84,6 +84,7 @@ type CurrentChannelsSources = Readonly<{
         input: Readonly<{ now: number; limit: number }>,
         context: PluginInvocationContext,
     ) => Promise<Readonly<{ compactedCensuses: number; deletedCensuses: number }>>;
+    poll: (input: Readonly<{ connectionId: string; waitMs: number }>, context: PluginInvocationContext) => Promise<unknown>;
 }>;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -112,8 +113,9 @@ async function loadCurrentChannelsSources(): Promise<CurrentChannelsSources> {
     const createCurrentConnectionFixture = fixtureNamespace.createCurrentConversationConnectionFixture;
     const ingest = ingressNamespace.ingestConversationProviderObservationForInvocation;
     const retain = ingressNamespace.runConversationIngressRetentionForInvocation;
+    const poll = ingressNamespace.runConversationCheckpointedPollForInvocation;
     if (typeof createCurrentConnectionFixture !== 'function' || typeof ingest !== 'function'
-        || typeof retain !== 'function') {
+        || typeof retain !== 'function' || typeof poll !== 'function') {
         throw new Error('Expected the current Channels ingress fixtures and handler.');
     }
     const parsedManifest = parsePluginManifest(manifestNamespace.PLUGIN_MANIFEST);
@@ -149,6 +151,7 @@ async function loadCurrentChannelsSources(): Promise<CurrentChannelsSources> {
         createCurrentConnectionFixture: createCurrentConnectionFixture as (input: unknown) => unknown,
         ingest: ingest as CurrentChannelsSources['ingest'],
         retain: retain as CurrentChannelsSources['retain'],
+        poll: poll as CurrentChannelsSources['poll'],
     });
 }
 
@@ -278,7 +281,7 @@ function createHttpCollectionBoundary(indexes: CurrentChannelsSources['channelSt
             async post(url: string, body: string) {
                 if (url.endsWith(PLUGIN_COLLECTION_GET_HTTP_PATH_V1)) {
                     const request = PluginCollectionGetRequestV1Schema.parse(JSON.parse(body));
-                    return { status: 200, data: { row: rows.get(request.rowId) ?? null } };
+                    return { status: 200, data: { row: rows.get(request.rowId) ?? null, absenceEpoch: 0 } };
                 }
                 if (url.endsWith(PLUGIN_COLLECTION_QUERY_HTTP_PATH_V1)) {
                     const request = PluginCollectionQueryRequestV1Schema.parse(JSON.parse(body));
@@ -385,6 +388,66 @@ async function readEveryRowOfKind(input: Readonly<{
 }
 
 describe('Channels C3 physical E2EE ingress batches', () => {
+    it('settles unchanged empty polls through the real Collection reader and writer without assert-only requests', async () => {
+        const channels = await loadCurrentChannelsSources();
+        const boundary = createHttpCollectionBoundary(channels.channelStateCollection.indexes);
+        const host = createAccountPluginDataStorageHost({
+            contracts: [normalizePluginAccountCollectionContractV1({
+                pluginId: CHANNELS_PLUGIN_ID, contribution: channels.channelStateCollectionDeclaration,
+            })],
+            readCredentials: async () => E2EE_CREDENTIALS,
+            isCurrentAccount: () => true,
+            resolveAccountScopeKey: () => ACCOUNT_SCOPE_KEY,
+            resolveBaseUrl: () => 'https://channels-c3-physical.example.test',
+            resolveAccountEncryptionCurrentness: async () => e2eeCurrentness(),
+            http: boundary.http,
+            randomBytes: length => new Uint8Array(length).fill(19),
+        });
+        const signal = new AbortController().signal;
+        const account = host.bind({ pluginId: CHANNELS_PLUGIN_ID, occurrenceId: 'empty-poll',
+            signal, isOccurrenceCurrent: () => true });
+        if (!account) throw new Error('Expected real Account Collection host binding.');
+        const collection = account.collection(channels.channelStateCollection);
+        const fixture = createCurrentConnection(channels.createCurrentConnectionFixture);
+        await collection.put({ ...fixture, payload: { ...jsonRecord(fixture.payload),
+            transport: { kind: 'checkpointedPull' }, replayContinuity: 'checkpointed',
+        } }, { expectedRevision: 'absent' });
+        const operation = { identity: { role: 'observationsPoll' } };
+        // Only the host's admitted contribution and provider Action boundaries
+        // are supplied here; ingress, schema admission, crypto and storage stay real.
+        const services = {
+            storage: { account },
+            actions: {
+                getCurrentExecutionRouting: async () => ({ serverIdentityId: 'srv_account_one',
+                    machineId: 'machine-1', pluginId: CHANNELS_PLUGIN_ID }),
+                executeAdmittedTargetedOperationWithExecutionOrigin: async () => ({
+                    result: { kind: 'checkpointOnly', checkpointAfterBatch: { uidValidity: '12345', lastUid: 12 } },
+                    executionOrigin: TELEGRAM_EXECUTION_ORIGIN,
+                }),
+            },
+            targetedContributions: { observeForSelf: () => ({ dispose() {}, readCurrent: async () => ({
+                occurrenceId: 'empty-poll', sourceCustody: { kind: 'development', registeredRootId: 'empty-poll' },
+                contributions: [{ contributor: { pluginId: 'happier.channel.telegram',
+                    contributionId: 'telegram-test-provider', immutableGenerationId: 'test-generation' },
+                    protocol: { id: 'happier.channels/providers', version: 1 }, operations: { observationsPoll: operation } }],
+            }) }) },
+        } as unknown as PluginServices;
+        const context: PluginInvocationContext = { plugin: { id: CHANNELS_PLUGIN_ID, version: '0.0.0' },
+            contribution: { id: 'ingress-supervisor', qualifiedId: 'happier.channels/backgroundServices/ingress-supervisor' },
+            surface: 'plugin', invokedAtMs: 1, signal, services };
+        await expect(channels.poll({ connectionId: 'connection-1', waitMs: 0 }, context))
+            .resolves.toMatchObject({ kind: 'committed' });
+        const checkpoint = await readEveryRowOfKind({ collection, recordKind: 'checkpoint' });
+        expect(checkpoint).toHaveLength(1);
+        const writes = boundary.capturedMutationRequests.length;
+        for (let index = 0; index < 3; index += 1) {
+            await expect(channels.poll({ connectionId: 'connection-1', waitMs: 0 }, context))
+                .resolves.toMatchObject({ kind: 'committed' });
+        }
+        expect(boundary.capturedMutationRequests).toHaveLength(writes);
+        expect(await readEveryRowOfKind({ collection, recordKind: 'checkpoint' })).toEqual(checkpoint);
+    });
+
     it('fills sealed ingress batches and compacts terminal attention through the strict E2EE Collection host', async () => {
         const channels = await loadCurrentChannelsSources();
         const boundary = createHttpCollectionBoundary(channels.channelStateCollection.indexes);
