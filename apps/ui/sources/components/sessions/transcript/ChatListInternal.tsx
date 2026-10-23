@@ -1789,6 +1789,7 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         observeOlderLoadResult: olderPagination.observeLoadResult,
         invalidateViewportAnchorCapture,
         isLoaded: props.isLoaded,
+        isTranscriptPresented: !showFirstPaintPlaceholder,
         isPinnedRef,
         itemsRef,
         jumpToSeq: props.jumpToSeq,

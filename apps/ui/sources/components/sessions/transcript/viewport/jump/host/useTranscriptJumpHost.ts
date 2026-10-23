@@ -108,6 +108,13 @@ type PlatformOS = 'web' | 'ios' | 'android' | 'windows' | 'macos' | 'native';
 type ExplicitJumpTakeoverEffects = ReturnType<TranscriptLifecycleHost['planExplicitJumpTakeover']>['explicitJumpTakeoverEffects'];
 type ActiveExplicitJumpOperation = Readonly<{
     releaseTakeover(): void;
+    signal?: AbortSignal;
+}>;
+type PendingJumpLandingNotification = Readonly<{
+    operation: ActiveExplicitJumpOperation | null;
+    result: Extract<TranscriptJumpResult, { status: 'scrolled' | 'window-rendered' }>;
+    serverId: string | null | undefined;
+    sessionId: string;
 }>;
 type PendingTargetRenderWait = Readonly<{
     operation: ActiveExplicitJumpOperation;
@@ -275,6 +282,8 @@ export type TranscriptJumpHostDeps = Readonly<{
     observeOlderLoadResult(result: TranscriptOlderPageLoadResult): void;
     invalidateViewportAnchorCapture(): void;
     isLoaded: boolean;
+    /** Existing first-paint owner has uncovered the transcript, not merely mounted its rows. */
+    isTranscriptPresented: boolean;
     isPinnedRef: MutableRef<boolean>;
     jumpToSeq: number | null | undefined;
     jumpToMessageId?: string | null;
@@ -404,6 +413,7 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         observeOlderLoadResult,
         invalidateViewportAnchorCapture,
         isLoaded,
+        isTranscriptPresented,
         isPinnedRef,
         jumpToSeq,
         jumpToMessageId,
@@ -452,6 +462,9 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
     const consumedRouteJumpRef = React.useRef<RouteJumpOperation | null>(null);
     const inFlightRouteJumpRef = React.useRef<RouteJumpOperation | null>(null);
     const currentExplicitJumpOperationRef = React.useRef<ActiveExplicitJumpOperation | null>(null);
+    const pendingJumpLandingNotificationRef = React.useRef<PendingJumpLandingNotification | null>(null);
+    const isTranscriptPresentedRef = React.useRef(isTranscriptPresented);
+    useCommittedTranscriptRef(isTranscriptPresentedRef, isTranscriptPresented);
     const transcriptNavigationEntriesRef = React.useRef(transcriptNavigationEntries);
     useCommittedTranscriptRef(transcriptNavigationEntriesRef, transcriptNavigationEntries);
     const pendingTargetRenderRef = React.useRef<PendingTargetRenderWait | null>(null);
@@ -936,12 +949,25 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         });
         landedNavigationAnchorRef.current = anchorId ? { anchorId, sessionId } : null;
         observeTranscriptNavigationVisibilityForSession();
-        onJumpLanded?.(result);
+        // Scroll/route settlement must release its own entry gate immediately.
+        // The landing feedback waits for that gate's real presentation release,
+        // otherwise its highlight can expire beneath the first-paint cover.
+        if (isTranscriptPresentedRef.current) {
+            onJumpLanded?.(result);
+        } else {
+            pendingJumpLandingNotificationRef.current = {
+                operation: currentExplicitJumpOperationRef.current,
+                result,
+                serverId: transcriptSource.serverId,
+                sessionId,
+            };
+        }
     }, [
         observeTranscriptNavigationVisibilityForSession,
         onJumpLanded,
         sessionId,
         transcriptNavigationRuntimeAnchorsRef,
+        transcriptSource.serverId,
     ]);
 
     const resolveWebTranscriptTargetObservation = React.useCallback((
@@ -979,6 +1005,7 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
     }, [resolveWebTranscriptTargetObservation]);
 
     const jumpToBottom = React.useCallback(() => {
+        pendingJumpLandingNotificationRef.current = null;
         const plan = lifecycleHost.planExplicitJumpTakeover({
             reason: 'jump-to-bottom',
             sessionId,
@@ -1028,7 +1055,8 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
             if (writeBarrierStarted) endExplicitJumpWriteBarrier();
             rendererTakeoverRelease?.();
         };
-        const operation: ActiveExplicitJumpOperation = { releaseTakeover };
+        const operation: ActiveExplicitJumpOperation = { releaseTakeover, signal: options?.signal };
+        pendingJumpLandingNotificationRef.current = null;
         const previousRenderWait = pendingTargetRenderRef.current;
         pendingTargetRenderRef.current = null;
         previousRenderWait?.resolve(false);
@@ -1303,6 +1331,7 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
     }, [onRouteJumpSettled]);
 
     const preemptExplicitJumpForUserTakeover = React.useCallback((): void => {
+        pendingJumpLandingNotificationRef.current = null;
         const activeOperation = currentExplicitJumpOperationRef.current;
         const routeJumpOperation = inFlightRouteJumpRef.current;
         currentExplicitJumpOperationRef.current = null;
@@ -1446,6 +1475,21 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         resolveWebScrollMetrics,
         sessionId,
     ]);
+
+    // After the route effect: a new target must retire a covered landing before
+    // the same commit can present its feedback. This owns no new paint policy.
+    React.useEffect(() => {
+        const pending = pendingJumpLandingNotificationRef.current;
+        if (!pending) return;
+        if (pending.sessionId !== sessionId || currentSessionIdRef.current !== sessionId
+            || pending.serverId !== transcriptSource.serverId || pending.operation?.signal?.aborted) {
+            pendingJumpLandingNotificationRef.current = null;
+            return;
+        }
+        if (!isTranscriptPresented) return;
+        pendingJumpLandingNotificationRef.current = null;
+        onJumpLanded?.(pending.result);
+    }, [currentSessionIdRef, isTranscriptPresented, onJumpLanded, sessionId, transcriptSource.serverId]);
 
     const onScrollToIndexFailed = React.useCallback((info: Readonly<{ index: number; averageItemLength: number }>) => {
         if (platformOS !== 'web') {

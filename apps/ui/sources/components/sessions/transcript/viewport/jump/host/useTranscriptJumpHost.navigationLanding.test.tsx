@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { Message } from '@happier-dev/session-core/messages';
 import type { ChatTranscriptListItem } from '../../../chatListTypes';
@@ -9,10 +9,17 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import type { TranscriptNavigationEntry } from '../../../navigation/transcriptNavigationTypes';
 import { clearTranscriptNavigationVisibilityStore, getTranscriptNavigationVisibilityStore } from '../../visibility/transcriptNavigationVisibilityStore';
 import type { restoreTranscriptJumpEnvironment as RestoreTranscriptJumpEnvironment } from './transcriptJumpHostTestHarness';
+import {
+    applyTranscriptJumpHighlightForJumpResult,
+    clearTranscriptJumpHighlight,
+    readActiveTranscriptJumpHighlight,
+    subscribeToTranscriptJumpHighlight,
+    TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS,
+} from '../../../navigation/transcriptJumpHighlightStore';
 
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
-const { createTranscriptJumpHostTestHarness, restoreTranscriptJumpEnvironment } = await import('./transcriptJumpHostTestHarness');
+const { createTranscriptJumpHostTestHarness, createTranscriptJumpWebMetrics, restoreTranscriptJumpEnvironment } = await import('./transcriptJumpHostTestHarness');
 
 const SESSION_ID = 'session-landing';
 const FIRST = SESSION_ID + ':user-turn:7';
@@ -50,9 +57,75 @@ describe('transcript jump landing owns the navigation anchor', () => {
         } }));
     });
     afterEach(async () => {
+        clearTranscriptJumpHighlight();
+        vi.useRealTimers();
         clearTranscriptNavigationVisibilityStore(SESSION_ID);
         await environment.dispose();
         standardCleanup();
+    });
+
+    it('starts the full highlight only when a landed DOM target is presented after the first-paint cover', async () => {
+        vi.useFakeTimers();
+        getStorage().getState().sessionMessages[SESSION_ID]!.reducerState.messageIds.set('source-answer', 'a2');
+        const harness = createTranscriptJumpHostTestHarness({ sessionId: SESSION_ID, rows: ROWS, messages: MESSAGES });
+        harness.metrics.current = createTranscriptJumpWebMetrics({
+            rows: ROWS.map((row, index) => ({ id: row.id, top: index * 100 })), scrollTop: 0,
+        });
+        const address = { serverId: environment.home.id, sessionId: SESSION_ID };
+        const route = { platformOS: 'web' as const, jumpToSeq: 7, jumpToMessageId: 'server:source-answer',
+            onJumpLanded: (result: Parameters<typeof applyTranscriptJumpHighlightForJumpResult>[1]) => {
+                applyTranscriptJumpHighlightForJumpResult(address, result);
+            } };
+        const publications: Array<ReturnType<typeof readActiveTranscriptJumpHighlight>> = [];
+        const unsubscribe = subscribeToTranscriptJumpHighlight(() => publications.push(readActiveTranscriptJumpHighlight()));
+        const hook = await harness.render({ ...route, isTranscriptPresented: false });
+        try {
+            await flushHookEffects();
+            expect(harness.settledRoutes).toEqual([SESSION_ID]);
+            expect(readActiveTranscriptJumpHighlight()).toBeNull();
+            expect(publications).toEqual([]);
+            await act(async () => { vi.advanceTimersByTime(TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS * 2); });
+            await hook.rerender(harness.props({ ...route, isTranscriptPresented: true }));
+            expect(readActiveTranscriptJumpHighlight()).toMatchObject({ sessionAddress: address, routeMessageId: 'server:source-answer' });
+            expect(publications).toHaveLength(1);
+            await act(async () => { vi.advanceTimersByTime(TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS - 1); });
+            expect(readActiveTranscriptJumpHighlight()).not.toBeNull();
+            await act(async () => { vi.advanceTimersByTime(1); });
+            expect(readActiveTranscriptJumpHighlight()).toBeNull();
+            expect(publications).toHaveLength(2);
+            await act(async () => {
+                await hook.getCurrent().jumpToTranscriptTarget({ kind: 'route-message-id', routeMessageId: 'server:source-answer', seqHint: 7 });
+            });
+            expect(readActiveTranscriptJumpHighlight()).toMatchObject({ routeMessageId: 'server:source-answer' });
+            expect(publications).toHaveLength(3);
+        } finally {
+            unsubscribe();
+            await hook.unmount();
+        }
+    });
+
+    it.each(['abort', 'reader takeover', 'live tail', 'Session change'] as const)('discards a covered landing after %s', async (retirement) => {
+        const harness = createTranscriptJumpHostTestHarness({ sessionId: SESSION_ID, rows: ROWS, messages: MESSAGES });
+        const controller = new AbortController();
+        const props = { isTranscriptPresented: false,
+            onJumpLanded: (result: Parameters<typeof applyTranscriptJumpHighlightForJumpResult>[1]) => {
+                applyTranscriptJumpHighlightForJumpResult({ serverId: environment.home.id, sessionId: SESSION_ID }, result);
+            } };
+        const hook = await harness.render(props);
+        try {
+            await act(async () => {
+                await hook.getCurrent().jumpToTranscriptTarget({ kind: 'seq', seq: 7 }, { signal: controller.signal });
+            });
+            expect(readActiveTranscriptJumpHighlight()).toBeNull();
+            if (retirement === 'abort') controller.abort();
+            if (retirement === 'reader takeover') hook.getCurrent().preemptExplicitJumpForUserTakeover();
+            if (retirement === 'live tail') hook.getCurrent().jumpToBottom();
+            await hook.rerender(harness.props({ ...props, isTranscriptPresented: true,
+                ...(retirement === 'Session change' ? { sessionId: 's2' } : {}) }));
+            expect(readActiveTranscriptJumpHighlight()).toBeNull();
+        } finally {
+            await hook.unmount();
+        }
     });
 
     it('lands a route message on the exact answer rather than the first row at the same sequence', async () => {

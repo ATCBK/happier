@@ -222,7 +222,7 @@ export function createTranscriptJumpHostTestHarness(options: Readonly<{
         currentSessionIdRef: currentSessionId, emitViewportChange: emitViewport,
         executeViewportCommand: execute, executeViewportCommandWithAnimation: execute,
         forkedTranscriptEnabled: false, hasMoreOlderRef: ref(false), observeOlderLoadResult: emptyEffects,
-        invalidateViewportAnchorCapture: emptyEffects, isLoaded: true, isPinnedRef: isPinned,
+        invalidateViewportAnchorCapture: emptyEffects, isLoaded: true, isTranscriptPresented: true, isPinnedRef: isPinned,
         jumpToSeq: null, lastPinOffsetForIntentRef: lastPinOffset, lastNativeRestoreIndexCommandRef: lastNativeRestore,
         lastRouteJumpProtectionClearingWebMovementAtMsRef: ref(Number.NEGATIVE_INFINITY),
         lastScrollOffsetForIntentRef: ref(null), lifecycleHost,
