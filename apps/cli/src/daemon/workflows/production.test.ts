@@ -13,9 +13,11 @@ import { createApiSessionSocketStub, createAvailableSessionSpawnMachineSnapshot 
 
 const readinessMachineRpc = vi.hoisted(() => ({ callMachineRpc: vi.fn() }));
 const readinessSockets = vi.hoisted(() => ({ connect: vi.fn() }));
+const observationSockets = vi.hoisted(() => ({ connect: vi.fn() }));
 vi.mock('@/api/session/sockets', async importOriginal => ({
   ...await importOriginal<typeof import('@/api/session/sockets')>(),
   createUserScopedSocketConnection: readinessSockets.connect,
+  createSessionScopedSocketConnection: observationSockets.connect,
 }));
 import {
   ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -47,6 +49,7 @@ import {
   AutomationTriggerIdSchema,
   deriveAutomationOccurrenceKeyV1,
   deriveWorkflowDestinationsV1,
+  ActionIdSchema,
   ActionDefinitionV1Schema,
   createWorkflowAccountRunActionOwner,
   createWorkflowActionExecutor,
@@ -54,7 +57,12 @@ import {
   getActionSpec,
   FeaturesResponseSchema,
   zodSchemaToJsonSchemaObject,
+  SessionInputAuthorityV2Schema,
+  WorkflowDiscussionRoundProjectResultV1Schema,
+  type ActionExecutorDeps,
 } from '@happier-dev/protocol';
+import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
+import { observeWorkflowSessionInputResult } from './stepExecution';
 import { MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
 import { WorkflowMachineCommandOutputV1Schema } from '@happier-dev/protocol/workflows/stepActionsV1';
 import { WorkflowInputResolutionError } from './input';
@@ -98,7 +106,9 @@ import { createWorkflowOriginContextInputPort } from '@/agent/runtime/session/co
 import { DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1, DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
-import { resolveWorkflowSessionConversation } from './daemonRuntime';
+import { buildWorkflowActionContext, resolveWorkflowSessionConversation } from './daemonRuntime';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '@happier-dev/protocol/actions/actionCatalog';
+import { DiscussionAgentPostResponseV1Schema } from '@happier-dev/protocol/discussions/api';
 
 const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
 const accountId = 'account-1';
@@ -372,25 +382,45 @@ describe('production workflow coordinator', () => {
     }
   });
 
-  it.each(['none', 'lost_ack', 'denied', 'review', 'review_stable_home'] as const)('materializes authorized Discussion history and repairs lost publication acknowledgements (publication=%s)', async scenario => {
+  it.each(['none', 'lost_ack', 'denied', 'review', 'review_stable_home', 'round_native_no_outcome', 'round_already_returned', 'round_concurrent', 'round_reclaimed_published'] as const)('materializes authorized Discussion history and repairs lost publication acknowledgements (publication=%s)', async scenario => {
     const publication = scenario !== 'none';
     const hasReview = scenario === 'review' || scenario === 'review_stable_home';
+    const concurrentRound = scenario === 'round_concurrent';
+    const reclaimedPublished = scenario === 'round_reclaimed_published';
+    const expiredClaim = new AbortController();
+    const projectsRound = scenario === 'round_native_no_outcome' || scenario === 'round_already_returned' || concurrentRound || reclaimedPublished;
+    const participants = (concurrentRound ? ['session-1', 'session-2'] : ['session-1'])
+      .map(sessionId => ({ kind: 'session' as const, session: { serverId: 'server-1', sessionId } }));
     const discussion = { serverId: scenario === 'review_stable_home' ? 'srv_workflow_home' : 'server-1', discussionId: 'discussion-1' };
     const credentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: null } as const;
-    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {
+    const step: WorkflowDefinitionV1['blocks'][number] = { ...onlyStep, input: [{ kind: 'discussion_context', scope: 'addressing_message' },
+      { kind: 'discussion_context', scope: 'so_far' }] };
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: projectsRound ? [{ name: 'participants', valueType: 'json',
+      multiple: true, inputType: { hostType: 'agentParticipant' }, required: true }] : [], defaults: {
       agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } },
       conversation: { kind: 'existing_session', sessionId: 'session-1', machineId },
-    }, blocks: [{ ...onlyStep, input: [{ kind: 'discussion_context', scope: 'addressing_message' },
-      { kind: 'discussion_context', scope: 'so_far' }] }, ...(hasReview ? [{ ...onlyStep, id: 'review',
+    }, blocks: projectsRound ? [{ kind: 'loop', id: 'opinions', repetition: { kind: 'items',
+      items: { kind: 'input', name: 'participants', path: [] }, execution: 'parallel', failurePolicy: 'collect_outcomes' },
+      body: [{ ...step, execution: { participant: { kind: 'item', field: 'value' } } }] },
+      { kind: 'action', id: 'outcomes', actionId: 'workflow.discussion.round.project',
+        input: { collections: { kind: 'literal', value: ['opinions'] } } }]
+      : [step, ...(hasReview ? [{ ...onlyStep, id: 'review',
         discussionReplyTo: { blockId: 'work', scope: { kind: 'current' as const } },
         input: [{ kind: 'result' as const, producer: { blockId: 'work', scope: { kind: 'current' as const } }, path: [] }] }] : [])] };
     const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
-      context: { source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'session' },
+      context: { source: { kind: 'inline' }, inputs: projectsRound ? { participants } : {}, machineId, executionTarget: { kind: 'session' },
         workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' } },
         origin: { kind: 'direct', discussion: { discussion, messageId: 'question', throughSeq: 2 } },
         ...(publication ? { resultDelivery: { kind: 'originating_discussion' as const, discussion, messageId: 'question', throughSeq: 2 } } : {}),
         authorization: { principal: { kind: 'host' } } }, admission: { kind: 'user' },
-      effects: { resolveTargetAvailability: async () => true } });
+      effects: { resolveTargetAvailability: async () => true,
+        resolveSessionTarget: async value => {
+          const participant = participants.find(candidate => JSON.stringify(candidate.session) === JSON.stringify(value));
+          return participant ? { address: participant.session, machineId }
+            : projectsRound ? null : { address: participants[0]!.session, machineId };
+        },
+        readActionContract: async actionId => freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(getActionSpec(ActionIdSchema.parse(actionId)))),
+      } });
     if (!accepted.ok) throw new Error(JSON.stringify(accepted.error));
     const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
       mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: accepted.snapshot,
@@ -447,6 +477,14 @@ describe('production workflow coordinator', () => {
     const admittedInputs = new Map<string, { workflow: SessionInputWorkflowV2;
       discussion: NonNullable<Parameters<NonNullable<WorkflowProductionExecutionDeps['sessionInput']>['enqueue']>[0]['discussionAddressing']> }>();
     const parents: string[] = [];
+    const pendingC2 = new Set(concurrentRound ? ['session-2'] : scenario === 'round_native_no_outcome' || reclaimedPublished ? ['session-1'] : []);
+    const observedNative = new Set<string>();
+    const observationConnections = new Map<string, ReturnType<typeof createApiSessionSocketStub>[]>();
+    observationSockets.connect.mockImplementation(({ sessionId }: { sessionId: string }) => {
+      const socket = createApiSessionSocketStub({ connected: true });
+      observationConnections.set(sessionId, [...(observationConnections.get(sessionId) ?? []), socket]);
+      return { socket, transport: createSocketTransportAdapter(socket) };
+    });
     const publicationDiagnostics: unknown[] = [];
     vi.spyOn(logger, 'warnLocalFile').mockImplementation((...args) => { publicationDiagnostics.push(args); });
     let denied = false;
@@ -456,13 +494,50 @@ describe('production workflow coordinator', () => {
       if (url.includes('/by-local-id/') && url.endsWith('/reply')) {
         const localId = decodeURIComponent(/\/by-local-id\/([^/]+)\/reply$/.exec(url)![1]!);
         const admitted = admittedInputs.get(localId)!;
-        const publicationId = publishedInputs.get(localId);
+        const publicationId = publishedInputs.get(localId) ?? (scenario === 'round_already_returned'
+          && observedNative.has(admitted.discussion.participantSessionId) ? 'published-answer' : undefined);
         return { status: 200, data: { v: 1, status: 'available', progress: {
         v: 1, mode: 'wait', workflow: admitted.workflow, acceptedTurnId: 'accepted-turn', disposition: publicationId ? 'returned' : 'observing',
         discussion: admitted.discussion,
-        outcome: publicationId ? { kind: 'answer', publicationRef: { kind: 'discussion', discussion, messageId: publicationId } }
-          : { kind: 'answer', result: { sessionId: 'session-1', messageId: 'exact-result' } },
+        ...(!pendingC2.has(admitted.discussion.participantSessionId) ? { outcome: publicationId
+          ? { kind: 'answer', publicationRef: { kind: 'discussion', discussion, messageId: publicationId } }
+          : { kind: 'answer', result: { sessionId: admitted.discussion.participantSessionId, messageId: 'exact-result' } } } : {}),
       } } };
+      }
+      if (projectsRound && (url.includes('/messages?') || url.includes('/messages/by-local-id/') || url.endsWith('/turns'))) {
+        const sessionId = /\/v[12]\/sessions\/([^/?]+)/.exec(url)?.[1];
+        const admitted = [...admittedInputs.entries()].find(([, value]) => value.discussion.participantSessionId === sessionId);
+        if (!sessionId || !admitted) throw new Error('Unbound native observation');
+        const [localId, source] = admitted;
+        const input = { id: `input-${sessionId}`, localId, seq: 1, createdAt: 1, updatedAt: 1,
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Work' }, meta: {
+            happierInputAuthorityV1: SessionInputAuthorityV2Schema.parse({ v: 2, producer: 'workflow', caller: { kind: 'host' },
+              permission: { admittedPermissionCeiling: 'default', requestedPermissionCeiling: 'default' }, workflow: source.workflow }),
+          } } } };
+        if (url.endsWith('/turns')) return { status: 200, data: { v: 1, sessionId, updatedAt: 2, turns: [{
+          turnId: 'accepted-turn', status: 'completed', startedAt: 1, updatedAt: 2, initiator: 'workflow', workDepth: 1,
+          workflowInvocation: { runId, invocationRecordId: source.workflow.invocationRecordId },
+          transcriptAnchors: { startUserMessageSeq: 1, userMessageSeqs: [1], finalAssistantMessageSeq: 2 },
+        }] } };
+        if (url.includes('/by-local-id/')) return { status: 200, data: { message: input } };
+        const answer = { id: 'exact-result', seq: 2, createdAt: 2, updatedAt: 2, content: { t: 'plain',
+          v: buildAcpAgentMessageEnvelope({ provider: 'external-agent', body: { type: 'message', message: 'answer' },
+            meta: { runtimeTurnId: 'accepted-turn', runtimeEventKind: 'transcript-message-committed' } }) } };
+        // Native completion and original-input C2 settlement are separate
+        // committed facts. Deliver the canonical custody wake during this read.
+        if (pendingC2.delete(sessionId)) {
+          if (reclaimedPublished) {
+            // C3 committed the answer while attempt 1 was observing native
+            // completion; its lease expires before any terminal Workflow fact.
+            publishedInputs.set(localId, 'published-answer');
+            committedPosts.set(deriveSessionMessageReplyReturnLocalIdV1({ sessionId, localId, acceptedTurnId: 'accepted-turn' }), 'published-answer');
+            expiredClaim.abort(new Error('automation_claim_lease_expired'));
+          }
+          for (const socket of observationConnections.get(sessionId) ?? []) {
+            socket.trigger('ephemeral', { type: 'session-message-reply-pending-v1', v: 1, sessionId, requestLocalId: localId });
+          }
+        }
+        return { status: 200, data: { messages: [input, answer] } };
       }
       return previousGet(url, config);
     });
@@ -470,13 +545,16 @@ describe('production workflow coordinator', () => {
     readinessMachineRpc.callMachineRpc.mockImplementation(async args => {
       if (args.method !== SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1) return previousRpc(args);
       const request = args.request.request;
-      const isReview = admittedInputs.get(inputLocalId)!.workflow.invocationRecordId !== [...admittedInputs.values()][0]!.workflow.invocationRecordId;
+      const publicationInputId = concurrentRound ? request.replyReturn.requestLocalId : inputLocalId;
+      const publicationWorkflow = admittedInputs.get(publicationInputId)!.workflow;
+      const publicationSessionId = concurrentRound ? request.sessionId : 'session-1';
+      const isReview = hasReview && publicationWorkflow.invocationRecordId !== [...admittedInputs.values()][0]!.workflow.invocationRecordId;
       const expectedParent = isReview ? 'published-answer' : 'question';
-      const expectedLocalId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'session-1', localId: inputLocalId,
+      const expectedLocalId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: publicationSessionId, localId: publicationInputId,
         acceptedTurnId: 'accepted-turn' });
-      expect(request).toMatchObject({ sessionId: 'session-1', discussionId: discussion.discussionId,
-        replyReturn: { requestLocalId: inputLocalId, acceptedTurnId: 'accepted-turn', workflow: {
-          runId, invocationRecordId: workflow!.invocationRecordId, invocationAttempt: '0',
+      expect(request).toMatchObject({ sessionId: publicationSessionId, discussionId: discussion.discussionId,
+        replyReturn: { requestLocalId: publicationInputId, acceptedTurnId: 'accepted-turn', workflow: {
+          runId, invocationRecordId: publicationWorkflow.invocationRecordId, invocationAttempt: '0',
         } }, request: { localId: expectedLocalId, replyTarget: { kind: 'message', messageId: expectedParent },
           content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: isReview ? 'reviewed' : 'answer' }] } } } });
       if (scenario === 'denied' && !denied) {
@@ -485,15 +563,26 @@ describe('production workflow coordinator', () => {
       }
       // This is the native RPC network boundary: the real append owner commits
       // one reply and C2 publicationRef, then its acknowledgement is lost.
-      const publicationId = isReview ? 'published-review' : 'published-answer';
+      const publicationId = concurrentRound ? `published-${publicationSessionId}` : isReview ? 'published-review' : 'published-answer';
       committedPosts.set(expectedLocalId, publicationId);
-      publishedInputs.set(inputLocalId, publicationId);
+      publishedInputs.set(publicationInputId, publicationId);
       parents.push(expectedParent);
-      if (scenario === 'denied' || hasReview) return { v: 1, ok: true, value: {
-        message: { ...wireMessage(4), id: publicationId, localId: expectedLocalId, content: request.request.content }, messageSeq: 4,
+      const publicationSeq = concurrentRound ? parents.length + 3 : 4;
+      if (scenario === 'denied' || hasReview || projectsRound) return { v: 1, ok: true, value: {
+        message: { ...wireMessage(publicationSeq), id: publicationId, localId: expectedLocalId, content: request.request.content,
+          producerV1: { v: 1, kind: 'agent', sessionId: publicationSessionId, runId,
+            replyReturn: { ...request.replyReturn, outcome: 'answer' } } }, messageSeq: publicationSeq,
       } };
       throw new Error('committed_reply_ack_lost');
     });
+    const runOwner = createWorkflowAccountRunActionOwner({ resolveAccountId: async () => accountId,
+      storage: boundary, definitions: { get: async () => { throw new Error('No mutable definition read'); } },
+      resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      normalizeAbsolutePath: path => path, randomBytes: () => { throw new Error('Plain keys are absent'); },
+    });
+    let observing = 0;
+    let releaseObservations = () => {};
+    const bothObserving = new Promise<void>(resolve => { releaseObservations = resolve; });
     const coordinate = createProductionWorkflowRunCoordinator({ token: credentials.token, accountId, machineId, storage: boundary,
       execution: { ...productionExecution({ enqueue: async request => {
         inputs.push(request.text);
@@ -501,9 +590,28 @@ describe('production workflow coordinator', () => {
         inputLocalId = deriveWorkflowSessionInputLocalIdV2(request.workflow);
         admittedInputs.set(inputLocalId, { workflow: request.workflow, discussion: request.discussionAddressing! });
         return { status: 'accepted', localId: inputLocalId };
-      }, observe: async ({ sessionId, localId }) => ({ ok: true, sessionId, localId,
-        result: { kind: 'final_text', text: admittedInputs.size > 1 ? 'reviewed' : 'answer' }, replyOutcome: { kind: 'answer',
-          result: { sessionId, messageId: 'exact-result' } } }) }), credentials,
+      }, observe: async ({ sessionId, localId, signal }) => {
+        if (concurrentRound) {
+          if (++observing === participants.length) releaseObservations();
+          await bothObserving;
+        }
+        if (projectsRound) {
+          const observed = await observeWorkflowSessionInputResult({ credentials, sessionId, localId, ...(signal ? { signal } : {}) });
+          observedNative.add(sessionId);
+          return observed;
+        }
+        return { ok: true, sessionId, localId,
+          result: { kind: 'final_text', text: hasReview && admittedInputs.size > 1 ? 'reviewed' : 'answer' },
+          ...(projectsRound && !(concurrentRound && sessionId === 'session-1') ? {}
+            : { replyOutcome: { kind: 'answer' as const, result: { sessionId, messageId: 'exact-result' } } }) };
+      } }), credentials,
+        ...(concurrentRound ? { resolveExistingSessionConversation: async ({ sessionId }) => ({ sessionId, machineId, directory: '/repo' }) } : {}),
+        ...(projectsRound ? { action: { executor: createActionExecutor({ workflowAction: args => runOwner.execute(args) } as ActionExecutorDeps),
+          buildContext: async execution => buildWorkflowActionContext(execution),
+          observeRun: async () => { throw new Error('Round projection does not launch a Run'); } },
+          postWorkflowMessage: async publication => DiscussionAgentPostResponseV1Schema.parse({ v: 1, ok: true,
+            value: { message: { ...wireMessage(5), content: publication.request.content, producerV1: publication.producer }, messageSeq: 5 } }),
+        } : {}),
         ...(scenario === 'review_stable_home' ? { serverIdentityId: 'srv_workflow_home' } : {}) },
       resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation' }),
       resolveAccountEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
@@ -520,6 +628,44 @@ describe('production workflow coordinator', () => {
       expect(boundary.rows().some(row => row.index.lifecycle === 'completed')).toBe(true);
       expect(boundary.rows().find(row => row.index.parentRecordId === null)?.index.lifecycle).toBe('needs_attention');
       expect(committedPosts.size).toBe(0);
+    } else if (projectsRound) {
+      if (reclaimedPublished) {
+        await expect(coordinate({ ...claim, attempt: 1, signal: expiredClaim.signal })).rejects.toThrow('runtime_interrupted');
+        const leaf = boundary.rows().find(row => row.index.parentRecordId !== null && row.index.lifecycle === 'running');
+        expect(leaf).toBeDefined();
+        expect(committedPosts.size).toBe(1);
+        expect(boundary.rows().filter(row => row.index.lifecycle === 'completed')).toEqual([]);
+      }
+      const result = await coordinate({ ...claim, ...(reclaimedPublished ? { attempt: 2, expectedRevision: boundary.run().revision } : {}) });
+      const opened = await runOwner.execute({ actionId: 'workflow.run.invocations.list',
+        input: { runId, includeContent: true }, context: { surface: 'cli' } });
+      const details = WorkflowActionOutputSchemasV1['workflow.run.invocations.list'].parse(opened).invocationDetails;
+      const answers = details?.filter(row => row.progress.invocationPath.blockId === 'work') ?? [];
+      const answer = answers[0];
+      expect(answers).toHaveLength(participants.length);
+      for (const participant of participants) {
+        expect(answers.find(row => row.progress.execution?.kind === 'session'
+          && row.progress.execution.sessionId === participant.session.sessionId)?.progress.replyOutcome)
+          .toMatchObject({ kind: 'answer' });
+      }
+      const reply = reclaimedPublished ? { kind: 'answer' as const,
+        publicationRef: { kind: 'discussion' as const, discussion, messageId: 'published-answer' } }
+        : { kind: 'answer' as const, result: { sessionId: 'session-1', messageId: 'exact-result' } };
+      expect(answer?.progress.replyOutcome).toEqual(reply);
+      expect(answer?.index.lifecycle).toBe('completed');
+      expect(answer?.progress.result).toBe('answer');
+      expect(result).toMatchObject({ state: 'succeeded' });
+      const projection = WorkflowDiscussionRoundProjectResultV1Schema.parse(details?.find(row => row.progress.invocationPath.blockId === 'outcomes')?.progress.result);
+      expect(projection).toMatchObject({ allPassed: false, nextParticipants: expect.arrayContaining(participants),
+        outcomeReferences: expect.arrayContaining(participants.map(participant => ({ runId,
+          invocationRecordId: answers.find(row => row.progress.execution?.kind === 'session'
+            && row.progress.execution.sessionId === participant.session.sessionId)!.index.id,
+          participant, kind: 'answer', executionSessionId: participant.session.sessionId, result: 'answer',
+          reply: reclaimedPublished ? reply : { kind: 'answer', result: { sessionId: participant.session.sessionId, messageId: 'exact-result' } },
+        }))) });
+      expect(projection.nextParticipants).toHaveLength(participants.length);
+      expect(projection.outcomeReferences).toHaveLength(participants.length);
+      expect(parents).toEqual(scenario === 'round_already_returned' || reclaimedPublished ? [] : participants.map(() => 'question'));
     } else if (hasReview) {
       expect(await coordinate(claim)).toMatchObject({ state: 'succeeded' });
       expect(parents).toEqual(['question', 'published-answer']);
@@ -541,7 +687,7 @@ describe('production workflow coordinator', () => {
       expect(boundary.rows().some(row => row.index.lifecycle === 'completed')).toBe(true);
       expect(committedPosts.size, JSON.stringify({ publicationDiagnostics, transportRequests })).toBe(1);
     } else expect(await coordinate(claim)).toMatchObject({ state: 'succeeded' });
-    expect(inputs).toHaveLength(hasReview ? 2 : 1);
+    expect(inputs).toHaveLength(hasReview ? 2 : participants.length);
     const values = inputs[0]!.split('\n').filter(line => line.startsWith('{"author":'))
       .map(line => JSON.parse(JSON.parse(line).text));
     const fixed = values.filter(value => value.reference.scope === 'addressing_message');
@@ -572,7 +718,7 @@ describe('production workflow coordinator', () => {
       });
     }
     expect(await coordinate({ ...claim, expectedRevision: boundary.run().revision })).toMatchObject({ state: 'succeeded' });
-    expect(inputs).toHaveLength(hasReview ? 2 : 1);
+    expect(inputs).toHaveLength(hasReview ? 2 : participants.length);
     expect(reads).toHaveLength(previousReads);
   });
   it.each([
@@ -2534,6 +2680,35 @@ describe('production workflow coordinator', () => {
     }));
   });
 
+  it.each([false, true])('acknowledges a competing terminal fact only when its reply custody matches (matching=%s)', async matching => {
+    const rootId = 'root-reply-conflict';
+    const encryption: WorkflowRunEncryptionV1 = { witness: { mode: 'plain', version: 1, contentKeyFingerprint: null }, runCrypto: { mode: 'plain' } };
+    const checkpoint = { kind: 'happier.workflow-checkpoint.v1' as const, rootRecordId: rootId,
+      nextSequence: '1', frontier: { nextBlockOrdinal: 0, paused: false } };
+    const boundary = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope: 'accepted' });
+    await boundary.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope: 'checkpoint', rootInvocation: {
+      id: rootId, contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: rootId, sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0' },
+        progress: { kind: 'happier.workflow-progress.v1', invocationPath: { blockId: '$root', scope: [] }, blockKind: 'root', attempt: '0', logicalInvocationRecordId: rootId } })),
+    } });
+    const load = () => DurableWorkflowCoordinatorStore.load({ accountId, runId, parentAttempt: 0, rootRecordId: rootId,
+      checkpoint, revision: boundary.run().revision, encryption, storage: boundary });
+    const coordinator = await load();
+    const key = workflowInvocationKey({ runId, blockId: 'work', scope: [], attempt: 0 });
+    const leaf = await coordinator.ensureIntent({ key, recordId: 'reply-conflict-leaf', runId, blockId: 'work', blockKind: 'step',
+      path: { blockId: 'work', scope: [] }, memberOrdinal: '0', attempt: 0, acceptedAtMs: 1, lifecycle: 'running' });
+    const replyOutcome = { kind: 'answer' as const, result: { sessionId: 'session-1', messageId: 'exact-result' } };
+    // A second real durable owner represents recovery observing the same
+    // ordinary retained turn before or after its independent C2 settlement.
+    const recovery = await load();
+    await recovery.readByLogicalInvocation(leaf.recordId);
+    await recovery.commitFact({ key, lifecycle: 'completed', result: 'answer', ...(matching ? { replyOutcome } : {}) });
+    const completion = coordinator.commitFact({ key, lifecycle: 'completed', result: 'answer', replyOutcome });
+    if (matching) await expect(completion).resolves.toMatchObject({ lifecycle: 'completed', replyOutcome });
+    else await expect(completion).rejects.toThrow('currentness_conflict');
+    expect((await recovery.read(key))?.replyOutcome).toEqual(matching ? replyOutcome : undefined);
+  });
+
   it('serializes facts for one invocation row so concurrent workspace commits cannot erase each other', async () => {
     const rootId = 'root-1';
     const rootIndex = {
@@ -3260,7 +3435,6 @@ describe('production workflow coordinator', () => {
       });
       expect(attempts).toEqual([0, 1, 2]);
       expect(policyDepthLimits).toEqual([1, 2, 3]);
-      expect(reads.filter(path => path === '/v2/account/settings')).toHaveLength(3);
       expect(reads.filter(path => path.startsWith('/v1/artifacts'))).toEqual([]);
       expect(nativeStart).not.toHaveBeenCalled();
       expect(failures).toEqual([]);

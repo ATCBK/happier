@@ -88,13 +88,22 @@ export async function runObservedWorkflowSessionStartup(
     }
     if (!address) {
       let retained!: () => void;
-      const admission = new Promise<void>(resolve => { retained = resolve; });
+      let refused!: (error: unknown) => void;
+      const admission = new Promise<void>((resolve, reject) => { retained = resolve; refused = reject; });
+      let rejoinedRetention: Promise<void> | undefined;
       const launch = host.observeExecution({ actionId: 'session.spawn_new',
         input: { creationKey: input.creationKey, directory: input.request.directory,
           machineId: host.machineId, agentTarget: input.request.agentTarget ?? null },
         actionRequestId: input.creationKey, rpcContext: host.rpcContext,
         onOperation: operation => {
           address = { key: 'startup', serverId: host.serverId, machineId: host.machineId, operationId: operation.operationId };
+          if (signal?.aborted) abort();
+          if (operation.state === 'running') {
+            // An active same-key launch skips this caller's execute callback.
+            // Retain its exact correspondence before observing it independently.
+            rejoinedRetention = read(false, false).then(snapshot => input.onObservation?.(snapshot));
+            void rejoinedRetention.then(retained, refused);
+          }
         },
         execute: async operation => {
           const operationId = operation.operationAcceptance?.operationId;
@@ -108,7 +117,7 @@ export async function runObservedWorkflowSessionStartup(
             // Retain the original operation before launch. A direct refusal
             // can settle observeExecution without returning an accepted reply.
             // Recovery still needs this exact owner, including after Cancel.
-            await input.onObservation?.(await read(false, false, operation.signal));
+            await (rejoinedRetention ?? input.onObservation?.(await read(false, false, operation.signal)));
             // Retaining correspondence can outlast a claim. Only explicit
             // Workflow stop authority, or the operation's own cancellation,
             // may stop the admitted launch after that durable handoff.

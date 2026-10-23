@@ -458,7 +458,7 @@ describe('workflow Session step executor', () => {
     expect(operations.store.list(scope).items[0]).toMatchObject({ operationId: 'original-refusal', state: 'failed' });
   });
 
-  it.each(['open', 'cancel', 'interrupt', 'cancel_before_entry', 'interrupt_before_entry'] as const)('keeps cold Session creation under its original startup observation owner (%s)', async outcome => {
+  it.each(['open', 'cancel', 'interrupt', 'rejoin_open', 'rejoin_cancel', 'rejoin_interrupt', 'rejoin_miswired', 'rejoin_retention_refused', 'cancel_before_entry', 'interrupt_before_entry'] as const)('keeps cold Session creation under its original startup observation owner (%s)', async outcome => {
     installSessionCreationTransport();
     const observations: unknown[] = [];
     const scope = { accountId: 'account-1', machineId: 'machine-1' };
@@ -478,8 +478,16 @@ describe('workflow Session step executor', () => {
         serverId: 'server-1', machineId: scope.machineId, workspaceRefId: 'workspace', cwd: '/repo' } });
       const review = { kind: 'pendingApproval' as const, code: 'project_setup_consent_required' as const,
         reviewedEffectDigest: 'setup', reviewedEffect: { commands: [] } };
-      void operation.operationReview.waitForResume(review, { review: async selected => selected?.reviewedEffectDigest === 'setup' ? null : review })
-        .then(() => { tracked.agentRuntimeDaemonServiceSessionOpenAttestation = {
+      void (async () => {
+        let approved = false;
+        do {
+          await operation.operationReview!.waitForResume(review, { review: async selected => {
+            approved = selected?.reviewedEffectDigest === 'setup';
+            return approved ? null : review;
+          } });
+          // Rejoining wakes setup to remeasure; it is not human consent.
+        } while (outcome.startsWith('rejoin_') && !approved);
+      })().then(() => { tracked.agentRuntimeDaemonServiceSessionOpenAttestation = {
           request: { kind: 'create', sessionId: 'original-session', cwd: '/repo' }, providerSessionId: 'native',
         }; }, () => undefined);
       return { type: 'success', sessionId: 'original-session', sessionCreationOutcome: {
@@ -487,11 +495,12 @@ describe('workflow Session step executor', () => {
       } };
     }, stopSession: async () => { throw new Error('Setup review does not refuse a native child'); } },
       awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }) });
+    let miswireObservation = false;
     const startup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup(input, { serverId: 'server-1', machineId: scope.machineId,
         observeExecution: operations.observeExecution, rpcContext: {},
         transport: operation => ({ spawn: (request, options) => handler(request, { ...options, localActionContext: operation }),
           resolveSpawnSessionByNonce: async () => { throw new Error('No replacement startup'); } }),
-        observeOperation: async (target, options) => await operations.handlers.getV2({ operationId: target.operationId,
+        observeOperation: async (target, options) => await operations.handlers.getV2({ operationId: miswireObservation ? 'foreign-operation' : target.operationId,
           ...(options.waitForTerminal ? { waitForTerminal: true } : {}),
           ...(options.includeSetupReview ? { includeSetupReview: true } : {}) }, options.signal ? { signal: options.signal } : undefined),
         cancelOperation: async target => operations.runner.cancel(scope, target.operationId), cleanupOnFailure: async () => {},
@@ -516,13 +525,24 @@ describe('workflow Session step executor', () => {
       selection: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
         connectedServices: { v: 2, bindingsByServiceId: {} } },
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
-      onStartupObservation: async (value: unknown) => { observations.push(value); },
+      onStartupObservation: async (value: unknown) => {
+        // The coordinator ignores observation when its claim was interrupted
+        // before commit; that must not cancel the admitted launch.
+        if (outcome.startsWith('rejoin_') && !controller.signal.aborted) {
+          controller.abort(new WorkflowRuntimeInterruption());
+          return;
+        }
+        if (outcome === 'rejoin_retention_refused') throw new Error('retention_refused');
+        observations.push(value);
+      },
     } satisfies Parameters<typeof create>[0];
     const creating = create({ ...request, signal: controller.signal });
     const rejection = creating.catch(error => error);
     let resumed = creating;
+    let resumedRejection = rejection;
     try {
-      await expect.poll(() => observations).toContainEqual(expect.objectContaining({ operationId: 'original-start',
+      if (outcome.startsWith('rejoin_')) await expect.poll(() => launches).toBe(1);
+      else await expect.poll(() => observations).toContainEqual(expect.objectContaining({ operationId: 'original-start',
         setupReview: expect.objectContaining({ code: 'project_setup_consent_required' }) }));
       expect(operations.store.list(scope).items).toHaveLength(1);
       expect(launches).toBe(1);
@@ -532,6 +552,45 @@ describe('workflow Session step executor', () => {
         expect(operations.store.list(scope).items[0]?.state).toBe('running');
         resumed = create({ ...request, retainedStartupOperation: { key: 'startup', serverId: 'server-1',
           machineId: scope.machineId, operationId: 'original-start' } });
+      }
+      if (outcome.startsWith('rejoin_')) {
+        controller.abort(new WorkflowRuntimeInterruption());
+        await expect(rejection).resolves.toBeInstanceOf(WorkflowRuntimeInterruption);
+        expect(operations.store.list(scope).items[0]?.state).toBe('running');
+        observations.length = 0;
+        miswireObservation = outcome === 'rejoin_miswired';
+        const rejoining = new AbortController();
+        // A claim interrupted before committing startup correspondence retries
+        // the same key without a retained address, while launch stays admitted.
+        resumed = create({ ...request, signal: rejoining.signal });
+        resumedRejection = resumed.catch(error => error);
+        if (miswireObservation) {
+          await expect(resumedRejection).resolves.toMatchObject({ message: 'workflow_invocation_fact_conflict' });
+          expect(observations).toEqual([]);
+          return;
+        }
+        if (outcome === 'rejoin_retention_refused') {
+          await expect(resumedRejection).resolves.toMatchObject({ message: 'retention_refused' });
+          expect(observations).toEqual([]);
+          expect(operations.store.list(scope).items[0]?.state).toBe('running');
+          expect(launches).toBe(1);
+          return;
+        }
+        await expect.poll(() => observations).toContainEqual(expect.objectContaining({ operationId: 'original-start',
+          setupReview: expect.objectContaining({ code: 'project_setup_consent_required' }) }));
+        expect(launches).toBe(1);
+        if (outcome === 'rejoin_interrupt') {
+          rejoining.abort(new WorkflowRuntimeInterruption());
+          await expect(resumedRejection).resolves.toBeInstanceOf(WorkflowRuntimeInterruption);
+          expect(operations.store.list(scope).items[0]?.state).toBe('running');
+          return;
+        }
+        if (outcome === 'rejoin_cancel') {
+          rejoining.abort(WORKFLOW_CANCEL_REQUESTED_ABORT_REASON);
+          await expect(resumedRejection).resolves.toBeDefined();
+          expect(operations.store.list(scope).items[0]?.state).toBe('cancelled');
+          return;
+        }
       }
       if (outcome === 'cancel') {
         expect(operations.runner.cancel(scope, 'original-start')).toEqual({ kind: 'requested' });
@@ -544,7 +603,7 @@ describe('workflow Session step executor', () => {
         await expect(resumed).resolves.toMatchObject({ sessionId: 'original-session', origin: { kind: 'run_step', runId: 'run-1' }, workDepth: 1 });
       }
       expect(launches).toBe(1);
-    } finally { operations.runner.cancel(scope, 'original-start'); await rejection; }
+    } finally { operations.runner.cancel(scope, 'original-start'); await rejection; await resumedRejection; }
   });
 
   it('recovers inputless creation before its Workflow fact through observation-only Session creation custody', async () => {
