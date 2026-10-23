@@ -1,5 +1,13 @@
 import type { PendingDeliveryBlockedReason } from './pendingDeliveryBlockedReason.js';
 import { normalizePendingDeliveryBlockedReason } from './pendingDeliveryBlockedReason.js';
+import { z } from 'zod/mini';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
+
+/** Read-only custody eligibility; recovery mutations still check current server state. */
+export const PendingDeliveryRecoveryV1Schema = lazyZodSchema(() => z.strictObject({
+  canSendAsNew: z.boolean(),
+}));
+export type PendingDeliveryRecoveryV1 = z.infer<typeof PendingDeliveryRecoveryV1Schema>;
 
 export type PendingDeliveryDetailV1 = 'custody_observed' | 'awaiting_acceptance';
 

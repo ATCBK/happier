@@ -1,5 +1,5 @@
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
-import { normalizePendingDeliveryStatusV1, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
+import { normalizePendingDeliveryStatusV1, type PendingDeliveryStatusV1, type PendingDeliveryRecoveryV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
 import { PendingRequestedActionV1Schema, PendingRequestedActionV1StoredSchema, type PendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { type SessionMessageAccountActorV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 
@@ -16,6 +16,7 @@ export type PendingMessageRow = {
     deliveryState: string | null;
     deliveryBlockedReason: string | null;
     deliveryStatus: PendingDeliveryStatusV1;
+    recovery: PendingDeliveryRecoveryV1;
     position: number;
     createdAt: Date;
     updatedAt: Date;
@@ -30,6 +31,7 @@ export type PendingMessageRowRaw = {
     autonomousExchangeRootLocalId?: string | null;
     inputAdmissionReceipt?: unknown;
     providerAction?: unknown;
+    replyProgress?: unknown;
     localId: string;
     targetExecutionRunId?: string | null;
     messageRole?: unknown;
@@ -45,6 +47,11 @@ export type PendingMessageRowRaw = {
     discardedReason: string | null;
     authorAccountId: string | null;
 };
+
+/** Shared with Send as new admission: reply custody stays with its exact original. */
+export function projectPendingDeliveryRecovery(row: Pick<PendingMessageRowRaw, 'replyProgress'>): PendingDeliveryRecoveryV1 {
+    return { canSendAsNew: row.replyProgress === null };
+}
 
 export function mapPendingMessageRow(row: PendingMessageRowRaw, accountActor: SessionMessageAccountActorV1 | null = null): PendingMessageRow {
     const parsedRequestedAction = row.requestedAction == null
@@ -66,6 +73,7 @@ export function mapPendingMessageRow(row: PendingMessageRowRaw, accountActor: Se
         status: row.status,
         deliveryState,
         deliveryBlockedReason,
+        recovery: projectPendingDeliveryRecovery(row),
         deliveryStatus: requestedActionMalformed && row.status !== "discarded"
             ? { status: "blocked", reason: "unsupported_action" }
             : normalizePendingDeliveryStatusV1({

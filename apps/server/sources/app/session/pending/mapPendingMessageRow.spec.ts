@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
 
 import { mapPendingMessageRow } from "./mapPendingMessageRow";
+import { PendingDeliveryRecoveryV1Schema } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
+import { SessionMessageReplyProgressV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
 describe("mapPendingMessageRow", () => {
+    it.each([null, SessionMessageReplyProgressV1Schema.parse({ v: 1, mode: 'wait', disposition: 'observing' }), {}, undefined])("projects Send as new eligibility without exposing reply custody (%j)", replyProgress => {
+        const now = new Date("2026-07-12T00:00:00.000Z");
+        const row = {
+            localId: "uncertain-input", messageRole: "user", content: { t: "plain" as const, v: "hello" },
+            status: "queued" as const, deliveryState: "blocked", deliveryBlockedReason: "delivery_outcome_uncertain",
+            position: 0, createdAt: now, updatedAt: now, discardedAt: null, discardedReason: null,
+            authorAccountId: "account-1", replyProgress,
+        };
+        const mapped = mapPendingMessageRow(row);
+        expect(mapped).toMatchObject({ recovery: { canSendAsNew: replyProgress === null } });
+        expect(PendingDeliveryRecoveryV1Schema.parse(mapped.recovery)).toEqual({ canSendAsNew: replyProgress === null });
+        expect(mapped).not.toHaveProperty('replyProgress');
+    });
+
     it.each([
         { requestedAction: { v: 1, kind: "enqueue", retired: true }, expectedAction: { v: 1, kind: "enqueue" } },
         {

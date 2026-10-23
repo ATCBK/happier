@@ -8,7 +8,7 @@ import { isRetainedPendingContextForPublisherInTx } from './retainedPendingConte
 import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { reconcileSessionPendingQueueStateInTx } from "@/app/session/pending/reconcileSessionPendingQueueState";
 import { applyPendingSessionStateChange } from "@/app/session/pending/applyPendingSessionStateChange";
-import { mapPendingMessageRow } from "@/app/session/pending/mapPendingMessageRow";
+import { mapPendingMessageRow, projectPendingDeliveryRecovery } from "@/app/session/pending/mapPendingMessageRow";
 import {
     assertSessionCapabilityInTx,
     assertSessionOwnerInTx,
@@ -4158,7 +4158,7 @@ export async function sendPendingDeliveryAsNew(params: {
                 },
             });
             if (!existing) return { ok: false, error: "not-found" } as const;
-            if (existing.replyProgress !== null) return { ok: false, error: 'delivery-settlement-conflict' } as const;
+            if (!projectPendingDeliveryRecovery(existing).canSendAsNew) return { ok: false, error: 'delivery-settlement-conflict' } as const;
             const existingStatus = readPendingDeliveryStatus(existing);
 
             const replacement = await tx.sessionPendingMessage.findUnique({

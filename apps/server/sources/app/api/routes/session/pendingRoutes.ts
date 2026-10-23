@@ -65,6 +65,7 @@ function toPendingJson(row: PendingMessageRow) {
         ...(row.autonomousExchangeRoot ? { autonomousExchangeRoot: row.autonomousExchangeRoot } : {}),
         status: row.status,
         deliveryStatus: row.deliveryStatus,
+        recovery: row.recovery,
         ...(row.deliveryState ? { deliveryState: row.deliveryState } : {}),
         ...(row.deliveryBlockedReason ? { deliveryBlockedReason: row.deliveryBlockedReason } : {}),
         position: row.position,
