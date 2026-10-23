@@ -176,7 +176,8 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                 const copy = platform === 'win32' || admitted.materialization === 'copy';
                 const previousByFolder = new Map(previous?.map(item => [item.sourceFolderName ?? item.name, item]));
                 const reusable = new Set<string>();
-                for (const item of items) {
+                for (const item of admitted.items) {
+                    if (!materialized.has(item.name)) continue;
                     const folder = item.sourceFolderName ?? item.name;
                     const prior = previousByFolder.get(folder);
                     if (!prior || prior.skillId !== item.skillId || prior.name !== item.name || prior.digest !== item.digest) continue;
@@ -185,6 +186,18 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                     try { entrypoint = await lstat(join(directory, 'SKILL.md')); }
                     catch (error) { if (errorCode(error) === 'ENOENT') continue; throw error; }
                     if (!entrypoint.isFile()) continue;
+                    let entriesPresent = true;
+                    for (const entry of item.files) {
+                        if (entry.path === 'SKILL.md') continue;
+                        let info: Stats;
+                        try { info = await lstat(join(directory, entry.path)); }
+                        catch (error) {
+                            if (errorCode(error) !== 'ENOENT' && errorCode(error) !== 'ENOTDIR') throw error;
+                            entriesPresent = false; break;
+                        }
+                        if (!info.isFile() && (copy || !info.isSymbolicLink())) { entriesPresent = false; break; }
+                    }
+                    if (!entriesPresent) continue;
                     if (copy && !(await Promise.all((await readdir(directory)).map(async name =>
                         !(await lstat(join(directory, name))).isSymbolicLink()))).every(Boolean)) continue;
                     reusable.add(folder);

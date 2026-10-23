@@ -9,7 +9,7 @@ import { createSkillStore, type SkillSessionDirItem } from './skillStore';
 // Count materialization at the OS boundary without replacing store logic or filesystem behavior.
 vi.mock('node:fs/promises', async importOriginal => {
     const actual = await importOriginal<typeof import('node:fs/promises')>();
-    return { ...actual, cp: vi.fn(actual.cp) };
+    return { ...actual, cp: vi.fn(actual.cp), lstat: vi.fn(actual.lstat), readdir: vi.fn(actual.readdir) };
 });
 
 const scratch: string[] = [];
@@ -44,21 +44,61 @@ async function fixture(platform: NodeJS.Platform = process.platform) {
     return { happyHomeDir, store, ensure, cachePath };
 }
 describe('daemon skill store', () => {
-    it.each([undefined, 'copy'] as const)('materializes only a changed or damaged skill among 139 delivered items (%s)', async materialization => {
-        const f = await fixture();
-        const items = Array.from({ length: 139 }, (_, index) => skill(`guide-${index}`));
+    it.each([
+        { mode: 'default', platform: process.platform, materialization: undefined },
+        { mode: 'copy', platform: process.platform, materialization: 'copy' as const },
+        { mode: 'win32', platform: 'win32' as const, materialization: undefined },
+    ])('materializes only a changed or damaged skill among 139 delivered items ($mode)', async ({ mode, platform, materialization }) => {
+        const f = await fixture(platform);
+        const withSupport = (name: string, content?: string): SkillSessionDirItem => {
+            const item = skill(name, content);
+            const files = [...item.files, { path: 'helper.txt', contentKind: 'utf8' as const,
+                contentBase64: Buffer.from('Support fixture').toString('base64') }];
+            return { ...item, files, digest: computePromptBundleDigestV1({ v: 1, entries: files, createdAtMs: 0, updatedAtMs: 0 }) };
+        };
+        const items = Array.from({ length: 139 }, (_, index) => withSupport(`guide-${index}`));
+        items[2] = { ...items[2]!, sourceFolderName: 'kept-support-source' };
         const ensure = () => f.store.ensureSkillSessionDir({ ownerKey: 'session-one', items, nativeDisables: [], materialization });
         const result = await ensure();
         const unchangedEntry = join(result.skillsRoot, items[1]!.name, 'SKILL.md');
         const unchangedBefore = await stat(unchangedEntry);
         const copies = vi.mocked(fs.cp);
+        const metadataReads = vi.mocked(fs.lstat);
+        const directoryReads = vi.mocked(fs.readdir);
         copies.mockClear();
-        items[0] = skill(items[0]!.name, 'Changed guide');
+        metadataReads.mockClear(); directoryReads.mockClear();
+        await ensure();
+        expect(copies.mock.calls).toHaveLength(0);
+        // Report the real metadata-read cost; only materialization counts are gated.
+        copies.mockClear();
+        items[0] = withSupport(items[0]!.name, 'Changed guide');
         await ensure();
         expect(copies.mock.calls).toHaveLength(1);
         expect(await readFile(join(result.skillsRoot, items[0]!.name, 'SKILL.md'), 'utf8')).toBe('Changed guide');
         expect((await stat(unchangedEntry)).mtimeMs).toBe(unchangedBefore.mtimeMs);
-        const damagedDirectory = join(result.skillsRoot, items[2]!.name);
+        const damagedDirectory = result.items[2]!.directory;
+        const support = join(damagedDirectory, 'helper.txt');
+        await chmod(damagedDirectory, 0o700);
+        if (!(await lstat(support)).isSymbolicLink()) await chmod(support, 0o600);
+        await unlink(support);
+        await chmod(damagedDirectory, 0o555);
+        items[0] = withSupport(items[0]!.name, 'Changed while sibling support is missing');
+        copies.mockClear();
+        const repaired = await ensure();
+        expect(repaired.failed).toEqual([]);
+        expect(copies.mock.calls).toHaveLength(2);
+        expect(await readFile(support, 'utf8')).toBe('Support fixture');
+        expect((await lstat(join(damagedDirectory, 'SKILL.md'))).isFile()).toBe(true);
+        expect((await stat(unchangedEntry)).mtimeMs).toBe(unchangedBefore.mtimeMs);
+        await chmod(damagedDirectory, 0o700);
+        if (!(await lstat(support)).isSymbolicLink()) await chmod(support, 0o600);
+        await unlink(support);
+        await mkdir(support);
+        await chmod(damagedDirectory, 0o555);
+        copies.mockClear();
+        await ensure();
+        expect(copies.mock.calls).toHaveLength(1);
+        expect(await readFile(support, 'utf8')).toBe('Support fixture');
         await chmod(damagedDirectory, 0o700);
         await chmod(join(damagedDirectory, 'SKILL.md'), 0o600);
         await unlink(join(damagedDirectory, 'SKILL.md'));
