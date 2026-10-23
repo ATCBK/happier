@@ -5,6 +5,7 @@ import type { TeamCapabilitiesV1, TeamErrorCodeV1 } from "@happier-dev/protocol/
 import type { Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
 import { AccountStatus, TeamMembershipStatus, TeamRole } from "@/storage/enums.generated";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import {
     readHomeGovernanceAccountInTx,
     resolveHomeGovernanceAuthority,
@@ -152,23 +153,27 @@ export async function resolveTeamActorContextsInTx(
 ): Promise<ReadonlyMap<string, TeamActorContext>> {
     const teamIds = [...new Set(input.teamIds)];
     if (teamIds.length === 0) return new Map();
-    const [teams, account, memberships, ownerRows] = await Promise.all([
-        tx.team.findMany({ where: { id: { in: teamIds } }, select: TEAM_PROJECTION_SELECT }),
+    const [teamPages, account, membershipPages, ownerPages] = await Promise.all([
+        Promise.all(portableQueryChunks({ values: teamIds, bindingsPerValue: 1, fixedBindings: 1 }).map(ids =>
+            tx.team.findMany({ where: { id: { in: [...ids] } }, select: TEAM_PROJECTION_SELECT }))),
         readHomeGovernanceAccountInTx(tx, input.actorAccountId),
-        tx.teamMembership.findMany({
-            where: { teamId: { in: teamIds }, accountId: input.actorAccountId },
+        Promise.all(portableQueryChunks({ values: teamIds, bindingsPerValue: 1, fixedBindings: 2 }).map(ids => tx.teamMembership.findMany({
+            where: { teamId: { in: [...ids] }, accountId: input.actorAccountId },
             select: { id: true, teamId: true, role: true, status: true,
                 provisionedIdentity: { select: { id: true } },
                 identityConnectionManagement: { select: { teamMembershipId: true } } },
-        }),
-        tx.teamMembership.findMany({
+        }))),
+        Promise.all(portableQueryChunks({ values: teamIds, bindingsPerValue: 1, fixedBindings: 4 }).map(ids => tx.teamMembership.findMany({
             where: {
-                teamId: { in: teamIds }, role: TeamRole.owner, status: TeamMembershipStatus.active,
+                teamId: { in: [...ids] }, role: TeamRole.owner, status: TeamMembershipStatus.active,
                 account: { status: AccountStatus.active },
             },
             select: { teamId: true },
-        }),
+        }))),
     ]);
+    const teams = teamPages.flat();
+    const memberships = membershipPages.flat();
+    const ownerRows = ownerPages.flat();
     const membershipByTeam = new Map(memberships.map(({ teamId, provisionedIdentity, identityConnectionManagement, ...membership }) => [teamId, {
         ...membership, managedExternally: provisionedIdentity !== null || identityConnectionManagement !== null,
     }] as const));

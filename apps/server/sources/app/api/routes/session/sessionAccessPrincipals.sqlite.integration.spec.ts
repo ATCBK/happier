@@ -66,7 +66,7 @@ describe("Selected Session access principals (SQLite HTTP integration)", () => {
         });
         expect(response.statusCode).toBe(200);
         expect(response.json()).toEqual({ v: 1, principals: [
-            { kind: "account", accountId: friend.id, username: "principal-friend", firstName: null, lastName: null, avatarUrl: null },
+            { kind: "account", accountId: friend.id, name: null, username: "principal-friend", firstName: null, lastName: null, avatarUrl: null },
             { kind: "team", teamId: team.id, name: "Visible Team" },
             { kind: "group", teamId: team.id, groupId: group.id, name: "Visible Group", teamName: "Visible Team" },
         ] });

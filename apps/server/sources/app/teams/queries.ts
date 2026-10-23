@@ -4,6 +4,7 @@ import { TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1, decodeTeamDirectoryCursorV1, enco
 import { readHomeGovernanceAccountInTx, resolveHomeGovernanceAuthority } from "@/app/home/governance/homeCapabilities";
 import type { Tx } from "@/storage/inTx";
 import { AccountStatus, TeamMembershipStatus, TeamRole } from "@/storage/enums.generated";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 
 import {
     composeTeamActorContext,
@@ -50,26 +51,30 @@ export async function resolveGrantableTeamForActorInTx(
     tx: Tx,
     input: Readonly<{ actorAccountId: string; teamId: string }>,
 ): Promise<Readonly<{ teamId: string }> | null> {
-    const membership = await tx.teamMembership.findUnique({
-        where: {
-            teamId_accountId: {
-                teamId: input.teamId,
-                accountId: input.actorAccountId,
-            },
-        },
+    const teams = await resolveGrantableTeamsForActorInTx(tx, { actorAccountId: input.actorAccountId, teamIds: [input.teamId] });
+    return teams.has(input.teamId) ? { teamId: input.teamId } : null;
+}
+
+/** The same structural grantability decision for explicitly selected Teams. */
+export async function resolveGrantableTeamsForActorInTx(
+    tx: Tx,
+    input: Readonly<{ actorAccountId: string; teamIds: readonly string[] }>,
+): Promise<ReadonlySet<string>> {
+    const teamIds = [...new Set(input.teamIds)];
+    if (teamIds.length === 0) return new Set();
+    const memberships = (await Promise.all(portableQueryChunks({ values: teamIds, bindingsPerValue: 1, fixedBindings: 2 }).map(ids => tx.teamMembership.findMany({
+        where: { accountId: input.actorAccountId, teamId: { in: [...ids] } },
         select: {
             status: true,
             account: { select: { status: true } },
             team: { select: { id: true, archivedAt: true } },
         },
-    });
-    return membership && isEffectiveTeamMembership({
+    })))).flat();
+    return new Set(memberships.filter(membership => isEffectiveTeamMembership({
         accountStatus: membership.account.status,
         membershipStatus: membership.status,
         teamArchivedAt: membership.team.archivedAt,
-    })
-        ? { teamId: membership.team.id }
-        : null;
+    })).map(membership => membership.team.id));
 }
 
 export async function listTeamsForActorInTx(

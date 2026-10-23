@@ -1,8 +1,9 @@
 import type { Tx } from "@/storage/inTx";
 import type { Prisma } from "@prisma/client";
 import { AccountStatus, TeamMembershipStatus } from "@/storage/prisma";
-import { resolveGrantableTeamForActorInTx } from "@/app/teams/queries";
-import { resolveGrantableTeamGroupForActorInTx } from "@/app/teams/groups/groupService";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
+import { resolveGrantableTeamsForActorInTx } from "@/app/teams/queries";
+import { resolveGrantableTeamGroupsForActorInTx } from "@/app/teams/groups/groupService";
 import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
 
 /**
@@ -64,22 +65,22 @@ export async function resolveSessionAccessGrantAccountSubjectsInTx(
         if (error) identityErrors.set(subjectAccountId, error);
     }
     const candidateIds = [...new Set(params.subjectAccountIds.filter((id) => !identityErrors.has(id)))];
-    const accounts = candidateIds.length === 0 ? [] : await tx.account.findMany({
-        where: { id: { in: candidateIds } },
+    const accounts = (await Promise.all(portableQueryChunks({ values: candidateIds, bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.account.findMany({
+        where: { id: { in: [...ids] } },
         select: { id: true, status: true },
-    });
+    })))).flat();
     const accountsById = new Map(accounts.map((account) => [account.id, account]));
     const eligibleIds = params.removingExistingGrant || params.hasExistingGrant || candidateIds.length === 0
         ? new Set(candidateIds)
-        : new Set((await tx.account.findMany({
+        : new Set((await Promise.all(portableQueryChunks({ values: candidateIds, bindingsPerValue: 1, fixedBindings: 10 }).map(ids => tx.account.findMany({
             where: {
                 AND: [
-                    { id: { in: candidateIds } },
+                    { id: { in: [...ids] } },
                     buildSessionAccessCollaborationAccountWhere(params.actorAccountId),
                 ],
             },
             select: { id: true },
-        })).map((account) => account.id));
+        })))).flat().map((account) => account.id));
 
     return params.subjectAccountIds.map((accountId): SessionAccessGrantSubjectResolution => {
         const identityError = identityErrors.get(accountId);
@@ -181,20 +182,28 @@ export async function resolveSessionAccessGrantSubjectsInTx(
     });
     const accountsById = new Map(accountIds.map((id, index) => [id, accountResolutions[index]!]));
     const teamIds = [...new Set(params.subjects.flatMap((subject) => subject.kind === "team" ? [subject.teamId] : []))];
-    const teams = teamIds.length === 0 ? [] : await tx.team.findMany({
-        where: { id: { in: teamIds } },
+    const teams = (await Promise.all(portableQueryChunks({ values: teamIds, bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.team.findMany({
+        where: { id: { in: [...ids] } },
         select: { id: true, archivedAt: true },
-    });
+    })))).flat();
     const teamsById = new Map(teams.map((team) => [team.id, team]));
     const groupIds = [...new Set(params.subjects.flatMap((subject) => subject.kind === "group" ? [subject.groupId] : []))];
-    const groups = groupIds.length === 0 ? [] : await tx.teamGroup.findMany({
-        where: { id: { in: groupIds } },
+    const groups = (await Promise.all(portableQueryChunks({ values: groupIds, bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.teamGroup.findMany({
+        where: { id: { in: [...ids] } },
         select: {
             id: true, teamId: true, archivedAt: true,
             team: { select: { archivedAt: true } },
         },
-    });
+    })))).flat();
     const groupsById = new Map(groups.map((group) => [group.id, group]));
+    const needsDiscovery = !params.removingExistingGrant && !params.hasExistingGrant;
+    const grantableTeamIds = needsDiscovery ? await resolveGrantableTeamsForActorInTx(tx, {
+        actorAccountId: params.actorAccountId, teamIds,
+    }) : new Set<string>();
+    const grantableGroups = needsDiscovery ? await resolveGrantableTeamGroupsForActorInTx(tx, {
+        actorAccountId: params.actorAccountId,
+        groups: params.subjects.flatMap(subject => subject.kind === "group" ? [subject] : []),
+    }) : new Map<string, never>();
     const results: { eligibility: SessionAccessGrantSubjectResolution; removalEligibility: SessionAccessGrantSubjectResolution }[] = [];
     for (const subject of params.subjects) {
         let eligibility: SessionAccessGrantSubjectResolution;
@@ -204,9 +213,9 @@ export async function resolveSessionAccessGrantSubjectsInTx(
             const team = teamsById.get(subject.teamId);
             if (!team) eligibility = { ok: false, error: "session_access_subject_not_found" };
             else if (params.removingExistingGrant) eligibility = { ok: true, subject };
-            else if (team.archivedAt !== null || (!params.hasExistingGrant && !await resolveGrantableTeamForActorInTx(tx, {
-                actorAccountId: params.actorAccountId, teamId: subject.teamId,
-            }))) eligibility = { ok: false, error: "session_access_subject_ineligible" };
+            else if (team.archivedAt !== null || (!params.hasExistingGrant && !grantableTeamIds.has(subject.teamId))) {
+                eligibility = { ok: false, error: "session_access_subject_ineligible" };
+            }
             else eligibility = { ok: true, subject };
         } else {
             // The Group row owns its parent Team; never trust the caller's claim.
@@ -214,9 +223,9 @@ export async function resolveSessionAccessGrantSubjectsInTx(
             if (!group || group.teamId !== subject.teamId) eligibility = { ok: false, error: "session_access_subject_not_found" };
             else if (params.removingExistingGrant) eligibility = { ok: true, subject };
             else if (group.archivedAt !== null || group.team.archivedAt !== null
-                || (!params.hasExistingGrant && !await resolveGrantableTeamGroupForActorInTx(tx, {
-                    actorAccountId: params.actorAccountId, teamId: subject.teamId, groupId: subject.groupId,
-                }))) eligibility = { ok: false, error: "session_access_subject_ineligible" };
+                || (!params.hasExistingGrant && grantableGroups.get(subject.groupId)?.teamId !== subject.teamId)) {
+                eligibility = { ok: false, error: "session_access_subject_ineligible" };
+            }
             else eligibility = { ok: true, subject };
         }
         // Ineligibility follows existence and identity validation. Removal skips

@@ -1,14 +1,15 @@
 import type { ResolveSessionAccessPrincipalsResponseV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { projectAccountDisplayProfileV1, ACCOUNT_DISPLAY_PROFILE_SELECT } from "@/app/account/profile/accountDisplayProfile";
 import { buildSessionAccessCollaborationAccountWhere } from "./sessionAccessGrantEligibility";
-import { resolveGrantableTeamForActorInTx } from "@/app/teams/queries";
-import { resolveGrantableTeamGroupForActorInTx } from "@/app/teams/groups/groupService";
+import { resolveGrantableTeamsForActorInTx } from "@/app/teams/queries";
+import { resolveGrantableTeamGroupsForActorInTx } from "@/app/teams/groups/groupService";
 import {
     qualifyTeamProjectionReadAuthenticationsInTx,
     resolveTeamActorContextsInTx,
 } from "@/app/teams/actorContext";
 import type { SessionAccessAuthentication } from "./sessionAccessAuthentication";
 import type { Tx } from "@/storage/inTx";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
 import type { SessionAccessCandidatesInspectResponseV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { assertSessionAccessManageAccessInTx } from './sessionAccessGrantService';
@@ -58,10 +59,11 @@ export async function resolveSessionAccessPrincipalsInTx(input: Readonly<{
     const subjects = [...new Map(input.subjects.map((subject) => [principalKey(subject), subject])).values()];
     const accountIds = subjects.filter((subject): subject is Extract<PrincipalRefV1, { kind: "account" }> => subject.kind === "account")
         .map((subject) => subject.accountId);
-    const accounts = accountIds.length === 0 ? [] : await input.tx.account.findMany({
-        where: { AND: [{ id: { in: accountIds } }, buildSessionAccessCollaborationAccountWhere(input.actorAccountId)] },
+    // Nine collaboration bindings plus Prisma's unbounded-findMany OFFSET binding.
+    const accounts = (await Promise.all(portableQueryChunks({ values: accountIds, bindingsPerValue: 1, fixedBindings: 10 }).map(ids => input.tx.account.findMany({
+        where: { AND: [{ id: { in: [...ids] } }, buildSessionAccessCollaborationAccountWhere(input.actorAccountId)] },
         select: ACCOUNT_DISPLAY_PROFILE_SELECT,
-    });
+    })))).flat();
     const accountsById = new Map(accounts.map((account) => [account.id, account]));
 
     const teamSubjects = subjects.filter((subject): subject is Extract<PrincipalRefV1, { kind: "team" }> => subject.kind === "team");
@@ -80,6 +82,14 @@ export async function resolveSessionAccessPrincipalsInTx(input: Readonly<{
             authenticationAuthority: input.authentication.authority,
         } : {}),
     });
+    const qualifiedTeamIds = teamIds.filter(teamId => qualifications.get(teamId)?.ok);
+    const grantableTeamIds = await resolveGrantableTeamsForActorInTx(input.tx, {
+        actorAccountId: input.actorAccountId, teamIds: qualifiedTeamIds,
+    });
+    const grantableGroups = await resolveGrantableTeamGroupsForActorInTx(input.tx, {
+        actorAccountId: input.actorAccountId,
+        groups: groupSubjects.filter(subject => grantableTeamIds.has(subject.teamId)),
+    });
     const result: ResolveSessionAccessPrincipalsResponseV1["principals"] = [];
     for (const subject of subjects) {
         if (subject.kind === "account") {
@@ -90,30 +100,21 @@ export async function resolveSessionAccessPrincipalsInTx(input: Readonly<{
         const context = contexts.get(subject.teamId);
         if (!context || !qualifications.get(subject.teamId)?.ok) continue;
         if (subject.kind === "team") {
-            if (await resolveGrantableTeamForActorInTx(input.tx, { actorAccountId: input.actorAccountId, teamId: subject.teamId })) {
+            if (grantableTeamIds.has(subject.teamId)) {
                 result.push({ kind: "team", teamId: context.team.id, name: context.team.name });
             }
             continue;
         }
-        if (await resolveGrantableTeamGroupForActorInTx(input.tx, {
-            actorAccountId: input.actorAccountId, teamId: subject.teamId, groupId: subject.groupId,
-        })) {
-            const group = await input.tx.teamGroup.findUnique({
-                where: { id: subject.groupId },
-                select: { id: true, teamId: true, name: true },
-            });
-            if (group?.teamId === subject.teamId) {
-                result.push({ kind: "group", teamId: group.teamId, groupId: group.id, name: group.name, teamName: context.team.name });
-            }
+        const group = grantableGroups.get(subject.groupId);
+        if (group?.teamId === subject.teamId) {
+            result.push({ kind: "group", teamId: group.teamId, groupId: group.groupId, name: group.name, teamName: context.team.name });
         }
     }
     let creationDecision: ResolveSessionAccessPrincipalsResponseV1["creationDecision"] = null;
     if (input.creationTeamId) {
         const context = contexts.get(input.creationTeamId);
         const qualification = qualifications.get(input.creationTeamId);
-        if (context && qualification?.ok && await resolveGrantableTeamForActorInTx(input.tx, {
-            actorAccountId: input.actorAccountId, teamId: input.creationTeamId,
-        })) {
+        if (context && qualification?.ok && grantableTeamIds.has(input.creationTeamId)) {
             const policy = context.team.sessionCreationPolicy;
             creationDecision = {
                 v: 1,

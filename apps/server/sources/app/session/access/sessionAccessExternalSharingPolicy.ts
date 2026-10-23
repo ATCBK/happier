@@ -1,6 +1,7 @@
 import { isSessionAccessGrantIncreaseV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import type { Tx } from "@/storage/inTx";
 import { AccountStatus, TeamExternalSharingPolicy, TeamMembershipStatus, TeamRole } from "@/storage/prisma";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import { resolveTeamActorContextInTx } from "@/app/teams/actorContext";
 import { isEffectiveTeamMembership } from "@/app/teams/memberships/effectiveMembership";
 import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublication";
@@ -76,10 +77,10 @@ export async function classifySubjectsExternalToTeamInTx(
     input: Readonly<{ primaryTeamId: string; subjects: readonly SessionAccessGrantSubject[] }>,
 ): Promise<readonly boolean[]> {
     const accountIds = input.subjects.flatMap((subject) => subject.kind === 'account' ? [subject.accountId] : []);
-    const memberships = accountIds.length === 0 ? [] : await tx.teamMembership.findMany({
+    const memberships = (await Promise.all(portableQueryChunks({ values: accountIds, bindingsPerValue: 1, fixedBindings: 2 }).map(ids => tx.teamMembership.findMany({
         where: {
             teamId: input.primaryTeamId,
-            accountId: { in: accountIds },
+            accountId: { in: [...ids] },
         },
         select: {
             accountId: true,
@@ -88,7 +89,7 @@ export async function classifySubjectsExternalToTeamInTx(
             account: { select: { status: true } },
             team: { select: { archivedAt: true } },
         },
-    });
+    })))).flat();
     const internalAccountIds = new Set(memberships.filter((membership) => membership.role !== TeamRole.guest
         && isEffectiveTeamMembership({ accountStatus: membership.account.status,
             membershipStatus: membership.status, teamArchivedAt: membership.team.archivedAt }))

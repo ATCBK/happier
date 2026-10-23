@@ -23,9 +23,10 @@ import {
     validateTeamGroupDescriptionV1,
     validateTeamGroupNameV1,
 } from "@happier-dev/protocol/teams";
-import { resolveGrantableTeamForActorInTx } from "../queries";
+import { resolveGrantableTeamsForActorInTx } from "../queries";
 
 import type { Tx } from "@/storage/inTx";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import type { SessionHistoryAccess } from "@/storage/enums.generated";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
@@ -140,14 +141,33 @@ export async function resolveGrantableTeamGroupForActorInTx(
     tx: Tx,
     input: Readonly<{ actorAccountId: string; teamId: string; groupId: string }>,
 ): Promise<Readonly<{ teamId: string; groupId: string }> | null> {
-    if (!await resolveGrantableTeamForActorInTx(tx, input)) return null;
-    const group = await tx.teamGroup.findUnique({
-        where: { id: input.groupId },
-        select: { id: true, teamId: true, archivedAt: true },
+    const groups = await resolveGrantableTeamGroupsForActorInTx(tx, {
+        actorAccountId: input.actorAccountId, groups: [input],
     });
-    return group?.teamId === input.teamId && group.archivedAt === null
-        ? { teamId: group.teamId, groupId: group.id }
-        : null;
+    const group = groups.get(input.groupId);
+    return group?.teamId === input.teamId ? { teamId: group.teamId, groupId: group.groupId } : null;
+}
+
+/** Selected Group identities and labels, admitted by the same Team membership owner. */
+export async function resolveGrantableTeamGroupsForActorInTx(
+    tx: Tx,
+    input: Readonly<{
+        actorAccountId: string;
+        groups: readonly Readonly<{ teamId: string; groupId: string }>[];
+    }>,
+): Promise<ReadonlyMap<string, Readonly<{ teamId: string; groupId: string; name: string }>>> {
+    if (input.groups.length === 0) return new Map();
+    const grantableTeamIds = await resolveGrantableTeamsForActorInTx(tx, {
+        actorAccountId: input.actorAccountId, teamIds: input.groups.map(group => group.teamId),
+    });
+    const groupIds = [...new Set(input.groups.filter(group => grantableTeamIds.has(group.teamId)).map(group => group.groupId))];
+    if (groupIds.length === 0) return new Map();
+    const groups = (await Promise.all(portableQueryChunks({ values: groupIds, bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.teamGroup.findMany({
+        where: { id: { in: [...ids] } },
+        select: { id: true, teamId: true, name: true, archivedAt: true },
+    })))).flat();
+    return new Map(groups.filter(group => group.archivedAt === null && grantableTeamIds.has(group.teamId))
+        .map(group => [group.id, { teamId: group.teamId, groupId: group.id, name: group.name }]));
 }
 
 async function projectGroupInTx(
