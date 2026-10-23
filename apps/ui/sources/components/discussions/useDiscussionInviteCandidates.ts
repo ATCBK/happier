@@ -9,6 +9,8 @@ import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
 import type { SessionListQueryHomeState } from '@/sync/domains/session/listing/sessionListQueryController';
+import { resolveSessionListQueryPresentation } from '@/sync/domains/session/listing/sessionListIndexPresentation';
+import { useSettlingHomeServerId } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import { readableSessionDisplayTitle, useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
 import { useSessionListRowsByServerId, useSessionDisplayNameProjections, type SessionDisplayNameSource } from '@/sync/domains/state/storage';
 import { getSessionWorkContext, getSessionWorkContextParts } from '@/utils/sessions/sessionUtils';
@@ -26,20 +28,36 @@ const sessionAgentId = (source: SessionDisplayNameSource | null) => source ? get
 const sessionTitleReadable = (source: SessionDisplayNameSource | null) => readableSessionDisplayTitle(source) !== null;
 
 /**
- * What the Session listing is doing, from the query owner's own Home state: nothing while the picker is
- * closed or its Account retired, `loading`/`failed` until a first page is applied, then `ready`. A
- * continuation exists only while the owner holds a cursor; a page that failed after rows were applied
- * keeps them (`pageFailed`).
+ * What the Session listing is doing, read through the one presentation owner of the query's Home state
+ * (`resolveSessionListQueryPresentation`, the Sessions pane's own): nothing while the picker is closed or
+ * its Account retired, `loading` until a first page lands or the Home settles, `failed` when it could
+ * not be read, then `ready`. A continuation exists only while the owner holds a cursor, and a read that
+ * failed after rows were applied keeps them (`pageFailed`; `retryNextPage` when that page can be asked again).
  */
-function readSessionChoices(enabled: boolean, state: SessionListQueryHomeState | null) {
-    if (!enabled) return { status: 'idle' as const, hasMore: false, loadingMore: false, pageFailed: false };
-    if (state === null || state.appliedQueryKey === null) {
-        return { status: state?.phase === 'error' ? 'failed' as const : 'loading' as const,
-            hasMore: false, loadingMore: false, pageFailed: false };
+function readSessionChoices(input: Readonly<{
+    enabled: boolean;
+    serverId: string;
+    state: SessionListQueryHomeState | null;
+    coverageComplete: boolean;
+    rowCount: number;
+    settlingHomeServerId: string | null;
+}>) {
+    if (!input.enabled) return { status: 'idle' as const, hasMore: false, loadingMore: false, pageFailed: false, retryNextPage: false };
+    const { state } = input;
+    const presentation = resolveSessionListQueryPresentation({ selectedServerIds: [input.serverId],
+        statesByServerId: { [input.serverId]: state ?? undefined }, coverageComplete: input.coverageComplete,
+        retainedRowCount: input.rowCount, settlingHomeServerId: input.settlingHomeServerId });
+    const applied = state !== null && state.appliedQueryKey !== null;
+    const hasMore = applied && ((state.hasNext && state.nextCursor !== null) || (state.attentionHasNext && state.attentionNextCursor !== null));
+    if (presentation.kind === 'initial_loading') {
+        return { status: 'loading' as const, hasMore: false, loadingMore: false, pageFailed: false, retryNextPage: false };
     }
-    return { status: 'ready' as const,
-        hasMore: (state.hasNext && state.nextCursor !== null) || (state.attentionHasNext && state.attentionNextCursor !== null),
-        loadingMore: state.phase === 'loading', pageFailed: state.phase === 'error' };
+    const unavailable = presentation.kind === 'error' || presentation.kind === 'partial';
+    if (unavailable && input.rowCount === 0) {
+        return { status: 'failed' as const, hasMore: false, loadingMore: false, pageFailed: false, retryNextPage: false };
+    }
+    return { status: 'ready' as const, hasMore, loadingMore: applied && state.phase === 'loading',
+        pageFailed: unavailable, retryNextPage: unavailable && hasMore && state?.phase === 'error' };
 }
 
 /**
@@ -124,7 +142,10 @@ export function useDiscussionInviteCandidates(input: Readonly<{
     }, [accountLifetime, enabled, peopleSource, project, teamMatches]);
     const candidates = React.useMemo(() => enabled ? project(peopleSource?.candidates ?? []) : [], [enabled, peopleSource?.candidates, project]);
     const sessionState = source.statesByServerId[scope.serverId] ?? null;
-    const choices = React.useMemo(() => readSessionChoices(enabled, sessionState), [enabled, sessionState]);
+    const settlingHomeServerId = useSettlingHomeServerId();
+    const choices = React.useMemo(() => readSessionChoices({ enabled, serverId: scope.serverId, state: sessionState,
+        coverageComplete: source.coverageComplete, rowCount: addresses.length, settlingHomeServerId }),
+    [addresses.length, enabled, scope.serverId, sessionState, settlingHomeServerId, source.coverageComplete]);
     return React.useMemo(() => ({ candidates,
         people: { status: peopleSource?.status ?? 'idle', error: peopleSource?.error, hasMore: enabled && (peopleSource?.hasMore ?? false),
             loadingMore: peopleSource?.loadingMore ?? false, resolverKey: peopleSource?.resolverKey,
@@ -132,10 +153,11 @@ export function useDiscussionInviteCandidates(input: Readonly<{
             retry: () => { if (enabled && accountLifetime.isCurrent()) directory.retry('account'); } },
         sessions: { state: sessionState, complete: enabled && source.coverageComplete, ...choices,
             loadMore: async () => { if (enabled && accountLifetime.isCurrent()) await source.loadNext(); },
-            // One recovery: the failed next page when the owner still holds its cursor, else a fresh first read.
+            // One recovery: the failed next page when the owner still holds its cursor, else a fresh read
+            // (which also re-arms an unreachable Home).
             retry: async () => {
                 if (!enabled || !accountLifetime.isCurrent()) return;
-                await (choices.status === 'ready' && choices.hasMore ? source.loadNext() : source.refresh());
+                await (choices.retryNextPage ? source.loadNext() : source.refresh());
             } },
     }), [accountLifetime, candidates, choices, directory, enabled, peopleSource, resolvePeople, scope.serverId, sessionState, source]);
 }

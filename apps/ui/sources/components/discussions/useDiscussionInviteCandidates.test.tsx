@@ -280,4 +280,97 @@ describe('Discussion Invite source composition', () => {
         expect(await pending).toEqual([]);
         expect(hook.getCurrent().candidates).toEqual([]);
     });
+
+    describe('the Session choices say what the listing is doing', () => {
+        const sessionOptions = (sections: ReturnType<typeof useExecutableParticipantSections>['sections']) =>
+            sections.find(section => section.id === 'agents-sessions')?.options ?? [];
+        const find = (sections: ReturnType<typeof useExecutableParticipantSections>['sections'], testID: string) =>
+            sessionOptions(sections).find(option => option.testID === testID);
+        const mountPicker = async (home: string) => {
+            const accountLifetime = await captureHome(home);
+            boundary.http.answer(home, '/v1/teams/list', { body: { items: [], nextCursor: null } });
+            const hook = await renderHook(() => useExecutableParticipantSections({ accountLifetime, enabled: true,
+                sessionsContext: 'Reviewer', onChoose: vi.fn() }));
+            return { accountLifetime, hook };
+        };
+
+        it('says it is looking while the first page loads, then offers Retry for a failed first page and recovers the choices', async () => {
+            const home = boundary.serverIds[1]!;
+            boundary.setRows(home, ['recovered']);
+            boundary.failQueries(home, 'all');
+            boundary.holdQueries(home);
+            const { hook } = await mountPicker(home);
+            await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-loading')).toBeDefined());
+            const loading = find(hook.getCurrent().sections, 'discussion-invite-sessions-loading')!;
+            expect(loading.label).toBe(t('workflows.conversation.sessionsLoading'));
+            expect(loading.disabled).toBe(true);
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-more')).toBeUndefined();
+            await act(async () => boundary.releaseQueries(home));
+            await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeDefined());
+            // No continuation exists after a failed first page: it is not presented as pagination.
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-more')).toBeUndefined();
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-loading')).toBeUndefined();
+            const retry = find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')!;
+            expect(retry.label).toBe(t('workflows.conversation.sessionsFailed'));
+            expect(retry.subtitle).toBe(t('workflows.conversation.retryLoadingSessions'));
+            expect(retry.disabled).toBeFalsy();
+            boundary.failQueries(home, null);
+            const before = boundary.queryRequests.length;
+            await act(async () => retry.onSelect?.());
+            await vi.waitFor(() => expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain('session:recovered'));
+            expect(boundary.queryRequests.slice(before).every(request => request.cursor === null)).toBe(true);
+            expect(boundary.queryRequests.length).toBeGreaterThan(before);
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeUndefined();
+        });
+
+        it('offers More sessions only while a continuation exists, and a page loads on choosing it', async () => {
+            const home = boundary.serverIds[1]!;
+            boundary.setRows(home, ['first']);
+            const { hook } = await mountPicker(home);
+            await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-more')).toBeDefined());
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeUndefined();
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-loading')).toBeUndefined();
+            await act(async () => find(hook.getCurrent().sections, 'discussion-invite-sessions-more')!.onSelect?.());
+            await vi.waitFor(() => expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain(`session:${boundary.accountId(home)}-page-2`));
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-more')).toBeUndefined();
+            expect(boundary.queryRequests.some(request => request.cursor === `cursor:${boundary.accountId(home)}`)).toBe(true);
+        });
+
+        it('keeps the loaded Sessions when a next page fails and retries that page', async () => {
+            const home = boundary.serverIds[1]!;
+            boundary.setRows(home, ['first']);
+            const { hook } = await mountPicker(home);
+            await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-more')).toBeDefined());
+            boundary.failQueries(home, 'nextPage');
+            await act(async () => find(hook.getCurrent().sections, 'discussion-invite-sessions-more')!.onSelect?.());
+            await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeDefined());
+            const retry = find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')!;
+            expect(retry.label).toBe(t('session.collaboration.discussion.participants.moreSessionsFailed'));
+            expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain('session:first');
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-more')).toBeUndefined();
+            boundary.failQueries(home, null);
+            await act(async () => retry.onSelect?.());
+            await vi.waitFor(() => expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain(`session:${boundary.accountId(home)}-page-2`));
+            expect(sessionOptions(hook.getCurrent().sections).map(option => option.id)).toContain('session:first');
+            // The retry asked for the failed page, not a fresh first page.
+            expect(boundary.queryRequests.at(-1)?.cursor).toBe(`cursor:${boundary.accountId(home)}`);
+            expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeUndefined();
+        });
+
+        it('presents nothing and reads nothing once the picker closes or its Account retires', async () => {
+            const home = boundary.serverIds[1]!;
+            boundary.setRows(home, ['first']);
+            boundary.failQueries(home, 'all');
+            const { accountLifetime, hook } = await mountPicker(home);
+            await vi.waitFor(() => expect(find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')).toBeDefined());
+            const retry = find(hook.getCurrent().sections, 'discussion-invite-sessions-retry')!;
+            await act(async () => boundary.switchAccount(home, 'replacement'));
+            expect(accountLifetime.isCurrent()).toBe(false);
+            expect(sessionOptions(hook.getCurrent().sections)).toEqual([]);
+            boundary.failQueries(home, null);
+            const before = boundary.queryRequests.length;
+            await act(async () => retry.onSelect?.());
+            expect(boundary.queryRequests).toHaveLength(before);
+        });
+    });
 });
