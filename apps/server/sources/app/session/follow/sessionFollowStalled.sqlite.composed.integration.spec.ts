@@ -36,13 +36,13 @@ import { registerSessionMessageRoutes } from '@/app/api/routes/session/registerS
 import { registerAccountEncryptionRoutes } from '@/app/api/routes/account/registerAccountEncryptionRoutes';
 import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { materializeNextPendingMessage } from '@/app/session/pending/materializeNextPendingMessage';
-import { resolveAcceptedPendingDelivery } from '@/app/session/pending/pendingMessageService';
+import { resolveAcceptedPendingDelivery, settlePendingInputAdmission } from '@/app/session/pending/pendingMessageService';
 import { readStoredSessionInputAdmissionReceipt } from '@/app/session/messages/sessionInputAdmission';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import type { SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import type { SessionFollowRuleSourceOccurrenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
-import { buildTrustedHostSessionInputAdmissionV1, settleSessionInputRequestV1, settleSessionMessageProvenanceV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { buildTrustedHostSessionInputAdmissionV1, readSessionInputRequest, settleSessionInputRequestV1, settleSessionMessageProvenanceV1, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { clearSessionExplicitStopV1FromMetadata, writeSessionExplicitStopV1ToMetadata } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
 
@@ -312,12 +312,17 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             }>('../../../../../cli/src/testkit/http/axiosAdapter');
             cleanups.push(installAxiosFastifyAdapter({ app, origin: 'http://original-follow.test' }));
             const httpAdapter = axios.getAdapter(axios.defaults.adapter);
+            const admissionOutcomes: { seq: number; status: number; code?: string }[] = [];
             axios.defaults.adapter = async config => {
                 const response = await httpAdapter(config);
                 if (config.method === 'post' && new URL(config.url!).pathname === `/v2/sessions/${destination.id}/pending`) {
                     const body: unknown = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
                     const delivery = body && typeof body === 'object' && 'followDeliveryV1' in body
                         ? SessionFollowInputV1Schema.safeParse(body.followDeliveryV1) : null;
+                    if (delivery?.success && 'sourceMessage' in delivery.data.original) {
+                        admissionOutcomes.push({ seq: delivery.data.original.sourceMessage.seq, status: response.status,
+                            ...(typeof response.data?.admissionRejectionCode === 'string' ? { code: response.data.admissionRejectionCode } : {}) });
+                    }
                     if (delivery?.success && 'sourceMessage' in delivery.data.original
                         && delivery.data.original.sourceMessage.seq === admissionFault.timeoutAfterCommitSeq) {
                         // The HTTP reply is lost after the real Pending transaction commits.
@@ -433,7 +438,10 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 else if (recovery === 'configured') await dispatchPending();
                 for (;;) {
                     const retained = collectRetainedContext ? await db.sessionPendingMessage.findMany({
-                        where: { sessionId: destination.id, localId: { in: deliveries.map(row => row.localInputId) } },
+                        // Wake input remains the primary claim; only quiet
+                        // originals may authorize retained-context traversal.
+                        where: { sessionId: destination.id, localId: { in: deliveries
+                            .filter(row => row.delivery.delivery === 'next_turn').map(row => row.localInputId) } },
                         select: { localId: true },
                     }) : [];
                     const materialized = await materializeNextPendingMessage({ actorUserId: account.id, sessionId: destination.id,
@@ -511,8 +519,8 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 await vi.waitFor(() => expect(acknowledgements.length).toBe(before + (prepared.representedFollowLocalInputIds?.length ?? 0)));
                 await Promise.allSettled(acknowledgements);
             };
-            return { prepare, accept, acceptNative, settleAcceptance, replacePublisher, deliveries, restart, dispatchPending,
-                dispatchReceiverPending, admissionFault, rulesReadBarrier, requests, sourceChanged, recoveries };
+            return { prepare, accept, acceptNative, settleAcceptance, replacePublisher, deliveries, restart, dispatchPending, machine,
+                dispatchReceiverPending, admissionFault, admissionOutcomes, rulesReadBarrier, requests, sourceChanged, recoveries };
         };
         const appendReply = async (text: string, turnId: string) => {
             await appendTurnInput(turnId);
@@ -1056,6 +1064,72 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             .toMatchObject({ deliveredTranscriptSeq: 11 });
         expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
         expect((await f.observe()).observations).toEqual([]);
+    });
+
+    it('recovers CONT29 completion past a host-admitted quiet original without a foreground input', async () => {
+        const f = await fixture('in_progress', { preset: 'important' });
+        await f.follow({ preset: 'everything' });
+        const original = await f.originals(true);
+        const finalText = 'The worker completed the requested investigation with useful findings.';
+        const messageSeq = await f.appendReply(finalText, 'completion-turn');
+        // Use the current native transcript codec, as in cont29's source row9.
+        await db.sessionMessage.updateMany({ where: { sessionId: f.source.id, seq: messageSeq }, data: {
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'acp', agentId: 'codex',
+                data: { type: 'message', message: finalText } } } },
+        } });
+        await original.dispatchReceiverPending();
+        await original.prepare('natural', 16384, false, 'admitted');
+        const quietInput = original.deliveries.at(-1)!;
+        expect(quietInput.delivery).toMatchObject({ delivery: 'next_turn', event: { kind: 'message' },
+            original: { sourceMessage: { seq: messageSeq } } });
+        const pending = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: {
+            sessionId: f.destination.id, localId: quietInput.localInputId } } });
+        const receipt = readStoredSessionInputAdmissionReceipt(pending.inputAdmissionReceipt)!;
+        const body = pending.content;
+        if (body.t !== 'plain') throw new Error('Expected plain host input');
+        const record = body.v as { role: string; content: unknown; meta: Record<string, unknown> };
+        const request = readSessionInputRequest(record.meta, 'stored');
+        if (request?.v !== 1) throw new Error('Expected original host request');
+        const authority = settleSessionInputRequestV1({ request, inputAdmissionReceipt: receipt,
+            currentSessionPermissionCeiling: 'default' });
+        const finalContent = { t: 'plain' as const, v: { ...record, meta: {
+            ...withSessionInputAuthority(record.meta, authority),
+            happierProvenanceV1: settleSessionMessageProvenanceV1({ request, inputAdmissionReceipt: receipt,
+                requestedProvenance: record.meta.happierProvenanceV1 }),
+        } } };
+        expect(await settlePendingInputAdmission({ actorUserId: f.account.id, sessionId: f.destination.id,
+            localId: quietInput.localInputId, publisherAuthority: { accountId: f.account.id,
+                sessionId: f.destination.id, machineId: original.machine.id,
+                committedFence: (await db.session.findUniqueOrThrow({ where: { id: f.destination.id } })).lastActiveAt },
+            decision: { kind: 'admit', finalContent } })).toMatchObject({ ok: true, result: { status: 'accepted' } });
+        const completionSeq = messageSeq + 1;
+        const completionLocalId = randomUUID();
+        await db.sessionMessage.create({ data: { sessionId: f.source.id, seq: completionSeq, localId: completionLocalId, messageRole: 'agent',
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: completionLocalId,
+                data: TranscriptRawAgentEventV1Schema.parse({ type: 'ready', completedTurnId: 'completion-turn' }),
+            } } }, transcriptObservationProvenance: { kind: 'non_dependent', source: 'external' } } });
+        await db.session.update({ where: { id: f.source.id }, data: { seq: completionSeq, latestReadyEventSeq: completionSeq } });
+        original.sourceChanged(f.destination.id);
+        await vi.waitFor(() => expect(original.recoveries).toHaveLength(1));
+        await Promise.all(original.recoveries);
+        const rows = await db.sessionPendingMessage.findMany({ where: { sessionId: f.destination.id } });
+        expect(rows.map(row => readStoredSessionInputAdmissionReceipt(row.inputAdmissionReceipt)?.followDeliveryV1),
+            JSON.stringify(original.admissionOutcomes))
+            .toEqual(expect.arrayContaining([expect.objectContaining({ delivery: 'wake', event: { kind: 'finished' },
+                original: expect.objectContaining({ sourceMessage: expect.objectContaining({ seq: completionSeq }) }) })]));
+        expect(rows.find(row => row.localId === quietInput.localInputId)?.content).toEqual(finalContent);
+        // runHostSessionRuntime prepares admitted wake input as an ordinary
+        // primary. Its 'wake' probe is only for no-original context-only input.
+        const prepared = await original.prepare('natural', 16384, true, 'admitted');
+        expect(prepared?.representedFollowLocalInputIds).toEqual(expect.arrayContaining(rows.map(row => row.localId)));
+        const prompt = renderSessionInputContextPromptV1({ transformedUserText: '',
+            sessionFollowUpdates: prepared!.updates, workerUpdates: prepared!.workerUpdates });
+        expect(prompt).toContain(finalText);
+        expect(prompt).toContain(f.source.id);
+        await original.accept(prepared!);
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
+        expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id)))
+            .toMatchObject({ deliveredTranscriptSeq: completionSeq });
     });
 
     it.each(['receiver change', 'reconnect'] as const)('recovers CONT18 originals 9–11 on %s after middle admission timeout and prefix ACK', async event => {

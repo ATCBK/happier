@@ -679,6 +679,18 @@ reason, while the earlier blocked row owns its explanation and repair controls.
 The per-row Retry Send control is for a failed local outbox operation, not a
 second recovery owner for uncertain server custody.
 
+Session Follow originals also re-enter Pending's settlement owner before a
+provider effect. The existing Follow owner checks the original's current
+relations and rules, including the exact manager attachment. A removed or
+replaced attachment cannot keep an unstarted original executable; a surviving
+overlapping Follow reason remains usable. If losing the route also removes its
+source observation, the host asks Pending to recheck the exact retained input
+before reporting unavailable Follow context. Confirmed `session_input_cancelled`
+retires that input's local custody and releases the next queued input without a
+failed turn or Follow ACK. Unavailable reads retain custody, and this check never
+replays or cancels provider-accepted work. Resolved questions whose route still
+exists retain the source hydrator's current, opened request check.
+
 For Discussion inputs in 0.3 development, the committed append owner selects
 the exact `(discussionId, messageId, participantSessionId, throughSeq)` tuple.
 Follow intake carries it in `discussionAddressing` and the original reply

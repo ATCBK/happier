@@ -31,7 +31,8 @@ import { admitSessionFollowRuleOccurrenceInTx } from '@/app/session/follow/sessi
 import { removeAccountFollowRule, setAccountFollowRule } from '@/app/session/follow/accountFollowRuleService';
 import { SessionFollowInputV1Schema, deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { SessionFollowRelationWitnessesV1Schema, SessionFollowSourceOccurrenceWitnessesV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
-import { buildTrustedHostSessionInputAdmissionV1, withSessionInputRequestV1, SESSION_MESSAGE_PROVENANCE_META_KEY } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { buildTrustedHostSessionInputAdmissionV1, settleSessionInputRequestV1, settleSessionMessageProvenanceV1,
+    withSessionInputAuthority, withSessionInputRequestV1, SESSION_MESSAGE_PROVENANCE_META_KEY } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { sealSessionFollowRuleContentV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleContentCodecV1';
 import { SessionFollowAdmittedInputAcknowledgeRequestV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { SessionFollowSourceProjectionRequestV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
@@ -39,7 +40,7 @@ import { hasCanonicalFollowProviderInputAcceptanceInTx } from '@/app/session/fol
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { serializePendingMaterializedMessage } from './serializePendingMaterializedMessage';
 import { readStoredSessionInputAdmissionReceipt } from '@/app/session/messages/sessionInputAdmission';
-import { enqueuePendingMessageByAuthenticatedMachine, resolveAcceptedPendingDelivery } from './pendingMessageService';
+import { enqueuePendingMessageByAuthenticatedMachine, resolveAcceptedPendingDelivery, settlePendingInputAdmission } from './pendingMessageService';
 import { materializeNextPendingMessage } from './materializeNextPendingMessage';
 
 describe('requester Session input through the custodian Machine socket', () => {
@@ -348,6 +349,27 @@ describe('requester Session input through the custodian Machine socket', () => {
             expect(claimed.providerAction).not.toBeNull();
             expect((await enqueueLate(payload(quiet))).statusCode).toBe(400);
             expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: destination.id, localId } } })).toEqual(claimed);
+            const request = { ...host.request, followDeliveryV1: important };
+            const claimedReceipt = readStoredSessionInputAdmissionReceipt(claimed.inputAdmissionReceipt)!;
+            const finalContent = mode === 'e2ee'
+                // Home preserves the host's sealed authority without opening it.
+                ? { t: 'encrypted' as const, c: 'opaque-host-settled-original' }
+                : { t: 'plain' as const, v: { role: 'user', content: { type: 'text', text: 'selected original' }, meta: {
+                    ...withSessionInputAuthority(withSessionInputRequestV1({ [SESSION_MESSAGE_PROVENANCE_META_KEY]: host.provenance }, request),
+                        settleSessionInputRequestV1({ request, inputAdmissionReceipt: claimedReceipt, currentSessionPermissionCeiling: 'default' })),
+                    [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({ request,
+                        requestedProvenance: host.provenance, inputAdmissionReceipt: claimedReceipt }),
+                } } };
+            expect(await settlePendingInputAdmission({ actorUserId: owner.id, sessionId: destination.id, localId,
+                publisherAuthority, decision: { kind: 'admit', finalContent } })).toMatchObject({ ok: true, result: { status: 'accepted' } });
+            const settled = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: destination.id, localId } } });
+            const retry = await enqueueLate({ ...payload(important), followSources: sources });
+            expect(retry.statusCode, retry.body).toBe(200);
+            expect(retry.json()).toMatchObject({ didWrite: false });
+            expect(await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: destination.id, localId } } })).toEqual(settled);
+            expect((await enqueueLate({ ...payload(important), followSources: [{ ...sources[0],
+                rule: { ruleId: 'private-rule-0', ruleVersion: 0 } }] })).statusCode).toBe(403);
+            expect((await enqueueLate(payload(quiet))).statusCode).toBe(400);
             expect(await resolveAcceptedPendingDelivery({ actorUserId: owner.id, sessionId: destination.id, publisherAuthority,
                 localId, acceptedTurn: { kind: 'followUp', turnId: 'accepted-original' },
                 // As with the encrypted input above, Home preserves this

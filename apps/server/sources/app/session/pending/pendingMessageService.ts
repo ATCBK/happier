@@ -108,7 +108,7 @@ import { createSessionInputReplyProgressInTx, bindSessionInputReplyAcceptedTurnI
 import { admitDiscussionFollowAddressingInTx, acknowledgeDiscussionFollowInputInTx, admitSessionFollowRelationsForInputInTx } from '@/app/session/follow/sessionFollowEdgeService';
 import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import type { SessionPendingEnqueueByMachineRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
-import { admitSessionFollowRuleOccurrenceInTx, sessionFollowInputFrontiers, settleSessionFollowInputReasonsInTx, settleAcceptedSessionFollowInputInTx, type SessionFollowRuleProgressAdmission } from '@/app/session/follow/sessionFollowRuleProgress';
+import { admitSessionFollowRuleOccurrenceInTx, readAdmittedSessionFollowInputInTx, sessionFollowInputFrontiers, settleSessionFollowInputReasonsInTx, settleAcceptedSessionFollowInputInTx, type SessionFollowRuleProgressAdmission } from '@/app/session/follow/sessionFollowRuleProgress';
 import { deriveSessionFollowOriginalOccurrenceKeyV1, deriveSessionFollowInputLocalIdV1, isRunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { DiscussionProducerV1Schema } from '@happier-dev/protocol/discussions/content';
 import { markDiscussionReadersChangedInTx } from '@/app/discussions/changes';
@@ -130,7 +130,7 @@ async function isForeignDiscussionCauseHeldInTx(tx: Tx, input: Readonly<{
     const producer = createStoredReadSchema(DiscussionProducerV1Schema).safeParse(message?.producerV1);
     if (!addressing.success || addressing.data.throughSeq !== discussion.throughSeq
         || !addressing.data.participantSessionIds.includes(discussion.participantSessionId)
-        || !producer.success || producer.data.sessionId !== input.reply.sourceSession.sourceSessionId
+        || !producer.success || producer.data.kind !== 'agent' || producer.data.sessionId !== input.reply.sourceSession.sourceSessionId
         || !isDeepStrictEqual(producer.data.sourceSession, input.reply.sourceSession)) return false;
     const source = await tx.session.findUnique({ where: { id: producer.data.sessionId }, select: { accountId: true } });
     return source !== null && source.accountId !== input.accountId;
@@ -538,7 +538,7 @@ export async function listPendingMessages(params: {
 
     try {
         if (targetExecutionRunId !== null) {
-            return await inTx(async (tx) => {
+            return await inReadSnapshot(async (tx) => {
                 const [queued, discarded, pendingCount, pendingBlockedCount, session] = await Promise.all([
                     tx.sessionPendingMessage.findMany({
                         where: { sessionId, targetExecutionRunId, status: "queued" },
@@ -576,7 +576,7 @@ export async function listPendingMessages(params: {
                         pendingVersion: session.pendingVersion,
                     },
                 } as const;
-            }, { isolationLevel: "Serializable" /* Queue rows, counts and version must describe one target queue snapshot. */ });
+            });
         }
 
         if (!includeDiscarded) {
@@ -1174,6 +1174,19 @@ async function enqueuePendingMessageWithAdmission(
                         : 'requestEvents' in retainedFollow && 'requestEvents' in currentFollow
                             && isDeepStrictEqual(retainedFollow.requestEvents, currentFollow.requestEvents);
                     if (!retainedKey || retainedKey !== currentKey || !sameEvent) return identityConflict;
+                    if (existing.status === 'queued'
+                        && (existing.messageRole === null || existing.messageRole === messageRole)
+                        && existing.content.t === content.t
+                        && isDeepStrictEqual(existingReceipt.data, inputAdmissionReceipt)
+                        && await tx.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId, localId } }, select: { id: true } })) {
+                        // Host admission replaces the request with settled authority
+                        // before provider acceptance. Freshly authorized retries of
+                        // this same original rejoin its frozen custody in either
+                        // storage mode; they cannot replace its admitted content.
+                        return { ok: true, didWrite: false, pending: (await projectPendingMessageRows(tx, [existing]))[0]!,
+                            pendingCount: session.pendingCount, pendingBlockedCount: session.pendingBlockedCount,
+                            pendingVersion: session.pendingVersion, badgeAttentionChanged: false, recipientCursors: [] } as const;
+                    }
                     // A complete, freshly admitted fanout can change while its
                     // ordinary original is still an editable draft. Replace
                     // that draft atomically, including reasons-only changes;
@@ -1830,6 +1843,16 @@ async function validateInputSettlementDomainFactsInTx(params: Readonly<{
     } }, select: originalProjection });
     const originalProgress = SessionMessageReplyProgressV1Schema.safeParse(original?.replyProgress);
     const originalReceipt = SessionInputAdmissionReceiptV1Schema.safeParse(original?.inputAdmissionReceipt);
+    // An original's materialized transcript is custody, not a surviving Follow
+    // route. Reuse the Follow owner even when it can no longer expose a source
+    // observation to the host (detached manager, removed rule or revoked access).
+    if (originalReceipt.success && originalReceipt.data.followDeliveryV1
+        && 'sourceSessionId' in originalReceipt.data.followDeliveryV1.original
+        && !original?.turnStartWitnessId
+        && !await readAdmittedSessionFollowInputInTx(params.tx, {
+            accountId: params.accountId, destinationSessionId: params.targetSessionId, localInputId: params.localId,
+            authority: { kind: 'account', authentication: backgroundDeliveryAuthentication() },
+        })) return { ok: false, rejectionCode: 'session_input_cancelled' };
     if (originalProgress.success && originalProgress.data.humanOrigin) {
         if (!originalReceipt.success || originalReceipt.data.issuer !== 'authenticatedAccount') {
             return { ok: false, rejectionCode: 'session_input_unauthorized' };
@@ -2111,7 +2134,7 @@ async function rejectQueuedPendingInputInTx(params: Readonly<{
     const requestedAction = PendingRequestedActionV1StoredSchema.safeParse(params.existing.requestedAction);
     if (!requestedAction.success) return null;
 
-    let requestEqualityEvidenceV1: SessionInputRequestEqualityEvidenceV1;
+    let requestEqualityEvidenceV1: SessionInputRequestEqualityEvidenceV1 | undefined;
     if (requestContent.t === "plain") {
         const derived = derivePlainRequestEqualityEvidence({
             content: requestContent,
@@ -2119,13 +2142,18 @@ async function rejectQueuedPendingInputInTx(params: Readonly<{
         });
         if (!derived) return null;
         requestEqualityEvidenceV1 = derived;
-    } else {
+    } else if (requestContent.t !== "encrypted" || params.code !== "session_input_cancelled"
+        || params.existing.requestEqualityEvidenceV1 != null) {
         const parsed = createStoredReadSchema(SessionInputRequestEqualityEvidenceV1Schema).safeParse(
             params.existing.requestEqualityEvidenceV1,
         );
         if (!parsed.success || parsed.data.kind !== "e2eeTag") return null;
         requestEqualityEvidenceV1 = parsed.data;
     }
+
+    // Main encrypted inputs can enter custody before an equality tag exists.
+    // Cancelling that exact retained row introduces no replacement content to
+    // compare. Keep its missing tag rather than blocking withdrawal or inventing one.
 
     const discardedFields = pendingDeliveryStatusV1ToPersistedFields({
         status: "discarded",
@@ -2141,7 +2169,7 @@ async function rejectQueuedPendingInputInTx(params: Readonly<{
         data: {
             ...discardedFields,
             discardedAt: new Date(),
-            requestEqualityEvidenceV1,
+            ...(requestEqualityEvidenceV1 ? { requestEqualityEvidenceV1 } : {}),
         },
     });
     await settleUnacceptedSessionInputReplyInTx(params.tx, params.sessionId, params.localId, 'failed');
@@ -2303,8 +2331,11 @@ export async function settlePendingInputAdmission(params: Readonly<{
                 const unstartedRunWake = receipt.success && receipt.data.followDeliveryV1?.delivery === 'wake'
                     && isRunFollowOriginalV1(receipt.data.followDeliveryV1.original) && committed.turnStartWitnessId === null
                     && readStoredSessionMessageDeliveryResolutionV1(committed.deliveryResolution)?.kind !== 'provider_accepted';
+                const unstartedSessionFollow = receipt.success && receipt.data.followDeliveryV1
+                    && 'sourceSessionId' in receipt.data.followDeliveryV1.original && committed.turnStartWitnessId === null
+                    && readStoredSessionMessageDeliveryResolutionV1(committed.deliveryResolution)?.kind !== 'provider_accepted';
                 if (receipt.success && (receipt.data.issuer === 'authenticatedMachine' && receipt.data.discussionAddressing
-                    || progress?.success && progress.data.humanOrigin || unstartedRunWake)) {
+                    || progress?.success && progress.data.humanOrigin || unstartedRunWake || unstartedSessionFollow)) {
                     if (!await isSessionInputTargetCurrentForPublisherInTx(tx, receipt.data, params.publisherAuthority)) {
                         return { ok: false, error: 'forbidden' } as const;
                     }

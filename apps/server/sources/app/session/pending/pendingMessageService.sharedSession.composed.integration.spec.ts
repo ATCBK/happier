@@ -48,7 +48,7 @@ import {
     updatePendingRequestedAction as updatePendingRequestedActionWithAuthentication,
 } from "./pendingMessageService";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
-import { createAuthenticatedFakeSocket, createFakeSocket, getSocketHandler } from "@/app/api/testkit/socketHarness";
+import { createAuthenticatedFakeSocket, createFakeSocket, createSocketRoomDiscoveryHarness, getSocketHandler } from "@/app/api/testkit/socketHarness";
 import { sessionUpdateHandler } from "@/app/api/socket/sessionUpdateHandler";
 import { activityCache } from "@/app/presence/sessionCache";
 import { createSessionPublisherPresence } from "@/app/presence/sessionPublisherPresence";
@@ -299,7 +299,7 @@ describe("pendingMessageService (shared sessions)", () => {
         });
     };
 
-    const createCurrentPendingPublisher = async (params: { accountId: string; sessionId: string }) => {
+    const createCurrentPendingPublisher = async (params: { accountId: string; sessionId: string; socket?: object }) => {
         const runtimeActivity = await db.session.findUniqueOrThrow({
             where: { id: params.sessionId },
             select: {
@@ -315,7 +315,7 @@ describe("pendingMessageService (shared sessions)", () => {
         });
         const binding = { accountId: params.accountId, machineId, sessionId: params.sessionId };
         const presence = createSessionPublisherPresence();
-        const socket = {};
+        const socket = params.socket ?? {};
         const registered = await presence.registerPublisher({
             socket,
             binding,
@@ -1788,7 +1788,11 @@ describe("pendingMessageService (shared sessions)", () => {
         const source = await createSession(owner.id);
         const receiver = await createSession(owner.id);
         await db.session.update({ where: { id: source.id }, data: { agentStateVersion: 1 } });
-        const publisher = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: receiver.id });
+        const socket = createAuthenticatedFakeSocket({ id: randomUUID(), nsp: { server: createSocketRoomDiscoveryHarness(async () => []) } });
+        const publisher = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: receiver.id, socket });
+        sessionUpdateHandler(owner.id, socket as never, { connectionType: 'session-scoped', socket,
+            userId: owner.id, sessionId: receiver.id } as never, { presence: publisher.presence,
+            binding: { accountId: owner.id, sessionId: receiver.id, machineId: publisher.machineId } });
         await db.machine.update({ where: { id: publisher.machineId }, data: {
             installationId: `install-${publisher.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
@@ -1828,13 +1832,18 @@ describe("pendingMessageService (shared sessions)", () => {
         }
         const settlement = { actorUserId: owner.id, sessionId: receiver.id, localId, publisherAuthority: publisher,
             decision: { kind: 'admit' as const, finalContent: content } };
-        const result = await settlePendingInputAdmission(settlement);
+        // Production registration, strict request/response schemas, publisher
+        // admission and Pending/Follow owners all run against disposable SQLite.
+        let result: unknown;
+        await getSocketHandler(socket, 'session-pending-admission-settlement-v1')({ v: 1,
+            sessionId: receiver.id, localId, decision: settlement.decision }, (response: unknown) => { result = response; });
         if (state === 'provider accepted' || state === 'overlapping follower') {
-            expect(result).toMatchObject({ ok: true, result: { status: 'alreadyAccepted', localId } });
+            expect(result).toMatchObject({ v: 1, result: { status: 'alreadyAccepted', localId } });
             return;
         }
-        expect(result).toMatchObject({ ok: true, result: { status: 'rejected', code: 'session_input_cancelled' },
-            pendingCount: 0, pendingBlockedCount: 0 });
+        expect(result).toMatchObject({ v: 1, result: { status: 'rejected', code: 'session_input_cancelled' } });
+        expect(await db.session.findUniqueOrThrow({ where: { id: receiver.id }, select: { pendingCount: true, pendingBlockedCount: true } }))
+            .toEqual({ pendingCount: 0, pendingBlockedCount: 0 });
         expect(await settlePendingInputAdmission(settlement)).toMatchObject({ ok: true,
             result: { status: 'rejected', code: 'session_input_cancelled' } });
         expect(await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: receiver.id, localId } } }))

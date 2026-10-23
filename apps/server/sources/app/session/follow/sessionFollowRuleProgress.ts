@@ -250,10 +250,10 @@ export async function readAdmittedSessionFollowInputInTx(tx: Tx, input: Readonly
                 'sourceMessage' in delivery.original ? delivery.original.sourceMessage : delivery.original.sourceRequests)) return null;
         const admitted = await admitSessionFollowRuleOccurrenceInTx(tx, { accountId: destination.accountId, witness,
             authority: input.principal ? { kind: 'admitted_input', principal: input.principal } : { ...input.authority, admitted: true } });
-        // Accepted input is historical effect evidence. Current source/pair
-        // access still controls its exact original read; removed private intent
-        // cannot erase that effect or authorize a fresh route mutation.
-        if (!admitted) { if (nativeAccepted) continue; return null; }
+        // Keep only current reasons from the original union. One removed route
+        // cannot veto a surviving route; accepted native custody can also rejoin
+        // with no current reason. Source/pair access still controls every read.
+        if (!admitted) continue;
         admissions.push(admitted);
     }
     const relations = [];
@@ -262,8 +262,7 @@ export async function readAdmittedSessionFollowInputInTx(tx: Tx, input: Readonly
             ...pair, relation: reason.relation,
         } } });
         if (!edge || reason.relation === 'manager' && edge.attachedAt.getTime() !== reason.attachedAt) {
-            if (nativeAccepted) continue;
-            return null;
+            continue;
         }
         relations.push(edge);
     }

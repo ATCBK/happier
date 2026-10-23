@@ -142,7 +142,8 @@ describe('installed Machine reviewed Discussion publication (SQLite)', () => {
                 resolveWorkspace: async () => ({ ok: true, workspace }), isAcceptedAuthorizationCurrent: async () => true,
                 executeStep: async () => { throw new Error('An Action must not fabricate a Session'); },
                 action: { executor, buildContext: async input => buildWorkflowActionContext(input),
-                    observeRun: async () => { throw new Error('An immediate Action must not observe a Run'); } }, onInvocationSettled: publish });
+                    observeRun: async () => { throw new Error('An immediate Action must not observe a Run'); } },
+                onInvocationSettled: async settled => { await publish(settled); } });
             try { expect(await coordinator.run({ ...materialized.snapshot, runId: run.id })).toMatchObject({ state: 'succeeded' }); }
             finally { registry.dispose(); }
             const actual = store.list().find(row => row.blockId === 'check');
@@ -158,7 +159,7 @@ describe('installed Machine reviewed Discussion publication (SQLite)', () => {
                     await input.onInputAccepted({ kind: 'detached_run', runId: 'native-run', localInputId: 'input',
                         runtimeSelection: projectWorkflowRetainedRuntimeSelectionV1(input.execution) });
                     return { kind: 'completed', result: { checked: true }, resultEncoding: 'typed' };
-                }, onInvocationSettled: publish });
+                }, onInvocationSettled: async settled => { await publish(settled); } });
             expect(await coordinator.run({ runId: run.id, inputs: {}, executionTarget: { kind: 'detached_run' },
                 authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' },
                 definition: { version: 1, defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'external.agent', localId: 'native' } } },
