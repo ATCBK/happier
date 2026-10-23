@@ -9,6 +9,8 @@ import { createPresentUserSessionAccessAuthentication } from '@/app/session/acce
 import { createSessionMessage as createSessionMessageWithAuthentication } from '@/app/session/sessionWriteService';
 import { deleteSessionTree } from '@/app/session/delete/deleteSessionTree';
 import { runSessionSidechainMessageRetentionRule } from '@/app/retention/rules/sessionSidechainMessageRetentionRule';
+import { SESSION_TRANSCRIPT_PUBLICATION_SELECT } from '@/app/session/sessionTranscriptPublicationPolicy';
+import { perfFixtureId } from '../../../../../packages/tests/src/testkit/stress/scenarios/perfProfile';
 
 const shutdownHandlers = vi.hoisted(() => new Map<string, Array<() => Promise<void>>>());
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -270,7 +272,7 @@ describe('startApi Home search production composition', () => {
         }
     }, 120_000);
 
-    it('uses the canonical session-list visibility rule for shared plain sessions', async () => {
+    it('uses the canonical session-list visibility rule without reading unrelated Sessions for a scoped search', async () => {
         const { startApi } = await import('@/app/api/api');
         const app = await startApi();
         try {
@@ -357,6 +359,58 @@ describe('startApi Home search production composition', () => {
                 });
             });
             expect((await searchAs(outsiderToken)).json()).toMatchObject({ ok: true, hits: [] });
+
+            await db.session.createMany({ data: Array.from({ length: 999 }, (_, index) => ({
+                id: perfFixtureId(20261023, 'home-search-unrelated-session', index),
+                tag: `home-search-unrelated-${index}`,
+                accountId: viewer.id,
+                metadata: 'unrelated Session',
+                encryptionMode: 'plain',
+                currentStorageState: 'hosted',
+            })) });
+            const nativeClient: unknown = Reflect.get(db, '_originalClient');
+            if (!nativeClient || typeof nativeClient !== 'object') throw new Error('Native Prisma boundary unavailable');
+            const boundary: unknown = Object.getPrototypeOf(nativeClient);
+            if (!boundary || typeof boundary !== 'object') throw new Error('Native Prisma prototype unavailable');
+            const nativeRequest: unknown = Reflect.get(boundary, '_request');
+            if (typeof nativeRequest !== 'function') throw new Error('Native Prisma request boundary unavailable');
+            let returnedSessionRows = 0;
+            // Pass through the genuine database adapter: the production resolver,
+            // Session access rules and publication-ceiling projection remain real.
+            Reflect.set(boundary, '_request', new Proxy(nativeRequest, { async apply(target, receiver, args) {
+                const result: unknown = await Reflect.apply(target, receiver, args);
+                const request: unknown = args[0];
+                const queryArgs: unknown = request && typeof request === 'object' ? Reflect.get(request, 'args') : null;
+                const select: unknown = queryArgs && typeof queryArgs === 'object' ? Reflect.get(queryArgs, 'select') : null;
+                if (request && typeof request === 'object' && Reflect.get(request, 'model') === 'Session'
+                    && Reflect.get(request, 'action') === 'findMany' && Array.isArray(result)
+                    && select && typeof select === 'object' && Reflect.get(select, 'id') === true
+                    && Object.entries(SESSION_TRANSCRIPT_PUBLICATION_SELECT).every(([key, value]) => Reflect.get(select, key) === value)) {
+                    returnedSessionRows += result.length;
+                }
+                return result;
+            } }));
+            try {
+                const scopedSearch = () => app.inject({
+                    method: 'POST', url: '/v1/home/search',
+                    headers: { authorization: `Bearer ${viewerToken}` },
+                    payload: { v: 1, query: 'marmot', scope: { type: 'session', sessionId: session.id },
+                        mode: 'auto', maxResults: 1 },
+                });
+                const selected = await scopedSearch();
+                expect(selected.statusCode).toBe(200);
+                expect(selected.json()).toMatchObject({ ok: true, hits: [expect.objectContaining({
+                    sessionId: session.id, seqFrom: published.message.seq, seqTo: published.message.seq,
+                })] });
+                const selectedRows = returnedSessionRows;
+                await db.teamMembership.deleteMany({ where: { teamId: team.id, accountId: viewer.id } });
+                returnedSessionRows = 0;
+                const revoked = await scopedSearch();
+                expect(revoked.statusCode).toBe(200);
+                expect(revoked.json()).toMatchObject({ ok: true, hits: [] });
+                const revokedRows = returnedSessionRows;
+                expect({ selectedRows, revokedRows }).toEqual({ selectedRows: 1, revokedRows: 0 });
+            } finally { Reflect.set(boundary, '_request', nativeRequest); }
         } finally {
             await stopHomeSearch();
             await app.close();
