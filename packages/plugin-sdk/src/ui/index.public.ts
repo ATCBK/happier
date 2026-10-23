@@ -1,6 +1,7 @@
 export type { HostedWebBridgeEnvelopeV1 } from '../ui.js';
 export { PluginUiLaunchInputV1Schema } from './hostApi.js';
 export type { PluginRightSidebarDefaultPlacement } from '../ui.js';
+export type { PluginDefaultPlacement } from '../ui.js';
 export { PluginRightSidebarCountV1Schema } from '../ui.js';
 export type { PluginRightSidebarCountV1 } from '../ui.js';
 export { artifactHtmlBundleFromBodyV1 } from './hostedWeb.js';

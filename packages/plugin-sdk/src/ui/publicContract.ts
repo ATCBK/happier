@@ -61,6 +61,7 @@ import type {
     PluginUiAppPageColumnV1 as ProtocolPluginUiAppPageColumnV1,
     PluginRightSidebarDefaultPlacement as ProtocolPluginRightSidebarDefaultPlacement,
     PluginRightSidebarCountV1 as ProtocolPluginRightSidebarCountV1,
+    PluginDefaultPlacement as ProtocolPluginDefaultPlacement,
     PluginUiWidgetAreaDeclarationV1 as ProtocolPluginUiWidgetAreaDeclarationV1,
     PluginUiDestinationPlacementV1 as ProtocolPluginUiDestinationPlacementV1,
     PluginUiViewInlineBindingInputV2 as ProtocolPluginUiViewInlineBindingInputV2,
@@ -116,6 +117,7 @@ export type PluginUiSchema<T> = Readonly<{
 }>;
 export type PluginRightSidebarDefaultPlacement = ProtocolPluginRightSidebarDefaultPlacement;
 export type PluginRightSidebarCountV1 = ProtocolPluginRightSidebarCountV1;
+export type PluginDefaultPlacement = ProtocolPluginDefaultPlacement;
 
 export type PluginUiJsonValueV1 = JsonValue;
 export type PluginUiJsonObjectV1 = { readonly [key: string]: PluginUiJsonValueV1 };

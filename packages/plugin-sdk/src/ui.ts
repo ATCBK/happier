@@ -21,6 +21,7 @@ import type {
 export type {
     PluginRightSidebarDefaultPlacement,
     PluginRightSidebarCountV1,
+    PluginDefaultPlacement,
     PluginUiWidgetAreaDeclarationV1,
     PluginUiAppPageColumnV1,
     PluginUiDestinationPlacementV1,
