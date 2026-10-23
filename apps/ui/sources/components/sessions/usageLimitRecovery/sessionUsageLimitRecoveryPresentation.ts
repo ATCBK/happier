@@ -6,10 +6,11 @@ import type {
     SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
 import {
-    SessionUsageLimitRecoveryV1Schema,
     buildUsageLimitIssueFingerprint,
     isSessionUsageLimitRecoveryForIssue,
+    isSessionUsageLimitIssueCurrentV1,
 } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
+export { readSessionUsageLimitRecoveryFromMetadata } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 
 import type { AgentInputStatusBadge, AgentInputStatusBadgeTone } from '@/components/sessions/agentInput/agentInputContracts';
 import { summarizeConnectedServiceQuotaRecoveryCredits } from '@/sync/domains/connectedServices/connectedServiceQuotaGauge';
@@ -186,13 +187,6 @@ function isActiveRecoveryStatus(status: SessionUsageLimitRecoveryState['status']
         || status === 'paused';
 }
 
-export function readSessionUsageLimitRecoveryFromMetadata(metadata: unknown): SessionUsageLimitRecoveryState | null {
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
-    const raw = (metadata as Record<string, unknown>).sessionUsageLimitRecoveryV1;
-    const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(raw);
-    return parsed.success ? parsed.data : null;
-}
-
 function resolveBadgeTone(waiting: boolean): AgentInputStatusBadgeTone {
     return waiting ? 'active' : 'warning';
 }
@@ -360,14 +354,9 @@ export function buildSessionUsageLimitRecoveryPresentation(params: Readonly<{
     if (params.recoveryState && !isSessionUsageLimitRecoveryForIssue(lastRuntimeIssue, params.recoveryState)) {
         params = { ...params, recoveryState: null };
     }
-    if (params.recoveryState?.status === 'cancelled') return null;
-    // The failed turn may append its own terminal limit notice after the runtime issue. That
-    // activity is part of the same failure, not proof that a later turn recovered.
-    if (params.hasActivityAfterRuntimeIssue === true && params.latestTurnStatus === 'in_progress') return null;
-    if (params.latestTurnStatus != null
-        && params.latestTurnStatus !== 'failed'
-        && params.latestTurnStatus !== 'cancelled'
-        && params.latestTurnStatus !== 'in_progress') return null;
+    if (!isSessionUsageLimitIssueCurrentV1({ issue: lastRuntimeIssue,
+        recovery: params.recoveryState, latestTurnStatus: params.latestTurnStatus,
+        hasActivityAfterRuntimeIssue: params.hasActivityAfterRuntimeIssue })) return null;
 
     const resetAtMs = readUsageLimitResetAtMs(lastRuntimeIssue, params.recoveryState);
     const ready = params.operationStatus === 'ready'
