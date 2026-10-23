@@ -50,7 +50,7 @@ import { verifyCurrentMaterializedRunnerPrincipalInTx } from "@/app/ephemeralRun
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/session/access/sessionRecipients";
 import { readSessionPendingReviewRunCountsInTx } from '@/app/session/awareness/sessionManagerProjection';
 import { parseStoredSessionRuntimeIssue, parseStoredSessionTurnTranscriptAnchors } from '@/app/session/turns/parseSessionTurnState';
-import { isDeliveryMutedInTx } from './sessionDeliveryMuteService';
+import { createDeliveryMuteReaderInTx, isDeliveryMutedInTx } from './sessionDeliveryMuteService';
 import { sourceForSessionFollowEdgeV1, sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 import { discussionContextStorageAdapter } from '@/app/discussions/access';
 import { mayInjectResourceContextInTx } from '@/app/session/access/sessionContextInjection';
@@ -1400,6 +1400,10 @@ async function observePendingSessionFollowEdgesInTx(tx: Tx, input: Readonly<{
     includeManager?: boolean;
     admitSource: (edge: EdgeRow) => Promise<boolean>;
 }>): Promise<SessionFollowObservationResultV1> {
+    const readDeliveryMuted = createDeliveryMuteReaderInTx(tx, {
+        accountId: input.destinationRuntimeAccountId,
+        receiver: { kind: 'session', sessionId: input.destinationSessionId },
+    });
     const edges = await tx.sessionFollowEdge.findMany({
         where: { destinationSessionId: input.destinationSessionId,
             sourceSessionId: { not: null },
@@ -1417,10 +1421,8 @@ async function observePendingSessionFollowEdgesInTx(tx: Tx, input: Readonly<{
         if (!source || source.archivedAt !== null) continue;
         if (!await input.admitSource(edge)) continue;
         currentSourceSessionIds.push(edge.sourceSessionId);
-        if (await isDeliveryMutedInTx(tx, { accountId: input.destinationRuntimeAccountId,
-            receiver: { kind: 'session', sessionId: input.destinationSessionId },
-            candidate: { senderSessionId: edge.sourceSessionId,
-                source: { kind: 'session', sessionId: edge.sourceSessionId } },
+        if (await readDeliveryMuted({ senderSessionId: edge.sourceSessionId,
+            source: { kind: 'session', sessionId: edge.sourceSessionId },
         }) !== false) continue;
         const delivered = readStoredSessionFollowFrontier(edge);
         let observed = readCurrentSourceSessionFollowFrontier(source, edge.relation === 'manager');
@@ -1445,7 +1447,7 @@ async function observePendingSessionFollowEdgesInTx(tx: Tx, input: Readonly<{
         });
     }
     return { currentSourceSessionIds: [...new Set(currentSourceSessionIds)], observations: [
-        ...pending, ...await observeDiscussionFollowSourcesInTx(tx, input),
+        ...pending, ...await observeDiscussionFollowSourcesInTx(tx, input, readDeliveryMuted),
     ] };
 }
 

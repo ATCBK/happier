@@ -8,7 +8,7 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { createSessionInputReplyProgressInTx } from '@/app/session/messages/sessionMessageReply';
 import { invalidateSessionRelationProjectionsInTx } from '@/app/session/relations/sessionRelationChanges';
 import type { Tx } from '@/storage/inTx';
-import { isDeliveryMutedInTx } from './sessionDeliveryMuteService';
+import { createDeliveryMuteReaderInTx, isDeliveryMutedInTx } from './sessionDeliveryMuteService';
 import { sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
 import { FollowPolicyV1Schema, resolveFollowDeliveryV1, serializeFollowPolicyV1, type FollowEventV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { readAccountFollowCreationPreferencesInTx } from './accountFollowCreationPreferences';
@@ -111,7 +111,10 @@ function receiptHasAddressing(value: unknown, addressing: DiscussionAddressingV1
  */
 export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly<{
     destinationSessionId: string; destinationRuntimeAccountId: string;
-}>): Promise<SessionFollowDiscussionPendingObservationV1[]> {
+}>, readDeliveryMuted = createDeliveryMuteReaderInTx(tx, {
+    accountId: input.destinationRuntimeAccountId,
+    receiver: { kind: 'session', sessionId: input.destinationSessionId },
+})): Promise<SessionFollowDiscussionPendingObservationV1[]> {
     const edges = await tx.sessionFollowEdge.findMany({ where: { destinationSessionId: input.destinationSessionId,
         sourceDiscussionId: { not: null }, relation: 'follower' },
         select: { sourceDiscussionId: true, deliveredTranscriptSeq: true, policyJson: true }, orderBy: { sourceDiscussionId: 'asc' } });
@@ -159,10 +162,9 @@ export async function observeDiscussionFollowSourcesInTx(tx: Tx, input: Readonly
                 // Shared receiver policy suppresses a muted original. A later
                 // accepted eligible original may cross it; there is no second
                 // deferred queue or suppression receipt for that earlier ask.
-                if (await isDeliveryMutedInTx(tx, { accountId: input.destinationRuntimeAccountId,
-                    receiver: { kind: 'session', sessionId: input.destinationSessionId }, candidate: {
-                        source: { kind: 'discussion', discussionId }, ...(candidate.senderSessionId ? { senderSessionId: candidate.senderSessionId } : {}),
-                    } }) !== false) continue;
+                if (await readDeliveryMuted({ source: { kind: 'discussion', discussionId },
+                    ...(candidate.senderSessionId ? { senderSessionId: candidate.senderSessionId } : {}),
+                }) !== false) continue;
                 if (!resolveFollowDeliveryV1({ policies: [policy], event: candidate.event,
                     discussionInput: { addressing: candidate.addressing, original: candidate.original, reply } }).selected) continue;
                 observations.push({ source: { kind: 'discussion', discussionId }, destinationSessionId: input.destinationSessionId,

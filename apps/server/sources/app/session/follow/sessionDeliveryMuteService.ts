@@ -61,6 +61,18 @@ export async function isDeliveryMutedInTx(tx: Tx, input: Readonly<{
     return scopes === null ? null : isFollowDeliveryMutedV1(scopes, input.candidate);
 }
 
+/** One lazy receiver read for this observation only; the next observation reads fresh. */
+export function createDeliveryMuteReaderInTx(tx: Tx, input: Readonly<{
+    receiver: FollowReceiverRefV1;
+    accountId: string;
+}>): (candidate: DeliveryMuteCandidate) => Promise<boolean | null> {
+    let scopes: Promise<readonly FollowDeliveryMuteScopeV1[] | null> | undefined;
+    return async candidate => {
+        const current = await (scopes ??= readDeliveryMuteScopesInTx(tx, input));
+        return current === null ? null : isFollowDeliveryMutedV1(current, candidate);
+    };
+}
+
 /** One Account-scoped policy read for the personal alert recipient batch. */
 export async function readAccountDeliveryMutedForRecipientsInTx(tx: Tx, input: Readonly<{
     accountIds: readonly string[];

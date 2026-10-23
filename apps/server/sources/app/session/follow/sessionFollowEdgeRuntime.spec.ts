@@ -13,9 +13,9 @@ import {
     observePendingSessionFollowForDestinationInTx,
 } from "./sessionFollowEdgeService";
 
-function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }) {
+function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }, sourceCount = 1) {
     const row = (id: string, accountId: string) => ({
-        id, accountId, account: { status: "active" }, archivedAt: null as Date | null, deliveryMutes: null,
+        id, accountId, account: { status: "active" }, archivedAt: null as Date | null, deliveryMutes: null as string | null,
         publisherGeneration: 3n, seq: 2, latestReadyEventSeq: 0, agentStateVersion: 0,
         latestTurnId: null, latestTurnStatus: null, publicShare: null as { expiresAt: Date | null } | null,
         currentStorageState: "hosted", acceptedThroughServerSeq: null,
@@ -26,6 +26,8 @@ function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }) {
     const source = row("source", "source-owner");
     const destination = row("destination", "runtime");
     source.shares.push({ id: "source-read", sharedWithUserId: "runtime", accessLevel: "view", canApprovePermissions: false });
+    const sources = Array.from({ length: sourceCount }, (_, index) => index === 0 ? source
+        : { ...source, id: `source-${index}`, shares: [...source.shares] });
     const audience = [{ id: "runtime" }];
     const edge = {
         sourceSessionId: source.id, destinationSessionId: destination.id,
@@ -38,6 +40,8 @@ function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }) {
         deliveredTranscriptSeq: 1, deliveredReadyEventSeq: 0, deliveredAgentStateVersion: 0,
         deliveredTurnId: null, deliveredTurnStatus: null,
     };
+    const edges = sources.map(source => ({ ...edge, sourceSessionId: source.id, sourceKey: `session:${source.id}` }));
+    edges[0] = edge;
     let edgeExists = true;
     const wakeEventRows = new Map<string, Readonly<{
         seq: number;
@@ -47,9 +51,9 @@ function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }) {
     }>>();
     const storage = {
         session: {
-            findUnique: vi.fn(async ({ where }: { where: { id: string } }) =>
-                [source, destination].find(value => value.id === where.id) ?? null),
-            findMany: vi.fn(async () => [source, destination]),
+            findUnique: vi.fn(async ({ where }: { where: { id: string }; select?: Record<string, unknown> }) =>
+                [...sources, destination].find(value => value.id === where.id) ?? null),
+            findMany: vi.fn(async () => [...sources, destination]),
         },
         sessionMessage: {
             findUnique: vi.fn(async ({ where }: { where: { sessionId_localId: { sessionId: string; localId: string } } }) =>
@@ -64,7 +68,7 @@ function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }) {
             findMany: vi.fn(async () => audience),
         },
         sessionFollowEdge: {
-            findMany: vi.fn(async () => edgeExists ? [edge] : []),
+            findMany: vi.fn(async () => edgeExists ? edges : []),
             findUnique: vi.fn(async () => edgeExists ? edge : null),
             updateMany: vi.fn(async ({ data }: { data: Partial<typeof edge> }) => {
                 Object.assign(edge, data);
@@ -88,7 +92,7 @@ function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }) {
         acceptance: { kind: "admitted_input", localInputId: "input-1", userMessageSeq: 2 } as const,
     };
     return {
-        tx, storage, source, destination, audience, edge, observeInput, ackInput,
+        tx, storage, source, sources, destination, audience, edge, observeInput, ackInput,
         commitWakeEvent: (eventLocalId: string, row: Readonly<{
             seq: number;
             sidechainId: string | null;
@@ -105,6 +109,55 @@ function runtimeFixture(policy: FollowPolicyV1 = { preset: 'quiet' }) {
 }
 
 describe("ordinary Account Follow runtime admission", () => {
+    it.each([1, 128])('reads destination mute settings once for %i admitted source candidates', async count => {
+        const f = runtimeFixture({ preset: 'everything' }, count);
+        const result = await observePendingSessionFollowForDestinationInTx(f.tx, f.observeInput);
+        expect(result.observations).toHaveLength(count);
+        const muteReads = f.storage.session.findUnique.mock.calls.filter(([input]) =>
+            input.select && Object.keys(input.select).join() === 'deliveryMutes');
+        expect(muteReads).toHaveLength(1);
+    });
+
+    it('keeps per-source admission, selective mutes and next-request mute changes', async () => {
+        const f = runtimeFixture({ preset: 'everything' }, 128);
+        f.sources[1]!.shares = [];
+        const observe = () => observePendingSessionFollowForDestinationInTx(f.tx, f.observeInput);
+        expect((await observe()).observations).toHaveLength(127);
+        f.destination.deliveryMutes = JSON.stringify([
+            { kind: 'sender_session', sessionId: f.sources[2]!.id },
+            { kind: 'source', source: { kind: 'session', sessionId: f.sources[3]!.id } },
+        ]);
+        const muted = await observe();
+        expect(muted.observations).toHaveLength(125);
+        expect(muted.currentSourceSessionIds).toHaveLength(127);
+        expect(muted.observations).not.toEqual(expect.arrayContaining([
+            expect.objectContaining({ sourceSessionId: f.sources[2]!.id }),
+            expect.objectContaining({ sourceSessionId: f.sources[3]!.id }),
+        ]));
+        f.destination.deliveryMutes = 'malformed';
+        expect((await observe()).observations).toEqual([]);
+        f.destination.deliveryMutes = null;
+        expect((await observe()).observations).toHaveLength(127);
+    });
+
+    it('does not read mute settings without an admitted source candidate', async () => {
+        const f = runtimeFixture();
+        f.source.shares = [];
+        expect((await observePendingSessionFollowForDestinationInTx(f.tx, f.observeInput)).observations).toEqual([]);
+        expect(f.storage.session.findUnique.mock.calls.filter(([input]) =>
+            input.select && Object.keys(input.select).join() === 'deliveryMutes')).toEqual([]);
+    });
+
+    it('fails closed when the receiver mute row is unavailable', async () => {
+        const f = runtimeFixture();
+        const findUnique = f.storage.session.findUnique.getMockImplementation()!;
+        f.storage.session.findUnique.mockImplementation(input => input.select?.deliveryMutes
+            ? Promise.resolve(null) : findUnique(input));
+        const result = await observePendingSessionFollowForDestinationInTx(f.tx, f.observeInput);
+        expect(result.currentSourceSessionIds).toEqual([f.source.id]);
+        expect(result.observations).toEqual([]);
+    });
+
     it("observes a manager through the same pairwise admission and fences reattachment at ACK", async () => {
         const f = runtimeFixture({ preset: 'important' });
         f.edge.relation = 'manager';
