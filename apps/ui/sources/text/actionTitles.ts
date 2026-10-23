@@ -244,6 +244,8 @@ const ACTION_TITLE_KEYS = {
     'ui.voice_global.position.set': 'actionPresentation.titles.ui_voice_global_position_set',
     'ui.voice_global.setup.open': 'actionPresentation.titles.ui_voice_global_setup_open',
     'ui.voice_global.setup.close': 'actionPresentation.titles.ui_voice_global_setup_close',
+    'ui.voice_global.setup.microphone.permission.request': 'voiceMoments.setupMicrophoneAction',
+    'ui.voice_global.setup.system_settings.open': 'voiceMoments.setupOpenSystemSettings',
     'ui.voice_global.dictation.start': 'actionPresentation.titles.ui_voice_global_dictation_start',
     'ui.voice_global.dictation.finish': 'actionPresentation.titles.ui_voice_global_dictation_finish',
     'ui.voice_global.dictation.cancel': 'actionPresentation.titles.ui_voice_global_dictation_cancel',

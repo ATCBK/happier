@@ -11,6 +11,7 @@ export const VOICE_CONVERSATION_ACTION_IDS = [
   'ui.voice_global.brief.close', 'ui.voice_global.glance.open', 'ui.voice_global.glance.close',
   'ui.voice_global.transcript.set_visible', 'ui.voice_global.companion.reveal', 'ui.voice_global.position.set',
   'ui.voice_global.setup.open', 'ui.voice_global.setup.close', 'ui.voice_global.open_conversation',
+  'ui.voice_global.setup.microphone.permission.request', 'ui.voice_global.setup.system_settings.open',
   'ui.voice_global.dictation.start', 'ui.voice_global.dictation.finish',
   'ui.voice_global.dictation.cancel', 'ui.voice_global.dictation.dismiss',
 ] as const;
@@ -67,6 +68,8 @@ export const VoiceConversationActionInputSchemas = {
   'ui.voice_global.position.set': z.strictObject({ x: z.number().check(z.minimum(0), z.maximum(1)), y: z.number().check(z.minimum(0), z.maximum(1)) }),
   'ui.voice_global.setup.open': z.strictObject({}),
   'ui.voice_global.setup.close': z.strictObject({}),
+  'ui.voice_global.setup.microphone.permission.request': z.strictObject({}),
+  'ui.voice_global.setup.system_settings.open': z.strictObject({}),
   'ui.voice_global.open_conversation': AttemptInputSchema,
   'ui.voice_global.dictation.start': DictationInputSchema,
   'ui.voice_global.dictation.finish': DictationInputSchema,
@@ -96,6 +99,11 @@ export const VoiceConversationActionResultSchema = lazyZodSchema(() => z.discrim
   z.strictObject({ status: z.literal('completed'), voice: VoiceConversationStatusSchema }),
   z.strictObject({ status: z.literal('unavailable'), code: IdSchema, voice: VoiceConversationStatusSchema }),
 ]));
+export const VoiceSetupMicrophonePermissionActionResultSchema = lazyZodSchema(() => z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('completed'), permission: z.literal('granted'), voice: VoiceConversationStatusSchema }),
+  z.strictObject({ status: z.literal('unavailable'), code: IdSchema,
+    permission: z.enum(['denied', 'unavailable', 'unknown']), voice: VoiceConversationStatusSchema }),
+]));
 const BriefResultSchema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['waiting', 'sent', 'refused', 'stopped', 'closed']), attemptId: z.nullable(IdSchema),
 }));
@@ -121,6 +129,8 @@ export const VoiceConversationActionOutputSchemas = {
   'ui.voice_global.position.set': VoiceConversationActionResultSchema,
   'ui.voice_global.setup.open': VoiceConversationActionResultSchema,
   'ui.voice_global.setup.close': VoiceConversationActionResultSchema,
+  'ui.voice_global.setup.microphone.permission.request': VoiceSetupMicrophonePermissionActionResultSchema,
+  'ui.voice_global.setup.system_settings.open': VoiceConversationActionResultSchema,
   'ui.voice_global.open_conversation': VoiceConversationActionResultSchema,
   'ui.voice_global.dictation.start': VoiceDictationActionResultSchema,
   'ui.voice_global.dictation.finish': VoiceDictationActionResultSchema,
@@ -151,6 +161,8 @@ const VOICE_CONVERSATION_ACTION_SUMMARIES = {
   'ui.voice_global.position.set': 'Place the mounted Island or Orb within its measured bounds using normalized coordinates.',
   'ui.voice_global.setup.open': 'Expand the mounted Voice setup steps without starting audio.',
   'ui.voice_global.setup.close': 'Close the mounted Voice setup steps.',
+  'ui.voice_global.setup.microphone.permission.request': 'Ask this device for microphone permission without starting a Voice conversation. The operating system or browser retains consent.',
+  'ui.voice_global.setup.system_settings.open': 'Open this device’s application settings so the person can change microphone permission.',
   'ui.voice_global.open_conversation': 'Open the captured conversation destination, including Voice History for an unsaved attempt.',
   'ui.voice_global.dictation.start': 'Dictate into the exact focused editable field. Requires microphone consent and never submits the field.',
   'ui.voice_global.dictation.finish': 'Finish Dictation and insert recognized words into the same editable field without sending.',
@@ -179,6 +191,8 @@ export const VOICE_CONVERSATION_ACTION_SPECS = VOICE_CONVERSATION_ACTION_IDS.map
     'ui.voice_global.companion.reveal': 'Reveal Companion Voice section',
     'ui.voice_global.position.set': 'Position Voice Island or Orb',
     'ui.voice_global.setup.open': 'Expand Voice setup', 'ui.voice_global.setup.close': 'Close Voice setup',
+    'ui.voice_global.setup.microphone.permission.request': 'Allow Voice microphone access',
+    'ui.voice_global.setup.system_settings.open': 'Open Voice system settings',
     'ui.voice_global.open_conversation': 'Open Voice conversation',
     'ui.voice_global.dictation.start': 'Start field Dictation', 'ui.voice_global.dictation.finish': 'Finish field Dictation',
     'ui.voice_global.dictation.cancel': 'Cancel field Dictation', 'ui.voice_global.dictation.dismiss': 'Dismiss field Dictation failure',
@@ -186,6 +200,7 @@ export const VOICE_CONVERSATION_ACTION_SPECS = VOICE_CONVERSATION_ACTION_IDS.map
   description: 'Use the answering client’s existing Voice lifecycle, input, recovery and Inbox Brief owners. Mutations require the captured attempt identity; navigation cannot retarget them. Spoken requests cannot decide approvals.',
   safety: id === 'ui.voice_global.start' || id === 'ui.voice_global.recover' || id === 'ui.voice_global.hold_begin'
     || id === 'ui.voice_global.set_muted' || id === 'ui.voice_global.dictation.start'
+    || id === 'ui.voice_global.setup.microphone.permission.request'
     || id === 'ui.voice_global.brief.request' || id === 'ui.voice_global.brief.retry' ? 'danger' : 'safe',
   sideEffectClass: id === 'ui.voice_global.get' ? 'read' : 'write',
   requiredAuthority: 'account_automation', executionPlacement: 'client', placements: ['command_palette'],

@@ -1,5 +1,6 @@
 import { VoiceConversationActionInputSchemas, type VoiceConversationActionId, type VoiceConversationStatus } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
+import { readMicrophonePermissionState, requestMicrophonePermission, type MicrophonePermissionState } from '@/utils/platform/microphonePermissions';
 import { storage } from '@/sync/domains/state/storage';
 import { voiceSettingsParse, readVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
 import { getFocusedSessionAddress } from '@/sync/domains/session/sessionSurfaceVisibility';
@@ -140,14 +141,28 @@ export async function executeVoiceConversationAction(
     actionId: VoiceConversationActionId,
     input: unknown,
     deps: Readonly<{ navigate: (href: unknown) => void | Promise<void>; isCurrent?: () => boolean; signal?: AbortSignal }>,
-): Promise<Readonly<{ status: 'completed'; voice: VoiceConversationStatus }> | Readonly<{ status: 'unavailable'; code: string; voice: VoiceConversationStatus }>> {
+): Promise<Readonly<{ status: 'completed'; voice: VoiceConversationStatus; permission?: MicrophonePermissionState }>
+    | Readonly<{ status: 'unavailable'; code: string; voice: VoiceConversationStatus; permission?: MicrophonePermissionState }>> {
     const parsed = VoiceConversationActionInputSchemas[actionId].safeParse(input);
     const current = await readConversation(parsed.success && 'target' in parsed.data ? parsed.data.target : undefined);
-    const unavailable = (code: string) => ({ status: 'unavailable' as const, code, voice: current.voice });
+    const unavailable = (code: string) => ({ status: 'unavailable' as const, code, voice: current.voice,
+        ...(actionId === 'ui.voice_global.setup.microphone.permission.request' ? { permission: 'unknown' as const } : {}) });
     if (deps.isCurrent?.() === false) return unavailable('voice_action_account_changed');
     if (!parsed.success) return unavailable('invalid_voice_action_input');
     const value = parsed.data;
     if (actionId === 'ui.voice_global.get') return { status: 'completed', voice: current.voice };
+    if (actionId === 'ui.voice_global.setup.microphone.permission.request') {
+        const permission = readMicrophonePermissionState(await requestMicrophonePermission());
+        return permission === 'granted' ? { status: 'completed', permission, voice: current.voice }
+            : { status: 'unavailable', permission, code: permission === 'denied' ? 'voice_microphone_permission_denied'
+                : permission === 'unavailable' ? 'voice_microphone_unavailable' : 'voice_microphone_permission_unavailable', voice: current.voice };
+    }
+    if (actionId === 'ui.voice_global.setup.system_settings.open') {
+        if (Platform.OS === 'web') return unavailable('voice_system_settings_unavailable');
+        try { await Linking.openSettings(); }
+        catch { return unavailable('voice_system_settings_unavailable'); }
+        return { status: 'completed', voice: current.voice };
+    }
     let presented: boolean | null = null;
     switch (actionId) {
         case 'ui.voice_global.glance.open': presented = setVoiceGlanceOpen(true); break;
