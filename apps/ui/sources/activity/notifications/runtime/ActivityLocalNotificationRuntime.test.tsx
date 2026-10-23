@@ -308,7 +308,7 @@ describe('ActivityLocalNotificationRuntime', () => {
             viewer: {
                 readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
                 relevance: { relevant: true, reasons: ['followed_by_me'] },
-                follow: { follows: true, notificationLevel: 'important' },
+                follow: { follows: true, notificationLevel: 'important', policy: { preset: 'important' } },
                 attention: { needsAttention: true, reasons: ['ready_after_read'], primary: 'ready_after_read', presentation: 'full' },
                 notification: { level: 'important', source: 'preference' },
             },
@@ -502,7 +502,7 @@ describe('ActivityLocalNotificationRuntime', () => {
         const viewer: NonNullable<Session['viewer']> = {
             readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
             relevance: { relevant: true, reasons: ['followed_by_me'] },
-            follow: { follows: true, notificationLevel: 'important' },
+            follow: { follows: true, notificationLevel: 'important', policy: { preset: 'important' } },
             attention: { needsAttention: true, reasons: ['ready_after_read'], primary: 'ready_after_read', presentation: 'status_only' },
             notification: { level: 'important', source: 'preference' },
         };
@@ -526,6 +526,7 @@ describe('ActivityLocalNotificationRuntime', () => {
         expect(`${statusOnly?.title} ${statusOnly?.body}`).not.toContain('Private title');
         sendExpoLocalNotification.mockClear();
         viewer.follow.notificationLevel = 'none';
+        viewer.follow.policy = { preset: 'custom', events: {} };
         await act(async () => {
             notifyActivityReady({ serverId: 'srv_home_a', sessionId: 'session-1' }, []);
         });

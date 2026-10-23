@@ -257,7 +257,7 @@ describe('live Follow socket notifications', () => {
         boundary.desktop = desktop;
         applySessions([{ ...getSession(), viewer: {
             readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['followed_by_me'] },
-            follow: { follows: true, notificationLevel: 'important' },
+            follow: { follows: true, notificationLevel: 'important', policy: { preset: 'important' } },
             attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
             notification: { level: 'important', source: 'preference' },
         } }]);
@@ -267,7 +267,7 @@ describe('live Follow socket notifications', () => {
         expect(submit).toHaveBeenCalledTimes(1);
         await act(async () => { await deliverMessage(2, false); });
         expect(submit).toHaveBeenCalledTimes(1);
-        await act(async () => { applySessions([{ ...getSession(), viewer: { ...getSession().viewer!, follow: { follows: true, notificationLevel: 'all_messages' } } }]); });
+        await act(async () => { applySessions([{ ...getSession(), viewer: { ...getSession().viewer!, follow: { follows: true, notificationLevel: 'all_messages', policy: { preset: 'everything' } } } }]); });
         await act(async () => { await deliverMessage(3, false); });
         expect(submit).toHaveBeenCalledTimes(2);
         await act(async () => { await handleEphemeralSocketUpdate({ sourceServerId: 'srv_home_a',
