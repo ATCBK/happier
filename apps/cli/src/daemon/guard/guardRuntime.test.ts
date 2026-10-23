@@ -66,6 +66,7 @@ describe('memory guard episode on the incumbent minute sampler', () => {
     const sessions: TrackedSession[] = [tracked, ...Array.from({ length: sessionCount - 1 }, (_, index) => ({
       pid: 11 + index, happySessionId: `s${index + 2}`, startedBy: 'daemon' }))];
     let working = false;
+    let otherSessionWorking = false;
     let draft: SessionDraftPresence = { status: 'absent' };
     let footprint: number | undefined = 80;
     let reads = 0;
@@ -79,8 +80,9 @@ describe('memory guard episode on the incumbent minute sampler', () => {
     const background: TrackedSession = { pid: 30, happySessionId: 'background', startedBy: 'daemon', spawnOptions: { directory: '/project' } };
     const producer = createSessionLiveWorkProducer({ readSessions: () => kind === 'session' ? sessions : [background],
       // Session live-work RPC boundary; the canonical producer reconciles current occurrence and coverage.
-      readActivity: async () => { await duringActivityRead?.();
-        return { session: working ? 'active' : 'settled', input: 'settled', agents: 'settled', attention: 'settled', settledAt: 0 }; } });
+      readActivity: async session => { await duringActivityRead?.();
+        return { session: working || session !== tracked && otherSessionWorking ? 'active' : 'settled',
+          input: 'settled', agents: 'settled', attention: 'settled', settledAt: 0 }; } });
     const inventory = createManagedActivityInventory({ producers: [producer], now: Date.now });
     const root: HappierProcessRoot = { owner: kind === 'session' ? { kind: 'session', sessionId: 's' }
       : kind === 'service' ? { kind: 'service', serviceId: 'project-service' } : { kind: 'browser_sidecar' },
@@ -152,6 +154,7 @@ describe('memory guard episode on the incumbent minute sampler', () => {
       setMissing: (value: boolean) => { missing = value; },
       setConnections: (value: number | null) => { connections = value; changed(); },
       setWorking: (value: boolean) => { working = value; producer.notifyChanged(); },
+      setOtherSessionWorking: (value: boolean) => { otherSessionWorking = value; producer.notifyChanged(); },
       setSessionAttribution: (value: NonNullable<TrackedSession['requesterWorkAttributionV1']>) => {
         for (const session of sessions) session.requesterWorkAttributionV1 = value;
         producer.notifyChanged();
@@ -274,6 +277,29 @@ describe('memory guard episode on the incumbent minute sampler', () => {
       await vi.advanceTimersByTimeAsync(1); await fixture.drain();
       expect(fixture.stops).toBe(1);
       expect(fixture.sampler.latest()?.sampledAt).toBeLessThan(901000);
+    } finally { await fixture.close(); }
+  });
+  it.each(['idle', 'memory'] as const)('keeps the same %s stop intent when another Session starts work during its publication', async rule => {
+    const fixture = await setup('session', rule === 'memory', undefined, 2);
+    try {
+      if (rule === 'idle') {
+        fixture.setIdlePolicy({ enabled: true, afterMs: 600000 });
+        await fixture.drain();
+      }
+      let startedOtherSession = false;
+      fixture.onNotice(async state => {
+        if (state.kind === 'stopped' && !startedOtherSession) {
+          startedOtherSession = true;
+          fixture.setOtherSessionWorking(true);
+        }
+      });
+      await vi.advanceTimersByTimeAsync(rule === 'idle' ? 600000 : 360000);
+      await fixture.drain();
+      expect(fixture.stoppedIds).toEqual(['s']);
+      // Each stopped notice creates a durable requested record. An unrelated
+      // inventory edge must not cancel it and create another for the same stop.
+      expect(fixture.notices.filter(state => state.kind === 'stopped')).toHaveLength(1);
+      expect(fixture.notices.some(state => state.kind === 'clear')).toBe(false);
     } finally { await fixture.close(); }
   });
   it('observes an unannounced stop on the next live sample and verifies after its existing cooldown', async () => {
