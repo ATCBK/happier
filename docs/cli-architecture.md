@@ -2319,6 +2319,16 @@ still name B. Invalid trigger inputs retain `invalid_input` with a specific
 closed `details.code`, such as `session_trigger_source_mismatch`. These are
 0.3 development semantics; they introduce no new stored format or migration.
 
+Workflow archive Actions carry the host-stamped caller's `originRunId` through
+the archive service, including its inactive-session retry, to the existing
+Session archive HTTP route. The CLI signs that exact request with its current
+Machine installation. Before passing the origin to the canonical archive
+transition, Home verifies the publisher proof, Run access and assignment to that
+Machine. The existing trigger ancestry owner then suppresses ancestor triggers
+and retains the origin for unrelated triggers. Human archives remain originless;
+Session creation origin does not identify who caused a later archive. This is
+a 0.3 development transport correction, with no new Action input or stored format.
+
 Session PR-comment and CI-failure triggers use the Channels binding writer to
 attach an authenticated GitHub pull-request endpoint to the scoped Automation.
 Native SCM credential selection, connection creation/reuse and principal resolution
@@ -2557,6 +2567,22 @@ default page remains an index-only read. No new activity stream or per-card
 detail requests are introduced; exact invocation reads still own recovery
 decisions. Card timing is the recorded creation-to-last-update interval,
 including waiting, not a fabricated execution-only duration.
+
+In 0.3 development, that same list owner supports an exact `invocationId`, a
+newest direct-member slot (`parentRecordId` with `memberOrdinal`), or the
+direct-child history of `parentRecordIds`. Batched child history includes
+superseded attempts; it is distinct from the newest-member window. These
+selectors remain bound into the cursor and can include progress through the
+same mode-aware opener and response-byte budget. Workflow Action scope opens
+only its logical attempt, current retry slot when needed, and accepted
+ancestry. Its `workflow.run.get` sets `includeUsage: false` to avoid aggregating
+unrelated history; ordinary Run detail reads continue to include usage.
+Discussion round projection selects the previous projection or current
+collection, then reads descendant frames in batches by parent. It preserves
+recorded reply custody and sequence order without opening other rounds or
+issuing one request per participant.
+Selected conditionals retain the same invocation scope, so the narrow reader
+follows their admitted branches when locating peer collections and preparation.
 
 The Agent/MCP catalog derives the direct `workflow_run_start`,
 `workflow_run_get`, `workflow_run_wait`, and `workflow_run_cancel` tools from
@@ -3966,8 +3992,13 @@ failures keep their existing classification.
 Development daemon admission captures the selected runtime's terminal-presentation
 result before Session commit. Only `runner` presentation hosts the Happier controller;
 `managed_terminal` and `provider_attach` keep it headless and present the selected
-runtime's prepared native process. The private runtime request carries the admitted
-host context separately from metadata describing a terminal that actually exists.
+runtime's prepared native process. The private runner bootstrap carries
+`terminalHostOwner: 'runtime'` for those two presentations. Both normal and deferred
+Session initialization still report the controller to the daemon, while the selected
+runtime owns attachment persistence, terminal binding, and fallback notices. Existing
+bootstraps without that field retain ordinary controller startup behavior. The private
+runtime request carries the admitted host context separately from metadata describing
+a terminal that actually exists.
 Herdr's exact socket is admitted before provider-specific authentication changes the
 child environment; an explicit socket never falls back to another ambient server.
 
