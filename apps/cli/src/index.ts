@@ -24,8 +24,6 @@ import { installConsoleWriteErrorGuards, shouldInstallConsoleWriteErrorGuards } 
 import { logger } from '@/ui/logger';
 import { applyStackSessionPriority } from '@/utils/process/applyStackSessionPriority';
 import { installTerminalAuthorityCeiling } from '@/api/client/terminalAuthorityCeiling';
-import { refreshTerminalPresentUserPolicy } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
-import { readStoredCredentials } from '@/persistence';
 import { fail } from '@happier-dev/cli-common/output';
 import { joinCurrentWindowsSessionProcessCustody } from '@/subprocess/supervision/processCustody';
 
@@ -71,11 +69,6 @@ if (!isCliDistIntegrityProbe) {
       publicReleaseRing: configuration.publicReleaseRing,
     });
     const { args, terminalRuntime } = parseCliArgs(normalizedArgv);
-    // Authentication commands must remain reachable during the one-way CLI re-login.
-    if (args[0] !== 'auth') {
-      const credentials = await readStoredCredentials();
-      if (credentials) await refreshTerminalPresentUserPolicy({ token: credentials.token });
-    }
     await dispatchCli({ args, terminalRuntime, rawArgv: process.argv });
   })().catch((error) => {
     logger.fatal(error);

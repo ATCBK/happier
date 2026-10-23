@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { compareVersions } from '@happier-dev/cli-common/update';
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { resolvePublicReleaseRingLabelForId } from '@happier-dev/release-runtime/releaseRings';
-import { ensureJavaScriptRuntimeExecutable } from '@/packagedRuntime/js/ensureJavaScriptRuntimeExecutable';
+import type { ensureJavaScriptRuntimeExecutable } from '@/packagedRuntime/js/ensureJavaScriptRuntimeExecutable';
 import { isBun } from '../../../utils/runtime';
 import { parseRuntimeContextPrefixArgs } from '@/utils/env/runtimeContextArgv';
 
@@ -99,7 +99,8 @@ export async function maybeReexecToRuntime(params: Readonly<{
   if (compareVersions(runtimeVersion, localVersion) <= 0) return;
 
   const execImpl = params.exec ?? execFileSync;
-  const ensureRuntimeExecutable = params.ensureRuntimeExecutable ?? ensureJavaScriptRuntimeExecutable;
+  const ensureRuntimeExecutable = params.ensureRuntimeExecutable
+    ?? (await import('@/packagedRuntime/js/ensureJavaScriptRuntimeExecutable')).ensureJavaScriptRuntimeExecutable;
   const runtimeExecutable = await ensureRuntimeExecutable({ isBunRuntime: params.isBunRuntime ?? isBun() });
   if (!runtimeExecutable) return;
   const childEnv: NodeJS.ProcessEnv = { ...env, HAPPIER_CLI_RUNTIME_REEXEC: '1' };

@@ -30,8 +30,6 @@ import {
 } from '@/auth/cliApiToken';
 import type { EphemeralResolvedServerSelection } from '@/server/serverSelection';
 import { argvBeforeOptionTerminator, readFlagValue } from '@/cli/commands/shared/argvFlags';
-import { resolveInheritedHerdrRuntime } from '@/terminal/runtime/inheritedHerdrRuntime';
-import { resolveInheritedZellijRuntime } from '@/terminal/runtime/inheritedZellijRuntime';
 
 function isTopLevelVersionRequest(args: readonly string[]): boolean {
   return args.length === 1 && (args[0] === '--version' || args[0] === '-v');
@@ -325,8 +323,8 @@ export async function dispatchCli(params: Readonly<{
     rawArgv,
     terminalRuntime: startsSession
       ? process.env.HERDR_ENV === '1'
-        ? await resolveInheritedHerdrRuntime({ terminalRuntime, env: process.env })
-        : resolveInheritedZellijRuntime({ terminalRuntime, env: process.env })
+        ? await (await import('@/terminal/runtime/inheritedHerdrRuntime')).resolveInheritedHerdrRuntime({ terminalRuntime, env: process.env })
+        : (await import('@/terminal/runtime/inheritedZellijRuntime')).resolveInheritedZellijRuntime({ terminalRuntime, env: process.env })
       : terminalRuntime,
     ...(signal ? { signal } : {}),
     ...(params.explicitServerSelection
@@ -346,21 +344,21 @@ export async function dispatchCli(params: Readonly<{
     return;
   }
 
+  // Global Home/token prefixes are resolved before admission. Local information
+  // needs no credential or security read; real commands retain the fresh policy
+  // before dispatch. Auth stays reachable during the one-way CLI re-login.
+  if (args[0] !== 'auth' && !isCredentialFreeInvocation(args)) {
+    const { readStoredCredentials } = await import('@/persistence');
+    const credentials = await readStoredCredentials();
+    if (credentials) {
+      const { refreshTerminalPresentUserPolicy } = await import('@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy');
+      await refreshTerminalPresentUserPolicy({ token: credentials.token });
+    }
+  }
+
   // If --version is passed - do not log, its likely daemon inquiring about our version
   if (!globalOptionArgs.includes('--version')) {
     debugCliStart(rawArgv);
-  }
-
-  // Prefix-only global flags are consumed before this dispatch, so version/help
-  // must be rechecked before command dispatch can fall through to the default agent.
-  if (isTopLevelVersionRequest(args)) {
-    console.log(packageJson.version);
-    return;
-  }
-  if (isTopLevelHelpRequest(args)) {
-    await ensureMergedAgentCommandRegistryLoaded();
-    console.log(buildRootHelpText());
-    return;
   }
 
   // Check if first argument is a subcommand
