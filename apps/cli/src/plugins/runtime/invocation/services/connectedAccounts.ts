@@ -393,6 +393,11 @@ function snapshotMaterialization(
     if (!isUnknownRecord(materialization) || materialization.kind !== request.kind) {
         throw materializationOutOfScope();
     }
+    const rawScope = materialization.usageAccountScope;
+    if (rawScope !== undefined && rawScope !== 'personal' && rawScope !== 'workspace' && rawScope !== 'unknown') {
+        throw materializationOutOfScope();
+    }
+    const scope = rawScope === undefined ? {} : { usageAccountScope: rawScope };
     if (request.kind === 'httpHeaders') {
         if (!isUnknownRecord(materialization.headers)) throw materializationOutOfScope();
         const requestedNames = new Set(request.headerNames.map((name) => name.toLowerCase()));
@@ -412,6 +417,7 @@ function snapshotMaterialization(
         }
         return Object.freeze({
             kind: 'httpHeaders',
+            ...scope,
             headers: Object.freeze(Object.fromEntries(headerEntries)),
         });
     }
@@ -427,6 +433,7 @@ function snapshotMaterialization(
         }
         return Object.freeze({
             kind: 'environment',
+            ...scope,
             env: Object.freeze(Object.fromEntries(environmentEntries)),
         });
     }
@@ -441,6 +448,7 @@ function snapshotMaterialization(
     }
     return Object.freeze({
         kind: 'files',
+        ...scope,
         files: Object.freeze(Object.fromEntries(fileEntries)),
     });
 }

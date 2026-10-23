@@ -74,6 +74,19 @@ function readContext(
 }
 
 describe('Claude Subscription Connected Account', () => {
+  it.each([
+    ['pro', 'personal'], ['max', 'personal'], ['team', 'workspace'],
+    ['enterprise', 'workspace'], [undefined, 'unknown'], ['future-plan', 'unknown'],
+  ])('classifies the materialized subscription, not the Agent (%s)', async (plan, expectedScope) => {
+    const runtime = activateConnectedAccountRuntime();
+    const values = new Map([['accessToken', 'synthetic-access']]);
+    if (plan) values.set('subscriptionType', plan);
+    const context = readContext('oauth', values);
+    const request = { kind: 'httpHeaders' as const, origin: 'https://api.anthropic.com', headerNames: ['authorization'] };
+    expect(await runtime.materialize(request, context, { signal: context.signal }))
+      .toMatchObject({ kind: 'httpHeaders', usageAccountScope: expectedScope });
+  });
+
   it('updates account context while retaining workspace approvals and private native preferences', async () => {
     const context = readContext('oauth', new Map([
       ['accessToken', 'replacement-access'], ['providerAccountId', 'replacement-account'],
@@ -124,7 +137,7 @@ describe('Claude Subscription Connected Account', () => {
     try {
       await vi.advanceTimersByTimeAsync(50);
       const ready = await Promise.race([materialization, Promise.resolve(null)]);
-      expect(ready).toEqual({ kind: 'files', files: { '.credentials.json': expect.any(Uint8Array) } });
+      expect(ready).toEqual({ kind: 'files', usageAccountScope: 'personal', files: { '.credentials.json': expect.any(Uint8Array) } });
       if (ready?.kind !== 'files') throw new Error('Expected credential files');
       expect(JSON.parse(new TextDecoder().decode(ready.files['.credentials.json']))).toEqual({ claudeAiOauth: {
         accessToken: 'claude-access', expiresAt: 2000000000000, scopes: ['user:inference'], subscriptionType: 'pro', rateLimitTier: 'default',
@@ -595,6 +608,7 @@ describe('Claude Subscription Connected Account', () => {
       ])),
     )).resolves.toEqual({
       kind: 'httpHeaders',
+      usageAccountScope: 'unknown',
       headers: { authorization: 'Bearer claude-access' },
     });
     await expect(runtime.materialize(

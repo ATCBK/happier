@@ -291,6 +291,7 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
       if (!params.legacyV021 && input.expectedAccount) {
         materializedAccountsByPurposeKey.set(qualifiedPurposeKey(input.purpose), Object.freeze({
           purpose: input.purpose.purpose,
+          ...(materialization.usageAccountScope === undefined ? {} : { usageAccountScope: materialization.usageAccountScope }),
           account: Object.freeze({ service: Object.freeze({ ...input.expectedAccount.service }),
             accountId: input.expectedAccount.accountId }),
         }));

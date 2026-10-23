@@ -14,6 +14,7 @@ import { agentRoutingIdAddressesContributionIdentityV1, buildQualifiedPluginCont
 import { registerSensitiveDiagnosticValues } from '@happier-dev/protocol/bugs/reports/redaction';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { ProviderErrorV1, QualifiedConnectedAccountRef, ArtifactSharingResourceV1 } from '@happier-dev/protocol';
+import type { AgentSessionConnectedAccountSelection } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import type { SessionTeamCredentialBindingIntentListV1 } from '@happier-dev/protocol/teams';
 import { configuration } from '@/configuration';
@@ -808,6 +809,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
         ? activeProviderLaunch.connectedServices
         : request.connectedServices ?? null;
     let materializedConnectedServices = effectiveConnectedServices;
+    let materializedSessionConnectedAccounts: readonly AgentSessionConnectedAccountSelection[] = [];
     let materializedStateObservationBinding: ConnectedServiceMaterializedStateObservationBinding | undefined;
     const connectedServiceCatalogEntry = lease.registry.acquireAgentCatalogEntry
       ? await lease.registry.acquireAgentCatalogEntry(request.agentId)
@@ -971,6 +973,7 @@ export async function prepareForegroundAgentRuntimeAdmission(
       const daemonSpawnHooks =
         await dependencies.resolveDaemonSpawnHooks!(request.agentId);
       materializedStateObservationBinding = connectedServiceAuth?.materializedStateObservationBinding;
+      materializedSessionConnectedAccounts = connectedServiceAuth?.sessionConnectedAccounts ?? [];
       materializedConnectedServices = connectedServiceAuth?.connectedServicesBindings
         ?? effectiveConnectedServices;
       const childEnvironment = await resolveSpawnChildEnvironment({
@@ -1261,9 +1264,23 @@ export async function prepareForegroundAgentRuntimeAdmission(
             }
             const expectedConnectedAccountByPurposeKey =
               new Map<string, QualifiedConnectedAccountRef>();
-            const connectedAccountsOwner =
+            const sourceConnectedAccountsOwner =
               dependencies.connectedAccountsOwner
               ?? (requester ? undefined : lease.registry.resolveConnectedAccountPurposeBindingOwner?.());
+            const connectedAccountsOwner = sourceConnectedAccountsOwner ? {
+              ...sourceConnectedAccountsOwner,
+              materialize: async (input: Parameters<StablePluginConnectedAccountsOwner['materialize']>[0]) => {
+                const result = await sourceConnectedAccountsOwner.materialize(input);
+                if (input.expectedAccount) {
+                  materializedSessionConnectedAccounts = [...materializedSessionConnectedAccounts.filter(selection =>
+                    selection.purpose !== input.purpose.purpose), {
+                    purpose: input.purpose.purpose, account: input.expectedAccount,
+                    ...(result.usageAccountScope === undefined ? {} : { usageAccountScope: result.usageAccountScope }),
+                  }];
+                }
+                return result;
+              },
+            } : undefined;
             const assertExpectedConnectedAccountsCurrent = async (): Promise<void> => {
               await assertSessionAccountCurrent(canonicalSessionId);
               if (!connectedAccountLaunchCurrent) {
@@ -1566,9 +1583,6 @@ export async function prepareForegroundAgentRuntimeAdmission(
                 ? []
                 : boundNativeHomeFilePurposes;
               if (boundFilePurposes.length > 0) {
-                const connectedAccountsOwner =
-                  dependencies.connectedAccountsOwner
-                  ?? (requester ? undefined : lease.registry.resolveConnectedAccountPurposeBindingOwner?.());
                 if (!sessionPurposeBindingLease || !connectedAccountsOwner) {
                   throw new Error(
                     'Foreground Connected Account native-home credential authority is unavailable',
@@ -1830,7 +1844,11 @@ export async function prepareForegroundAgentRuntimeAdmission(
             const sessionConnectedAccounts = (sessionPurposeBindingSnapshot?.authorizedPurposes ?? [])
               .flatMap(({ purpose }) => {
                 const account = expectedConnectedAccountByPurposeKey.get(qualifiedPurposeKey(purpose));
-                return account ? [{ purpose: purpose.purpose, account }] : [];
+                const materialized = materializedSessionConnectedAccounts.find(selection => selection.purpose === purpose.purpose
+                  && account && sameQualifiedConnectedAccountRef(account, selection.account));
+                return account ? [{ purpose: purpose.purpose, account,
+                  ...(materialized?.usageAccountScope === undefined ? {} : { usageAccountScope: materialized.usageAccountScope }),
+                }] : [];
               });
             return {
               ok: true as const,

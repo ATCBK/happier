@@ -471,6 +471,7 @@ const McpLaunchConfigSchema = lazyZodSchema(() => z.strictObject({
 
 const ConnectedAccountSchema = lazyZodSchema(() => z.strictObject({
   purpose: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+  usageAccountScope: z.optional(z.enum(['personal', 'workspace', 'unknown'])),
   account: z.strictObject({
     service: z.strictObject({
       pluginId: BoundedIdSchema,

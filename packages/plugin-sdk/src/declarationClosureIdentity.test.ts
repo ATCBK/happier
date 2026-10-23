@@ -1444,6 +1444,7 @@ describe('normal SDK declaration closure identities', () => {
             .toEqualTypeOf<CanonicalAgentSessionStartupInstructions | undefined>();
         expectTypeOf<AgentSessionConnectedAccountSelection>().toEqualTypeOf<Readonly<{
             purpose: string;
+            usageAccountScope?: 'personal' | 'workspace' | 'unknown';
             account: Readonly<{
                 service: Readonly<{
                     pluginId: string;

@@ -21,6 +21,8 @@ export type RuntimeDescriptorV1 = Readonly<{
 
 export type AgentSessionConnectedAccountSelection = Readonly<{
   purpose: string;
+  /** Credential-free service classification from successful admitted materialization. */
+  usageAccountScope?: 'personal' | 'workspace' | 'unknown';
   account: Readonly<{
     service: Readonly<{
       pluginId: string;

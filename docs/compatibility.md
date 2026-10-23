@@ -58,6 +58,13 @@ current-development launch projections; they add no persisted binding format or
 historical attribution. The moving 0.2 predecessor has no foreground claim seam and retains its direct
 Connected Service launch path.
 
+The optional `usageAccountScope` materialization result and launch carrier are
+additive 0.3 development evidence: older service results omit it and remain
+unknown, and older hosts may ignore it without changing authentication. Only a
+service's actual admitted credential revision may supply the classification.
+Public usage continues to use the existing `usageAttribution` shape; no stored
+row is backfilled from a current subscription or Session selection.
+
 - `dev`/`*-dev.*` builds, untagged history outside the live predecessor frontier, abandoned experiments, and undeployed internal module paths are not lasting compatibility contracts.
 - Do not keep aliases or adapters solely for an atomic internal rename/move whose old path never shipped.
 - The predecessor rule preserves observable wire/data/state behavior, not `../0.2`'s internal architecture.

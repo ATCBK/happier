@@ -187,16 +187,18 @@ export function snapshotConnectedAccountEstablishedResult<
     if (options.quotaLeafUnavailable) return null as ConnectedAccountRuntimeEstablishedResult<TOperation>;
     if (operation.kind === 'materialize') {
         const result = raw as PluginConnectedAccountMaterialization;
+        const scope = result.usageAccountScope === undefined ? {} : { usageAccountScope: result.usageAccountScope };
         if (result.kind === 'files') {
             return Object.freeze({
+                ...scope,
                 kind: 'files',
                 files: Object.freeze(Object.fromEntries(Object.entries(result.files)
                     .map(([id, bytes]) => [id, new Uint8Array(bytes)]))),
             }) as ConnectedAccountRuntimeEstablishedResult<TOperation>;
         }
         return Object.freeze(result.kind === 'httpHeaders'
-            ? { kind: result.kind, headers: Object.freeze({ ...result.headers }) }
-            : { kind: result.kind, env: Object.freeze({ ...result.env }) }) as ConnectedAccountRuntimeEstablishedResult<TOperation>;
+            ? { ...scope, kind: result.kind, headers: Object.freeze({ ...result.headers }) }
+            : { ...scope, kind: result.kind, env: Object.freeze({ ...result.env }) }) as ConnectedAccountRuntimeEstablishedResult<TOperation>;
     }
     if (operation.kind === 'quota' || operation.kind === 'recoveryCredits.read'
         || operation.kind === 'recoveryCredits.consume') {

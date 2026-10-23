@@ -3,6 +3,7 @@ import { normalizeClaudeOauthProfileEntitlement, type ClaudeOauthCredentialMetad
 import { CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1 } from '@happier-dev/plugin-sdk/first-party/connected-accounts';
 import {
   type ConnectedAccountAuthenticationContext as PluginConnectedAccountAuthenticationContext,
+  type ConnectedAccountMaterialization,
   type ConnectedAccountHealthResult as PluginConnectedAccountHealthResult,
   type ConnectedAccountRuntime as PluginConnectedAccountRuntime,
 } from '@happier-dev/plugin-sdk/connected-accounts';
@@ -75,6 +76,14 @@ const PROVIDER_EMAIL_KEY = 'providerEmail';
 const EXPIRES_AT_MS_KEY = 'expiresAtMs';
 const SCOPES_KEY = 'scopes';
 const SUBSCRIPTION_TYPE_KEY = 'subscriptionType';
+
+function classifyUsageAccountScope(subscriptionType: unknown): ConnectedAccountMaterialization['usageAccountScope'] {
+  switch (subscriptionType) {
+    case 'pro': case 'max': return 'personal';
+    case 'team': case 'enterprise': return 'workspace';
+    default: return 'unknown';
+  }
+}
 const RATE_LIMIT_TIER_KEY = 'rateLimitTier';
 const ORGANIZATION_UUID_KEY = 'organizationUuid';
 const ANTHROPIC_API_ORIGIN = 'https://api.anthropic.com';
@@ -692,10 +701,14 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
       ) {
         throw new Error('Claude OAuth connected accounts cannot materialize credentials for this HTTP-header request');
       }
-      const accessToken = await readCredential(context.credentials, ACCESS_TOKEN_KEY, options);
+      const [accessToken, subscriptionType] = await Promise.all([
+        readCredential(context.credentials, ACCESS_TOKEN_KEY, options),
+        readCredential(context.credentials, SUBSCRIPTION_TYPE_KEY, options),
+      ]);
       if (!accessToken) throw new Error('Claude OAuth credentials are unavailable');
       return {
         kind: 'httpHeaders',
+        usageAccountScope: classifyUsageAccountScope(subscriptionType),
         headers: { authorization: `Bearer ${accessToken}` },
       };
     }
@@ -743,7 +756,7 @@ const claudeSubscriptionRuntimeDefinition: PluginConnectedAccountRuntime = {
         providerOrganizationId: organizationUuid || null,
       })));
     }
-    return { kind: 'files', files };
+    return { kind: 'files', files, usageAccountScope: classifyUsageAccountScope(planMetadata.subscriptionType) };
   },
 };
 

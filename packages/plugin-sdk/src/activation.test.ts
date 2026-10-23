@@ -262,7 +262,7 @@ describe('plugin activation contract', () => {
         expectTypeOf<keyof Extract<
             PluginConnectedAccountMaterialization,
             { kind: 'httpHeaders' }
-        >>().toEqualTypeOf<'kind' | 'headers'>();
+        >>().toEqualTypeOf<'kind' | 'headers' | 'usageAccountScope'>();
         expectTypeOf<Extract<
             PluginConnectedAccountMaterialization,
             { kind: 'httpHeaders' }
@@ -270,7 +270,7 @@ describe('plugin activation contract', () => {
         expectTypeOf<keyof Extract<
             PluginConnectedAccountMaterialization,
             { kind: 'environment' }
-        >>().toEqualTypeOf<'kind' | 'env'>();
+        >>().toEqualTypeOf<'kind' | 'env' | 'usageAccountScope'>();
         expectTypeOf<Extract<
             PluginConnectedAccountMaterialization,
             { kind: 'environment' }
@@ -278,7 +278,7 @@ describe('plugin activation contract', () => {
         expectTypeOf<keyof Extract<
             PluginConnectedAccountMaterialization,
             { kind: 'files' }
-        >>().toEqualTypeOf<'kind' | 'files'>();
+        >>().toEqualTypeOf<'kind' | 'files' | 'usageAccountScope'>();
         expectTypeOf<Extract<
             PluginConnectedAccountMaterialization,
             { kind: 'files' }
