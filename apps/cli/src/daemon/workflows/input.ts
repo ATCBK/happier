@@ -386,19 +386,35 @@ export async function materializeWorkflowStepInput(params: Readonly<{
   let text = render();
   while (Buffer.byteLength(text, 'utf8') > MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES) {
     const index = resolvedInputs.findIndex((entry) => entry.reference.kind === 'session_context'
-      && WorkflowSessionContextV1Schema.parse(entry.value).turns.length > 0);
+      && isWorkflowJsonObject(entry.value) && Array.isArray(entry.value.turns) && entry.value.turns.length > 0);
     if (index < 0) {
-      if (!compactWorkflowPromptContext(promptContext)) throw new WorkflowInputResolutionError('workflow_input_too_large');
-      text = render();
+      const compacted = compactWorkflowPromptContext(promptContext, render, text);
+      if (compacted === null) throw new WorkflowInputResolutionError('workflow_input_too_large');
+      text = compacted;
       continue;
     }
     const entry = resolvedInputs[index]!;
     const context = WorkflowSessionContextV1Schema.parse(entry.value);
-    entry.value = { ...context, turns: context.turns.slice(1), truncated: true };
-    values[index] = entry.value;
     const projected = promptContext.find(projected => projected.reference === entry.reference);
-    if (projected) projected.value = entry.value;
-    text = render();
+    const dropOldestTurns = (count: number) => {
+      entry.value = { ...context, turns: context.turns.slice(count), truncated: true };
+      values[index] = entry.value;
+      if (projected) projected.value = entry.value;
+      return render();
+    };
+    // Removing Session turns reduces the encoded array. Find the same first
+    // fitting suffix without reparsing and rendering every discarded prefix.
+    text = dropOldestTurns(context.turns.length);
+    if (Buffer.byteLength(text, 'utf8') > MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES) continue;
+    let first = 1;
+    let last = context.turns.length;
+    while (first < last) {
+      const middle = first + Math.floor((last - first) / 2);
+      const candidate = dropOldestTurns(middle);
+      if (Buffer.byteLength(candidate, 'utf8') <= MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES) last = middle;
+      else first = middle + 1;
+    }
+    text = dropOldestTurns(first);
   }
   for (const [index, entry] of resolvedInputs.entries()) {
     const projection = promptContext.filter(projected => projected.reference === entry.reference);

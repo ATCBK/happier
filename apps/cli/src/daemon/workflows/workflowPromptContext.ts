@@ -1,5 +1,6 @@
 import { renderDiscussionContextBlockV1, type DiscussionPromptAuthorV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import type { WorkflowValueReference } from '@happier-dev/protocol/workflows';
+import { MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
 import { isWorkflowJsonObject, type WorkflowJsonValue } from './input';
 
 export type WorkflowPromptContext = {
@@ -59,26 +60,43 @@ export function projectWorkflowPromptContext(input: Readonly<{
     ...(input.resultSource ? { source: input.resultSource.source } : {}) }];
 }
 
+function serializeWorkflowPromptContextEntry({ author, ...entry }: WorkflowPromptContext) {
+  return { author, text: JSON.stringify(entry) };
+}
+
 export function renderWorkflowPromptContext(entries: readonly WorkflowPromptContext[]): string {
-  return renderDiscussionContextBlockV1(entries.map(({ author, ...entry }) => ({ author, text: JSON.stringify(entry) })));
+  return renderDiscussionContextBlockV1(entries.map(serializeWorkflowPromptContextEntry));
 }
 
 /** Reduce only the prompt projection. Exact values and source custody remain at their existing owners. */
-export function compactWorkflowPromptContext(entries: WorkflowPromptContext[]): boolean {
+export function compactWorkflowPromptContext(entries: WorkflowPromptContext[], render: () => string, rendered: string): string | null {
   // Preserve the original question/request and the newest Discussion item. Older
   // messages become source references before any individual body is shortened.
   const discussionEntries = entries.filter(entry => isWorkflowJsonObject(entry.source) && entry.source.readAction === 'discussion.read');
-  const older = discussionEntries.slice(0, -1).find(entry => !entry.incomplete);
-  if (older) { older.value = null; older.incomplete = true; return true; }
+  const older = discussionEntries.slice(0, -1).filter(entry => !entry.incomplete);
+  if (older.length > 0) {
+    let bytes = Buffer.byteLength(rendered, 'utf8');
+    for (const entry of older) {
+      // The canonical writer frames entries independently, so this delta is
+      // exact. Marking a tiny value incomplete can grow it: keep authored order
+      // and stop at the first fit instead of assuming monotonic prefix sizes.
+      const originalBytes = Buffer.byteLength(renderWorkflowPromptContext([entry]), 'utf8');
+      entry.value = null;
+      entry.incomplete = true;
+      bytes += Buffer.byteLength(renderWorkflowPromptContext([entry]), 'utf8') - originalBytes;
+      if (bytes <= MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES) break;
+    }
+    return render();
+  }
   const candidates = entries.filter(entry => !(entry.reference.kind === 'input'
     && (entry.reference.name === 'question' || entry.reference.name === 'request')));
   const largest = candidates.map(entry => ({ entry, text: typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value) }))
     .filter(candidate => candidate.text.length > 1 && candidate.entry.value !== null)
     .sort((left, right) => right.text.length - left.text.length)[0];
-  if (!largest) return false;
+  if (!largest) return null;
   // Repeated halving is logarithmic and uses the containing materialization
   // allowance; this introduces no second budget or per-source limit.
   largest.entry.value = largest.text.slice(-Math.floor(largest.text.length / 2));
   largest.entry.incomplete = true;
-  return true;
+  return render();
 }
