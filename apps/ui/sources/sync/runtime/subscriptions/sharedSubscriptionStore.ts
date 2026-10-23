@@ -80,8 +80,9 @@ export type SharedSubscriptionStoreConfig<
      * payload it carried describe this entry". They differ for a domain whose entries are narrower
      * than a publication — a public-preview entry pinned to one `exposureId` is affected by a
      * session-wide publication but must not adopt a snapshot describing a different exposure. When
-     * this returns false the entry refreshes instead of applying, so it converges on its own scope
-     * rather than silently showing another scope's state. Omit it and every matching entry applies
+     * this returns false a demanded entry refreshes instead of applying, so it converges on its own
+     * scope rather than silently showing another scope's state. A retained closed entry revalidates
+     * when demand returns. Omit it and every matching entry applies
      * the snapshot, which is right for a domain whose entries and publications share a scope.
      */
     snapshotCoversEntry?: (entryInput: TInput, snapshot: TSnapshot, publishInput: TInput) => boolean;
@@ -454,6 +455,7 @@ export function createSharedSubscriptionStore<
                     continue;
                 }
                 if (snapshotCoversEntry && !snapshotCoversEntry(entry.input, snapshot, input)) {
+                    if (entry.refCount <= 0) continue;
                     if (entry.inFlight) entry.refreshRequested = true;
                     void runRefresh(entry);
                     continue;

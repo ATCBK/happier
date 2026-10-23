@@ -15,6 +15,78 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it('refreshes a non-covering publication only while the retained projection is demanded', async () => {
+        type Input = Readonly<{ machineId: string; projection: string }>;
+        const input: Input = { machineId: 'machine', projection: 'workspace' };
+        const broader: Input = { machineId: 'machine', projection: 'all' };
+        let value = 0;
+        const snapshotClient = vi.fn(async () => ++value);
+        const watchSignals: Array<AbortSignal | undefined> = [];
+        const watchClient = vi.fn((signal?: AbortSignal) => new Promise<SharedSubscriptionWatchOutcome<number>>(resolve => {
+            watchSignals.push(signal);
+            signal?.addEventListener('abort', () => resolve({ status: 'unavailable' }), { once: true });
+        }));
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: Input) => key,
+            storeKey: (key: Input) => `${key.machineId}:${key.projection}`,
+            retainState: true, watchAfterRefresh: true,
+            defaultSnapshotClient: snapshotClient, defaultWatchClient: watchClient,
+            refresh: ({ snapshotClient: client }) => client(),
+            watch: ({ watchClient: client, signal }) => client(signal),
+            applySnapshot: (_state: number, snapshot: number) => snapshot,
+            matchesPublish: (entry, published) => entry.machineId === published.machineId,
+            snapshotCoversEntry: (entry, _snapshot, published) => entry.projection === published.projection,
+        });
+        let release = store.subscribe(input, () => {});
+        try {
+            await vi.waitFor(() => expect(watchClient).toHaveBeenCalledOnce());
+            expect(store.getState(input)).toBe(1);
+            release();
+            expect(watchSignals[0]?.aborted).toBe(true);
+            snapshotClient.mockClear();
+            watchClient.mockClear();
+
+            // A sibling Action affects this entry, but carries another projection.
+            store.publish(broader, 99);
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(snapshotClient).not.toHaveBeenCalled();
+            expect(watchClient).not.toHaveBeenCalled();
+            expect(store.getState(input)).toBe(1);
+
+            // A covered answer is already admitted data, not a reason to read.
+            store.publish(input, 7);
+            expect(store.getState(input)).toBe(7);
+            expect(snapshotClient).not.toHaveBeenCalled();
+            expect(watchClient).not.toHaveBeenCalled();
+
+            release = store.subscribe(input, () => {});
+            expect(store.getState(input)).toBe(7);
+            await vi.waitFor(() => expect(store.getState(input)).toBe(2));
+            expect(snapshotClient).toHaveBeenCalledOnce();
+            expect(watchClient).toHaveBeenCalledOnce();
+
+            store.publish(broader, 99);
+            await vi.waitFor(() => expect(store.getState(input)).toBe(3));
+            expect(snapshotClient).toHaveBeenCalledTimes(2);
+            expect(watchClient).toHaveBeenCalledOnce();
+            release();
+            expect(watchSignals[1]?.aborted).toBe(true);
+
+            // Explicit read authority remains independent of subscription demand.
+            store.invalidate(input);
+            expect(snapshotClient).toHaveBeenCalledTimes(2);
+            await store.readOnce(input);
+            expect(store.getState(input)).toBe(4);
+            await store.readOnce(input);
+            expect(snapshotClient).toHaveBeenCalledTimes(3);
+            await store.read(input);
+            expect(store.getState(input)).toBe(5);
+            expect(snapshotClient).toHaveBeenCalledTimes(4);
+            expect(watchClient).toHaveBeenCalledOnce();
+        } finally { release(); store.reset(); }
+    });
+
     it.each(['parked', 'preparing'] as const)('revalidates a reconnected transport without waiting for its %s watch', async phase => {
         let recover: ((revalidate?: boolean) => void) | undefined;
         let reads = 0;
