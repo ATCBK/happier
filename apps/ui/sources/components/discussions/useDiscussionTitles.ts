@@ -42,18 +42,21 @@ export function useDiscussionTitles(input: Readonly<{
             accountLifetime: binding,
         });
     }, [address, availability, binding, enabled, wanted]);
-    React.useEffect(() => repository?.mount(), [repository]);
-
     const idsKey = input.discussionIds.join('\u0000');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by the id set, not the array identity
     const discussionIds = React.useMemo(() => input.discussionIds, [idsKey]);
-    const addresses = React.useMemo(() => discussionIds.map(discussionId => ({ serverId, discussionId })), [discussionIds, serverId]);
+    React.useEffect(() => {
+        if (!repository) return;
+        const disposals = discussionIds.map(discussionId => repository.mount({ discussionId, projection: 'summary' }));
+        return () => { for (const dispose of disposals) dispose(); };
+    }, [discussionIds, repository]);
+    const addresses = React.useMemo(() => repository ? discussionIds.map(discussionId => ({ serverId, discussionId })) : [], [discussionIds, repository, serverId]);
     const projected = useDiscussionTitleProjections(addresses);
     const titles = React.useMemo(() => {
         if (!repository) return NO_TITLES;
-        return new Map(discussionIds.flatMap((id, index) => {
+        return new Map(discussionIds.flatMap((id, index): Array<readonly [string, string]> => {
             const title = projected[index]?.trim();
-            return title ? [[id, title] as const] : [];
+            return title ? [[id, title]] : [];
         }));
     }, [discussionIds, projected, repository]);
 

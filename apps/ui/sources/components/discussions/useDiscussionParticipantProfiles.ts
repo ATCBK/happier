@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { TranscriptAccountActor } from '@happier-dev/session-core/messages';
 import type { DiscussionParticipantsListResponseV1 } from '@happier-dev/protocol/discussions/participants';
 import type { AccountDisplayProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
+import type { SessionMessageAccountActorV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 import { areServerAccountScopesEqual, serverAccountScopedResourceKey, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { getUserProfiles } from '@/sync/api/social/apiFriends';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
@@ -12,6 +13,8 @@ import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDi
 export function useDiscussionParticipantProfiles(input: Readonly<{
     scope: ServerAccountScope;
     roster: DiscussionParticipantsListResponseV1 | null;
+    /** Complete scoped profiles already admitted by the Discussion summary owner. */
+    participantAccounts?: readonly SessionMessageAccountActorV1[];
     /** Before a roster exists (a New Discussion's chosen people), the same profile read by id. */
     accountIds?: readonly string[];
     enabled: boolean;
@@ -26,24 +29,27 @@ export function useDiscussionParticipantProfiles(input: Readonly<{
         () => accountLifetime?.isCurrent() === true && areServerAccountScopesEqual(accountLifetime.scope, scope),
         () => false);
     const viewerProfile = useShareViewerProfile(scope);
-    const accountIdsKey = JSON.stringify(roster ? [...new Set([roster.ownerAccountId, ...roster.grants.flatMap(grant =>
-        grant.principal.kind === 'account' ? [grant.principal.accountId] : [])])].sort() : [...new Set(input.accountIds ?? [])].sort());
+    const accountIds = roster ? [...new Set([roster.ownerAccountId, ...roster.grants.flatMap(grant =>
+        grant.principal.kind === 'account' ? [grant.principal.accountId] : [])])].sort() : [...new Set(input.accountIds ?? [])].sort();
+    const accountIdsKey = JSON.stringify(accountIds);
+    const admittedAccounts = React.useMemo(() => new Map<string, SessionMessageAccountActorV1>(input.participantAccounts?.map(actor => [actor.accountId, actor]) ?? []), [input.participantAccounts]);
+    const missingIdsKey = JSON.stringify(accountIds.filter(id => !admittedAccounts.has(id)));
     const key = serverAccountScopedResourceKey(scope, roster?.discussionId ?? '', accountIdsKey);
     const [resolved, setResolved] = React.useState<Readonly<{
         key: string; lifetime: ServerAccountScopeLifetime; profiles: ReadonlyMap<string, AccountDisplayProfileV1 | null>;
     }> | null>(null);
 
     React.useEffect(() => {
-        if (!enabled || !isCurrent || !accountLifetime || accountIdsKey === '[]') return;
+        if (!enabled || !isCurrent || !accountLifetime || missingIdsKey === '[]') return;
         const abort = new AbortController();
         const retirement = accountLifetime.onRetire(() => abort.abort());
-        const ids: string[] = JSON.parse(accountIdsKey);
+        const ids: string[] = JSON.parse(missingIdsKey);
         void runWithServerRequestAuthorityForServerAccountScope({ scope,
             activeRequest: async () => { throw new Error('Discussion profiles require captured Home credentials'); },
         }, async authority => {
             if (abort.signal.aborted || !accountLifetime.isCurrent()) return;
-            // The existing people API owns batching/parsing. Every member of this batch uses the
-            // same captured Account authority, including when another Home is focused.
+            // New drafts and genuinely absent projections still need the People
+            // owner, under the same captured Account even when another Home is focused.
             const users = await getUserProfiles({ token: authority.context.token }, ids, { retry: 'none',
                 request: (path, init, options) => authority.request(path, { ...init, signal: abort.signal }, { retry: options?.retry }),
             });
@@ -56,7 +62,7 @@ export function useDiscussionParticipantProfiles(input: Readonly<{
             })) });
         }).catch(() => { /* Unavailable profiles do not erase acknowledged roster names or imply a former member. */ });
         return () => { retirement.dispose(); abort.abort(); };
-    }, [accountIdsKey, enabled, key, scope.serverId, scope.accountId, accountLifetime, isCurrent]);
+    }, [missingIdsKey, enabled, key, scope.serverId, scope.accountId, accountLifetime, isCurrent]);
 
     return React.useMemo(() => {
         const accounts = new Map<string, TranscriptAccountActor>();
@@ -70,11 +76,14 @@ export function useDiscussionParticipantProfiles(input: Readonly<{
         if (resolved?.key === key && resolved.lifetime === accountLifetime) for (const [accountId, profile] of resolved.profiles) {
             accounts.set(accountId, { v: 1, serverId: scope.serverId, accountId, profile });
         }
+        // Canonical current observations beat earlier fallback reads, including
+        // explicit null profiles that withdraw a previously displayed face/name.
+        for (const actor of admittedAccounts.values()) accounts.set(actor.accountId, { ...actor, serverId: scope.serverId });
         // A default/unnamed loading profile must not erase an acknowledged Home name.
         if (roster && viewerProfile && formatAccountDisplayName(viewerProfile)
             && (roster.ownerAccountId === scope.accountId || accounts.has(scope.accountId))) {
             accounts.set(scope.accountId, { v: 1, serverId: scope.serverId, accountId: scope.accountId, profile: viewerProfile });
         }
         return { owner: roster ? accounts.get(roster.ownerAccountId) ?? null : null, accounts };
-    }, [key, resolved, roster, scope.serverId, scope.accountId, viewerProfile, accountLifetime, isCurrent]);
+    }, [admittedAccounts, key, resolved, roster, scope.serverId, scope.accountId, viewerProfile, accountLifetime, isCurrent]);
 }

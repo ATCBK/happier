@@ -1,6 +1,7 @@
 import {
   DiscussionSelectionSourceV1Schema,
   isDiscussionDocEditProposalContentV1,
+  readDiscussionMentionedParticipantIdsV1,
   readDiscussionMessagePartsV1,
 } from '@happier-dev/protocol/discussions/content';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
@@ -83,6 +84,77 @@ export function projectDiscussionMessageReferences(
       .map((part) => (typeof part === 'string' ? part : part.marker))
       .join(''),
   };
+}
+
+export type DiscussionMessageLabelResolvers = Readonly<{
+  account: (id: string) => string | null;
+  session: (id: string) => string | null;
+}>;
+export const EMPTY_DISCUSSION_MESSAGE_LABELS: DiscussionMessageLabelResolvers = {
+  account: () => null,
+  session: () => null,
+};
+type LabelMessage = Pick<DiscussionOpenedMessageV1,
+  'id' | 'content' | 'replyTarget' | 'participantDeliveryV1' | 'docEditProposalDispositionV1'>
+  & Partial<Pick<DiscussionOpenedMessageV1, 'producerV1'>>;
+export type DiscussionMessageLabelProjection = DiscussionMessageLabelResolvers & Readonly<{
+  content: LabelMessage['content'];
+  parent: LabelMessage | undefined;
+  deliveries: LabelMessage['participantDeliveryV1'];
+  decider: string | null;
+  producer: LabelMessage['producerV1'];
+  accounts: ReadonlyMap<string, string | null>;
+  sessions: ReadonlyMap<string, string | null>;
+}>;
+
+function labelsUnchanged(values: ReadonlyMap<string, string | null>, resolve: (id: string) => string | null): boolean {
+  for (const [id, label] of values) if (resolve(id) !== label) return false;
+  return true;
+}
+
+/** Rows consume only their own/quoted references, not a changing whole-history resolver. */
+export function projectDiscussionMessageLabels(
+  messages: readonly LabelMessage[],
+  labels: DiscussionMessageLabelResolvers,
+  previous: ReadonlyMap<string, DiscussionMessageLabelProjection> = new Map<string, DiscussionMessageLabelProjection>(),
+): ReadonlyMap<string, DiscussionMessageLabelProjection> {
+  const byId = new Map(messages.map(message => [message.id, message]));
+  let changed: Map<string, DiscussionMessageLabelProjection> | null = null;
+  for (const message of messages) {
+    const known = previous.get(message.id);
+    const parent = message.replyTarget?.kind === 'message' ? byId.get(message.replyTarget.messageId) : undefined;
+    const disposition = message.docEditProposalDispositionV1;
+    const decider = disposition && disposition.state !== 'open' ? disposition.decidedBy.accountId : null;
+    if (known && known.content === message.content && known.parent === parent
+      && known.deliveries === message.participantDeliveryV1 && known.decider === decider
+      && known.producer === message.producerV1
+      && labelsUnchanged(known.accounts, labels.account) && labelsUnchanged(known.sessions, labels.session)) continue;
+    const accountIds = new Set<string>();
+    const sessionIds = new Set<string>();
+    for (const content of [message.content, parent?.content]) if (content) {
+      const mentioned = readDiscussionMentionedParticipantIdsV1(content);
+      for (const id of mentioned.mentionedAccountIds) accountIds.add(id);
+      for (const id of mentioned.mentionedSessionIds) sessionIds.add(id);
+    }
+    if (decider) accountIds.add(decider);
+    if (message.producerV1?.kind === 'agent') sessionIds.add(message.producerV1.sessionId);
+    for (const delivery of message.participantDeliveryV1 ?? []) sessionIds.add(delivery.participantSessionId);
+    const accounts = new Map<string, string | null>();
+    const sessions = new Map<string, string | null>();
+    for (const id of accountIds) accounts.set(id, labels.account(id));
+    for (const id of sessionIds) sessions.set(id, labels.session(id));
+    changed ??= new Map(previous);
+    changed.set(message.id, {
+      content: message.content, parent, deliveries: message.participantDeliveryV1, decider, producer: message.producerV1, accounts, sessions,
+      account: accounts.size ? id => accounts.get(id) ?? null : EMPTY_DISCUSSION_MESSAGE_LABELS.account,
+      session: sessions.size ? id => sessions.get(id) ?? null : EMPTY_DISCUSSION_MESSAGE_LABELS.session,
+    });
+  }
+  for (const id of previous.keys()) if (!byId.has(id)) {
+    changed ??= new Map(previous);
+    changed.delete(id);
+  }
+  return changed ?? previous;
 }
 
 /** Readable message content as one preview line; unknown mentions never expose raw ids. */
@@ -363,6 +435,7 @@ export type DiscussionTimelineItem<
   | Readonly<{
       kind: 'human_message';
       message: TMessage;
+      labels?: DiscussionMessageLabelProjection;
     }>
   | Readonly<{
       kind: 'agent_activity_reference';
@@ -413,8 +486,18 @@ export function buildDiscussionTimelineItems<
     readExecutionRunEntry: (runId: string) => AgentActivityEntry | null;
     /** The authorized managed Run list for this Discussion; a Run whose starting message isn't loaded waits for it. */
     workflowRuns?: readonly WorkflowRunSummaryV1[];
+    messageLabels?: ReadonlyMap<string, DiscussionMessageLabelProjection>;
   }>,
+  previous: readonly DiscussionTimelineItem<TMessage>[] = [],
 ): readonly DiscussionTimelineItem<TMessage>[] {
+  const previousMessages = new Map<string, Extract<DiscussionTimelineItem<TMessage>, { kind: 'human_message' }>>();
+  const previousRuns = new Map<string, Extract<DiscussionTimelineItem<TMessage>, { kind: 'workflow_run' }>>();
+  const previousReferences = new Map<string, AgentActivityReference>();
+  for (const item of previous) {
+    if (item.kind === 'human_message') previousMessages.set(item.message.id, item);
+    else if (item.kind === 'workflow_run') previousRuns.set(item.run.id, item);
+    else previousReferences.set(item.entry.runId ?? item.subagent.id, item);
+  }
   const messageById = new Map(
     params.messages.map((message) => [message.id, message]),
   );
@@ -454,7 +537,9 @@ export function buildDiscussionTimelineItems<
     const entry = params.readExecutionRunEntry(runId);
     if (!entry || entry.kind !== 'execution_run' || entry.runId !== runId)
       continue;
-    const reference: AgentActivityReference = {
+    const known = previousReferences.get(runId);
+    const reference: AgentActivityReference = known && known.anchorSeq === anchorSeq
+      && known.entry === entry && known.subagent === subagent ? known : {
       kind: 'agent_activity_reference',
       anchorSeq,
       entry,
@@ -488,12 +573,17 @@ export function buildDiscussionTimelineItems<
 
   const items: DiscussionTimelineItem<TMessage>[] = [];
   for (const message of params.messages) {
-    items.push({ kind: 'human_message', message });
-    for (const run of workflowRunsByMessageId.get(message.id) ?? [])
-      items.push({ kind: 'workflow_run', run });
+    const labels = params.messageLabels?.get(message.id);
+    const known = previousMessages.get(message.id);
+    items.push(known?.message === message && known.labels === labels
+      ? known : { kind: 'human_message', message, ...(labels ? { labels } : {}) });
+    for (const run of workflowRunsByMessageId.get(message.id) ?? []) {
+      const knownRun = previousRuns.get(run.id);
+      items.push(knownRun?.run === run ? knownRun : { kind: 'workflow_run', run });
+    }
     items.push(...(referencesByAnchorSeq.get(message.seq) ?? []));
   }
-  return items;
+  return items.length === previous.length && items.every((item, index) => item === previous[index]) ? previous : items;
 }
 
 /**

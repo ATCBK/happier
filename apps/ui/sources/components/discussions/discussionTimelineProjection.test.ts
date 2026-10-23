@@ -7,7 +7,7 @@ import {
 } from '@/sync/domains/session/agentActivity';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
-import { buildDiscussionTimelineItems, placeDiscussionRequesterApprovals, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, resolveDiscussionWorkflowAttribution, readDiscussionWorkflowResultDetail, resolveDiscussionReplyPresentation, startsDiscussionMessageGroup } from '@/components/discussions/discussionTimelineProjection';
+import { buildDiscussionTimelineItems, placeDiscussionRequesterApprovals, projectDiscussionMessageLabels, readDiscussionMessagePreview, resolveDiscussionMessageAuthorLabel, resolveDiscussionReplyAttributionLine, resolveDiscussionReplyOutcome, resolveDiscussionWorkflowAttribution, readDiscussionWorkflowResultDetail, resolveDiscussionReplyPresentation, startsDiscussionMessageGroup } from '@/components/discussions/discussionTimelineProjection';
 import { t } from '@/text';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
@@ -36,6 +36,32 @@ describe('readDiscussionMessagePreview', () => {
         ] }, { account: () => 'Maya' })).toBe('Ask @Maya');
         expect(readDiscussionMessagePreview(null)).toBeNull();
     });
+});
+
+it('updates only referenced labels and withdraws quoted references when their parent becomes unreadable', () => {
+    const root = { id: 'root', content: DiscussionMessageContentV1Schema.parse({ v: 1, parts: [
+        { t: 'mention', participant: { kind: 'account', accountId: 'person' } },
+        { t: 'mention', participant: { kind: 'session', sessionId: 'session' } },
+    ] }) };
+    const plain = { id: 'plain', content: DiscussionMessageContentV1Schema.parse({ v: 1, parts: [{ t: 'text', text: 'Unrelated' }] }) };
+    const replyTarget = { kind: 'message', messageId: 'root' } satisfies NonNullable<Parameters<typeof projectDiscussionMessageLabels>[0][number]['replyTarget']>;
+    const reply = { id: 'reply', content: plain.content, replyTarget };
+    let account: string | null = 'Maya';
+    let session: string | null = 'Reviewer';
+    const labels = { account: () => account, session: () => session };
+    const first = projectDiscussionMessageLabels([root, plain, reply], labels);
+    const arrival = { id: 'arrival', content: plain.content };
+    const next = projectDiscussionMessageLabels([root, plain, reply, arrival], labels, first);
+    for (const row of [root, plain, reply]) expect(next.get(row.id)).toBe(first.get(row.id));
+    account = 'Mei';
+    session = null;
+    const changed = projectDiscussionMessageLabels([root, plain, reply, arrival], labels, next);
+    expect(changed.get('plain')).toBe(next.get('plain'));
+    expect(changed.get('root')?.account('person')).toBe('Mei');
+    expect(changed.get('reply')?.session('session')).toBeNull();
+    const withheld = projectDiscussionMessageLabels([{ ...root, content: null }, plain, reply, arrival], labels, changed);
+    expect(withheld.get('reply')).not.toBe(changed.get('reply'));
+    expect(withheld.get('reply')?.account('person')).toBeNull();
 });
 
 describe('resolveDiscussionMessageAuthorLabel', () => {
@@ -113,6 +139,29 @@ function workflowRun(id: string, params: Readonly<{ messageId: string; serverId?
 function message(id: string, seq: number) {
     return { id, seq };
 }
+
+it('publishes only the arriving timeline model across 300 messages and three Runs', () => {
+    const messages = Array.from({ length: 300 }, (_, index) => message(`message-${index + 1}`, index + 1));
+    const params = { serverId: 'home-1', discussionId: 'discussion-1', messages, subagents: [],
+        readExecutionRunEntry: () => null,
+        workflowRuns: [100, 200, 300].map(seq => workflowRun(`run-${seq}`, { messageId: `message-${seq}` })),
+    };
+    const previous = buildDiscussionTimelineItems(params);
+    const next = buildDiscussionTimelineItems({ ...params, messages: [...messages, message('arrival', 301)] }, previous);
+    const current = new Set(next);
+    const republished = previous.filter(item => !current.has(item)).length;
+    expect(republished).toBe(0);
+    expect(next).toHaveLength(previous.length + 1);
+});
+
+it('keeps unchanged requester-card groups stable when another message arrives', () => {
+    const messages = Array.from({ length: 300 }, (_, index) => ({ id: `message-${index + 1}`, producerV1: null }));
+    const approvals = [50, 100, 200, 300].map(seq => ({ requestRef: `request-${seq}`, originMessageId: `message-${seq}` }));
+    const previous = placeDiscussionRequesterApprovals(messages, approvals);
+    const next = placeDiscussionRequesterApprovals([...messages, { id: 'arrival', producerV1: null }], approvals, previous);
+    const republished = [...previous].filter(([id, group]) => next.get(id) !== group).length;
+    expect(republished).toBe(0);
+});
 
 function entry(runId: string, startedAtMs: number | null): AgentActivityEntry {
     return {

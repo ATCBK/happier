@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { SessionMessageAccountActorV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { act, renderHook } from '@/dev/testkit/hooks/renderHook';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -28,6 +29,39 @@ function roster(ownerAccountId: string) {
 }
 
 describe('useDiscussionParticipantProfiles', () => {
+    it('uses the complete profiles already admitted by the Discussion summary without per-person HTTP reads', async () => {
+        const home = await serveAccountHomes({ homes: [{ key: 'captured', serverUrl: 'https://discussion-admitted-people.test', accountId: 'viewer' }],
+            route: request => request.path.startsWith('/v1/user/') ? Response.json({ user: {
+                id: request.path.split('/').at(-1), firstName: 'Scoped', lastName: request.path.split('/').at(-1),
+                username: 'person', avatar: { path: '/face.png', url: 'https://discussion-admitted-people.test/face.png' },
+                bio: null, status: 'none', publicKey: null,
+            } }) : undefined });
+        try {
+            const scope = { serverId: home.homes.captured!.id, accountId: 'viewer' };
+            const people = DiscussionParticipantsListResponseV1Schema.parse({ ...roster('owner'),
+                grants: Array.from({ length: 4 }, (_, index) => ({ principal: { kind: 'account', accountId: `person-${index}` },
+                    accessLevel: 'edit', createdByAccountId: 'owner', createdAt: 1, display: { name: `Scoped person-${index}`, username: 'person' } })),
+            });
+            const participantAccounts = ['owner', ...people.grants.flatMap(grant => grant.principal.kind === 'account' ? [grant.principal.accountId] : [])]
+                .map(accountId => SessionMessageAccountActorV1Schema.parse({ v: 1, accountId, profile: {
+                    name: `Scoped ${accountId}`, firstName: 'Scoped', lastName: accountId, username: 'person',
+                    avatarUrl: 'https://discussion-admitted-people.test/face.png',
+                } }));
+            const input = { scope, roster: people, participantAccounts, enabled: true };
+            const hook = await renderHook(({ participantAccounts }) => usePeople({ ...input, participantAccounts }),
+                { initialProps: { participantAccounts } });
+            await vi.waitFor(() => expect(hook.getCurrent().accounts.size).toBe(5));
+            expect(hook.getCurrent().owner?.profile?.avatarUrl).toBe('https://discussion-admitted-people.test/face.png');
+            const reads = home.requests.filter(request => request.path.startsWith('/v1/user/'));
+            expect(reads.length).toBe(0);
+            await hook.rerender({ participantAccounts: participantAccounts.map(actor => actor.accountId === 'owner'
+                ? { ...actor, profile: null } : actor) });
+            expect(hook.getCurrent().owner?.profile).toBeNull();
+            expect(home.requests.filter(request => request.path.startsWith('/v1/user/')).length).toBe(0);
+            await hook.unmount();
+        } finally { await home.dispose(); }
+    });
+
     it('resolves the owner and humans from the captured Home without borrowing the same Account on another Home', async () => {
         const home = await serveAccountHomes({
             homes: [{ key: 'captured', serverUrl: 'https://discussion-people.test', accountId: 'viewer' },

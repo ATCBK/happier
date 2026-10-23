@@ -328,6 +328,7 @@ export function createDiscussionRepository(options: Readonly<{
     const listInFlight = new Map<string, Promise<void>>();
     const mountedAnchors = new Map<string, { anchor: ListAnchor; count: number }>();
     const mountedThreads = new Map<string, number>();
+    const mountedSummaries = new Map<string, number>();
     const intents = new Map<string, MutationIntent>();
     let client = options.client;
     let mountedWatch: MountedDiscussionChangeWatch | null = null;
@@ -436,9 +437,7 @@ export function createDiscussionRepository(options: Readonly<{
     const applyListPages = (state: 'active' | 'archived', status: DiscussionRepositoryStatus, errorCode: string | null, anchorSessionId?: ListAnchor) => {
         const pages = pagesFor(anchorSessionId)[state];
         const current = getListSnapshot(anchorSessionId).lists[state];
-        const flattened = flattenListPages(pages, current.items);
-        const items = flattened.length === current.items.length && flattened.every((row, index) => row === current.items[index])
-            ? current.items : flattened;
+        const items = flattenListPages(pages, current.items);
         updateList(state, {
             items,
             nextCursor: pages.at(-1)?.nextCursor ?? null,
@@ -1108,7 +1107,7 @@ export function createDiscussionRepository(options: Readonly<{
         return outcome;
     };
 
-    const refreshLoaded = async (): Promise<void> => {
+    const refreshLoaded = async (discussionIds: readonly string[]): Promise<void> => {
         const work: Promise<void>[] = [];
         if (attentionMountReferences > 0) work.push(refreshAttentionAfterChange());
         for (const anchor of [...(homeMountReferences > 0 ? [undefined] : []), ...[...mountedAnchors.values()].map(entry => entry.anchor)]) {
@@ -1121,9 +1120,13 @@ export function createDiscussionRepository(options: Readonly<{
             work.push(reread('active'));
             if (pagesFor(anchor).archived.length > 0) work.push(reread('archived'));
         }
-        const homeThreadsDemanded = homeMountReferences > 0 || [...mountedAnchors.values()].some(entry => typeof entry.anchor === 'string');
-        for (const discussionId of homeThreadsDemanded ? Object.keys(snapshot.threads) : mountedThreads.keys()) {
-            if (snapshot.threads[discussionId]?.status !== 'revoked') work.push(refreshDiscussion(discussionId));
+        for (const discussionId of discussionIds) {
+            if (mountedThreads.has(discussionId)) work.push(refreshDiscussion(discussionId));
+            else if (snapshot.threads[discussionId] || mountedSummaries.has(discussionId)) {
+                // A changed retained resource still rechecks current access and
+                // withdraws revoked content. A list/title is not message demand.
+                work.push((async () => { await refreshSummary(discussionId); })());
+            }
         }
         await Promise.all(work);
         await Promise.all([...intents.values()].map(async (intent) => {
@@ -1289,18 +1292,19 @@ export function createDiscussionRepository(options: Readonly<{
                 ? { kind: 'stopped', errorCode: outcome.errorCode }
                 : { kind: 'retryable', errorCode: outcome.errorCode };
         },
-        mount(input?: Readonly<{ anchorSessionId?: string; anchorDocArtifactId?: string; discussionId?: string; attention?: boolean }>) {
+        mount(input?: Readonly<{ anchorSessionId?: string; anchorDocArtifactId?: string; discussionId?: string; projection?: 'summary'; attention?: boolean }>) {
             mountReferences += 1;
             const anchor: ListAnchor | undefined = input?.anchorDocArtifactId === undefined ? input?.anchorSessionId : { anchorDocArtifactId: input.anchorDocArtifactId };
             const threadId = input?.discussionId;
+            const threadMounts = input?.projection === 'summary' ? mountedSummaries : mountedThreads;
             if (input?.attention) attentionMountReferences += 1;
-            else if (threadId !== undefined) mountedThreads.set(threadId, (mountedThreads.get(threadId) ?? 0) + 1);
+            else if (threadId !== undefined) threadMounts.set(threadId, (threadMounts.get(threadId) ?? 0) + 1);
             else if (anchor === undefined) homeMountReferences += 1;
             else { const key = listAnchorKey(anchor); mountedAnchors.set(key, { anchor, count: (mountedAnchors.get(key)?.count ?? 0) + 1 }); }
             if (!mountedWatch) {
                 mountedWatch = watchMountedDiscussions({ scope: options.scope, address: options.address,
                     includeDocSourceChanges: () => attentionMountReferences > 0 || [...mountedAnchors.values()].some(entry => typeof entry.anchor === 'object'),
-                    onInvalidated: () => { void refreshLoaded(); } });
+                    onInvalidated: discussionIds => { void refreshLoaded(discussionIds); } });
             }
             let released = false;
             return () => {
@@ -1309,9 +1313,9 @@ export function createDiscussionRepository(options: Readonly<{
                 mountReferences -= 1;
                 if (input?.attention) attentionMountReferences -= 1;
                 else if (threadId !== undefined) {
-                    const remaining = (mountedThreads.get(threadId) ?? 1) - 1;
-                    if (remaining > 0) mountedThreads.set(threadId, remaining);
-                    else mountedThreads.delete(threadId);
+                    const remaining = (threadMounts.get(threadId) ?? 1) - 1;
+                    if (remaining > 0) threadMounts.set(threadId, remaining);
+                    else threadMounts.delete(threadId);
                 }
                 else if (anchor === undefined) homeMountReferences -= 1;
                 else {
@@ -1339,6 +1343,7 @@ export function createDiscussionRepository(options: Readonly<{
             listInFlight.clear();
             mountedAnchors.clear();
             mountedThreads.clear();
+            mountedSummaries.clear();
             listPages.active = [];
             listPages.archived = [];
             anchorPages.clear();

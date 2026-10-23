@@ -9,7 +9,7 @@ export type MountedDiscussionChangeWatch = Readonly<{
 type ActiveWatch = Readonly<{
     scope: ServerAccountScope;
     address: Readonly<{ serverId: string }>;
-    onInvalidated(): void;
+    onInvalidated(discussionIds: readonly string[]): void;
     includeDocSourceChanges?: () => boolean;
 }>;
 
@@ -23,7 +23,7 @@ const activeWatches = new Set<ActiveWatch>();
 export function watchMountedDiscussions(input: Readonly<{
     scope: ServerAccountScope;
     address: Readonly<{ serverId: string }>;
-    onInvalidated(): void;
+    onInvalidated(discussionIds: readonly string[]): void;
     includeDocSourceChanges?: () => boolean;
 }>): MountedDiscussionChangeWatch {
     const watch: ActiveWatch = Object.freeze({
@@ -53,7 +53,8 @@ export function publishMountedDiscussionChanges(input: Readonly<{
     changes: readonly ApiChangeEntry[];
 }>): void {
     if (activeWatches.size === 0) return;
-    const discussionChanged = input.changes.some(change => change.kind === 'discussion');
+    const discussionIds = [...new Set(input.changes.filter(change => change.kind === 'discussion').map(change => change.entityId))];
+    const discussionChanged = discussionIds.length > 0;
     const docChanged = input.changes.some(change => change.kind === 'artifact');
     if (!discussionChanged && !docChanged) return;
 
@@ -66,7 +67,7 @@ export function publishMountedDiscussionChanges(input: Readonly<{
         }
         if (!discussionChanged && !(docChanged && watch.includeDocSourceChanges?.())) continue;
         try {
-            watch.onInvalidated();
+            watch.onInvalidated(discussionIds);
         } catch {
             // A presentation refresh cannot suppress sibling observers or the
             // AccountChange owner's own canonical materialization/checkpoint.

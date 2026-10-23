@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { projectDiscussionMessageReferences } from './discussionTimelineProjection';
+import { projectDiscussionMessageLabels, EMPTY_DISCUSSION_MESSAGE_LABELS, type DiscussionMessageLabelProjection } from './discussionTimelineProjection';
 import { canonicalSessionDraftAddressV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import { deriveDocCommentDiscussionCreationLocalIdV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import { prepareDiscussionContentForPassage, readDiscussionContentPassage } from './discussionComposerDocument';
@@ -252,6 +253,8 @@ function useRepository(
     scope: ServerAccountScope,
     address: DiscussionHomeAddress,
     accountLifetime: ServerCredentialAccountScopeBinding,
+    discussionId?: string,
+    active = true,
 ): readonly [DiscussionRepository, ReturnType<DiscussionRepository['getSnapshot']>] {
     const client = React.useMemo(() => createDiscussionClient({ scope, availability: 'available' }), [scope]);
     const repository = React.useMemo(() => getDiscussionRepository({
@@ -261,7 +264,7 @@ function useRepository(
         accountLifetime,
     }), [accountLifetime, address, client, scope]);
     const snapshot = useDiscussionRepositorySnapshot(repository);
-    React.useEffect(() => repository.mount(), [repository]);
+    React.useEffect(() => repository.mount(discussionId ? { discussionId, projection: active ? undefined : 'summary' } : undefined), [active, discussionId, repository]);
     return [repository, snapshot];
 }
 
@@ -567,7 +570,7 @@ const DiscussionSourceObserver = React.memo(function DiscussionSourceObserver(pr
 });
 
 function Discussion(props: DiscussionProps) {
-    const [repository, snapshot] = useRepository(props.scope, props.target.address, props.accountLifetime);
+    const [repository, snapshot] = useRepository(props.scope, props.target.address, props.accountLifetime, props.target.discussionId, props.active);
     const thread = snapshot.threads[props.target.discussionId];
     const anchor = thread?.status === 'revoked' ? null : thread?.summary?.anchor;
     const anchorSessionId = anchor?.kind === 'session' ? anchor.sessionId : null;
@@ -648,6 +651,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     const refreshRoster = participantManagement.refresh;
     const participantProfiles = useDiscussionParticipantProfiles({ scope: props.scope, accountLifetime: props.accountLifetime,
         roster: participantManagement.roster,
+        participantAccounts: discussion?.participantAccounts,
         enabled: props.active && thread?.status !== 'revoked' });
     // The viewer's own unacknowledged message is authored with their scoped profile, not "Collaborator".
     const viewerProfile = useShareViewerProfile(props.scope);
@@ -924,15 +928,22 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
     }, [messages, mutation, props.scope.accountId, props.target.discussionId, thread?.messageSeq]);
     const sourceSubagents = props.source?.activity.subagents ?? NO_SOURCE_SUBAGENTS;
     const readSourceExecutionRunEntry = props.source?.activity.readExecutionRunEntry ?? readNoSourceExecutionRunEntry;
-    const items = React.useMemo(() => buildDiscussionTimelineItems({ serverId: props.target.address.serverId, discussionId: props.target.discussionId, messages: displayMessages, subagents: sourceSubagents, readExecutionRunEntry: readSourceExecutionRunEntry, workflowRuns: managedRuns.runs }), [displayMessages, managedRuns.runs, props.target.address.serverId, props.target.discussionId, readSourceExecutionRunEntry, sourceSubagents]);
+    const previousMessageLabels = React.useRef<ReadonlyMap<string, DiscussionMessageLabelProjection>>(new Map<string, DiscussionMessageLabelProjection>());
+    const messageLabels = React.useMemo(() => {
+        const next = projectDiscussionMessageLabels(displayMessages, { account: resolveAccountLabel, session: resolveSessionLabel }, previousMessageLabels.current);
+        previousMessageLabels.current = next;
+        return next;
+    }, [displayMessages, resolveAccountLabel, resolveSessionLabel]);
+    const previousTimelineItems = React.useRef<readonly DiscussionTimelineItem<DiscussionDisplayMessage>[]>([]);
+    const items = React.useMemo(() => {
+        const next = buildDiscussionTimelineItems({ serverId: props.target.address.serverId, discussionId: props.target.discussionId, messages: displayMessages, subagents: sourceSubagents, readExecutionRunEntry: readSourceExecutionRunEntry, workflowRuns: managedRuns.runs, messageLabels }, previousTimelineItems.current);
+        previousTimelineItems.current = next;
+        return next;
+    }, [displayMessages, managedRuns.runs, messageLabels, props.target.address.serverId, props.target.discussionId, readSourceExecutionRunEntry, sourceSubagents]);
     // C7: a shared Bot's outward request waits in the thread that asked, under the Bot's reply to that
     // ask (or the ask itself while the Bot is blocked on it), joined by the request's admitted cause.
     const requesterApprovals = useDiscussionRequesterApprovals(discussionAddress, mentionedSessionAddresses);
     const requesterApprovalsByMessage = React.useMemo(() => placeDiscussionRequesterApprovals(displayMessages, requesterApprovals), [displayMessages, requesterApprovals]);
-    // Rows render through the list's cell cache: a decided request must reach its mounted row (the
-    // receipt replaces the card in place), so its placement and versions are the list's data version.
-    const requesterApprovalsVersion = React.useMemo(() => [...requesterApprovalsByMessage].map(([messageId, approvals]) => `${messageId}:${approvals
-        .map((approval) => `${approval.artifact.id}@${approval.artifact.bodyVersion ?? ''}:${approval.artifact.updatedAt}:${approval.parsed.request.status}`).join(',')}`).join(';'), [requesterApprovalsByMessage]);
     const discussionReturnHref = React.useMemo(() => buildDiscussionRouteHref({ target: { kind: 'discussion', address: { serverId: props.target.address.serverId }, discussionId: props.target.discussionId } }), [props.target.address.serverId, props.target.discussionId]);
     const messageGroupStarts = React.useMemo(() => new Set(items.flatMap((item, index) => {
         if (item.kind !== 'human_message') return [];
@@ -1081,21 +1092,27 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
         const entry = proposalDocReads[artifactId];
         return shownProposalDocs.includes(artifactId) && entry?.client === proposalClient ? entry.read : LOADING_PROPOSAL_DOC;
     };
-    // Legend retains its renderItem through refs; currentness/refusal must reach its mounted cells.
-    // A Workflow reply's byline names its Run once that Run's private metadata arrives.
     // Only a real name speaks for the Run; an unnamed or unreadable one falls back to "Workflow run" in the row.
     const workflowRunLabel = (runId: string): string | null => {
         const name = resolveWorkflowRunDisplayName(managedRuns.metadataByRunId?.[runId]);
         return name.kind === 'name' ? formatWorkflowRunDisplayName(name) : null;
     };
-    const producerRunLabels = [...new Set(messages.flatMap((message) => message.producerV1?.kind === 'workflow' ? [message.producerV1.runId] : []))]
-        .map((runId) => [runId, workflowRunLabel(runId)]);
-    const rowsVersion = JSON.stringify([requesterApprovalsVersion, producerRunLabels, shownProposalDocs.map(artifactId => {
-        const read = readProposalDoc(artifactId);
-        return read.status === 'ready'
-            ? [artifactId, read.status, read.value.artifact.revision, read.value.artifact.seq, read.value.artifact.access]
-            : [artifactId, read.status];
-    })]);
+    // The viewport caches cells, not just messages. Its explicit non-item inputs
+    // must deliver real access/approval/label changes even when history is unchanged.
+    // Rows still receive narrow props, so waking a cell need not rerender its Markdown.
+    const rowContext = React.useMemo(() => ({
+        items, requesterApprovalsByMessage, proposalDocReads, proposalClient, shownProposalDocs,
+        workflowMetadata: managedRuns.metadataByRunId,
+        workflowAccess: managedRuns.callerAccessByRunId,
+        supportsAnotherRound: managedRuns.supportsAnotherRoundByRunId,
+        retryRun: managedRuns.retry,
+        canReply: discussion?.archivedAt === null && discussion.capabilities.postMessages,
+        viewer, mutation, source: props.source, mentionedSessionTitles,
+        openQuotedMessage, replyToMessage, dismissRefusal,
+    }), [items, requesterApprovalsByMessage, proposalDocReads, proposalClient, shownProposalDocs,
+        managedRuns.metadataByRunId, managedRuns.callerAccessByRunId, managedRuns.supportsAnotherRoundByRunId, managedRuns.retry,
+        discussion?.archivedAt, discussion?.capabilities.postMessages, viewer, mutation, props.source, mentionedSessionTitles,
+        openQuotedMessage, replyToMessage, dismissRefusal]);
     const readableVisibleSeqs = React.useMemo(
         () => resolveReadableVisibleDiscussionSeqs({ messages, visibleMessageIds, lastReadSeq: discussion?.lastReadSeq ?? null }),
         [discussion?.lastReadSeq, messages, visibleMessageIds],
@@ -1279,7 +1296,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     dataKey={dataKey}
                     viewportRetention={repository}
                     data={items}
-                    extraData={rowsVersion}
+                    extraData={rowContext}
                     frame={frame}
                     webDomObservation={observation}
                     keyExtractor={(item) => item.kind === 'human_message' ? `message:${item.message.localId ?? item.message.id}` : item.kind === 'workflow_run' ? `workflow:${item.run.id}` : `run:${item.entry.runId ?? item.subagent.id}`}
@@ -1309,6 +1326,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                         const pendingMutation = item.message.localId === mutation?.localId ? mutation : null;
                         const parentMessage = item.message.replyTarget?.kind === 'message'
                             ? messageById.get(item.message.replyTarget.messageId) : undefined;
+                        const labels = item.labels ?? EMPTY_DISCUSSION_MESSAGE_LABELS;
                         return <DiscussionMessageRow
                             message={item.message}
                             parentMessage={parentMessage}
@@ -1321,8 +1339,8 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                             startsGroup={messageGroupStarts.has(item.message.id)}
                             repeatsPassage={repeatedPassages.has(item.message.id)}
                             selectable={isCommittedDisplayMessage(item.message) && isSelectableDiscussionMessage(item.message) && item.message.id !== mutation?.localId}
-                            resolveAccountLabel={resolveAccountLabel}
-                            resolveSessionLabel={resolveSessionLabel}
+                            resolveAccountLabel={labels.account}
+                            resolveSessionLabel={labels.session}
                             serverId={props.scope.serverId}
                             proposalClient={proposalClient}
                             proposalDocRead={item.message.content && isDiscussionDocEditProposalContentV1(item.message.content)

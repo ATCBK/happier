@@ -23,7 +23,9 @@ import { DiscussionCreateResultV1Schema } from '@happier-dev/protocol/discussion
 import { DiscussionAccessGrantsListResponseV1Schema, DiscussionAccessGrantMutationResponseV1Schema, DiscussionLeaveResponseV1Schema } from '@happier-dev/protocol/discussions/access';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { DiscussionSummaryV1Schema } from '@happier-dev/protocol/discussions/models';
-import { act, renderHook } from '@/dev/testkit';
+import { act, flushHookEffects, renderHook } from '@/dev/testkit';
+import { useSyncExternalStore } from 'react';
+import { createRenderCommitCounter, useRenderCommitCounter } from '@/dev/testkit/performance/counts';
 import { useDiscussionRepositorySnapshot } from './useDiscussionRepositorySnapshot';
 
 import { createDiscussionRepository, selectDiscussionListSearch, selectDiscussionThreadAccessState, type DiscussionRepositoryClient } from './discussionRepository';
@@ -35,6 +37,113 @@ import {
 
 const address = { serverId: 'home-a' } as const;
 const scope = { serverId: address.serverId, accountId: 'account-a' } as const;
+
+it('refreshes a changed closed Discussion without hydrating retained histories from the open rail', async () => {
+    const requests: string[] = [];
+    const ids = ['discussion-a', 'discussion-b', 'discussion-c'];
+    let revoked = false;
+    const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+        const url = new URL(path, 'https://home.invalid');
+        requests.push(url.pathname);
+        const id = url.pathname.split('/')[3] ?? ids[0]!;
+        if (url.pathname === '/v1/discussions') return response({ discussions: url.searchParams.get('state') === 'archived'
+            ? [] : ids.filter(id => !revoked || id !== ids[0]).map(id => ({ ...storedSummary(id), messageSeq: 300 })), nextCursor: null });
+        if (revoked && id === ids[0]) return response({ error: 'discussion_read_denied' }, 403);
+        if (!url.pathname.endsWith('/messages')) return response({ discussion: { ...storedSummary(id), messageSeq: 300 } });
+        const after = Number(url.searchParams.get('afterSeq') ?? 0);
+        return response({ messages: Array.from({ length: 300 }, (_, index) => storedMessage(id, index + 1))
+            .filter(row => row.seq > after), hasMoreOlder: false, messageSeq: 300 });
+    }) });
+    for (const id of ids) await repository.refreshDiscussion(id);
+    await repository.refreshList('active');
+    requests.length = 0;
+    const unmount = repository.mount();
+    try {
+        publishMountedDiscussionChanges({ serverId: scope.serverId, accountId: scope.accountId,
+            changes: [{ cursor: 1, kind: 'discussion', entityId: ids[0]!, changedAt: 1 }] });
+        await flushHookEffects();
+        expect(requests.filter(path => path.endsWith('/messages'))).toEqual([]);
+        expect(requests.filter(path => ids.slice(1).some(id => path === `/v1/discussions/${id}`))).toEqual([]);
+        expect(repository.getSnapshot().threads[ids[0]!]!.messages).toHaveLength(300);
+        requests.length = 0;
+        revoked = true;
+        publishMountedDiscussionChanges({ serverId: scope.serverId, accountId: scope.accountId,
+            changes: [{ cursor: 2, kind: 'discussion', entityId: ids[0]!, changedAt: 2 }] });
+        await flushHookEffects();
+        expect(repository.getSnapshot().threads[ids[0]!]).toMatchObject({ status: 'revoked', summary: null, messages: [] });
+        expect(repository.getSnapshot().threads[ids[1]!]!.messages).toHaveLength(300);
+        expect(requests.filter(path => path.endsWith('/messages'))).toEqual([]);
+        revoked = false;
+        publishMountedDiscussionChanges({ serverId: scope.serverId, accountId: scope.accountId,
+            changes: [{ cursor: 3, kind: 'discussion', entityId: ids[0]!, changedAt: 3 }] });
+        await flushHookEffects();
+        expect(repository.getSnapshot().threads[ids[0]!]!.summary?.id).toBe(ids[0]);
+        expect(repository.getSnapshot().threads[ids[0]!]!.messages).toHaveLength(0);
+    } finally { unmount(); repository.clear(); }
+});
+
+it('publishes no unchanged history or list rows on a warm 300-message refresh and does no settled idle reads', async () => {
+    const requests: string[] = [];
+    const rows = Array.from({ length: 300 }, (_, index) => storedMessage('discussion-a', index + 1));
+    const repository = createDiscussionRepository({ scope, address, client: httpClient(async path => {
+        const url = new URL(path, 'https://home.invalid');
+        requests.push(url.pathname);
+        if (url.pathname === '/v1/discussions') return response({ discussions: [{ ...storedSummary('discussion-a'), messageSeq: rows.length }], nextCursor: null });
+        if (!url.pathname.endsWith('/messages')) return response({ discussion: { ...storedSummary('discussion-a'), messageSeq: rows.length } });
+        const after = Number(url.searchParams.get('afterSeq') ?? 0);
+        return response({ messages: rows.filter(row => row.seq > after), hasMoreOlder: false, messageSeq: rows.length });
+    }) });
+    await repository.refreshDiscussion('discussion-a');
+    await repository.refreshList('active');
+    const cold = [...requests];
+    requests.length = 0;
+    const historyCounter = createRenderCommitCounter();
+    const listCounter = createRenderCommitCounter();
+    const history = await renderHook(() => {
+        const messages = useSyncExternalStore(repository.subscribe, () => repository.getSnapshot().threads['discussion-a']!.messages);
+        useRenderCommitCounter(historyCounter);
+        return messages;
+    });
+    const list = await renderHook(() => {
+        const items = useSyncExternalStore(repository.subscribe, () => repository.getSnapshot().lists.active.items);
+        useRenderCommitCounter(listCounter);
+        return items;
+    });
+    vi.useFakeTimers();
+    const timeoutInstalls = vi.spyOn(globalThis, 'setTimeout');
+    const intervalInstalls = vi.spyOn(globalThis, 'setInterval');
+    const unmount = repository.mount({ discussionId: 'discussion-a' });
+    let unmountRail: (() => void) | undefined;
+    try {
+        historyCounter.reset(); listCounter.reset();
+        await act(async () => { await repository.refreshDiscussion('discussion-a'); await repository.refreshList('active'); });
+        const warm = [...requests];
+        expect(historyCounter.read()).toEqual({ renders: 0, commits: 0 });
+        expect(listCounter.read()).toEqual({ renders: 0, commits: 0 });
+        requests.length = 0;
+        timeoutInstalls.mockClear(); intervalInstalls.mockClear();
+        expect(vi.getTimerCount()).toBe(0);
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        const discussionIdleRequests = requests.length;
+        const discussionTimerInstalls = timeoutInstalls.mock.calls.length + intervalInstalls.mock.calls.length;
+        expect(requests).toEqual([]);
+        expect(discussionTimerInstalls).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);
+        unmount();
+        requests.length = 0;
+        timeoutInstalls.mockClear(); intervalInstalls.mockClear();
+        unmountRail = repository.mount();
+        expect(vi.getTimerCount()).toBe(0);
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        const railTimerInstalls = timeoutInstalls.mock.calls.length + intervalInstalls.mock.calls.length;
+        expect(requests).toEqual([]);
+        expect(railTimerInstalls).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);
+    } finally {
+        unmountRail?.(); unmount(); timeoutInstalls.mockRestore(); intervalInstalls.mockRestore();
+        vi.useRealTimers(); await history.unmount(); await list.unmount(); repository.clear();
+    }
+});
 
 function draftSubmission(kind: 'newDiscussion' | 'discussion' = 'newDiscussion'): DiscussionDraftSubmission {
     return {
@@ -301,7 +410,7 @@ describe('Discussion repository', () => {
         expect(previous.messages.map(row => row.seq)).toEqual([3, 4, 5, 6, 7, 8]);
         expect(previous.hasMoreOlder).toBe(true);
         const unchanged = previous.messages.find(row => row.seq === 4);
-        const unmount = repository.mount();
+        const unmount = repository.mount({ discussionId: 'discussion-a' });
         try {
             decided = true;
             publishMountedDiscussionChanges({ ...scope, changes: [{ cursor: 1, kind: 'discussion', entityId: 'discussion-a', changedAt: 10 }] });
