@@ -4,6 +4,9 @@ import { useNavigation, useRouter } from 'expo-router';
 import type { Href } from 'expo-router';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
+import { useAuth } from '@/auth/context/AuthContext';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { PairingLinkEntryForm } from '@/components/account/restore/PairingLinkEntryForm';
 import { t } from '@/text';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
@@ -34,6 +37,27 @@ type ScanAuthQrScreenProps = ScanAuthQrScreenBaseProps & (
         homeQrEntryIntent?: never;
     }>
 );
+
+function PairingConnectionWarning(props: Readonly<{ testID: string }>) {
+    const { isAuthenticated } = useAuth();
+    const showWarning = getStorage()((state) => state.endpointStatus === 'offline'
+        || state.endpointStatus === 'auth_failed'
+        || (isAuthenticated && state.socketStatus !== 'connected'));
+    if (!showWarning) return null;
+
+    return (
+        <AttentionBanner
+            testID={props.testID}
+            title={t('connect.pairingConnectionWarningTitle')}
+            description={t('connect.pairingConnectionWarningBody')}
+            tone="warning"
+            placement="inline"
+            presentation="strip"
+            announce="alert"
+            accessibilityLiveRegion="polite"
+        />
+    );
+}
 
 export function ScanAuthQrScreen(props: ScanAuthQrScreenProps) {
     const router = useRouter();
@@ -70,15 +94,18 @@ export function ScanAuthQrScreen(props: ScanAuthQrScreenProps) {
     // owning a second entry presentation.
     if (view === 'paste') {
         return (
-            <PairingLinkEntryForm
-                onBack={showScanner}
-                onSubmit={processAuthUrl}
-                title={props.manualEntryTitle}
-                description={props.manualEntryDescription}
-                placeholder={props.manualEntryPlaceholder}
-                submitLabel={props.manualEntrySubmitText}
-                backLabel={t('connect.scanNewQr')}
-            />
+            <View style={{ flex: 1 }}>
+                <PairingConnectionWarning testID={`${props.testIDPrefix}-connection-warning`} />
+                <PairingLinkEntryForm
+                    onBack={showScanner}
+                    onSubmit={processAuthUrl}
+                    title={props.manualEntryTitle}
+                    description={props.manualEntryDescription}
+                    placeholder={props.manualEntryPlaceholder}
+                    submitLabel={props.manualEntrySubmitText}
+                    backLabel={t('connect.scanNewQr')}
+                />
+            </View>
         );
     }
 
@@ -94,6 +121,7 @@ export function ScanAuthQrScreen(props: ScanAuthQrScreenProps) {
 
     return (
         <View style={{ flex: 1 }}>
+            <PairingConnectionWarning testID={`${props.testIDPrefix}-connection-warning`} />
             <QrCodeScannerView
                 active={!scannerPaused}
                 embedded

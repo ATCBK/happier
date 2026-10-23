@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { getStorage } from '@/sync/domains/state/storageStore';
 
 const boundary = vi.hoisted(() => ({
     alertAsync: vi.fn(async () => undefined),
@@ -34,8 +36,8 @@ vi.mock('expo-camera', () => ({
 
 const { ScanAuthQrScreen } = await import('./ScanAuthQrScreen');
 
-function renderScanner() {
-    return renderScreen(<InjectedAuthProvider credentials={null}><ScanAuthQrScreen
+function renderScanner(credentials: AuthCredentials | null = null) {
+    return renderScreen(<InjectedAuthProvider credentials={credentials}><ScanAuthQrScreen
         allowedUrlKind="account"
         homeQrEntryIntent="add_home"
         fallbackHref="/"
@@ -86,5 +88,52 @@ describe('ScanAuthQrScreen recovery', () => {
         expect(screen.findAllHostsByTestId('auth-qr-camera')).toHaveLength(0);
         await screen.pressByTestIdAsync('auth-qr-scan-again');
         expect(screen.findAllHostsByTestId('auth-qr-camera')).toHaveLength(1);
+    });
+});
+
+
+describe('ScanAuthQrScreen connection warning', () => {
+    beforeEach(() => {
+        getStorage().setState({ socketStatus: 'connected', endpointStatus: 'online' });
+    });
+
+    it.each(['disconnected', 'connecting', 'error'] as const)(
+        'warns while %s and clears on reconnection while preserving scanner and paste recovery',
+        async (socketStatus) => {
+            getStorage().setState({ socketStatus });
+            const screen = await renderScanner({ token: 'test-token', secret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' });
+            expect(screen.findAllHostsByTestId('auth-qr-connection-warning')).not.toHaveLength(0);
+            expect(screen.findByTestId('auth-qr-camera')).not.toBeNull();
+
+            await screen.pressByTestIdAsync('auth-qr-enter-url');
+            expect(screen.findAllHostsByTestId('auth-qr-connection-warning')).not.toHaveLength(0);
+            expect(screen.findByTestId('restore-pairing-link-input')).not.toBeNull();
+            await act(async () => {
+                screen.changeTextByTestId('restore-pairing-link-input', 'unfinished-pairing-link');
+            });
+
+            await act(async () => {
+                getStorage().setState({ socketStatus: 'connected' });
+            });
+            expect(screen.findAllHostsByTestId('auth-qr-connection-warning')).toHaveLength(0);
+            expect(screen.findByTestId('restore-pairing-link-input')!.props.value).toBe('unfinished-pairing-link');
+        },
+    );
+
+    it('warns on endpoint loss even before the socket status changes', async () => {
+        getStorage().setState({ endpointStatus: 'offline' });
+        const screen = await renderScanner();
+        expect(screen.findAllHostsByTestId('auth-qr-connection-warning')).not.toHaveLength(0);
+        await act(async () => {
+            getStorage().setState({ endpointStatus: 'online' });
+        });
+        expect(screen.findAllHostsByTestId('auth-qr-connection-warning')).toHaveLength(0);
+    });
+
+    it('does not mistake signed-out Home recovery for a lost authenticated connection', async () => {
+        getStorage().setState({ socketStatus: 'disconnected', endpointStatus: 'idle' });
+        const screen = await renderScanner();
+        expect(screen.findAllHostsByTestId('auth-qr-connection-warning')).toHaveLength(0);
+        expect(screen.findByTestId('auth-qr-camera')).not.toBeNull();
     });
 });
