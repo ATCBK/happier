@@ -4,8 +4,6 @@ import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import YAML from 'yaml';
-
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 const workflowsDir = join(repoRoot, '.github', 'workflows');
@@ -21,7 +19,6 @@ test('workflows use Node 22 policy and do not pin Node 20', async () => {
     assert.doesNotMatch(raw, /node-version:\s*\[[^\]]*\b20\b[^\]]*\]/, `${file} must not include Node 20 in a matrix`);
   }
 });
-
 test('workflows that run pipeline scripts set up Node 22', async () => {
   const files = (await readdir(workflowsDir)).filter((name) => name.endsWith('.yml'));
 
@@ -35,34 +32,5 @@ test('workflows that run pipeline scripts set up Node 22', async () => {
     const hasDirect22 = /node-version:\s*22(\.x)?\b/.test(raw);
     const usesEnvNodeVersion = /node-version:\s*\$\{\{\s*env\.NODE_VERSION\s*\}\}/.test(raw) && /NODE_VERSION:\s*"?22\.x"?/.test(raw);
     assert.ok(hasDirect22 || usesEnvNodeVersion, `${file} must use node-version 22.x when running pipeline scripts`);
-  }
-});
-
-test('release jobs that execute Yarn pin it via Corepack', async () => {
-  const expected = /corepack prepare yarn@1\.22\.22 --activate/;
-  const files = [
-    'release.yml',
-    'release-channel.yml',
-    'release-npm.yml',
-    'promote-ui.yml',
-    'promote-server.yml',
-    'promote-website.yml',
-    'promote-docs.yml',
-    'build-tauri.yml',
-  ];
-
-  for (const file of files) {
-    const raw = await readFile(join(workflowsDir, file), 'utf8');
-    const parsed = YAML.parse(raw);
-    for (const [jobName, job] of Object.entries(parsed.jobs ?? {})) {
-      if (job.uses) continue;
-      const commands = (job.steps ?? []).map((step) => String(step.run ?? '')).join('\n');
-      if (!/(^|[\s;&|])yarn(?:\s|$)/mu.test(commands)) continue;
-      assert.match(
-        commands,
-        expected,
-        `${file} job '${jobName}' should pin Yarn before executing it`,
-      );
-    }
   }
 });

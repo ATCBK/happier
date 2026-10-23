@@ -5,8 +5,10 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { resolvePnpmCommandInvocation } from './execPnpmCommand.mjs';
 
 const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
+const build = resolvePnpmCommandInvocation(['run', '--silent', 'build']);
 
 for (const packagePath of [
   'packages/cli-common',
@@ -18,7 +20,7 @@ for (const packagePath of [
   test(`${packagePath} build honors the workspace staged output directory`, () => {
     const outputRoot = mkdtempSync(join(tmpdir(), `${basename(packagePath)}-staged-dist-`));
     try {
-      const result = spawnSync('yarn', ['-s', 'build'], {
+      const result = spawnSync(build.command, build.args, {
         cwd: join(repoRoot, packagePath),
         encoding: 'utf8',
         env: {
@@ -41,7 +43,7 @@ test('packages/privacy-kit build honors the workspace staged output directory', 
   const packagePath = 'packages/privacy-kit';
   const outputRoot = mkdtempSync(join(tmpdir(), 'privacy-kit-staged-dist-'));
   try {
-    const result = spawnSync('yarn', ['-s', 'build'], {
+    const result = spawnSync(build.command, build.args, {
       cwd: join(repoRoot, packagePath),
       encoding: 'utf8',
       env: {
