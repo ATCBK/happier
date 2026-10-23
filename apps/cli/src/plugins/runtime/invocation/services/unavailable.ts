@@ -274,7 +274,7 @@ export type PluginInvocationServicesFactoryParams = Readonly<{
 
 /** One executable selection path for ordinary invocations and child-process placement. */
 export async function resolvePluginInvocationExecutable(
-    executable: import('@happier-dev/plugin-sdk').ManagedExecutableRef,
+    executable: ManagedExecutableRef,
     pluginId: string,
     exec: NonNullable<PluginInvocationServicesFactoryParams['exec']>,
     systemTools: ExecSystemToolServiceV1 | undefined,
@@ -380,12 +380,16 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
         },
         createAvailable({ seed, binding }): PluginServices['backgroundServices'] | null {
             if (binding.availability.backgroundServices === 'denied' || !seed.demandBackgroundService) return null;
-            return Object.freeze({ demand(localId, reason) {
-                if (seed.signal.aborted || !seed.isOccurrenceCurrent()) throw new PluginError('plugin_service_unavailable', 'Background service caller is no longer current');
+            const demandBackgroundService = seed.demandBackgroundService;
+            const service: PluginServices['backgroundServices'] = { demand(localId, reason) {
+                if (seed.signal.aborted || !seed.isOccurrenceCurrent()) {
+                    throw new PluginError({ code: PLUGIN_SERVICE_UNAVAILABLE_CODE, message: 'Background service caller is no longer current' });
+                }
                 // An accepted background demand outlives its initiating Action;
                 // the returned handle and the service occurrence own retirement.
-                return seed.demandBackgroundService!(localId, reason);
-            } });
+                return demandBackgroundService(localId, reason);
+            } };
+            return Object.freeze(service);
         },
     },
     logger: {

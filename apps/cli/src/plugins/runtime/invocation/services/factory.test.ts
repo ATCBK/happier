@@ -71,6 +71,16 @@ describe('unavailable plugin invocation services factory', () => {
         await host.dispose();
     });
 
+    it('refuses a background demand from a caller that is no longer current with a typed service error', () => {
+        const services = createPluginInvocationServicesFactory({ loggerSink: { write() {} } })(
+            { ...seed, isOccurrenceCurrent: () => false, demandBackgroundService: () => { throw new Error('Unexpected demand'); } },
+            createLoggerAvailablePluginInvocationServiceBinding('7', 'binding'),
+        );
+        expect(() => services.backgroundServices.demand('index')).toThrow(expect.objectContaining({
+            name: 'PluginError', code: 'plugin_service_unavailable', message: 'Background service caller is no longer current',
+        }));
+    });
+
     it('refuses bootstrap credential materialization for an ordinary plugin invocation', async () => {
         for (const [factory, binding] of [
             [createUnavailablePluginServicesFactory(), createUnavailablePluginInvocationServiceBinding('7', 'binding')],
