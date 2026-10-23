@@ -2452,7 +2452,10 @@ export function createCliActionDeps(params: Readonly<{
       credentials,
       idOrPrefix: normalized,
       ...(signal ? { signal } : {}),
-      ...(caller ? { resolveAuthorizationHeaders: request => resolveServerRequestHeaders(caller.context, caller.actionId, request) } : {}),
+      ...(caller ? { resolveAuthorizationHeaders: request => resolveServerRequestHeaders(caller.context,
+        // Reference/manager reads prepare the admitted root. A preview's
+        // described Action is not a second signed execution authority.
+        caller.context.externalActionExecutionAuthorization?.binding.actionId ?? caller.actionId, request) } : {}),
       ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}),
     });
     const resolved = await (caller ? withProjectHome(read) : read());
@@ -7545,7 +7548,7 @@ export function createCliActionDeps(params: Readonly<{
         : context;
       const resolveAuthorizationHeaders = externalActionRequest
         ? (request: Readonly<{ method: string; path: string; body?: unknown }>) =>
-            resolveServerRequestHeaders(context, 'session.message.send', request)
+            resolveServerRequestHeaders(messageContext, 'session.message.send', request)
         : undefined;
       if (resolveAuthorizationHeaders && !resolveAuthorizationHeaders({
           method: 'GET',
