@@ -31,7 +31,7 @@ export function resolveCliAgentStartContextV1(input: Readonly<{
   starterDepth: number | undefined;
   turnDepth: number;
   callerPermissionMode: string | null;
-  settings: AccountSettings | null;
+  settings: Pick<AccountSettings, 'workDepthLimit' | 'sessionAgentStartAllowListsV1'> | null;
   accountRoleOverrides?: AccountRoleOverridesReadV1;
   roles?: ResolvedRolesSnapshotV1;
   roleSourceInventory?: RoleSourceInventoryV1;

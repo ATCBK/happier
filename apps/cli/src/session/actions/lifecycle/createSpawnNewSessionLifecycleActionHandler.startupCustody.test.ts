@@ -12,8 +12,8 @@ import type { TrackedSession } from '@/daemon/types';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
-import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { createMachineSessionSpawnRpcHandler } from '../sessionLifecycleActions';
+import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 
 import { createSpawnNewSessionLifecycleActionHandler } from './createSpawnNewSessionLifecycleActionHandler';
 import { runRequesterSessionLifecycle } from './requesterSessionLifecycle';
@@ -73,10 +73,10 @@ describe('Session startup operation custody', () => {
       return rows;
     } }) });
     try {
-      await operations.observeExecution({ actionId: 'session.spawn_new', input: { creationKey: 'refused' },
+      await expect(operations.observeExecution({ actionId: 'session.spawn_new', input: { creationKey: 'refused' },
         execute: async operation => ({ ok: true, result: await handler({ directory: '/project',
           agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
-        }, { signal: operation.signal, localActionContext: operation }) }) });
+        }, { signal: operation.signal, localActionContext: operation }) }) })).rejects.toBeInstanceOf(SessionStartupInputRefusalError);
       await operations.handlers.getV2({ operationId: 'refused-startup', waitForTerminal: true });
       expect(operations.store.get(scope, 'refused-startup')).toMatchObject({ state: 'failed',
         error: { errorCode: 'native_agent_session_mode_unavailable' } });
@@ -115,13 +115,10 @@ describe('Session startup operation custody', () => {
         agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
       }, { signal: operation.signal, localActionContext: operation }) }) });
     try {
-      await response;
-      await vi.waitFor(() => expect(operations.store.get(scope, 'refused-startup')).toMatchObject({ state: 'running' }));
-      await Promise.race([stopping, operations.handlers.getV2({ operationId: 'refused-startup', waitForTerminal: true }).then(() => {
-        throw new Error('Startup settled without retiring its refused runner');
-      })]);
+      await stopping;
       expect(operations.store.get(scope, 'refused-startup')).toMatchObject({ state: 'running' });
       releaseStop();
+      await expect(response).rejects.toBeInstanceOf(SessionStartupInputRefusalError);
       await vi.waitFor(() => expect(operations.store.get(scope, 'refused-startup')).toMatchObject({ state: 'failed',
         error: { errorCode: 'native_agent_session_mode_unavailable' } }));
     } finally { releaseStop(); operations.runner.cancel(scope, 'refused-startup'); }
@@ -354,7 +351,7 @@ describe('Session startup operation custody', () => {
       getTrackedSessions: () => trackedSessions, ...input,
     }) });
     try {
-      const response = await operations.observeExecution({ actionId: 'session.spawn_new',
+      const response = operations.observeExecution({ actionId: 'session.spawn_new',
         input: { creationKey: 'same-creation' }, execute: async operation => {
           try {
             return { ok: true, result: await handler({ directory: '/project',
@@ -365,12 +362,9 @@ describe('Session startup operation custody', () => {
             throw error;
           }
         } });
-      expect(response).toMatchObject({ ok: true, result: { type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true,
-        operation: { serverId: 'home', machineId: scope.machineId, operationId: 'original-startup' } } });
-      if (!response.ok) throw new Error('Expected accepted startup');
-      expect(SessionSpawnNewResultV1Schema.parse(response.result)).toEqual(response.result);
-      expect(await operations.observeExecution({ actionId: 'session.spawn_new', input: { creationKey: 'same-creation' },
-        execute: async () => { throw new Error('An existing startup must not spawn again'); } })).toEqual(response);
+      await vi.waitFor(() => expect(captured).toBeDefined());
+      const rejoined = operations.observeExecution({ actionId: 'session.spawn_new', input: { creationKey: 'same-creation' },
+        execute: async () => { throw new Error('An existing startup must not spawn again'); } });
       expect(captured?.projectSetupOperation?.operationAcceptance?.operationId).toBe('original-startup');
       expect(operations.store.get(scope, 'original-startup')).toMatchObject({ state: 'running' });
       await vi.advanceTimersByTimeAsync(15_100);
@@ -400,6 +394,15 @@ describe('Session startup operation custody', () => {
       await vi.waitFor(() => expect(operations.store.get(scope, 'original-startup')).toMatchObject({
         state: outcome === 'cancel' ? 'cancelled' : 'succeeded',
       }));
+      const settled = await response;
+      expect(await rejoined).toEqual(settled);
+      if (outcome === 'open') {
+        expect(settled).toMatchObject({ ok: true, result: { type: 'success', sessionId: 'session-child' } });
+      } else if (outcome === 'cancel') {
+        expect(settled).toMatchObject({ ok: false, errorCode: 'cancelled' });
+      } else {
+        expect(settled).toMatchObject({ ok: true, result: { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED } });
+      }
       if (outcome === 'exit') expect(operations.store.get(scope, 'original-startup')).toMatchObject({
         result: { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
           errorDetail: { kind: 'launch_error', code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED } },

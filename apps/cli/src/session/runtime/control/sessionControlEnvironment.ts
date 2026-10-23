@@ -117,6 +117,19 @@ export function stripSessionControlUnsetEnvKeys(keys: readonly string[]): string
 }
 
 /**
+ * Preserve materializer controls only for the protected daemon bootstrap
+ * transport. The marker alone is not authority, and system controls stay blocked.
+ */
+export function reconcileAgentSessionScopedEnvironment(input: Readonly<{
+  environment: Readonly<Record<string, string>>;
+  trustedDaemonTransport: boolean;
+}>): Record<string, string> {
+  return stripSessionControlEnvOverrides(input.environment, {
+    allowConnectedServiceMaterializerKeys: input.trustedDaemonTransport,
+  });
+}
+
+/**
  * Selects the exact session controls emitted by a trusted launch owner. Values
  * with dedicated typed finalizer inputs, and controls that must stay absent,
  * are deliberately excluded here.

@@ -266,6 +266,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             });
         },
         async refreshSessionSnapshotFromServerBestEffort() {},
+        async refreshSessionSnapshotFromServerRequired() {},
         async disposeExecutionRuns() {},
         observeProviderInputSettlement() {},
         markPendingProviderInputDispatched() {},

@@ -260,9 +260,17 @@ describe('CLI host Message admission', () => {
           kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default',
         } },
       context, callerSurface: 'agent',
-      actionCaller: { kind: 'host' }, requestedAction: { v: 1, kind: 'enqueue' },
+      actionCaller: { kind: 'session', sessionId: sourceSessionId, starterDepth: 0, turnDepth: 0 },
+      requestedAction: { v: 1, kind: 'enqueue' },
     })).toMatchObject({ status: 'rejected', code: 'session_input_untrusted_assertion' });
     expect(http.post).not.toHaveBeenCalled();
+    expect(machineAdmissionTransport).not.toHaveBeenCalled();
+    expect(await deps.sessionSendMessage({ sessionId: receiverSessionId, message: 'Mismatched source',
+      requestedAction: { v: 1, kind: 'enqueue' },
+      sessionInputSource: { sourceSessionId, sourceTurnId, sourceInputId: 'session-input', via: 'action',
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } },
+      context, callerSurface: 'agent', actionCaller: { kind: 'session', sessionId: 'another-source', starterDepth: 0, turnDepth: 0 },
+    })).toMatchObject({ status: 'rejected', code: 'session_input_untrusted_assertion' });
     expect(machineAdmissionTransport).not.toHaveBeenCalled();
   });
 
@@ -343,7 +351,7 @@ describe('CLI host Message admission', () => {
     };
     const deps = createCliActionDeps({ token: 'test-account-token', sessionId: 'cli-global', mode: 'plain', ctx: null,
       credentials: { token: 'test-account-token', encryption: null }, sessionActionRpcTransport,
-      getCurrentTurnWorkDepth: () => 0, getCurrentSessionWorkDepth: () => 0,
+      getCurrentTurnWorkDepth: () => 0,
       machineAdmissionTransport: async request => { content = request.content; return { status: 'accepted', localId: request.localId }; },
     });
     const context = { surface: 'agent' as const, authority: 'account_automation' as const, actionRequestId: 'source-action',

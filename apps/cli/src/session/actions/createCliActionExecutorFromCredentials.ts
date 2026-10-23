@@ -52,6 +52,7 @@ import { createSessionFollowSourceKeyPreparationAfterSet } from '@/agent/runtime
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { getActionSpec, resolveActionExecutionPlacementForInput, PublicActionIdSchema, SignedRootActionIdSchema, projectSessionSpawnNewApiRequest } from '@happier-dev/protocol/actions/actionSpecs';
 import { isPluginActionExecutionDispatchId } from './createDaemonPluginActionExecutor';
+import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { ActionIdSchema, isPluginDevLoopActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { isSettingsDeclarationActionIdV1, SettingsDeclarationActionInputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { enrichCliActionApprovalContext } from './enrichCliActionApprovalContext';
@@ -694,6 +695,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
   providerPreparedSavedSecret?: Parameters<typeof createCliActionDeps>[0]['providerPreparedSavedSecret'];
   sessionMessageReplyPublisher?: Parameters<typeof createCliActionDeps>[0]['sessionMessageReplyPublisher'];
   postAgentDiscussionMessage?: Parameters<typeof createCliActionDeps>[0]['postAgentDiscussionMessage'];
+  postWorkflowDiscussionMessage?: Parameters<typeof createCliActionDeps>[0]['postWorkflowDiscussionMessage'];
   onRequesterSessionCredentialDisclosure?: Parameters<typeof dispatchRequesterSessionSpawnNewRpc>[0]['onRequesterSessionCredentialDisclosure'];
   scmFilesystemAccessPolicy?: FilesystemAccessPolicy;
   /** Receives the exact dispatch boundary for Home-owned HTTP Actions. */
@@ -794,7 +796,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     | undefined
     | Promise<CliServerFeaturesSnapshot | undefined>;
 }> & CliActionFixedServerTarget): ReturnType<typeof createCliActionExecutor> & Readonly<{
-  bindInvocation(signal: AbortSignal): ReturnType<typeof createCliActionExecutor>;
+  bindInvocation(signal: AbortSignal, approvalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime']): ReturnType<typeof createCliActionExecutor>;
   resolveSessionTarget(idOrPrefix: string): Promise<CliActionSessionTarget>;
   resolveMachineTarget(): Promise<CliActionMachineTarget>;
 }> {
@@ -866,6 +868,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     sessionMemoryEnabled?: boolean,
     serverIdentityId = params.serverIdentityId,
     readAdmittedInputTypeOptions?: ActionExecutorDeps['readAdmittedInputTypeOptions'],
+    approvalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime'],
+    routeHostChildAction?: ActionExecutorDeps['routeHostChildAction'],
   ): ReturnType<typeof createCliActionExecutor> => {
     const resolveServerFeaturesSnapshot = params.resolveServerFeaturesSnapshot
       ?? (async () => await resolveServerFeaturesSnapshotForCredentials(credentials));
@@ -998,6 +1002,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
     });
     return createCliActionExecutor({
       ...cryptoContext,
+      ...(routeHostChildAction ? { routeHostChildAction } : {}),
       ...(readAdmittedInputTypeOptions ? { readAdmittedInputTypeOptions } : {}),
       ...(sessionMemoryEnabled !== undefined ? { sessionMemoryEnabled } : {}),
       clientActionExecute: params.clientActionExecute ?? getDaemonClientActionExecutor(approvalServerId),
@@ -1011,7 +1016,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ...(params.managedMachineAction ? { managedMachineAction: params.managedMachineAction } : {}),
       ...(params.machineEnvironmentApply ? { machineEnvironmentApply: params.machineEnvironmentApply } : {}),
       ...(params.sessionStop ? { sessionStop: params.sessionStop } : {}),
-      ...(params.hostActionApprovalLifetime ? { hostActionApprovalLifetime: params.hostActionApprovalLifetime } : {}),
+      ...((approvalLifetime ?? params.hostActionApprovalLifetime) ? { hostActionApprovalLifetime: approvalLifetime ?? params.hostActionApprovalLifetime } : {}),
       ...(params.runActionOperation ? { runActionOperation: params.runActionOperation } : {}),
       ...(params.projectAction ? { projectAction: params.projectAction } : {}),
       ...(params.projectWorkerAction ? { projectWorkerAction: params.projectWorkerAction } : {}),
@@ -1065,6 +1070,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       sessionId: 'cli-global',
       ...(params.sessionMessageReplyPublisher ? { sessionMessageReplyPublisher: params.sessionMessageReplyPublisher } : {}),
       ...(params.postAgentDiscussionMessage ? { postAgentDiscussionMessage: params.postAgentDiscussionMessage } : {}),
+      ...(params.postWorkflowDiscussionMessage ? { postWorkflowDiscussionMessage: params.postWorkflowDiscussionMessage } : {}),
       ...(params.getCurrentTurnWorkDepth ? { getCurrentTurnWorkDepth: params.getCurrentTurnWorkDepth } : {}),
       ...(params.resolveAutomationEventAdoptedDefinitionSet
         ? { resolveAutomationEventAdoptedDefinitionSet: params.resolveAutomationEventAdoptedDefinitionSet }
@@ -1293,7 +1299,19 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
   const createCredentialRefreshingExecutor = (
     transcriptFollowLeaseRegistry: ReturnType<typeof createFollowLeaseRegistry>,
     invocationSignal?: AbortSignal,
+    approvalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime'],
   ): CliActionExecutor => {
+    const routeHostChildAction = (credentials: StoredCredentials): NonNullable<ActionExecutorDeps['routeHostChildAction']> =>
+      async ({ actionId, input, context }) => {
+        if (params.pluginActionExecutionOwner === 'current_process') {
+          // Account plugin runtimes also own their local plugin invocation;
+          // only a daemon-applied registry establishes Machine runtime custody.
+          const lease = tryAcquireAuthoritativePluginRuntimeRegistryLease();
+          if (lease) { await lease.release(); return null; }
+        }
+        const prepared = await prepareOriginalCliActionInvocation(actionId, input, context, credentials, true);
+        return prepared.invocation ? await prepared.invocation.run() : actionFailure('target_unavailable');
+      };
     const readInputTypeOptions = (credentials: StoredCredentials): NonNullable<ActionExecutorDeps['readAdmittedInputTypeOptions']> =>
       async ({ input, context }) => {
         // The schema/consumer was admitted by the local input owner. Resolve
@@ -1312,7 +1330,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       ? null
       : shouldUsePatPublicActionTransport(params.credentials, undefined)
         ? null
-        : createExecutor(params.credentials, transcriptFollowLeaseRegistry, undefined, params.serverIdentityId, readInputTypeOptions(params.credentials));
+        : createExecutor(params.credentials, transcriptFollowLeaseRegistry, undefined, params.serverIdentityId, readInputTypeOptions(params.credentials), approvalLifetime, routeHostChildAction(params.credentials));
     let fixedExecutorServerIdentityId = params.serverIdentityId;
     const resolveExecutor = async (credentials: StoredCredentials, sessionMemoryEnabled?: boolean,
       routing?: Pick<ActionExecutorContext, 'serverIdentityId'>) => {
@@ -1321,7 +1339,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       const serverIdentityId = routing ? routing.serverIdentityId : params.serverIdentityId
         ?? (await enrichApprovalRoutingContext(undefined, credentials)).serverIdentityId;
       if (!fixedExecutor || sessionMemoryEnabled !== undefined) {
-        const executor = createExecutor(credentials, transcriptFollowLeaseRegistry, sessionMemoryEnabled, serverIdentityId, readInputTypeOptions(credentials));
+        const executor = createExecutor(credentials, transcriptFollowLeaseRegistry, sessionMemoryEnabled, serverIdentityId, readInputTypeOptions(credentials), approvalLifetime, routeHostChildAction(credentials));
         if (!params.readCredentials && sessionMemoryEnabled === undefined) {
           fixedExecutor = executor;
           fixedExecutorServerIdentityId = serverIdentityId;
@@ -1329,7 +1347,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         return executor;
       }
       if (fixedExecutorServerIdentityId !== serverIdentityId) {
-        fixedExecutor = createExecutor(credentials, transcriptFollowLeaseRegistry, undefined, serverIdentityId, readInputTypeOptions(credentials));
+        fixedExecutor = createExecutor(credentials, transcriptFollowLeaseRegistry, undefined, serverIdentityId, readInputTypeOptions(credentials), approvalLifetime, routeHostChildAction(credentials));
         fixedExecutorServerIdentityId = serverIdentityId;
       }
       return fixedExecutor;
@@ -1349,7 +1367,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       context: ActionExecutorContext, credentials: StoredCredentials, requireDaemonIngress = false) => {
       // This receiver already owns admission and execution. A Machine selector
       // must not send its host/CLI context back through its own root endpoint.
-      if (params.pluginActionExecutionOwner === 'current_process') return { context };
+      if (params.pluginActionExecutionOwner === 'current_process' && !requireDaemonIngress) return { context };
       // Plugin Actions and their discovery/invocation meta-Actions belong to
       // the placement-aware plugin owner, not the finite root transport map.
       // Credential admission and approval context are already established;
@@ -1407,8 +1425,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       }
       const clientAction = spec.cli !== undefined && (!settingsAction || settingsInput?.success)
         && resolveActionExecutionPlacementForInput(spec, admittedInput) === 'client';
-      const originalMachineAction = ((isPluginDevLoopActionIdV1(actionId)
-        && resolveActionExecutionPlacementForInput(spec, admittedInput) === 'machine') || isMachineTerminalActionId(actionId)) && originalCliCaller
+      const originalMachineAction = ((requireDaemonIngress || isPluginDevLoopActionIdV1(actionId))
+        && resolveActionExecutionPlacementForInput(spec, admittedInput) === 'machine' || isMachineTerminalActionId(actionId)) && originalCliCaller
         ? spec.inputSchema.safeParse(admittedInput) : null;
       const selectedOriginalMachine = originalMachineAction?.success
         && (typeof readRecord(originalMachineAction.data)?.machineId === 'string'
@@ -1858,9 +1876,9 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         });
       });
     },
-    bindInvocation(signal: AbortSignal) {
+    bindInvocation(signal: AbortSignal, approvalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime']) {
       if (params.transcriptFollowLeaseRegistry) {
-        return createCredentialRefreshingExecutor(params.transcriptFollowLeaseRegistry, signal);
+        return createCredentialRefreshingExecutor(params.transcriptFollowLeaseRegistry, signal, approvalLifetime);
       }
       const transcriptFollowLeaseRegistry = createFollowLeaseRegistry();
       const dispose = (): void => {
@@ -1868,7 +1886,7 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
       };
       if (signal.aborted) dispose();
       else signal.addEventListener('abort', dispose, { once: true });
-      return createCredentialRefreshingExecutor(transcriptFollowLeaseRegistry, signal);
+      return createCredentialRefreshingExecutor(transcriptFollowLeaseRegistry, signal, approvalLifetime);
     },
   });
 }
@@ -2053,5 +2071,5 @@ export function createCliActionExecutorFromCredentials(params: Parameters<typeof
       },
     };
   };
-  return Object.freeze({ ...core, ...wrap(core), bindInvocation: signal => wrap(core.bindInvocation(signal), signal) });
+  return Object.freeze({ ...core, ...wrap(core), bindInvocation: (signal, approvalLifetime) => wrap(core.bindInvocation(signal, approvalLifetime), signal) });
 }

@@ -25,7 +25,7 @@ import { sendSessionMessage, waitForSessionInputResult } from './sendSessionMess
 
 type ReplyPublisher = Pick<ApiSessionClient, 'mutateSessionMessageReply'>;
 /** Original custody supplies every routing/correlation fact; Account composition supplies the resource codec. */
-export type DiscussionReplyReturnPublication = Readonly<{
+export type DiscussionSessionReplyReturnPublication = Readonly<{
   serverId: string;
   requestSessionId: string;
   requestLocalId: string;
@@ -35,8 +35,18 @@ export type DiscussionReplyReturnPublication = Readonly<{
   outcome: SessionMessageReplyOutcomeV1;
   actionRequestAttributionV1?: ActionRequestAttributionV1;
   message: string;
+  content?: import('@happier-dev/protocol/discussions/content').DiscussionMessageContentV1;
   sourceMessageRef?: SessionMessageRefV1;
 }>;
+export type DiscussionWorkflowReplyReturnPublication = Readonly<{
+  kind: 'workflow_invocation'; serverId: string;
+  workflow: NonNullable<DiscussionSessionReplyReturnPublication['workflow']>;
+  discussion: import('@happier-dev/protocol/workflows/workflowDestinationsV1').WorkflowDiscussionOriginV1;
+  producer: import('@happier-dev/protocol/discussions/content').DiscussionWorkflowProducerV1;
+  content: import('@happier-dev/protocol/discussions/content').DiscussionMessageContentV1;
+  expectedParentRevision?: number;
+}>;
+export type DiscussionReplyReturnPublication = DiscussionSessionReplyReturnPublication | DiscussionWorkflowReplyReturnPublication;
 export type DiscussionReplyReturnPublisher = (input: DiscussionReplyReturnPublication,
   options?: Readonly<{ signal?: AbortSignal }>) => Promise<DiscussionAgentPostResponseV1>;
 type ReplyAddress = Readonly<{ credentials: Pick<StoredCredentials, 'token'>; sessionId: string; localId: string; signal?: AbortSignal;

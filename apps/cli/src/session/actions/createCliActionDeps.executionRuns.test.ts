@@ -347,14 +347,15 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
   afterEach(async () => {
     await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
   });
-  it('does not send an admitted write ceiling through a public machine request', async () => {
+  it.each([null, 'source-session'])('does not send an admitted private stamp through public RPC (Session: %s)', async sessionId => {
     const credentials = { token: 'token', encryption: null };
     const deps = createCliActionDeps({ token: 'token', credentials, sessionId: 'cli-global', mode: 'plain', ctx: null });
-    const result = await deps.executionRunStart(null, { instructions: 'Inspect' }, {
-      exactMachineId: 'machine-1', workspaceWrites: 'deny',
+    const result = await deps.executionRunStart(sessionId, { instructions: 'Inspect' }, {
+      exactMachineId: 'machine-1', workDepth: 1, workspaceWrites: 'deny',
     });
     expect(result).toMatchObject({ ok: false, code: 'execution_run_target_unavailable', details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } });
     expect(callMachineRpc).not.toHaveBeenCalled();
+    expect(callSessionRpc).not.toHaveBeenCalled();
   });
 
   it('carries admitted depth and write ceiling in the exact-daemon private context, not Run input', async () => {

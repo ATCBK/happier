@@ -24,8 +24,10 @@ export function createRoleSourceReader(params: RoleSourceReaderParams): RoleSour
     } } : {}),
   });
   const pending = new Map<AbortSignal | undefined, ReturnType<RoleSourceReader>>();
-  return async signal => {
+  return async (signal, options) => {
     signal?.throwIfAborted();
+    // Selected reads are fresh and must never borrow a concurrent full catalog.
+    if (options?.roleIds !== undefined) return read(signal, options);
     let current = pending.get(signal);
     if (!current) { current = read(signal); pending.set(signal, current); }
     try { return await current; }

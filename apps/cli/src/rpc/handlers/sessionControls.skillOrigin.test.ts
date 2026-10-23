@@ -42,7 +42,7 @@ describe('current Session skill origin', () => {
     const registrar: RpcHandlerRegistrar = { registerHandler: (method, handler) => { handlers.set(method, handler); } };
     const sessionDelivery = { ...delivery, pluginRoot: join(configuration.happyHomeDir, 'skills', 'sessions', 'session'),
       skillsRoot: join(configuration.happyHomeDir, 'skills', 'sessions', 'session', 'skills') };
-    let current = sessionDelivery;
+    let current: typeof sessionDelivery | undefined = sessionDelivery;
     // Only Codex's JSON-RPC transport is substituted; its actual catalog producer remains real.
     const catalog = await listCodexAppServerSkills({ cwd: '/repo', client: { request: async () => ({ data: [{ skills: [
       { name: 'sample', path: join(configuration.happyHomeDir, 'skills', 'cache', 'a'.repeat(64), 'SKILL.md') },
@@ -51,9 +51,10 @@ describe('current Session skill origin', () => {
     ] }] }) } });
     const producer = catalog.skills.map(item => SkillCatalogItemV1Schema.parse(item));
     let currentCatalog = producer;
+    let unsupported = false;
     expect(producer).toHaveLength(2);
     registerSessionControlHandlers(registrar, { sessionRuntimeControls: {
-      listSkills: async () => ({ skills: currentCatalog }), readSkillDelivery: () => current,
+      listSkills: async () => ({ skills: currentCatalog, ...(unsupported ? { unsupported: true } : {}) }), readSkillDelivery: () => current,
     } });
     const read = async () => {
       const result = await handlers.get(SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST)!({});
@@ -67,7 +68,7 @@ describe('current Session skill origin', () => {
     const libraryItem = SkillListItemV1Schema.parse({ skillId: 'library', name: 'sample', description: null,
       revision: '1:1', rules: [], trust: 'text_only', cost: { bodyTokens: 1, descriptionTokens: 0 }, provenance: { kind: 'written' },
       modified: false, updatePolicy: 'manual', createdAt: 1, migratedFromContext: false, userInvocable: true, folderId: null });
-    // Real Codex producer → registered host annotation → strict catalog → exact picker consumer.
+    // Real Codex producer → registered host annotation → canonical catalog → exact picker consumer.
     expect(buildSkillComposerGroups({ open: true, query: '', agentId: 'codex', machineId: null,
       sessionItems: skills, libraryItems: [libraryItem], found: null }).some(group => group.kind === 'library')).toBe(false);
     expect(skills[1]).toEqual(producer[1]);
@@ -76,6 +77,19 @@ describe('current Session skill origin', () => {
     ] }] }) } });
     currentCatalog = nativeCatalog.skills.map(item => SkillCatalogItemV1Schema.parse(item));
     expect(await read()).toEqual(currentCatalog);
+    // A delivery acknowledgement cannot invent native discovery.
+    currentCatalog = [];
+    expect(await read()).toEqual([]);
+    current = { ...sessionDelivery, items: [{ ...sessionDelivery.items[0]!, directory: '/replacement/source-sample' }] };
+    currentCatalog = [{ ...producer[0]!, path: join('/replacement/source-sample', 'SKILL.md') }];
+    expect(await read()).toEqual([expect.objectContaining({ id: 'library', origin: 'happier', path: join('/replacement/source-sample', 'SKILL.md') })]);
+    current = undefined;
+    expect(await read()).toEqual(currentCatalog);
+    current = sessionDelivery;
+    currentCatalog = [];
+    unsupported = true;
+    expect(await handlers.get(SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST)!({})).toEqual({ unsupported: true, skills: [] });
+    unsupported = false;
     currentCatalog = producer;
     current = { ...sessionDelivery, items: [] };
     expect((await read())[0]).toEqual(producer[0]);

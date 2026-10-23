@@ -88,8 +88,14 @@ export function createCliActionExecutorHarness(
   const originationSettingsProvider = params.actionsSettingsProvider ?? createActionSettingsProvider({
     scopeKey: resolveAccountSettingsScopeKeyForToken(params.token),
   });
+  const hasAcceptedReservationPolicy = (id: string, ctx: ActionExecutorContext) =>
+    id === 'discussion.invite' && ctx.actionCaller?.kind === 'workflowRun'
+      && ctx.actionCaller.discussionModelReservation !== undefined && ctx.actionsSettings !== undefined;
   const isActionEnabled: NonNullable<ActionExecutorDeps['isActionEnabled']> = (id, ctx) =>
-    isActionEnabledWithSessionMemory(id, params.sessionMemoryEnabled) && isActionEnabledByActionsSettings(
+    isActionEnabledWithSessionMemory(id, params.sessionMemoryEnabled)
+    && (!hasAcceptedReservationPolicy(id, ctx) || isActionEnabledByActionsSettings(id, ctx.actionsSettings!, {
+      surface: ctx.surface ?? 'cli', placement: ctx.placement ?? null,
+    })) && isActionEnabledByActionsSettings(
       id,
       params.actionsSettingsProvider?.getActionsSettings()
         ?? ctx.actionsSettings
@@ -106,7 +112,11 @@ export function createCliActionExecutorHarness(
       && ctx.surface === 'cli' && !ctx.externalActionCredential && !ctx.externalActionExecutionAuthorization
       && !ctx.rpcSessionAuthorization && (!ctx.actionCaller || ctx.actionCaller.kind === 'host');
   const readApprovalRequired: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, ctx, input, defaultUiConfirmation?: boolean) =>
-    isApprovalRequiredByActionsSettings(
+    // A contained Workflow invitation retains its admitted restrictions; a
+    // later provider waiver is not consent. Current restrictions still apply.
+    (hasAcceptedReservationPolicy(id, ctx) && isApprovalRequiredByActionsSettings(id, ctx.actionsSettings!, {
+      surface: ctx.surface ?? null, authority: ctx.authority, presentUserConfirmation: ctx.presentUserConfirmation,
+    }, undefined, undefined, input, defaultUiConfirmation)) || isApprovalRequiredByActionsSettings(
       id,
       params.actionsSettingsProvider?.getActionsSettings()
         ?? ctx.actionsSettings
@@ -262,7 +272,7 @@ export function createCliActionExecutorHarness(
   }
   const deps = rawDeps as ActionExecutorDeps;
   const executor = createActionExecutor(deps);
-  const resolveContext = (context: Parameters<typeof executor.execute>[2]) => {
+  const resolveContext = (context: Parameters<typeof executor.execute>[2], actionId?: string) => {
     const accountSettings = !context?.externalActionExecutionAuthorization && context?.surface !== 'rpc'
       ? originationSettingsProvider.getAccountSettings?.() : null;
     return {
@@ -272,7 +282,8 @@ export function createCliActionExecutorHarness(
       ...(accountSettings ? { managedMachineCreationEnabled: accountSettings.managedMachineCreationEnabled } : {}),
       ...(params.serverId ? { serverId: params.serverId } : {}),
       ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
-      ...(params.actionsSettingsProvider
+      ...(params.actionsSettingsProvider && !(actionId === 'discussion.invite' && context?.actionCaller?.kind === 'workflowRun'
+        && context.actionCaller.discussionModelReservation && context.actionsSettings)
         ? { actionsSettings: params.actionsSettingsProvider.getActionsSettings() }
         : {}),
       ...(params.getCurrentSessionMetadata ? {
@@ -322,8 +333,8 @@ export function createCliActionExecutorHarness(
       }
     },
     executor: {
-      prepare: (actionId, input, context) => runOnCapturedHome(() => executor.prepare(actionId, input, resolveContext(context))),
-      execute: (actionId, input, context) => runOnCapturedHome(() => executor.execute(actionId, input, resolveContext(context))),
+      prepare: (actionId, input, context) => runOnCapturedHome(() => executor.prepare(actionId, input, resolveContext(context, actionId))),
+      execute: (actionId, input, context) => runOnCapturedHome(() => executor.execute(actionId, input, resolveContext(context, actionId))),
       continueConfidentialApprovalRequest: (input, context) => runOnCapturedHome(() => executor.continueConfidentialApprovalRequest(input, resolveContext(context))),
       replayApprovedApprovalRequest: (args) => runOnCapturedHome(() => executor.replayApprovedApprovalRequest(args)),
     },

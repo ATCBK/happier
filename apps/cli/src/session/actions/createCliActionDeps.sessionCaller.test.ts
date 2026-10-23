@@ -718,7 +718,7 @@ describe('daemon Account Action Session caller context', () => {
       if (actionId === 'roles.get') expect(current).toMatchObject({ roleId, role });
       else expect(current).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ roleId, role })]) });
       // Retirement below must prevent both discovery and the selected private-body read.
-      expect(privateReads).toEqual(['/v1/artifacts', '/v1/artifacts/read']);
+      expect(privateReads).toEqual(actionId === 'roles.get' ? [`/v1/artifacts/${roleId}`] : ['/v1/artifacts', '/v1/artifacts/read']);
       privateReads.length = 0;
       clearActiveAccountSettingsSnapshot();
       publish(2);

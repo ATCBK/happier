@@ -15,10 +15,99 @@ import { createRoleSourceReaderV1 } from '@happier-dev/protocol/prompts/roles/ac
 import { createRoleSourceReader } from './roleSources';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { createDeferred } from '@/testkit/async/deferred';
+import { createResourceDataKey } from '@/api/encryption/resourceDataKey';
+import { encodeBase64, encryptWithDataKey } from '@/api/encryption';
+import { randomBytes } from 'node:crypto';
+import { x25519 } from '@noble/curves/ed25519';
 
 const defaultEngine = { agentTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }) };
 
 describe('session role prompt-plan context', () => {
+  it.each(['plain', 'e2ee'] as const)('opens selected %s Roles without unrelated inventory and preserves fresh mode refusal', async mode => {
+    const secret = randomBytes(32);
+    const credentials = { token: 'selected-role-token', encryption: mode === 'plain' ? null : {
+      type: 'dataKey' as const, publicKey: x25519.getPublicKey(secret), machineKey: secret,
+    } };
+    const key = await createResourceDataKey({ credentials, mode });
+    const seal = (value: unknown) => key.mode === 'plain' ? encodePlainArtifactStoredContent(value)
+      : encodeBase64(encryptWithDataKey(value, key.dataKey));
+    let accountMode = mode;
+    let bodyVersion = 1;
+    let instructions = 'Selected first revision';
+    const paths: string[] = [];
+    const controller = new AbortController();
+    let cancel = false;
+    vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const path = new URL(String(input)).pathname;
+      paths.push(path);
+      if (path === '/v1/artifacts/selected-role/access/recipients') return { status: 200, data: {
+        artifactId: 'selected-role', ownerAccountId: 'account', access: 'owner', encryptionMode: mode,
+        dataEncryptionKey: key.dataEncryptionKey, callerDataEncryptionKey: key.dataEncryptionKey, recipients: [],
+      } };
+      if (path !== '/v1/artifacts/selected-role') throw new Error('Unrelated locked Artifact inventory');
+      if (cancel) controller.abort(new Error('cancelled'));
+      return { status: 200, data: { id: 'selected-role', ownerAccountId: 'account', access: 'owner',
+        encryptionMode: mode, publicAudience: 'none', dataEncryptionKey: key.mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER : key.dataEncryptionKey,
+        header: seal({ kind: 'role.v1' }), body: seal({ body: JSON.stringify({ ...BUILT_IN_ROLES_V1.builder, instructions }) }),
+        headerVersion: 1, bodyVersion, seq: bodyVersion, createdAt: 1, updatedAt: bodyVersion } };
+    });
+    const read = createRoleSourceReader({ readPluginRoles: () => [], artifactStore: createAccountArtifactStore({
+      credentials, getAccountEncryptionMode: async () => accountMode,
+    }) });
+    expect((await read(undefined, { roleIds: ['selected-role'] })).entries).toMatchObject([
+      { roleId: 'selected-role', role: { instructions }, revision: { headerVersion: 1, bodyVersion: 1 } },
+    ]);
+    instructions = 'Selected updated revision'; bodyVersion = 2;
+    expect((await read(undefined, { roleIds: ['selected-role'] })).entries).toMatchObject([
+      { roleId: 'selected-role', role: { instructions }, revision: { headerVersion: 1, bodyVersion: 2 } },
+    ]);
+    expect(paths).toEqual(Array.from({ length: 2 }, () => ['/v1/artifacts/selected-role',
+      ...(mode === 'e2ee' ? ['/v1/artifacts/selected-role/access/recipients'] : [])]).flat());
+    accountMode = mode === 'plain' ? 'e2ee' : 'plain';
+    await expect(read(undefined, { roleIds: ['selected-role'] })).rejects.toMatchObject({ code: 'artifact_account_mode_mismatch' });
+    accountMode = mode;
+    cancel = true;
+    await expect(read(controller.signal, { roleIds: ['selected-role'] })).rejects.toThrow('cancelled');
+  });
+
+  it('keeps selected demand independent of a concurrent complete catalog read on the same signal', async () => {
+    const release = createDeferred<void>();
+    const paths: string[] = [];
+    const row = { id: 'selected-role', ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
+      publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+      header: encodePlainArtifactStoredContent({ kind: 'role.v1' }),
+      body: encodePlainArtifactStoredContent({ body: JSON.stringify(BUILT_IN_ROLES_V1.builder) }),
+      headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+    vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const path = new URL(String(input)).pathname;
+      paths.push(path);
+      if (path === '/v1/artifacts') { await release.promise; return { status: 200, data: [row] }; }
+      if (path === '/v1/artifacts/selected-role') return { status: 200, data: row };
+      throw new Error(`Unexpected Artifact request: ${path}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async input => {
+      const path = new URL(String(input)).pathname;
+      if (path !== '/v1/artifacts/read') throw new Error(`Unexpected Artifact request: ${path}`);
+      return { status: 200, data: { items: [{ artifactId: row.id, ok: true, artifact: row, recipientCensus: null }] } };
+    });
+    const read = createRoleSourceReader({ readPluginRoles: () => [], artifactStore: createAccountArtifactStore({
+      credentials: { token: 'same-signal-role-token', encryption: null }, getAccountEncryptionMode: async () => 'plain',
+    }) });
+    const signal = new AbortController().signal;
+    const complete = read(signal);
+    const selected = read(signal, { roleIds: ['selected-role'] });
+    const empty = read(signal, { roleIds: [] });
+    const observations = Promise.all([complete, selected, empty]);
+    release.resolve();
+    const [allRoles, selectedRoles, noRoles] = await observations;
+    expect(allRoles.entries).toHaveLength(Object.keys(BUILT_IN_ROLES_V1).length + 1);
+    expect(selectedRoles.entries.map(entry => entry.roleId)).toEqual(['selected-role']);
+    expect(noRoles.entries).toEqual([]);
+    expect(paths).toEqual(['/v1/artifacts', '/v1/artifacts/selected-role']);
+  });
+
   it.each(['ECONNRESET', 'ETIMEDOUT', 'database_connection_unavailable'])('keeps a transient Home Role read pending without falling back to a Role set (%s)', async code => {
     vi.spyOn(axios, 'get').mockRejectedValue(Object.assign(new Error('PRIVATE_NETWORK_DETAIL'), { code }));
     const artifactStore = createAccountArtifactStore({ credentials: { token: 'role-read-test-token', encryption: null },

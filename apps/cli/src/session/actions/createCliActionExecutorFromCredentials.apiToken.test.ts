@@ -16,6 +16,14 @@ import { installDaemonMachineAdmissionTransport } from '@/daemon/machineAdmissio
 import { SIGNED_ROOT_ACTION_EXECUTE_PATH } from '@/daemon/externalActions/signedRootActionControl';
 import { createAccountEncryptionCurrentnessFixture, createCurrentSessionProjectionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { encodeBase64, encryptLegacy } from '@/api/encryption';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { DiscussionSecondOpinionPreviewV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
+import { DiscussionInviteInputV1Schema } from '@happier-dev/protocol/discussions/actions';
+import type { ActionExecutorDeps } from '@happier-dev/protocol';
+import { createActionOperationRunner } from '@/daemon/actionOperations/actionOperationRunner';
+import { createActionOperationStore } from '@/daemon/actionOperations/actionOperationStore';
 
 const {
   createCliActionExecutor,
@@ -464,6 +472,107 @@ describe('createCliActionExecutorFromCredentials API Token transport', () => {
         { surface: 'api', authority: 'account_automation', actionRequestId: 'request-api' }))
         .resolves.toMatchObject({ ok: false, errorCode: 'local_executor_used' });
       expect(daemonPost).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(['daemon_control', 'current_process'] as const)('routes an Account composite Machine child through signed daemon ingress (%s plugin owner)', async pluginActionExecutionOwner => {
+    const actual = await vi.importActual<typeof import('./createCliActionExecutor')>('./createCliActionExecutor');
+    createCliActionExecutor.mockImplementation(actual.createCliActionExecutor);
+    daemonPost.mockResolvedValue({ ok: true, result: { kind: 'not_found' } });
+    await withPublishedAccountDaemon(async ({ credentials, serverId, serverApiUrl, daemonTarget }) => {
+      const executor = createCliActionExecutorFromCredentials({ credentials, serverId, serverApiUrl, pluginActionExecutionOwner,
+        actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({}), getAccountSettings: () => ({}) } });
+      const result = await executor.execute('wait', {
+        target: { kind: 'action_operation', serverId, machineId: daemonTarget.machineId, operationId: 'operation-1' },
+        condition: { kind: 'terminal' },
+      }, { surface: 'cli', authority: 'present_user' });
+      expect(result).toMatchObject({ ok: true, result: { disposition: 'target_unavailable' } });
+      expect(daemonPost).toHaveBeenCalledWith(SIGNED_ROOT_ACTION_EXECUTE_PATH, {
+        actionId: 'action.operations.get', input: { serverId, machineId: daemonTarget.machineId,
+          operationId: 'operation-1', waitForTerminal: true }, target: { kind: 'machine', machineId: daemonTarget.machineId },
+      }, expect.objectContaining({ target: daemonTarget, mutation: false }));
+    });
+  });
+
+  it('routes sibling Machine starts through Protocol and CLI transport without conflicting on rejoin', async () => {
+    const actual = await vi.importActual<typeof import('./createCliActionExecutor')>('./createCliActionExecutor');
+    createCliActionExecutor.mockImplementation(actual.createCliActionExecutor);
+    await withPublishedAccountDaemon(async ({ credentials, serverId, serverApiUrl, daemonTarget }) => {
+      const transport = createCliActionExecutorFromCredentials({ credentials, serverId, serverApiUrl,
+        machineId: daemonTarget.machineId, externalActionClient: true });
+      const nativeStarts: string[] = [], requestIds: Array<string | undefined> = [];
+      const runner = createActionOperationRunner({ store: createActionOperationStore(), resolveAction: actionId => ({
+        actionId, title: getActionSpec('session.spawn_new').title, operation: getActionSpec('session.spawn_new').operation,
+      }) });
+      // Daemon HTTP and native process creation are system boundaries. The
+      // Protocol composite, credentialed CLI transport and operation dedupe stay real.
+      daemonPost.mockImplementation(async (_path, request: { actionId: string; input: unknown; actionRequestId?: string }) => {
+        expect(request.actionId).toBe('session.spawn_new');
+        requestIds.push(request.actionRequestId);
+        const input = SessionSpawnNewInputV2Schema.parse(request.input);
+        return runner.observe({ actionId: request.actionId, input, requestId: request.actionRequestId,
+          scope: { accountId: daemonTarget.accountId, machineId: daemonTarget.machineId }, execute: async () => {
+            nativeStarts.push(input.creationKey!);
+            return { ok: true, result: { type: 'success', disposition: 'created', sessionId: `session-${input.creationKey}`,
+              executionTarget: input.executionTarget, organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } } };
+          } });
+      });
+      const reviewers = ['reviewer-a', 'reviewer-b'].map(participantSlotId => ({ participantSlotId,
+        selection: { kind: 'model' as const, launch: { executionTarget: { serverId, machineId: daemonTarget.machineId },
+          directory: { kind: 'path' as const, path: '/repo' },
+          agentTarget: { kind: 'agent' as const, identity: { pluginId: 'example.agents', localId: 'reviewer' } }, permissionMode: 'read-only' as const } } }));
+      const source = { kind: 'session' as const, message: { kind: 'session' as const, session: { serverId, sessionId: 'source' }, messageId: 'answer' } };
+      const preview = DiscussionSecondOpinionPreviewV1Schema.parse({ source, sourceContentReady: true,
+        sourceAudienceAccountIds: [daemonTarget.accountId], discussionAudienceAccountIds: [daemonTarget.accountId],
+        missingDiscussionSourceAccountIds: [], discussionDisclosure: { ok: true }, canGrantSource: true,
+        reviewers: reviewers.map(reviewer => ({ ...reviewer, sourceAccess: 'read', runtimeAccountId: daemonTarget.accountId,
+          audienceAccountIds: [daemonTarget.accountId], missingSourceAccountIds: [], canGrantSource: true, disclosure: { ok: true } })) });
+      const deps: Partial<ActionExecutorDeps> = {
+        routeHostChildAction: ({ actionId, input, context }) => actionId === 'session.spawn_new'
+          ? transport.execute(actionId, input, context) : Promise.resolve(null),
+        sessionTranscriptGet: async () => ({ ok: true, sessionId: 'source', items: [{ id: 'answer', semanticRole: 'assistant',
+          role: 'assistant', kind: 'message', createdAt: 1, text: 'Source answer' }], nextCursor: null, hasMore: false,
+          diagnostics: { rawRowsScanned: 1, pagesFetched: 1, scanLimitReached: false, payloadTruncations: 0 } }),
+        discussionAction: async ({ actionId, input }) => {
+          if (actionId === 'discussion.second_opinion.start') return { ok: true, value: preview };
+          if (actionId === 'discussion.invite') {
+            const invite = DiscussionInviteInputV1Schema.parse(input);
+            if (invite.participant.kind !== 'model') throw new Error('Expected model invitation');
+            return { discussionId: 'opinion', ownerAccountId: daemonTarget.accountId, access: 'owner', grants: [], changed: true,
+              modelParticipant: { participant: { kind: 'model', participantSlotId: invite.participant.participantSlotId },
+                launch: invite.participant.launch, sessionId: null, answerPolicy: 'when_addressed', createdAt: 1 } };
+          }
+          if (actionId === 'discussion.post') return { ok: false, errorCode: 'fixture_after_invites', error: 'fixture_after_invites' };
+          if (actionId !== 'discussion.create') throw new Error(`Unexpected Discussion HTTP operation: ${actionId}`);
+          return { v: 1, serverId, firstMessage: { id: 'quote', discussionId: 'opinion', localId: 'quote-opinion', seq: 1,
+            authorAccountId: null, accountActor: null, producerV1: null, createdAt: 1, mentionedAccountIds: [],
+            content: { v: 1, parts: [{ t: 'text', text: 'Source answer' }] },
+            messageRef: { kind: 'discussion', discussion: { serverId, discussionId: 'opinion' }, messageId: 'quote' } },
+            discussion: { id: 'opinion', ownerAccountId: daemonTarget.accountId, access: 'owner', encryptionMode: 'plain',
+              keyReadiness: true, dataEncryptionKey: null, anchor: null, creationLocalId: 'create-opinion', title: 'Two reviewers',
+              latestMessage: { id: 'quote', localId: 'quote-opinion', seq: 1, authorAccountId: null, accountActor: null, producerV1: null, createdAt: 1 },
+              messageSeq: 1, lastReadSeq: 0, unreadCount: 0, unreadMentionCount: 0, recentAuthorAccountIds: [], archivedAt: null,
+              capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true,
+                sendToSession: true, manageAccess: true, leave: false } } };
+        },
+      };
+      const executor = createActionExecutor(deps as ActionExecutorDeps);
+      const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId, actionRequestId: 'two-reviewer-root',
+        actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: Object.fromEntries([
+          'discussion.second_opinion.start', 'discussion.create', 'discussion.invite', 'discussion.post', 'session.spawn_new',
+        ].map(id => [id, ['cli']])) }) };
+      const input = { intent: 'ask', title: 'Two reviewers', question: 'Review this', source, reviewers, confirmedPreview: preview,
+        retry: { creationLocalId: 'create-opinion', quoteLocalId: 'quote-opinion', questionLocalId: 'ask-opinion' },
+        project: { machineId: daemonTarget.machineId, directory: '/repo' } };
+      for (let retry = 0; retry < 2; retry++) {
+        const result = await executor.execute('discussion.second_opinion.start', input, context);
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'pending', stage: 'ask', errorCode: 'fixture_after_invites' } });
+      }
+      expect(nativeStarts).toEqual(['reviewer-a', 'reviewer-b']);
+      expect(requestIds).toHaveLength(4);
+      expect(requestIds[0]).toEqual(expect.any(String));
+      expect(requestIds[1]).not.toBe(requestIds[0]);
+      expect(requestIds.slice(2)).toEqual(requestIds.slice(0, 2));
     });
   });
 

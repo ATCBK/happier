@@ -74,6 +74,8 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     accountServerActionDeps?: AccountServerActionDeps;
     /** Origin-neutral workflow family handler; absent until its server/session owners are bound. */
     workflowAction?: ActionExecutorDeps['workflowAction'];
+    /** Reuses the root placement owner for Machine children of Account composites. */
+    routeHostChildAction?: ActionExecutorDeps['routeHostChildAction'];
     managedMachineAction?: ActionExecutorDeps['managedMachineAction'];
     machineEnvironmentApply?: ActionExecutorDeps['machineEnvironmentApply'];
     /** Receiving daemon's native Stop effect, after requester policy and scope admission. */
@@ -198,6 +200,7 @@ export function createCliActionExecutor(
       ...(personalSavedSecretActionExecute ? { personalSavedSecretActionExecute } : {}),
       ...(params.projectWorkerAction ? { projectWorkerAction: params.projectWorkerAction } : {}),
       ...(params.workflowAction ? { workflowAction: params.workflowAction } : {}),
+      ...(params.routeHostChildAction ? { routeHostChildAction: params.routeHostChildAction } : {}),
       ...(params.managedMachineAction ? { managedMachineAction: params.managedMachineAction } : {}),
       ...(params.machineEnvironmentApply ? { machineEnvironmentApply: params.machineEnvironmentApply } : {}),
       ...(params.sessionStop ? { sessionStop: params.sessionStop } : {}),

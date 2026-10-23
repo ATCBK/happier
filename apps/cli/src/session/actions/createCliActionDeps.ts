@@ -1,4 +1,6 @@
 import { readLatestUsageLimitFailureIssue } from '@/session/usageLimitRecoveryControls/readLatestUsageLimitFailureIssue';
+import { readCurrentRunnerAgentStartPolicyV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
+import type { RequesterAgentStartPolicyV1 } from '@/daemon/sessionEncryption/requesterAgentStartPolicy';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1, admitActionAgentStartV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { SessionSpawnNewIncompatibleTargetV1Schema, type SessionSpawnNewIncompatibleTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { homedir } from 'node:os';
@@ -126,7 +128,7 @@ import { DaemonLocalServicePublicPreviewCreateResponseV1Schema, DaemonLocalServi
 import type { RpcHandlerContext, RpcLocalActionContext } from '@/api/rpc/types';
 import { resolveFilesystemAccessPolicy, type FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { resolveCwd } from '@/scm/runtime';
-import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import { acquireAuthoritativePluginRuntimeRegistryLease, tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { bindScmActionToSessionWorkspace, isRetainedScmReviewAction } from '@/scm/actions/placement';
 import { requiresExplicitScmMachineTarget } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveSocketRpcSessionAuthorization, type SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
@@ -877,6 +879,7 @@ export function createCliActionDeps(params: Readonly<{
   sessionMessageReplyPublisher?: Pick<ApiSessionClient, 'sessionId' | 'mutateSessionMessageReply' | 'publishSessionMessageReply'>;
   /** Current Session publisher supplied by the admitted host; never a human HTTP fallback. */
   postAgentDiscussionMessage?: Parameters<typeof createDiscussionActionDeps>[0]['postAgentMessage'];
+  postWorkflowDiscussionMessage?: Parameters<typeof createDiscussionActionDeps>[0]['postWorkflowMessage'];
   /** Exact live RPC owner for this bound Session; absent on Account/daemon action hosts. */
   invokeBoundSessionRpc?: (method: string, input: unknown, signal?: AbortSignal, origin?: SessionActionRpcOriginV1) => Promise<unknown>;
   /** One-use transport already resolved by this Goal RPC's admission owner. */
@@ -935,6 +938,8 @@ export function createCliActionDeps(params: Readonly<{
     | Promise<CliServerFeaturesSnapshot | undefined>;
   /** Exact Home-bound policy/settings snapshot owned by the runtime constructor. */
   actionsSettingsProvider?: RuntimeActionSettingsProvider;
+  /** Authenticated narrow policy for the constructor's exact origin Session. */
+  readAgentStartPolicy?: (signal?: AbortSignal) => Promise<RequesterAgentStartPolicyV1 | null>;
   /** Existing Account workflow family owner, shared with notification link checks. */
   workflowAction?: ActionExecutorDeps['workflowAction'];
   /** Exact committed contributed-Action owner supplied by this host constructor. */
@@ -951,6 +956,7 @@ export function createCliActionDeps(params: Readonly<{
   /** Existing daemon authority owner shared with coordinator effect currentness. */
   workflowAcceptedAuthorizationCurrentness?: (input: Readonly<{
     authorization: import('@happier-dev/protocol').WorkflowAcceptedAuthorizationV1;
+    reservation?: import('@/daemon/workflows/recovery').WorkflowDiscussionModelReservationReplay;
     signal?: AbortSignal;
   }>) => boolean | Promise<boolean>;
 }> & SessionStoredContentCryptoContext & ExternalActionHomeBinding & CliActionExactHomeTarget,
@@ -1234,9 +1240,9 @@ export function createCliActionDeps(params: Readonly<{
     accountId: params.credentials ? readAccountIdFromToken(params.credentials.token) ?? undefined : undefined,
     readRawAccountSettings: readRawRoleSettings,
   });
-  const readRoleSources: RoleSourceReader = async signal => {
+  const readRoleSources: RoleSourceReader = async (signal, options) => {
     const read = () => params.serverHttpBaseUrl
-      ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => sourceReader(signal)) : sourceReader(signal);
+      ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, () => sourceReader(signal, options)) : sourceReader(signal, options);
     // The built-in reader only lists/reads artifacts and, for this private
     // Account, reads captured Settings. Injected readers retain their own scope.
     const sources = await (params.savedSecretOperationContext && !params.readRoleSources
@@ -1325,12 +1331,16 @@ export function createCliActionDeps(params: Readonly<{
     // selections. Catalog hydration repeats requester authority round trips
     // without contributing any fact to the fresh Home subtree decision.
     const scopeOnly = options?.purpose === 'session_scope';
+    const requiresBoundStartPolicy = !scopeOnly && (Boolean(params.readAgentStartPolicy)
+      || (params.actionsSettingsProvider ? !params.actionsSettingsProvider.getAccountSettings : !params.credentials));
     const prepareStartReads = async () => {
       if (!scopeOnly) await measureActionStartPhaseV1(context, 'role_overrides', () => prepareAccountRoleOverrides(context.signal));
       const roleSources = scopeOnly ? undefined
         : await measureActionStartPhaseV1(context, 'role_sources', () => readRoleSources(context.signal));
-      const settings = await measureActionStartPhaseV1(context, 'account_settings', async () =>
-        params.actionsSettingsProvider?.getAccountSettings?.()
+      const settings = scopeOnly ? null : await measureActionStartPhaseV1(context, 'account_settings', async () =>
+        requiresBoundStartPolicy ? await (params.readAgentStartPolicy
+          ? params.readAgentStartPolicy(context.signal) : readCurrentRunnerAgentStartPolicyV1(session.sessionId, context.signal))
+        : params.actionsSettingsProvider?.getAccountSettings?.()
         ?? (params.credentials ? (await runWithoutRequesterSessionCurrentnessCheckpoint(() =>
           bootstrapAccountSettingsContext({ credentials: params.credentials!, mode: 'blocking' }))).settings : null));
       let appliedChildSelection: import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelection | undefined;
@@ -1352,6 +1362,7 @@ export function createCliActionDeps(params: Readonly<{
       return refuse('caller_session_unavailable');
     }
     context.signal?.throwIfAborted();
+    if (requiresBoundStartPolicy && !settings) return refuse('requester_projection_unavailable');
     return resolveCliAgentStartContextV1({
       recordActionStartDiagnostic: context.recordActionStartDiagnostic,
       sessionId: session.sessionId,
@@ -2150,7 +2161,15 @@ export function createCliActionDeps(params: Readonly<{
           }
           return decision.state === 'enabled';
         },
-        resolveIngressContext: async (args) => await resolveWorkflowIngressContext(args.context),
+        resolveIngressContext: async (args) => {
+          if (args.actionId === 'workflow.run.start') {
+            // Admission materializes the current executable catalog. Refuse a
+            // non-daemon process before Account/source reads or Run storage.
+            const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
+            await lease.release();
+          }
+          return await resolveWorkflowIngressContext(args.context);
+        },
         resolveTargetValidation: async (args) => {
           try {
             const machines = await listCurrentAccountMachines({
@@ -2179,6 +2198,7 @@ export function createCliActionDeps(params: Readonly<{
         definitions: workflowDefinitions,
         ...(workflowTriggers ? { triggers: workflowTriggers } : {}),
         runs: createWorkflowRunActionOwner({
+          resolveServerProfileScopeId: identifier => isSameActionHomeId(identifier) ? actionHomeId : null,
           resolveDiscussionOrigin: async ({ origin, context }) => {
             const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
             const credentials = requester?.credentials ?? params.credentials;
@@ -2193,7 +2213,9 @@ export function createCliActionDeps(params: Readonly<{
               ...(params.externalActionMachineInstallationId ? { externalActionMachineInstallationId: params.externalActionMachineInstallationId } : {}),
               ...(params.resolveServerFeaturesSnapshot ? { resolveServerFeaturesSnapshot: params.resolveServerFeaturesSnapshot } : {}),
             }).discussionAction!;
-            const result = await resolveWorkflowDiscussionOrigin({ origin, context, discussionAction, signal: context.signal }).catch(error => {
+            const result = await resolveWorkflowDiscussionOrigin({ origin,
+              context: { ...context, ...(!context.serverIdentityId && params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}) },
+              discussionAction, signal: context.signal }).catch(error => {
               context.signal?.throwIfAborted();
               const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
               throw Object.assign(new Error(code === 'invalid_reference_scope' ? 'invalid_reference_scope' : 'content_unavailable'), {
@@ -3376,6 +3398,8 @@ export function createCliActionDeps(params: Readonly<{
           ...(sessionAuthorization ? { authorization: sessionAuthorization } : {}),
           context, effectActionId: actionId,
           authority: context.authority, exactMachine: true,
+          // SCM reads, like effects, belong to the containing Action lifetime.
+          timeoutMs: null,
           ...(context.signal ? { signal: context.signal } : {}), ...options }),
       });
       try {
@@ -7507,6 +7531,12 @@ export function createCliActionDeps(params: Readonly<{
 
       const externalActionRequest = context?.externalActionCredential !== undefined
         || context?.externalActionExecutionAuthorization !== undefined;
+      // Home minted a Machine placement for opaque input. The canonical target
+      // resolver has now selected this receiver; sign its exact Session reads
+      // under the same root so Home can enforce Session/Machine access.
+      const messageContext = context?.externalActionExecutionAuthorization
+        ? { ...context, externalActionTarget: { kind: 'session' as const, sessionId } }
+        : context;
       const resolveAuthorizationHeaders = externalActionRequest
         ? (request: Readonly<{ method: string; path: string; body?: unknown }>) =>
             resolveServerRequestHeaders(context, 'session.message.send', request)
@@ -7548,15 +7578,25 @@ export function createCliActionDeps(params: Readonly<{
             ...(context?.actionRequestAttributionV1 ? { actionRequestAttributionV1: context.actionRequestAttributionV1 } : {}),
           })
         : undefined;
+      const admittedCaller = sessionInputSource && actionCaller?.kind === 'session'
+        ? AgentStartSessionCallerV1Schema.safeParse(actionCaller) : null;
+      if (admittedCaller && (!admittedCaller.success || admittedCaller.data.sessionId !== sessionInputSource?.sourceSessionId)) {
+        return { status: 'rejected' as const, code: 'session_input_untrusted_assertion' as const };
+      }
       const turnDepth = sessionInputSource ? params.getCurrentTurnWorkDepth?.(sessionInputSource.sourceTurnId) : undefined;
-      const starterDepth = sessionInputSource ? params.getCurrentSessionWorkDepth?.() : undefined;
+      // Credentialed daemon execution has an exact-turn reader but no bound
+      // Session starter-depth getter. Agent admission consumes this same caller.
+      const starterDepth = sessionInputSource
+        ? params.getCurrentSessionWorkDepth ? params.getCurrentSessionWorkDepth()
+          : admittedCaller?.success ? admittedCaller.data.starterDepth : undefined
+        : undefined;
       if (sessionInputSource && (turnDepth === undefined || starterDepth === undefined)) {
         return { status: 'rejected' as const, code: 'session_input_untrusted_assertion' as const };
       }
       // A user turn resets turn depth to zero, but cannot reset the Session or
       // background Run's immutable starter depth when it sends to another Session.
-      const callerDepth = turnDepth !== undefined && starterDepth !== undefined
-        ? readAgentStartCallerWorkDepthV1({ kind: 'session', sessionId: params.sessionId, starterDepth, turnDepth })
+      const callerDepth = sessionInputSource && turnDepth !== undefined && starterDepth !== undefined
+        ? readAgentStartCallerWorkDepthV1({ kind: 'session', sessionId: sessionInputSource.sourceSessionId, starterDepth, turnDepth })
         : undefined;
       const causalSessionInputAdmission = sessionInputSource && callerDepth !== undefined
         ? buildCausalSessionInputAdmissionV1({ ...sessionInputSource, callerDepth,
@@ -9430,6 +9470,7 @@ export function createCliActionDeps(params: Readonly<{
       ? createDiscussionActionDeps({
           credentials: params.credentials,
           ...(params.postAgentDiscussionMessage ? { postAgentMessage: params.postAgentDiscussionMessage } : {}),
+          ...(params.postWorkflowDiscussionMessage ? { postWorkflowMessage: params.postWorkflowDiscussionMessage } : {}),
           ...(params.resolveServerFeaturesSnapshot
             ? { resolveServerFeaturesSnapshot: params.resolveServerFeaturesSnapshot }
             : {}),
@@ -9451,6 +9492,12 @@ export function createCliActionDeps(params: Readonly<{
       const operationSignal = signal ?? context.signal;
       operationSignal?.throwIfAborted();
       if (!sessionId || !actionId || await projectHomeAdmission(undefined, context)) return { kind: 'incomplete' };
+      // The host binding proves this exact Session, without Account credentials.
+      // Restricted descendant references use the shared server-proved subtree reader.
+      if (!params.credentials && sessionId === params.sessionId && context.defaultSessionId === params.sessionId
+        && context.sessionListAccess === 'current_session') {
+        return { kind: 'unique', address: { serverId: actionHomeId, sessionId } };
+      }
       try {
         const target = await resolveTransportForSession(sessionId, operationSignal, { context, actionId });
         operationSignal?.throwIfAborted();
