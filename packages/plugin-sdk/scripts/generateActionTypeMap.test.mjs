@@ -63,6 +63,7 @@ const GENERATED_PATH = resolve(PACKAGE_ROOT, 'src/actions/actionTypeMap.generate
 
 test('generated module validation rejects invalid syntax and private validator references', () => {
   assert.doesNotThrow(() => validateGeneratedModuleSyntax('export type Valid = { value: string };\n'));
+  assert.doesNotThrow(() => validateGeneratedModuleSyntax("export type Diagnostic = 'ZodError' | '$ZodError' | 'z.ZodString' | 'zod/mini';\n"));
   assert.throws(
     () => validateGeneratedModuleSyntax("import type { Private } from '@happier-dev/protocol';\nexport type Invalid = Private;\n"),
     /private or absolute import/u,
@@ -70,6 +71,20 @@ test('generated module validation rejects invalid syntax and private validator r
   assert.throws(
     () => validateGeneratedModuleSyntax('export type Invalid = z.ZodString;\n'),
     /validator-library implementation reference/u,
+  );
+  assert.throws(
+    () => validateGeneratedModuleSyntax("import type { AnySchema } from 'zod/mini';\nexport type Invalid = AnySchema;\n"),
+    /validator-library implementation reference/u,
+  );
+  for (const reference of ['ZodString', '$brand', 'z.infer<string>']) {
+    assert.throws(
+      () => validateGeneratedModuleSyntax(`export type Invalid = ${reference};\n`),
+      /validator-library implementation reference/u,
+    );
+  }
+  assert.throws(
+    () => validateGeneratedModuleSyntax("export type Invalid = import('zod/mini').AnySchema;\n"),
+    /private or absolute import/u,
   );
   assert.throws(
     () => validateGeneratedModuleSyntax('export type Invalid = {\n'),

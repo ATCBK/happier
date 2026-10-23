@@ -18,7 +18,7 @@ const PACKAGE_ROOT = resolve(REPO_ROOT, 'packages/plugin-sdk');
 const WORKSPACE_BUILD_LOCK_PATH = resolveWorkspaceBundleLockPath(REPO_ROOT);
 const OUTPUT_PATH = resolve(REPO_ROOT, 'packages/plugin-sdk/src/actions/actionTypeMap.generated.ts');
 const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
-const FORBIDDEN_PUBLIC_VALIDATOR_REFERENCE = /(?:['"]zod(?:\/[^'"]*)?['"]|\bz\.[A-Za-z_$]|\bZod[A-Za-z0-9_]*\b|\$(?:brand|Zod[A-Za-z0-9_]*))/u;
+const FORBIDDEN_PUBLIC_VALIDATOR_IDENTIFIER = /^(?:Zod[A-Za-z0-9_]*|\$(?:brand|Zod[A-Za-z0-9_]*))$/u;
 
 const CACHE_PATH = resolve(PACKAGE_ROOT, 'node_modules/.cache/happier-action-type-map.json');
 const COMPILER_PATH = fileURLToPath(import.meta.resolve('typescript'));
@@ -379,10 +379,6 @@ export function validateGeneratedModuleSyntax(output) {
   if (PRIVATE_OR_ABSOLUTE_IMPORT.test(output)) {
     throw new ActionTypeProjectionValidationError('Generated Action type map contains a private or absolute import.');
   }
-  if (FORBIDDEN_PUBLIC_VALIDATOR_REFERENCE.test(output)) {
-    throw new ActionTypeProjectionValidationError('Generated Action type map contains a validator-library implementation reference.');
-  }
-
   const sourceFile = ts.createSourceFile(
     OUTPUT_PATH,
     output,
@@ -395,6 +391,22 @@ export function validateGeneratedModuleSyntax(output) {
     throw new Error(
       `Generated Action type map is not valid TypeScript: ${ts.flattenDiagnosticMessageText(diagnostics[0].messageText, '\n')}`,
     );
+  }
+  // Diagnostic string literals may name Zod errors without exposing its types.
+  const referencesValidator = (node) => {
+    if (ts.isIdentifier(node) && FORBIDDEN_PUBLIC_VALIDATOR_IDENTIFIER.test(node.text)) return true;
+    const namespace = ts.isQualifiedName(node) ? node.left
+      : ts.isPropertyAccessExpression(node) ? node.expression : undefined;
+    if (namespace && ts.isIdentifier(namespace) && namespace.text === 'z') return true;
+    const module = ts.isImportDeclaration(node) || ts.isExportDeclaration(node) ? node.moduleSpecifier
+      : ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) ? node.argument.literal
+      : ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) ? node.moduleReference.expression
+      : undefined;
+    if (module && ts.isStringLiteral(module) && /^zod(?:\/|$)/u.test(module.text)) return true;
+    return ts.forEachChild(node, referencesValidator);
+  };
+  if (referencesValidator(sourceFile)) {
+    throw new ActionTypeProjectionValidationError('Generated Action type map contains a validator-library implementation reference.');
   }
 }
 
