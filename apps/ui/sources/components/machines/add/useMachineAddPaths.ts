@@ -22,8 +22,8 @@ import { isThisComputerMachineOfHome, resolveMachineAddPaths, type MachineAddPat
 export function useThisComputerMachineId(taskRunner?: SystemTaskRunner): string | null {
     const runner = taskRunner ?? getSystemTasksRunner();
     const subscribe = React.useCallback((listener: () => void) => subscribeLocalDaemonSharedState(runner, listener), [runner]);
-    const read = React.useCallback(() => readLocalDaemonSharedState<LocalDaemonStatusData>(runner), [runner]);
-    return React.useSyncExternalStore(subscribe, read, read).status?.machineId ?? null;
+    const read = React.useCallback(() => readLocalDaemonSharedState<LocalDaemonStatusData>(runner).status?.machineId ?? null, [runner]);
+    return React.useSyncExternalStore(subscribe, read, read);
 }
 
 /** Reads the canonical status projection; it does not start another daemon status task. */

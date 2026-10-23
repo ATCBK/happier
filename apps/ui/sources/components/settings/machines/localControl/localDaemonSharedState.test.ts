@@ -25,7 +25,8 @@ import type { IModal } from '@/modal';
 import { useThisComputerSetupTask } from '@/components/systemTasks/useThisComputerSetupTask';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import * as React from 'react';
-import { renderScreen } from '@/dev/testkit';
+import { createRenderCommitCounter, renderScreen, useRenderCommitCounter } from '@/dev/testkit';
+import type { LocalDaemonStatusData } from './useLocalDaemonControl';
 import type { SetupThisComputerWizardPrimaryState } from '@/components/onboarding/checklists/setupThisComputer/SetupThisComputerChecklistStep';
 
 // Only the canonical JS → native event transport is substituted; host selection, native bridge and runner stay real.
@@ -466,4 +467,43 @@ it('records a shared update only at successful settlement for its initiating acc
     await started;
     expect(readUnseenUpdateCompletions(accountA).get('machine-local-1:happier-cli')).toBe('done');
     expect(readUnseenUpdateCompletions(accountB).size).toBe(0);
+});
+
+it('keeps Machine identity readers quiet across unrelated local daemon status publications', async () => {
+    const { useThisComputerMachineId } = await import('@/components/machines/add/useMachineAddPaths');
+    const runner = createSystemTaskRunner({ bridge: createDeterministicSystemTaskBridge(), mode: 'dev' });
+    const initial: LocalDaemonStatusData = {
+        machineId: 'local-machine', serviceInstalled: true, daemonRunning: true, needsAuth: false,
+    };
+    publishLocalDaemonStatus(runner, initial);
+    const counter = createRenderCommitCounter();
+    let observed: string | null = null;
+    function MachineIdentityReader() {
+        observed = useThisComputerMachineId(runner);
+        useRenderCommitCounter(counter);
+        return null;
+    }
+    const screen = await renderScreen(React.createElement(React.Fragment, null,
+        Array.from({ length: 100 }, (_, index) => React.createElement(MachineIdentityReader, { key: index }))));
+    try {
+        expect(observed).toBe('local-machine');
+        counter.reset();
+        for (let arrival = 0; arrival < 5; arrival += 1) {
+            await act(async () => publishLocalDaemonStatus(runner, {
+                ...initial, daemonRunning: arrival % 2 === 0,
+                cliUpdate: { currentVersion: `1.${arrival}`, latestVersion: null, updateAvailable: false,
+                    managed: true, origin: null },
+            }));
+        }
+        expect(counter.read()).toEqual({ renders: 0, commits: 0 });
+        await act(async () => publishLocalDaemonStatus(runner, { ...initial, machineId: 'replacement-machine' }));
+        expect(observed).toBe('replacement-machine');
+        expect(counter.read()).toEqual({ renders: 100, commits: 100 });
+        counter.reset();
+        await act(async () => publishLocalDaemonStatus(runner, { ...initial, machineId: null }));
+        expect(observed).toBeNull();
+        expect(counter.read()).toEqual({ renders: 100, commits: 100 });
+    } finally {
+        await screen.unmount();
+    }
 });
