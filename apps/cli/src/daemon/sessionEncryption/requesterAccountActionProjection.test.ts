@@ -27,6 +27,7 @@ import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externa
 import { openExternalActionRequesterAccountContextV1, sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import * as installationStore from '@/daemon/identity/store';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { createServerUrlServerFeaturesSnapshotStore } from '@/features/serverFeaturesSnapshotStore';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -574,9 +575,16 @@ describe('admitted requester Action projection', () => {
       const source = readFileSync(sourcePath, 'utf8');
       const initializer = source.match(/const resolveCurrentMachineExecutionOriginContext\s*=\s*(createCurrentMachineExecutionOriginContextResolver\(\{[\s\S]*?\}\));/u)?.[1];
       if (!initializer) throw new Error('Missing production origin composition');
+      const homeTransportCancellation = new AbortController();
+      const serverFeaturesSnapshotStore = createServerUrlServerFeaturesSnapshotStore({
+        serverUrl: resolveServerHttpBaseUrl(), token: credentials.token,
+      });
+      await serverFeaturesSnapshotStore.refresh();
       const resolveOrigin = new Function('createCurrentMachineExecutionOriginContextResolver', 'configuration',
-        'resolveServerHttpBaseUrl', 'machineId', `return ${initializer};`).call({ machine: { id: 'machine' } },
-          createCurrentMachineExecutionOriginContextResolver, configuration, resolveServerHttpBaseUrl, 'machine') as
+        'resolveServerHttpBaseUrl', 'machineId', 'homeTransportCancellation', 'homeTarget', 'serverFeaturesSnapshotStore',
+        `return ${initializer};`).call({ machine: { id: 'machine' } },
+          createCurrentMachineExecutionOriginContextResolver, configuration, resolveServerHttpBaseUrl, 'machine',
+          homeTransportCancellation, { homeServerIdentityId: null }, serverFeaturesSnapshotStore) as
           ReturnType<typeof createCurrentMachineExecutionOriginContextResolver>;
       const executor = createActionExecutor(createUnavailableActionTransportDeps());
       prepared = await requesterAccountOwner.prepareInstalledRequesterAccountActionContext({ authorization: sealed, purpose,
@@ -729,6 +737,155 @@ describe('admitted requester Action projection', () => {
       expect(await prepared?.authorization.requesterHttpProjection?.createRequestHeaders({ effectActionId: 'localServices.launcher.start',
         method: 'POST', path: '/v1/account/project-rows/list' })).toBeNull();
     } finally { await prepared?.dispose(); }
+  });
+
+  it('brackets passive SOURCE preparation with fresh admission and keeps retained operations and Settings refresh fresh', async () => {
+    const [{ RpcHandlerManager }, machineAdmission, { createWorkspaceSyncTargetContent }, { socketRpcCodec },
+      { PROJECT_ACTION_INPUT_SCHEMAS_V1 }, { WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSourceExecutionV1Schema }] = await Promise.all([
+      import('@/api/rpc/RpcHandlerManager'), import('@/api/machine/machineRpcAuthorization'),
+      import('@/api/rpc/workspaceSyncTargetContent'), import('@happier-dev/sync-client'),
+      import('@happier-dev/protocol/actions/projectActionFamily'), import('@happier-dev/protocol/socketRpc'),
+    ]);
+    const controller = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(61));
+    const worker = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(62));
+    const installation = { version: 1 as const, installationId: 'controller-installation', createdAt: 1,
+      publicKey: Buffer.from(controller.publicKey).toString('base64url'), privateKey: Buffer.from(controller.secretKey).toString('base64url') };
+    const installed = vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue(installation);
+    const admission = { actorAccountId: 'bob', custodianAccountId: 'source-owner', machineId: 'source',
+      installationId: 'source-installation', role: 'use' as const, encryptionMode: 'plain' as const };
+    const envelope = ExternalActionRequestEnvelopeSchema.parse({ v: 1, requestId: 'source-preparation',
+      input: PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse({ workspace: {
+        serverId: 'stable-home', workspaceId: 'source-ref', machineId: 'source', rootPath: '/source',
+      }, selection: { kind: 'named', name: 'test' } }), target: { kind: 'machine', machineId: 'worker' } });
+    const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'source-root', binding: {
+      accountId: 'bob', custodianAccountId: 'worker-owner', authentication: { kind: 'terminal', tokenEpoch: 1 },
+      accountEncryptionMode: 'plain', serverIdentityId: 'stable-home', machineId: 'worker', installationId: 'worker-installation',
+      actionId: 'projects.script.run', requestId: envelope.requestId,
+      requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), target: envelope.target,
+    } });
+    const params = { sourceWorkspaceRefId: 'source-ref', targetWorkspaceRefId: 'worker-ref' };
+    const purpose = { kind: 'workspace_sync_prepare', controller: { machineId: 'controller', installationId: installation.installationId },
+      request: params } as const;
+    const sealed = sealExternalActionRequesterAccountContextV1({ authorization: root, purpose,
+      credentials: { token: 'bob-private', secret: null, encryption: null }, installationPublicKey: controller.publicKey,
+      randomBytes: nacl.randomBytes });
+    const routing = WorkspaceSyncSourceRoutingV1Schema.parse({ v: 1, phase: 'prepare', operationId: 'source-sync',
+      accountServerId: 'stable-home', sourceMachineId: 'source', sourceRootPath: '/source', originalActionEnvelope: envelope,
+      sourceContext: { machineAdmission: admission, callerAuthority: 'account_automation', workspaceWrites: 'allow' } });
+    const method = `controller:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN}`;
+    const content = createWorkspaceSyncTargetContent({ destination: { machineId: 'controller',
+      installationId: installation.installationId, installationPublicKey: installation.publicKey }, method, routing });
+    const callId = '0123456789abcdef0123456789abcdef';
+    const encoded = await socketRpcCodec.encodeParams(content, params, { method, callId });
+    const packet = WorkspaceSyncSourceExecutionV1Schema.parse({ method, requestId: 'source-packet', params: encoded,
+      externalActionExecution: createExternalActionMachineRpcExecution({ context: {
+        externalActionExecutionAuthorization: sealed, externalActionTarget: root.binding.target },
+        effectActionId: root.binding.actionId, installationId: root.binding.installationId,
+        method, requestId: 'source-packet', params: encoded, privateKey: worker.secretKey, workspaceSyncSourceRouting: routing }) });
+    let current = true;
+    let afterSettings: (() => void) | undefined;
+    let revokeAtOperation = false;
+    let revokeAtSettingsRefresh = false;
+    let proofs = 0;
+    let effects = 0;
+    let executors = 0;
+    const preparationProofs: number[] = [];
+    // Only Home HTTP and the installation file are substituted. The real
+    // Manager verifies the exact SOURCE packet and owns each fresh admission.
+    vi.spyOn(axios, 'post').mockImplementation(async (url, raw) => {
+      expect(new URL(String(url)).pathname).toBe('/v1/machines/controller/admission/verify');
+      const body = raw as { proof: Parameters<typeof verifyMachineInstallationProof>[0]['proof'] };
+      expect(verifyMachineInstallationProof({ publicKey: controller.publicKey, proof: body.proof,
+        payload: { version: 1, machineId: 'controller', installationId: installation.installationId,
+          accountId: 'controller-owner', rpcAdmission: { context: admission, method, callerInputAuthorization: sealed,
+            workspaceSyncSourceRouting: routing, workspaceSyncSourceExecution: packet } } })).toBe(true);
+      proofs += 1;
+      return { status: 200, data: { v: 1, ok: current } };
+    });
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (url.endsWith('/v2/account/settings')) {
+        const change = afterSettings;
+        afterSettings = undefined;
+        change?.();
+        return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+      }
+      throw new Error(`Unexpected SOURCE preparation read: ${new URL(url).pathname}`);
+    });
+    const rpc = new RpcHandlerManager({ scopePrefix: 'controller', localMachineId: 'controller', encryptionMode: 'plain', logger: () => {},
+      authorizeRequest: request => machineAdmission.authorizeMachineRpcRequest(request, { machineId: 'controller',
+        resolveCustodianAccountId: async () => 'controller-owner', resolveInstallationId: () => installation.installationId,
+        verifyMachineAdmission: request => machineAdmission.verifyMachineRpcAdmissionCurrent({ ...request,
+          privateKey: controller.secretKey, daemonToken: 'controller-token', serverHttpBaseUrl: 'https://requester-home.test',
+          workspaceSyncSourceReceiver: { machineId: 'controller', installationId: installation.installationId, accountId: 'controller-owner' } }),
+      }), prepareRequesterAccountContext: async request => {
+        const before = proofs;
+        try { return await requesterAccountOwner.prepareInstalledRequesterAccountActionContext({ ...request,
+          purpose: request.purpose ?? { kind: 'external_action' }, machineId: 'controller', serverId: 'home-profile',
+          serverHttpBaseUrl: 'https://requester-home.test',
+          resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'controller', serverIdentityId: 'stable-home' }),
+          createExecutor: () => { executors += 1; return { execute: async () => ({ ok: false, errorCode: 'unused', error: 'unused' }) }; },
+        }); } finally { preparationProofs.push(proofs - before); }
+      },
+    });
+    rpc.registerHandler(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN, async (_body, context) => {
+      const custody = requesterAccountOwner.readRequesterAccountActionContext(context?.callerInputAuthorization);
+      if (!custody) throw new Error('Missing admitted SOURCE custody');
+      if (revokeAtSettingsRefresh) {
+        current = false;
+        const before = proofs;
+        await channel.pushSettings('bob', {}, 2);
+        expect(await custody.refreshAccountSettings()).toBe(false);
+        expect(proofs).toBeGreaterThan(before);
+        expect(custody.savedSecretOperationContext.readSnapshot()).toBeNull();
+        return { prepared: false };
+      }
+      if (revokeAtOperation) current = false;
+      const before = proofs;
+      const allowed = await custody.isCurrent();
+      expect(proofs - before).toBe(1);
+      if (!allowed) return { prepared: false };
+      effects += 1;
+      return { prepared: true };
+    });
+    const invoke = async () => {
+      const result = await rpc.handleRequest({ method, params: encoded, requestId: 'source-packet',
+        machineAdmission: admission, callerAuthority: 'account_automation', callerInputAuthorization: sealed,
+        workspaceSyncSourceRouting: routing, workspaceSyncSourceExecution: packet });
+      if (result && typeof result === 'object' && 'errorCode' in result) return result;
+      return await socketRpcCodec.decodeResult(content, { ok: true, result }, callId);
+    };
+    expect(await invoke()).toEqual({ prepared: true });
+    expect(preparationProofs).toEqual([2]);
+    expect(await invoke()).toEqual({ prepared: true });
+    expect(preparationProofs).toEqual([2, 2]);
+    expect(effects).toBe(2);
+
+    afterSettings = () => { current = false; };
+    expect(await invoke()).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
+    expect(effects).toBe(2);
+    expect(executors).toBe(2);
+    expect(channel.clients.every(client => client.disconnected)).toBe(true);
+    current = true;
+    const beforeReplacement = proofs;
+    afterSettings = () => installed.mockReturnValue({ ...installation, installationId: 'replacement' });
+    expect(await invoke()).toMatchObject({ errorCode: 'RPC_FORBIDDEN' });
+    expect(proofs - beforeReplacement).toBe(2); // Initial Manager admission and one preparation entry; no proof after retirement.
+    expect(executors).toBe(2);
+    installed.mockReturnValue(installation);
+
+    revokeAtOperation = true;
+    expect(await invoke()).toEqual({ prepared: false });
+    expect(effects).toBe(2);
+    revokeAtOperation = false;
+    current = true;
+    revokeAtSettingsRefresh = true;
+    expect(await invoke()).toEqual({ prepared: false });
+    expect(effects).toBe(2);
+    expect(channel.clients.every(client => client.disconnected)).toBe(true);
   });
 
   it('opens finite preparation custody at its controller, keeps the worker root, and retires its private Account reads', async () => {

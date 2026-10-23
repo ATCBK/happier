@@ -77,6 +77,7 @@ export async function projectRequesterAccountActionAuthorization(
 async function projectAdmittedAccountCustody(
   input: RequesterAccountActionAuthorizationInput,
   isCustodyLive: () => boolean = () => true,
+  isPreparationCurrent = () => input.bootstrap.isCurrent(),
 ): Promise<ExternalActionExecutionAuthorizationV1 | null> {
   const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
   const { bootstrap } = input;
@@ -87,7 +88,7 @@ async function projectAdmittedAccountCustody(
   if (!parsed.success) return refused('requester_projection_root');
   let phase = 'requester_projection_currentness';
   try {
-    if (!await bootstrap.isCurrent()) return refused('requester_projection_custody');
+    if (!await isPreparationCurrent()) return refused('requester_projection_custody');
     if (input.signal?.aborted) return refused('requester_projection_cancelled');
     const currentness = await readRequesterAccountEncryptionCurrentness({ accountId: stamp.accountId, token: bootstrap.credentials.token,
       serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
@@ -95,7 +96,7 @@ async function projectAdmittedAccountCustody(
     if (parsed.data.binding.accountEncryptionMode !== undefined
       && parsed.data.binding.accountEncryptionMode !== currentness.mode) return refused('requester_projection_mode');
     if (currentness.mode === 'e2ee' && !encryption) return refused('requester_projection_material');
-    if (!await bootstrap.isCurrent()) return refused('requester_projection_custody');
+    if (!await isPreparationCurrent()) return refused('requester_projection_custody');
     if (input.signal?.aborted) return refused('requester_projection_cancelled');
     const material: AccountScopedCryptoMaterial | null = currentness.mode === 'plain' ? null : encryption?.type === 'legacy'
         ? { type: 'legacy', secret: new Uint8Array(encryption.secret) }
@@ -246,6 +247,7 @@ export async function resolveAdmittedRequesterAccountReadRuntime(input: Readonly
 
 export async function admitRequesterAccountActionContext(input: Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
+  purpose?: ExternalActionRequesterAccountContextPurposeV1;
   invocation?: ExternalActionRequesterInvocationV1;
   credentials: StoredCredentials;
   serverId: string;
@@ -286,6 +288,12 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   };
   const isCurrent = async () => live && !input.signal?.aborted
     && await (input.isCustodyCurrent ?? input.isCurrent)() && live && !input.signal?.aborted;
+  const sourcePreparation = input.purpose?.kind === 'workspace_sync_prepare' && input.isCustodyCurrent !== undefined;
+  // SOURCE constructors consume installed custody, but retained ports and Settings
+  // refresh keep the exact signed request's full currentness owner.
+  const isProjectionCurrent = sourcePreparation
+    ? async () => await isCurrent() && await input.isCurrent() && await isCurrent()
+    : isCurrent;
   let phase = 'requester_profile';
   const refused = (branch = phase, observedMode?: 'plain' | 'e2ee') => refuseAdmission(phase, branch, undefined, observedMode);
   try {
@@ -348,12 +356,15 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     const authorization = await trace('requester.account_projection', () => projectAdmittedAccountCustody({ authorization: wire,
       ...(input.invocation ? { invocation: input.invocation } : {}),
       serverIdentityId: input.serverIdentityId, bootstrap: {
-      credentials: input.credentials, serverHttpBaseUrl: input.serverHttpBaseUrl, isCurrent,
+      credentials: input.credentials, serverHttpBaseUrl: input.serverHttpBaseUrl, isCurrent: isProjectionCurrent,
       attribution: { serverId: input.serverId, accountId: profile.id, machineId: wire.binding.machineId,
         installationId: wire.binding.installationId },
-    }, ...(input.signal ? { signal: input.signal } : {}) }, () => live));
+    }, ...(input.signal ? { signal: input.signal } : {}) }, () => live, sourcePreparation ? isCurrent : undefined));
     if (!authorization) return refused('null_projection');
     if (!await isCurrent()) return refused('custody');
+    // All asynchronous passive preparation is complete. Refuse and retire its
+    // observation before constructing subscriptions or publishing private ports.
+    if (sourcePreparation && !await authorization.requesterAccountProjection!.isCurrent()) return refused('currentness');
     phase = 'requester_saved_secret_context';
     const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials: input.credentials,
       snapshot: accountSettingsContext, serverHttpBaseUrl: input.serverHttpBaseUrl,
@@ -380,10 +391,10 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
       authorization: carrier, resolveEncryption,
       refreshAccountSettings,
       serverHttpBaseUrl: input.serverHttpBaseUrl,
-      isCurrent: input.isCustodyCurrent ? async () => await authorization.requesterAccountProjection!.isCurrent()
+      isCurrent: input.isCustodyCurrent && !sourcePreparation ? async () => await authorization.requesterAccountProjection!.isCurrent()
         && await input.isCurrent() && await authorization.requesterAccountProjection!.isCurrent()
         : authorization.requesterAccountProjection!.isCurrent,
-      ...(input.isCustodyCurrent ? { isCustodyCurrent: authorization.requesterAccountProjection!.isCurrent } : {}),
+      ...(input.isCustodyCurrent && !sourcePreparation ? { isCustodyCurrent: authorization.requesterAccountProjection!.isCurrent } : {}),
       retain,
       dispose: async () => { if (!ingressReleased) { ingressReleased = true; await release(); } },
     });
@@ -486,13 +497,14 @@ export async function prepareInstalledRequesterAccountActionContext(input: Reado
   return await prepareRequesterAccountActionContext({ ...input, installationId: installation.installationId,
     ...(requesterSessionBootstrap ? { requesterSessionBootstrap } : {}),
     serverIdentityId: origin.serverIdentityId, installationPrivateKey,
-    // SOURCE preparation has a distinct manager-owned proof and keeps its
-    // incumbent fresh verification; it is not a worker-targeted HTTP grant.
+    // SOURCE admission brackets passive preparation with its manager-owned
+    // fresh proof; its retained ports keep that full proof, not installed custody.
     // The installed Stop receiver has the same split as external Actions:
     // HTTP destinations admit signed observations, and its native Stop port
     // calls admitted.isCurrent() immediately before the physical effect.
     // Do not repeat Home root admission while opening its private read ports.
     ...(input.purpose.kind === 'external_action'
+      || input.purpose.kind === 'workspace_sync_prepare'
       || input.purpose.kind === 'machine_rpc' && input.purpose.method === RPC_METHODS.STOP_SESSION
         && binding.actionId === 'session.stop'
       || input.purpose.kind === 'machine_rpc' && input.purpose.recipient ? { isCustodyCurrent } : {}),
