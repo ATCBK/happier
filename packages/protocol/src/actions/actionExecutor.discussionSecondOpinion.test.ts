@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from './actionExecutor.js';
 import { ActionIdSchema } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
@@ -28,6 +28,7 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
   reviewer?: DiscussionSecondOpinionReviewerV1; sourcePages?: 'paged' | 'truncated'; lostGrant?: boolean;
   publisherSessionId?: string; publisherDisclosure?: boolean; noReviewers?: boolean;
   reviewers?: readonly DiscussionSecondOpinionReviewerV1[];
+  interceptActionExecution?: ActionExecutorDeps['interceptActionExecution'];
   routeHostChildAction?: ActionExecutorDeps['routeHostChildAction'] } = {}) {
   const events: string[] = [];
   const creates: unknown[] = [], posts: unknown[] = [], invites: unknown[] = [];
@@ -161,6 +162,7 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
     catch (error) { events.push(`workflow-error:${error instanceof Error ? error.message : String(error)}`); throw error; }
   };
   const executor = createActionExecutor({ ...deps, resolveServerProfileScopeId,
+    ...(options.interceptActionExecution ? { interceptActionExecution: options.interceptActionExecution } : {}),
     ...(options.routeHostChildAction ? { routeHostChildAction: options.routeHostChildAction } : {}) });
   const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'home', bypassApprovals: true,
     actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
@@ -474,6 +476,50 @@ describe('Second opinion canonical Action composition', () => {
     expect(result).toMatchObject({ ok: true, result: { execution: { ok: true, result: {
       status: 'pending', stage: 'workflow', errorCode: 'daemon_fixture_unavailable' } } } });
     expect(routed).toEqual(['workflow.run.start']);
+    expect(f.workflowAdmissions).toEqual([]);
+  });
+  it('parses a Machine child input once before routing its admitted value', async () => {
+    const reviewers = [request.reviewers[0], { selection: { kind: 'session' as const,
+      session: { serverId: 'home', sessionId: 'other-reviewer' } } }];
+    const routed: string[] = [];
+    const f = fixture({ reviewers, routeHostChildAction: async ({ actionId }) => {
+      if (actionId !== 'workflow.run.start') return null;
+      routed.push(actionId);
+      return { ok: false, errorCode: 'daemon_fixture_unavailable', error: 'daemon_fixture_unavailable' };
+    } });
+    // Observe real admission; no schema behavior is substituted. Approval
+    // presentation is outside this child invocation's parse cost contract.
+    const parse = vi.spyOn(getActionSpec('workflow.run.start').inputSchema, 'safeParse');
+    try {
+      const result = await f.executor.execute('discussion.second_opinion.start', { ...request, intent: 'ask',
+        reviewers, confirmedPreview: f.preview(), project: { machineId: 'machine', directory: '/repo' } }, f.context);
+      expect(result).toMatchObject({ ok: true, result: { status: 'pending', stage: 'workflow' } });
+      expect(routed).toEqual(['workflow.run.start']);
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(f.workflowAdmissions).toEqual([]);
+    } finally { parse.mockRestore(); }
+  });
+  it.each([false, true])('routes only the admitted transformed Machine child (invalid: %s)', async invalid => {
+    const reviewers = [request.reviewers[0], { selection: { kind: 'session' as const,
+      session: { serverId: 'home', sessionId: 'other-reviewer' } } }];
+    const routed: string[] = [];
+    const f = fixture({ reviewers,
+      interceptActionExecution: async ({ actionId, input }) => ({ status: 'continue',
+        input: actionId === 'workflow.run.start' && typeof input === 'object' && input !== null
+          ? { ...input, ...(invalid ? { runId: 'invalid' } : { inputs: { admitted: 'transformed' } }) } : input }),
+      routeHostChildAction: async ({ actionId, input, context }) => {
+        if (actionId !== 'workflow.run.start') return null;
+        routed.push(actionId);
+        expect(input).toMatchObject({ inputs: { admitted: 'transformed' } });
+        expect(context.externalActionTarget).toMatchObject({ kind: 'machine', machineId: 'machine' });
+        return { ok: false, errorCode: 'daemon_fixture_unavailable', error: 'daemon_fixture_unavailable' };
+      },
+    });
+    const result = await f.executor.execute('discussion.second_opinion.start', { ...request, intent: 'ask',
+      reviewers, confirmedPreview: f.preview(), project: { machineId: 'machine', directory: '/repo' } }, f.context);
+    expect(result).toMatchObject({ ok: true, result: { status: 'pending', stage: 'workflow',
+      errorCode: invalid ? 'invalid_parameters' : 'daemon_fixture_unavailable' } });
+    expect(routed).toEqual(invalid ? [] : ['workflow.run.start']);
     expect(f.workflowAdmissions).toEqual([]);
   });
   it.each(['local', 'routed'] as const)('gives sibling Machine children stable distinct request identities on %s retry', async placement => {
