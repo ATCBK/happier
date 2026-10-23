@@ -12,10 +12,9 @@ import { ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/error
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
-import { AGENT_STARTUP_FAILURE_PREVIEWS, readAgentStartupFailureCode, SessionRuntimeIssueSourceV1Schema, SessionRuntimeTeamCredentialDenialDetailsV1Schema, SessionRuntimeUsageLimitDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { AGENT_STARTUP_FAILURE_PREVIEWS, readAgentStartupFailureCode, readSessionPreparationFailureCode, SESSION_PREPARATION_FAILURE_PREVIEWS, TEAM_CREDENTIAL_FAILURE_PREVIEW, SessionRuntimeIssueSourceV1Schema, SessionRuntimeTeamCredentialDenialDetailsV1Schema, SessionRuntimeUsageLimitDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 import { hasConnectedServiceRuntimeAuthRecoveryContext } from './connectedServiceRuntimeAuthRecoveryContext';
-import { readSessionPreparationFailureCode, SESSION_PREPARATION_FAILURE_PREVIEWS, TEAM_CREDENTIAL_FAILURE_PREVIEW } from './sessionPreparationFailure';
 import { AGENT_CLI_MISSING_PREVIEW } from '@/packagedRuntime/managedTools/agentCliNotFoundError';
 import { inspectOwnErrorCodeDataProperty } from '@/agent/runtime/session/process/agentRuntimeBridgeError';
 import { classifyProviderLimitEvidence, parseProviderResetAt } from '@/daemon/connectedServices/quotas/normalization';

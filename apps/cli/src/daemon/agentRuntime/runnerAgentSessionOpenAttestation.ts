@@ -3,7 +3,7 @@ import { processIdentityMatches } from '@happier-dev/cli-common/processInstance'
 
 import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
-import { readSessionPreparationFailureCode, type SessionPreparationFailureCode } from '@/agent/runtime/session/errors/sessionPreparationFailure';
+import { readSessionPreparationFailureCode, type SessionPreparationFailureCode } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import {

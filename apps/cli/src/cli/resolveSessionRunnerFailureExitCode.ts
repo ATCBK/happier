@@ -2,7 +2,7 @@ import { HostTerminalTranscriptFollowAdmissionError } from '@/agent/runtime/sess
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import { logger } from '@/ui/logger';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
-import { readSessionPreparationFailureCode } from '@/agent/runtime/session/errors/sessionPreparationFailure';
+import { readSessionPreparationFailureCode } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { inspectOwnErrorCodeDataProperty } from '@/agent/runtime/session/process/agentRuntimeBridgeError';
 import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import {

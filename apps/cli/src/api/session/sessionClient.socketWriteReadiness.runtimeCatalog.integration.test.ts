@@ -62,7 +62,7 @@ import { SessionMutationJournalAdmissionBlockedError } from './client/transport/
 import { ApiClient } from '@/api/api';
 import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession';
 import { reportSessionToDaemonIfRunning } from '@/agent/runtime/startupSideEffects';
-import { SESSION_PREPARATION_FAILURE_PREVIEWS } from '@/agent/runtime/session/errors/sessionPreparationFailure';
+import { SESSION_PREPARATION_FAILURE_PREVIEWS } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 // Substitute only HTTP and Socket.IO. Negotiation, the outbox, tuple codecs,
 // Account-currentness admission and connection supersession remain real.

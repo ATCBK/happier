@@ -2,7 +2,7 @@ import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract
 import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import type { ProjectSetupOperationContext } from '@/workspaces/projectSetup/projectSetupExecution';
 import { logger } from '@/ui/logger';
-import { readSessionPreparationFailureCode, SESSION_PREPARATION_FAILURE_PREVIEWS } from '@/agent/runtime/session/errors/sessionPreparationFailure';
+import { readSessionPreparationFailureCode, SESSION_PREPARATION_FAILURE_PREVIEWS } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 import type { SessionLifecycleActionHandler, SessionLifecycleMachineDeps, SessionLifecycleMachineHandlers } from './sessionLifecycleTypes';
 

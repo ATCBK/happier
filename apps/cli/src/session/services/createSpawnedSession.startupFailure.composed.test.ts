@@ -34,7 +34,7 @@ import { buildSessionMetadataEnvelopeCreateFields } from '@/session/metadata/bui
 import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
-import { SESSION_PREPARATION_FAILURE_PREVIEWS } from '@/agent/runtime/session/errors/sessionPreparationFailure';
+import { SESSION_PREPARATION_FAILURE_PREVIEWS } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { SessionTeamCredentialLaunchUnavailableError } from './sessionTeamCredentialLaunch';
 
 afterEach(() => { vi.unstubAllEnvs(); reloadConfiguration(); });
