@@ -41,8 +41,10 @@ Current behavior is intentionally conservative:
 
 - tapping the notification opens the targeted session
 - pressing a notification action button can execute the direct action when the runtime can verify the target server/session and the surface policy allows direct actions
-- when direct execution is not safe, Happier opens the targeted session instead
-- if the server is not saved yet, Happier routes you into the safest add/switch flow instead of silently approving on the wrong server
+- an action can open the targeted session for review instead of sending a decision
+- when an action opens Happier and its server is not saved yet, Happier uses the safest add/switch flow instead of silently approving on the wrong server
+
+**Development builds only:** Android background actions can send `Allow` and `Deny` without opening Happier when registration succeeds. If registration is unavailable, the buttons open the app. Background delivery or execution can still fail after registration without opening Happier. If a response is unconfirmed, open the session to inspect the current request.
 
 For the exact routing behavior, see [Notification routing](/extras/notifications-routing).
 
