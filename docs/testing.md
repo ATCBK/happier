@@ -752,6 +752,10 @@ UI projections; the CLI script at `apps/cli/scripts/deriveTypecheckProjects.mjs`
 provides the same check. Pass `--write-authored` to either generator for an explicit
 refresh of its tracked membership lists. Adding, moving or deleting a source file
 requires no manual partition registration.
+Coverage validates the editor roots selected by that invocation's derivation,
+including duplicate ownership. Files created while the graph is being derived
+are selected on the next invocation, so concurrent additions cannot invalidate
+an already selected program by changing the later coverage scan.
 
 Bootstrap admits source tools and UI postinstall outputs without compiling Stack's
 unrelated workspace closure. Component typecheck preparation does not rebuild
