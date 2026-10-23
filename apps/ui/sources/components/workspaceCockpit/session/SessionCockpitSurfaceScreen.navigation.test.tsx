@@ -122,6 +122,12 @@ vi.mock('@react-navigation/native', async () => {
     };
 });
 
+// The cockpit's navigator is the library's tab navigator plus its hosted Chat scene; this harness drives the
+// library fake below for both.
+vi.mock('./sessionCockpitTabs', async () => ({
+    createSessionCockpitTabNavigator: (await import('@react-navigation/bottom-tabs')).createBottomTabNavigator,
+}));
+
 vi.mock('@react-navigation/bottom-tabs', async () => {
     const { TabRouter, CommonActions } = await vi.importActual<typeof import('@react-navigation/native')>('@react-navigation/native');
     return ({

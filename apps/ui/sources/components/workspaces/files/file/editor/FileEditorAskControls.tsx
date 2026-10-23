@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
+import { useAskSessionReveal } from '@/components/ui/code/selection/useAskSessionReveal';
 import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { AskSelectionControls, type AskSelectionControlsProps } from '@/components/ui/code/selection/AskSelectionControls';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
@@ -24,7 +24,7 @@ export function FileEditorAskControls(
   }>,
 ): React.ReactElement | null {
   const pane = useAppPaneScope(props.scopeId);
-  const mainColumn = usePaneMainColumn();
+  const revealSessionColumn = useAskSessionReveal();
   const handle = props.handle;
   const getSelection = React.useCallback(
     () => handle?.getSelection?.() ?? null,
@@ -41,9 +41,6 @@ export function FileEditorAskControls(
     () => handle?.getValue() ?? props.savedText ?? '',
     [handle, props.savedText],
   );
-  const revealSessionColumn = React.useCallback(() => {
-    if (mainColumn?.hidden) mainColumn.setHidden(false);
-  }, [mainColumn]);
   const sessionTarget = React.useMemo(
     () =>
       props.sessionId

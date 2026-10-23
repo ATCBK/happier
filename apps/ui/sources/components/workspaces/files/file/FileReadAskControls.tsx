@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
+import { useAskSessionReveal } from '@/components/ui/code/selection/useAskSessionReveal';
 import { AskSelectionControls, type AskSelectionControlsProps } from '@/components/ui/code/selection/AskSelectionControls';
 import { readCodeLineFromDomNode, resolveSourceLinesForText, useDomTextSelection } from '@/components/ui/code/selection/useDomTextSelection';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
@@ -25,9 +25,10 @@ export function FileReadAskControls(props: Readonly<{
     active: boolean;
     /** Comment opens the page's inline composer with the selected source lines and diff side. */
     onCommentRange?: AskSelectionControlsProps['onCommentSelection'];
+    onPhoneBarShownChange?: AskSelectionControlsProps['onPhoneBarShownChange'];
 }>): React.ReactElement | null {
     const pane = useAppPaneScope(props.scopeId);
-    const mainColumn = usePaneMainColumn();
+    const revealSessionColumn = useAskSessionReveal();
     const text = props.text;
     const resolveLines = React.useCallback((range: Parameters<Parameters<typeof useDomTextSelection>[0]['resolveLines']>[0]) => {
         if (props.mode === 'markdown') return resolveSourceLinesForText(text, range.text);
@@ -41,9 +42,6 @@ export function FileReadAskControls(props: Readonly<{
     const diffLines = React.useMemo(() => props.mode === 'diff' ? buildCodeLinesFromUnifiedDiff({ unifiedDiff: text, hideFilePrelude: true }) : undefined,
         [props.mode, text]);
     const getLinesText = React.useCallback(() => text, [text]);
-    const revealSessionColumn = React.useCallback(() => {
-        if (mainColumn?.hidden) mainColumn.setHidden(false);
-    }, [mainColumn]);
     const sessionTarget = React.useMemo(() => props.sessionId ? { sessionId: props.sessionId, revealSessionColumn } : null,
         [props.sessionId, revealSessionColumn]);
     return (
@@ -62,6 +60,7 @@ export function FileReadAskControls(props: Readonly<{
             openDetailsTab={pane.openDetailsTab}
             active={props.active}
             onCommentSelection={props.onCommentRange}
+            onPhoneBarShownChange={props.onPhoneBarShownChange}
             testID="file-read-selection-toolbar"
         />
     );

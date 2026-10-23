@@ -6,6 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
+import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurface';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useWebScrollLockBypass } from '@/components/ui/scroll/useWebScrollLockBypass';
@@ -146,6 +147,14 @@ export type DetailsTabGroupPanelProps = Readonly<{
     collapseSingleTabStrip?: boolean;
 }>;
 
+function DetailsTabBody(props: Readonly<{
+    tab: DetailsTabState;
+    active: boolean;
+    renderTabContent: DetailsTabGroupPanelProps['renderTabContent'];
+}>) {
+    return props.renderTabContent(props.tab, { active: props.active });
+}
+
 export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -260,13 +269,15 @@ export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps
                                 tabKey={tab.key}
                                 isActive={isActive}
                             >
-                                <DetailsTabChromeProvider value={chromeFor(tab.key)}>
-                                    <HeaderActionsScope scopeKey={lendsControls ? headerActionsScopeKey : null}>
-                                        <React.Suspense fallback={<PaneLoadingFallback />}>
-                                            {props.renderTabContent(tab, { active: presented })}
-                                        </React.Suspense>
-                                    </HeaderActionsScope>
-                                </DetailsTabChromeProvider>
+                                <RetainedPanelSurface isActive={presented} mode="flow">
+                                    <DetailsTabChromeProvider value={chromeFor(tab.key)}>
+                                        <HeaderActionsScope scopeKey={lendsControls ? headerActionsScopeKey : null}>
+                                            <React.Suspense fallback={<PaneLoadingFallback />}>
+                                                <DetailsTabBody tab={tab} active={presented} renderTabContent={props.renderTabContent} />
+                                            </React.Suspense>
+                                        </HeaderActionsScope>
+                                    </DetailsTabChromeProvider>
+                                </RetainedPanelSurface>
                             </DetailsTabSurface>
                         );
                     })}

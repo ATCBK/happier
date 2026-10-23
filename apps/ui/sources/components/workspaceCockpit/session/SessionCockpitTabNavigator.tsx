@@ -1,10 +1,7 @@
 import { useSessionCollaborationDestinationAdmitted } from '@/hooks/session/useSessionCollaborationAvailability';
 import { useSessionBoardFeatureEnabled } from '@/components/sessions/board/useSessionBoardFeatureEnabled';
 import * as React from 'react';
-import {
-    createBottomTabNavigator,
-    type BottomTabBarProps,
-} from '@react-navigation/bottom-tabs';
+import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import {
     NavigationContainer,
     NavigationIndependentTree,
@@ -50,6 +47,9 @@ import {
 import { SessionBoardControllerProvider } from '@/components/sessions/board/SessionBoardControllerProvider';
 import { useSessionPluginRuntime } from '@/components/sessions/plugins/useSessionPluginRuntime';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { PhoneAskSheetProvider, usePhoneAskSheet, usePhoneAskSheetState } from '@/components/sessions/composer/phoneAsk/phoneAskSheetState';
+import { PhoneAskSheetFrame } from '@/components/sessions/composer/phoneAsk/PhoneAskSheetFrame';
+import { createSessionCockpitTabNavigator } from './sessionCockpitTabs';
 
 type SessionCockpitTabParamList = {
     [key: string]: undefined;
@@ -63,7 +63,7 @@ type SessionCockpitTabParamList = {
     terminal: undefined;
 };
 
-const Tab = createBottomTabNavigator<SessionCockpitTabParamList>();
+const Tab = createSessionCockpitTabNavigator<SessionCockpitTabParamList>();
 
 const DISABLED_NAVIGATION_LINKING = { enabled: false, prefixes: [] };
 const SESSION_COCKPIT_TAB_SCREEN_OPTIONS = {
@@ -233,6 +233,15 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
     }), [catalog, retainedPluginSurface]);
     const initialSurface = resolveInitialSurface(cockpit ? requestedInitialSurface : 'chat', surfaces);
     const persistSessionLastMobileSurface = usePersistSessionLastMobileSurface();
+    // Phone Ask (P5 §3.9, D-4): the cockpit is the common parent of the File page and the Chat scene that mounts
+    // the one Session composer. It hosts the Chat scene itself, so Ask can raise that scene, composer and draft
+    // intact, as a bottom sheet over the File scene (web and native alike).
+    const phoneAsk = usePhoneAskSheetState(cockpit && deviceType === 'phone');
+    const raisedChatScene = React.useMemo(() => ({
+        routeName: 'chat',
+        raised: phoneAsk?.phase === 'open',
+        Frame: PhoneAskSheetFrame,
+    }), [phoneAsk?.phase]);
     const lastCommittedNavigationSurfaceRef = React.useRef<Readonly<{
         sessionId: string;
         serverId: string | null;
@@ -283,6 +292,7 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
             serverId={sessionServerId}
             pluginRuntime={boardPluginRuntime}
         >
+            <PhoneAskSheetProvider value={phoneAsk}>
             <NavigationIndependentTree>
                 <NavigationContainer
                     theme={navigationTheme}
@@ -294,6 +304,7 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
                             backBehavior="history"
                             initialRouteName={initialSurface}
                             screenOptions={SESSION_COCKPIT_TAB_SCREEN_OPTIONS}
+                            raisedScene={raisedChatScene}
                             tabBar={(tabBarProps) => (
                                 <SessionCockpitNavigatorInitialSurfaceBridge
                                     {...tabBarProps}
@@ -340,6 +351,7 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
                     </PluginSurfacePaneLaunchScope>
                 </NavigationContainer>
             </NavigationIndependentTree>
+            </PhoneAskSheetProvider>
         </SessionBoardControllerProvider>
     );
 });
@@ -407,7 +419,9 @@ const SessionCockpitSceneActivityBoundary = React.memo((props: Readonly<{
     children: React.ReactNode;
     surface: SessionMobileSurface;
 }>) => {
-    const isFocused = useIsFocused();
+    // Chat raised as the Ask sheet over another scene is live there: its composer takes the caret and the taps.
+    const askRaised = usePhoneAskSheet()?.phase === 'open' && props.surface === 'chat';
+    const isFocused = useIsFocused() || askRaised;
     const isWeb = Platform.OS === 'web';
 
     return (

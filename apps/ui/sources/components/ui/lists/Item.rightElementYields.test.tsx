@@ -91,6 +91,13 @@ describe('Item rightElementYields', () => {
     expect(stripShown(screen)).toBe(true);
   });
 
+  it('steps the facts aside when the name column only just equals the name measured to whole pixels', async () => {
+    const screen = await renderRailRow(true);
+    // Layout reports whole pixels; the name's true width is a fraction wider, so an equal column still clips it.
+    await layout(screen, { title: 106, strip: 84, natural: 106 });
+    expect(stripShown(screen)).toBe(false);
+  });
+
   it('keeps an ordinary trailing element in place', async () => {
     const screen = await renderRailRow(false);
     await layout(screen, { title: 40, strip: 90 });

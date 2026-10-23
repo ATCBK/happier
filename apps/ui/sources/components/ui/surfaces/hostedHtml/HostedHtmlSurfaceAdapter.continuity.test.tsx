@@ -195,11 +195,15 @@ it('bootstraps caller HTML with the canonical host environment before reveal', a
         receipt,
     );
     await send(1, 'ready', { ready: true });
-    // The negotiation reply is the frame's first Host API context, delivered before reveal.
+    // Negotiation establishes the API; actual context reads own environment facts.
     const negotiated = await send(2, 'hostApi', { wireVersion: 1, kind: 'negotiate', identity, apiRange: '^1.0.0' }) as
         { payload?: { kind?: string; surface?: Record<string, unknown> } };
     expect(negotiated.payload?.kind).toBe('negotiated');
-    const surface = negotiated.payload!.surface!;
+    expect(negotiated.payload).not.toHaveProperty('surface');
+    const context = await send(3, 'hostApi', {
+        wireVersion: 1, kind: 'request', identity, requestId: 'environment-context', method: 'context',
+    }) as { payload?: { result?: { surface?: Record<string, unknown> } } };
+    const surface = context.payload!.result!.surface!;
     // The same environment facts every installed surface receives, from the one producer.
     expect(surface).toMatchObject({
         direction: expect.stringMatching(/^(ltr|rtl)$/),
@@ -211,8 +215,7 @@ it('bootstraps caller HTML with the canonical host environment before reveal', a
         safeAreaInsets: expect.objectContaining({ top: expect.any(Number) }),
         theme: expect.any(Object),
     });
-    // The guest's decoder is strict. A host-shaped bag can negotiate at the
-    // transport but still fail caller presentation inside the actual SDK.
+    // The actual context reader must admit the complete host environment.
     expect(PluginUiHostApiSurfaceContextV1Schema.safeParse(surface).success).toBe(true);
     expect(surface).toMatchObject({
         mount: { kind: 'embedded', role: 'callerHostedHtml', presentation: 'content' },

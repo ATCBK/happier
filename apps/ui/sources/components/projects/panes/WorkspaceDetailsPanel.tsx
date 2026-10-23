@@ -352,6 +352,8 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         browserProfile: props.browserProductModels?.browserProfile?.profile,
     });
     const detailsSurfaceRenderers = React.useMemo(() => createWorkspaceDetailsSurfaceRenderers({
+        localServicePreviewState,
+        localServicePreviewServerId: props.workspaceRef.serverId,
         onOpenTarget: openBrowserViewTarget,
         onRevealInFilesTree: revealInFilesTree,
         onOpenChanges: openChanges,
@@ -386,6 +388,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
     }), [
         revealInFilesTree,
         openBrowserViewTarget,
+        localServicePreviewState,
         openChanges,
         browserLaunchpad,
         deviceType,

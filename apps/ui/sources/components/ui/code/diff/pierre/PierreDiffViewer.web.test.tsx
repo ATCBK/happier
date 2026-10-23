@@ -434,7 +434,7 @@ describe('PierreDiffViewer (web)', () => {
         instance.cleanUp();
         virtualizer.cleanUp();
     });
-    it('lands a Find match mid-viewport through the plain virtualizer, clear of the sticky chrome', async () => {
+    it('lands a mounted Find match on its own row, centered in whichever scroller holds the diff', async () => {
         fileDiffSpy.mockClear();
         const { VirtualizedFileDiff, Virtualizer } = await import('@pierre/diffs');
         const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
@@ -452,17 +452,80 @@ describe('PierreDiffViewer (web)', () => {
         const context = (await import('@pierre/diffs/react')).VirtualizerContext;
         const screen = await renderScreen(<context.Provider value={virtualizer}>
             <PierreDiffViewer mode="unified" unifiedDiff={patch} findActive scrollToLineId={target.id}
-                findRangesByLineId={new Map([[target.id, [{ start: 0, end: 5, current: true }]]])} />
+                {...({ findRangesByLineId: new Map([[target.id, [{ start: 0, end: 5, current: true }]]]) })} />
         </context.Provider>);
         const host = document.createElement('div');
         const root = host.attachShadow({ mode: 'open' });
         root.innerHTML = '<code data-unified><div data-line-type="change-addition" data-line="1">after</div></code>';
-        const row = root.querySelector<HTMLElement>('[data-line="1"]')!;
-        row.scrollIntoView = vi.fn();
+        const row = root.querySelector<HTMLElement>('[data-line="1"]');
+        if (row) row.scrollIntoView = vi.fn();
         await renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(host, instance); });
-        // 120 (file offset) + 400 (line) - (600 viewport - 20 line) / 2: the same virtualizer landing as go-to-change.
+        // Pierre's offset for an unmeasured (wrapped) row can be far off: a mounted row is landed on itself.
+        expect(row!.scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+        expect(scroll).not.toHaveBeenCalled();
+        instance.cleanUp();
+        virtualizer.cleanUp();
+    });
+    it('lands a mounted go-to-change row the same way as Find', async () => {
+        fileDiffSpy.mockClear();
+        const { VirtualizedFileDiff, Virtualizer } = await import('@pierre/diffs');
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const patch = '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before\n+after\n';
+        const target = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true }).find(line => line.kind === 'add')!;
+        const virtualizer = new Virtualizer();
+        const instance = new VirtualizedFileDiff<React.ReactNode, undefined>({}, virtualizer);
+        vi.spyOn(instance, 'revealLine').mockReturnValue(false);
+        vi.spyOn(instance, 'getLinePosition').mockReturnValue({ top: 400, height: 20 });
+        vi.spyOn(virtualizer, 'getOffsetInScrollContainer').mockReturnValue(120);
+        const scrollRoot = document.createElement('div');
+        Object.defineProperty(scrollRoot, 'clientHeight', { value: 600 });
+        vi.spyOn(virtualizer, 'getRoot').mockReturnValue(scrollRoot);
+        const scroll = vi.spyOn(virtualizer, 'scrollTo').mockImplementation(() => {});
+        const context = (await import('@pierre/diffs/react')).VirtualizerContext;
+        const screen = await renderScreen(<context.Provider value={virtualizer}>
+            <PierreDiffViewer mode="unified" unifiedDiff={patch} scrollToLineId={target.id}
+                {...({})} />
+        </context.Provider>);
+        const host = document.createElement('div');
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML = '<code data-unified><div data-line-type="change-addition" data-line="1">after</div></code>';
+        const row = root.querySelector<HTMLElement>('[data-line="1"]');
+        if (row) row.scrollIntoView = vi.fn();
+        await renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(host, instance); });
+        // Pierre's offset for an unmeasured (wrapped) row can be far off: a mounted row is landed on itself.
+        expect(row!.scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+        expect(scroll).not.toHaveBeenCalled();
+        instance.cleanUp();
+        virtualizer.cleanUp();
+    });
+    it('brings an unmounted Find match into view mid-viewport through the virtualizer', async () => {
+        fileDiffSpy.mockClear();
+        const { VirtualizedFileDiff, Virtualizer } = await import('@pierre/diffs');
+        const { PierreDiffViewer } = await import('./PierreDiffViewer.web');
+        const patch = '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before\n+after\n';
+        const target = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true }).find(line => line.kind === 'add')!;
+        const virtualizer = new Virtualizer();
+        const instance = new VirtualizedFileDiff<React.ReactNode, undefined>({}, virtualizer);
+        vi.spyOn(instance, 'revealLine').mockReturnValue(false);
+        vi.spyOn(instance, 'getLinePosition').mockReturnValue({ top: 400, height: 20 });
+        vi.spyOn(virtualizer, 'getOffsetInScrollContainer').mockReturnValue(120);
+        const scrollRoot = document.createElement('div');
+        Object.defineProperty(scrollRoot, 'clientHeight', { value: 600 });
+        vi.spyOn(virtualizer, 'getRoot').mockReturnValue(scrollRoot);
+        const scroll = vi.spyOn(virtualizer, 'scrollTo').mockImplementation(() => {});
+        const context = (await import('@pierre/diffs/react')).VirtualizerContext;
+        const screen = await renderScreen(<context.Provider value={virtualizer}>
+            <PierreDiffViewer mode="unified" unifiedDiff={patch} findActive scrollToLineId={target.id}
+                {...({ findRangesByLineId: new Map([[target.id, [{ start: 0, end: 5, current: true }]]]) })} />
+        </context.Provider>);
+        const host = document.createElement('div');
+        const root = host.attachShadow({ mode: 'open' });
+        root.innerHTML = '<code data-unified></code>';
+        const row = root.querySelector<HTMLElement>('[data-line="1"]');
+        if (row) row.scrollIntoView = vi.fn();
+        await renderer.act(async () => { screen.findAllByType('FileDiff')[0].props.options.onPostRender(host, instance); });
+        // 120 (file offset) + 400 (line) - (600 viewport - 20 line) / 2; the row then lands on itself once mounted.
         expect(scroll).toHaveBeenCalledWith({ top: 230 });
-        expect(row.scrollIntoView).not.toHaveBeenCalled();
         instance.cleanUp();
         virtualizer.cleanUp();
     });

@@ -2,13 +2,15 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 import { act, type ReactTestInstance } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { SplitCanvasHost } from '@/components/appShell/splitCanvas/components/SplitCanvasHost';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
-import { registerMountedTabUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
+import { registerMountedTabUnsavedChangesGuard, runGuardedTabNavigation } from '@/utils/navigation/runGuardedNavigation';
+import type { DetailsTabState } from './detailsWorkspaceTypes';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -135,6 +137,81 @@ const pane = {
 await import('./DetailsSplitWorkspace');
 
 describe('DetailsSplitWorkspace', () => {
+    it('defers unopened details bodies until presented and preserves visited drafts and passive lifetimes', async () => {
+        const { DetailsTabGroupPanel } = await import('./DetailsTabGroupPanel');
+        const firstGroup = pane.scopeState!.details.groups![0]!;
+        const tabs = Array.from({ length: 20 }, (_, index) => ({
+            ...firstGroup.tabs[0]!,
+            key: `cold-details:${index}`,
+            title: `${index}.txt`,
+        }));
+        const store = createStore(() => ({ revision: 0 }));
+        const subscriptions = new Set<string>();
+        const mounts: string[] = [];
+        const unmounts: string[] = [];
+        const rendered: string[] = [];
+        const requestDecision = vi.fn(async () => 'keepEditing' as const);
+
+        function StatefulDetailsBody({ tabKey }: { tabKey: string }) {
+            const [draft, setDraft] = React.useState('');
+            const [scroll, setScroll] = React.useState(0);
+            const dirtyRef = React.useRef(false);
+            dirtyRef.current = draft.length > 0;
+            const subscribe = React.useCallback((notify: () => void) => {
+                subscriptions.add(tabKey);
+                const unsubscribe = store.subscribe(notify);
+                return () => { subscriptions.delete(tabKey); unsubscribe(); };
+            }, [tabKey]);
+            const revision = React.useSyncExternalStore(subscribe, store.getState).revision;
+            React.useEffect(() => {
+                mounts.push(tabKey);
+                const unregister = registerMountedTabUnsavedChangesGuard(tabKey, {
+                    isDirtyRef: dirtyRef, tag: 'details-cold-mount-test', requestDecision,
+                });
+                return () => { unmounts.push(tabKey); unregister(); };
+            }, [tabKey]);
+            return React.createElement('StatefulDetailsBody', { tabKey, draft, scroll, revision, setDraft, setScroll });
+        }
+
+        const renderTabContent = (tab: DetailsTabState) => {
+            rendered.push(tab.key);
+            return <StatefulDetailsBody tabKey={tab.key} />;
+        };
+        const panel = (activeIndex: number, presented = true) => (
+            <DetailsTabGroupPanel
+                pane={pane}
+                group={{ ...firstGroup, tabs, tabKeys: tabs.map(tab => tab.key), activeTabKey: tabs[activeIndex]!.key }}
+                presented={presented}
+                renderTabContent={renderTabContent}
+            />
+        );
+        const screen = await renderScreen(panel(0, false));
+        expect({ callbacks: rendered, mounts, subscriptions: [...subscriptions] }).toEqual({
+            callbacks: [], mounts: [], subscriptions: [],
+        });
+        await screen.update(panel(0));
+        expect([...subscriptions]).toEqual(['cold-details:0']);
+        expect(new Set(rendered)).toEqual(new Set(['cold-details:0']));
+        const body = () => screen.root.findAllByType('StatefulDetailsBody').find(node => node.props.tabKey === 'cold-details:0')!;
+        await act(async () => {
+            body().props.setDraft('unsaved draft');
+            body().props.setScroll(240);
+        });
+        await screen.update(panel(1));
+        await screen.update(panel(1, false));
+        expect([...subscriptions]).toEqual(['cold-details:0', 'cold-details:1']);
+        expect(mounts).toEqual(['cold-details:0', 'cold-details:1']);
+        expect(unmounts).toEqual([]);
+        const navigate = vi.fn();
+        expect(await runGuardedTabNavigation(['cold-details:0'], navigate)).toBe(false);
+        expect(requestDecision).toHaveBeenCalledOnce();
+        expect(navigate).not.toHaveBeenCalled();
+        await act(async () => { store.setState({ revision: 1 }); });
+        await screen.update(panel(0));
+        expect(body().props).toMatchObject({ draft: 'unsaved draft', scroll: 240, revision: 1 });
+        expect(mounts).toEqual(['cold-details:0', 'cold-details:1']);
+        expect(new Set(rendered)).toEqual(new Set(['cold-details:0', 'cold-details:1']));
+    });
     it('keeps a group open when one of its retained editors declines closing', async () => {
         const { DetailsSplitWorkspace } = await import('./DetailsSplitWorkspace');
         const requestDecision = vi.fn(async () => 'keepEditing' as const);
@@ -233,10 +310,10 @@ describe('DetailsSplitWorkspace', () => {
             leafKind: 'details-group',
             payload: { groupId: 'group:legacy' },
         });
-        expect(screen.root.findAllByType('TabContent')).toHaveLength(2);
+        expect(screen.root.findAllByType('TabContent').map(node => node.props.tabKey)).toEqual(['file:b']);
     });
 
-    it('keeps an inactive retained details tab mounted without allowing it to reactivate the parent focus fact', async () => {
+    it('keeps a visited details tab mounted without allowing it to reactivate presentation or the parent focus fact', async () => {
         const { DetailsSplitWorkspace } = await import('./DetailsSplitWorkspace');
         const firstGroup = pane.scopeState!.details.groups![0]!;
         const inactiveTab = {
@@ -245,7 +322,8 @@ describe('DetailsSplitWorkspace', () => {
             title: 'c.txt',
             resource: { kind: 'file' as const, path: 'c.txt' },
         };
-        const screen = await renderScreen(
+        const presentation = new Map<string, boolean>();
+        const workspace = (activeTabKey: string) => (
             <DetailsSplitWorkspace
                 pane={{
                     ...pane,
@@ -258,52 +336,7 @@ describe('DetailsSplitWorkspace', () => {
                                     ...firstGroup,
                                     tabKeys: ['file:a', 'file:c'],
                                     tabs: [firstGroup.tabs[0]!, inactiveTab],
-                                    activeTabKey: 'file:a',
-                                },
-                                pane.scopeState!.details.groups![1]!,
-                            ],
-                        },
-                    },
-                }}
-                renderTabContent={(tab) => (
-                    <FocusEligibilityProbe testID={`details-tab-focus-${tab.key}`} />
-                )}
-            />,
-        );
-
-        expect(findFocusEligibilityProbe(screen.root, 'details-tab-focus-file:a').props.eligible).toBe(true);
-        expect(findFocusEligibilityProbe(screen.root, 'details-tab-focus-file:c').props.eligible).toBe(false);
-        expect(findFocusEligibilityProbe(screen.root, 'details-tab-focus-file:b').props.eligible).toBe(true);
-    });
-
-    it('tells each rendered tab whether its group is actually presenting it', async () => {
-        // Every tab stays mounted for content, scroll and view continuity, so a
-        // surface that owns an editor, a draft or an executable frame cannot infer
-        // presentation from being mounted. Both split groups present one tab each.
-        const { DetailsSplitWorkspace } = await import('./DetailsSplitWorkspace');
-        const firstGroup = pane.scopeState!.details.groups![0]!;
-        const retainedTab = {
-            ...firstGroup.tabs[0]!,
-            key: 'file:c',
-            title: 'c.txt',
-            resource: { kind: 'file' as const, path: 'c.txt' },
-        };
-        const presentation = new Map<string, boolean>();
-
-        const screen = await renderScreen(
-            <DetailsSplitWorkspace
-                pane={{
-                    ...pane,
-                    scopeState: {
-                        ...pane.scopeState!,
-                        details: {
-                            ...pane.scopeState!.details,
-                            groups: [
-                                {
-                                    ...firstGroup,
-                                    tabKeys: ['file:a', 'file:c'],
-                                    tabs: [firstGroup.tabs[0]!, retainedTab],
-                                    activeTabKey: 'file:a',
+                                    activeTabKey,
                                 },
                                 pane.scopeState!.details.groups![1]!,
                             ],
@@ -312,11 +345,16 @@ describe('DetailsSplitWorkspace', () => {
                 }}
                 renderTabContent={(tab, tabPresentation) => {
                     presentation.set(tab.key, tabPresentation.active);
-                    return React.createElement('TabContent', { tabKey: tab.key });
+                    return <FocusEligibilityProbe testID={`details-tab-focus-${tab.key}`} />;
                 }}
-            />,
+            />
         );
+        const screen = await renderScreen(workspace('file:c'));
+        await screen.update(workspace('file:a'));
 
+        expect(findFocusEligibilityProbe(screen.root, 'details-tab-focus-file:a').props.eligible).toBe(true);
+        expect(findFocusEligibilityProbe(screen.root, 'details-tab-focus-file:c').props.eligible).toBe(false);
+        expect(findFocusEligibilityProbe(screen.root, 'details-tab-focus-file:b').props.eligible).toBe(true);
         expect(Object.fromEntries(presentation)).toEqual({
             'file:a': true,
             'file:c': false,

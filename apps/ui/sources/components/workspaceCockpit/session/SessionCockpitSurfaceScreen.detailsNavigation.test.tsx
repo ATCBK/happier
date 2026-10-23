@@ -58,6 +58,12 @@ vi.mock('@react-navigation/native', async () => ({
 }));
 // Only the external navigator is replaced. Session scenes, comparison renderer,
 // pane reducer, registration, route producer and URL consumer remain real.
+// The cockpit's navigator is the library's tab navigator plus its hosted Chat scene; this harness drives the
+// library fake below for both.
+vi.mock('./sessionCockpitTabs', async () => ({
+    createSessionCockpitTabNavigator: (await import('@react-navigation/bottom-tabs')).createBottomTabNavigator,
+}));
+
 vi.mock('@react-navigation/bottom-tabs', () => ({ createBottomTabNavigator: () => ({
     Screen: () => null,
     Navigator: ({ children, initialRouteName, tabBar }: React.PropsWithChildren<{
@@ -247,6 +253,9 @@ it.each([false, true])('opens phone Details through workspace navigation and ret
         details: 'scmReview', comparison: 'workingTree', view: 'walkthrough',
     } });
     expect(screen.findHostByTestId('scm-comparison-phone-back')).not.toBeNull();
+    // A phone presents hosted Details as its Session cockpit's File scene, beside the cockpit's one Chat composer.
+    expect(screen.findHostByTestId('session-cockpit-route-screen')).not.toBeNull();
+    expect(screen.findHostByTestId('session-cockpit-scene:tabs')).not.toBeNull();
     if (watch) expect(sourceLifetime?.isCurrent()).toBe(true);
     observingReturn = true;
     await screen.pressByTestIdAsync('scm-comparison-phone-back');
@@ -271,7 +280,8 @@ it.each([false, true])('opens phone Details through workspace navigation and ret
     if (watch) expect(sourceLifetime?.isCurrent()).toBe(false);
 });
 
-it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s phone Details route to its qualified Session when history leads Home', async (experience) => {
+it.each((['classic', 'cockpit', 'hosted'] as const).flatMap(experience =>
+    (['back', 'composer'] as const).map(trigger => ({ experience, trigger }))))('returns from the full $experience phone Details route through $trigger to its qualified Session when history leads Home', async ({ experience, trigger }) => {
     const snapshot = fileViewSnapshot({ rootPath: '/tmp/repo' });
     fixture = await createSessionFilesViewFixture({ serverUrl: `https://phone-${experience}.test`, rootPath: '/tmp/repo', rpc: request =>
         request.method === 'scm.status.snapshot' ? { success: true, snapshot } : undefined,
@@ -298,6 +308,9 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
     const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
     const { MobileBottomChromeHost } = await import('@/components/navigation/mobile/chrome/MobileBottomChromeHost');
     const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+    const { useReviewComposerHandoff } = await import('@/components/sessions/reviews/comments/useReviewComposerHandoff');
+    const { writeExistingSessionDraft, getSessionComposerDraftSnapshot, getSessionDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
     const tab = createSessionScmReviewDetailsTab({ comparison: { kind: 'workingTree' }, view: 'walkthrough' });
     route.params = { ...buildActiveDetailsRouteParams([tab], tab.key), id: 's1', serverId: fixture.home.id };
     route.href = '/session/s1/details';
@@ -305,8 +318,11 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
     let workspace!: WorkspaceNavigationContextValue;
     let pane!: ReturnType<typeof useAppPaneScope>;
     let persistSurface!: ReturnType<typeof usePersistSessionLastMobileSurface>;
+    let handoff!: () => void;
     function Probe() {
-        pane = useAppPaneScope(createSessionPaneScopeId('s1', fixture.home.id, instanceKey));
+        const scopeId = createSessionPaneScopeId('s1', fixture.home.id, instanceKey);
+        pane = useAppPaneScope(scopeId);
+        handoff = useReviewComposerHandoff(scopeId);
         persistSurface = usePersistSessionLastMobileSurface();
         return null;
     }
@@ -347,13 +363,29 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
     await act(async () => persistSurface('s1', 'tabs', fixture.home.id));
     route.replace.mockClear();
     route.back.mockClear();
-    await screen.pressByTestIdAsync('scm-comparison-phone-back');
+    const scope = getActiveServerAccountScope();
+    if (!scope) throw new Error('Expected the restored Home Account');
+    const question = 'Why preserve this selection?';
+    const recipient = { mode: 'scm_diff_summary', recipient: { kind: 'execution_run', runId: 'generator' },
+        target: { cwd: '/tmp/repo', resultId: 'reading', expectedRevision: 2, stopIds: ['selection'] } };
+    if (trigger === 'composer') {
+        await act(async () => {
+            writeExistingSessionDraft({ scope, sessionId: 's1', patch: { text: question, routing: { recipient } } });
+            handoff();
+        });
+    } else await screen.pressByTestIdAsync('scm-comparison-phone-back');
     await flushHookEffects({ cycles: 20 });
     const url = new URL(route.href, 'https://happier.test');
     expect(url.pathname).toBe('/session/s1');
     expect(url.searchParams.get('serverId')).toBe(fixture.home.id);
     expect(parseSessionPaneUrlState(Object.fromEntries(url.searchParams))?.details).toBeUndefined();
     expect(url.searchParams.get('mobileSurface')).toBe('chat');
+    if (trigger === 'composer') {
+        const draft = getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId: 's1' });
+        expect(draft?.composer.text.value).toBe(question);
+        const target = getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 's1' })?.document.target;
+        expect(target?.kind === 'session' ? target.routing.recipient.value : null).toEqual(recipient);
+    }
     if (experience === 'hosted') {
         expect(selectedWorkspaceTab()).toMatchObject({ id: originalInstanceKey, target: { kind: 'session', params: { id: 's1', serverId: fixture.home.id } } });
         expect(screen.tree.findAllByType(SessionDetailsDestinationBody)).toHaveLength(0);
@@ -368,6 +400,7 @@ it.each(['classic', 'cockpit', 'hosted'] as const)('returns from the full %s pho
         await flushHookEffects({ cycles: 20 });
         expect(selectedWorkspaceTab()).toMatchObject({ id: originalInstanceKey, target: { kind: 'sessionDetails' } });
         expect(screen.findHostByTestId('scm-comparison-phone-back')).not.toBeNull();
+        expect(screen.findHostByTestId('session-cockpit-scene:tabs')).not.toBeNull();
     }
     // Hosted Details uses its destination selection; its retained pane remains
     // available when the workspace switches back to the Session destination.

@@ -4,6 +4,7 @@ import { getStorage, useActiveServerAccountScope, useIsDataReady, useLocalSettin
 import type { WorkspaceAction, WorkspaceTab, WorkspaceState } from './workspaceState';
 import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
 import { randomUUID } from '@/platform/randomUUID';
+import { LocalSettingsPersistenceError } from '@/sync/domains/state/settingsPersistence';
 import { reconcileWorkspaceSyncedTabs, type SharedWorkspaceTabs } from './workspaceSyncedTabs';
 import {
     readScopedWorkspaceLayout, workspaceLayoutScopeKey, writeScopedWorkspaceLayout,
@@ -95,7 +96,14 @@ export function useWorkspaceState(input: Readonly<{
         if (!next || !scopeKey) return;
         const nextLayouts = writeScopedWorkspaceLayout(layoutsRef.current, scopeKey, next);
         layoutsRef.current = nextLayouts;
-        getStorage().getState().applyLocalSettings({ workspaceLayoutV1: nextLayouts }, { source: 'ui' });
+        try {
+            getStorage().getState().applyLocalSettings({ workspaceLayoutV1: nextLayouts }, { source: 'ui' });
+        } catch (error) {
+            if (!(error instanceof LocalSettingsPersistenceError)) throw error;
+            // Navigation already belongs to the live owner. A refused restoration snapshot must
+            // not tear down the shell; the next explicit intent can persist the latest layout.
+            console.warn('[workspace] Layout persistence failed; keeping the current workspace in memory.');
+        }
     }, [isReady, update, scopeKey]);
     const restoreAction = React.useCallback((action: WorkspaceAction) => {
         update(reduceWorkspaceState(stateRef.current, action));

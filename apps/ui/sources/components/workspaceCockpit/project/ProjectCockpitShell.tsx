@@ -15,6 +15,7 @@ import { ProjectScriptsBody } from '@/components/projects/projectSetup/ProjectSc
 import { ProjectContextBody } from '@/components/projects/context/ProjectContextBody';
 import { ProjectMemoryBody } from '@/components/projects/memory/ProjectMemoryBody';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { useDeviceType } from '@/utils/platform/responsive';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
 import { useServicesOpenInBrowser } from '@/components/sessions/localServices/useServicesOpenInBrowser';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -51,6 +52,7 @@ export const ProjectCockpitShell = React.memo((props: ProjectCockpitShellProps) 
 ));
 
 const ProjectCockpitSurface = React.memo((props: ProjectCockpitShellProps) => {
+    const isPhone = useDeviceType() === 'phone';
     const { navigateToSurface, selectDashboard, checkoutWorkspace, codeLocation, navigateCodeLocation, openCodeHistory } = useProjectSurfaceController({
         scopeId: props.scopeId,
         workspaceRef: props.workspaceRef,
@@ -80,15 +82,15 @@ const ProjectCockpitSurface = React.memo((props: ProjectCockpitShellProps) => {
         navigateToSurface('browser');
     }, [navigateToSurface]);
     const { binding: accountLifetime } = useServerCredentialAccountScopeBinding(props.workspaceRef.serverId);
-    // The mobile browser is a separate full-screen surface with its own pane scope; open a service
-    // into that browser workspace, then switch the cockpit to it (only after a mappable target).
+    // Desktop opens into this Project's details pane. Phones own a separate full-screen
+    // Browser workspace and switch to it only after the shared opener commits its tab.
     const openServiceInBrowser = useServicesOpenInBrowser({
-        scopeId: `${props.scopeId}:browser`,
-        scope: 'sessionMobile',
+        scopeId: isPhone ? `${props.scopeId}:browser` : props.scopeId,
+        scope: isPhone ? 'sessionMobile' : 'workspaceDetails',
         accountLifetime,
         machineId: props.workspaceRef.machineId,
         serverId: props.workspaceRef.serverId,
-        onAfterOpen: switchToBrowserSurface,
+        onAfterOpen: isPhone ? switchToBrowserSurface : undefined,
     });
 
     const {

@@ -267,6 +267,9 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
       let lineSeparator = '\\n';
       let findRequest = null;
       let keyboardSignatures = new Set();
+      // Lines and text positions the host draws over (Track's caret and wash); answered as they move.
+      let geometryWatch = [];
+      let geometryFrame = 0;
       const minimalDocumentEdit = ${minimalCodeEditorEdit.toString()};
 
       function detectLineSeparator(doc) {
@@ -612,6 +615,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             extensions: extensions.concat([
               EditorView.updateListener.of((update) => {
                 if (update.docChanged || update.selectionSet || update.viewportChanged || update.geometryChanged) publishSelection(update.view);
+                if (update.docChanged || update.viewportChanged || update.geometryChanged) scheduleGeometry();
                 if (update.docChanged || update.selectionSet) publishCursor(update.view);
                 if (update.focusChanged) sendEnvelope({ v: 1, type: 'editor.focus', payload: { focused: update.view.hasFocus } });
                 if (findRequest && (update.docChanged || update.selectionSet)) publishFindStatus();
@@ -638,6 +642,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
           });
 
           const editor = new EditorView({ state, parent: root });
+          editor.scrollDOM.addEventListener('scroll', scheduleGeometry, { passive: true });
           applyGutterDigits(editor);
           return editor;
         }
@@ -685,6 +690,41 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             rect,
             collapsed: selection.empty,
           } });
+        }
+
+        function geometryOf(editor, position) {
+          const doc = editor.state.doc;
+          if (!Number.isInteger(position.line) || position.line < 1 || position.line > doc.lines) return null;
+          const line = doc.line(position.line);
+          try {
+            if (position.character === null) {
+              // The text column of the line, every visual row of it when it wraps.
+              const start = editor.coordsAtPos(line.from, 1);
+              const end = editor.coordsAtPos(line.to, -1);
+              if (!start || !end) return null;
+              const content = editor.contentDOM.getBoundingClientRect();
+              return { x: start.left, y: start.top, width: Math.max(0, content.right - start.left), height: end.bottom - start.top };
+            }
+            const caret = editor.coordsAtPos(Math.min(line.from + Math.max(0, position.character), line.to), -1);
+            return caret ? { x: caret.left, y: caret.top, width: 0, height: caret.bottom - caret.top } : null;
+          } catch (e) {
+            return null;
+          }
+        }
+
+        function publishGeometry() {
+          geometryFrame = 0;
+          if (!view || !geometryWatch.length) return;
+          const editor = view;
+          editor.requestMeasure({
+            read: () => geometryWatch.map(position => ({ line: position.line, character: position.character, rect: geometryOf(editor, position) })),
+            write: items => sendEnvelope({ v: 1, type: 'geometry', payload: { items } }),
+          });
+        }
+
+        function scheduleGeometry() {
+          if (!geometryWatch.length || geometryFrame) return;
+          geometryFrame = requestAnimationFrame(publishGeometry);
         }
 
         function publishFindStatus() {
@@ -790,6 +830,13 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             return;
           }
           if (envelope.type === 'focus') { if (view) view.focus(); return; }
+          if (envelope.type === 'geometry.watch') {
+            const positions = Array.isArray(envelope.payload?.positions) ? envelope.payload.positions : [];
+            geometryWatch = positions.filter(position => position && Number.isInteger(position.line)
+              && (position.character === null || Number.isInteger(position.character)));
+            publishGeometry();
+            return;
+          }
           if (envelope.type === 'reveal') { const payload = envelope.payload || {}; reveal(payload.line, payload); return; }
           if (envelope.type === 'command') { runCommand(envelope.payload?.command); return; }
           if (envelope.type === 'decorations.set') {
@@ -843,6 +890,7 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             } else recreateView(doc, language, readOnly);
             applyGutterDigits(view);
             if (payload.reveal) reveal(payload.reveal.line, payload.reveal);
+            scheduleGeometry();
             view.requestMeasure({ read: () => null, write: () => sendEnvelope({ v: 1, type: 'editor.ready', payload: {} }) });
             return;
           }

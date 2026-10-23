@@ -31,6 +31,7 @@ import { buildCodeLinesFromTextDiff } from '@/components/ui/code/model/buildCode
 import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 import { codeLineScrollTargetKey } from '@/components/ui/code/model/codeLineScrollTargetKey';
+import { scrollCodeLineIntoView } from '@/components/ui/code/view/scrollCodeLineIntoView';
 import { resolveCodeLineRangeSelection } from '@/components/ui/code/interactions/resolveCodeLineRangeSelection';
 import type { CodeTokenPointer } from '@/components/ui/code/interactions/codeTokenPress';
 import { PIERRE_FIND_HIGHLIGHT_CSS, pierreCodeLineSelector, registerPierreFindHighlights } from './pierreFindHighlights.web';
@@ -1138,6 +1139,13 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         if (paint.virtualizer && paint.instance instanceof VirtualizedFileDiff) {
             const position = paint.instance.getLinePosition(lineNumber, side);
             if (!position) return;
+            // A row that is already mounted is landed on directly, in whichever element scrolls it, centered clear
+            // of the sticky file header and the Find bar. Pierre's offset for rows it has not measured (wrapped
+            // lines on a phone) can be far off, so the offset scroll below only brings an unmounted row into view.
+            if (!annotation && scrollCodeLineIntoView(el)) {
+                lastScrolledLineIdRef.current = { key: targetKey, filePath: props.filePath };
+                return;
+            }
             const top = paint.virtualizer.getOffsetInScrollContainer(paint.node) + (
                 annotationRect && annotationRect.height > 0
                     ? annotationRect.top - paint.node.getBoundingClientRect().top : position.top
@@ -1152,8 +1160,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             if (annotation ? !annotationRect || annotationRect.height <= 0 : !el) return;
         } else {
             const node = annotationNode ?? el;
-            if (!node || typeof node.scrollIntoView !== 'function') return;
-            node.scrollIntoView({ block: annotationNode ? 'start' : 'center' });
+            if (!scrollCodeLineIntoView(node, annotationNode ? 'start' : 'center')) return;
         }
         lastScrolledLineIdRef.current = { key: targetKey, filePath: props.filePath };
     };

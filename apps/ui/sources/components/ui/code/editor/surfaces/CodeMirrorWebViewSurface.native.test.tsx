@@ -163,6 +163,33 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         emitEnvelope({ v: 1, type: 'selection', payload: selection });
         expect(listener).not.toHaveBeenCalled();
     });
+    it('answers line and position geometry from the WebView, so a host overlay can follow the text', async () => {
+        postMessageSpy.mockClear();
+        const ref = React.createRef<CodeEditorHandle>();
+        const screen = await renderScreen(<CodeMirrorWebViewSurface ref={ref} resetKey="geometry" value="one\ntwo\nthree" language="text" onChange={vi.fn()} />);
+        emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
+        const listener = vi.fn();
+        ref.current!.subscribeSelection!(listener);
+        // Unknown geometry is asked for, never guessed.
+        expect(ref.current!.getLineRect!(2)).toBeNull();
+        expect(ref.current!.getPositionRect!(3, 5)).toBeNull();
+        const watched = postMessageSpy.mock.calls.map(([raw]) => JSON.parse(raw)).filter((envelope) => envelope.type === 'geometry.watch').at(-1);
+        expect(watched?.payload.positions).toEqual([{ line: 2, character: null }, { line: 3, character: 5 }]);
+        emitEnvelope({ v: 1, type: 'geometry', payload: { items: [
+            { line: 2, character: null, rect: { x: 40, y: 20, width: 300, height: 18 } },
+            { line: 3, character: 5, rect: { x: 82, y: 38, width: 0, height: 18 } },
+        ] } });
+        expect(ref.current!.getLineRect!(2)).toEqual({ x: 40, y: 20, width: 300, height: 18 });
+        expect(ref.current!.getPositionRect!(3, 5)).toEqual({ x: 82, y: 38, width: 0, height: 18 });
+        expect(listener).toHaveBeenCalled();
+        // A line scrolled out of the editor answers null again.
+        emitEnvelope({ v: 1, type: 'geometry', payload: { items: [{ line: 2, character: null, rect: null }] } });
+        expect(ref.current!.getLineRect!(2)).toBeNull();
+        // A new document starts with no geometry.
+        await screen.update(<CodeMirrorWebViewSurface ref={ref} resetKey="geometry-2" value="other" language="text" onChange={vi.fn()} />);
+        expect(ref.current!.getPositionRect!(3, 5)).toBeNull();
+        await screen.unmount();
+    });
     it('reveals after document initialization and publishes engine history without rerendering its host', async () => {
         postMessageSpy.mockClear();
         const ref = React.createRef<CodeEditorHandle>();

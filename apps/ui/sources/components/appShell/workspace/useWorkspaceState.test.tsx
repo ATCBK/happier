@@ -53,6 +53,41 @@ describe('useWorkspaceState', () => {
         storageState.layouts = {};
         saveLayouts = vi.spyOn(getStorage().getState(), 'applyLocalSettings');
     });
+    it.each(['QuotaExceededError', 'SecurityError'])('keeps workspace navigation usable after a %s storage refusal and saves the next intent', async (name) => {
+        storageState.ready = true;
+        const { getPersistenceStorage } = await import('@/sync/domains/state/persistenceStorage');
+        const { loadLocalSettings } = await import('@/sync/domains/state/settingsPersistence');
+        const { useWorkspaceState } = await import('./useWorkspaceState');
+        const hook = await renderHook(() => useWorkspaceState({ initialTab, windowId: 'window-a' }));
+        act(() => hook.getCurrent().dispatch({ type: 'openTab', groupId: 'group:1', tab: storedTab }));
+        const scopeKey = workspaceLayoutScopeKey({ ...storageState.scope, windowId: 'window-a' });
+        const saved = loadLocalSettings().workspaceLayoutV1;
+        const mmkv = getPersistenceStorage();
+        const write = mmkv.set.bind(mmkv);
+        // MMKV is the OS/browser storage boundary; settings parsing and the real store stay live.
+        const set = vi.spyOn(mmkv, 'set').mockImplementation((key, value) => {
+            if (key === 'local-settings') throw Object.assign(new Error('private storage detail'), { name });
+            write(key, value);
+        });
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            act(() => hook.getCurrent().dispatch({ type: 'setTarget', tabId: 'session-a',
+                target: { kind: 'session', params: { id: 'session-b', serverId: 'home' } } }));
+            expect(hook.getCurrent().state.tabs['session-a'].target.params.id).toBe('session-b');
+            expect(hook.getCurrent().getState()).toBe(hook.getCurrent().state);
+            expect(loadLocalSettings().workspaceLayoutV1).toEqual(saved);
+            expect(warning.mock.calls.flat().join(' ')).not.toContain('private storage detail');
+            expect(warning).toHaveBeenCalled();
+            set.mockImplementation(write);
+            act(() => hook.getCurrent().dispatch({ type: 'setPinned', tabId: 'session-a', pinned: false }));
+            expect((loadLocalSettings().workspaceLayoutV1[scopeKey] as WorkspaceState).tabs['session-a'])
+                .toMatchObject({ pinned: false, target: { params: { id: 'session-b' } } });
+        } finally {
+            set.mockRestore();
+            warning.mockRestore();
+            await hook.unmount();
+        }
+    });
     it('keeps a local singleton instance when a remote client opens the same destination under another ID', async () => {
         storageState.ready = true;
         const active = { id: 'device-editor', target: { kind: pluginKind, params: { subPath: 'SECOND' } }, pinned: true, preview: false };

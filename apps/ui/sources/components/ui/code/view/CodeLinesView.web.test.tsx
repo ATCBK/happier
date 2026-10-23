@@ -83,6 +83,36 @@ async function flushReactAsyncWork(): Promise<void> {
 }
 
 describe('CodeLinesView (web)', () => {
+    it.each([500, 5_000])('lands a revealed target when its row is measured after %i ms', async (mountDelay) => {
+        const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
+        const { buildCodeLinesFromFile } = await import('../model/buildCodeLinesFromFile');
+        const lines = buildCodeLinesFromFile({ text: 'before\nfolded match\nafter' });
+        const target = lines[1]!;
+        vi.useFakeTimers();
+        const screen = await renderScreen(<CodeLinesViewCore lines={lines} virtualized={false} scrollToLineId={target.id} />);
+        const row = screen.tree.root.findAll(node => typeof node.type === 'string' && node.props.nativeID?.endsWith(`-${target.id}`))[0]!;
+        const element = document.createElement('div');
+        element.id = row.props.nativeID;
+        // Browser layout and the React Native Web layout event are the only substituted boundaries.
+        const scrollIntoView = vi.fn();
+        element.scrollIntoView = scrollIntoView;
+        try {
+            await renderer.act(async () => { vi.advanceTimersByTime(mountDelay); });
+            expect(scrollIntoView).not.toHaveBeenCalled();
+            document.body.append(element);
+            await renderer.act(async () => { row.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 1200, width: 400, height: 22 } } }); });
+            expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: 'center' });
+            scrollIntoView.mockClear();
+            await screen.update(<CodeLinesViewCore lines={[...lines]} virtualized={false} scrollToLineId={target.id} />);
+            await renderer.act(async () => { row.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 1200, width: 400, height: 22 } } }); });
+            expect(scrollIntoView).not.toHaveBeenCalled();
+        } finally {
+            await screen.unmount();
+            element.remove();
+            vi.useRealTimers();
+        }
+    });
+
     it('washes the block the agent writes and stands its caret after the block\'s last line (P5 Track)', async () => {
         const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
         const { EditorAgentCaret } = await import('@/components/ui/motion/EditorAgentCaret');

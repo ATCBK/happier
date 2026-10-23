@@ -18,7 +18,7 @@ import { rangeOfReviewUnit, useHunkDiscard } from '@/components/workspaces/scm/r
 import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import { askAboutRanges, type AskSelectionTargetContext } from '@/components/ui/code/selection/askAboutRanges';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
-import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
+import { useAskSessionReveal } from '@/components/ui/code/selection/useAskSessionReveal';
 import {
   useFileChangesScope,
   type FileChangesScopeView,
@@ -66,7 +66,7 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
   const sessionId = params.sessionId?.trim() || null;
   const reachability = useCheckoutReachability(scope);
   const opener = useWorkspaceFileOpener();
-  const mainColumn = usePaneMainColumn();
+  const revealSessionColumn = useAskSessionReveal();
   const latestTurnId = useSessionSelector(
     sessionId ?? '',
     scope.serverId,
@@ -146,13 +146,13 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     const deletion = !hunkTarget.unit.hunk.lines.some(line => line.kind === 'add');
     await askAboutRanges({
       workspaceScope: scope,
-      sessionTarget: sessionId ? { sessionId, revealSessionColumn: () => { if (mainColumn?.hidden) mainColumn.setHidden(false); } } : null,
+      sessionTarget: sessionId ? { sessionId, revealSessionColumn } : null,
       targetContext: params.getAskTargetContext?.(),
       filePath: hunkTarget.path, source: 'diff', savedText: unifiedDiff,
       lines: buildCodeLinesFromUnifiedDiff({ unifiedDiff, hideFilePrelude: true }),
       ranges: [{ startLine: range.rangeStart, endLine: range.rangeEnd, side: deletion ? 'before' : 'after' }],
     });
-  }, [sessionId, unifiedDiff, scope, mainColumn, params.getAskTargetContext]);
+  }, [sessionId, unifiedDiff, scope, revealSessionColumn, params.getAskTargetContext]);
 
   const liveFiles = React.useMemo(
     () => live && params.changedPaths ? buildFileChangesLiveFiles(params.changedPaths, filePath, unifiedDiff ?? '') : undefined,

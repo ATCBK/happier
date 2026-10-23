@@ -19,6 +19,7 @@ type SessionCockpitShellProps = Readonly<{
     surface: SessionMobileSurface;
     safeAreaPadding?: boolean;
     jumpToSeq?: number | null;
+    jumpToMessageId?: string | null;
     paneUrlState?: SessionPaneUrlState | null;
     initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
     terminalTabAvailable?: boolean;
@@ -43,6 +44,7 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
                 initialSurface={props.surface}
                 safeAreaPadding={props.safeAreaPadding}
                 jumpToSeq={props.jumpToSeq}
+                jumpToMessageId={props.jumpToMessageId}
                 paneUrlState={props.paneUrlState}
                 initialAttachmentDrafts={props.initialAttachmentDrafts}
                 terminalTabAvailable={props.terminalTabAvailable}

@@ -1,6 +1,7 @@
 import type { CustomModalChromeCardConfig } from '@/modal/types';
 
 import type { ModalCardDimensionOptions } from './useModalCardDimensions';
+import { HAPPIER_CATALOG_LIST_ROLE } from '@happier-dev/plugin-ui/presentation';
 
 /**
  * The command-surface card: Search / ⌘K and Browse external sessions. One owner for its geometry, so
@@ -36,7 +37,8 @@ export const CATALOG_SURFACE_CARD_DIMENSIONS: ModalCardDimensionOptions = Object
  * The catalog list beside an open item's details: the Collection's split minima and list share inside
  * `CATALOG_SURFACE_CARD_DIMENSIONS` (the list keeps a readable name, description and facts line; the details take the rest).
  */
-export const CATALOG_SURFACE_LIST_ROLE = Object.freeze({ minListWidthPx: 320, minDetailWidthPx: 440, preferredListRatio: 0.34 });
+/** The catalog list/detail split; its owner is the shared Add body (`HAPPIER_CATALOG_LIST_ROLE`). */
+export const CATALOG_SURFACE_LIST_ROLE = HAPPIER_CATALOG_LIST_ROLE;
 
 /** Which frame a command surface shows: the compact palette, or the list with a detail column. */
 export type CommandSurfaceLayout = 'compact' | 'detail';

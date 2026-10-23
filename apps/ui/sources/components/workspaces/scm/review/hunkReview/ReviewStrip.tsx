@@ -52,7 +52,7 @@ export function ReviewStrip<T extends string>(props: ReviewStripProps<T>) {
   const { theme } = useUnistyles();
   const previousLabel = useKeyboardShortcutLabel('review.change.previous');
   const nextLabel = useKeyboardShortcutLabel('review.change.next');
-  const nextFileLabel = useKeyboardShortcutLabel('review.change.next');
+  const nextFileLabel = useKeyboardShortcutLabel('review.file.next');
   const withKey = (label: string, key: string | undefined) =>
     key ? `${label} (${key})` : label;
   const scope =

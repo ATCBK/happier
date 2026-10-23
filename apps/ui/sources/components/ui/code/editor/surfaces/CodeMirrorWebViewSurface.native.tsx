@@ -90,6 +90,8 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
         pendingRevealRef.current = props.initialLine ? { line: props.initialLine, behavior: 'instant' } : null;
         historyRef.current = { canUndo: false, canRedo: false };
         for (const listener of historyListenersRef.current) listener(historyRef.current);
+        geometryRef.current.clear();
+        geometryWatchRef.current.clear();
     }, [props.resetKey]);
     const decorationsRef = React.useRef(new Map<EditorDecorationLayer, readonly EditorDecoration[]>());
     const decorationListenersRef = React.useRef(new Set<Parameters<CodeEditorHandle['onDecorationPress']>[0]>());
@@ -99,6 +101,13 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
         selectionRef.current = selection;
         for (const listener of selectionListenersRef.current) listener();
     }, []);
+    // Geometry the host draws over (Track's caret and wash): asked of the WebView once per line/position and
+    // answered again as the text moves. Rects arrive in the WebView's coordinates; the container adds its origin.
+    type GeometryRect = NonNullable<ReturnType<NonNullable<CodeEditorHandle['getLineRect']>>>;
+    const containerRef = React.useRef<View | null>(null);
+    const originRef = React.useRef({ x: 0, y: 0 });
+    const geometryRef = React.useRef(new Map<string, GeometryRect | null>());
+    const geometryWatchRef = React.useRef(new Map<string, { line: number; character: number | null }>());
 
     const wrapLines = props.wrapLines ?? true;
     const showLineNumbers = props.showLineNumbers ?? true;
@@ -201,6 +210,16 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
         });
     }, [postEnvelope]);
 
+    const readGeometry = React.useCallback((line: number, character: number | null): GeometryRect | null => {
+        const key = `${line}:${character ?? ''}`;
+        if (!geometryWatchRef.current.has(key)) {
+            geometryWatchRef.current.set(key, { line, character });
+            if (readyRef.current) postEnvelope({ v: 1, type: 'geometry.watch', payload: { positions: [...geometryWatchRef.current.values()] } });
+            return null;
+        }
+        const rect = geometryRef.current.get(key);
+        return rect ? { ...rect, x: rect.x + originRef.current.x, y: rect.y + originRef.current.y } : null;
+    }, [postEnvelope]);
     React.useImperativeHandle(
         ref,
         () => ({
@@ -212,6 +231,8 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
             },
             find,
             getSelection: () => selectionRef.current,
+            getLineRect: (line) => readGeometry(line, null),
+            getPositionRect: (line, character) => readGeometry(line, character),
             subscribeSelection: (listener) => {
                 selectionListenersRef.current.add(listener);
                 return () => { selectionListenersRef.current.delete(listener); };
@@ -252,7 +273,7 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
             },
             getCursorPosition: () => cursorRef.current,
         }),
-        [find, flushPendingChange, postEnvelope],
+        [find, flushPendingChange, postEnvelope, readGeometry],
     );
 
     const sendInit = React.useCallback(() => {
@@ -275,6 +296,7 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
         postEnvelope({ v: 1, type: 'keyboard.config', payload: { signatures: keyboardRef.current.signatures } });
         if (findRequestRef.current) postFind({ v: 1, type: 'find.set', payload: findRequestRef.current });
         for (const [layer, items] of decorationsRef.current) postEnvelope({ v: 1, type: 'decorations.set', payload: { layer, items } });
+        if (geometryWatchRef.current.size) postEnvelope({ v: 1, type: 'geometry.watch', payload: { positions: [...geometryWatchRef.current.values()] } });
     }, [postEnvelope, postFind]);
 
     React.useEffect(() => {
@@ -312,6 +334,8 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
 
     return (
         <View
+            ref={containerRef}
+            collapsable={false}
             testID={props.testID}
             style={{ flex: 1, borderWidth: canvas ? 0 : 1, borderColor: editorTheme.dividerColor, borderRadius: canvas ? 0 : 10, overflow: 'hidden', backgroundColor: editorTheme.backgroundColor }}
         >
@@ -401,6 +425,27 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
                         const item = payload.item as EditorDecoration;
                         if (!decorationsRef.current.get(payload.layer)?.some((owned) => owned.id === item.id)) return;
                         for (const listener of decorationListenersRef.current) listener(payload.layer, item);
+                        return;
+                    }
+                    if (decoded.type === 'geometry') {
+                        const items = (decoded.payload as { items?: unknown } | null)?.items;
+                        if (!Array.isArray(items)) return;
+                        for (const item of items) {
+                            if (!item || typeof item !== 'object') continue;
+                            const value = item as Record<string, unknown>;
+                            if (!Number.isInteger(value.line) || (value.character !== null && !Number.isInteger(value.character))) continue;
+                            const rect = value.rect && typeof value.rect === 'object' ? value.rect as Record<string, unknown> : null;
+                            const valid = rect && ['x', 'y', 'width', 'height'].every((key) => typeof rect[key] === 'number' && Number.isFinite(rect[key]));
+                            geometryRef.current.set(`${value.line}:${value.character ?? ''}`, valid
+                                ? { x: Number(rect.x), y: Number(rect.y), width: Number(rect.width), height: Number(rect.height) } : null);
+                        }
+                        for (const listener of selectionListenersRef.current) listener();
+                        // The WebView answers in its own coordinates; follow where the editor sits in the window.
+                        containerRef.current?.measureInWindow?.((x, y) => {
+                            if (x === originRef.current.x && y === originRef.current.y) return;
+                            originRef.current = { x, y };
+                            for (const listener of selectionListenersRef.current) listener();
+                        });
                         return;
                     }
                     if (decoded.type === 'selection') {

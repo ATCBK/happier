@@ -7,7 +7,7 @@ import type { DetailsTabHeaderMetaFact } from '@/components/appShell/panes/detai
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { machinePageHref } from '@/components/machines/page/machinePageHref';
-import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
+import { useAskSessionReveal } from '@/components/ui/code/selection/useAskSessionReveal';
 import type { WorkspaceSymbolSearchInput } from '@/components/appShell/search/workspaceSymbolSearchSource';
 import type {
   Rect,
@@ -258,7 +258,7 @@ export function useFilePageCodeIntelligence(
   const router = useRouter();
   const workspaceRefs = useWorkspaceRefs();
   const pane = useAppPaneScope(input.scopeId);
-  const mainColumn = usePaneMainColumn();
+  const revealSessionColumn = useAskSessionReveal();
   const phone = useDeviceType() === 'phone';
   const interaction = React.useMemo(() => createCardInteraction(), []);
   React.useEffect(() => () => interaction.dispose(), [interaction]);
@@ -627,9 +627,7 @@ export function useFilePageCodeIntelligence(
       sessionTarget: current.sessionId
         ? {
             sessionId: current.sessionId,
-            revealSessionColumn: () => {
-              if (mainColumn?.hidden) mainColumn.setHidden(false);
-            },
+            revealSessionColumn,
           }
         : null,
       targetContext: askTargetContext(),
@@ -646,7 +644,7 @@ export function useFilePageCodeIntelligence(
       },
     });
     return result.created > 0;
-  }, [askTargetContext, controller, mainColumn]);
+  }, [askTargetContext, controller, revealSessionColumn]);
   const latestController = React.useRef(controller);
   latestController.current = controller;
 

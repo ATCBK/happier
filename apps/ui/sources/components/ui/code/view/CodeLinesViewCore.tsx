@@ -14,6 +14,7 @@ import {
 import { CodeLineRow, CODE_LINE_BASE_HEIGHT, type CodeLineDiagnosticRange, type CodeLinePressEvent } from './CodeLineRow';
 import { resolveEffectiveSyntaxHighlighting } from './resolveEffectiveSyntaxHighlighting';
 import { CodeLinesReadingAnchor, type NativeCodeReadingAnchor } from './CodeLinesReadingAnchor';
+import { scrollCodeLineIntoView } from './scrollCodeLineIntoView';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { Rect } from '../editor/codeEditorTypes';
 import { CODE_GUTTER_METRICS } from '../editor/codeEditorFontMetrics';
@@ -222,6 +223,7 @@ export function CodeLinesViewCore(
     }, [props.externalScrollView]);
     const lineNativeIdPrefix = React.useId();
     const completedScrollTarget = React.useRef<string | null>(null);
+    const pendingTargetLanding = React.useRef<(() => void) | null>(null);
     const contentRef = React.useRef<View | null>(null);
     const nativeReadingAnchor = React.useRef<NativeCodeReadingAnchor | null>(null);
     const pendingReadingScroll = React.useRef<NativeCodeReadingAnchor | null>(null);
@@ -429,7 +431,10 @@ export function CodeLinesViewCore(
             nativeID={`${lineNativeIdPrefix}-${item.id}`}
             // A text selection inside the row reads its line from here (Ask about a selection, web).
             {...(Platform.OS === 'web' ? { dataSet: codeLineDomDataSet(item) } : {})}
-            onLayout={props.externalScrollView ? () => measureExternalRow(item.id) : undefined}
+            onLayout={props.externalScrollView || item.id === props.scrollToLineId ? () => {
+                measureExternalRow(item.id);
+                if (item.id === props.scrollToLineId) pendingTargetLanding.current?.();
+            } : undefined}
             ref={(node) => {
                 if (node) lineRefs.current.set(item.id, node);
                 else lineRefs.current.delete(item.id);
@@ -473,6 +478,7 @@ export function CodeLinesViewCore(
         lineNativeIdPrefix,
         measureExternalRow,
         props.externalScrollView,
+        props.scrollToLineId,
         props.findRangesByLineId,
         diagnosticsByNewLine,
         onActivateToken,
@@ -563,17 +569,11 @@ export function CodeLinesViewCore(
         const tryScrollIntoView = (): boolean => {
             if (typeof document === 'undefined') return false;
             // React Native Web maps `nativeID` to DOM `id`.
-            const el = (document as any)?.getElementById?.(`${lineNativeIdPrefix}-${targetId}`);
-            if (!el) return false;
-            if (typeof el.scrollIntoView !== 'function') return false;
+            const el = document.getElementById(`${lineNativeIdPrefix}-${targetId}`);
             try {
                 // A sheet over the bottom of the page (`contentPaddingBottom`) is not a place to land: the
                 // covered strip counts as the row's margin, so the row centres in the part still visible.
-                const covered = props.contentPaddingBottom ?? 0;
-                if (covered > 0) el.style.scrollMarginBottom = `${covered}px`;
-                el.scrollIntoView({ block: props.scrollToLineAlignment === 'start' ? 'start' : 'center' });
-                if (covered > 0) el.style.scrollMarginBottom = '';
-                return true;
+                return scrollCodeLineIntoView(el, props.scrollToLineAlignment === 'start' ? 'start' : 'center', props.contentPaddingBottom);
             } catch {
                 return false;
             }
@@ -617,9 +617,9 @@ export function CodeLinesViewCore(
             return false;
         };
 
+        let bootstrapped = false;
         const attemptScroll = () => {
-            if (cancelled) return;
-            pendingReadingScroll.current = null;
+            if (cancelled || completedScrollTarget.current === scrollTargetKey) return;
             pendingReadingScroll.current = null;
             if (!virtualized && typeof document === 'undefined') {
                 const row = lineRefs.current.get(targetId);
@@ -642,44 +642,40 @@ export function CodeLinesViewCore(
                 });
                 return;
             }
-            // Defer until after layout to avoid "no item at index" on first paint.
+            // A measured/mounted row is authoritative. Estimates only bring an unmounted target into
+            // the render window; its layout event completes the landing, however late the fold opens.
+            if (tryScrollIntoView()) {
+                completedScrollTarget.current = scrollTargetKey;
+                return;
+            }
+            if (!virtualized || bootstrapped) return;
+            bootstrapped = true;
             try {
                 if (listRef.current) {
                     listRef.current.scrollToIndex({ index: scrollIndex, viewPosition: props.scrollToLineAlignment === 'start' ? 0 : 0.25, animated: props.scrollToLineAlignment !== 'start' });
-                    completedScrollTarget.current = scrollTargetKey;
+                    if (typeof document === 'undefined') completedScrollTarget.current = scrollTargetKey;
                 }
             } catch {
                 // ignore
             }
             // React Native Web sometimes fails to forward FlatList refs; fall back to DOM scrollTop.
-            const offsetScrolled = tryScrollDomOffset();
-            if (tryScrollIntoView() || offsetScrolled) completedScrollTarget.current = scrollTargetKey;
+            tryScrollDomOffset();
         };
 
-        let attempts = 0;
-        let timer: any = null;
-        const tick = () => {
-            attempts += 1;
-            attemptScroll();
-            if (cancelled) return;
-            // Retry briefly to catch layout + virtualization rendering on web.
-            if (attempts < 6 && typeof document !== 'undefined') {
-                timer = setTimeout(tick, 50);
-            }
-        };
-
-        timer = setTimeout(tick, 0);
+        pendingTargetLanding.current = attemptScroll;
+        attemptScroll();
         return () => {
             cancelled = true;
-            clearTimeout(timer);
+            if (pendingTargetLanding.current === attemptScroll) pendingTargetLanding.current = null;
         };
-    }, [estimatedRowHeight, lineNativeIdPrefix, props.lines, props.externalScrollView, props.onScrollToLine, props.scrollToLineId, props.scrollToLineAlignment, scrollTargetKey, scrollIndex, virtualized]);
+    }, [estimatedRowHeight, lineNativeIdPrefix, props.lines, props.externalScrollView, props.onScrollToLine, props.scrollToLineId, props.scrollToLineAlignment, props.contentPaddingBottom, scrollTargetKey, scrollIndex, virtualized]);
 
     // FlatList is a PureComponent: when behavior depends on props outside `data`, we must provide `extraData`
     // to ensure rows get re-rendered. This matters for "selected" state and inline review-comment composers.
     const listExtraData = React.useMemo(() => ({
         lineNumberDigits,
         reviewLaneWidth,
+        scrollToLineId: props.scrollToLineId,
         selectedLineIds: props.selectedLineIds,
         renderAfterLine: props.renderAfterLine,
         renderLeadingLane: props.renderLeadingLane,
@@ -735,6 +731,7 @@ export function CodeLinesViewCore(
         props.renderAfterLine,
         props.renderLeadingLane,
         props.selectedLineIds,
+        props.scrollToLineId,
         showLineNumbers,
         showPrefix,
         wrapLines,
@@ -853,6 +850,11 @@ export function CodeLinesViewCore(
                     });
                 } catch {
                     // ignore
+                }
+                if (!readingTarget && Platform.OS === 'web') {
+                    // Navigation finishes on the target row's layout event after this estimate.
+                    pendingTargetLanding.current?.();
+                    return;
                 }
                 setTimeout(() => {
                     try {

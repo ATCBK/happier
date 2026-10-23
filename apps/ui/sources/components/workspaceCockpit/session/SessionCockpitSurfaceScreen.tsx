@@ -86,6 +86,10 @@ import {
 import { resolveSessionCockpitMobileCatalog } from './sessionCockpitMobileCatalog';
 import { SessionServicesSurfaceScreen } from './SessionServicesSurfaceScreen';
 import { useSessionCockpitSurfaceNavigation } from './SessionCockpitSurfaceNavigation';
+import { PhoneAskSheet } from '@/components/sessions/composer/phoneAsk/PhoneAskSheet';
+import { PhoneWorkingCapsule } from '@/components/sessions/composer/phoneAsk/PhoneWorkingCapsule';
+import { usePhoneAskSheet } from '@/components/sessions/composer/phoneAsk/phoneAskSheetState';
+import type { SessionComposerRenderer } from '@/components/sessions/composer/sessionComposerModel';
 import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 
 // The one Work tab the desktop sidebar mounts too.
@@ -105,6 +109,7 @@ export type SessionCockpitSurfaceScreenProps = Readonly<{
     surface: SessionMobileSurface;
     safeAreaPadding?: boolean;
     jumpToSeq?: number | null;
+    jumpToMessageId?: string | null;
     paneUrlState?: SessionPaneUrlState | null;
     initialAttachmentDrafts?: readonly AttachmentDraft[] | null;
     terminalTabAvailable?: boolean;
@@ -151,6 +156,14 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
     const isFocused = cockpit && sceneFocused && surfaceFocused && surfaceVisible;
     const pane = useAppPaneScope(props.scopeId);
     const surfaceNavigation = useSessionCockpitSurfaceNavigation();
+    // Phone Ask (P5 D-4): the Session screen keeps the one composer and seats it in the Ask sheet over the File page.
+    const phoneAsk = usePhoneAskSheet();
+    const phoneAskComposerHost = phoneAsk !== null && props.surface === 'chat';
+    const askSheetOpen = phoneAskComposerHost && phoneAsk?.phase === 'open';
+    const renderPhoneAskComposer = React.useMemo<SessionComposerRenderer | undefined>(
+        () => phoneAskComposerHost ? (composer) => <PhoneAskSheet composer={composer} /> : undefined,
+        [phoneAskComposerHost],
+    );
     const enclosingNavigation = usePluginSurfaceDestinationNavigationBinding();
     const registerCockpitChrome = useSessionCockpitChromeRegister();
     const openDetailsTabCount = useDetailsTabCount(props.scopeId);
@@ -610,10 +623,11 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
             routeServerId={props.routeServerId ?? undefined}
             routeHydrationState={props.routeHydrationState}
             jumpToSeq={props.jumpToSeq}
+            jumpToMessageId={props.jumpToMessageId}
             paneUrlState={props.paneUrlState ?? undefined}
             initialAttachmentDrafts={props.initialAttachmentDrafts}
-            surfaceFocusedOverride={surfaceFocused && (cockpit ? sceneFocused : true)}
-            surfaceVisibleOverride={surfaceVisible && (cockpit ? sceneFocused : true)}
+            surfaceFocusedOverride={surfaceFocused && (cockpit ? sceneFocused || askSheetOpen : true)}
+            surfaceVisibleOverride={surfaceVisible && (cockpit ? sceneFocused || askSheetOpen : true)}
             routeAnchorOverride={cockpit ? Platform.OS === 'web' ? undefined : true : surfaceFocused && surfaceVisible}
             contentOverride={contentOverride}
             safeAreaTopMode={safeAreaTopMode}
@@ -622,8 +636,11 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
             openWorkStateRequestKey={openWorkStateRequestKey}
             resolveBoardPrimaryHost={resolveBoardPrimaryHost}
             sessionPluginRuntime={boardPluginRuntime}
+            renderComposer={renderPhoneAskComposer}
         />
     ), [
+        askSheetOpen,
+        renderPhoneAskComposer,
         headerSafeAreaTopMode,
         cockpit,
         sceneFocused,
@@ -631,6 +648,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
         surfaceVisible,
         props.initialAttachmentDrafts,
         props.jumpToSeq,
+        props.jumpToMessageId,
         props.paneUrlState,
         props.routeServerId,
         props.routeHydrationState,
@@ -874,6 +892,11 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
                 showHeaderActions={false}
                 onRequestClose={requestCloseDetails}
                 resolveBoardPrimaryHost={resolveBoardPrimaryHost}
+            />
+            <PhoneWorkingCapsule
+                sessionId={props.sessionId}
+                serverId={servicesServerId ?? null}
+                onView={() => surfaceNavigation?.switchSurface('chat')}
             />
         </View>,
     );

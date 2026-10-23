@@ -360,7 +360,8 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
     }));
     const pane = useAppPaneScope(props.scopeId);
     const deviceType = useDeviceType();
-    const appProjection = useAppShellPluginUiProjection().pluginUiProjection;
+    const appProjection = useAppShellPluginUiProjection(value => scopeState?.right.selectedDestination?.kind === 'plugin'
+        ? value.pluginUiProjection : null);
     const screenFocused = useDestinationFocus();
     // Activation reads the current creation input; resizing or changing preferences
     // must not activate the scope again. The reducer ignores it for retained scopes.
