@@ -22,7 +22,7 @@ import {
     createBrowserLaunchpadDetailsTab,
     type BrowserSurfaceProductModels,
 } from '@/components/browser/surfaces';
-import { resolveBrowserSurfacePlatform, useBrowserSurfaceHostProps } from '@/components/browser/surfaces/useBrowserSurfaceHostProps';
+import { resolveBrowserSurfacePlatform } from '@/components/browser/surfaces/useBrowserSurfaceHostProps';
 import { useOpenBrowserTargetInWorkspace } from '@/components/browser/surfaces/useOpenBrowserTargetInWorkspace';
 import {
     DetailsSurfaceHost,
@@ -32,16 +32,12 @@ import {
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { useWorkspaceRefs, useAllMachines, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
-import { useLocalServicePreviewState } from '@/sync/domains/local/services/preview/useLocalServicePreviewState';
-import {
-    type LocalServiceLauncherState,
-    useLocalServiceLauncherState,
-} from '@/sync/domains/local/services/launch';
+import { useWorkspaceRefs, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
+import type { LocalServiceLauncherState } from '@/sync/domains/local/services/launch';
 import type { PluginBrowserProjectionModel } from '@/sync/domains/plugins/browser/targets';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { resolveWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { useWorkspaceDetailsMachineName } from './useWorkspaceDetailsMachineName';
 import { deferOnWeb } from '@/utils/platform/deferOnWeb';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { buildWorkspaceCacheKey, tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
@@ -126,7 +122,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         onRevealInFilesTreeNavigate: navigateFiles, onOpenChangesNavigate: navigateChanges,
     });
     const displayPath = props.displayPathOverride ?? props.workspaceRef.rootPath;
-    const allMachines = useAllMachines();
+    const machineName = useWorkspaceDetailsMachineName(props.workspaceRef.machineId);
     // The Project Details adapter owns the exact current scope facts for its
     // generic details surfaces. An optional explicit projection remains a
     // test/embedding override, while interaction/currentness comes from the
@@ -155,40 +151,6 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
     const workspaceReviewCommentDrafts = useWorkspaceReviewCommentsDrafts(workspaceScope);
     const hasWorkspaceReviewCommentDrafts = workspaceReviewCommentDrafts.length > 0;
 
-    const machineName = React.useMemo(() => {
-        const machine = allMachines.find((m) => m.id === props.workspaceRef.machineId) ?? null;
-        return getMachineDisplayName(machine) ?? props.workspaceRef.machineId;
-    }, [allMachines, props.workspaceRef.machineId]);
-    const localServicePreviewState = useLocalServicePreviewState({
-        machineId: props.workspaceRef.machineId,
-        serverId: props.workspaceRef.serverId,
-    });
-    const liveLocalServiceLauncherState = useLocalServiceLauncherState({
-        machineId: props.workspaceRef.machineId,
-        serverId: props.workspaceRef.serverId,
-        enabled: props.localServiceLauncherState === undefined,
-    });
-    const localServiceLauncherState =
-        props.localServiceLauncherState !== undefined
-            ? props.localServiceLauncherState
-            : liveLocalServiceLauncherState;
-    // Route the launchpad feed through the shared browser-host bootstrap so the workspace and
-    // session details panels assemble the identical feed (BRW-13). This converges the prior drift
-    // where the workspace panel omitted pluginBrowserProjection + nowMs and therefore could never
-    // surface hosted-plugin browser targets. Launcher/preview states are injected from the values
-    // already resolved above, so the helper does not spin up duplicate live controllers.
-    const browserLaunchpad = useBrowserSurfaceHostProps({
-        scope: 'workspaceDetails',
-        workspaceRefId: props.workspaceRef.id,
-        machineId: props.workspaceRef.machineId,
-        serverId: props.workspaceRef.serverId,
-        platform: props.platform,
-        launcherState: localServiceLauncherState,
-        localServicePreviewState,
-        pluginBrowserProjection,
-        pluginUiProjection,
-        nowMs: props.nowMs,
-    });
     // Resolve through the canonical preview-platform owner so the desktop host resolves to `desktop`
     // (finding #13 / Phase 5.5) instead of collapsing to `web`, and so this panel cannot drift from
     // the session-details panel's resolution.
@@ -285,8 +247,6 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         openReviewAllChanges,
         displayName,
         displayPath,
-        localServiceLauncherState,
-        localServicePreviewState,
         machineName,
         openWorkspaceSyncConflicts,
         openWorkspaceSyncDetails,
@@ -348,11 +308,11 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
 
     const openBrowserViewTarget = useOpenBrowserTargetInWorkspace({
         scopeId: props.scopeId, scope: 'workspaceDetails', accountLifetime: scopedPluginProjection.accountLifetime,
-        openDetailsTab: pane.openDetailsTab, platform: resolveBrowserSurfacePlatform(props.platform), localServicePreviewState,
+        openDetailsTab: pane.openDetailsTab, platform: resolveBrowserSurfacePlatform(props.platform),
         browserProfile: props.browserProductModels?.browserProfile?.profile,
     });
     const detailsSurfaceRenderers = React.useMemo(() => createWorkspaceDetailsSurfaceRenderers({
-        localServicePreviewState,
+        localServiceLauncherState: props.localServiceLauncherState,
         localServicePreviewServerId: props.workspaceRef.serverId,
         onOpenTarget: openBrowserViewTarget,
         onRevealInFilesTree: revealInFilesTree,
@@ -372,10 +332,6 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         openDetailsTab: pane.openDetailsTab,
         openFileTab,
         renderWorkspaceInfo,
-        launchpadRows: browserLaunchpad.launchpadRows,
-        launchpadRefreshStatus: browserLaunchpad.launchpadRefreshStatus,
-        launchpadRefreshError: browserLaunchpad.launchpadRefreshError,
-        onRefreshLaunchpad: browserLaunchpad.onRefreshLaunchpad,
         pluginUiProjection,
         pluginUiProjectionPhase: scopedPluginProjection.phase,
         pluginAccountLifetime: scopedPluginProjection.accountLifetime,
@@ -385,12 +341,11 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         platform: pluginSurfacePlatform,
         formFactor: pluginSurfaceFormFactor,
         productModels: props.browserProductModels ?? undefined,
+        nowMs: props.nowMs,
     }), [
         revealInFilesTree,
         openBrowserViewTarget,
-        localServicePreviewState,
         openChanges,
-        browserLaunchpad,
         deviceType,
         filesController.checkoutWorkspace,
         effectiveRootPath,
@@ -398,6 +353,8 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         pane.openDetailsTab,
         pane.pinDetailsTab,
         props.browserProductModels,
+        props.localServiceLauncherState,
+        props.nowMs,
         pluginInteractionEnabled,
         scopedPluginProjection.phase,
         scopedPluginProjection.accountLifetime,

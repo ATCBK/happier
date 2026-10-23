@@ -488,6 +488,60 @@ describe('native preview viewer access', () => {
         await hook.unmount();
     });
 
+    it.each([undefined, 'retained'] as const)('keeps mounted Browser preview custody and eligibility cleanup (%s)', async (presentationPolicy) => {
+        const { RetainedPanelSurface } = await import('@/components/ui/panels/RetainedPanelSurface');
+        const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+        const { useLocalServicePreviewState } = await import('./useLocalServicePreviewState');
+        const { selectLocalServicePreviewRows } = await import('./store');
+        const snapshotClient = vi.fn(async () => ({ ok: true as const, snapshot: {
+            generatedAt: 1, refreshState: 'idle' as const, diagnostics: [], previews: [{
+                previewId: 'preview-1', accessUrl: null, expiresAt: null, diagnostics: [],
+                nativeDirect: { v: 1, kind: 'iroh_preview', previewId: 'preview-1', machineId: 'machine-1' } as const,
+                resource: {
+                    previewId: 'preview-1', machineId: 'machine-1', owner: { kind: 'user', id: 'owner-account' } as const,
+                    target: { scheme: 'http', host: '127.0.0.1', port: 5173 } as const,
+                    initialPath: { pathname: '/start', search: '' }, originMode: 'host' as const,
+                    display: { title: 'Preview', addressLabel: 'localhost:5173' },
+                    browserTarget: { kind: 'localServicePreview', targetId: 'preview-1', machineId: 'machine-1' } as const,
+                },
+            }],
+        } }));
+        let access: ReturnType<typeof useNativeDirectPreview> | undefined;
+        function Custody() {
+            const state = useLocalServicePreviewState({ machineId: 'machine-1', serverId, snapshotClient,
+                presentationPolicy });
+            const preview = selectLocalServicePreviewRows(state)[0];
+            access = useNativeDirectPreview({ ...baseInput, serverId, nativeDirectEnabled: Boolean(preview?.nativeDirect) });
+            return null;
+        }
+        const render = (active: boolean) => React.createElement(RetainedPanelSurface, { isActive: active }, React.createElement(Custody));
+        const screen = await renderScreen(render(false));
+        expect(snapshotClient).not.toHaveBeenCalled();
+        expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'iroh_start_machine_tunnel')).toHaveLength(0);
+        await screen.update(render(true));
+        await flushHookEffects({ cycles: 40 });
+        expect(access?.localOrigin).toBe('http://127.0.0.1:42123');
+        await screen.update(render(false));
+        await flushHookEffects({ cycles: 40 });
+        expect(access?.localOrigin).toBe(presentationPolicy === 'retained' ? 'http://127.0.0.1:42123' : null);
+        expect(snapshotClient).toHaveBeenCalledTimes(1);
+        expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'iroh_stop_machine_tunnel')).toHaveLength(presentationPolicy === 'retained' ? 0 : 1);
+        await act(async () => { storage.setState(state => ({ localSettings: {
+            ...state.localSettings, homeApplicationCarrierEligibility: 'standard_only',
+        } })); });
+        await flushHookEffects({ cycles: 40 });
+        expect(access?.localOrigin).toBeNull();
+        expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'iroh_stop_machine_tunnel')).toHaveLength(1);
+        await act(async () => { storage.setState(state => ({ localSettings: {
+            ...state.localSettings, homeApplicationCarrierEligibility: 'automatic',
+        } })); });
+        await flushHookEffects({ cycles: 40 });
+        expect(access?.localOrigin).toBe(presentationPolicy === 'retained' ? 'http://127.0.0.1:42123' : null);
+        await screen.unmount();
+        await flushHookEffects();
+        expect(boundaries.invoke.mock.calls.filter(([command]) => command === 'iroh_stop_machine_tunnel')).toHaveLength(presentationPolicy === 'retained' ? 2 : 1);
+    });
+
     it('consumed BrowserViewHost owns native preview leases by logical view lifetime without an isolated server route', async () => {
         const { BrowserViewHost } = await import('@/components/browser/BrowserViewHost');
         const { buildBrowserAdapterCapabilities } = await import('@/sync/domains/browser/adapters/capabilities');

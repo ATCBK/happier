@@ -1,8 +1,12 @@
 import * as React from 'react';
-import { storage } from '@/sync/domains/state/storage';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { describe, expect, it } from 'vitest';
+import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
-import { renderScreen } from '@/dev/testkit';
+import { createMachineFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { storage } from '@/sync/domains/state/storageStore';
 import {
     applyLocalServiceLauncherSnapshot,
     createLocalServiceLauncherState,
@@ -12,98 +16,18 @@ import {
     EMPTY_PLUGIN_BROWSER_PROJECTION,
     type PluginBrowserProjectionModel,
 } from '@/sync/domains/plugins/browser/targets';
+import { installSessionDetailsPanelCommonModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelTestHelpers';
+import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 
-const detailsSurfaceHostSpy = vi.hoisted(() => vi.fn((props: unknown) => React.createElement('DetailsSurfaceHostMock', { props })));
-
-vi.mock('@/components/appShell/panes/details/surfaces', () => ({
-    DetailsSurfaceHost: (props: unknown) => detailsSurfaceHostSpy(props),
-    createDetailsSurfacePaneCallbacks: (callbacks: unknown) => callbacks,
-}));
-
-vi.mock('@/components/appShell/panes/details/workspace/DetailsSplitWorkspace', () => ({
-    DetailsSplitWorkspace: (props: {
-        renderTabContent?: (tab: unknown) => React.ReactNode;
-    }) => React.createElement(
-        React.Fragment,
-        null,
-        props.renderTabContent?.({
-            key: 'browser:launchpad',
-            kind: 'browser-view',
-            title: 'Browser',
-            resource: {
-                kind: 'browser-view',
-                mode: 'launchpad',
-                browserSessionId: 'browser_surface:details:browser_launchpad',
-            },
-            isPinned: true,
-            isPreview: false,
-        }),
-    ),
-}));
-
-vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
-
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock();
+installSessionDetailsPanelCommonModuleMocks();
+await loadSyncSingletonForTests();
+const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
+const runtime = installSessionPaneRuntimeTestHarness({
+    sessionId: 'workspace-browser',
+    scopeId: 'project:wr_1',
+    features: () => createRootLayoutFeaturesResponse({ features: { browser: { enabled: true, viewTargets: { enabled: true } } } }),
+    rpc: async () => { throw new RpcError('Unsupported fixture RPC', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE); },
 });
-
-vi.mock('react-native-unistyles', async () => {
-    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock();
-});
-
-vi.mock('@expo/vector-icons', async () => {
-    const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
-    return createExpoVectorIconsMock();
-});
-
-vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
-    useAppPaneScope: () => ({
-        scopeState: { right: { isOpen: false, activeTabId: null, tabState: {} }, details: { tabState: {} } },
-        closeDetails: vi.fn(),
-        openDetailsTab: vi.fn(),
-        pinDetailsTab: vi.fn(),
-        setDetailsTabState: vi.fn(),
-    }),
-}));
-
-vi.mock('@/utils/platform/responsive', () => ({
-    useDeviceType: () => 'desktop',
-}));
-
-vi.mock('@/components/plugins/projection/useScopedPluginUiProjection', () => ({
-    useScopedPluginUiProjection: () => ({
-        pluginUiProjection: null,
-        pluginBrowserProjection: null,
-        phase: 'unavailable',
-        interactionEnabled: false,
-        machineId: 'machine-1',
-        serverId: 'server-1',
-        platform: 'web',
-    }),
-}));
-
-vi.mock('@/components/workspaces/files/details/WorkspaceFileDetailsView', () => ({
-    WorkspaceFileDetailsView: () => React.createElement('WorkspaceFileDetailsView'),
-}));
-
-vi.mock('@/components/projects/panes/details/views/WorkspaceCommitDetailsView', () => ({
-    WorkspaceCommitDetailsView: () => React.createElement('WorkspaceCommitDetailsView'),
-}));
-
-vi.mock('@/components/projects/panes/details/views/WorkspaceScmReviewDetailsView', () => ({
-    WorkspaceScmReviewDetailsView: () => React.createElement('WorkspaceScmReviewDetailsView'),
-}));
-
-vi.mock('@/components/projects/panes/details/views/WorkspaceScmStashDetailsView', () => ({
-    WorkspaceScmStashDetailsView: () => React.createElement('WorkspaceScmStashDetailsView'),
-}));
-
-vi.mock('@/components/projects/detail/surfaces/ProjectTerminalSurface', () => ({
-    ProjectTerminalSurface: () => React.createElement('ProjectTerminalSurface'),
-}));
-
 
 function buildLauncherState() {
     return applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), {
@@ -158,103 +82,23 @@ const hostedPluginProjection = {
     },
 } satisfies PluginBrowserProjectionModel;
 
-function renderBrowserLaunchpadRenderer(element: unknown): React.ReactElement<{
-    launchpadRows?: readonly { id: string; disabledReason: string | null; target: { kind: string } | null }[];
-}> | null {
-    return element as React.ReactElement<{
-        launchpadRows?: readonly { id: string; disabledReason: string | null; target: { kind: string } | null }[];
-    }> | null;
-}
-
-beforeEach(() => storage.setState(storage.getInitialState(), true));
 
 describe('WorkspaceDetailsPanel local service launcher handoff', () => {
-    it('passes supplied LSV launcher rows into the browser details renderer', async () => {
-        const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
-        detailsSurfaceHostSpy.mockClear();
-
-        await renderScreen(
+    it.each([false, true])('renders supplied launcher rows through the presented Browser leaf (plugin targets: %s)', async withPlugin => {
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-1' })]);
+        const screen = await renderScreen(<runtime.Wrapper>
             <WorkspaceDetailsPanel
-                workspaceRef={{
-                    id: 'wr_1',
-                    serverId: 'server-1',
-                    machineId: 'machine-1',
-                    rootPath: '/repo/main',
-                    createdAtMs: 1_700_000_000_000,
-                    label: 'Repo',
-                }}
+                workspaceRef={{ id: 'wr_1', serverId: runtime.serverId, machineId: 'machine-1', rootPath: '/repo/main', createdAtMs: 1 }}
                 scopeId="project:wr_1"
-                activeRootPath="/repo/main"
                 localServiceLauncherState={buildLauncherState()}
-            />,
-        );
-
-        const hostProps = detailsSurfaceHostSpy.mock.calls.at(-1)?.[0] as {
-            renderers?: readonly Readonly<{
-                id: string;
-                render: (input: unknown) => React.ReactElement | null;
-            }>[];
-        };
-        const browserRenderer = hostProps.renderers?.find((renderer) => renderer.id === 'browser-view-details-surface');
-        const element = browserRenderer?.render({
-            tab: {
-                ...createBrowserLaunchpadDetailsTab(),
-                isPinned: true,
-                isPreview: false,
-            },
-            descriptor: { surfaceId: 'browser-launchpad' },
-            active: true,
-            callbacks: { replaceTab: vi.fn() },
-        }) as React.ReactElement<{ launchpadRows?: readonly { id: string; disabledReason: string | null }[] }> | null;
-
-        expect(element?.props.launchpadRows).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                id: 'service:preview:project-browser-feed',
-                disabledReason: null,
-            }),
-        ]));
-    });
-
-    it('threads pluginBrowserProjection into the workspace launchpad feed (drift fix)', async () => {
-        const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
-        detailsSurfaceHostSpy.mockClear();
-
-        await renderScreen(
-            <WorkspaceDetailsPanel
-                workspaceRef={{
-                    id: 'wr_1',
-                    serverId: 'server-1',
-                    machineId: 'machine-1',
-                    rootPath: '/repo/main',
-                    createdAtMs: 1_700_000_000_000,
-                    label: 'Repo',
-                }}
-                scopeId="project:wr_1"
-                activeRootPath="/repo/main"
-                localServiceLauncherState={buildLauncherState()}
-                pluginBrowserProjection={hostedPluginProjection}
+                pluginBrowserProjection={withPlugin ? hostedPluginProjection : null}
                 nowMs={() => 1_500}
-            />,
-        );
-
-        const hostProps = detailsSurfaceHostSpy.mock.calls.at(-1)?.[0] as {
-            renderers?: readonly Readonly<{
-                id: string;
-                render: (input: unknown) => React.ReactElement | null;
-            }>[];
-        };
-        const browserRenderer = hostProps.renderers?.find((renderer) => renderer.id === 'browser-view-details-surface');
-        const element = renderBrowserLaunchpadRenderer(browserRenderer?.render({
-            tab: {
-                ...createBrowserLaunchpadDetailsTab(),
-                isPinned: true,
-                isPreview: false,
-            },
-            descriptor: { surfaceId: 'browser-launchpad' },
-            active: true,
-            callbacks: { replaceTab: vi.fn() },
-        }));
-
-        expect(element?.props.launchpadRows?.some((row) => row.target?.kind === 'hostedPluginWeb')).toBe(true);
+            />
+        </runtime.Wrapper>);
+        await act(async () => runtime.pane.openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' }));
+        await flushHookEffects();
+        expect(screen.getTextContent()).toContain('Project browser feed');
+        if (withPlugin) expect(screen.getTextContent()).toContain('Plugin Preview');
+        await screen.unmount();
     });
 });

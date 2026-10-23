@@ -18,7 +18,7 @@ import {
     type LocalServiceLauncherState,
 } from '@/sync/domains/local/services/launch';
 import type { LocalServicePreviewState } from '@/sync/domains/local/services/preview/store';
-import { useLocalServicePreviewState } from '@/sync/domains/local/services/preview/useLocalServicePreviewState';
+import { useLocalServicePreviewState, type UseLocalServicePreviewStateInput } from '@/sync/domains/local/services/preview/useLocalServicePreviewState';
 import { invalidateLocalServicePreviewStore } from '@/sync/domains/local/services/preview/sharedStore';
 import type { LocalServicePreviewSnapshotClient } from '@/sync/domains/local/services/preview/useLocalServicePreviewState';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
@@ -185,11 +185,17 @@ function resolveBrowserSessionId(input: BrowserSurfaceHostPropsInput): string {
  * Rules of Hooks (hence the `use` prefix). All call sites invoke it unconditionally at the top
  * level of a component.
  */
-export function useBrowserSurfaceHostProps(
-    input: BrowserSurfaceHostPropsInput,
-): BrowserSurfaceHostPropsBundle {
+export type BrowserSurfaceHostFeedInput = Omit<BrowserSurfaceHostPropsInput, 'scope'> & Readonly<{
+    enabled?: boolean;
+    launcherEnabled?: boolean;
+    previewPresentationPolicy?: UseLocalServicePreviewStateInput['presentationPolicy'];
+}>;
+
+/** One launchpad feed owner, consumed inside the surface that actually needs its data. */
+export function useBrowserSurfaceHostFeed(
+    input: BrowserSurfaceHostFeedInput,
+): Pick<BrowserSurfaceHostPropsBundle, 'feed' | 'onRefreshLaunchpad' | 'localServicePreviewState' | 'localServicePreviewServerId'> {
     const platform = resolveBrowserSurfacePlatform(input.platform);
-    const browserSessionId = resolveBrowserSessionId(input);
     const machineId = normalizeId(input.machineId);
     const serverId = normalizeId(input.serverId);
 
@@ -197,7 +203,7 @@ export function useBrowserSurfaceHostProps(
         machineId,
         serverId,
         sessionId: input.sessionId,
-        enabled: input.launcherState === undefined,
+        enabled: input.enabled !== false && input.launcherEnabled !== false && input.launcherState === undefined,
         snapshotClient: input.launcherSnapshotClient,
         nowMs: input.nowMs,
     }).state;
@@ -208,7 +214,8 @@ export function useBrowserSurfaceHostProps(
     const liveLocalServicePreviewState = useLocalServicePreviewState({
         machineId,
         serverId,
-        enabled: input.localServicePreviewState === undefined,
+        enabled: input.enabled !== false && input.localServicePreviewState === undefined,
+        presentationPolicy: input.previewPresentationPolicy,
         snapshotClient: input.localServicePreviewSnapshotClient,
         nowMs: input.nowMs,
     });
@@ -216,8 +223,7 @@ export function useBrowserSurfaceHostProps(
         ? input.localServicePreviewState
             : liveLocalServicePreviewState;
     const onRefreshLaunchpad = React.useMemo(() => (
-        // Details panels can supply the same shared snapshot from their existing subscription.
-        // Refresh its key rather than starting a second catalog controller or reloading a page.
+        // Refresh the canonical preview key without starting another controller or reloading.
         machineId
             ? () => invalidateLocalServicePreviewStore({ machineId, serverId })
             : undefined
@@ -250,6 +256,18 @@ export function useBrowserSurfaceHostProps(
         localServicePreviewState,
         platform,
     ]);
+
+    return { feed, onRefreshLaunchpad, localServicePreviewState, localServicePreviewServerId: serverId };
+}
+
+/** Browser identity/retention bootstrap; feed assembly remains shared with retained Details leaves. */
+export function useBrowserSurfaceHostProps(
+    input: BrowserSurfaceHostPropsInput,
+): BrowserSurfaceHostPropsBundle {
+    const platform = resolveBrowserSurfacePlatform(input.platform);
+    const browserSessionId = resolveBrowserSessionId(input);
+    const serverId = normalizeId(input.serverId);
+    const { feed, onRefreshLaunchpad, localServicePreviewState } = useBrowserSurfaceHostFeed(input);
 
     // The reset key for `BrowserSurfaceHost` is its `surfaceKey`. Keeping it stable for a given
     // logical view is what preserves in-host browser state across pane-hide/show transitions, so it

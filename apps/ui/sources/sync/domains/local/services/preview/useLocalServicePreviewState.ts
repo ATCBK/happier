@@ -20,6 +20,8 @@ export type UseLocalServicePreviewStateInput = Readonly<{
     machineId?: string | null;
     serverId?: string | null;
     enabled?: boolean;
+    /** Only a cold-gated retained Browser body may keep preview lease custody while hidden. */
+    presentationPolicy?: 'presented' | 'retained';
     nowMs?: () => number;
     snapshotClient?: LocalServicePreviewSnapshotClient;
 }>;
@@ -41,7 +43,7 @@ export function useLocalServicePreviewState(
     input: UseLocalServicePreviewStateInput,
 ): LocalServicePreviewState {
     const presented = useLayoutPresentationActive();
-    const enabled = (input.enabled ?? true) && presented;
+    const enabled = (input.enabled ?? true) && (presented || input.presentationPolicy === 'retained');
     const machineId = normalizeId(input.machineId);
     const serverId = normalizeId(input.serverId);
     const active = enabled && Boolean(machineId);

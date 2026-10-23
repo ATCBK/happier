@@ -5,6 +5,8 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 import { createSessionFixture, createMachineFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createPlainMachineReadHttpResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storageStore';
 import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
@@ -16,13 +18,21 @@ await loadSyncSingletonForTests();
 const { SessionDetailsPanel } = await import('./SessionDetailsPanel');
 const { WorkspaceDetailsPanel } = await import('@/components/projects/panes/WorkspaceDetailsPanel');
 const serviceMethods: string[] = [];
-const runtime = installSessionPaneRuntimeTestHarness({ sessionId: 'session-a', rpc: async (method, _input, machineId) => {
+const runtime = installSessionPaneRuntimeTestHarness({ sessionId: 'session-a',
+    features: () => createRootLayoutFeaturesResponse({ features: { browser: { enabled: true, viewTargets: { enabled: true } } } }),
+    request: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'machine-a', accountId: 'account-a' })]);
+        return createPlainMachineReadHttpResponseFixture(path, init, 'account-a');
+    },
+    rpc: async (method, _input, machineId) => {
     if (method.includes('localServices.')) serviceMethods.push(method);
     if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return new Promise(() => {});
     if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) return {
         protocolVersion: 1, snapshot: { v: 1, machineId, sessionId: 'session-a', updatedAt: 3_000, targets: [] },
     };
-    if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT) return {
+    if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT
+        || method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH) return {
         protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 3_000, refreshState: 'idle', entries: [], diagnostics: [] },
     };
     throw new RpcError('Unsupported fixture RPC', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
@@ -41,7 +51,7 @@ describe('SessionDetailsPanel local service launcher handoff', () => {
                 rootPath: '/repo', createdAtMs: 1 }} scopeId="session:session-a" />}</runtime.Wrapper>);
         await act(async () => runtime.pane.openDetailsTab({ key: 'file:a.txt', kind: 'file', title: 'a.txt',
             resource: { kind: 'file', path: 'a.txt' } }, { intent: 'pinned' }));
-        await flushHookEffects();
+        await flushHookEffects({ cycles: 40 });
         expect(serviceMethods).toEqual([]);
 
         const browser = createBrowserLaunchpadDetailsTab();
@@ -58,11 +68,11 @@ describe('SessionDetailsPanel local service launcher handoff', () => {
         expect(serviceMethods.filter(method => method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT)).toHaveLength(2);
         await screen.unmount();
     });
-    it('passes supplied LSV launcher rows into the real browser details renderer', async () => {
-        const { DetailsSurfaceHost, createDetailsSurfaceDescriptor } = await import('@/components/appShell/panes/details/surfaces');
+    it.each([true, false])('honors supplied launcher state and explicit null without ambient reads (rows: %s)', async supplied => {
         const { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState } = await import('@/sync/domains/local/services/launch');
-        const { BrowserDetailsSurface, createBrowserLaunchpadDetailsTab } = await import('@/components/browser/surfaces');
+        const { createBrowserLaunchpadDetailsTab } = await import('@/components/browser/surfaces');
         const session = createSessionFixture({ id: 'session-a', serverId: runtime.serverId });
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-a' })]);
         storage.getState().applySessions([{ ...session, metadata: { ...session.metadata!, machineId: 'machine-a' } }]);
         const launcherState = applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), {
             v: 1, machineId: 'machine-a', sessionId: 'session-a', updatedAt: 3_000,
@@ -78,27 +88,14 @@ describe('SessionDetailsPanel local service launcher handoff', () => {
         });
         const screen = await renderScreen(<runtime.Wrapper>
             <SessionDetailsPanel sessionId="session-a" routeServerId={runtime.serverId}
-                scopeId="session:session-a" nowMs={() => 4_000} localServiceLauncherState={launcherState} />
+                scopeId="session:session-a" nowMs={() => 4_000}
+                localServiceLauncherState={supplied ? launcherState : null} localServicePreviewState={null} />
         </runtime.Wrapper>);
-        await act(async () => runtime.pane.openDetailsTab({
-            key: 'unsupported:launcher-probe', kind: 'unsupported', title: 'Launcher probe',
-            resource: { kind: 'unsupported' },
-        }, { intent: 'pinned' }));
-        const host = screen.tree.findByType(DetailsSurfaceHost);
-        const tab = { ...createBrowserLaunchpadDetailsTab(), isPinned: true, isPreview: false };
-        const descriptor = createDetailsSurfaceDescriptor({ tab, scope: host.props.scope, region: 'details' });
-        const browserRenderer = host.props.renderers.find((renderer: { id: string }) => renderer.id === 'browser-view-details-surface');
-        expect(browserRenderer).toBeDefined();
-        const element = browserRenderer.render({
-            tab, descriptor, scope: host.props.scope, region: 'details', active: true, callbacks: host.props.callbacks,
-        });
-        expect(React.isValidElement(element)).toBe(true);
-        if (!React.isValidElement<React.ComponentProps<typeof BrowserDetailsSurface>>(element)) {
-            throw new Error('Expected the real browser details surface');
-        }
-        expect(element.type).toBe(BrowserDetailsSurface);
-        expect(element.props.launchpadRows).toEqual(expect.arrayContaining([
-            expect.objectContaining({ id: 'service:preview:session-browser-feed', disabledReason: null }),
-        ]));
+        await act(async () => runtime.pane.openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' }));
+        await flushHookEffects();
+        if (supplied) expect(screen.getTextContent()).toContain('Session browser feed');
+        else expect(screen.getTextContent()).not.toContain('Session browser feed');
+        expect(serviceMethods).toEqual([]);
+        await screen.unmount();
     });
 });

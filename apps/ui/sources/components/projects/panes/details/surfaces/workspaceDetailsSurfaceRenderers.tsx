@@ -139,6 +139,7 @@ export function createWorkspaceDetailsSurfaceRenderers(
         }),
         createBrowserViewDetailsSurfaceRenderer({
             localServicePreviewState: options.localServicePreviewState,
+            localServiceLauncherState: options.localServiceLauncherState,
             localServicePreviewServerId: options.localServicePreviewServerId,
             machineId: options.machineId,
             serverId: options.serverId,

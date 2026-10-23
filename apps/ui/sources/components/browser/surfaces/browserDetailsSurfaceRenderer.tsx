@@ -4,7 +4,7 @@ import type { BrowserPlatformV1 } from '@happier-dev/protocol/browser/view/v1';
 import type { FeatureDecision } from '@happier-dev/protocol/features/decision';
 import * as React from 'react';
 
-import { resolveBrowserSurfacePlatform } from './useBrowserSurfaceHostProps';
+import { resolveBrowserSurfacePlatform, useBrowserSurfaceHostFeed } from './useBrowserSurfaceHostProps';
 
 import type {
     DetailsSurfaceRendererV1,
@@ -26,6 +26,7 @@ import { useBrowserDaemonControlTransport } from '@/sync/domains/browser/control
 import type { DesktopWebViewNativeAvailability } from '@/sync/domains/browser/adapters/desktopWebView';
 import { useDesktopWebViewNativeAvailability } from '@/sync/domains/browser/adapters/useDesktopWebViewNativeAvailability';
 import { resolveLocalBrowserProfile } from '@/sync/domains/browser/profiles/localBrowserProfile';
+import type { LocalServiceLauncherState } from '@/sync/domains/local/services/launch';
 import type { LocalServicePreviewState } from '@/sync/domains/local/services/preview/store';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -73,6 +74,9 @@ export type BrowserDetailsSurfaceRendererOptions = Readonly<{
     keepAliveAboveRouter?: boolean;
     localServicePreviewState?: LocalServicePreviewState | null;
     localServicePreviewServerId?: string | null;
+    localServiceLauncherState?: LocalServiceLauncherState | null;
+    /** Session launcher scope; project augmentation does not turn a workspace feed into a Session feed. */
+    sessionId?: string | null;
     // W2-A-1 / A3: the machine/server scope used to build the UI→daemon control transport so a
     // daemon-authoritative (chromiumSidecar/streamedBrowserSurface) view in this workspace tab
     // dispatches reload/stop/navigate through the daemon control broker.
@@ -163,6 +167,9 @@ export function BrowserDetailsSurface(props: Readonly<{
     visible?: boolean;
     localServicePreviewState?: LocalServicePreviewState | null;
     localServicePreviewServerId?: string | null;
+    localServiceLauncherState?: LocalServiceLauncherState | null;
+    /** Session launcher scope; project augmentation does not turn a workspace feed into a Session feed. */
+    sessionId?: string | null;
     machineId?: string | null;
     serverId?: string | null;
     pluginUiProjection?: PluginUiProjectionModel | null;
@@ -195,6 +202,25 @@ export function BrowserDetailsSurface(props: Readonly<{
     const platform = resolveBrowserSurfacePlatform(
         readBrowserPlatform(props.resource.platform) ?? props.platform,
     );
+    const liveFeed = useBrowserSurfaceHostFeed({
+        machineId: props.machineId,
+        serverId: props.serverId,
+        sessionId: props.sessionId,
+        platform,
+        enabled: props.launchpadRows === undefined,
+        launcherEnabled: props.visible !== false && props.active !== false,
+        launcherState: props.localServiceLauncherState,
+        localServicePreviewState: props.localServicePreviewState,
+        // This leaf is already cold-gated by the workspace. A visited Browser keeps its
+        // existing native-preview lease custody; inventory/launcher demand still follows visibility.
+        previewPresentationPolicy: 'retained',
+        pluginBrowserProjection: props.pluginBrowserProjection,
+        pluginUiProjection: props.pluginUiProjection,
+        nowMs: props.nowMs,
+    });
+    const localServicePreviewState = props.launchpadRows === undefined
+        ? liveFeed.localServicePreviewState
+        : props.localServicePreviewState;
     const browserSessionId = readOptionalString(props.resource.browserSessionId)
         ?? createBrowserSurfaceSessionId(['slot', props.presentationSlotId]);
     const viewId = readOptionalString(props.resource.viewId);
@@ -250,7 +276,7 @@ export function BrowserDetailsSurface(props: Readonly<{
             browserSessionId,
             ...(viewId ? { viewId } : {}),
             target,
-            localServicePreviewState: props.localServicePreviewState,
+            localServicePreviewState,
             browserFeatureDecision,
             browserProfile,
             desktopWebViewAvailability,
@@ -268,7 +294,7 @@ export function BrowserDetailsSurface(props: Readonly<{
             desktopWebViewAvailability,
             platform,
             props.allowExternalUrlBrowsing,
-            props.localServicePreviewState,
+            localServicePreviewState,
             target,
             viewId,
         ],
@@ -284,8 +310,8 @@ export function BrowserDetailsSurface(props: Readonly<{
             keepAliveAboveRouter={props.keepAliveAboveRouter ?? true}
             visible={props.visible ?? props.active ?? true}
             active={props.active ?? true}
-            localServicePreviewState={props.localServicePreviewState}
-            localServicePreviewServerId={props.localServicePreviewServerId}
+            localServicePreviewState={localServicePreviewState}
+            localServicePreviewServerId={props.localServicePreviewServerId === undefined ? liveFeed.localServicePreviewServerId : props.localServicePreviewServerId}
             pluginUiProjection={props.pluginUiProjection}
             pluginAccountLifetime={props.pluginAccountLifetime}
             pluginUiInteractionEnabled={props.pluginUiInteractionEnabled}
@@ -296,10 +322,10 @@ export function BrowserDetailsSurface(props: Readonly<{
                 sessionId: props.pluginBrowserActionSessionId,
             }}
             productModels={productModels}
-            launchpadRows={props.launchpadRows}
-            launchpadRefreshStatus={props.launchpadRefreshStatus}
-            launchpadRefreshError={props.launchpadRefreshError}
-            onRefreshLaunchpad={props.onRefreshLaunchpad}
+            launchpadRows={props.launchpadRows ?? liveFeed.feed.rows}
+            launchpadRefreshStatus={props.launchpadRefreshStatus ?? liveFeed.feed.refreshStatus}
+            launchpadRefreshError={props.launchpadRefreshError === undefined ? liveFeed.feed.refreshError : props.launchpadRefreshError}
+            onRefreshLaunchpad={props.onRefreshLaunchpad ?? liveFeed.onRefreshLaunchpad}
             onOpenTarget={props.onOpenTarget}
             browserFeatureDecision={browserFeatureDecision}
             desktopWebViewAvailability={desktopWebViewAvailability}
@@ -400,6 +426,8 @@ export function createBrowserViewDetailsSurfaceRenderer(
                     visible={options.visible !== false && input.active}
                     localServicePreviewState={options.localServicePreviewState}
                     localServicePreviewServerId={options.localServicePreviewServerId}
+                    localServiceLauncherState={options.localServiceLauncherState}
+                    sessionId={options.sessionId}
                     machineId={options.machineId}
                     serverId={options.serverId}
                     pluginUiProjection={options.pluginUiProjection}

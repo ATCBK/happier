@@ -37,10 +37,7 @@ import {
     resolveSessionDetailsSurfaceIconName,
 } from './surfaces/sessionDetailsSurfaceRegistry';
 import type { LocalServicePreviewState } from '@/sync/domains/local/services/preview/store';
-import {
-    type LocalServiceLauncherState,
-    useLocalServiceLauncherState,
-} from '@/sync/domains/local/services/launch';
+import type { LocalServiceLauncherState } from '@/sync/domains/local/services/launch';
 import type { PeerMediationObservabilityUiStore } from '@/sync/domains/machines/peer/mediation/observability';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
 import type { BrowserShellRecordingState } from '@/components/browser/BrowserShell';
@@ -49,10 +46,9 @@ import {
     mergeBrowserSurfaceProductModels,
     type BrowserSurfaceProductModels,
 } from '@/components/browser/surfaces';
-import { resolveBrowserSurfacePlatform, useBrowserSurfaceHostProps } from '@/components/browser/surfaces/useBrowserSurfaceHostProps';
+import { resolveBrowserSurfacePlatform } from '@/components/browser/surfaces/useBrowserSurfaceHostProps';
 import { useOpenBrowserTargetInWorkspace } from '@/components/browser/surfaces/useOpenBrowserTargetInWorkspace';
 import { useSessionDetailsPanelPluginRuntime } from './useSessionDetailsPanelPluginRuntime';
-import { useLocalServicePreviewState } from '@/sync/domains/local/services/preview/useLocalServicePreviewState';
 import { usePeerMediationObservabilityStore } from '@/sync/domains/machines/peer/mediation/observability/usePeerMediationObservabilityStore';
 import type { SimulatorPreviewSurfaceRuntime } from '@/sync/domains/devices/simulator/useSimulatorPreviewRuntime';
 import { useSimulatorPreviewLiveSurface } from '@/components/devices/simulator/relay/useSimulatorPreviewLiveSurface';
@@ -141,31 +137,14 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         () => resolvePluginUiRuntimeFormFactor({ deviceType }),
         [deviceType],
     );
-    const liveLocalServicePreviewState = useLocalServicePreviewState({
-        machineId: pluginRuntime.machineId,
-        serverId: pluginRuntime.serverId,
-        enabled: props.localServicePreviewState === undefined,
-    });
-    const liveLocalServiceLauncherState = useLocalServiceLauncherState({
-        machineId: pluginRuntime.machineId,
-        serverId: pluginRuntime.serverId,
-        sessionId: props.sessionId,
-        enabled: props.localServiceLauncherState === undefined,
-    });
     const livePeerMediationObservabilityState = usePeerMediationObservabilityStore({
         scope: pluginRuntime.peerMediationObservabilityScope,
         source: 'server',
         serverId: pluginRuntime.serverId,
         enabled: props.peerMediationObservabilityState === undefined,
     });
-    const localServicePreviewState =
-        props.localServicePreviewState !== undefined
-            ? props.localServicePreviewState
-            : liveLocalServicePreviewState;
-    const localServiceLauncherState =
-        props.localServiceLauncherState !== undefined
-            ? props.localServiceLauncherState
-            : liveLocalServiceLauncherState;
+    const localServicePreviewState = props.localServicePreviewState;
+    const localServiceLauncherState = props.localServiceLauncherState;
     const peerMediationObservabilityState =
         props.peerMediationObservabilityState !== undefined
             ? props.peerMediationObservabilityState
@@ -207,24 +186,6 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
         props.simulatorPreview !== undefined
             ? props.simulatorPreview
             : liveSimulatorPreview;
-    // Route the launchpad feed through the shared browser-host bootstrap so the session and
-    // workspace details panels assemble the identical feed and cannot drift apart (BRW-13). The
-    // launcher/preview states are injected from the values already resolved above, so the helper
-    // does not spin up duplicate live controllers.
-    const browserLaunchpad = useBrowserSurfaceHostProps({
-        scope: 'sessionDetails',
-        sessionId: props.sessionId,
-        machineId: pluginRuntime.machineId,
-        serverId: pluginRuntime.serverId,
-        // OWNER-PLATFORM: do NOT leak the local-preview platform (`LocalServicePreviewPlatform`,
-        // which cannot represent `desktop` and defaults non-mobile to `'web'`) into the browser
-        // surface — that is B-RC1. Omit it so the hook resolves the browser platform Tauri-aware.
-        launcherState: localServiceLauncherState,
-        localServicePreviewState,
-        pluginBrowserProjection: pluginRuntime.pluginBrowserProjection,
-        pluginUiProjection: pluginRuntime.pluginUiProjection,
-        nowMs: props.nowMs,
-    });
     const browserContextProductModel = useSessionBrowserContextProductModel({
         machineId: pluginRuntime.machineId,
         serverId: pluginRuntime.serverId,
@@ -355,6 +316,7 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             pluginBrowserProjection: pluginRuntime.pluginBrowserProjection,
             callerHostedHtmlRuntime,
             localServicePreviewState,
+            localServiceLauncherState,
             peerMediationObservabilityState,
             peerMediationObservabilityScope: pluginRuntime.peerMediationObservabilityScope,
             simulatorPreview,
@@ -362,10 +324,6 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             formFactor: pluginRuntimeFormFactor,
             productModels: browserProductModels,
             browserRecording,
-            launchpadRows: browserLaunchpad.launchpadRows,
-            launchpadRefreshStatus: browserLaunchpad.launchpadRefreshStatus,
-            launchpadRefreshError: browserLaunchpad.launchpadRefreshError,
-            onRefreshLaunchpad: browserLaunchpad.onRefreshLaunchpad,
             nowMs: props.nowMs,
             requestClose,
             openFileTab,
@@ -377,7 +335,6 @@ export const SessionDetailsPanel = React.memo((props: SessionDetailsPanelProps) 
             resolveBoardPrimaryHost: props.resolveBoardPrimaryHost,
         }) : [], [
         openBrowserViewTarget,
-        browserLaunchpad,
         browserProductModels,
         getStartEditingFileHandler,
         localServiceLauncherState,

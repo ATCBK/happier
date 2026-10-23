@@ -93,6 +93,7 @@ type SessionDetailsSurfaceRendererOptions = Readonly<{
     pluginBrowserProjection?: PluginBrowserProjectionModel | null;
     callerHostedHtmlRuntime?: CallerHostedHtmlRuntime | null;
     localServicePreviewState?: LocalServicePreviewState | null;
+    localServiceLauncherState?: BrowserDetailsSurfaceRendererOptions['localServiceLauncherState'];
     peerMediationObservabilityState?: PeerMediationObservabilityUiStore | null;
     peerMediationObservabilityScope?: PeerMediationObservabilityScopeV1 | null;
     simulatorPreview?: SimulatorPreviewSurfaceRuntime | null;
@@ -309,6 +310,8 @@ export function createSessionDetailsSurfaceRenderers(
         }),
         createBrowserViewDetailsSurfaceRenderer({
             localServicePreviewState: options.localServicePreviewState,
+            localServiceLauncherState: options.localServiceLauncherState,
+            sessionId: options.sessionId,
             localServicePreviewServerId: options.serverId,
             // W2-A-1 / A3: scope for the UI→daemon browser control transport so a daemon-authoritative
             // view in this workspace tab dispatches reload/stop/navigate through the daemon broker.
