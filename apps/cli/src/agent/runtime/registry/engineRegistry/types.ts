@@ -64,6 +64,8 @@ export type RunnerAgentExternalSessionProviderOps = Required<Pick<
 export type RunnerAgentSessionRuntimeSource = Readonly<{
     /** Captured launch choice; grants no Agent/session authority. */
     startupRuntimeDescriptorV1?: AgentSessionOpenRequest['runtimeDescriptorV1'];
+    /** Captured placement owner; does not admit a retained terminal. */
+    startupTerminalHostOwner?: 'startup' | 'runtime';
     /** Exact Agent contribution used to construct this Session. */
     agentContribution: ResolvedAgentContribution;
     identity: Readonly<{

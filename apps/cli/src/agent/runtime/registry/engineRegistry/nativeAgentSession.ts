@@ -4455,6 +4455,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
     acpRuntimeDefinition?: Parameters<typeof createPublicAcpRuntimeProtocols>[0]['runtimeDefinition'];
     sessionInput: PluginSessionBindingInput;
     executionSurfaces?: Partial<Pick<BackendExecutionSurfaces, 'attach' | 'externalSession' | 'terminalRuntime' | 'resolveTerminalPresentation'>>;
+    terminalHostOwner?: 'startup' | 'runtime';
     externalSessionHostOperations?: Readonly<{
         bindSession(sessionId: string): ExternalSessionHostOperationPort;
     }> | null;
@@ -6326,6 +6327,11 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
             }
         },
     });
+    if (params.terminalHostOwner) {
+        plan = { ...plan, config: { ...plan.config, initializeSession: {
+            ...plan.config.initializeSession, terminalHostOwner: params.terminalHostOwner,
+        } } };
+    }
     if (params.prepareRuntimeSource) {
         const previous = plan.config.lifecycleHooks;
         plan = { ...plan, config: { ...plan.config, lifecycleHooks: {

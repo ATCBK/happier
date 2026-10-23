@@ -1193,6 +1193,8 @@ export async function executeSpawnSessionRequest(
                     descriptor: runnerAgentSessionDescriptor,
                     ...(startupRuntimeDescriptorV1 ? { launch: {
                         runtimeDescriptorV1: startupRuntimeDescriptorV1,
+                        ...(terminalPresentation.kind === 'managed_terminal' || terminalPresentation.kind === 'provider_attach'
+                            ? { terminalHostOwner: 'runtime' as const } : {}),
                         ...(connectedServices.sessionConnectedAccounts ? {
                             sessionConnectedAccounts: [...connectedServices.sessionConnectedAccounts],
                         } : {}),

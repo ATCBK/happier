@@ -182,6 +182,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
         isCurrent(): boolean;
     }>;
     nativeAgentSessionCapabilities?: AgentSessionCapabilities;
+    nativeAgentTerminalHostOwner?: 'startup' | 'runtime';
     nativeAgentPolicyAgentId?: string;
     nativeAgentSessionProjection?: NonNullable<
         Parameters<typeof createNativeAgentRuntimeSessionPlan>[0]['sessionProjection']
@@ -300,6 +301,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 ? { acpRuntimeDefinition: params.nativeAgentAcpRuntimeDefinition }
                                 : {}),
                             executionSurfaces: params.executionSurfaces,
+                            terminalHostOwner: params.nativeAgentTerminalHostOwner,
                             externalSessionHostOperations:
                                 params.externalSessionHostOperations,
                             managedServiceEndpointReadPort:

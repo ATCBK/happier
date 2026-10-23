@@ -74,6 +74,8 @@ export interface InitializeBackendRunSessionOptions {
   startupSideEffectsOrder?: 'report-first' | 'persist-first'
   /** Selected runtime permits exact retained-owned-host continuation, not fresh placement. */
   retainedTerminalRecovery?: 'adopt'
+  /** Physical terminal startup belongs to the selected runtime rather than this controller. */
+  terminalHostOwner?: 'startup' | 'runtime'
   deferPendingFirstInputCommitUntilRuntimeReady?: boolean
   requireDaemonAckOnAttach?: boolean
   signal?: AbortSignal
@@ -308,9 +310,9 @@ export async function initializeBackendRunSession(
     requireDaemonAck: boolean,
     sessionCreationOutcome?: SessionCreationOutcome,
   ): Promise<void> => {
-    if (preservesRetainedTerminal) {
-      // The headless controller is not a new physical placement. Leave the
-      // exact current/predecessor record untouched until actual host adoption.
+    if (preservesRetainedTerminal || opts.terminalHostOwner === 'runtime') {
+      // A headless controller does not own the runtime's physical terminal.
+      // Preserve retained attachment records until the actual host adopts them.
       await startDaemonReport(sessionToUse, sessionId, metadata, daemonReportMode, requireDaemonAck, sessionCreationOutcome)
       return
     }

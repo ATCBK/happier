@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as tmp from 'tmp'
 import { configuration } from '@/configuration'
-import { readTerminalHostAttachmentState } from '@/terminal/attachment/terminalAttachmentInfo'
+import { readTerminalHostAttachmentState, readTerminalAttachmentInfo } from '@/terminal/attachment/terminalAttachmentInfo'
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures'
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata'
+import * as daemonControl from '@/daemon/controlClient'
+import { createDeferredStartupBootstrap } from '@/agent/runtime/startup/createDeferredStartupBootstrap'
 
 import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRunSession'
 import type { ApiSessionClient } from '@/api/session/sessionClient'
@@ -36,6 +40,67 @@ function createSessionResponse(id: string, metadata: Metadata, state: AgentState
 }
 
 describe('initialize run session', () => {
+  it.each([
+    ['direct', 'runtime'], ['deferred', 'runtime'],
+    ['direct', 'startup'], ['deferred', 'startup'],
+  ] as const)('keeps terminal startup effects with their selected owner through %s startup (%s)', async (startup, terminalHostOwner) => {
+    const dir = tmp.dirSync({ unsafeCleanup: true })
+    const home = Object.getOwnPropertyDescriptor(configuration, 'happyHomeDir')!
+    Object.defineProperty(configuration, 'happyHomeDir', { ...home, value: dir.name })
+    const env = createEnvKeyScope(['HAPPIER_DAEMON_PENDING_FIRST_INPUT'])
+    env.patch({ HAPPIER_DAEMON_PENDING_FIRST_INPUT: undefined })
+    const sessionId = `terminal-owner-${startup}-${terminalHostOwner}`
+    const metadata = createTestMetadata({ path: dir.name, startedBy: 'daemon',
+      terminal: { mode: 'plain', requested: 'tmux', ...(terminalHostOwner === 'startup' ? { fallbackReason: 'tmux unavailable' } : {}) } })
+    const events: Array<Parameters<ApiSessionClient['enqueueSessionEventCommitted']>[0]> = []
+    const session = createMutableApiSessionClientFixture({ sessionId, metadata, overrides: {
+      enqueueSessionEventCommitted: async event => { events.push(event); return { persisted: true, delivered: false } },
+    } })
+    // The daemon IPC and Session API are genuine process/transport boundaries.
+    const report = vi.spyOn(daemonControl, 'notifyDaemonSessionStarted').mockResolvedValue({ status: 'ok' })
+    const api = {
+      getOrCreateSession: async () => createSessionResponse(sessionId, metadata, { controlledByUser: false }),
+      sessionSyncClient: () => session,
+      push: () => null,
+    }
+    let deferred: Awaited<ReturnType<typeof createDeferredStartupBootstrap>> | undefined
+    try {
+      await withSessionRunnerOwnership(async () => {
+        if (startup === 'direct') {
+          await initializeBackendRunSession({ api, sessionTag: sessionId, metadata,
+            state: { controlledByUser: false }, uiLogPrefix: '[Test]', ...(terminalHostOwner === 'runtime' ? { terminalHostOwner } : {}),
+            startupMetadataOverrides: { permissionModeOverride: { mode: 'default', updatedAt: 1 } },
+          })
+        } else {
+          deferred = await createDeferredStartupBootstrap({
+            credentials: { token: 'test-token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+            startedBy: 'daemon', initialMachineId: 'machine',
+            machineMetadata: { host: 'test', platform: 'linux', happyCliVersion: 'test', homeDir: dir.name,
+              happyHomeDir: dir.name, happyLibDir: dir.name },
+            sessionTag: sessionId, initialMetadata: metadata, ...(terminalHostOwner === 'runtime' ? { terminalHostOwner } : {}),
+            createInitializedSessionMetadata: () => ({ metadata, state: { controlledByUser: false } }),
+            uiLogPrefix: '[Test]', startupMetadataOverrides: { permissionModeOverride: { mode: 'default', updatedAt: 1 } },
+            initializeBackendApiContext: async () => ({ api, machineId: 'machine' }),
+          })
+          await deferred.start?.()
+        }
+        const fallbackMessages = events.filter(event => event.type === 'message' && /tmux/i.test(event.message))
+        expect(fallbackMessages).toHaveLength(terminalHostOwner === 'runtime' ? 0 : 1)
+        const attachment = await readTerminalAttachmentInfo({ happyHomeDir: dir.name, sessionId })
+        if (terminalHostOwner === 'runtime') expect(attachment).toBeNull()
+        else expect(attachment).not.toBeNull()
+        expect(report).toHaveBeenCalledWith(sessionId, expect.objectContaining({ startedBy: 'daemon' }), expect.any(Object))
+      })
+    } finally {
+      await deferred?.cleanup?.()
+      await session.close()
+      report.mockRestore()
+      env.restore()
+      Object.defineProperty(configuration, 'happyHomeDir', home)
+      dir.removeCallback()
+    }
+  })
+
   it('owns the fresh Session before its realtime client and releases ownership after startup fails', async () => {
     const dir = tmp.dirSync({ unsafeCleanup: true })
     const home = Object.getOwnPropertyDescriptor(configuration, 'happyHomeDir')!

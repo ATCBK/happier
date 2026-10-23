@@ -430,6 +430,7 @@ export const AgentRuntimeRunnerBootstrapV1Schema = lazyZodSchema(() => z.strictO
   descriptor: AgentRuntimeDaemonSessionDescriptorV1Schema,
   launch: z.optional(z.strictObject({
     runtimeDescriptorV1: RuntimeDescriptorV1Schema,
+    terminalHostOwner: z.optional(z.enum(['startup', 'runtime'])),
     sessionConnectedAccounts: z.optional(AgentSessionConnectedAccountsV1Schema),
   })),
 }));

@@ -126,6 +126,7 @@ export async function createDeferredStartupBootstrap(params: Readonly<{
     startupMetadataOverrides: InitializeBackendRunSessionOptions['startupMetadataOverrides'];
     startupSideEffectsOrder?: InitializeBackendRunSessionOptions['startupSideEffectsOrder'];
     retainedTerminalRecovery?: InitializeBackendRunSessionOptions['retainedTerminalRecovery'];
+    terminalHostOwner?: InitializeBackendRunSessionOptions['terminalHostOwner'];
     onBackgroundStartFailure?: (error: unknown) => void | Promise<void>;
     onSessionAttached?: (params: Readonly<{
         session: ApiSessionClient;
@@ -258,6 +259,7 @@ export async function createDeferredStartupBootstrap(params: Readonly<{
                     startupMetadataOverrides: params.startupMetadataOverrides,
                     startupSideEffectsOrder: params.startupSideEffectsOrder,
                     retainedTerminalRecovery: params.retainedTerminalRecovery,
+                    terminalHostOwner: params.terminalHostOwner,
                     signal: backgroundController.signal,
                     onSessionSwap: async (nextSession) => {
                         await attachServerSession({

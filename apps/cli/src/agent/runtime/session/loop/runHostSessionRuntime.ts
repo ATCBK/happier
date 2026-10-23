@@ -866,6 +866,7 @@ export type HostSessionRuntimeConfig = {
   initializeSession?: Readonly<{
     startupSideEffectsOrder?: InitializeBackendRunSessionOptions['startupSideEffectsOrder'];
     retainedTerminalRecovery?: InitializeBackendRunSessionOptions['retainedTerminalRecovery'];
+    terminalHostOwner?: InitializeBackendRunSessionOptions['terminalHostOwner'];
   }>;
   onAttachMetadataSnapshotMissing?: (error: unknown | null) => void;
   onAttachMetadataSnapshotError?: (error: unknown) => void;
@@ -1480,6 +1481,7 @@ export async function runHostSessionRuntime(
         ...params,
         hostProcessStartTimeMs: runnerProcessIdentity?.processStartTimeMs,
         retainedTerminalRecovery: config.initializeSession?.retainedTerminalRecovery,
+        terminalHostOwner: config.initializeSession?.terminalHostOwner,
         augmentSessionMetadata,
         transformSessionInputBeforeCommit,
         afterComposerAttachmentMessageAccepted,
@@ -1631,6 +1633,7 @@ export async function runHostSessionRuntime(
       },
       startupSideEffectsOrder: config.initializeSession?.startupSideEffectsOrder,
       retainedTerminalRecovery: config.initializeSession?.retainedTerminalRecovery,
+      terminalHostOwner: config.initializeSession?.terminalHostOwner,
       onAttachMetadataSnapshotMissing: config.onAttachMetadataSnapshotMissing,
       onAttachMetadataSnapshotError: config.onAttachMetadataSnapshotError,
       deferPendingFirstInputCommitUntilRuntimeReady:

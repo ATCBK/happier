@@ -547,6 +547,7 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
 
     return Object.freeze({
         ...(launch ? { startupRuntimeDescriptorV1: launch.runtimeDescriptorV1 } : {}),
+        ...(launch?.terminalHostOwner ? { startupTerminalHostOwner: launch.terminalHostOwner } : {}),
         get agentContribution() {
             return claimed?.agentContribution
                 ?? bootstrapAgentContribution;

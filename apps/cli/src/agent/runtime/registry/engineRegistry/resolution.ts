@@ -161,6 +161,7 @@ export async function resolveEngineAdapterResolutionFromRegistry(params: Readonl
     const runnerRuntimeCoreParams = runnerRuntimeSource
         ? {
             startupRuntimeDescriptorV1: runnerRuntimeSource.startupRuntimeDescriptorV1,
+            nativeAgentTerminalHostOwner: runnerRuntimeSource.startupTerminalHostOwner,
             nativeAgentRuntimeVoiceAuthority:
                 runnerRuntimeSource.agentSessionRealtimeVoiceAuthority,
             createNativeAgentRuntime:
