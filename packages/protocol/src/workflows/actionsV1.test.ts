@@ -199,6 +199,7 @@ describe('workflow Action contracts', () => {
       'workflow.definition.delete',
       'workflow.definition.import',
       'workflow.definition.export',
+      'workflow.definition.capture',
       'workflow.trigger.list',
       'workflow.trigger.add',
       'workflow.trigger.update',
@@ -323,12 +324,21 @@ describe('workflow Action contracts', () => {
     }
   });
 
-  it('admits explicit invocation content on history pages while keeping parent projections lean', () => {
+  it('admits selected invocation content and rejects ambiguous selector combinations', () => {
     const schema = WorkflowActionInputSchemasV1['workflow.run.invocations.list'];
     const runId = '11111111-1111-4111-8111-111111111111';
     expect(schema.safeParse({ runId, includeContent: true }).success).toBe(true);
     expect(schema.safeParse({ runId, includeContent: false, parentRecordId: '22222222-2222-4222-8222-222222222222' }).success).toBe(true);
-    expect(schema.safeParse({ runId, includeContent: true, parentRecordId: '22222222-2222-4222-8222-222222222222' }).success).toBe(false);
+    expect(schema.safeParse({ runId, includeContent: true, parentRecordId: '22222222-2222-4222-8222-222222222222' }).success).toBe(true);
+    const parentRecordId = '22222222-2222-4222-8222-222222222222';
+    expect(schema.safeParse({ runId, includeContent: true, invocationId: parentRecordId }).success).toBe(true);
+    expect(schema.safeParse({ runId, includeContent: true, parentRecordIds: [parentRecordId] }).success).toBe(true);
+    expect(schema.safeParse({ runId, parentRecordId, memberOrdinal: '499' }).success).toBe(true);
+    for (const invalid of [{ memberOrdinal: '499' }, { parentRecordIds: [] },
+      { invocationId: parentRecordId, parentRecordId }, { invocationId: parentRecordId, lifecycles: ['completed'] },
+      { parentRecordIds: [parentRecordId], parentRecordId }, { parentRecordIds: [parentRecordId], invocationId: parentRecordId }]) {
+      expect(schema.safeParse({ runId, ...invalid }).success).toBe(false);
+    }
   });
 
   it('projects accepted execution context without the admitted authorization', () => {

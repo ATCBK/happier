@@ -1,4 +1,4 @@
-import { WorkflowRunGetResultV1Schema, WorkflowInvocationListResultV1Schema } from '../../workflows/actionsV1.js';
+import { WorkflowRunGetResultV1Schema, WorkflowInvocationListResultV1Schema, type WorkflowInvocationListRequestV1 } from '../../workflows/actionsV1.js';
 import { resolveWorkflowInvocationStructureV1, type WorkflowInvocationBindingRowV1 } from '../../workflows/workflowInvocationStructureV1.js';
 import { readWorkflowActionInvocationV1, type WorkflowSessionScopeV1 } from '../../workflows/workflowSessionScopeV1.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
@@ -9,7 +9,9 @@ import type { WorkflowMaterializedLeafV1 } from '../../workflows/workflowDefinit
 
 type WorkflowActionInvocationContextV1 = Readonly<{
   opened: ReturnType<typeof WorkflowRunGetResultV1Schema.parse>;
-  rows: ReadonlyMap<string, WorkflowInvocationBindingRowV1>;
+  readInvocation: (id: string) => Promise<WorkflowInvocationBindingRowV1 | undefined>;
+  readMembers: (parentRecordId: string, memberOrdinal?: string) => Promise<WorkflowInvocationBindingRowV1[]>;
+  readChildHistory: (parentRecordIds: string[]) => Promise<WorkflowInvocationBindingRowV1[]>;
   invocation: WorkflowInvocationBindingRowV1;
   structure: NonNullable<Awaited<ReturnType<typeof resolveWorkflowInvocationStructureV1>>>;
   leaf: WorkflowMaterializedLeafV1;
@@ -29,40 +31,61 @@ export async function readActionWorkflowInvocationContextV1(
   const common = { context, ...(context.signal ? { signal: context.signal } : {}) };
   try {
     const opened = WorkflowRunGetResultV1Schema.parse(await invoke({ ...common,
-      actionId: 'workflow.run.get', input: { runId: caller.runId } }));
+      actionId: 'workflow.run.get', input: { runId: caller.runId, includeUsage: false } }));
     if (opened.run.id !== caller.runId) return null;
-    // This history view lives only for this scope resolution. It neither retains
+    // This opened ancestry lives only for this Action. It neither retains
     // authority across Actions nor replaces each effect's current Session check.
     const rows = new Map<string, WorkflowInvocationBindingRowV1>();
-    const cursors = new Set<string>();
-    let cursor: string | undefined;
-    do {
-      context.signal?.throwIfAborted();
-      const page = WorkflowInvocationListResultV1Schema.parse(await invoke({ ...common,
-        actionId: 'workflow.run.invocations.list', input: { runId: caller.runId, includeContent: true,
-          ...(cursor ? { cursor } : {}) } }));
-      const details = page.invocationDetails;
-      if (!details || details.length !== page.invocations.length) return null;
-      const indices = new Map(page.invocations.map(index => [index.id, index]));
-      if (indices.size !== page.invocations.length) return null;
-      for (const detail of details) {
-        const index = indices.get(detail.index.id);
-        if (!index || index.runId !== caller.runId || !sameStrictJsonValue(index, detail.index)
-          || detail.parentRevision !== page.parentRevision || detail.progress.attempt !== index.attempt
-          || rows.has(index.id)) return null;
-        rows.set(index.id, detail);
-      }
-      cursor = page.nextCursor;
-      if (cursor && cursors.has(cursor)) return null;
-      if (cursor) cursors.add(cursor);
-    } while (cursor);
-    const read = async (invocationId: string) => rows.get(invocationId);
+    const readSelected = async (selection: Pick<WorkflowInvocationListRequestV1, 'invocationId' | 'parentRecordId' | 'memberOrdinal' | 'parentRecordIds'>) => {
+      const parents = selection.parentRecordIds ? new Set(selection.parentRecordIds) : undefined;
+      const selected: WorkflowInvocationBindingRowV1[] = [];
+      const ids = new Set<string>();
+      const cursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        context.signal?.throwIfAborted();
+        const page = WorkflowInvocationListResultV1Schema.parse(await invoke({ ...common,
+          actionId: 'workflow.run.invocations.list', input: { runId: caller.runId, includeContent: true,
+            ...selection, ...(cursor ? { cursor } : {}) } }));
+        const details = page.invocationDetails;
+        if (!details || details.length !== page.invocations.length) throw new Error('workflow_scope_content_unavailable');
+        const indices = new Map(page.invocations.map(index => [index.id, index]));
+        if (indices.size !== page.invocations.length) throw new Error('workflow_scope_content_unavailable');
+        for (const detail of details) {
+          const index = indices.get(detail.index.id);
+          if (!index || index.runId !== caller.runId || !sameStrictJsonValue(index, detail.index)
+            || detail.parentRevision !== page.parentRevision || detail.progress.attempt !== index.attempt
+            || ids.has(index.id)
+            || (selection.invocationId !== undefined && index.id !== selection.invocationId)
+            || (selection.parentRecordId !== undefined && index.parentRecordId !== selection.parentRecordId)
+            || (parents !== undefined && (index.parentRecordId === null || !parents.has(index.parentRecordId)))
+            || (selection.memberOrdinal !== undefined && index.memberOrdinal !== selection.memberOrdinal)) {
+            throw new Error('workflow_scope_content_unavailable');
+          }
+          ids.add(index.id);
+          rows.set(index.id, detail);
+          selected.push(detail);
+        }
+        cursor = page.nextCursor;
+        if (cursor && cursors.has(cursor)) throw new Error('workflow_scope_content_unavailable');
+        if (cursor) cursors.add(cursor);
+      } while (cursor);
+      return selected;
+    };
+    const read = async (invocationId: string) => {
+      const existing = rows.get(invocationId);
+      if (existing) return existing;
+      const selected = await readSelected({ invocationId });
+      return selected.length === 1 ? selected[0] : undefined;
+    };
+    const readMembers = (parentRecordId: string, memberOrdinal?: string) => readSelected({ parentRecordId,
+      ...(memberOrdinal === undefined ? {} : { memberOrdinal }) });
+    const readChildHistory = (parentRecordIds: string[]) => parentRecordIds.length ? readSelected({ parentRecordIds }) : Promise.resolve([]);
     const logical = await read(identity.logicalInvocationId);
     if (!logical) return null;
     let invocation = logical.index.attempt === identity.attempt ? logical : undefined;
     if (!invocation && logical.index.parentRecordId !== null) {
-      const selected = [...rows.values()].filter(row => row.index.parentRecordId === logical.index.parentRecordId
-        && row.index.memberOrdinal === logical.index.memberOrdinal && row.index.attempt === identity.attempt
+      const selected = (await readMembers(logical.index.parentRecordId, logical.index.memberOrdinal)).filter(row => row.index.attempt === identity.attempt
         && row.index.lifecycle !== 'superseded');
       if (selected.length !== 1) return null;
       invocation = selected[0];
@@ -78,7 +101,7 @@ export async function readActionWorkflowInvocationContextV1(
     const leaf = opened.acceptedContext.materializedLeaves.find(leaf => leaf.sourceKey === structure.sourceKey
       && leaf.blockId === structure.leaf.id && leaf.kind === 'action' && leaf.actionId === actionId);
     if (!leaf) return null;
-    return { opened, rows, invocation, structure, leaf };
+    return { opened, readInvocation: read, readMembers, readChildHistory, invocation, structure, leaf };
   } catch {
     context.signal?.throwIfAborted();
     return null;

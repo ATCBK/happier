@@ -2439,7 +2439,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         result = opened.content.result.value;
         finalOutputInvocationId = opened.content.producerInvocation.recordId;
       }
-      const usage = await readRunUsage(
+      const usage = args.input.includeUsage === false ? undefined : await readRunUsage(
         args.input.runId,
         { accountId, enc },
         args.context.signal,

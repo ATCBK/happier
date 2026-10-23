@@ -289,7 +289,11 @@ export const WorkflowRunListResultV1Schema = lazyZodSchema(() => z.strictObject(
       message: 'Caller access must belong to a Run in the same page' });
   }
 })));
-export const WorkflowRunGetRequestV1Schema = lazyZodSchema(() => z.strictObject({ runId: WorkflowRunIdV1Schema }));
+export const WorkflowRunGetRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  runId: WorkflowRunIdV1Schema,
+  /** Scope readers need the accepted frame, without opening usage history. */
+  includeUsage: z.optional(z.boolean()),
+}));
 export const WorkflowRunSourceSummariesRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sourceArtifactIds: z.array(WorkflowDefinitionIdV1Schema).check(z.superRefine((ids, context) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: "custom", message: 'Duplicate source artifacts' });
@@ -442,13 +446,24 @@ export const WorkflowRunControlResultV1Schema = lazyZodSchema(() => z.strictObje
 export const WorkflowInvocationListRequestV1Schema = lazyZodSchema(() => z.strictObject({
   runId: WorkflowRunIdV1Schema, cursor: zMini.optional(CursorSchema), limit: z.optional(PositivePagePreferenceSchema),
   parentRecordId: zMini.optional(WorkflowInvocationRecordIdSchema),
+  /** Direct-child history of the requested parents, including superseded attempts. */
+  parentRecordIds: z.optional(z.array(WorkflowInvocationRecordIdSchema).check(z.minLength(1))),
+  /** Exact history record, including a superseded logical attempt. */
+  invocationId: z.optional(WorkflowInvocationRecordIdSchema),
+  /** Newest attempt of one direct-member slot. */
+  memberOrdinal: z.optional(WorkflowDecimalV1Schema),
   lifecycles: z.optional(z.array(WorkflowInvocationLifecycleV1Schema).check(z.minLength(1))),
-  /** Open private progress beside the same history page, without individual detail reads. */
+  /** Open private progress beside the selected indices, without recovery-detail reads. */
   includeContent: z.optional(z.boolean()),
 }).check(z.superRefine((value, context) => {
-  if (value.includeContent === true && value.parentRecordId !== undefined) {
-    context.addIssue({ code: "custom", path: ['includeContent'],
-      message: 'Invocation content is available on history pages only' });
+  if (value.memberOrdinal !== undefined && value.parentRecordId === undefined) {
+    context.addIssue({ code: "custom", path: ['memberOrdinal'], message: 'A member slot requires its parent' });
+  }
+  if (value.parentRecordIds !== undefined && (value.parentRecordId !== undefined || value.invocationId !== undefined || value.memberOrdinal !== undefined)) {
+    context.addIssue({ code: "custom", path: ['parentRecordIds'], message: 'Batched child history cannot select another window' });
+  }
+  if (value.invocationId !== undefined && (value.parentRecordId !== undefined || value.memberOrdinal !== undefined || value.lifecycles !== undefined)) {
+    context.addIssue({ code: "custom", path: ['invocationId'], message: 'An exact record cannot select a member window or lifecycle' });
   }
 })));
 export const WorkflowInvocationListResultV1Schema = lazyZodSchema(() => z.strictObject({
