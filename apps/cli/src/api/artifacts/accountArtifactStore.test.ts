@@ -623,6 +623,44 @@ describe('createAccountArtifactStore', () => {
     await expect(request).rejects.toMatchObject({ code: 'artifact_read_unavailable', status: 500 });
   });
 
+  it.each(['plain', 'e2ee'] as const)('acquires an exact %s header without requesting an unreadable body', async mode => {
+    const secret = randomBytes(32);
+    const dataKey = randomBytes(32);
+    const credentials = { token: 'token', encryption: mode === 'plain' ? null : {
+      type: 'dataKey' as const, publicKey: x25519.getPublicKey(secret), machineKey: secret,
+    } };
+    const authorityReads: unknown[] = [];
+    const store = createAccountArtifactStore({ credentials, getAccountEncryptionMode: async options => {
+      authorityReads.push(options?.usage);
+      return mode;
+    } });
+    const header = { v: 1, kind: 'memory_doc.v1', title: 'Selected memory' };
+    const selected = { id: 'selected', ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+      publicAudience: 'none',
+      header: mode === 'plain' ? encodePlainArtifactStoredContent(header) : encodeBase64(encryptWithDataKey(header, dataKey)),
+      dataEncryptionKey: mode === 'plain' ? ARTIFACT_PLAIN_DATA_KEY_MARKER
+        : encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey, recipientPublicKey: credentials.encryption!.publicKey, randomBytes })),
+      headerVersion: 2, bodyVersion: 3, seq: 4, createdAt: 1, updatedAt: 2 };
+    // The actual server refuses a full Plain read before disclosing a readable
+    // header when the stored body cannot be opened. Header projection is a
+    // distinct, existing authenticated transport contract, not a decode trick.
+    mockGet.mockResolvedValue({ status: 409, data: { error: 'artifact_content_unavailable' } });
+    mockPost.mockImplementation(async (url: string, input: unknown) => {
+      expect(new URL(url).pathname).toBe('/v1/artifacts/read');
+      expect(input).toEqual({ artifactIds: ['selected'], projection: 'headers' });
+      return { status: 200, data: { projection: 'headers', items: [
+        { artifactId: 'selected', ok: true, artifact: selected },
+      ] } };
+    });
+
+    expect(await store.readHeader('selected', { prepareRecipients: false })).toMatchObject({
+      artifactId: 'selected', header, headerVersion: 2, bodyVersion: 3,
+    });
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(authorityReads).toContain('fresh-authority');
+  });
+
   it('opens only an exact header admitted by fresh authority after recipient preparation', async () => {
     const secret = randomBytes(32);
     const dataKey = randomBytes(32);
@@ -1638,7 +1676,12 @@ it.each(['plain', 'e2ee'] as const)('round trips binary content under the same A
       const url = new URL(rawUrl);
       const limit = Number(url.searchParams.get('limit') ?? 500);
       if (limit > 500) return { status: 400, data: { error: 'invalid_limit' } };
-      return { status: 200, data: url.searchParams.has('cursor') ? rows.slice(500) : rows.slice(0, limit) };
+      // The HTTP owner excludes the exact keyset row, not one fixed page.
+      // A 501-row logical page continues after row 501, not the first 500-row fetch.
+      const cursor = url.searchParams.get('cursor');
+      const index = cursor ? rows.findIndex(row => encodeAccountArtifactListCursor({ artifactId: row.id, updatedAt: row.updatedAt }) === cursor) : -1;
+      if (cursor && index < 0) return { status: 400, data: { error: 'invalid_cursor' } };
+      return { status: 200, data: rows.slice(index + 1, index + 1 + limit) };
     });
     const page = await store.list({ sort: 'updated_desc', limit: 501 });
     expect(page.items).toHaveLength(501);
