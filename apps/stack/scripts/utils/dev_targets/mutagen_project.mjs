@@ -143,6 +143,8 @@ export const DEV_TARGET_MUTAGEN_IGNORE_PATHS = [
   'packages/iroh-native/native-test',
   'packages/*/ios/vendor',
   'packages/iroh-native/release-evidence',
+  // Local Expo module projects synchronize; their Gradle output stays target-local.
+  '**/apps/ui/modules/*/android/build',
   'packages/*/android/build',
   // CLI runs write target-local logs. Ignoring only *.log leaves the parent
   // directory visible to Mutagen, causing a deletion conflict on replicas.

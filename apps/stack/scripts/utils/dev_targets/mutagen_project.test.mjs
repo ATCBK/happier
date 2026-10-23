@@ -262,7 +262,10 @@ test('renderMutagenProject preserves default exclusions inside re-included proje
       excluded.push(`${ui}/${platform}`, `${ui}/${platform}/project.properties`,
         `${ui}/${platform}/build/generated/output`);
     }
-    included.push(`${ui}/modules/local-module/android/src/main/Module.kt`,
+    excluded.push(`${ui}/modules/local-module/android/build`,
+      `${ui}/modules/local-module/android/build/intermediates/cxx/output.so`);
+    included.push(`${ui}/modules/local-module/android/build.gradle`,
+      `${ui}/modules/local-module/android/src/main/Module.kt`,
       `${ui}/modules/local-module/ios/Module.swift`);
   };
   // Expo generates complete native projects on each target, including in nested
