@@ -347,12 +347,15 @@ export function discussionUnreadMessagesWhere(params: Readonly<{
 }
 
 /** Correlated equivalent of the cursor predicate for demand-bounded attention.
- * m is the message and c is this viewer's LEFT JOINed private read state.
+ * The cheap author predicate precedes cursor demand; own human posts need no
+ * read-state join. m is the message in the calling attention query.
  */
 export function discussionUnreadMessageSql(viewerAccountId: string): Prisma.Sql {
-    return sql.sql`(c.${name('lastReadSeq')} IS NOT NULL AND m.${name('seq')} > c.${name('lastReadSeq')}
-        AND (m.${name('authorAccountId')} <> ${viewerAccountId} OR m.${name('authorAccountId')} IS NULL
-            OR m.${name('producerV1')} IS NOT NULL))`;
+    return sql.sql`((m.${name('authorAccountId')} <> ${viewerAccountId} OR m.${name('authorAccountId')} IS NULL
+            OR m.${name('producerV1')} IS NOT NULL)
+        AND EXISTS (SELECT 1 FROM ${name('DiscussionReadState')} c
+            WHERE c.${name('discussionId')} = m.${name('discussionId')} AND c.${name('accountId')} = ${viewerAccountId}
+                AND c.${name('lastReadSeq')} < m.${name('seq')}))`;
 }
 
 export async function countUnreadMessagesInTx(tx: Tx, params: Readonly<{

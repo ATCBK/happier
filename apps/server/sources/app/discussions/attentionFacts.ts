@@ -47,7 +47,6 @@ export async function readDiscussionAttention(input: Readonly<{
             const position = provider === 'sqlite' && at ? at.getTime() : at;
             const ids: { id: string }[] = await tx.$queryRaw(sql.sql`SELECT m.${name('id')} AS id FROM ${name('DiscussionMessage')} m
                 JOIN ${name('Discussion')} d ON d.${name('id')} = m.${name('discussionId')}
-                LEFT JOIN ${name('DiscussionReadState')} c ON c.${name('discussionId')} = d.${name('id')} AND c.${name('accountId')} = ${input.actorAccountId}
                 WHERE ${discussionCandidateSql(input.actorAccountId)} AND d.${name('archivedAt')} IS NULL
                 AND (${open} OR ${discussionUnreadMessageSql(input.actorAccountId)})
                 ${frontier ? sql.sql`AND (m.${name('createdAt')} < ${position} OR (m.${name('createdAt')} = ${position} AND m.${name('id')} < ${frontier.id}))` : sql.empty}
