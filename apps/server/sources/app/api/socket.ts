@@ -1167,6 +1167,7 @@ export function startSocket(app: Fastify) {
             machineUpdateHandler(userId, socket, {
                 operationSocketBatchLimits: externalSessionOperationSocketBatchLimits,
                 sessionPublisherPresence,
+                resolveCurrentSessionMachine,
                 sessionServerStartIngress: sessionServerStartAutomationIngress,
             });
             externalSessionStatusDemandHandler(userId, socket, { io });

@@ -202,6 +202,7 @@ export function machineUpdateHandler(
             ReturnType<typeof createSessionPublisherPresence>,
             "captureMachineSessionTerminal" | "finalizeMachineSessionTerminal"
         >;
+        resolveCurrentSessionMachine?: (input: Readonly<{ accountId: string; sessionId: string }>) => Promise<string | null>;
         sessionServerStartIngress?: (params: Readonly<{
             accountId: string;
             sourceMachineId: string;
@@ -398,6 +399,7 @@ export function machineUpdateHandler(
                     ? await verifyExternalActionMachineRpcExecution(externalAction, {
                         event, method: event, requestId: externalAction.authorization.binding.requestId,
                         params: unsignedRequest,
+                        resolveCurrentSessionMachine: options.resolveCurrentSessionMachine,
                     }) : null;
                 if (externalAction && (!verifiedInvocation
                     || verifiedInvocation.principal.accountId !== userId
