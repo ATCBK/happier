@@ -45,8 +45,9 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', a
 const { renderHook, standardCleanup, createSessionFixture, createMachineFixture, createDeferred } = await import('@/dev/testkit');
 const { getStorage } = await import('@/sync/domains/state/storage');
 await import('@/sync/syncEngine');
-const { useSessionScmWalkthrough, useScmWalkthroughState } = await import('./useSessionScmWalkthrough');
+const { useSessionScmWalkthrough, useScmWalkthroughState, useScmWalkthroughStates } = await import('./useSessionScmWalkthrough');
 const { useScmDiffSummaryBinding } = await import('../comparison/useScmDiffSummaryBinding');
+const { useWorkspaceScmDiffSummaryBinding } = await import('@/components/projects/scm/useWorkspaceScmDiffSummaryBinding');
 const { useSessionScmDraft } = await import('@/hooks/session/sourceControl/useSessionScmDraft');
 const { useGitPullRequestBodyDraft } = await import('@/components/sessions/panes/git/pullRequest/useGitPullRequestBodyDraft');
 const { useMachinePresenceSummary } = await import('@/components/sessions/model/useMachinePresenceSummary');
@@ -91,6 +92,49 @@ afterEach(async () => {
 });
 
 describe('saved output restoration', () => {
+    it.each([false, true])('shares the workspace binding inventory with its pending proposal projection (older proposal: %s)', async olderProposal => {
+        const original = saved('workspace-reading', { walkthrough: reading }, ['walkthrough']);
+        inventory([original, ...(olderProposal ? [saved('workspace-proposal', { commitPlan: proposal }, ['commitPlan'])] : [])], false);
+        const target = { kind: 'workingTree' as const, comparisonId: comparison.id };
+        const parent = await renderHook(() => {
+            const bound = useWorkspaceScmDiffSummaryBinding({ machineId: 'restore-machine', rootPath: '/repo/exact', serverId,
+                comparison: target, output: 'walkthrough', restoreSelections: [{ comparison: { kind: 'workingTree' }, output: 'commitPlan' }] });
+            const plan = useScmWalkthroughState({ machineId: 'restore-machine', cwd: '/repo/exact' }, { kind: 'workingTree' }, 'commitPlan', serverId, bound.restoration);
+            return { reading: bound.viewModel, plan };
+        });
+        await waitForHomeGovernance(() => expect(parent.getCurrent().plan.restoreState).toBe('ready'));
+        expect(parent.getCurrent().reading?.resultId).toBe(original.resultId);
+        expect(parent.getCurrent().plan.viewModel?.resultId ?? null).toBe(olderProposal ? 'workspace-proposal' : null);
+        expect(boundary.methods.filter(method => method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST)).toHaveLength(1);
+        expect(boundary.reads).toEqual([original.resultId, ...(olderProposal ? ['workspace-proposal'] : [])]);
+    });
+    it('acquires the comparison once for both parent outputs, including known absence and later publication', async () => {
+        const original = saved('shared-reading', { walkthrough: reading }, ['walkthrough']);
+        inventory([original]);
+        const target = { kind: 'workingTree' as const, comparisonId: comparison.id };
+        const parent = await renderHook(() => {
+            const restored = useScmWalkthroughStates({ sessionId }, [
+                { comparison: target, output: 'walkthrough' },
+                { comparison: { kind: 'workingTree' }, output: 'commitPlan' },
+            ], serverId);
+            const child = useScmWalkthroughState({ sessionId }, target, 'walkthrough', serverId, restored.restoration);
+            return { reading: child.viewModel, plan: restored.viewModels[1], restoreState: restored.restoration.restoreState };
+        });
+        await waitForHomeGovernance(() => expect(parent.getCurrent().reading?.resultId).toBe(original.resultId));
+        expect(parent.getCurrent().plan).toBeNull();
+        await waitForHomeGovernance(() => expect(parent.getCurrent().restoreState).toBe('ready'));
+        expect(boundary.methods.filter(method => method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST)).toHaveLength(1);
+        expect(boundary.reads).toEqual([original.resultId]);
+        const { applySavedScmDiffSummaryResult } = await import('@/sync/ops/scmDiffSummary/generate');
+        const updated = ScmDiffSummaryResultSchema.parse({ ...original, revision: 2,
+            output: { ...original.output, revision: 2, requestedOutputs: ['walkthrough', 'commitPlan'],
+                outputs: { walkthrough: reading, commitPlan: proposal } } });
+        await act(async () => { applySavedScmDiffSummaryResult(parent.getCurrent().reading!.requestKey!, updated); });
+        await waitForHomeGovernance(() => expect(parent.getCurrent().plan?.outputs?.commitPlan?.value).toEqual(proposal.value));
+        expect(parent.getCurrent().reading?.outputs?.walkthrough?.value).toEqual(reading.value);
+        expect(boundary.methods.filter(method => method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST)).toHaveLength(1);
+        expect(boundary.reads).toEqual([original.resultId]);
+    });
     it('exposes a failed PR saved-result read with Retry instead of a machine/model prerequisite', async () => {
         await (await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage')).prepareSessionDraftPersistenceStorage();
         boundary.inventory = { success: false, errorCode: 'BACKEND_UNAVAILABLE', error: 'Read unavailable' };
@@ -410,16 +454,26 @@ describe('saved output restoration', () => {
         await hook.rerender('walkthrough');
         await waitForHomeGovernance(() => expect(hook.getCurrent()?.savedResult?.resultId).toBe('reading'));
     });
-    it('keeps the newest proposal and the published reading when both consumers share the store', async () => {
-        inventory([saved('newest-plan', { walkthrough: { state: 'failed', reason: 'Stopped' }, commitPlan: proposal }, ['walkthrough', 'commitPlan']),
+    it.each([false, true])('keeps the newest proposal and the published reading with an exact reading selector (newer comparison: %s)', async newerComparison => {
+        const latest = saved('newest-plan', { walkthrough: { state: 'failed', reason: 'Stopped' }, commitPlan: proposal }, ['walkthrough', 'commitPlan']);
+        const newest = newerComparison ? ScmDiffSummaryResultSchema.parse({ ...latest,
+            output: { ...latest.output, sourceKey: 'newer-comparison',
+                metadata: { ...latest.output.metadata, sourceKey: 'newer-comparison' },
+                comparison: { ...comparison, id: 'newer-comparison' } } }) : latest;
+        inventory([newest,
             saved('older-plan', { walkthrough: reading, commitPlan: proposal }, ['walkthrough', 'commitPlan'])]);
         const target = { kind: 'workingTree' as const, comparisonId: comparison.id };
-        const hook = await renderHook(() => ({
-            plan: useSessionScmWalkthrough(sessionId, target, 'commitPlan', serverId),
-            reading: useSessionScmWalkthrough(sessionId, target, 'walkthrough', serverId),
-        }));
+        const hook = await renderHook(() => {
+            const restored = useScmWalkthroughStates({ sessionId }, [
+                { comparison: target, output: 'walkthrough' },
+                { comparison: { kind: 'workingTree' }, output: 'commitPlan' },
+            ], serverId);
+            return { reading: restored.viewModels[0], plan: restored.viewModels[1] };
+        });
         await waitForHomeGovernance(() => expect(hook.getCurrent().reading?.outputs?.walkthrough?.value).toBeDefined());
         expect(hook.getCurrent().plan?.savedResult?.resultId).toBe('newest-plan');
         expect(hook.getCurrent().reading?.savedResult?.resultId).toBe('older-plan');
+        expect(boundary.methods.filter(method => method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST)).toHaveLength(1);
+        expect(boundary.reads).toEqual(['newest-plan', 'older-plan']);
     });
 });

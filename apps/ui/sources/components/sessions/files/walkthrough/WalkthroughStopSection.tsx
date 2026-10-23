@@ -139,6 +139,7 @@ export const WalkthroughHunkCard = React.memo(function WalkthroughHunkCard(props
                             showPrefix
                             wrapLines={props.phone === true}
                             presentationStyleOverride="unified"
+                            lineInfoSeparators
                             errorFallback={evidence('render_failed')}
                             findActive={find?.active}
                             precomputedLines={find?.active ? findSnapshot?.lines : undefined}

@@ -26,7 +26,7 @@ import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFo
 
 import type { useScmDiffSummaryBinding } from '@/components/sessions/files/comparison/useScmDiffSummaryBinding';
 import { WalkthroughView, type WalkthroughViewLayout } from './WalkthroughView';
-import { buildWalkthroughReading, EMPTY_WALKTHROUGH_READING, type WalkthroughStop } from './walkthroughReading';
+import { buildWalkthroughReading, EMPTY_WALKTHROUGH_READING, type WalkthroughPhase, type WalkthroughStop } from './walkthroughReading';
 import { useScmReviewedMarks } from '../comparison/useScmReviewedMarks';
 import { useWalkthroughSavedActions } from './WalkthroughSavedActions';
 import type { ScmComparisonMenuSection } from '@/components/sessions/files/comparison/ScmComparisonMoreMenu';
@@ -124,7 +124,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         };
     }, [bound.isCurrent, cwd, discussion, onOpenComposer, props.sessionId, props.onAskStop, scope?.serverId, scope?.accountId, viewModel?.savedResult]);
     const saved = viewModel?.savedResult;
-    const updateWitnessed = useWitnessedUpdateNotice(saved);
+    const updateWitnessed = useWitnessedUpdateNotice(saved, reading?.phase ?? 'none');
     const nativeTurns = !sessionId ? viewModel?.latestRun?.inputTurns : null;
     const nativeTerminalTurn = nativeTurns?.current?.state === 'completed' ? nativeTurns.current
         : nativeTurns?.last?.state === 'completed' ? nativeTurns.last : null;
@@ -225,10 +225,11 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     // Agent beside its mark ("Codex read all 2"), and only then the generic "The model".
     const producerModelId = viewModel?.producer?.modelId
         ?? (viewModel?.producer?.kind !== 'review' ? saved?.generator?.modelId : undefined);
+    const producerSelection = viewModel?.latestRun?.resolvedSelection ?? saved?.generator;
     const producerLabel = React.useMemo(() => {
-        if (producerModelId) return resolveRunNativeModelLabel(producerTarget)(producerModelId) ?? producerModelId;
+        if (producerModelId) return resolveRunNativeModelLabel(producerTarget, modelChoices.catalogProfiles, producerSelection)(producerModelId) ?? producerModelId;
         try { return resolveExecutionRunBackendLabel(producerTarget); } catch { return null; }
-    }, [producerModelId, producerTarget]);
+    }, [producerModelId, producerTarget, producerSelection, modelChoices.catalogProfiles]);
     const marksAvailable = capturedComparison !== null && marks.record !== null && marks.unavailableReason === null;
     const setReviewed = marks.setReviewed;
     const onToggleReviewed = React.useMemo(() => (marksAvailable
@@ -328,10 +329,19 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
  * "Saved result updated · Undo" confirms an update this view saw arrive (a merge, an edit, a regeneration).
  * A notice already on the result when the view first showed it is history: the stops' own changed marks
  * carry it, and Undo stays in the comparison menu, so the band doesn't sit on the page indefinitely.
+ * Revisions that land while the first reading is still being written (the inventory, then its prose arriving)
+ * are that reading arriving, not an update to one the person was already reading, so they move the baseline.
  */
-function useWitnessedUpdateNotice(saved: Readonly<{ resultId: string; revision: number; updateNotice?: Readonly<{ revision: number }> }> | null | undefined): boolean {
-    const [baseline, setBaseline] = React.useState<Readonly<{ resultId: string; revision: number }> | null>(null);
-    const current = saved ? (baseline?.resultId === saved.resultId ? baseline : { resultId: saved.resultId, revision: saved.revision }) : baseline;
+function useWitnessedUpdateNotice(
+    saved: Readonly<{ resultId: string; revision: number; updateNotice?: Readonly<{ revision: number }> }> | null | undefined,
+    phase: WalkthroughPhase,
+): boolean {
+    const [baseline, setBaseline] = React.useState<Readonly<{ resultId: string; revision: number; readable: boolean }> | null>(null);
+    const readable = phase !== 'none' && phase !== 'inventory' && phase !== 'arriving';
+    const current = !saved ? baseline
+        : baseline?.resultId !== saved.resultId || (!baseline.readable && (saved.revision > baseline.revision || readable))
+            ? { resultId: saved.resultId, revision: saved.revision, readable }
+            : baseline;
     if (current !== baseline) setBaseline(current);
     return Boolean(saved?.updateNotice && current && saved.updateNotice.revision > current.revision);
 }

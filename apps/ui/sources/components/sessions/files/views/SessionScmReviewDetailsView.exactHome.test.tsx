@@ -2,13 +2,20 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { invokeTestInstanceHandler, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, invokeTestInstanceHandler, standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from './sessionFilesViewTestkit';
 
 installSessionFilesViewBoundaries();
 let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 beforeAll(prepareSessionFilesViewTestkit);
-afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
+afterEach(async () => {
+    standardCleanup();
+    if (fixture) {
+        const { retireScmDiffSummaryScope } = await import('@/sync/ops/scmDiffSummary/generate');
+        retireScmDiffSummaryScope({ serverId: fixture.home.id, accountId: 'alice' });
+    }
+    await fixture?.dispose();
+});
 
 function snapshotWithFile(path: string) {
     return fileViewSnapshot({ rootPath: '/tmp/repo', entries: [{
@@ -19,6 +26,37 @@ function snapshotWithFile(path: string) {
 }
 
 describe('SessionScmReviewDetailsView (exact Home)', () => {
+    it('keeps a restored pending comparison count before the live checkout snapshot arrives', async () => {
+        const pendingSnapshots: Array<() => void> = [];
+        fixture = await createSessionFilesViewFixture({ rootPath: '/tmp/repo', rpc: request =>
+            request.method === 'scm.status.snapshot' ? new Promise(resolve => pendingSnapshots.push(() =>
+                resolve({ success: true, snapshot: fileViewSnapshot({ rootPath: '/tmp/repo' }) }))) : undefined });
+        const { ScmDiffSummaryResultSchema } = await import('@happier-dev/protocol/scm');
+        const { loadSavedScmDiffSummaryResult } = await import('@/sync/ops/scmDiffSummary/generate');
+        const result = ScmDiffSummaryResultSchema.parse({ resultId: 'restored-pending-count', revision: 0, canUndo: false,
+            output: { success: true, resultId: 'restored-pending-count', revision: 0, sourceKey: 'saved-pending-count',
+                metadata: { sourceKey: 'saved-pending-count', source: { kind: 'workingTree' } }, requestedOutputs: ['walkthrough'],
+                comparison: { id: 'saved-pending-count', source: { kind: 'workingTree' }, repository: { rootPath: '/tmp/repo' }, endpoints: {},
+                    inventory: { state: 'complete', reasons: [], files: [{ path: 'src/saved.ts', changeKind: 'modified',
+                        binary: false, generated: false, lockfile: false, evidence: { state: 'available', unifiedDiff: '' }, occurrences: [] }] } },
+                outputs: { walkthrough: { state: 'pending' } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
+        loadSavedScmDiffSummaryResult({ sessionId: 's1', scope: { serverId: fixture.home.id, accountId: 'alice' }, result, savedAtMs: 1 });
+        const { SessionScmReviewDetailsView } = await import('./SessionScmReviewDetailsView');
+        const { ScmComparisonScopePicker } = await import('@/components/sessions/files/comparison/ScmComparisonScopePicker');
+        const screen = await fixture.render(<SessionScmReviewDetailsView sessionId="s1" serverId={fixture.home.id}
+            scopeId="session:s1" target={{ comparison: { kind: 'workingTree' }, view: 'walkthrough' }} />);
+        try {
+            expect(screen.findByType(ScmComparisonScopePicker).props.fileCount).toBe(1);
+            expect(screen.findByType(ScmComparisonScopePicker).props.options.find((option: { sourceKind: string }) => option.sourceKind === 'workingTree').fileCount).toBe(1);
+        } finally {
+            await act(async () => {
+                for (const complete of pendingSnapshots) complete();
+                await flushHookEffects();
+            });
+        }
+    });
+
     it('promotes a pending file from a historical Walkthrough to working-tree Files through the same focus owner', async () => {
         const snapshot = snapshotWithFile('src/pending.ts');
         fixture = await createSessionFilesViewFixture({ rootPath: '/tmp/repo', rpc: request =>

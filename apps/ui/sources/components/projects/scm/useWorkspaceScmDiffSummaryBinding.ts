@@ -6,11 +6,14 @@ import { useMachinePresenceSummary } from '@/components/sessions/model/useMachin
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useExecutionRunsBackendsForMachine } from '@/hooks/server/useExecutionRunsBackendsForSession';
 import { resolveExecutionRunAvailableBackends } from '@/sync/domains/executionRuns/resolveExecutionRunAvailableBackends';
+import type { ScmWalkthroughRestoration, ScmWalkthroughSelection } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 
 /** Exact Machine/checkout adapter. No Session is needed or manufactured. */
 export function useWorkspaceScmDiffSummaryBinding(params: Readonly<{
     machineId: string; rootPath: string; serverId: string;
     comparison: SessionScmReviewComparison | null; output: ScmDiffSummaryOutputKind;
+    restoration?: ScmWalkthroughRestoration;
+    restoreSelections?: readonly ScmWalkthroughSelection[];
 }>): ReturnType<typeof useScmDiffSummaryBinding> {
     const owner = useMachinePresenceSummary(params.serverId, params.machineId);
     const machineReachable = owner.reachability === 'reachable';
@@ -24,5 +27,6 @@ export function useWorkspaceScmDiffSummaryBinding(params: Readonly<{
         && resolveExecutionRunAvailableBackends(backends, 'scm_diff_summary').length > 0 }), [enabled, machineReachable, backends]);
     const comparison = params.comparison?.kind === 'session' || params.comparison?.kind === 'turnCheckpoint' ? null : params.comparison;
     return useScmDiffSummaryBinding({ host: { machineId: params.machineId }, serverId: params.serverId, machine,
-        machineReachable, canControl: machineReachable, canSend: machineReachable, launch, comparison, output: params.output });
+        machineReachable, canControl: machineReachable, canSend: machineReachable, launch, comparison, output: params.output,
+        restoration: params.restoration, restoreSelections: params.restoreSelections });
 }

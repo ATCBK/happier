@@ -4,7 +4,7 @@ import type { ScmDiffSummaryOutputKind } from '@happier-dev/protocol';
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import { getStorage, useSetting } from '@/sync/domains/state/storage';
-import { useScmWalkthroughState } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
+import { useScmWalkthroughStates, type ScmWalkthroughRestoration, type ScmWalkthroughSelection } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 import { resolveScmDiffSummaryModelSelection, SCM_DIFF_SUMMARY_SETTING_KEYS } from '@/settings/scmDiffSummary/settings';
 import { scmComparisonSourceOf } from '@/sync/domains/scm/diffSummary/selection';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -41,6 +41,8 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     /** Null while the view is not mounted in front; nothing is read or restored then. */
     comparison: SessionScmReviewComparison | null;
     output: ScmDiffSummaryOutputKind;
+    restoration?: ScmWalkthroughRestoration;
+    restoreSelections?: readonly ScmWalkthroughSelection[];
 }>) {
     const { host, serverId, comparison, output, machine, machineReachable, launch } = params;
     const sessionId = 'sessionId' in host ? host.sessionId : null;
@@ -75,7 +77,15 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         if (!sessionId && isCurrent()) setInputObservation({ hostKey, ...observation });
     }, [sessionId, isCurrent, hostKey]);
     React.useEffect(() => { setStarting(false); setError(null); }, [hostKey]);
-    const { viewModel, restoreState, retryRestore, machineReachability } = useScmWalkthroughState(sessionId ? { sessionId } : { machineId: host.machineId!, cwd: machine?.basePath ?? '' }, comparison, output, serverId);
+    const { viewModels, restoration } = useScmWalkthroughStates(sessionId ? { sessionId } : { machineId: host.machineId!, cwd: machine?.basePath ?? '' }, [
+        { comparison, output },
+        // Proposing can extend a saved reading even when it has no commitPlan yet.
+        { comparison: output === 'commitPlan' ? comparison : null, output: 'walkthrough' },
+        ...(params.restoreSelections ?? []),
+    ], serverId, params.restoration);
+    const viewModel = viewModels[0] ?? null;
+    const { retryRestore, machineReachability } = restoration;
+    const restoreState = !comparison ? 'idle' : viewModel ? 'ready' : restoration.restoreState;
     const capturedComparison = viewModel?.comparison ?? null;
     const cwd = capturedComparison?.repository.rootPath ?? machine?.basePath ?? null;
     const operations = React.useMemo(() => scope ? createScmDiffSummaryResultOperations({ ...host,
@@ -151,14 +161,14 @@ export function useScmDiffSummaryBinding(params: Readonly<{
         const current = () => isCurrent() && !abort.signal.aborted;
         let pending = false;
         let invalidated = false;
-        const refresh = async () => {
+        const refresh = async (readSaved = true) => {
             if (!current()) return;
             if (pending) { invalidated = true; return; }
             pending = true;
             try {
                 let currentRunId = runId;
                 let observation = viewModel;
-                if (resultId && current()) {
+                if (readSaved && resultId && current()) {
                     const saved = await operations.read({ cwd, resultId });
                     if (saved.success && current()) {
                         applySavedScmDiffSummaryResult(key, saved.result);
@@ -191,7 +201,9 @@ export function useScmDiffSummaryBinding(params: Readonly<{
                 if (invalidated && current()) { invalidated = false; void refresh(); }
             }
         };
-        void refresh();
+        // Restoration owns the initial full-result read, including revalidation on remount/reconnect.
+        // Run observation consumes that admitted record; subsequent activity rereads its current revision.
+        void refresh(false);
         // A newly seeded discussion can bind its Run after admission; reread the canonical
         // saved linkage on Session activity too, rather than filtering out that new Run.
         const unsubscribe = sessionId ? subscribeExecutionRunActivity({ sessionId, serverId: scope.serverId }, () => { void refresh(); }) : () => {};
@@ -201,7 +213,7 @@ export function useScmDiffSummaryBinding(params: Readonly<{
     return {
         host, serverId, comparison,
         binding, isCurrent, scope, machine, machineReachable, canControl, canSend, launch, viewModel, capturedComparison, cwd, operations,
-        restoreState, retryRestore, machineReachability,
+        restoreState, retryRestore, machineReachability, restoration,
         admission: viewModel?.admission ?? null, checkAdmission, cancelGeneration,
         error, setError,
         /** The typed refusal or failure of the comparison's generation; never its diagnostic code or message. */

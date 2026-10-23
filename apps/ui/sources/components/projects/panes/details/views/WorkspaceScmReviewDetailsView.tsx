@@ -134,8 +134,10 @@ export const WorkspaceScmReviewDetailsView = React.memo((props: WorkspaceScmRevi
 });
 
 function MachineBoundWorkspaceReview(props: WorkspaceScmReviewDetailsViewProps) {
+    const comparison: SessionScmReviewComparison = props.comparison ?? { kind: 'workingTree' };
     const bound = useWorkspaceScmDiffSummaryBinding({ machineId: props.machineId, rootPath: props.rootPath,
-        serverId: props.serverId, comparison: props.comparison ?? { kind: 'workingTree' }, output: 'walkthrough' });
+        serverId: props.serverId, comparison, output: 'walkthrough',
+        restoreSelections: [{ comparison: comparison.kind === 'workingTree' ? comparison : null, output: 'commitPlan' }] });
     return <WorkspaceReviewBody {...props} bound={bound} host={{ machineId: props.machineId }} />;
 }
 
@@ -285,7 +287,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
     const reviewDisabled = !bound.scope || !bound.machine || !bound.canControl
         || ((comparison.kind === 'session' || comparison.kind === 'turnCheckpoint') && !props.host.sessionId);
     const commitPlan = useScmWalkthrough(props.host.sessionId ? { sessionId: props.host.sessionId }
-        : { machineId: props.machineId, cwd: props.rootPath }, pendingComparison ? comparison : null, 'commitPlan', props.serverId);
+        : { machineId: props.machineId, cwd: props.rootPath }, pendingComparison ? comparison : null, 'commitPlan', props.serverId, bound.restoration);
     const startedReviewRunIds = Array.isArray(persistedReviewTabState?.reviewRunIds)
         ? persistedReviewTabState.reviewRunIds.filter((id): id is string => typeof id === 'string') : null;
     const startReview = () => {
@@ -433,6 +435,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                 onProposeCommits={pendingComparison ? () => selectTarget({ view: 'commits' }) : undefined}
                 proposeCommits={pendingComparison && view !== 'commits' && !commitPlan?.outputs?.commitPlan ? <ScmComparisonProposeCommits onPress={() => selectTarget({ view: 'commits' })} /> : undefined}
                 renderCommits={({ layout, renderBar }) => <WorkspaceCommitsView scope={scope}
+                    {...bound.restoration}
                     comparison={comparison} branch={snapshot?.branch.detached ? null : snapshot?.branch.head ?? null} layout={layout === 'phone' ? 'phone' : 'wide'}
                     active={presented} renderBar={() => renderBar()} onShowInGit={props.onShowInGit} />}
                 filesState={comparison.kind === 'workingTree' && !comparison.comparisonId

@@ -9,7 +9,7 @@ import { WorkspaceScmReviewBody } from '@/components/projects/scm/WorkspaceScmRe
 import { listFilesComparisonScopeOptions, resolveFilesComparisonLabel } from '@/components/sessions/files/comparison/filesComparison';
 import { useScmReviewActiveFileSelection, useSessionScmReviewTabState } from '@/components/sessions/files/comparison/useSessionScmReviewTabState';
 import { SessionWalkthroughView } from '@/components/sessions/files/walkthrough/SessionWalkthroughView';
-import { useSessionScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
+import { useScmWalkthroughState } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { useScmReviewedMarks } from '@/components/sessions/files/comparison/useScmReviewedMarks';
 import { presentStartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
@@ -23,6 +23,7 @@ import { useSessionMachineReachability } from '@/components/sessions/model/useSe
 import { t } from '@/text';
 import { activeReviewFileKeyForSession } from '@/components/workspaces/scm/review/activeReviewFile';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
 
 const NO_LOCAL_SCOPES = { showTurnViewToggle: false, showTurnAgentReportedViewToggle: false, showTurnCheckpointViewToggle: false, showSessionViewToggle: false };
 
@@ -40,7 +41,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
     const { machineReachable } = useSessionMachineReachability(props.sessionId, props.serverId);
     const reviewDisabledReason = machineReachable ? null : t('walkthrough.notice.offlineA11y');
     const view = props.target?.view === 'walkthrough' ? 'walkthrough' : 'files';
-    const walkthrough = useSessionScmWalkthrough(props.sessionId, props.comparison, 'walkthrough', props.serverId);
+    const { viewModel: walkthrough, ...restoration } = useScmWalkthroughState({ sessionId: props.sessionId }, props.comparison, 'walkthrough', props.serverId);
     const captured = useSessionCapturedScmComparison({ sessionId: props.sessionId, serverId: props.serverId,
         comparison: props.comparison, active: props.active !== false,
         knownComparison: view === 'walkthrough' || props.comparison.comparisonId ? walkthrough?.comparison : null });
@@ -87,10 +88,14 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
         onSelectComparison={selectComparison} onSelectView={selectView} onClose={props.onRequestClose ?? pane.closeDetails}
         fileCount={fileCount} rootPath={captured.comparison?.repository.rootPath}
         changeCount={captured.comparison?.inventory.files.reduce((sum, file) => sum + file.occurrences.length, 0)}
-        reading={reading} modelLabel={walkthrough?.producer?.modelId} marksAvailable={marksAvailable}
+        reading={reading} modelLabel={walkthrough?.producer?.modelId ? resolveRunNativeModelLabel(
+            walkthrough.latestRun?.backendTarget ?? walkthrough.savedResult?.generator?.backendTarget,
+            undefined, walkthrough.latestRun?.resolvedSelection ?? walkthrough.savedResult?.generator,
+        )(walkthrough.producer.modelId) ?? walkthrough.producer.modelId : undefined} marksAvailable={marksAvailable}
         explain={explain} onExplainChange={setExplain}
         onStartReview={openReview} reviewDisabled={!captured.comparison || !machineReachable} reviewDisabledReason={reviewDisabledReason}
         renderWalkthrough={({ layout, renderBar, onShowFiles }) => <SessionWalkthroughView sessionId={props.sessionId}
+            {...restoration}
             serverId={props.serverId} comparison={comparison} scopeLabel={scopeLabel} layout={layout} active={props.active !== false}
             startedReviewRunIds={startedReviewRunIds}
             renderBar={renderBar} onShowFiles={onShowFiles} onOpenFile={onShowFiles} onOpenComposer={goToComposer} />}

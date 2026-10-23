@@ -214,7 +214,7 @@ export function useScmCommitPlan(params: Readonly<{
     const walkthroughHost = bound.host.sessionId !== undefined ? { sessionId: bound.host.sessionId }
         : { machineId: bound.host.machineId, cwd: bound.machine?.basePath ?? '' };
     const walkthrough = useScmWalkthrough(walkthroughHost,
-        supportedComparison && !planOutput ? bound.comparison : null, 'walkthrough', bound.serverId);
+        supportedComparison && !planOutput ? bound.comparison : null, 'walkthrough', bound.serverId, bound.restoration);
     const walkthroughSaved = walkthrough?.savedResult ?? null;
     const walkthroughKey = walkthrough?.requestKey ?? null;
     const addToSaved = React.useMemo(() => (walkthroughSaved && walkthroughKey && cwd && operations && !planOutput

@@ -14,6 +14,8 @@ const boundary = vi.hoisted(() => ({
     capabilities: async (): Promise<unknown> => ({ protocolVersion: 1, results: {} }),
     /** The executing Machine's Summary model catalog, served as its exact-Machine Action over Home HTTP. */
     catalog: null as ((url: URL, init?: RequestInit) => Promise<Response | null>) | null,
+    discoveredModels: [] as import('@happier-dev/protocol/models/descriptor').ProviderModelDescriptorV1[],
+    modelCatalogReads: 0,
     savedResult: null as import('@happier-dev/protocol/scm').ScmDiffSummaryResult | null,
     savedSessionId: '',
     listBarrier: null as (() => Promise<void>) | null,
@@ -178,6 +180,12 @@ const { ScmWalkthroughView } = await import('./ScmWalkthroughView');
 const { WalkthroughStopSection } = await import('./WalkthroughStopSection');
 const { getSessionComposerDraftSnapshot, getSessionDraftSnapshot, writeExistingSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
 const { useWorkspaceScmDiffSummaryBinding } = await import('@/components/projects/scm/useWorkspaceScmDiffSummaryBinding');
+const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+const { createSessionPaneScopeId } = await import('@/components/sessions/panes/sessionPaneScopeId');
+const { useReviewComposerHandoff } = await import('@/components/sessions/reviews/comments/useReviewComposerHandoff');
+const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+const { useSessionRecipientState } = await import('@/components/sessions/agentInput/routing/useSessionRecipientState');
+const { useSessionAgentInputRoutingControls } = await import('@/components/sessions/agentInput/routing/useSessionAgentInputRoutingControls');
 const initialStorage = getStorage().getState();
 const initialAppliedHome = getAppliedActiveServerSnapshot();
 const initialRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
@@ -203,6 +211,8 @@ afterEach(async () => {
     boundary.accountRoute = null;
     boundary.generate = null;
     boundary.catalog = null;
+    boundary.discoveredModels = [];
+    boundary.modelCatalogReads = 0;
     boundary.router?.spies.push.mockClear();
     await servedHome?.dispose();
     servedHome = null;
@@ -218,7 +228,8 @@ async function createHome(serverUrl: string, settings?: Readonly<Record<string, 
             accountId: 'walkthrough-account', machineId: catalogMachineId, automaticTarget,
             targets: (['codex', 'claude'] as const).map(agentId => ({ backendTarget: { kind: 'backend' as const, backendId: agentId },
                 // The Machine's catalog owns cost tiers; its first model is the low-cost automatic default.
-                models: getAgentStaticModels(agentId).map((model, index) => index === 0 ? { ...model, costTier: 'low' as const } : model),
+                models: [...getAgentStaticModels(agentId).map((model, index) => index === 0 ? { ...model, costTier: 'low' as const } : model),
+                    ...(agentId === 'codex' ? boundary.discoveredModels : [])],
                 catalogModels: getAgentStaticModels(agentId, { catalogOnly: true }),
                 agentFormats: getAgentCore(agentId)?.structuredOutput?.formats })) })).handle;
     }
@@ -229,6 +240,7 @@ async function createHome(serverUrl: string, settings?: Readonly<Record<string, 
                 features: { execution: { runs: { enabled: true } }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
                 capabilities: {},
             }));
+            if (request.path === '/v1/actions/agents.models.list') boundary.modelCatalogReads++;
             const catalog = await boundary.catalog?.(request.url, { method: request.method,
                 ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) });
             return catalog ?? await boundary.accountRoute?.(request);
@@ -269,7 +281,8 @@ function generationCalls() {
     return boundary.calls.filter((call) => call.method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE);
 }
 
-async function mountWithAccountMarks(sessionId: string, suggestedQuestions?: string[]) {
+async function mountWithAccountMarks(sessionId: string, suggestedQuestions?: string[],
+    renderDestination?: Parameters<typeof mount>[6]) {
     const before = 'a'.repeat(40);
     const after = 'b'.repeat(40);
     const comparison = { id: buildScmComparisonIdentity({ source: { kind: 'workingTree' }, repositoryRootPath: '/repo/exact',
@@ -310,7 +323,7 @@ async function mountWithAccountMarks(sessionId: string, suggestedQuestions?: str
         }
         return undefined;
     };
-    const mounted = await mount({ kind: 'workingTree' }, sessionId, '', undefined, true);
+    const mounted = await mount({ kind: 'workingTree' }, sessionId, '', undefined, true, undefined, renderDestination);
     await vi.waitFor(() => {
         const button = mounted.screen.findByTestId('walkthrough-mark-retained');
         expect(button).toBeTruthy();
@@ -327,7 +340,29 @@ async function mountWithAccountMarks(sessionId: string, suggestedQuestions?: str
 }
 
 describe('SessionWalkthroughView retained offline reading through real Account marks', () => {
-    it('prepares a suggested question in the existing Ask composer without discarding its draft', async () => {
+    it('names the saved producer from the same Machine catalog as the picker without another acquisition', async () => {
+        boundary.discoveredModels = [{ id: 'gpt-6-luna', name: 'GPT-6-Luna', capabilities: { structuredOutput: 'supported' } }];
+        const comparison = { id: 'label-comparison', source: { kind: 'workingTree' }, repository: { rootPath: '/repo/exact' },
+            endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } };
+        boundary.savedSessionId = 'producer-catalog-label';
+        boundary.savedResult = ScmDiffSummaryResultSchema.parse({ resultId: 'producer-label-result', revision: 1, canUndo: false,
+            generator: { backendTarget: { kind: 'backend', backendId: 'codex' }, modelId: 'gpt-6-luna' },
+            output: { success: true, resultId: 'producer-label-result', revision: 1, sourceKey: comparison.id, comparison,
+                producer: { kind: 'generation', modelId: 'gpt-6-luna' },
+                metadata: { sourceKey: comparison.id, source: comparison.source }, requestedOutputs: ['walkthrough'],
+                outputs: { walkthrough: { state: 'complete', value: { title: 'Retained reading', intro: '', stops: [], otherChangeRefs: [] } } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
+        const { screen } = await mount({ kind: 'workingTree' }, 'producer-catalog-label');
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('GPT-6-Luna'));
+        expect(screen.getTextContent()).not.toContain('gpt-6-luna');
+        expect(boundary.modelCatalogReads).toBe(1);
+        expect(generationCalls()).toEqual([]);
+    }, 120_000);
+    it.each([
+        { name: 'an empty Ask', initialText: '', suggested: false },
+        { name: 'Ask with an existing draft', initialText: 'My pending question', suggested: false },
+        { name: 'a suggested question', initialText: 'My pending question', suggested: true },
+    ])('hands $name from full-page reading to the remounted composer with its exact stop and recipient', async ({ initialText, suggested }) => {
         boundary.runResponse = ExecutionRunGetResponseSchema.parse({ run: {
             runId: 'question-generator', callId: 'question-call', sidechainId: 'question-sidechain', intent: 'scm_diff_summary',
             backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'read_only', retentionPolicy: 'resumable',
@@ -336,16 +371,59 @@ describe('SessionWalkthroughView retained offline reading through real Account m
         } });
         const question = 'Why keep the saved code after refresh?';
         const sessionId = 'question-composer';
-        const { screen, home } = await mountWithAccountMarks(sessionId, [question]);
+        const composer: {
+            recipient: ReturnType<typeof useSessionRecipientState> | null;
+            controls: ReturnType<typeof useSessionAgentInputRoutingControls> | null;
+        } = { recipient: null, controls: null };
+        let destinationHref = '';
+        function Composer(props: React.ComponentProps<typeof SessionWalkthroughView>) {
+            const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+            const recipient = useSessionRecipientState({ targets: [], autoRecipient: null, accountLifetime: binding,
+                draftPersistence: { sessionId: props.sessionId, surface: 'mainComposer' } });
+            composer.recipient = recipient;
+            composer.controls = useSessionAgentInputRoutingControls({ isReadOnly: false, participantTargets: [], recipientState: recipient });
+            return null;
+        }
+        function Reading(props: React.ComponentProps<typeof SessionWalkthroughView>) {
+            const handoff = useReviewComposerHandoff(createSessionPaneScopeId(props.sessionId, props.serverId, 'reading-destination'));
+            return <SessionWalkthroughView {...props} onOpenComposer={handoff} />;
+        }
+        function Destination(props: React.ComponentProps<typeof SessionWalkthroughView>) {
+            const [href, setHref] = React.useState(`/session/${props.sessionId}/details?serverId=${props.serverId}&details=scmReview&view=walkthrough`);
+            destinationHref = href;
+            const url = new URL(href, 'https://happier.test');
+            const reading = url.pathname.endsWith('/details');
+            const open = (next: unknown) => {
+                if (typeof next !== 'string') throw new Error('Expected a qualified Session route');
+                setHref(next);
+            };
+            return <DestinationInstanceHost tabId="reading-destination" ref={{ kind: reading ? 'sessionDetails' : 'session',
+                params: { id: props.sessionId, ...Object.fromEntries(url.searchParams) } }} pathname={url.pathname}
+                focused visible navigation={{ push: open, replace: open, back: () => {} }}>
+                {reading ? <Reading {...props} /> : <Composer {...props} />}
+            </DestinationInstanceHost>;
+        }
+        const { screen, home } = await mountWithAccountMarks(sessionId, [question], props => <Destination {...props} />);
         await vi.waitFor(() => expect(screen.findByTestId('walkthrough-ask-retained')).toBeTruthy());
         const scope = { serverId: home.id, accountId: 'walkthrough-account' };
         const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
         await prepareSessionDraftPersistenceStorage();
-        writeExistingSessionDraft({ scope, sessionId, patch: { text: 'My pending question' } });
-        const section = screen.findByType(WalkthroughStopSection);
-        await act(async () => section.props.onAsk(section.props.stop, question));
+        if (initialText) writeExistingSessionDraft({ scope, sessionId, patch: { text: initialText } });
+        if (suggested) {
+            const section = screen.findByType(WalkthroughStopSection);
+            await act(async () => section.props.onAsk(section.props.stop, question));
+        } else await screen.pressByTestIdAsync('walkthrough-ask-retained');
+        await vi.waitFor(() => {
+            expect(new URL(destinationHref, 'https://happier.test').pathname).toBe(`/session/${sessionId}`);
+            expect(composer.recipient?.recipient).toEqual({ kind: 'execution_run', runId: 'question-generator' });
+            expect(composer.recipient?.scmDiffSummaryDiscussion).toEqual({ cwd: '/repo/exact', resultId: `result:${sessionId}`,
+                expectedRevision: 1, stopIds: ['retained'] });
+            expect(composer.controls?.extraActionChips?.find(chip => chip.controlId === 'recipient')?.collapsedOptionsPopover?.label)
+                .toBe('To: Walkthrough');
+        });
+        expect(new URL(destinationHref, 'https://happier.test').searchParams.get('serverId')).toBe(home.id);
         const draft = getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId });
-        expect(draft?.composer.text.value).toBe(`My pending question\n\n${question}`);
+        expect(draft?.composer.text.value).toBe(suggested ? `${initialText}\n\n${question}` : initialText);
         const target = getSessionDraftSnapshot(scope, { kind: 'session', sessionId })?.document.target;
         expect(target?.kind === 'session' && target.routing.recipient?.value).toMatchObject({ mode: 'scm_diff_summary',
             recipient: { kind: 'execution_run', runId: 'question-generator' },
@@ -920,22 +998,37 @@ describe('SessionWalkthroughView START through real generation and model owners'
         const rendered = screen.getTextContent();
         expect(rendered).toContain('Published reading');
         expect(rendered).toContain('Prose published after the Run was bound.');
-        expect(screen.findByTestId('walkthrough-undo')).not.toBeNull();
+        // The first reading arriving is not an update to one the person was reading: no "Saved result updated" band.
+        expect(screen.findByTestId('walkthrough-notice-update')).toBeNull();
+        expect(screen.findByTestId('walkthrough-undo')).toBeNull();
+        const published = boundary.savedResult!;
+        boundary.savedResult = ScmDiffSummaryResultSchema.parse({ ...published, revision: 2, canUndo: true,
+            updateNotice: { kind: 'generation', revision: 2, affectedStopIds: [] },
+            output: { ...published.output, revision: 2, outputs: { walkthrough: { state: 'complete', value: {
+                title: 'Refined reading', intro: 'Prose published after the Run was bound.', stops: [], otherChangeRefs: [],
+            } } } } });
+        boundary.runResponse = ExecutionRunGetResponseSchema.parse({ ...boundary.runResponse,
+            structuredMeta: { kind: 'scm_diff_summary.v1', payload: boundary.savedResult.output } });
+        await act(async () => notifyExecutionRunActivity({ serverId: home.id, sessionId: 'late-bound-run' }, { runId: 'newly-bound-run' }));
+        await vi.waitFor(() => expect(projection()?.savedResult?.revision).toBe(2));
+        // An update to the reading on the page is confirmed with its Undo.
+        await vi.waitFor(() => expect(screen.findByTestId('walkthrough-undo')).not.toBeNull());
+        expect(screen.getTextContent()).toContain('Refined reading');
         const current = boundary.savedResult!;
-        boundary.savedResult = ScmDiffSummaryResultSchema.parse({ ...current, revision: 2, canUndo: false,
-            updateNotice: { kind: 'undo', revision: 2, affectedStopIds: [] },
-            output: { ...current.output, revision: 2, outputs: { walkthrough: { state: 'complete', value: {
+        boundary.savedResult = ScmDiffSummaryResultSchema.parse({ ...current, revision: 3, canUndo: false,
+            updateNotice: { kind: 'undo', revision: 3, affectedStopIds: [] },
+            output: { ...current.output, revision: 3, outputs: { walkthrough: { state: 'complete', value: {
                 title: 'Earlier reading', intro: '', stops: [], otherChangeRefs: [],
             } } } } });
         await screen.pressByTestIdAsync('walkthrough-undo');
-        await vi.waitFor(() => expect(projection()?.savedResult?.revision).toBe(2));
+        await vi.waitFor(() => expect(projection()?.savedResult?.revision).toBe(3));
         expect(screen.getTextContent()).toContain('Earlier reading');
         expect(screen.findByTestId('walkthrough-undo')).toBeNull();
         // With nothing left to undo the band has nothing to offer; the reading's own provenance marks carry the history.
         expect(screen.findByTestId('walkthrough-notice-update')).toBeNull();
         expect([...boundary.calls, ...boundary.sessionCalls]).toEqual(expect.arrayContaining([expect.objectContaining({
             method: RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_UNDO,
-            payload: { cwd: '/repo/exact', resultId: 'pending-result', expectedRevision: 1 },
+            payload: { cwd: '/repo/exact', resultId: 'pending-result', expectedRevision: 2 },
         })]));
         expect(boundary.sessionCalls).toEqual(expect.arrayContaining([expect.objectContaining({ sessionId: 'late-bound-run',
             method: SESSION_RPC_METHODS.EXECUTION_RUN_GET, payload: { runId: 'newly-bound-run', includeStructured: true },

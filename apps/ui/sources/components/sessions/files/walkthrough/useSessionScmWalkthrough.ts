@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { ScmDiffSummaryOutputKind, ScmDiffSummaryResult } from '@happier-dev/protocol/scm';
+import type { ScmDiffSummaryOutputKind } from '@happier-dev/protocol/scm';
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 import type { ScmDiffSummaryEntry, ScmDiffSummaryViewModel, ScmDiffSummaryRestoreState } from '@/sync/domains/scm/diffSummary/state';
@@ -30,8 +30,31 @@ export function useSessionScmWalkthrough(sessionId: string, comparison: SessionS
     return useScmWalkthrough({ sessionId }, comparison, output, serverId);
 }
 
+type ScmWalkthroughHost = Readonly<{ sessionId: string }> | Readonly<{ machineId: string; cwd: string }>;
+export type ScmWalkthroughSelection = Readonly<{ comparison: SessionScmReviewComparison | null; output: ScmDiffSummaryOutputKind }>;
+export type ScmWalkthroughRestoration = Readonly<{
+    restoreState: ScmDiffSummaryRestoreState;
+    retryRestore: () => void;
+    machineReachability: ReturnType<typeof useMachinePresenceSummary>['reachability'];
+}>;
+/** Primitive props keep the memoized view adapters stable when the parent renders unrelated changes. */
+export type ScmWalkthroughRestorationProps = ScmWalkthroughRestoration | Readonly<{
+    restoreState?: never;
+    retryRestore?: never;
+    machineReachability?: never;
+}>;
+
 export function useScmWalkthroughState(host: Readonly<{ sessionId: string }> | Readonly<{ machineId: string; cwd: string }>,
-    comparison: SessionScmReviewComparison | null, output: ScmDiffSummaryOutputKind = 'walkthrough', serverId?: string | null) {
+    comparison: SessionScmReviewComparison | null, output: ScmDiffSummaryOutputKind = 'walkthrough', serverId?: string | null,
+    restoration?: ScmWalkthroughRestoration) {
+    const { viewModels, restoration: restored } = useScmWalkthroughStates(host, [{ comparison, output }], serverId, restoration);
+    const viewModel = viewModels[0] ?? null;
+    return { viewModel, ...restored, restoreState: !comparison ? 'idle' as const : viewModel ? 'ready' as const : restored.restoreState };
+}
+
+/** One acquisition admits complete saved records; each output keeps its own comparison and fallback selection. */
+export function useScmWalkthroughStates(host: ScmWalkthroughHost, selections: readonly ScmWalkthroughSelection[],
+    serverId?: string | null, restoration?: ScmWalkthroughRestoration) {
     const admittedScope = React.useRef<ServerAccountScope | null>(null);
     const projectionLifecycle = React.useMemo(() => ({
         beforeBinding: (binding: Readonly<{ scope: ServerAccountScope }>) => { admittedScope.current = binding.scope; },
@@ -43,23 +66,23 @@ export function useScmWalkthroughState(host: Readonly<{ sessionId: string }> | R
     // Profile/reconnect revalidation retires request authority, not hydrated Account data.
     // The scope owner retains this identity until it confirms a different Account or sign-out.
     const scopeKey = resolution.kind === 'bound' ? serverAccountScopeKeySuffix(resolution.scope) : null;
-    const comparisonKey = comparison ? scmComparisonKey(comparison) : null;
+    const selectionKey = JSON.stringify(selections.map(({ comparison, output }) => [comparison ? scmComparisonKey(comparison) : null, output]));
     const getSnapshot = React.useMemo(() => {
-        let previousEntry: ScmDiffSummaryEntry | undefined;
-        let projection: ScmDiffSummaryViewModel | null = null;
+        let previousEntries: (ScmDiffSummaryEntry | undefined)[] = [];
+        let projection: readonly (ScmDiffSummaryViewModel | null)[] = selections.map(() => null);
         return () => {
-            if (!scopeKey) return null;
             const state = getScmDiffSummaryState();
-            const key = selectScmWalkthroughKey(state, host, comparison, output, scopeKey);
-            const entry = key ? state.entriesByKey[key] : undefined;
-            if (entry === previousEntry) return projection;
-            previousEntry = entry;
-            projection = key ? getScmDiffSummaryOperationState(state, key, output) : null;
+            const keys = selections.map(({ comparison, output }) => scopeKey
+                ? selectScmWalkthroughKey(state, host, comparison, output, scopeKey) : null);
+            const entries = keys.map(key => key ? state.entriesByKey[key] : undefined);
+            if (entries.length === previousEntries.length && entries.every((entry, index) => entry === previousEntries[index])) return projection;
+            previousEntries = entries;
+            projection = keys.map((key, index) => key ? getScmDiffSummaryOperationState(state, key, selections[index]!.output) : null);
             return projection;
         };
     }, ['sessionId' in host ? host.sessionId : null, 'machineId' in host ? host.machineId : null,
-        'cwd' in host ? host.cwd : null, comparisonKey, output, scopeKey]);
-    const viewModel = React.useSyncExternalStore(subscribeScmDiffSummaryState, getSnapshot, getSnapshot);
+        'cwd' in host ? host.cwd : null, selectionKey, scopeKey]);
+    const viewModels = React.useSyncExternalStore(subscribeScmDiffSummaryState, getSnapshot, getSnapshot);
     const sessionId = 'sessionId' in host ? host.sessionId : null;
     // The control-target owner admits an exact metadata target before presence hydrates; transport still
     // verifies the captured Session/Account. Display identity is used only to explain known offline state.
@@ -70,15 +93,16 @@ export function useScmWalkthroughState(host: Readonly<{ sessionId: string }> | R
     const cwd = 'cwd' in host ? host.cwd : sessionMachine?.basePath;
     const presence = useMachinePresenceSummary(binding?.scope.serverId, machineId ?? (sessionId ? displayMachine.machineId : null));
     const machineOffline = presence.reachability === 'unreachable';
-    const restoreKey = JSON.stringify([scopeKey, sessionId, machineId, cwd, comparisonKey, output]);
+    const restoreKey = JSON.stringify([scopeKey, sessionId, machineId, cwd, selectionKey]);
     const [restored, setRestored] = React.useState<Readonly<{ key: string; state: 'ready' | 'unavailable' }> | null>(null);
     const [retry, setRetry] = React.useState(0);
     const retryRestore = React.useCallback(() => { setRestored(null); setRetry(value => value + 1); }, []);
-    const needsPublishedFallback = Boolean(viewModel?.savedResult && scmDiffSummaryOutputNeedsPublishedFallback(viewModel.outputs?.[output]));
+    const needsRestore = selections.some(({ comparison, output }, index) => comparison && (!viewModels[index]
+        || (viewModels[index]?.savedResult && scmDiffSummaryOutputNeedsPublishedFallback(viewModels[index]?.outputs?.[output]))));
     // Files, Walkthrough and Commits read the same saved-result owner. A
     // published reading must not depend on visiting its generation controls.
     React.useEffect(() => {
-        if (!binding?.isCurrent() || !machineId || !cwd || machineOffline || !comparison || (viewModel && !needsPublishedFallback)) return;
+        if (restoration || !binding?.isCurrent() || !machineId || !cwd || machineOffline || !needsRestore) return;
         const scope = binding.scope;
         const abort = new AbortController();
         const current = () => binding.isCurrent() && !abort.signal.aborted;
@@ -97,30 +121,34 @@ export function useScmWalkthroughState(host: Readonly<{ sessionId: string }> | R
                 const listed = await inventory.list();
                 if (!current()) return;
                 if (!listed.success) { setRestored({ key: restoreKey, state: 'unavailable' }); return; }
-                const candidates = listed.results.filter(item => item.cwd === cwd && (sessionId ? item.sessionId === sessionId : !item.sessionId)
-                    && (!comparison.comparisonId || item.comparisonId === comparison.comparisonId)
-                    && scmReviewComparisonMatchesSource(comparison, item.source));
-                // Newest first, for the requested output. A content-less failed attempt must not hide a published
-                // value; when no candidate supplies one, retain that latest requested attempt.
-                let failedAttempt: { result: ScmDiffSummaryResult; savedAtMs: number } | null = null;
+                const remaining = new Set(selections.flatMap(({ comparison }, index) => comparison ? [index] : []));
+                const failedAttempts = new Set<number>();
                 let unreadable = false;
-                for (const candidate of candidates) {
+                for (const candidate of listed.results) {
+                    if (candidate.cwd !== cwd || (sessionId ? candidate.sessionId !== sessionId : Boolean(candidate.sessionId))) continue;
+                    const matches = [...remaining].filter(index => {
+                        const comparison = selections[index]!.comparison!;
+                        return (!comparison.comparisonId || candidate.comparisonId === comparison.comparisonId)
+                            && scmReviewComparisonMatchesSource(comparison, candidate.source);
+                    });
+                    if (matches.length === 0) continue;
                     const response = await operations.read({ cwd: candidate.cwd, resultId: candidate.resultId });
                     if (!current()) return;
                     const captured = response.success ? response.result.output.comparison : null;
-                    if (!response.success || captured?.repository.rootPath !== cwd || captured.id !== candidate.comparisonId
-                        || !scmReviewComparisonMatchesSource(comparison, captured.source, captured)) { unreadable = true; continue; }
-                    const requestedOutput = response.result.output.success ? response.result.output.outputs?.[output] : undefined;
-                    if (!requestedOutput) continue;
-                    if (requestedOutput.value === undefined && (failedAttempt || scmDiffSummaryOutputNeedsPublishedFallback(requestedOutput))) {
-                        failedAttempt ??= { result: response.result, savedAtMs: candidate.updatedAtMs };
-                        continue;
-                    }
+                    if (!response.success || captured?.repository.rootPath !== cwd || captured.id !== candidate.comparisonId) { unreadable = true; continue; }
+                    const capturedMatches = matches.filter(index => scmReviewComparisonMatchesSource(selections[index]!.comparison!, captured.source, captured));
+                    if (capturedMatches.length === 0) { unreadable = true; continue; }
+                    // Admit the complete record even when an output is absent. Later publications enter the
+                    // same store, and the selectors retain independent newest/proven-value fallback rules.
                     loadSavedScmDiffSummaryResult({ ...host, scope, result: response.result, savedAtMs: candidate.updatedAtMs });
-                    setRestored({ key: restoreKey, state: 'ready' });
-                    return;
+                    for (const index of capturedMatches) {
+                        const requestedOutput = response.result.output.success ? response.result.output.outputs?.[selections[index]!.output] : undefined;
+                        if (!requestedOutput) continue;
+                        if (scmDiffSummaryOutputNeedsPublishedFallback(requestedOutput)) failedAttempts.add(index);
+                        if (requestedOutput.value !== undefined || !failedAttempts.has(index)) remaining.delete(index);
+                    }
+                    if (remaining.size === 0) break;
                 }
-                if (failedAttempt && current()) loadSavedScmDiffSummaryResult({ ...host, scope, ...failedAttempt });
                 if (current()) setRestored({ key: restoreKey, state: unreadable ? 'unavailable' : 'ready' });
             } catch {
                 if (current()) setRestored({ key: restoreKey, state: 'unavailable' });
@@ -132,17 +160,44 @@ export function useScmWalkthroughState(host: Readonly<{ sessionId: string }> | R
         void restore();
         const unsubscribe = sessionId ? subscribeExecutionRunActivity({ sessionId, serverId: scope.serverId }, () => { if (current()) void restore(); }) : () => {};
         return () => { abort.abort(); unsubscribe(); };
-    }, [binding, machineId, cwd, machineOffline, sessionId, comparisonKey, output, Boolean(viewModel), needsPublishedFallback, restoreKey, retry]);
+    }, [binding, machineId, cwd, machineOffline, sessionId, selectionKey, needsRestore, restoreKey, retry, Boolean(restoration)]);
+    // A preloaded comparison is revalidated once on mount/reconnect, at the same owner as cold
+    // restoration. Newly admitted output does not trigger this effect or another full-result read.
+    React.useEffect(() => {
+        if (restoration || !binding?.isCurrent() || !machineId || !cwd || machineOffline || !selections.some(selection => selection.comparison)) return;
+        const admitted = getSnapshot();
+        if (selections.some(({ comparison, output }, index) => comparison && (!admitted[index]
+            || (admitted[index]?.savedResult && scmDiffSummaryOutputNeedsPublishedFallback(admitted[index]?.outputs?.[output]))))) return;
+        const scope = binding.scope;
+        const abort = new AbortController();
+        const current = () => binding.isCurrent() && !abort.signal.aborted;
+        const operations = createScmDiffSummaryResultOperations({ ...host, serverId: scope.serverId,
+            accountId: scope.accountId, signal: abort.signal, shouldContinue: current });
+        void (async () => {
+            const read = new Set<string>();
+            for (const value of admitted) {
+                if (!current()) return;
+                if (!value?.resultId || read.has(value.resultId)) continue;
+                read.add(value.resultId);
+                try {
+                    const response = await operations.read({ cwd: value.comparison?.repository.rootPath ?? cwd, resultId: value.resultId });
+                    if (response.success && current()) loadSavedScmDiffSummaryResult({ ...host, scope, result: response.result });
+                } catch { /* Keep the admitted last-known record on a failed revalidation. */ }
+            }
+        })();
+        return () => abort.abort();
+    }, [binding, machineId, cwd, machineOffline, sessionId, selectionKey, getSnapshot, retry, Boolean(restoration)]);
     // A missing projection is unknown until its saved read settles. Presence and target hydration can take
     // longer than the read itself; neither is proof that this comparison has no saved output.
-    const restoreState: ScmDiffSummaryRestoreState = !comparison ? 'idle' : viewModel ? 'ready'
+    const restoreState: ScmDiffSummaryRestoreState = !selections.some(selection => selection.comparison) ? 'idle' : !needsRestore ? 'ready'
         : restored?.key === restoreKey ? restored.state
         : machineOffline || (sessionId && sessionTarget.status === 'unavailable') ? 'unavailable' : 'restoring';
-    return { viewModel, restoreState, retryRestore, machineReachability: presence.reachability } as const;
+    return { viewModels, restoration: restoration ?? { restoreState, retryRestore, machineReachability: presence.reachability } } as const;
 }
 
 /** Projection-only consumers share the same restoration lifecycle as the foreground binding. */
 export function useScmWalkthrough(host: Readonly<{ sessionId: string }> | Readonly<{ machineId: string; cwd: string }>,
-    comparison: SessionScmReviewComparison | null, output: ScmDiffSummaryOutputKind = 'walkthrough', serverId?: string | null): ScmDiffSummaryViewModel | null {
-    return useScmWalkthroughState(host, comparison, output, serverId).viewModel;
+    comparison: SessionScmReviewComparison | null, output: ScmDiffSummaryOutputKind = 'walkthrough', serverId?: string | null,
+    restoration?: ScmWalkthroughRestoration): ScmDiffSummaryViewModel | null {
+    return useScmWalkthroughState(host, comparison, output, serverId, restoration).viewModel;
 }

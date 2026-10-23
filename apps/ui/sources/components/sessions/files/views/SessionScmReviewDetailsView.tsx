@@ -24,7 +24,7 @@ import { SessionCommitsView } from '@/components/sessions/files/commits/SessionC
 import { scmReviewViewUnavailableReason } from '@/sync/domains/scm/diffSummary/selection';
 import { useScmReviewedMarks } from '@/components/sessions/files/comparison/useScmReviewedMarks';
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
-import { useSessionScmWalkthrough } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
+import { useScmWalkthroughStates } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import {
   describeChangedFilesModeAsComparison,
@@ -83,6 +83,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { resolveExecutionRunAgentMarkId } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
+import { resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -681,6 +682,18 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       },
       [openDetailsTab, props.target, requestedView],
     );
+    const pending = shownComparison?.kind === 'workingTree';
+    // Both views project the same captured inventory, including before checkout status hydrates.
+    const { viewModels: [walkthroughAnalysis, commitPlan], restoration } = useScmWalkthroughStates(
+      { sessionId: props.sessionId },
+      [
+        { comparison: shownComparison, output: 'walkthrough' },
+        { comparison: pending && props.active !== false ? PENDING_COMPARISON : null, output: 'commitPlan' },
+      ], props.serverId,
+    );
+    const capturedFileCount = requestedView === 'walkthrough' || shownComparison?.comparisonId
+      ? walkthroughAnalysis?.comparison?.inventory.files.length
+      : undefined;
     const scopeOptions = React.useMemo(
       () =>
         listFilesComparisonScopeOptions(
@@ -690,6 +703,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
           {
             pendingFileCount: changed.allRepositoryChangedFiles.length,
             latestTurnFileCount: latestTurnChangeSet?.files.length,
+            currentFileCount: capturedFileCount,
           },
         ),
       [
@@ -698,12 +712,12 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         shownComparison,
         changed.allRepositoryChangedFiles.length,
         latestTurnChangeSet?.files.length,
+        capturedFileCount,
       ],
     );
     const scopeLabel = shownComparison
       ? resolveFilesComparisonLabel(shownComparison, pickerLatestTurnId)
       : t('scmComparison.scope.workingTree');
-    const pending = shownComparison?.kind === 'workingTree';
     const reviewView: SessionScmReviewView =
       scmReviewViewUnavailableReason(requestedView, shownComparison) ? 'files' : requestedView;
     // What "This session" spans: since the Session began, over the turns that changed files.
@@ -821,12 +835,6 @@ const SessionWorkingScmReviewDetailsView = React.memo(
       [openDetailsTab, props.target, shownComparison],
     );
     // The proposal's size labels the Commits view ("Commits 3"); proposing opens that view.
-    const commitPlan = useSessionScmWalkthrough(
-      props.sessionId,
-      pending && props.active !== false ? PENDING_COMPARISON : null,
-      'commitPlan',
-      props.serverId,
-    );
     const commitsCount =
       commitPlan?.outputs?.commitPlan?.value?.groups.length ?? null;
     const proposeCommits =
@@ -836,12 +844,6 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         <ScmComparisonProposeCommits onPress={() => selectView('commits')} />
       ) : null;
     // Files' Explain projects the same walkthrough beside its hunks; it never asks for a second output.
-    const walkthroughAnalysis = useSessionScmWalkthrough(
-      props.sessionId,
-      shownComparison,
-      'walkthrough',
-      props.serverId,
-    );
     const marks = useScmReviewedMarks({
       comparison:
         reviewView === 'files'
@@ -1062,13 +1064,16 @@ const SessionWorkingScmReviewDetailsView = React.memo(
         onClose={props.onRequestClose ?? pane.closeDetails}
         rootPath={effectiveSnapshot?.repo.rootPath}
         reading={filesReading}
-        modelLabel={walkthroughAnalysis?.producer?.modelId}
+        modelLabel={walkthroughAnalysis?.producer?.modelId ? resolveRunNativeModelLabel(
+          walkthroughAnalysis.latestRun?.backendTarget ?? walkthroughAnalysis.savedResult?.generator?.backendTarget,
+          undefined, walkthroughAnalysis.latestRun?.resolvedSelection ?? walkthroughAnalysis.savedResult?.generator,
+        )(walkthroughAnalysis.producer.modelId) ?? walkthroughAnalysis.producer.modelId : undefined}
         analysisMark={analysisMarkAgentId ? <AgentIcon agentId={analysisMarkAgentId} size={ICON_SIZE.xs} /> : null}
         marksAvailable={marksAvailable}
         explain={explain}
         onExplainChange={setExplain}
         commitsCount={commitsCount}
-        fileCount={effectiveSnapshot ? shownScopeFileCount : null}
+        fileCount={capturedFileCount ?? (effectiveSnapshot ? shownScopeFileCount : null)}
         proposeCommits={proposeCommits}
         onProposeCommits={proposeCommits ? () => selectView('commits') : null}
         onStartReview={openReviewLauncher}
@@ -1083,6 +1088,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
           <SessionWalkthroughView
             sessionId={props.sessionId}
             serverId={props.serverId}
+            {...restoration}
             comparison={shownComparison}
             scopeLabel={scopeLabel}
             scopeDetail={scopeDetail}
@@ -1100,6 +1106,7 @@ const SessionWorkingScmReviewDetailsView = React.memo(
           <SessionCommitsView
             sessionId={props.sessionId}
             serverId={props.serverId}
+            {...restoration}
             branch={
               effectiveSnapshot?.branch?.detached
                 ? null

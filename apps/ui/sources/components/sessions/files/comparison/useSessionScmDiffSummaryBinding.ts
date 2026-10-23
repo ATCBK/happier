@@ -8,10 +8,12 @@ import { useSessionExternalSessionRuntime } from '@/components/sessions/model/us
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
 import { useScmDiffSummaryBinding } from './useScmDiffSummaryBinding';
+import type { ScmWalkthroughRestoration } from '@/components/sessions/files/walkthrough/useSessionScmWalkthrough';
 
 /** Session authority and launch policy feed the shared saved-result binding. */
 export function useSessionScmDiffSummaryBinding(params: Readonly<{
     sessionId: string; serverId?: string | null; comparison: SessionScmReviewComparison | null; output: ScmDiffSummaryOutputKind;
+    restoration?: ScmWalkthroughRestoration;
 }>) {
     const session = useSession(params.sessionId, params.serverId);
     const machine = useSessionMachineTarget(params.sessionId, params.serverId);

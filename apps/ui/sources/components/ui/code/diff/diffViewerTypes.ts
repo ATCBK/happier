@@ -119,7 +119,8 @@ export type UnifiedDiffViewerProps = DiffViewerBaseProps & Readonly<{
     contextBaseText?: string;
     /**
      * Host-private: draw each hunk header as Pierre's quiet "N unchanged lines · heading" band rather than
-     * the raw `@@` header, so the Happier renderer standing in while Pierre initializes reads like Pierre.
+     * the raw `@@` header, so the Happier renderer standing in while Pierre initializes reads like Pierre, and a
+     * prose-anchored hunk card (a walkthrough stop) reads the same whichever renderer the person chose.
      */
     lineInfoSeparators?: boolean;
 }>;
