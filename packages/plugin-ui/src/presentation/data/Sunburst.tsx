@@ -28,6 +28,7 @@ import {
   type HappierSunburstNode,
   type HappierSunburstRing,
 } from './sunburstLayout.js';
+import { fitText } from './chartText.js';
 import type { HappierChartPart } from './Treemap.js';
 
 export type HappierSunburstProps = Readonly<{
@@ -622,7 +623,7 @@ export function Sunburst(props: HappierSunburstProps) {
             fill={theme.colors.text}
             textAnchor="middle"
           >
-            {props.centerLabel}
+            {fitText(props.centerLabel, (rings[0]!.inner - 4) * 2 - 12, 13, 'semibold')}
           </SvgText>
           <SvgText
             x={cx}

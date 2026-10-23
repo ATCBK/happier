@@ -22,6 +22,7 @@ import {
 import type { HappierUiTheme } from '../../environment/types.js';
 import { useOptionalHappierUiAccessibility } from '../../environment/context.js';
 import { HAPPIER_MOTION_V1 } from '../interaction/motion.js';
+import { fitText, textFits } from './chartText.js';
 import {
   createHappierTreemapHitGrid,
   layoutHappierTreemap,
@@ -457,15 +458,3 @@ function lockPath(x: number, y: number) {
   return `M${x + 2},${y + 5}h6v5h-6z M${x + 3.2},${y + 5}v-1.6a1.8,1.8 0 0 1 3.6,0v1.6`;
 }
 
-/** An average glyph advance for the UI face at a size; labels are cut to the tile, never drawn past it. */
-// Semibold names run wider than the regular face; measured at the regular advance they ran into the lock mark.
-const ADVANCE_PER_PX = { regular: 0.58, semibold: 0.64 } as const;
-type TileTextWeight = keyof typeof ADVANCE_PER_PX;
-function textFits(text: string, room: number, fontPx: number, weight: TileTextWeight = 'regular') {
-  return text.length * fontPx * ADVANCE_PER_PX[weight] <= room;
-}
-function fitText(text: string, room: number, fontPx: number, weight: TileTextWeight = 'regular') {
-  if (textFits(text, room, fontPx, weight)) return text;
-  const chars = Math.floor(room / (fontPx * ADVANCE_PER_PX[weight])) - 1;
-  return chars > 1 ? `${text.slice(0, chars).trimEnd()}…` : '';
-}

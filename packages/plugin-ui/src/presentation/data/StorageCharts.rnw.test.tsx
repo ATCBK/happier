@@ -182,6 +182,19 @@ describe('storage charts through their public component entry', () => {
     expect(placed.every(leader => leader.right)).toBe(true);
   });
 
+  it('cuts a long centre name to the hole so it never runs over the first ring', () => {
+    const name = 'j8d-resource-DZTcxc-with-a-long-tail';
+    const mount = mountThroughReactNativeWeb(<Sunburst theme={theme} items={items} width={760} height={408} minArcDegrees={2} reducedMotion
+      centerLabel={name} centerValue="57.3 KB" accessibilityLabel="Rings" smallerLabel={count => `${count} smaller`} testID="rings" />);
+    try {
+      const text = mount.container.textContent ?? '';
+      expect(text).not.toContain(name);
+      expect(text).toContain('j8d-reso');
+      expect(text).toContain('…');
+      expect(text).toContain('57.3 KB');
+    } finally { mount.unmount(); }
+  });
+
   it('drills by morphing arcs by key: mid-way the new level has no settled labels yet, and they arrive when it lands', async () => {
     const mount = mountThroughReactNativeWeb(<Sunburst theme={theme} items={items} width={760} height={408} minArcDegrees={2}
       centerLabel="Root" centerValue="900 MB" accessibilityLabel="Rings" smallerLabel={count => `${count} smaller`} testID="rings" />);
