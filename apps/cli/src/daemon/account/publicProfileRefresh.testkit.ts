@@ -39,7 +39,7 @@ export function createPublicProfileRefreshOwner(computedAtMs: number | null) {
 /** Real native adapter, shared Action executor and captured Account HTTP binding.
  * Only the remote HTTP peer and clock are substituted. The real shared builder
  * consumes the Usage service's strict response to the public-population request.
- * Server-side exact-request eligibility is covered by usageQueryService integration,
+ * Server-side known-Team exclusion is covered by usageQueryService integration,
  * not reimplemented or certified by this client fixture.
  */
 export async function createNativePublicProfileRefreshFixture(options: {
