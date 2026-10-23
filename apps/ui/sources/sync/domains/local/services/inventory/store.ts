@@ -1,3 +1,5 @@
+import { projectLocalServiceMachineSummaryV1, type LocalServiceMachineSummaryV1 } from '@happier-dev/protocol/local/services/inventory/v1';
+
 export type LocalServiceInventoryRow = Readonly<{
     id: string;
     machineId: string;
@@ -40,6 +42,9 @@ export type LocalServiceInventorySnapshot = Readonly<{
 }>;
 
 export type LocalServiceInventoryState = Readonly<{
+    summary: LocalServiceMachineSummaryV1 | null;
+    /** Last received Machine-summary object; inventory observations do not replay that receipt. */
+    machineSummarySource: object | null;
     machineId: string | null;
     generatedAt: number | null;
     refreshState: 'idle' | 'refreshing' | 'error';
@@ -47,6 +52,13 @@ export type LocalServiceInventoryState = Readonly<{
     rowsById: ReadonlyMap<string, LocalServiceInventoryRow>;
     diagnostics: readonly unknown[];
 }>;
+
+export function applyLocalServiceInventorySummary(state: LocalServiceInventoryState, summary: LocalServiceMachineSummaryV1): LocalServiceInventoryState {
+    const previous = state.summary;
+    if (previous?.state === summary.state && (summary.state !== 'ready'
+        || (previous.state === 'ready' && previous.runningCount === summary.runningCount))) return state;
+    return { ...state, summary };
+}
 
 function rowKey(row: LocalServiceInventoryRow): string {
     return JSON.stringify(row);
@@ -72,6 +84,8 @@ function presentationRow(row: LocalServiceInventoryRow): LocalServiceInventoryPr
 
 export function createLocalServiceInventoryState(): LocalServiceInventoryState {
     return {
+        summary: null,
+        machineSummarySource: null,
         machineId: null,
         generatedAt: null,
         refreshState: 'idle',
@@ -96,6 +110,8 @@ export function applyLocalServiceInventoryRefreshStarted(
 ): LocalServiceInventoryState {
     if (state.machineId !== null && state.machineId !== machineId) {
         return {
+            summary: null,
+            machineSummarySource: null,
             machineId,
             generatedAt: null,
             refreshState: 'refreshing',
@@ -128,6 +144,8 @@ export function applyLocalServiceInventoryRefreshFailed(
 ): LocalServiceInventoryState {
     if (state.machineId !== null && state.machineId !== machineId) {
         return {
+            summary: null,
+            machineSummarySource: null,
             machineId,
             generatedAt: null,
             refreshState: 'error',
@@ -137,18 +155,19 @@ export function applyLocalServiceInventoryRefreshFailed(
         };
     }
 
-    if (state.machineId === machineId && state.refreshState === 'error') return state;
-    return {
+    if (state.machineId === machineId && state.refreshState === 'error' && state.summary?.state === 'error') return state;
+    return applyLocalServiceInventorySummary({
         ...state,
         machineId,
         refreshState: 'error',
-    };
+    }, { v: 1, state: 'error' });
 }
 
 export function applyLocalServiceInventorySnapshot(
     state: LocalServiceInventoryState,
     snapshot: LocalServiceInventorySnapshot,
 ): LocalServiceInventoryState {
+    const summaryState = applyLocalServiceInventorySummary(state, projectLocalServiceMachineSummaryV1(snapshot));
     const rowsById = new Map<string, LocalServiceInventoryRow>();
     const rowIds: string[] = [];
     for (const row of snapshot.entries) {
@@ -161,7 +180,7 @@ export function applyLocalServiceInventorySnapshot(
     const nextMap = sameRows ? state.rowsById : rowsById;
     const diagnostics = JSON.stringify(state.diagnostics) === JSON.stringify(snapshot.diagnostics) ? state.diagnostics : snapshot.diagnostics;
     if (state.machineId === snapshot.machineId && state.generatedAt === snapshot.generatedAt
-        && state.refreshState === snapshot.refreshState && sameRows && diagnostics === state.diagnostics) return state;
+        && state.refreshState === snapshot.refreshState && sameRows && diagnostics === state.diagnostics) return summaryState;
     if (!sameRows) {
         const previousPresentation = selectLocalServiceInventoryPresentationRows(state);
         const previousById = new Map(previousPresentation.map(row => [row.id, row]));
@@ -174,6 +193,8 @@ export function applyLocalServiceInventorySnapshot(
             ? previousPresentation : nextPresentation);
     }
     return {
+        summary: summaryState.summary,
+        machineSummarySource: state.machineSummarySource,
         machineId: snapshot.machineId,
         generatedAt: snapshot.generatedAt,
         refreshState: snapshot.refreshState,

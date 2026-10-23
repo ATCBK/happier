@@ -1,4 +1,5 @@
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+import { projectLocalServiceMachineSummaryV1, type LocalServiceMachineSummaryV1 } from '@happier-dev/protocol/local/services/inventory/v1';
 
 import { createParkWatch, type ParkWatchResult } from '@/daemon/lifecycle/parkWatch';
 
@@ -11,6 +12,7 @@ import type { NormalizedLocalServiceInventorySnapshot } from './scanner';
 export type LocalServiceInventoryWatchResult = ParkWatchResult<NormalizedLocalServiceInventorySnapshot>;
 
 export type LocalServiceInventoryRoutes = Readonly<{
+    getSummary?(): LocalServiceMachineSummaryV1;
     /** Latest observation, including silent timestamp updates, without awaiting a new scan. */
     readCurrentSnapshot(): NormalizedLocalServiceInventorySnapshot;
     getSnapshot(): Promise<NormalizedLocalServiceInventorySnapshot>;
@@ -40,6 +42,7 @@ export type LocalServiceInventoryRoutes = Readonly<{
 
 export function createLocalServiceInventoryRoutes(input: Readonly<{
     registry: LocalServiceInventoryRegistry;
+    getSummary?: () => LocalServiceMachineSummaryV1;
     refreshSnapshot?: () => Promise<NormalizedLocalServiceInventorySnapshot>;
     /**
      * Bring the snapshot up to date when a reader arrives without a parked watch. The scan loop
@@ -56,6 +59,7 @@ export function createLocalServiceInventoryRoutes(input: Readonly<{
     const watches = createParkWatch({ onWatcherCountChanged: input.onWatcherCountChanged });
 
     return {
+        getSummary: input.getSummary ?? (() => projectLocalServiceMachineSummaryV1(input.registry.getSnapshot())),
         readCurrentSnapshot: input.registry.getSnapshot,
         async getSnapshot() {
             await input.ensureFreshSnapshot?.();

@@ -6,6 +6,7 @@ import { DaemonLocalServicePreviewOpenOrCreateRequestV1Schema, DaemonLocalServic
 import { DaemonLocalServicePublicPreviewCopyUrlRequestV1Schema, DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, isLocalServicePublicPreviewCreateConfirmed, redactLocalServicePublicPreviewCreateResponseForAgentEgress, redactLocalServicePublicPreviewRevokeResponseForAgentEgress, redactLocalServicePublicPreviewSnapshotForAgentEgress } from '@happier-dev/protocol/local/services/public/v1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
+import { LocalServiceInventoryCountResponseV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
 import { ProjectServiceRelocateInputV1Schema, type ProjectServiceRelocateInputV1 } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-dev/protocol';
@@ -22,7 +23,7 @@ import type { LocalServicePreviewRoutes } from '../preview/routes';
 import { LocalServicePublicPreviewCreateRefusal, type LocalServicePublicPreviewRoutes } from '../public/routes';
 
 export type LocalServicesRuntimeActionRoutes = Readonly<{
-    inventoryRoutes?: Pick<LocalServiceInventoryRoutes, 'getSnapshot' | 'refreshSnapshot'>;
+    inventoryRoutes?: Pick<LocalServiceInventoryRoutes, 'getSnapshot' | 'refreshSnapshot'> & Partial<Pick<LocalServiceInventoryRoutes, 'getSummary'>>;
     launcherRoutes?: Pick<LocalServiceLauncherRoutes, 'getSnapshot'> & Partial<Pick<LocalServiceLauncherRoutes, 'startTarget' | 'leaves'>>;
     previewRoutes?: Pick<LocalServicePreviewRoutes, 'getSnapshot'> & Partial<Pick<LocalServicePreviewRoutes, 'openOrCreate' | 'revoke'>>;
     actionRoutes?: Pick<LocalServiceActionRoutes, 'execute'>;
@@ -213,6 +214,9 @@ export function createLocalServicesDaemonRuntimeActionExecutor(
 
         if (args.actionId === 'localServices.inventory.list') {
             const routes = input.routes.inventoryRoutes;
+            if (routes && parsed.input && typeof parsed.input === 'object' && 'projection' in parsed.input && parsed.input.projection === 'count') {
+                return LocalServiceInventoryCountResponseV1Schema.parse({ summary: routes.getSummary?.() ?? { v: 1, state: 'unknown' } });
+            }
             return routes
                 ? projectLocalServiceInventorySnapshotV1(await routes.getSnapshot())
                 : disabledResult('local_services_inventory_routes_unavailable');

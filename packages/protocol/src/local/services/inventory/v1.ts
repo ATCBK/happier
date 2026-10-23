@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { localServiceListenerGroupKey } from './listeners.js';
 
 export const LocalServiceAddressFamilyV1Schema = lazyZodSchema(() => z.enum(['ipv4', 'ipv6', 'unknown']));
 export type LocalServiceAddressFamilyV1 = z.infer<typeof LocalServiceAddressFamilyV1Schema>;
@@ -152,12 +153,37 @@ export const LocalServiceMachineSummaryV1Schema = lazyZodSchema(() => z.discrimi
 ]));
 export type LocalServiceMachineSummaryV1 = z.infer<typeof LocalServiceMachineSummaryV1Schema>;
 
+/** Shared by the daemon publication and admitted client inventory snapshots. */
+export function projectLocalServiceMachineSummaryV1(snapshot: Readonly<{
+  generatedAt: number;
+  refreshState: string;
+  entries: readonly (Parameters<typeof localServiceListenerGroupKey>[0] & Readonly<{ state: string; classification?: unknown }>)[];
+  diagnostics: readonly unknown[];
+}>): LocalServiceMachineSummaryV1 {
+  const codes = snapshot.diagnostics.flatMap(diagnostic => diagnostic && typeof diagnostic === 'object'
+    && 'code' in diagnostic && typeof diagnostic.code === 'string' ? [diagnostic.code] : []);
+  if (snapshot.refreshState === 'error') return { v: 1, state: codes.includes('local_services_inventory_probe_failed') ? 'unknown' : 'error' };
+  if (codes.some(code => code.startsWith('local_services_inventory_'))) return { v: 1, state: 'disabled' };
+  if (snapshot.generatedAt === 0) return { v: 1, state: 'unknown' };
+  const listeners = new Set(snapshot.entries.filter(entry => entry.state === 'listening'
+    && !(entry.classification && typeof entry.classification === 'object' && 'kind' in entry.classification && entry.classification.kind === 'happier'))
+    .map(localServiceListenerGroupKey));
+  return { v: 1, state: 'ready', runningCount: listeners.size };
+}
+
+export const LocalServiceInventoryCountResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  summary: LocalServiceMachineSummaryV1Schema,
+}));
+export type LocalServiceInventoryCountResponseV1 = z.infer<typeof LocalServiceInventoryCountResponseV1Schema>;
+
 const DaemonLocalServiceInventoryMachineRequestV1Schema = lazyZodSchema(() => z.strictObject({
   machineId: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
 }));
 
-export const DaemonLocalServiceInventorySnapshotRequestV1Schema =
-  DaemonLocalServiceInventoryMachineRequestV1Schema;
+export const DaemonLocalServiceInventorySnapshotRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  ...DaemonLocalServiceInventoryMachineRequestV1Schema.shape,
+  projection: z.optional(z.literal('count')),
+}));
 export type DaemonLocalServiceInventorySnapshotRequestV1 = z.infer<
   typeof DaemonLocalServiceInventorySnapshotRequestV1Schema
 >;

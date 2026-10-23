@@ -135,6 +135,25 @@ const publicPreviewSnapshot: LocalServicePublicPreviewSnapshotV1 = {
 };
 
 describe('daemon local services machine rpc handlers', () => {
+    it('reads the runtime summary through RPC and Action without scanning or starting observation', async () => {
+        const scan = vi.fn(async () => ({ listeners: [], processes: new Map(), workspaces: [], diagnostics: [] }));
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine_1', startLoop: false,
+            inventoryEnabled: () => true, scan, processEnv: {} });
+        try {
+            const { handlers, registrar } = createRegistrar();
+            registerDaemonLocalServicesMachineRpcHandlers(registrar, { machineId: 'machine_1', localServicesInventory: runtime.inventoryRoutes });
+            const expected = { summary: runtime.getSummary() };
+            expect(await handlers.get(RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT)?.({ machineId: 'machine_1', projection: 'count' })).toEqual(expected);
+            await expect(handlers.get(RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT)?.({ machineId: 'machine_other', projection: 'count' })).rejects.toThrow();
+            const featureGate = createLocalServicesDaemonFeatureGate({ env: {}, resolveServerFeaturesSnapshot: () => ({ status: 'ready',
+                features: FeaturesResponseSchema.parse({ features: { localServices: { enabled: true, inventory: { enabled: true } } }, capabilities: {} }) }) });
+            await featureGate.refresh();
+            const execute = createLocalServicesDaemonRuntimeActionExecutor({ routes: { inventoryRoutes: runtime.inventoryRoutes }, featureGate });
+            expect(await execute({ actionId: 'localServices.inventory.list', input: { machineId: 'machine_1', projection: 'count' }, context: {} })).toEqual(expected);
+            expect(scan).not.toHaveBeenCalled();
+            expect(runtime.inventoryRoutes.watcherCount()).toBe(0);
+        } finally { await runtime.stop(); }
+    });
     it.each([
         RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
         RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH,

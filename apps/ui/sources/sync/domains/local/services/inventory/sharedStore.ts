@@ -1,4 +1,5 @@
 import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
+import { LocalServiceMachineSummaryV1Schema, type LocalServiceMachineSummaryV1 } from '@happier-dev/protocol/local/services/inventory/v1';
 import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
 import { subscribeMachineRpcRecovery } from '@/sync/runtime/orchestration/serverScopedRpc/subscribeMachineRpcRecovery';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -13,11 +14,13 @@ import {
 import {
     fetchLocalServiceInventorySnapshotViaMachineRpc,
     watchLocalServiceInventorySnapshotViaMachineRpc,
+    fetchLocalServiceInventorySummaryViaMachineRpc,
 } from './machineRpc';
 import {
     applyLocalServiceInventoryRefreshFailed,
     applyLocalServiceInventoryRefreshStarted,
     applyLocalServiceInventorySnapshot,
+    applyLocalServiceInventorySummary,
     createLocalServiceInventoryState,
     type LocalServiceInventorySnapshot,
     type LocalServiceInventoryState,
@@ -90,7 +93,7 @@ export function subscribeLocalServiceCredentialRetirement(
 const store = createSharedSubscriptionStore<
     LocalServiceInventoryStoreKeyInput,
     LocalServiceInventoryState,
-    LocalServiceInventorySnapshot,
+    LocalServiceInventorySnapshot | Readonly<{ summary: LocalServiceMachineSummaryV1; machineSummarySource?: object | null }>,
     LocalServiceInventorySnapshotClient,
     LocalServiceInventoryWatchClient
 >({
@@ -123,7 +126,12 @@ const store = createSharedSubscriptionStore<
     ),
     failWatch: (state, input) => applyLocalServiceInventoryRefreshFailed(state, input.machineId),
     subscribeRecovery: (input, recover) => subscribeMachineRpcRecovery({ ...input, expectedAccountId: input.accountId }, recover),
-    applySnapshot: applyLocalServiceInventorySnapshot,
+    applySnapshot: (state, snapshot) => {
+        if (!('summary' in snapshot)) return applyLocalServiceInventorySnapshot(state, snapshot);
+        const next = applyLocalServiceInventorySummary(state, snapshot.summary);
+        return 'machineSummarySource' in snapshot && snapshot.machineSummarySource !== state.machineSummarySource
+            ? { ...next, machineSummarySource: snapshot.machineSummarySource ?? null } : next;
+    },
     defaultWatchClient,
     watchAfterRefresh: true,
     // Freshness comes from the daemon: one parked watch per subscribed machine, re-armed on each
@@ -155,6 +163,49 @@ export function getLocalServiceInventoryState(
     input: LocalServiceInventoryStoreKeyInput,
 ): LocalServiceInventoryState {
     return store.getState(input);
+}
+
+export function getLocalServiceInventoryRunningCount(input: LocalServiceInventoryStoreKeyInput): number | null {
+    const summary = store.getState(input).summary;
+    return summary?.state === 'ready' ? summary.runningCount : null;
+}
+
+/** Passive observation does not acquire the inventory's refresh or parked watch. */
+export function observeLocalServiceInventorySummary(input: LocalServiceInventoryStoreKeyInput, listener: () => void): () => void {
+    return store.observe(input, listener);
+}
+
+export function publishLocalServiceInventorySummary(input: LocalServiceInventoryStoreKeyInput, summary: LocalServiceMachineSummaryV1): void {
+    const release = store.observe(input, () => {});
+    store.publish(input, { summary }, { resumeWatch: false });
+    release();
+}
+
+/** Untyped Machine daemon-state content enters the inventory summary owner once per receipt. */
+export function publishLocalServiceInventoryMachineSummary(input: LocalServiceInventoryStoreKeyInput, received: unknown): void {
+    if (typeof received === 'object' && received !== null && received === store.getState(input).machineSummarySource) return;
+    const parsed = LocalServiceMachineSummaryV1Schema.safeParse(received);
+    const source = parsed.success && typeof received === 'object' && received !== null ? received : null;
+    const release = store.observe(input, () => {});
+    store.publish(input, { summary: parsed.success ? parsed.data : { v: 1, state: 'unknown' }, machineSummarySource: source }, { resumeWatch: false });
+    release();
+}
+
+/** Owned by the mounted Session address; repeated calls share its single allowance. */
+export function createLocalServiceInventoryCountAcquisition(input: LocalServiceInventoryStoreKeyInput): Readonly<{
+    readOnce(): Promise<void>;
+    dispose(): void;
+}> {
+    return store.acquireReadOnce(input, input.sessionId ?? '', async signal => {
+        if (getLocalServiceInventoryRunningCount(input) !== null) return;
+        const previous = store.getState(input);
+        const summary = await fetchLocalServiceInventorySummaryViaMachineRpc({ ...input, signal });
+        const current = store.getState(input);
+        if (!signal.aborted && summary && current.summary === previous.summary
+            && current.machineSummarySource === previous.machineSummarySource && current.generatedAt === previous.generatedAt) {
+            publishLocalServiceInventorySummary(input, summary);
+        }
+    });
 }
 
 export function subscribeLocalServiceInventoryStore(

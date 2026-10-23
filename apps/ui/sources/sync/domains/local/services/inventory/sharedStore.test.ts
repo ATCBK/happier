@@ -12,6 +12,11 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 
 import { expectNoWallClockPolling } from '../noPollingTestHelpers';
 import {
+    createLocalServiceInventoryCountAcquisition,
+    getLocalServiceInventoryRunningCount,
+    observeLocalServiceInventorySummary,
+    publishLocalServiceInventorySummary,
+    publishLocalServiceInventoryMachineSummary,
     getLocalServiceInventoryState,
     invalidateLocalServiceInventoryStore,
     publishLocalServiceInventorySnapshot,
@@ -49,6 +54,99 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('shared local-service inventory store', () => {
+    it('does not overwrite a newer inventory observation when another consumer presents the same Machine summary receipt', () => {
+        const key = { machineId: 'machine-a', serverId: 'server-a' };
+        const received = { v: 1, state: 'ready', runningCount: 4 };
+        publishLocalServiceInventoryMachineSummary(key, received);
+        publishLocalServiceInventorySnapshot(key, snapshot);
+        publishLocalServiceInventoryMachineSummary(key, received);
+        expect(getLocalServiceInventoryRunningCount(key)).toBe(1);
+        publishLocalServiceInventoryMachineSummary(key, { v: 1, state: 'ready', runningCount: 2 });
+        expect(getLocalServiceInventoryRunningCount(key)).toBe(2);
+    });
+    it('deduplicates concurrent count acquisitions for the same mounted Session without retaining its allowance after retirement', async () => {
+        const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
+        const pending = createDeferred<unknown>();
+        rpc.snapshot.mockReturnValue(pending.promise);
+        const first = createLocalServiceInventoryCountAcquisition(key);
+        const second = createLocalServiceInventoryCountAcquisition(key);
+        const reads = [first.readOnce(), second.readOnce()];
+        expect(rpc.machine).toHaveBeenCalledTimes(1);
+        first.dispose();
+        expect(rpc.machine.mock.calls[0]?.[0].signal.aborted).toBe(false);
+        pending.resolve({ summary: { v: 1, state: 'unknown' } });
+        await Promise.all(reads);
+        second.dispose();
+        const reopened = createLocalServiceInventoryCountAcquisition(key);
+        await reopened.readOnce();
+        expect(rpc.machine).toHaveBeenCalledTimes(2);
+        reopened.dispose();
+    });
+    it('holds a passive scalar summary with one cancellable read per acquisition and no inventory watch', async () => {
+        const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a', accountId: 'account-a', credentialKey: 'credential-a' };
+        const release = observeLocalServiceInventorySummary(key, () => {});
+        publishLocalServiceInventorySummary(key, { v: 1, state: 'ready', runningCount: 4 });
+        const held = createLocalServiceInventoryCountAcquisition(key);
+        await held.readOnce();
+        expect(getLocalServiceInventoryRunningCount(key)).toBe(4);
+        expect(rpc.machine).not.toHaveBeenCalled();
+        held.dispose();
+        publishLocalServiceInventorySummary(key, { v: 1, state: 'unknown' });
+        const pending = createDeferred<unknown>();
+        rpc.snapshot.mockReturnValue(pending.promise);
+        const acquisition = createLocalServiceInventoryCountAcquisition(key);
+        const first = acquisition.readOnce();
+        const second = acquisition.readOnce();
+        pending.resolve({ summary: { v: 1, state: 'ready', runningCount: 2 } });
+        await Promise.all([first, second]);
+        expect(rpc.machine).toHaveBeenCalledTimes(1);
+        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ payload: { machineId: 'machine-a', projection: 'count' } }));
+        expect(getLocalServiceInventoryRunningCount(key)).toBe(2);
+        publishLocalServiceInventorySnapshot(key, snapshot);
+        expect(getLocalServiceInventoryRunningCount(key)).toBe(1);
+        acquisition.dispose();
+        release();
+    });
+
+    it.each([{}, { summary: { v: 1, state: 'error' } }, { summary: { v: 1, state: 'disabled' } }, { protocolVersion: 1, snapshot }])(
+        'settles an unavailable scalar as unknown without fallback or retry (%j)', async response => {
+            const key = { machineId: 'machine-a', serverId: 'server-a' };
+            rpc.snapshot.mockResolvedValue(response);
+            const acquisition = createLocalServiceInventoryCountAcquisition(key);
+            await acquisition.readOnce();
+            await acquisition.readOnce();
+            expect(getLocalServiceInventoryRunningCount(key)).toBeNull();
+            expect(rpc.machine).toHaveBeenCalledTimes(1);
+            acquisition.dispose();
+        },
+    );
+
+    it('aborts a retired acquisition and ignores its late scalar response', async () => {
+        const key = { machineId: 'machine-a', serverId: 'server-a' };
+        const pending = createDeferred<unknown>();
+        rpc.snapshot.mockReturnValue(pending.promise);
+        const acquisition = createLocalServiceInventoryCountAcquisition(key);
+        const read = acquisition.readOnce();
+        acquisition.dispose();
+        pending.resolve({ summary: { v: 1, state: 'ready', runningCount: 8 } });
+        await read;
+        expect(rpc.machine.mock.calls[0]?.[0].signal.aborted).toBe(true);
+        expect(getLocalServiceInventoryRunningCount(key)).toBeNull();
+    });
+
+    it('keeps a newer unavailable Machine publication when an older scalar read replies late', async () => {
+        const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
+        publishLocalServiceInventoryMachineSummary(key, { v: 1, state: 'unknown' });
+        const pending = createDeferred<unknown>();
+        rpc.snapshot.mockReturnValue(pending.promise);
+        const acquisition = createLocalServiceInventoryCountAcquisition(key);
+        const read = acquisition.readOnce();
+        publishLocalServiceInventoryMachineSummary(key, { v: 1, state: 'unknown' });
+        pending.resolve({ summary: { v: 1, state: 'ready', runningCount: 8 } });
+        await read;
+        expect(getLocalServiceInventoryRunningCount(key)).toBeNull();
+        acquisition.dispose();
+    });
     beforeEach(() => {
         rpc.snapshot.mockReset();
         rpc.machine.mockReset().mockImplementation(async (request: { method: string }) => {

@@ -10,6 +10,7 @@ import {
   type ProjectServiceDeclarationRefV1,
 } from '../../local/services/actions/v1.js';
 import { DaemonLocalServiceInventorySnapshotRequestV1Schema, DaemonLocalServiceInventorySnapshotResponseV1Schema,
+  DaemonLocalServiceInventoryRefreshRequestV1Schema, LocalServiceInventoryCountResponseV1Schema,
   LocalServiceInventorySnapshotV1Schema } from '../../local/services/inventory/v1.js';
 import {
   DaemonLocalServiceLauncherHistoryClearResponseV1Schema,
@@ -98,7 +99,7 @@ export const LOCAL_SERVICE_DOMAIN_ACTION_RPC_BINDINGS = Object.freeze({
   'localServices.inventory.list': { rpcMethod: RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
     requestSchema: DaemonLocalServiceInventorySnapshotRequestV1Schema, snapshotResponseSchema: DaemonLocalServiceInventorySnapshotResponseV1Schema },
   'localServices.inventory.refresh': { rpcMethod: RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH,
-    requestSchema: DaemonLocalServiceInventorySnapshotRequestV1Schema, snapshotResponseSchema: DaemonLocalServiceInventorySnapshotResponseV1Schema },
+    requestSchema: DaemonLocalServiceInventoryRefreshRequestV1Schema, snapshotResponseSchema: DaemonLocalServiceInventorySnapshotResponseV1Schema },
   'localServices.launcher.snapshot': { rpcMethod: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,
     requestSchema: DaemonLocalServiceLauncherSnapshotRequestV1Schema, snapshotResponseSchema: DaemonLocalServiceLauncherSnapshotResponseV1Schema },
   'localServices.launcher.registerPreview': { rpcMethod: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_REGISTER_PREVIEW,
@@ -256,7 +257,10 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_DESCRIPTIONS: Readonly<Partial<Record
  */
 export const LOCAL_SERVICES_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'projects.service.relocate': ProjectServiceRelocateInputV1Schema,
-  'localServices.inventory.list': RuntimeLocalServiceMachineInputSchema,
+  'localServices.inventory.list': lazyZodSchema(() => z.union([
+    z.strictObject({ ...RuntimeLocalServiceMachineInputSchema.shape, projection: z.literal('count') }),
+    z.looseObject({ ...RuntimeLocalServiceMachineInputSchema.shape, projection: z.optional(z.never()) }),
+  ])),
   'localServices.inventory.refresh': RuntimeLocalServiceMachineInputSchema,
   'localServices.launcher.snapshot': RuntimeLocalServiceMachineInputSchema,
   'localServices.launcher.start': DaemonLocalServiceLauncherStartRequestV1Schema,
@@ -280,7 +284,7 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
 
 export const LOCAL_SERVICES_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'projects.service.relocate': ProjectServiceRelocateResultV1Schema,
-  'localServices.inventory.list': LocalServiceInventorySnapshotV1Schema,
+  'localServices.inventory.list': lazyZodSchema(() => z.union([LocalServiceInventoryCountResponseV1Schema, LocalServiceInventorySnapshotV1Schema])),
   'localServices.inventory.refresh': LocalServiceInventorySnapshotV1Schema,
   'localServices.launcher.snapshot': LocalServiceLauncherSnapshotV1Schema,
   'localServices.launcher.start': DaemonLocalServiceLauncherStartResponseV1Schema,

@@ -4,6 +4,7 @@ import { DaemonLocalServicePublicPreviewCopyUrlRequestV1Schema, DaemonLocalServi
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
+import { fetchLocalServiceInventorySummaryViaMachineRpc } from '../inventory/machineRpc';
 import { DaemonLocalServiceLauncherLeafRequestV1Schema, DaemonLocalServiceLauncherSnapshotRequestV1Schema, DaemonLocalServiceLauncherStartRequestV1Schema, type DaemonLocalServiceLauncherLeafRequestV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { requiresAgentEgressRedaction } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { resolveLocalServiceActionKindForRuntimeActionId } from '@happier-dev/protocol/actions/specs/localServices';
@@ -27,7 +28,7 @@ import {
     type LocalServiceInventorySnapshotClientResult,
     type LocalServiceInventorySnapshotRequest,
 } from '../inventory/api';
-import { invalidateLocalServiceInventoryStore, publishLocalServiceInventorySnapshot } from '../inventory/sharedStore';
+import { invalidateLocalServiceInventoryStore, publishLocalServiceInventorySnapshot, publishLocalServiceInventorySummary } from '../inventory/sharedStore';
 import type { LocalServiceInventorySnapshot } from '../inventory/store';
 import {
     fetchLocalServiceLauncherSnapshot,
@@ -427,6 +428,13 @@ export function createLocalServicesRuntimeActionExecutor(
 
         if (args.actionId === 'localServices.inventory.list' || args.actionId === 'localServices.inventory.refresh') {
             if (!machineId) return disabledResult('local_services_machine_unavailable');
+            if (args.actionId === 'localServices.inventory.list' && isRecord(parsed.input) && parsed.input.projection === 'count') {
+                const summary = await fetchLocalServiceInventorySummaryViaMachineRpc({ machineId, serverId,
+                    ...(catalogBinding ? { accountId: catalogBinding.lifetime.scope.accountId } : {}), signal: args.context.signal });
+                if (!summary) return routeFailureResult('inventory', 'unavailable');
+                if (mayPublishCatalog(serverId)) publishLocalServiceInventorySummary({ machineId, serverId, ...catalogScope }, summary);
+                return { summary };
+            }
             const result = await fetchInventorySnapshot({
                 machineId,
                 serverId,

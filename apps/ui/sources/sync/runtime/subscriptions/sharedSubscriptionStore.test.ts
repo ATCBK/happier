@@ -15,6 +15,37 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it('shares a one-shot acquired read until its last mounted owner retires', async () => {
+        const calls: AbortSignal[] = [];
+        let finish = () => {};
+        const store = createSharedSubscriptionStore({ emptyState: 0, createState: () => 0,
+            normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            retainState: true, defaultSnapshotClient: async () => 0,
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, next: number) => next });
+        const read = (signal: AbortSignal) => {
+            calls.push(signal);
+            return new Promise<void>(resolve => { finish = resolve; });
+        };
+        const first = store.acquireReadOnce('machine-a', 'session-a', read);
+        const second = store.acquireReadOnce('machine-a', 'session-a', read);
+        const reads = [first.readOnce(), second.readOnce()];
+        expect(calls).toHaveLength(1);
+        first.dispose();
+        expect(calls[0]?.aborted).toBe(false);
+        finish();
+        await Promise.all(reads);
+        await second.readOnce();
+        expect(calls).toHaveLength(1);
+        second.dispose();
+        const reopened = store.acquireReadOnce('machine-a', 'session-a', read);
+        const pending = reopened.readOnce();
+        expect(calls).toHaveLength(2);
+        store.reset();
+        expect(calls[1]?.aborted).toBe(true);
+        finish();
+        await pending;
+        reopened.dispose();
+    });
     it('forgets retained content on owner retirement without deleting another or replacement entry', async () => {
         const retirements: Array<{ key: string; retire(): void; dispose: ReturnType<typeof vi.fn> }> = [];
         let value = 0;

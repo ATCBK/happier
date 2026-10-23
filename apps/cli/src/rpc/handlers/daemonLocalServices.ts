@@ -1,4 +1,5 @@
 import type { RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
+import { LocalServiceInventoryCountResponseV1Schema, type LocalServiceInventoryCountResponseV1 } from '@happier-dev/protocol/local/services/inventory/v1';
 import { DaemonLocalServiceActionExecuteRequestV1Schema, DaemonLocalServiceActionExecuteResponseV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
 import { DaemonLocalServiceInventoryRefreshRequestV1Schema, DaemonLocalServiceInventoryRefreshResponseV1Schema, DaemonLocalServiceInventorySnapshotRequestV1Schema, DaemonLocalServiceInventorySnapshotResponseV1Schema, DaemonLocalServiceInventoryWatchRequestV1Schema, DaemonLocalServiceInventoryWatchResponseV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
 import { DaemonLocalServiceLauncherHistoryClearResponseV1Schema, DaemonLocalServiceLauncherLeafRequestV1Schema, DaemonLocalServiceLauncherOpenPreviewResponseV1Schema, DaemonLocalServiceLauncherRegisterPreviewResponseV1Schema, DaemonLocalServiceLauncherSnapshotRequestV1Schema, DaemonLocalServiceLauncherSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -26,7 +27,7 @@ export type DaemonLocalServicesMachineRpcRoutes = Pick<DaemonLocalServicePreview
     accountId?: string;
     localServicesInventory?:
         & Pick<LocalServiceInventoryRoutes, 'getSnapshot' | 'refreshSnapshot'>
-        & Partial<Pick<LocalServiceInventoryRoutes, 'watchSnapshot'>>
+        & Partial<Pick<LocalServiceInventoryRoutes, 'watchSnapshot' | 'getSummary'>>
         | null;
     localServicesLauncher?: Pick<LocalServiceLauncherRoutes, 'getSnapshot'> & Partial<Pick<LocalServiceLauncherRoutes, 'startTarget' | 'leaves' | 'prepareStartApproval'>> | null;
     localServicesPreview?: LocalServicePreviewRoutes | null;
@@ -82,10 +83,14 @@ export function registerDaemonLocalServicesMachineRpcHandlers(
     if (options.localServicesInventory) {
         rpc.registerHandler(
             RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
-            async (raw: unknown, context): Promise<DaemonLocalServiceInventorySnapshotResponseV1> => {
-                DaemonLocalServiceInventorySnapshotRequestV1Schema.parse(raw);
+            async (raw: unknown, context): Promise<DaemonLocalServiceInventorySnapshotResponseV1 | LocalServiceInventoryCountResponseV1> => {
+                const request = DaemonLocalServiceInventorySnapshotRequestV1Schema.parse(raw);
                 await assertRequesterRead(context);
                 const routes = requireInventoryRoutes(options);
+                if (options.machineId && request.machineId !== options.machineId) throw new Error('Local service inventory Machine target does not match');
+                if (request.projection === 'count') return LocalServiceInventoryCountResponseV1Schema.parse({
+                    summary: routes.getSummary?.() ?? { v: 1, state: 'unknown' },
+                });
                 const snapshot = await routes.getSnapshot();
                 await assertRequesterRead(context);
                 return DaemonLocalServiceInventorySnapshotResponseV1Schema.parse({

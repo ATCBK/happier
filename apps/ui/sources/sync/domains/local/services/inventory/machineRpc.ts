@@ -5,6 +5,8 @@ import {
     DaemonLocalServiceInventorySnapshotResponseV1Schema,
     DaemonLocalServiceInventoryWatchRequestV1Schema,
     DaemonLocalServiceInventoryWatchResponseV1Schema,
+    LocalServiceInventoryCountResponseV1Schema,
+    type LocalServiceMachineSummaryV1,
 } from '@happier-dev/protocol/local/services/inventory/v1';
 import { isRpcMethodNotFoundResult, RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { isMachineRpcTimeoutError, MACHINE_RPC_TIMEOUT_ERROR_CODE, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
@@ -18,6 +20,21 @@ import {
     type LocalServiceInventoryWatchClientInput,
     type LocalServiceInventoryWatchClientResult,
 } from './api';
+
+export async function fetchLocalServiceInventorySummaryViaMachineRpc(
+    input: Omit<LocalServiceInventorySnapshotClientInput, 'refresh' | 'request'>,
+): Promise<LocalServiceMachineSummaryV1 | null> {
+    if (input.signal?.aborted) return null;
+    try {
+        const payload = DaemonLocalServiceInventorySnapshotRequestV1Schema.parse({ machineId: input.machineId, projection: 'count' });
+        const raw = await machineRpcWithServerScope<unknown, typeof payload>({ machineId: input.machineId,
+            serverId: input.serverId, accountId: input.accountId, method: RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
+            payload, signal: input.signal });
+        if (input.signal?.aborted) return null;
+        const result = LocalServiceInventoryCountResponseV1Schema.safeParse(raw);
+        return result.success ? result.data.summary : null;
+    } catch { return null; }
+}
 
 export async function fetchLocalServiceInventorySnapshotViaMachineRpc(
     input: LocalServiceInventorySnapshotClientInput,

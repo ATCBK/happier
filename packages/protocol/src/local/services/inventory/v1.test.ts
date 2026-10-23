@@ -5,7 +5,23 @@ import {
   LocalServiceInventoryLabelPatchV1Schema,
   LocalServiceInventorySnapshotV1Schema,
   LocalServiceInventoryUpdateEventV1Schema,
+  DaemonLocalServiceInventorySnapshotRequestV1Schema,
+  LocalServiceInventoryCountResponseV1Schema,
 } from './v1.js';
+
+it('admits a scalar inventory read without changing the ordinary snapshot request', () => {
+  expect(DaemonLocalServiceInventorySnapshotRequestV1Schema.parse({ machineId: 'machine-a', projection: 'count' }))
+    .toEqual({ machineId: 'machine-a', projection: 'count' });
+  expect(DaemonLocalServiceInventorySnapshotRequestV1Schema.parse({ machineId: 'machine-a' })).toEqual({ machineId: 'machine-a' });
+  expect(DaemonLocalServiceInventorySnapshotRequestV1Schema.safeParse({ machineId: 'machine-a', projection: 'full' }).success).toBe(false);
+  expect(LocalServiceInventoryCountResponseV1Schema.parse({ summary: { v: 1, state: 'ready', runningCount: 0 } }))
+    .toEqual({ summary: { v: 1, state: 'ready', runningCount: 0 } });
+  for (const runningCount of [-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(LocalServiceInventoryCountResponseV1Schema.safeParse({ summary: { v: 1, state: 'ready', runningCount } }).success).toBe(false);
+  }
+  expect(LocalServiceInventoryCountResponseV1Schema.safeParse({ summary: { v: 1, state: 'error', runningCount: 0 } }).success).toBe(false);
+  expect(LocalServiceInventoryCountResponseV1Schema.safeParse({ summary: { v: 1, state: 'ready', runningCount: 1 }, snapshot: {} }).success).toBe(false);
+});
 
 describe('LocalServiceInventoryEntryV1Schema', () => {
   it('separates observed listener facts from label annotations and sanitized provenance', () => {

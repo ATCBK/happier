@@ -1,4 +1,5 @@
 import type { UsageLimitContinuationResult } from '@/daemon/connectedServices/continuation/continueSessionAfterUsageLimitReset';
+import { LocalServiceInventoryCountResponseV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
 import type { readLatestUsageLimitFailureIssue } from '@/session/usageLimitRecoveryControls/readLatestUsageLimitFailureIssue';
 import type { readCurrentRunnerAgentStartPolicyV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
 import type { RequesterAgentStartPolicyV1 } from '@/daemon/sessionEncryption/requesterAgentStartPolicy';
@@ -3858,7 +3859,8 @@ export function createCliActionDeps(params: Readonly<{
       }));
       const failure = ActionExecuteFailureSchema.safeParse(response);
       if (failure.success) return failure.data;
-      const result = domainRpc && 'snapshotResponseSchema' in domainRpc
+      const countProjection = args.actionId === 'localServices.inventory.list' && 'projection' in request && request.projection === 'count';
+      const result = countProjection ? LocalServiceInventoryCountResponseV1Schema.parse(response) : domainRpc && 'snapshotResponseSchema' in domainRpc
         ? domainRpc.snapshotResponseSchema.parse(response).snapshot : response;
       if (requiresAgentEgressRedaction(args.context)) {
         if (args.actionId === 'localServices.publicPreview.status') return redactLocalServicePublicPreviewSnapshotForAgentEgress(LocalServicePublicPreviewSnapshotV1Schema.parse(result));

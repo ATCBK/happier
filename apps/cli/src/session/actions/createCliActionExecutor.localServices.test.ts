@@ -66,6 +66,14 @@ function receivingMachineBoundary(response: unknown, actionId: ActionId = 'local
 describe('credentialed CLI Local Services runtime dispatch', () => {
     afterEach(() => vi.restoreAllMocks());
 
+    it.each(['cli', 'agent', 'mcp'] as const)('reads the scalar Services projection through %s without a full inventory fallback', async surface => {
+        const result = { summary: { v: 1, state: 'ready', runningCount: 3 } };
+        const { executor, requests, context } = receivingMachineBoundary(result, 'localServices.inventory.list', false, surface);
+        const input = { machineId: 'machine-a', projection: 'count' as const };
+        expect(await executor.execute('localServices.inventory.list', input, context)).toEqual({ ok: true, result });
+        expect(requests).toEqual([expect.objectContaining({ method: `machine-a:${RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT}`, params: input })]);
+    });
+
     it('compiles service discovery and renders actual state through the credentialed Action executor', async () => {
         const snapshot = { v: 1, machineId: 'machine-a', updatedAt: 1, targets: [{ id: 'service-web', machineId: 'machine-a',
             source: 'managed_service', sourceClass: { kind: 'managed_service', managedServiceId: 'instance-web' },

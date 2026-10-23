@@ -2,7 +2,7 @@ import { resolveCliFeatureDecision, type CliServerFeaturesSnapshot } from '@/fea
 import { startSingleFlightIntervalLoop, type SingleFlightIntervalLoopHandle } from '@/daemon/lifecycle/singleFlightIntervalLoop';
 import { listSessionMarkers } from '@/daemon/sessionRegistry';
 import { logger } from '@/ui/logger';
-import { localServiceListenerGroupKey } from '@happier-dev/protocol/local/services/inventory/listeners';
+import { projectLocalServiceMachineSummaryV1 } from '@happier-dev/protocol/local/services/inventory/v1';
 import type { LocalServiceMachineSummaryV1 } from '@happier-dev/protocol/local/services/inventory';
 import { DEFAULT_LOCAL_SERVICE_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/localServiceCapabilities';
 import type { FeatureDecision } from '@happier-dev/protocol';
@@ -296,23 +296,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     const summarySubscribers = new Set<(summary: LocalServiceMachineSummaryV1) => void>();
     let summary: LocalServiceMachineSummaryV1 = { v: 1, state: 'unknown' };
     const publishInventorySummary = (snapshot: NormalizedLocalServiceInventorySnapshot): void => {
-        let next: LocalServiceMachineSummaryV1;
-        if (snapshot.refreshState === 'error') {
-            next = {
-                v: 1,
-                state: snapshot.diagnostics.some((diagnostic) => diagnostic.code === 'local_services_inventory_probe_failed')
-                    ? 'unknown' : 'error',
-            };
-        } else if (snapshot.diagnostics.some((diagnostic) => diagnostic.code.startsWith('local_services_inventory_'))) {
-            next = { v: 1, state: 'disabled' };
-        } else if (snapshot.generatedAt === 0) {
-            next = { v: 1, state: 'unknown' };
-        } else {
-            const listeners = new Set(snapshot.entries
-                .filter((entry) => entry.state === 'listening' && entry.classification?.kind !== 'happier')
-                .map(localServiceListenerGroupKey));
-            next = { v: 1, state: 'ready', runningCount: listeners.size };
-        }
+        const next = projectLocalServiceMachineSummaryV1(snapshot);
         if (summary.state === next.state && (
             summary.state !== 'ready' || next.state !== 'ready' || summary.runningCount === next.runningCount
         )) return;
@@ -582,6 +566,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
 
     const inventoryRoutes = createLocalServiceInventoryRoutes({
         registry: inventoryRegistry,
+        getSummary: () => summary,
         refreshSnapshot: refreshInventoryNow,
         ensureFreshSnapshot: ensureFreshInventory,
         onWatcherCountChanged: (count) => {

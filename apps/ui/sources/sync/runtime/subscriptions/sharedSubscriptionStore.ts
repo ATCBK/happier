@@ -4,6 +4,14 @@ export type SharedSubscriptionStoreOptions<TSnapshotClient, TWatchClient = never
     nowMs?: () => number;
 }>;
 
+export type SharedSubscriptionReadAcquisition = Readonly<{ readOnce(): Promise<void>; dispose(): void }>;
+
+type AcquiredRead = {
+    refCount: number;
+    controller: AbortController;
+    read: Promise<void> | null;
+};
+
 export type SharedSubscriptionRefreshParams<TInput, TState, TSnapshotClient> = Readonly<{
     input: TInput;
     state: TState;
@@ -113,13 +121,15 @@ export type SharedSubscriptionStore<
     observeRefreshing(input: TInput, listener: () => void): () => void;
     read(input: TInput, options?: SharedSubscriptionStoreOptions<TSnapshotClient, TWatchClient>): Promise<void>;
     readOnce(input: TInput, options?: SharedSubscriptionStoreOptions<TSnapshotClient, TWatchClient>): Promise<void>;
+    /** A mounted caller lifetime shares one passive read without acquiring refresh/watch demand. */
+    acquireReadOnce(input: TInput, ownerId: string, read: (signal: AbortSignal) => Promise<void>): SharedSubscriptionReadAcquisition;
     subscribe(
         input: TInput,
         listener: () => void,
         options?: SharedSubscriptionStoreOptions<TSnapshotClient, TWatchClient>,
     ): () => void;
     invalidate(input: TInput): void;
-    publish(input: TInput, snapshot: TSnapshot): void;
+    publish(input: TInput, snapshot: TSnapshot, options?: Readonly<{ resumeWatch?: boolean }>): void;
     reset(): void;
 }>;
 
@@ -130,6 +140,7 @@ type SharedSubscriptionStoreEntry<TInput, TState, TSnapshotClient, TWatchClient>
     watchClient: TWatchClient;
     readonly listeners: Set<() => void>;
     readonly refreshListeners: Set<() => void>;
+    readonly acquiredReads: Map<string, AcquiredRead>;
     refreshing: boolean;
     refCount: number;
     inFlight: Promise<void> | null;
@@ -197,6 +208,7 @@ export function createSharedSubscriptionStore<
                 watchClient: (options?.watchClient ?? config.defaultWatchClient) as TWatchClient,
                 listeners: new Set(),
                 refreshListeners: new Set(),
+                acquiredReads: new Map(),
                 refreshing: false,
                 refCount: 0,
                 inFlight: null,
@@ -361,6 +373,8 @@ export function createSharedSubscriptionStore<
         entry.unsubscribeRetirement?.();
         entry.unsubscribeRetirement = null;
         entry.abortController?.abort();
+        for (const read of entry.acquiredReads.values()) read.controller.abort();
+        entry.acquiredReads.clear();
         stopWatch(entry);
         setState(entry, config.emptyState);
         setRefreshing(entry, false);
@@ -397,6 +411,34 @@ export function createSharedSubscriptionStore<
             const normalized = config.normalizeInput(input);
             const entry = ensureEntry(config.storeKey(normalized), normalized, options);
             return entry.inFlight ?? (entry.readStarted ? Promise.resolve() : runRefresh(entry));
+        },
+        acquireReadOnce(input, ownerId, read) {
+            const normalized = config.normalizeInput(input);
+            const key = config.storeKey(normalized);
+            const entry = ensureEntry(key, normalized);
+            let acquired = entry.acquiredReads.get(ownerId);
+            if (!acquired) {
+                acquired = { refCount: 0, controller: new AbortController(), read: null };
+                entry.acquiredReads.set(ownerId, acquired);
+            }
+            const shared = acquired;
+            shared.refCount += 1;
+            let disposed = false;
+            return {
+                readOnce() {
+                    if (disposed || shared.controller.signal.aborted) return Promise.resolve();
+                    if (!shared.read) shared.read = read(shared.controller.signal);
+                    return shared.read;
+                },
+                dispose() {
+                    if (disposed) return;
+                    disposed = true;
+                    shared.refCount -= 1;
+                    if (shared.refCount > 0) return;
+                    shared.controller.abort();
+                    if (entry.acquiredReads.get(ownerId) === shared) entry.acquiredReads.delete(ownerId);
+                },
+            };
         },
         subscribe(input, listener, options) {
             const normalized = config.normalizeInput(input);
@@ -474,7 +516,7 @@ export function createSharedSubscriptionStore<
                 else runWatchLoop(entry);
             }
         },
-        publish(input, snapshot) {
+        publish(input, snapshot, options) {
             const normalized = config.normalizeInput(input);
             const matchesPublish = config.matchesPublish;
             const snapshotCoversEntry = config.snapshotCoversEntry;
@@ -492,6 +534,7 @@ export function createSharedSubscriptionStore<
                     continue;
                 }
                 setState(entry, config.applySnapshot(entry.state, snapshot));
+                if (options?.resumeWatch === false) continue;
                 // An Action's successful read publishes here instead of calling
                 // invalidate. Its fresh snapshot also restores the parked watch;
                 // otherwise a recovered surface stops receiving later changes.
@@ -508,6 +551,8 @@ export function createSharedSubscriptionStore<
                 entry.unsubscribeRetirement?.();
                 entry.unsubscribeRetirement = null;
                 entry.abortController?.abort();
+                for (const read of entry.acquiredReads.values()) read.controller.abort();
+                entry.acquiredReads.clear();
                 setRefreshing(entry, false);
                 stopWatch(entry);
             }

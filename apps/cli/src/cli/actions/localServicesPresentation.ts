@@ -1,5 +1,5 @@
 import { LOCAL_SERVICES_RUNTIME_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/localServices';
-import { LocalServiceInventorySnapshotV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
+import { LocalServiceInventoryCountResponseV1Schema, LocalServiceInventorySnapshotV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
 import { DaemonLocalServiceLauncherHistoryClearResponseV1Schema, DaemonLocalServiceLauncherRegisterPreviewResponseV1Schema,
   DaemonLocalServiceLauncherStartResponseV1Schema, LocalServiceLauncherSnapshotV1Schema,
   type LocalServiceLauncherSnapshotV1 } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -51,6 +51,11 @@ export const LOCAL_SERVICES_PRESENTATION: ActionCliPresentation = {
     switch (context.command.actionId) {
       case 'localServices.inventory.list':
       case 'localServices.inventory.refresh': {
+        const count = LocalServiceInventoryCountResponseV1Schema.safeParse(payload);
+        if (count.success) {
+          console.log(count.data.summary.state === 'ready' ? `Running services: ${count.data.summary.runningCount}` : `Running services: ${count.data.summary.state}`);
+          return true;
+        }
         const snapshot = LocalServiceInventorySnapshotV1Schema.parse(payload);
         console.log(`Machine ${snapshot.machineId} · ${snapshot.refreshState}`);
         for (const entry of snapshot.entries) {
