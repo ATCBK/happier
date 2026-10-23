@@ -8192,6 +8192,9 @@ localTailscale: {
         body: ({ count }: { count: number }) => count > 0 ? `バックグラウンドの処理が${count}件実行中です。再起動すると、この処理が停止する場合があります。` : '再起動すると、このセッションのバックグラウンド処理が停止する場合があります。',
         confirmAction: '再起動を続行',
     },
+    startFailure: {
+      title: "このセッションを開始できませんでした",
+    },
     staleRunner: {
       banner: {
         stopAndResumeBody: 'このランナーは安全に再起動できません。セッションを停止し、再開して現在のランタイムを使用してください。',

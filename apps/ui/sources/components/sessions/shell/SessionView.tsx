@@ -141,6 +141,8 @@ import { createSessionCompanionPanePresentation } from "@/components/sessions/co
 import type { PaneMainColumnState } from "@/components/appShell/panes/mainColumn/usePaneMainColumn";
 import { resolveSessionRoutePathForSurface } from "@/components/workspaceCockpit/session/sessionCockpitState";
 import { ComposerAuxiliaryFrame } from "./view/ComposerAuxiliaryFrame";
+import { SessionStartFailureBanner } from "@/components/sessions/startFailure/SessionStartFailureBanner";
+import { resolveSessionStartFailureNotice } from "@/components/sessions/startFailure/sessionStartFailureNotice";
 import { SessionComputerPresenceLine } from "@/components/computer/SessionComputerPresenceLine";
 import { SessionViewerHost } from "@/components/sessions/viewer/SessionViewerHost";
 import { SessionViewerScope } from "@/components/sessions/viewer/SessionViewerScope";
@@ -2484,6 +2486,18 @@ function SessionViewLoadedContent({
                       />
                   </ComposerAuxiliaryFrame>
               ) : null;
+      // Retry is the Resume owner and is offered only while it can run, as the status line's own Resume is.
+      const startFailureRetry = inactiveUi.shouldShowInput && inactiveUi.noticeKind === 'none'
+          && !sessionMachineAccessRemoved && hasWriteAccess
+          ? {
+              busy: sessionStatus.state === 'resuming',
+              run: () => fireAndForget(handleResumeSession(), { tag: 'SessionView.startFailure.retry' }),
+          }
+          : null;
+      const startFailureNotice = resolveSessionStartFailureNotice({ issue: session.lastRuntimeIssue, sessionActive: session.active === true });
+      const startFailureBanner = startFailureNotice
+          ? <SessionStartFailureBanner notice={startFailureNotice} retry={startFailureRetry} />
+          : null;
       const content = (
           <>
               {authSurfaceState && !(inactiveUi.shouldShowInput && !isEncryptedSessionLocked) ? (
@@ -2656,7 +2670,7 @@ function SessionViewLoadedContent({
             {embedded ? null : header}
             {/* The transcript's own positioning context: its floating notices anchor below the header. */}
             <View style={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }}>
-            {requesterRecoveryBanner ? <PaneMainBody>{requesterRecoveryBanner}</PaneMainBody> : null}
+            {requesterRecoveryBanner || startFailureBanner ? <PaneMainBody>{requesterRecoveryBanner}{startFailureBanner}</PaneMainBody> : null}
             <SessionTranscriptSelectionBoundary
                 sessionId={sessionId}
                 metadata={ownerMetadata}

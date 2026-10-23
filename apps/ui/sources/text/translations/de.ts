@@ -7870,6 +7870,9 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             body: ({ count }: { count: number }) => count > 0 ? `Im Hintergrund läuft Arbeit (${count}). Ein Neustart kann diese Arbeit beenden.` : 'Ein Neustart kann Hintergrundarbeit in dieser Sitzung beenden.',
             confirmAction: 'Trotzdem neu starten',
         },
+        startFailure: {
+          title: 'Diese Session konnte nicht gestartet werden',
+        },
         staleRunner: {
             banner: {
                 stopAndResumeBody: 'Dieser Runner kann nicht sicher neu starten. Stoppe die Session und setze sie dann fort, um die aktuelle Runtime zu nutzen.',

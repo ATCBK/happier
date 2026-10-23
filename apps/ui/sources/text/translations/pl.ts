@@ -7724,6 +7724,9 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
         body: ({ count }: { count: number }) => count > 0 ? `Praca w tle jest w toku (${count}). Ponowne uruchomienie może zatrzymać tę pracę.` : 'Ponowne uruchomienie może zatrzymać pracę w tle w tej sesji.',
         confirmAction: 'Uruchom ponownie mimo to',
     },
+    startFailure: {
+      title: "Nie udało się uruchomić tej sesji",
+    },
     staleRunner: {
       banner: {
         stopAndResumeBody: 'Tego runnera nie można bezpiecznie uruchomić ponownie. Zatrzymaj sesję, a następnie ją wznów, aby użyć bieżącego środowiska uruchomieniowego.',

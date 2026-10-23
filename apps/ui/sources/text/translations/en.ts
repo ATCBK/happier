@@ -9393,6 +9393,9 @@ const enSession = {
     body: ({ count }: { count: number }) => count > 0 ? `${count} background ${count === 1 ? 'activity is' : 'activities are'} running. Restarting may stop this work.` : 'Restarting may stop background work in this session.',
     confirmAction: 'Restart anyway',
   },
+  startFailure: {
+    title: 'Couldn’t start this session',
+  },
   staleRunner: {
     banner: {
       stopAndResumeBody: 'This runner cannot restart safely. Stop the session, then Resume to use the current runtime.',
