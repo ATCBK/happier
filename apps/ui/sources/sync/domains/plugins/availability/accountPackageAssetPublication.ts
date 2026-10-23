@@ -1,5 +1,6 @@
 import type { PluginProjectionV2 } from '@happier-dev/protocol';
-import { createPackageAssetArchiveV1, openPackageAssetArchiveV1 } from '@happier-dev/protocol/plugins/availability';
+import { createPackageAssetArchiveV1 } from '@happier-dev/protocol/plugins/availability';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { createPluginContextualResourceReadClient, type PluginSurfaceResourceReadTransport } from '@/components/plugins/surfaces/pluginSurfaceResourceRead';
 import {
@@ -53,7 +54,6 @@ function readPublicationSource(input: PluginAccountPackageAssetPublicationInput)
     return {
         target: admitted.target,
         materializationId: materialization.materializationId,
-        generation: input.projection.generation,
         installedGeneration: installed.immutableGenerationId,
         occurrenceId: installed.occurrenceId,
     };
@@ -64,7 +64,7 @@ function samePublicationSource(
     right: ReturnType<typeof readPublicationSource>,
 ): boolean {
     if (!left || !right) return left === right;
-    return left.generation === right.generation && left.installedGeneration === right.installedGeneration
+    return left.installedGeneration === right.installedGeneration && left.occurrenceId === right.occurrenceId
         && left.materializationId === right.materializationId
         && left.target.release.version === right.target.release.version
         && left.target.descriptor.archiveDigestSha256 === right.target.descriptor.archiveDigestSha256;
@@ -115,11 +115,7 @@ export async function acquireAndPublishPluginAccountPackageAssets(
             manifest: source.target.normalizedManifest,
             files: [...files].map(([path, bytes]) => ({ path, bytes })),
         });
-        if (!archive || !openPackageAssetArchiveV1({
-            expectedDescriptor: source.target.descriptor,
-            header: archive.header,
-            body: archive.body,
-        }) || !isCurrent()) return;
+        if (!archive || !sameStrictJsonValue(archive.descriptor, source.target.descriptor) || !isCurrent()) return;
         const publish = dependencies.publisher?.publishPackageAssets ?? publishActivePluginAccountPackageAssets;
         const result = await publish({ accountLifetime: input.accountLifetime, release: source.target.release, archive, signal });
         return isCurrent() ? result : undefined;

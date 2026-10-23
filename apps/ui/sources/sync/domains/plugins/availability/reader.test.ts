@@ -13,8 +13,6 @@ import {
 import {
     createPluginAccountAvailabilityReader,
     createPluginAccountAvailabilityReaderStore,
-    readHostBundledPluginUiDeclarations,
-    readPluginUiAccountActionDeclaration,
     type PluginAccountAvailabilitySnapshot,
 } from './reader';
 import { normalizePluginUiDestinationBindingV1, PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
@@ -120,6 +118,57 @@ function snapshot(overrides: Partial<PluginAccountAvailabilitySnapshot> = {}): P
 }
 
 describe('Plugin Account Availability reader', () => {
+    it('publishes stable semantic UI inputs while observations advance and real declaration/lifecycle changes remain visible', () => {
+        const store = createPluginAccountAvailabilityReaderStore();
+        const reader = store.bind(scope);
+        expect(reader.readUiProjectionInputs).toEqual(expect.any(Function));
+        expect(reader.readUiProjectionInputs()).toBeNull();
+        const base = snapshot();
+        const materialization = PluginMachineMaterializationV1Schema.parse({
+            ...base.materializations[0], portableRelease: false, sourceClass: 'localPath',
+            enabled: true, trustState: 'trusted',
+            declaredManifest: intentRead().release!.normalizedManifest, declaredUiEntries: {},
+        });
+        const value = snapshot({ materializations: [materialization],
+            snapshots: [{ ...base.snapshots[0]!, materializations: [materialization] }],
+        });
+        store.replace({ scope, snapshot: value });
+        const first = reader.readUiProjectionInputs();
+        expect(first?.installedPlugins?.[0]?.installations[0]?.declaration?.id).toBe('com.acme.fixture');
+        const notification = vi.fn();
+        const unsubscribe = store.subscribe(notification);
+        let observation = reader.getObservationSnapshot();
+        for (let index = 1; index <= 20; index += 1) {
+            const row = { ...materialization, observedAt: materialization.observedAt + index };
+            store.replace({ scope, snapshot: { ...value, availabilityCursor: 42 + index,
+                materializations: [row], snapshots: [{ ...value.snapshots[0]!, materializations: [row] }],
+            } });
+            expect(reader.readUiProjectionInputs()).toBe(first);
+            expect(reader.getObservationSnapshot()).not.toBe(observation);
+            observation = reader.getObservationSnapshot();
+            expect(reader.readMaterializations()).toMatchObject({ availabilityCursor: 42 + index,
+                materializations: [{ observedAt: materialization.observedAt + index }],
+            });
+        }
+        expect(notification).toHaveBeenCalledTimes(20);
+        const changed = { ...materialization, declaredManifest: { ...materialization.declaredManifest!, displayName: 'Changed external declaration' } };
+        store.replace({ scope, snapshot: { ...value, materializations: [changed] } });
+        const declared = reader.readUiProjectionInputs();
+        expect(declared).not.toBe(first);
+        expect(declared?.installedPlugins?.[0]?.installations[0]?.declaration?.displayName).toBe('Changed external declaration');
+        store.replace({ scope, snapshot: { ...value, materializations: [{ ...changed, trustState: 'revoked' }] } });
+        const revoked = reader.readUiProjectionInputs();
+        expect(revoked).not.toBe(declared);
+        expect(revoked?.materializations[0]?.trustState).toBe('revoked');
+        store.retire([materialization.pluginId]);
+        expect(reader.readUiProjectionInputs()).not.toBe(revoked);
+        store.replace({ scope: { ...scope, accountId: 'account-b' }, snapshot: value });
+        expect(reader.readUiProjectionInputs()).toBeNull();
+        store.clear();
+        expect(store.bind({ ...scope, accountId: 'account-b' }).readUiProjectionInputs()).toBeNull();
+        unsubscribe();
+    });
+
     it('keeps equal replacement publications quiet while publishing cursor, refresh-status and scope changes', () => {
         const store = createPluginAccountAvailabilityReaderStore();
         const createSnapshot = () => snapshot({ intentReads: [{ pluginId: 'com.acme.fixture', response: intentRead() }] });
@@ -152,6 +201,36 @@ describe('Plugin Account Availability reader', () => {
         expect(notify).toHaveBeenCalledTimes(4);
         expect(reader.readMaterializations()).toEqual({ kind: 'unavailable', code: 'account_availability_scope_mismatch' });
         unsubscribe();
+    });
+
+    it('publishes empty inventory census transitions without manufacturing a loaded projection before admission', () => {
+        const store = createPluginAccountAvailabilityReaderStore();
+        const reader = store.bind(scope);
+        expect(reader.readUiProjectionInputs).toEqual(expect.any(Function));
+        const empty = snapshot({ materializations: [], snapshots: [], inventoryComplete: false });
+        store.replace({ scope, snapshot: empty });
+        const incomplete = reader.readUiProjectionInputs();
+        expect(incomplete).toMatchObject({ materializations: [], installedPlugins: [], accountUiProjection: null });
+        store.replace({ scope, snapshot: { ...empty, inventoryComplete: true } });
+        expect(reader.readUiProjectionInputs()).not.toBe(incomplete);
+        const complete = reader.readUiProjectionInputs();
+        store.replace({ scope, snapshot: { ...empty, inventoryComplete: true, availabilityCursor: 43 } });
+        expect(reader.readUiProjectionInputs()).toBe(complete);
+        let cursor = 43;
+        for (const inventoryComplete of [undefined, true, undefined]) {
+            store.replace({ scope, snapshot: snapshot({ materializations: [], snapshots: [],
+                availabilityCursor: ++cursor,
+                ...(inventoryComplete === undefined ? {} : { inventoryComplete }),
+            }) });
+            expect(reader.readUiProjectionInputs()).toBe(complete);
+        }
+        store.replace({ scope, snapshot: { ...empty, availabilityCursor: ++cursor } });
+        const incompleteAgain = reader.readUiProjectionInputs();
+        expect(incompleteAgain).not.toBe(complete);
+        store.replace({ scope, snapshot: snapshot({ materializations: [], snapshots: [], availabilityCursor: ++cursor }) });
+        expect(reader.readUiProjectionInputs()).not.toBe(incompleteAgain);
+        store.clear();
+        expect(reader.readUiProjectionInputs()).toBeNull();
     });
 
     it('publishes retirement and clearing once per real transition and restores retired authority on replacement', () => {
@@ -195,7 +274,6 @@ describe('Plugin Account Availability reader', () => {
         const store = createPluginAccountAvailabilityReaderStore(input);
         const reader = store.bind(scope);
         expect(reader.readCurrentAccountExecutionDeclarations()).toEqual([]);
-        expect(reader.readBundledAccountDeclarationDigest(manifest.id)).toBeNull();
         expect(reader.readCurrentArtifact({ pluginId: manifest.id, ...hostedSlot, platform: 'web' }).kind).toBe('unavailable');
         store.clear();
         store.retire([manifest.id]);
@@ -210,8 +288,6 @@ describe('Plugin Account Availability reader', () => {
         expect(published).toEqual(['available']);
         expect(acquisitions).toBe(1);
 
-        bundle.normalizedManifest.displayName = 'Caller mutation';
-        bundle.packageName = '@happier-dev/plugins-replaced';
         store.clear();
         expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
         store.replace({ scope, snapshot: empty });
@@ -249,75 +325,25 @@ describe('Plugin Account Availability reader', () => {
         expect(published).toEqual(['available']);
         unsubscribe();
     });
-    it('consumes compiled first-party custody without hashing during publication or reads', () => {
+    it('selects trusted host declarations by package and version without using artifact bytes as authority', () => {
         const manifest = PluginPortableReleaseManifestV1Schema.parse(intentRead().release!.normalizedManifest);
-        const packageName = '@happier-dev/plugins-fixture';
-        const graph = PluginUiArtifactsManifestEntryV2Schema.parse({
-            artifactId: 'fixture', tier: 'reactNative', entry: 'react-native/fixture/entry.cjs.bundle', digest: artifactDigest,
-            files: [{ relativePath: 'react-native/fixture/entry.cjs.bundle', digest: artifactDigest, byteSize: 1 }],
-            builtWith: { bundler: 'esbuild', version: '1.0.0' }, executable: { exports: ['activate'] }, hostUiApiRange: '^1.0.0',
+        const packageName = '@acme/fixture';
+        const parseManifest = vi.spyOn(PluginPortableReleaseManifestV1Schema, 'safeParse');
+        onTestFinished(() => parseManifest.mockRestore());
+        const reader = createPluginAccountAvailabilityReader({
+            scope,
+            snapshot: snapshot({ intentReads: [], materializations: [], snapshots: [] }),
+            hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
+                packageName, normalizedManifest: manifest, entriesById: {}, artifactGraphs: [] }],
         });
-        const expected = availability.computePluginAccountBundledCustodyV1({ packageName, manifest, artifacts: [graph] });
-        const custody = vi.spyOn(availability, 'computePluginAccountBundledCustodyV1');
-        onTestFinished(() => custody.mockRestore());
-        const accountCustody = { ...expected };
-        const store = createPluginAccountAvailabilityReaderStore({ loadHostBundledUi: () => readHostBundledPluginUiDeclarations([{
-            pluginId: manifest.id, releaseVersion: manifest.version, artifactId: graph.artifactId,
-            tier: graph.tier, digest: graph.digest, artifactGraph: graph, files: [],
-            uiDeclaration: { pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture', packageName,
-                normalizedManifest: manifest, entriesById: {}, artifactGraphs: [graph], accountCustody },
-        }]) });
-        const reader = store.bind(scope);
-        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
-        const empty = snapshot({ intentReads: [], materializations: [], snapshots: [] });
-        store.replace({ scope, snapshot: empty });
-        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({
-            kind: 'available', manifest, custodyId: expected.custodyId,
+        const selected = reader.readCurrentAccountExecution(manifest.id);
+        expect(selected).toMatchObject({
+            kind: 'available', manifest,
+            custodyId: JSON.stringify([packageName, manifest.id, manifest.version]),
+            sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName } },
         });
-        accountCustody.custodyId = 'later caller mutation';
-        expect(reader.readBundledAccountDeclarationDigest(manifest.id)).toBe(expected.declarationDigest);
-        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ custodyId: expected.custodyId });
-        store.clear();
-        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
-        store.replace({ scope, snapshot: empty });
-        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ custodyId: expected.custodyId });
-        store.retire([manifest.id]);
-        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
-        expect(store.bind({ ...scope, accountId: 'other' }).readCurrentAccountExecutionDeclarations()).toEqual([]);
-        expect(custody).not.toHaveBeenCalled();
-    });
-    it('defers bundled execution custody until Account availability is admitted', () => {
-        const manifest = PluginPortableReleaseManifestV1Schema.parse(intentRead().release!.normalizedManifest);
-        const packageName = '@happier-dev/plugins-fixture';
-        const expected = availability.computePluginAccountBundledCustodyV1({ packageName, manifest, artifacts: [] });
-        // Forward to the real digest owner: this measures startup work, not a substituted admission path.
-        const custody = vi.spyOn(availability, 'computePluginAccountBundledCustodyV1');
-        onTestFinished(() => custody.mockRestore());
-        const bundle = {
-            pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
-            packageName, normalizedManifest: manifest, entriesById: {}, artifactGraphs: [],
-        };
-        const store = createPluginAccountAvailabilityReaderStore({ hostBundledUi: [bundle] });
-        // The deferred computation consumes the acquired snapshot, not later caller edits.
-        bundle.packageName = '@happier-dev/plugins-replaced';
-        const reader = store.bind(scope);
-        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
-        expect(reader.readAccountUiProjection()).toBeNull();
-        expect(custody).not.toHaveBeenCalled();
-
-        const empty = snapshot({ intentReads: [], materializations: [], snapshots: [] });
-        store.replace({ scope, snapshot: empty });
-        expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({
-            kind: 'available', manifest, custodyId: expected.custodyId,
-        });
-        for (let index = 0; index < 50; index += 1) {
-            expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ kind: 'available', custodyId: expected.custodyId });
-        }
-        expect(custody).toHaveBeenCalledTimes(1);
-        store.retire([manifest.id]);
-        expect(reader.readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
-        expect(store.bind({ ...scope, accountId: 'other' }).readCurrentAccountExecution(manifest.id).kind).toBe('unavailable');
-        expect(custody).toHaveBeenCalledTimes(1);
+        expect(selected.kind === 'available' ? selected.manifest : null).toBe(manifest);
+        expect(parseManifest).not.toHaveBeenCalled();
     });
     it.each(['equal', 'different'] as const)('prepares %s bundled Account Action graphs once, without repeating graph traversal during currentness checks', (duplicate) => {
         const graph = PluginUiArtifactsManifestEntryV2Schema.parse({
@@ -392,8 +418,11 @@ describe('Plugin Account Availability reader', () => {
         const reader = store.bind(scope);
         const first = reader.readAccountUiProjection();
         const action = first?.actionsById[`${manifest.id}/read`];
+        const selected = reader.readCurrentAccountExecution(manifest.id);
+        if (selected.kind !== 'available') throw new Error('Missing selected Account declaration');
+        expect(action?.accountActionDeclaration).toBe(selected.manifest.contributes.actions![0]);
         expect(action).toMatchObject({ pluginId: manifest.id, id: 'read', execution: manifest.contributes.actions![0]!.execution,
-            hostAccountDeclaration: manifest, hostAccountOrigin: { ...scope, sourceCustody: { kind: 'account_release' } },
+            accountActionDeclaration: selected.manifest.contributes.actions![0], hostAccountOrigin: { ...scope, sourceCustody: { kind: 'account_release' } },
             authorization: { generation: { appliedGeneration: null } } });
         const custodyId = action?.occurrenceId;
         expect(custodyId).toBeTypeOf('string');
@@ -403,6 +432,11 @@ describe('Plugin Account Availability reader', () => {
             .toMatchObject({ artifactGraph, generatedOwnerKind: 'clientContribution', contributionId: 'read',
                 occurrenceId: custodyId, runtime: { decision: { state: 'load' }, loadPolicy: { source: 'installedArtifact' } } });
         expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ kind: 'available', manifest, custodyId });
+        if (!action) throw new Error('Missing published Account Action');
+        const slot = { pluginId: manifest.id, contributionId: 'read', tier: 'reactNative' as const, platform: 'web' as const };
+        expect(reader.readCurrentArtifact(slot).kind).toBe('available');
+        expect(Object.isFrozen(action.accountActionDeclaration)).toBe(true);
+        expect(Object.isFrozen(action.accountActionDeclaration?.inputSchema)).toBe(true);
         // Count the real decoder after the canonical Account publication, not a
         // synthetic frozen input or a replacement for its validation logic.
         const decodeCustody = vi.spyOn(PluginSourceCustodyV1Schema, 'safeParse');
@@ -442,8 +476,8 @@ describe('Plugin Account Availability reader', () => {
         const changedAction = reader.readAccountUiProjection()?.actionsById[`${manifest.id}/read`];
         expect(changedAction?.occurrenceId).not.toBe(custodyId);
         if (!changedAction) throw new Error('Missing replaced Account Action');
-        const changedDeclaration = readPluginUiAccountActionDeclaration(changedAction);
-        expect(changedDeclaration).not.toBe(declarations[0]);
+        const changedDeclaration = changedAction.accountActionDeclaration;
+        expect(changedDeclaration).not.toBe(action.accountActionDeclaration);
         expect(changedDeclaration?.inputSchema).toEqual({ type: 'object', additionalProperties: false });
         expect(readPluginUiAccountExecutableOrigin(changedAction)?.sourceCustody).toMatchObject({ version: '2.0.0' });
         store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id,
@@ -642,11 +676,15 @@ describe('Plugin Account Availability reader', () => {
         store.replace({ scope, snapshot: input.snapshot });
         const bound = store.bind(scope);
         const accountUi = bound.readAccountUiProjection();
+        const uiInputs = bound.readUiProjectionInputs();
+        expect(uiInputs?.accountUiProjection).toBe(accountUi);
         store.replace({ scope, snapshot: { ...input.snapshot, availabilityCursor: 43 } });
         expect(store.bind(scope).readAccountUiProjection()).toBe(accountUi);
+        expect(bound.readUiProjectionInputs()).toBe(uiInputs);
         store.retire([manifest.id]);
         expect(bound.readCurrentArtifact(slot)).toEqual({ kind: 'unavailable', code: 'artifact_not_current' });
         expect(bound.readAccountUiProjection()).toBeNull();
+        expect(bound.readUiProjectionInputs()?.accountUiProjection).toBeNull();
     });
     it('projects admitted registry and skill declarations on a cold Account and retires their installation census', () => {
         const base = snapshot();

@@ -14,13 +14,14 @@ import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugi
 import { PluginAccountAvailabilityIntentReadResponseV1Schema, PluginReleaseFactsV1Schema, PluginMachineMaterializationV1Schema, PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
 import { projectPluginPortableUiDeclarationsV1, projectPluginReactNativeArtifactEntryV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
 import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
 import { getInstalledPluginUiClientExecutableComposition } from '@/components/plugins/reactNative/clientExecutableContributions';
 import { dispatchPluginSurfaceAction } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
 import { createPluginUiProjectedActionResolver } from './projection';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
-import { createPluginAccountAvailabilityReader, readPluginUiAccountActionDeclaration } from '@/sync/domains/plugins/availability/reader';
+import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
 import { resolvePluginMachineExecutionOriginState } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolvePluginSurfaceDestinationOpen } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 
@@ -110,15 +111,10 @@ it('retains current Account Actions through installed composition without replac
     }, [clientBundleId]: { ...accountBundle, id: clientBundleId, contributionId: 'machine-client', hostAccountOrigin: undefined,
         occurrenceId: 'machine:current', [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: machineOrigin } } };
     const executableProjection = mergeInstalledPluginUiProjections([installed], runtimeWithExecutableGraph)!;
-    const decodeDeclaration = vi.spyOn(PluginPortableReleaseManifestV1Schema, 'safeParse');
-    try {
-        const composedAction = executableProjection.actionsById['happier.fixture/read']!;
-        const selected = reader.readCurrentAccountExecution(manifest.id);
-        if (selected.kind !== 'available') throw new Error('Missing admitted bundled declaration');
-        const declarations = Array.from({ length: 100 }, () => readPluginUiAccountActionDeclaration(composedAction));
-        expect(decodeDeclaration).not.toHaveBeenCalled();
-        expect(declarations.every(declaration => declaration === selected.manifest.contributes.actions[0])).toBe(true);
-    } finally { decodeDeclaration.mockRestore(); }
+    const composedAction = executableProjection.actionsById['happier.fixture/read']!;
+    const selected = reader.readCurrentAccountExecution(manifest.id);
+    if (selected.kind !== 'available') throw new Error('Missing selected bundled declaration');
+    expect(composedAction.accountActionDeclaration).toBe(selected.manifest.contributes.actions[0]);
     const executables = resolveProjectedPluginUiClientExecutables({ actionProjection: { projection: executableProjection }, platform: 'web' });
     expect(executables).toHaveLength(2);
     expect(executables).toEqual(expect.arrayContaining([
@@ -579,7 +575,7 @@ it('reuses the live occurrence for the same declared root without confusing runt
     expect(mergeInstalledPluginUiProjections([changed], runtime)?.surfacePlacementsById[String(entry.id)]?.occurrenceId).toBeUndefined();
 });
 
-it('reuses validated declaration comparisons when only fleet execution selection changes', () => {
+it('compares fleet declarations without re-admitting models and rejects changed authored content', () => {
     const unionPluginUiProjections = projectionUnion.createPluginUiProjectionUnionPublication().publish;
     const pluginId = 'acme.stable-declaration';
     const entry = placementEntry({ pluginId, localId: 'stable', container: 'appPage' });
@@ -604,7 +600,7 @@ it('reuses validated declaration comparisons when only fleet execution selection
     try {
         const initial = unionPluginUiProjections(members);
         expect(initial.pluginUiProjection?.surfacePlacementsById[entry.id]).toBeDefined();
-        expect(parse.mock.calls.length).toBeGreaterThan(0);
+        expect(parse).not.toHaveBeenCalled();
         parse.mockClear();
         serialize.mockClear();
         unionPluginUiProjections([...members], selectedOrigins(selectedOrigin(pluginId, 'machine-b')));
@@ -619,8 +615,59 @@ it('reuses validated declaration comparisons when only fleet execution selection
         } });
         const replaced = unionPluginUiProjections([members[0]!, changed]);
         expect(replaced.pluginUiProjection?.surfacePlacementsById[entry.id]).toMatchObject({ hostCompatibility: 'conflict' });
-        expect(parse.mock.calls.length).toBeGreaterThan(0);
+        expect(parse).not.toHaveBeenCalled();
     } finally { parse.mockRestore(); serialize.mockRestore(); }
+});
+
+it('does not walk unchanged authored declarations when currentness republishes a union into the installed merge', () => {
+    const pluginId = 'acme.currentness-comparison';
+    const entry = placementEntry({ pluginId, localId: 'stable', container: 'appPage' });
+    const model = {
+        identity: { pluginId, localId: 'inspector', qualifiedId: `${pluginId}/inspector` },
+        visible: true, requiredHostMethods: [],
+        declarativeInventory: { actions: [], destinations: [], settings: [], uiQueries: [] },
+        root: { kind: 'text', path: 'root', order: 0, text: 'Unchanged authored declaration' },
+    };
+    const declared = { ...machineProjection({ generation: 1, entriesById: { [entry.id]: {
+        ...entry, occurrenceId: undefined, renderer: { kind: 'declarative', contributionId: 'inspector', model: projectNativeJsonValueForTransport(model) },
+    } } }), generation: null };
+    const origin = selectedOrigin(pluginId, 'machine-a');
+    const current = member({ machineId: 'machine-a', generation: 1, entriesById: { [entry.id]: {
+        ...entry, renderer: { kind: 'declarative', contributionId: 'inspector', model: projectNativeJsonValueForTransport({
+            ...model, identity: { ...model.identity, occurrenceId: entry.occurrenceId },
+        }) },
+    } } });
+    const union = projectionUnion.createPluginUiProjectionUnionPublication();
+    const installed = projectionUnion.createInstalledPluginUiProjectionPublication();
+    const publish = (generation: number) => installed.publish([declared], union.publish([{
+        ...current, projection: { ...current.projection!, generation },
+    }], selectedOrigins(origin)).pluginUiProjection);
+    publish(1);
+    const descriptors = vi.spyOn(Object, 'getOwnPropertyDescriptors');
+    const values = vi.spyOn(Object, 'values');
+    const parseModel = vi.spyOn(PluginDeclarativeProjectedModelV1Schema, 'safeParse');
+    try {
+        for (let generation = 2; generation <= 101; generation += 1) publish(generation);
+        const walks = descriptors.mock.calls.filter(([value]) => value !== null && typeof value === 'object'
+            && Reflect.getOwnPropertyDescriptor(value, 'text')?.value === model.root.text).length;
+        expect(walks).toBe(0);
+        expect(parseModel).not.toHaveBeenCalled();
+        const unchangedDictionaryWalks = values.mock.calls.filter(([value]) => value === current.projection!.surfacePlacementsById).length;
+        expect(unchangedDictionaryWalks).toBe(0);
+        expect(installed.getSnapshot()?.generation).toBe(101);
+    } finally { descriptors.mockRestore(); values.mockRestore(); parseModel.mockRestore(); }
+
+    const rawModel = Object.freeze({ ...model, identity: { ...model.identity, occurrenceId: entry.occurrenceId }, root: { ...model.root } });
+    const rawMerge = projectionUnion.createInstalledPluginUiProjectionPublication();
+    const readRaw = () => rawMerge.publish([declared], machineProjection({ generation: 102, entriesById: { [entry.id]: {
+        ...entry, renderer: { kind: 'declarative', contributionId: 'inspector', model: rawModel },
+    } } }));
+    expect(readRaw()?.surfacePlacementsById[entry.id]?.occurrenceId).toBe(entry.occurrenceId);
+    // A caller-frozen model does not prove admission of its mutable root.
+    rawModel.root.text = 'Changed authored declaration';
+    const rejected = readRaw()?.surfacePlacementsById[entry.id];
+    expect(rejected?.occurrenceId).toBeUndefined();
+    expect(rejected?.renderer.model).toMatchObject({ root: { text: model.root.text } });
 });
 
 it('compares declaration snapshots without serialization while preserving native optional fields and authored payloads', () => {

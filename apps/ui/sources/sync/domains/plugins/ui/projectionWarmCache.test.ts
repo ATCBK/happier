@@ -52,6 +52,109 @@ const ACCOUNT_B = { serverId: 'server-a', accountId: 'account-b' } as const;
 const MACHINE_ID = 'machine-1';
 const TARGET_KEY = pluginUiProjectionAdmissionTargetKey({ serverId: 'server-1', machineId: MACHINE_ID });
 
+it('serializes retained plugin UI state only when published content changes', async () => {
+    await prepareWarmCacheEncryptionKey();
+    store.clear();
+    forgetPluginUiProjectionAdmissionSnapshots(ACCOUNT_A);
+    const entry = { machineId: MACHINE_ID, projection: projectionAtGeneration('unchanged-cache', 77) };
+    savePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId, { [TARGET_KEY]: entry });
+    const previous = loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
+    // Raw equal replacements still pass through native-JSON admission. Equality
+    // must retain the publication before normalization and whole-fleet encoding.
+    const replacements = Array.from({ length: 100 }, () => ({
+        [TARGET_KEY]: { machineId: MACHINE_ID, projection: projectionAtGeneration('unchanged-cache', 77) },
+    }));
+    const normalize = vi.spyOn(projectionNormalizer, 'normalizePluginUiProjection');
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+        for (const replacement of replacements) {
+            savePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId, replacement);
+        }
+        expect(stringify).not.toHaveBeenCalled();
+        expect(normalize).not.toHaveBeenCalled();
+        expect(loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId)).toBe(previous);
+        const changed = { [TARGET_KEY]: { ...entry, projection: { ...entry.projection, generation: 78 } } };
+        savePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId, changed);
+        expect(normalize).toHaveBeenCalledTimes(1);
+        expect(stringify.mock.calls.some(([value]) => value !== null && typeof value === 'object' && TARGET_KEY in value)).toBe(true);
+        expect(loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId)[TARGET_KEY]?.projection.generation).toBe(78);
+        const ownedEntries = loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
+        const callerEntries: typeof ownedEntries = { ...ownedEntries, other: ownedEntries[TARGET_KEY]! };
+        savePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId, callerEntries);
+        delete callerEntries.other;
+        expect(loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId).other).toBe(ownedEntries[TARGET_KEY]);
+        savePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId, {});
+        expect(loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId)).toEqual({});
+    } finally {
+        normalize.mockRestore();
+        stringify.mockRestore();
+    }
+});
+
+it('retains equal target admissions but snapshots caller-owned target data before comparing replacements', async () => {
+    await prepareWarmCacheEncryptionKey();
+    store.clear();
+    forgetPluginUiProjectionAdmissionSnapshots(ACCOUNT_A);
+    const occurrenceId = 'target-cache';
+    const projection = projectionAtGeneration(occurrenceId, 1);
+    savePluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID, projection });
+    const raw = targetedContributionsFor(occurrenceId);
+    savePluginUiProjectionTargetedAdmissionSnapshot({ scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID,
+        targetedContributions: raw });
+    const previous = loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
+    const equal = targetedContributionsFor(occurrenceId);
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+        for (let index = 0; index < 100; index += 1) {
+            savePluginUiProjectionTargetedAdmissionSnapshot({ scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID,
+                targetedContributions: equal });
+        }
+        expect(stringify).not.toHaveBeenCalled();
+        expect(loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId)).toBe(previous);
+        raw.points.length = 0;
+        expect(previous[TARGET_KEY]?.targetedContributionsByPluginId?.['acme.browser']?.points).toHaveLength(1);
+        savePluginUiProjectionTargetedAdmissionSnapshot({ scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID,
+            targetedContributions: raw });
+        expect(loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId)[TARGET_KEY]
+            ?.targetedContributionsByPluginId?.['acme.browser']).toBeUndefined();
+    } finally {
+        stringify.mockRestore();
+    }
+});
+
+it('builds translation pooling keys once per changed immutable bundle, not per generation', async () => {
+    await prepareWarmCacheEncryptionKey();
+    store.clear();
+    forgetPluginUiProjectionAdmissionSnapshots(ACCOUNT_A);
+    savePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId, {
+        [TARGET_KEY]: { machineId: MACHINE_ID, projection: projectionAtGeneration('bundle-cache', 1) },
+        other: { machineId: 'machine-2', projection: projectionAtGeneration('bundle-cache', 1) },
+    });
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+        for (let generation = 2; generation <= 101; generation += 1) {
+            const entries = loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
+            const entry = entries[TARGET_KEY]!;
+            savePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId, {
+                ...entries, [TARGET_KEY]: { ...entry, projection: { ...entry.projection, generation } },
+            });
+        }
+        const bundleKeyCalls = () => stringify.mock.calls.filter(([value]) => value !== null && typeof value === 'object' && 'en' in value).length;
+        expect(bundleKeyCalls()).toBe(0);
+        expect(loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId)[TARGET_KEY]?.projection.generation).toBe(101);
+        const entries = loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
+        const replacement = projectionAtGeneration('bundle-cache', 102);
+        const translations = replacement.familiesById.pluginUi!.entriesById['translations:acme.browser'];
+        if (translations?.contributionKind !== 'translations') throw new Error('Expected translation fixture');
+        if (!translations.bundles || typeof translations.bundles !== 'object') throw new Error('Expected translation bundles');
+        Reflect.set(translations.bundles, 'en', { title: 'Changed title' });
+        savePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId, {
+            ...entries, [TARGET_KEY]: { machineId: MACHINE_ID, projection: replacement },
+        });
+        expect(bundleKeyCalls()).toBe(1);
+    } finally { stringify.mockRestore(); }
+});
+
 it('publishes retained presentation before reads and observes replacement, platform and retirement', async () => {
     await prepareWarmCacheEncryptionKey();
     store.clear();
@@ -214,7 +317,19 @@ describe('plugin UI projection admission custody', () => {
         vi.resetModules();
         const fresh = await import('./projectionWarmCache');
         await (await import('@/sync/domains/state/warmCacheEncryptionKey')).prepareWarmCacheEncryptionKey();
-        (await import('@/sync/domains/state/warmCachePersistence')).preparePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
+        const persistence = await import('@/sync/domains/state/warmCachePersistence');
+        const { createStoredReadSchema } = await import('@happier-dev/protocol/json/storedReadSchema');
+        // Observe the real canonical admission, including its nested checks. The compact storage
+        // envelope must be unpacked first, so each complete Machine entry is admitted only once.
+        const admit = vi.spyOn(createStoredReadSchema(persistence.PluginUiProjectionCacheEntryV1Schema)._zod, 'run');
+        try {
+            persistence.preparePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
+            expect(admit).toHaveBeenCalledTimes(machines.length);
+            persistence.preparePluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId);
+            expect(admit).toHaveBeenCalledTimes(machines.length);
+        } finally {
+            admit.mockRestore();
+        }
         for (const machineId of machines) {
             const targetKey = fresh.pluginUiProjectionAdmissionTargetKey({ serverId: ACCOUNT_A.serverId, machineId });
             const restored = fresh.readPluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A, targetKey, machineId });
@@ -238,6 +353,13 @@ describe('plugin UI projection admission custody', () => {
         store.set(key, JSON.stringify(corrupt));
         expect(fresh.readPluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A,
             targetKey: fresh.pluginUiProjectionAdmissionTargetKey({ serverId: ACCOUNT_A.serverId, machineId: 'one' }), machineId: 'one', platform: 'web' })).toBeNull();
+        expect(store.has(key)).toBe(false);
+        const invalidProjection = JSON.parse(serialized);
+        invalidProjection.entries[Object.keys(invalidProjection.entries)[0]].projection.generation = 'invalid';
+        store.set(key, JSON.stringify(invalidProjection));
+        // Envelope reconstruction is not admission: malformed known projection fields
+        // still fail the canonical schema before any presentation is published.
+        expect(persistence.loadPluginUiProjectionWarmCacheEntries(ACCOUNT_A.serverId, ACCOUNT_A.accountId)).toEqual({});
         expect(store.has(key)).toBe(false);
     });
 

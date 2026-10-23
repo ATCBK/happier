@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { runInNewContext } from 'node:vm';
 
 import {
   computePluginUiArtifactFileSetSha256DigestV1,
@@ -20,6 +21,13 @@ import {
 
 const execFileAsync = promisify(execFile);
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+
+function readEmittedPluginUiInventory(output) {
+  // Native assets are the external boundary; the generated data stays real.
+  return runInNewContext(`${output.replaceAll('export const ', 'const ')}\n({ BUNDLED_PLUGIN_UI_APP_DECLARATIONS, BUNDLED_PLUGIN_UI_APP_ARTIFACTS });`, {
+    require: () => 1, Uint8Array,
+  });
+}
 
 async function createFixture() {
   const repoRoot = await mkdtemp(join(tmpdir(), 'happier-ui-preseed-'));
@@ -128,7 +136,7 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
       protocols: [{ id: 'acme.fixture/providers', version: 1, operations: { read: { required: true,
         input: { kind: 'contributorDefined' }, resultSchema: { type: 'object' },
         action: { surfaces: ['plugin', 'ui'], dangerLevel: 'safe' } } } }] }];
-    const { PluginPortableReleaseManifestV1Schema, computePluginAccountBundledCustodyV1 } = await import('@happier-dev/protocol/plugins/availability');
+    const { PluginPortableReleaseManifestV1Schema } = await import('@happier-dev/protocol/plugins/availability');
     // Keep fixture drift distinguishable from a missing compiled declaration.
     PluginPortableReleaseManifestV1Schema.parse(manifest);
     await writeFile(manifestPath, JSON.stringify(manifest));
@@ -149,15 +157,18 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
     const graph = JSON.parse(output.match(/    artifactGraph: .*\*\/ \((.+)\),/)[1]);
     assert.equal(graph.artifactId, 'fixture-card');
     assert.equal(graph.digest, JSON.parse(await readFile(join(fixture.artifactRoot, 'ui-artifacts.json'), 'utf8')).entries[0].digest);
-    const declaration = JSON.parse(output.match(/const BUNDLED_PLUGIN_UI_APP_DECLARATION_0 = (.+);/)[1]);
+    // Native asset loading is the only substituted boundary. Evaluate the real
+    // emitted declarations and inventory together, as the app imports them.
+    const emitted = readEmittedPluginUiInventory(output);
+    assert.equal(emitted.BUNDLED_PLUGIN_UI_APP_DECLARATIONS.length, 1);
+    assert.ok(emitted.BUNDLED_PLUGIN_UI_APP_ARTIFACTS.every(row => !Object.hasOwn(row, 'uiDeclaration')));
+    const declaration = JSON.parse(JSON.stringify(emitted.BUNDLED_PLUGIN_UI_APP_DECLARATIONS[0]));
     assert.equal(declaration.pluginId, 'happier.fixture');
     assert.equal(declaration.packageName, '@happier-dev/plugins-fixture');
     assert.equal(declaration.normalizedManifest.id, manifest.id);
     assert.deepEqual(declaration.normalizedManifest.contributes.actions, manifest.contributes.actions);
     assert.deepEqual(declaration.artifactGraphs, JSON.parse(await readFile(join(fixture.artifactRoot, 'ui-artifacts.json'), 'utf8')).entries);
-    assert.deepEqual(declaration.accountCustody, computePluginAccountBundledCustodyV1({
-      packageName: declaration.packageName, manifest: declaration.normalizedManifest, artifacts: declaration.artifactGraphs,
-    }));
+    assert.equal(Object.hasOwn(declaration, 'accountCustody'), false);
     assert.deepEqual(declaration.declaredExecution, { daemonActions: true, contributionPoints: true });
     const { normalizePluginAccountCollectionContractV1 } = await import('@happier-dev/protocol/plugins/data/collectionsV1');
     const compiled = normalizePluginAccountCollectionContractV1({ pluginId: manifest.id, contribution: collection });
@@ -165,7 +176,7 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
       schemaVersion: collection.schemaVersion, contractDigest: compiled.contractDigest }]);
     assert.equal(declaration.entriesById['reactNativeBundle:happier.fixture:fixture'].artifactGraph.digest, graph.digest);
     assert.equal(declaration.entriesById['surfacePlacement:happier.fixture:fixture'].availability.state, 'available');
-    assert.match(output, /uiDeclaration: BUNDLED_PLUGIN_UI_APP_DECLARATION_0,/);
+    assert.doesNotMatch(output, /uiDeclaration:/);
     assert.doesNotMatch(output, /platform:/);
 
     manifest.contributes.actions = [{ ...manifest.contributes.actions[0], execution: { target: 'client',
@@ -175,11 +186,7 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
     await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'write' });
     const clientOnlyOutput = await readFile(outputPath, 'utf8');
     const clientOnlyDeclaration = JSON.parse(clientOnlyOutput.match(/const BUNDLED_PLUGIN_UI_APP_DECLARATION_0 = (.+);/)[1]);
-    assert.notEqual(clientOnlyDeclaration.accountCustody.custodyId, declaration.accountCustody.custodyId);
-    assert.deepEqual(clientOnlyDeclaration.accountCustody, computePluginAccountBundledCustodyV1({
-      packageName: clientOnlyDeclaration.packageName, manifest: clientOnlyDeclaration.normalizedManifest,
-      artifacts: clientOnlyDeclaration.artifactGraphs,
-    }));
+    assert.equal(Object.hasOwn(clientOnlyDeclaration, 'accountCustody'), false);
     assert.deepEqual(clientOnlyDeclaration.declaredExecution, { daemonActions: false, contributionPoints: false });
 
     await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'check' });
@@ -206,10 +213,56 @@ test('UI declaration text containing require syntax does not become an app asset
   } finally { await rm(fixture.repoRoot, { recursive: true, force: true }); }
 });
 
+test('semantic declaration publication refuses non-JSON schema data without repairing its meaning', async () => {
+  const fixture = await createFixture();
+  try {
+    const path = join(fixture.repoRoot, 'packages/plugins/fixture/.happier-plugin/plugin.json');
+    const manifest = JSON.parse(await readFile(path, 'utf8'));
+    const inputSchema = { type: 'string', enum: undefined };
+    manifest.contributes.pluginContributionPoints = [{ id: 'point', protocols: [{
+      id: 'detail', version: 1, operations: {},
+      surfaces: { detail: { required: true, presentation: 'content', inputSchema } },
+    }] }];
+    const { PluginPortableReleaseManifestV1Schema } = await import('@happier-dev/protocol/plugins/availability');
+    // This is accepted by the declaration grammar, but cannot cross JSON
+    // publication: omitting enum would turn unsupported input into a string.
+    PluginPortableReleaseManifestV1Schema.parse(manifest);
+    const invalid = await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot,
+      pluginManifests: { fixture: manifest } });
+    assert.deepEqual(invalid.pluginFailures.map(failure => failure.pluginId), ['happier.fixture']);
+    assert.doesNotMatch(await readFile(invalid.outputPath, 'utf8'), /const BUNDLED_PLUGIN_UI_APP_DECLARATION_0 =/);
+
+    // Unsupported but serializable point semantics still retain the plugin.
+    manifest.contributes.pluginContributionPoints[0].protocols[0].surfaces.detail.inputSchema = { not: { type: 'null' } };
+    const supportedBytes = await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot,
+      pluginManifests: { fixture: manifest } });
+    assert.deepEqual(supportedBytes.pluginFailures, []);
+    const output = await readFile(supportedBytes.outputPath, 'utf8');
+    const declaration = JSON.parse(output.match(/const BUNDLED_PLUGIN_UI_APP_DECLARATION_0 = (.+);/)[1]);
+    assert.deepEqual(declaration.normalizedManifest.contributes.pluginContributionPoints[0]
+      .protocols[0].surfaces.detail.inputSchema, { not: { type: 'null' } });
+
+    // Canonical package manifests can omit native optional members normally;
+    // their serialized representation remains a supported producer input.
+    const { serializeCanonicalPluginManifest } = await import('../../cli/src/plugins/manifest/serialize.ts');
+    const optional = JSON.parse(serializeCanonicalPluginManifest(PluginPortableReleaseManifestV1Schema.parse({
+      ...manifest, description: undefined,
+    })));
+    assert.equal(Object.hasOwn(optional, 'description'), false);
+    const omittedOptional = await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot,
+      pluginManifests: { fixture: optional } });
+    assert.deepEqual(omittedOptional.pluginFailures, []);
+  } finally { await rm(fixture.repoRoot, { recursive: true, force: true }); }
+});
+
 test('the UI byte publisher projects declared packaged brand marks, including packages without UI entries', async () => {
   const fixture = await createFixture();
   try {
     const { bytes, manifest } = await addFixtureBrand(fixture);
+    delete manifest.contributes.ui;
+    manifest.contributes.actions = [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui'],
+      placementBindings: [], dangerLevel: 'safe', execution: { target: 'daemon' } }];
+    await writeFile(join(fixture.repoRoot, 'packages/plugins/fixture/.happier-plugin/plugin.json'), JSON.stringify(manifest));
     await writeFile(join(fixture.artifactRoot, 'ui-artifacts.json'), JSON.stringify({ version: 2, entries: [] }));
     // Daemon-only bundled plugins (including machine provisioners) have brands
     // without an app dependency or an executable UI graph.
@@ -222,11 +275,17 @@ test('the UI byte publisher projects declared packaged brand marks, including pa
     assert.ok(output.includes(`bytes: Uint8Array.from(${JSON.stringify([...bytes])})`));
     assert.ok(output.includes(`digest: ${JSON.stringify(computePluginUiArtifactSha256DigestV1(bytes))}`));
     assert.doesNotMatch(output, /require\([^)]*brand\.png/);
+    const emitted = readEmittedPluginUiInventory(output);
+    assert.equal(emitted.BUNDLED_PLUGIN_UI_APP_ARTIFACTS.length, 0);
+    assert.equal(emitted.BUNDLED_PLUGIN_UI_APP_DECLARATIONS.length, 1);
+    assert.equal(emitted.BUNDLED_PLUGIN_UI_APP_DECLARATIONS[0].declaredExecution.daemonActions, true);
     const privateResult = await generateBundledPluginUiArtifacts({
       repoRoot: fixture.repoRoot, publicationMode: 'artifact', artifactRoots: {},
       pluginManifests: { fixture: manifest }, outputPath: join(fixture.repoRoot, 'private/inventory.js'),
     });
     assert.match(await readFile(privateResult.outputPath, 'utf8'), /resourceId: "brand-icon"/);
+    assert.equal(readEmittedPluginUiInventory(await readFile(privateResult.outputPath, 'utf8'))
+      .BUNDLED_PLUGIN_UI_APP_DECLARATIONS.length, 1);
   } finally {
     await rm(fixture.repoRoot, { recursive: true, force: true });
   }
@@ -281,7 +340,9 @@ test('live and packaged app inventories require their nonempty plugin graphs to 
     assert.deepEqual(live.diagnostics.map(({ pluginId, code }) => ({ pluginId, code })), [
       { pluginId: 'happier.fixture', code: 'plugin_ui_artifact_invalid' },
     ]);
-    assert.doesNotMatch(await readFile(live.outputPath, 'utf8'), /pluginId: "happier\.fixture"/);
+    const emitted = readEmittedPluginUiInventory(await readFile(live.outputPath, 'utf8'));
+    assert.equal(emitted.BUNDLED_PLUGIN_UI_APP_ARTIFACTS.length, 0);
+    assert.deepEqual(Array.from(emitted.BUNDLED_PLUGIN_UI_APP_DECLARATIONS, declaration => declaration.pluginId), ['happier.fixture']);
   } finally {
     await rm(fixture.repoRoot, { recursive: true, force: true });
   }
@@ -312,11 +373,13 @@ test('the emitted JavaScript and committed declaration satisfy the inventory con
     ].join('\n'));
     const consumerPath = join(fixtureDir, 'consumer.ts');
     await writeFile(consumerPath, [
-      "import { BUNDLED_PLUGIN_UI_APP_ARTIFACTS, BUNDLED_PLUGIN_BRAND_MARKS } from './generatedBundledPluginUiArtifacts';",
-      "import type { BundledPluginUiAppArtifactInventory, BundledPluginBrandMark } from './bundledPluginUiArtifactInventory';",
+      "import { BUNDLED_PLUGIN_UI_APP_ARTIFACTS, BUNDLED_PLUGIN_UI_APP_DECLARATIONS, BUNDLED_PLUGIN_BRAND_MARKS } from './generatedBundledPluginUiArtifacts';",
+      "import type { BundledPluginUiAppArtifactInventory, PluginHostBundledUiDeclaration, BundledPluginBrandMark } from './bundledPluginUiArtifactInventory';",
       'const inventory: BundledPluginUiAppArtifactInventory = BUNDLED_PLUGIN_UI_APP_ARTIFACTS;',
+      'const declarations: readonly PluginHostBundledUiDeclaration[] = BUNDLED_PLUGIN_UI_APP_DECLARATIONS;',
       'const brands: readonly BundledPluginBrandMark[] = BUNDLED_PLUGIN_BRAND_MARKS;',
       'void inventory;',
+      'void declarations;',
       'void brands;',
       '',
     ].join('\n'));
@@ -379,19 +442,30 @@ test('unchanged Plugin UI artifact inputs preserve the generated compiler input'
   }
 });
 
-test('one missing plugin artifact is reported while another plugin remains in the published UI inventory', async () => {
+test('invalid plugin bytes retain semantic declarations while healthy byte sources remain usable', async () => {
   const fixture = await createFixture();
   try {
     await addSecondPlugin(fixture.repoRoot);
-    await rm(join(fixture.artifactRoot, fixture.relativePath));
-    const result = await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'write' });
-    const output = await readFile(resolveBundledPluginUiArtifactsOutputPath(fixture.repoRoot), 'utf8');
-    assert.match(output, /pluginId: "happier\.second"/);
-    assert.doesNotMatch(output, /pluginId: "happier\.fixture"/);
-    assert.deepEqual(result.diagnostics.map(({ pluginId, code }) => ({ pluginId, code })), [
-      { pluginId: 'happier.fixture', code: 'plugin_ui_artifact_invalid' },
-    ]);
-    assert.match(result.diagnostics[0].message, /Missing bundled Plugin UI artifact file/);
+    const artifactPath = join(fixture.artifactRoot, fixture.relativePath);
+    for (const missing of [false, true]) {
+      if (missing) await rm(artifactPath);
+      else await writeFile(artifactPath, 'tampered bytes');
+      const result = await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'write' });
+      const output = await readFile(resolveBundledPluginUiArtifactsOutputPath(fixture.repoRoot), 'utf8');
+      const emitted = readEmittedPluginUiInventory(output);
+      assert.deepEqual(Array.from(emitted.BUNDLED_PLUGIN_UI_APP_DECLARATIONS, declaration => declaration.pluginId), ['happier.fixture']);
+      assert.deepEqual(Array.from(emitted.BUNDLED_PLUGIN_UI_APP_ARTIFACTS, artifact => artifact.pluginId), ['happier.second']);
+      assert.deepEqual(result.diagnostics.map(({ pluginId, code }) => ({ pluginId, code })), [
+        { pluginId: 'happier.fixture', code: 'plugin_ui_artifact_invalid' },
+      ]);
+      assert.match(result.diagnostics[0].message, missing ? /Missing bundled Plugin UI artifact file/ : /digest mismatch/);
+    }
+    await rm(join(fixture.artifactRoot, 'ui-artifacts.json'));
+    const noMetadata = await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot });
+    const declaration = readEmittedPluginUiInventory(await readFile(noMetadata.outputPath, 'utf8'))
+      .BUNDLED_PLUGIN_UI_APP_DECLARATIONS[0];
+    assert.equal(declaration.pluginId, 'happier.fixture');
+    assert.equal(declaration.artifactGraphs.length, 0);
   } finally {
     await rm(fixture.repoRoot, { recursive: true, force: true });
   }

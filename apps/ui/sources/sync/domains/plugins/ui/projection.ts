@@ -2,6 +2,7 @@ import type {
     DaemonContributionRegistryProjection,
 } from '@/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
 import type { PluginContributionClientPlatform } from '@happier-dev/protocol';
+import type { PluginActionContributionV2 } from '@happier-dev/protocol';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
 import { PluginProjectedWorkItemsEntryV1Schema, type PluginProjectedWorkItemsEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
@@ -324,7 +325,10 @@ export type PluginVoiceProviderProjection = UnknownRecord & Readonly<{
  * composition owner. This is a projection carrier, not a UI-local Action
  * catalog or target normalizer.
  */
-export type PluginUiActionProjection = UnknownRecord & PluginProjectedActionV2;
+export type PluginUiActionProjection = UnknownRecord & PluginProjectedActionV2 & Readonly<{
+    /** Canonical selected Account declaration; permission stays with current invocation authority. */
+    accountActionDeclaration?: PluginActionContributionV2;
+}>;
 
 /** One daemon-admitted Resource declaration carried without reinterpretation. */
 export type PluginUiResourceProjection = UnknownRecord & PluginProjectedResourceV2;
@@ -336,7 +340,7 @@ export type PluginUiResourceProjection = UnknownRecord & PluginProjectedResource
  */
 export type PluginUiProjectedActionResolver = (
     identity: PluginContributionIdentityV1,
-) => PluginProjectedActionV2 | null;
+) => PluginUiActionProjection | null;
 
 /** One fail-closed executability decision for every projected Action consumer. */
 export function isPluginProjectedActionExecutable<
@@ -348,7 +352,7 @@ export function isPluginProjectedActionExecutable<
 }
 
 export function createPluginUiProjectedActionResolver(
-    actionsById: Readonly<Record<string, PluginProjectedActionV2>> | null | undefined,
+    actionsById: Readonly<Record<string, PluginUiActionProjection>> | null | undefined,
 ): PluginUiProjectedActionResolver {
     return (identity) => {
         const action = actionsById?.[buildQualifiedPluginContributionKey(identity)] ?? null;

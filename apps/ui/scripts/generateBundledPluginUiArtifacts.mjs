@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { projectBundledPluginUiDeclaration } from '../../cli/scripts/build-owned/bundledPlugins/uiDeclarations.mjs';
 
 import {
   createBundledPluginPublicationFailure,
@@ -162,9 +163,6 @@ export function listBundledPluginUiArtifactExports(packageJson) {
 }
 
 export async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFailures = [], artifactRoots, pluginManifests = {}, artifactOutputDirs = {}, artifactStoreDir) {
-  const { PluginPortableReleaseManifestV1Schema, computePluginAccountBundledCustodyV1 } = await import('@happier-dev/protocol/plugins/availability');
-  const { projectPluginPortableUiDeclarationsV1 } = await import('@happier-dev/protocol/plugins/contributions/ui');
-  const { normalizePluginAccountCollectionContractsV1 } = await import('@happier-dev/protocol/plugins/data/collectionsV1');
   const {
     PluginUiArtifactsManifestV2Schema,
     computePluginUiArtifactFileSetSha256DigestV1,
@@ -176,11 +174,12 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
     ? uiPackageJson.dependencies
     : {};
   const pluginsRoot = resolve(repoRoot, 'packages', 'plugins');
-  const pluginDirectories = artifactRoots ? Object.keys(artifactRoots).sort() : (await readdir(pluginsRoot, { withFileTypes: true }))
+  const pluginDirectories = artifactRoots ? [...new Set([...Object.keys(artifactRoots), ...Object.keys(pluginManifests)])].sort() : (await readdir(pluginsRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith('_'))
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
   const sources = [];
+  const declarations = new Map();
   const publishedArtifactRoots = {};
   const pluginFailures = [...initialPluginFailures];
   const excludedPackageNames = new Set(initialPluginFailures.map((failure) => failure.packageName));
@@ -191,43 +190,76 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
     if (excludedPackageNames.has(candidatePackageName)) continue;
     const packageRoot = resolve(pluginsRoot, pluginDirectory);
     const candidateRoots = artifactRoots
-      ? [...new Set([artifactRoots[pluginDirectory]].flat().filter(Boolean).map((root) => resolve(root)))]
+      ? (Object.hasOwn(artifactRoots, pluginDirectory)
+        ? [...new Set([artifactRoots[pluginDirectory]].flat().filter(Boolean).map((root) => resolve(root)))]
+        : [undefined])
       : [resolve(packageRoot, 'dist', 'happier-plugin-ui')];
-    for (const [candidateIndex, artifactsRoot] of candidateRoots.entries()) {
-    const artifactsManifestPath = resolve(artifactsRoot, 'ui-artifacts.json');
+    // Source preparation owns manifest/last-good selection. An explicit empty
+    // candidate set means it could not select one; absent roots also cover
+    // valid daemon-only declarations that need no UI compilation.
+    if (candidateRoots.length === 0) continue;
+    const packageJsonPath = resolve(packageRoot, 'package.json');
+    const pluginManifestPath = resolve(packageRoot, '.happier-plugin', 'plugin.json');
+    let packageJson;
+    let pluginManifest;
+    let packageName;
+    let packageVersion;
     let pluginId = pluginManifests[pluginDirectory]?.id ?? `happier.${pluginDirectory}`;
     try {
-    let rawArtifactManifest;
-    try {
-      rawArtifactManifest = parseJson(await readFile(artifactsManifestPath, 'utf8'), artifactsManifestPath);
+      packageJson = parseJson(await readFile(packageJsonPath, 'utf8'), packageJsonPath);
+      packageName = readRequiredString(packageJson, 'name', packageJsonPath);
+      packageVersion = readRequiredString(packageJson, 'version', packageJsonPath);
+      if (!packageName.startsWith(PLUGIN_PACKAGE_PREFIX)) {
+        throw new Error(`Bundled Plugin UI package '${packageName}' must use the '${PLUGIN_PACKAGE_PREFIX}' prefix`);
+      }
+      pluginManifest = pluginManifests[pluginDirectory] ?? await readFile(pluginManifestPath, 'utf8')
+        .then(bytes => parseJson(bytes, pluginManifestPath))
+        .catch(error => { if (error.code !== 'ENOENT') throw error; return undefined; });
+      if (pluginManifest) {
+        pluginId = readRequiredString(pluginManifest, 'id', pluginManifestPath);
+      }
     } catch (error) {
-      if (error?.code === 'ENOENT') {
-        const packageJsonPath = resolve(packageRoot, 'package.json');
-        const packageJson = parseJson(await readFile(packageJsonPath, 'utf8'), packageJsonPath);
+      pluginFailures.push(createBundledPluginPublicationFailure({ repoRoot, packageName: candidatePackageName,
+        pluginId, code: 'plugin_ui_artifact_invalid', error }));
+      continue;
+    }
+    for (const [candidateIndex, artifactsRoot] of candidateRoots.entries()) {
+    try {
+    let rawArtifactManifest;
+    let artifactManifestError;
+    if (artifactsRoot) {
+      const artifactsManifestPath = resolve(artifactsRoot, 'ui-artifacts.json');
+      try {
+        rawArtifactManifest = parseJson(await readFile(artifactsManifestPath, 'utf8'), artifactsManifestPath);
+      } catch (error) {
+        artifactManifestError = error;
+      }
+    }
+    const parsedManifest = rawArtifactManifest === undefined ? undefined : PluginUiArtifactsManifestV2Schema.safeParse(rawArtifactManifest);
+    // Select compiler facts before projecting. Failed metadata candidates must
+    // not erase an earlier graph declaration; only final unresolved metadata
+    // needs an empty-graph declaration when none has been produced yet.
+    if (parsedManifest?.success || !artifactsRoot
+      || (candidateIndex === candidateRoots.length - 1 && !declarations.has(pluginId))) {
+      const declaration = await projectBundledPluginUiDeclaration({ packageName, packageVersion,
+        manifest: pluginManifest, artifactGraphs: parsedManifest?.success ? parsedManifest.data.entries : [] });
+      if (declaration) declarations.set(declaration.pluginId, declaration);
+    }
+    if (!artifactsRoot) break;
+    if (artifactManifestError) {
+      if (artifactManifestError.code === 'ENOENT') {
         const bundleExports = listBundledPluginUiArtifactExports(packageJson);
         if (bundleExports.length === 0 && !artifactRoots) continue;
-        const pluginManifestPath = resolve(packageRoot, '.happier-plugin', 'plugin.json');
-        const pluginManifest = pluginManifests[pluginDirectory] ?? parseJson(await readFile(pluginManifestPath, 'utf8'), pluginManifestPath);
         pluginId = readRequiredString(pluginManifest, 'id', pluginManifestPath);
         throw new Error(
           `Bundled Plugin UI artifact manifest is missing for '${pluginId}' with declared UI artifact exports: ${bundleExports.join(', ')}`,
         );
       }
-      throw error;
+      throw artifactManifestError;
     }
 
-    const packageJsonPath = resolve(packageRoot, 'package.json');
-    const pluginManifestPath = resolve(packageRoot, '.happier-plugin', 'plugin.json');
-    const packageJson = parseJson(await readFile(packageJsonPath, 'utf8'), packageJsonPath);
-    const pluginManifest = pluginManifests[pluginDirectory] ?? parseJson(await readFile(pluginManifestPath, 'utf8'), pluginManifestPath);
-    const packageName = readRequiredString(packageJson, 'name', packageJsonPath);
-    const packageVersion = readRequiredString(packageJson, 'version', packageJsonPath);
     pluginId = readRequiredString(pluginManifest, 'id', pluginManifestPath);
-    if (!packageName.startsWith(PLUGIN_PACKAGE_PREFIX)) {
-      throw new Error(`Bundled Plugin UI package '${packageName}' must use the '${PLUGIN_PACKAGE_PREFIX}' prefix`);
-    }
-    const parsedManifest = PluginUiArtifactsManifestV2Schema.safeParse(rawArtifactManifest);
-    if (!parsedManifest.success) {
+    if (!parsedManifest?.success) {
       throw new Error(`Invalid bundled Plugin UI artifact manifest for '${packageName}'`);
     }
     // App dependency membership applies to executable UI graphs. Daemon-only
@@ -239,27 +271,6 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
     }
 
     let destination = artifactOutputDirs[pluginDirectory] && resolve(artifactOutputDirs[pluginDirectory]);
-    const declaration = PluginPortableReleaseManifestV1Schema.safeParse(pluginManifest);
-    const normalizedManifest = declaration.success ? { ...declaration.data, version: packageVersion } : null;
-    // Empty (e.g. brand-only) artifact inventories emit no declaration row.
-    const uiDeclaration = normalizedManifest && parsedManifest.data.entries.length > 0 ? {
-      pluginId, pluginVersion: packageVersion, packageName,
-      displayName: typeof normalizedManifest.displayName === 'string' ? normalizedManifest.displayName : normalizedManifest.displayName.fallback,
-      normalizedManifest,
-      artifactGraphs: parsedManifest.data.entries,
-      // Immutable app-package correspondence, like the collection contracts below.
-      // Use the shared algorithm here, not on the UI's first Account publication.
-      accountCustody: computePluginAccountBundledCustodyV1({ packageName, manifest: normalizedManifest,
-        artifacts: parsedManifest.data.entries }),
-      declaredExecution: {
-        daemonActions: normalizedManifest.contributes.actions?.some(action => !action.execution || action.execution.target === 'daemon') === true,
-        contributionPoints: (normalizedManifest.contributes.pluginContributionPoints?.length ?? 0) > 0,
-      },
-      entriesById: projectPluginPortableUiDeclarationsV1(normalizedManifest, parsedManifest.data.entries),
-      collectionContracts: normalizePluginAccountCollectionContractsV1({ pluginId,
-        contributions: normalizedManifest.contributes.accountCollections }).map(({ pluginId, collectionId, schemaVersion, contractDigest }) =>
-        ({ pluginId, collectionId, schemaVersion, contractDigest })),
-    } : undefined;
     const pluginSources = [];
     const pluginFiles = [];
     for (const entry of parsedManifest.data.entries) {
@@ -309,7 +320,6 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
         tier: entry.tier,
         digest: entry.digest,
         artifactGraph: entry,
-        uiDeclaration,
         files: [...entry.files]
           .sort((left, right) => left.relativePath.localeCompare(right.relativePath))
           .map((file) => ({ relativePath: file.relativePath, specifier: artifactRoots
@@ -360,10 +370,11 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
     || left.tier.localeCompare(right.tier)
     || left.digest.localeCompare(right.digest)
   ));
-  return { sources, pluginFailures, artifactRoots: publishedArtifactRoots };
+  return { sources, declarations: [...declarations.values()].sort((left, right) => left.packageName.localeCompare(right.packageName)),
+    pluginFailures, artifactRoots: publishedArtifactRoots };
 }
 
-function renderBundledPluginUiArtifactInventory(sources) {
+function renderBundledPluginUiArtifactInventory(sources, declarations) {
   const lines = [
     '/**',
     ' * GENERATED FILE CONTRACT (APP-BUNDLED-PLUGIN-UI-ARTIFACTS)',
@@ -371,9 +382,9 @@ function renderBundledPluginUiArtifactInventory(sources) {
     ' * This file is emitted by:',
     ' * - `apps/ui/scripts/generateBundledPluginUiArtifacts.mjs`',
     ' *',
-    ' * Static module values below are immutable packaged bytes only. Artifact',
-    ' * selection, currentness, cache custody, graph validation, and integrity',
-    ' * remain owned by the Availability Artifact lease.',
+    ' * Artifact rows pre-seed immutable packaged bytes. The separate semantic',
+    ' * declaration projection is owned by the CLI build-owned projector;',
+    ' * packaged byte availability does not admit plugin declarations.',
     ' */',
     '',
   ];
@@ -389,14 +400,20 @@ function renderBundledPluginUiArtifactInventory(sources) {
   }
   if (assetSymbolBySpecifier.size > 0) lines.push('');
   const declarationSymbolByPluginId = new Map();
-  for (const source of sources) {
-    if (declarationSymbolByPluginId.has(source.pluginId)) continue;
+  for (const declaration of declarations) {
     const symbol = `BUNDLED_PLUGIN_UI_APP_DECLARATION_${declarationSymbolByPluginId.size}`;
-    declarationSymbolByPluginId.set(source.pluginId, symbol);
-    lines.push("/** @type {import('./bundledPluginUiArtifactInventory').PluginHostBundledUiDeclaration | undefined} */");
-    lines.push(`const ${symbol} = ${JSON.stringify(source.uiDeclaration)};`);
+    declarationSymbolByPluginId.set(declaration.pluginId, symbol);
+    lines.push("/** @type {import('./bundledPluginUiArtifactInventory').PluginHostBundledUiDeclaration} */");
+    lines.push(`const ${symbol} = ${JSON.stringify(declaration)};`);
   }
   if (declarationSymbolByPluginId.size > 0) lines.push('');
+  lines.push(
+    "/** @type {ReadonlyArray<import('./bundledPluginUiArtifactInventory').PluginHostBundledUiDeclaration>} */",
+    'export const BUNDLED_PLUGIN_UI_APP_DECLARATIONS = Object.freeze([',
+    ...[...declarationSymbolByPluginId.values()].map(symbol => `  ${symbol},`),
+    ']);',
+    '',
+  );
   lines.push(
     "/** @satisfies {import('./bundledPluginUiArtifactInventory').BundledPluginUiAppArtifactInventory} */",
     'export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = Object.freeze([',
@@ -410,7 +427,6 @@ function renderBundledPluginUiArtifactInventory(sources) {
       `    digest: ${JSON.stringify(source.digest)},`,
       `    releaseVersion: ${JSON.stringify(source.packageVersion)},`,
       `    artifactGraph: /** @satisfies {NonNullable<import('./bundledPluginUiArtifactInventory').BundledPluginUiAppArtifact['artifactGraph']>} */ (${JSON.stringify(source.artifactGraph)}),`,
-      `    uiDeclaration: ${declarationSymbolByPluginId.get(source.pluginId)},`,
       '    files: Object.freeze([',
     );
     for (const file of source.files) {
@@ -542,7 +558,7 @@ export async function generateBundledPluginUiArtifacts({
   const diagnostics = reportedFailures.map(({ pluginId, diagnostic }) => ({
     pluginId, ...diagnostic,
   }));
-  const output = renderBundledPluginUiArtifactInventory(sources) + renderBundledPluginBrandMarks(brands.marks);
+  const output = renderBundledPluginUiArtifactInventory(sources, collected.declarations) + renderBundledPluginBrandMarks(brands.marks);
   if (mode === 'check') {
     let current = null;
     try {

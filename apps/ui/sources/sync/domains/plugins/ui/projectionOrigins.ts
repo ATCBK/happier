@@ -45,7 +45,6 @@ export type PluginUiAccountExecutableOrigin = Readonly<{
     accountId: string;
     custodyId: string;
     sourceCustody: Extract<PluginSourceCustodyV1, Readonly<{ kind: 'account_release' | 'bundled_first_party' }>>;
-    declarationDigest?: string;
 }>;
 
 // These proofs live only with immutable values owned by this decoder. Freezing
@@ -94,14 +93,12 @@ export function readPluginUiAccountExecutableOrigin(entry: unknown): PluginUiAcc
         || prepared.sourceCustody.pluginId === record?.pluginId ? prepared : null;
     if (!stamp || typeof stamp.serverId !== 'string' || !stamp.serverId.trim()
         || typeof stamp.accountId !== 'string' || !stamp.accountId.trim()
-        || typeof stamp.custodyId !== 'string' || !stamp.custodyId.trim()
-        || (stamp.declarationDigest !== undefined && (typeof stamp.declarationDigest !== 'string' || !stamp.declarationDigest.trim()))) return null;
+        || typeof stamp.custodyId !== 'string' || !stamp.custodyId.trim()) return null;
     const custody = PluginSourceCustodyV1Schema.safeParse(stamp.sourceCustody);
     if (!custody.success || (custody.data.kind !== 'bundled_first_party' && custody.data.kind !== 'account_release')
         || (custody.data.kind === 'account_release' && custody.data.pluginId !== record?.pluginId)) return null;
     const origin: PluginUiAccountExecutableOrigin = { serverId: stamp.serverId, accountId: stamp.accountId,
-        custodyId: stamp.custodyId, sourceCustody: custody.data,
-        ...(typeof stamp.declarationDigest === 'string' ? { declarationDigest: stamp.declarationDigest } : {}) };
+        custodyId: stamp.custodyId, sourceCustody: custody.data };
     freezeOwnedFacts(origin);
     return origin;
 }

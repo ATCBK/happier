@@ -44,7 +44,7 @@ export function createPluginAccountCollectionContractBootstrap(
         if (admitted(input)) return true;
         const selected = input.readAvailability().readCurrentAccountExecution(input.pluginId);
         if (selected.kind !== 'available' || selected.release !== null || selected.sourceCustody.kind !== 'bundled_first_party'
-            || selected.sourceCustody.packagedRuntime.kind !== 'app_bundle') return false;
+            || selected.sourceCustody.packagedRuntime.kind !== 'source_declaration') return false;
         const contracts = normalizePluginAccountCollectionContractsV1({ pluginId: input.pluginId,
             contributions: selected.manifest.contributes.accountCollections });
         if (!contracts.some(ref => ref.collectionId === (input.ref?.collectionId ?? input.collectionId)

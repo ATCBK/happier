@@ -55,12 +55,12 @@ vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts',
     const collectionContracts = normalizePluginAccountCollectionContractsV1({ pluginId: manifest.id,
         contributions: manifest.contributes.accountCollections }).map(({ pluginId, collectionId, schemaVersion, contractDigest }) =>
         ({ pluginId, collectionId, schemaVersion, contractDigest }));
-    return { ...base, BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [{ pluginId: manifest.id, releaseVersion: manifest.version,
-        artifactId: graph.artifactId, tier: graph.tier, digest: graph.digest, artifactGraph: graph, files: [],
-        uiDeclaration: { pluginId: manifest.id, pluginVersion: manifest.version, displayName: manifest.displayName,
+    return { ...base, BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: manifest.displayName,
             packageName: '@happier-dev/plugins-cold-links', normalizedManifest: manifest, artifactGraphs: [graph],
-            entriesById: {}, collectionContracts },
-    }] satisfies import('@/sync/domains/plugins/availability/bundledPluginUiArtifactInventory').BundledPluginUiAppArtifactInventory };
+            entriesById: {}, collectionContracts }],
+        BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [{ pluginId: manifest.id, releaseVersion: manifest.version,
+            artifactId: graph.artifactId, tier: graph.tier, digest: graph.digest, artifactGraph: graph, files: [],
+        }] satisfies import('@/sync/domains/plugins/availability/bundledPluginUiArtifactInventory').BundledPluginUiAppArtifactInventory };
 });
 
 const pluginId = 'example.links';

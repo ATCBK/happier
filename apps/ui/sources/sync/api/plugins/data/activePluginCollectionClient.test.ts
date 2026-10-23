@@ -625,6 +625,7 @@ describe('active Account Collection direct client', () => {
 
     it('opens retained rows with unknown fields while keeping mutation admission strict', async () => {
         const harness = await loadClient({ responseForDataPath: () => new Response(JSON.stringify({
+            absenceEpoch: 0,
             row: { rowId: 'channel-1', revision: 1, projection: { status: 'enabled', title: 'Ops channel' },
                 content: { t: 'plain', v: { privateNote: 'kept', retired: { nested: true } } } },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } }) });
@@ -945,7 +946,7 @@ describe('active Account Collection direct client', () => {
             currentness: e2eeCurrentness,
             credentials: e2eeCredentials,
             responseForDataPath: (path) => path === '/v1/plugins/data/get'
-                ? new Response(JSON.stringify({ row: encryptedRow }), {
+                ? new Response(JSON.stringify({ row: encryptedRow, absenceEpoch: 0 }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' },
                 })
@@ -1136,6 +1137,7 @@ describe('active Account Collection direct client', () => {
         const harness = await loadClient({
             retireDuringDataRequest: true,
             responseForDataPath: () => new Response(JSON.stringify({
+                absenceEpoch: 0,
                 row: {
                     rowId: 'channel-1',
                     revision: 1,
@@ -1229,7 +1231,7 @@ describe('active Account Collection direct client', () => {
     it('does not materialize a response after the active server generation advances', async () => {
         const harness = await loadClient({
             advanceServerGenerationDuringDataRequest: true,
-            responseForDataPath: () => new Response(JSON.stringify({ row: null }), {
+            responseForDataPath: () => new Response(JSON.stringify({ row: null, absenceEpoch: 0 }), {
                 status: 200,
                 headers: { 'Content-Type': 'application/json' },
             }),

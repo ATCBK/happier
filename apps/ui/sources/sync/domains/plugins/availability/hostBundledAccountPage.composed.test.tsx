@@ -154,12 +154,13 @@ vi.mock('./generatedBundledPluginUiArtifacts', async () => {
     const pointlessDeclaration = { ...uiDeclaration, pluginId: pointlessManifest.id, normalizedManifest: pointlessManifest,
         entriesById: projectPluginPortableUiDeclarationsV1(pointlessManifest, [artifactGraph, accountGraph]),
         declaredExecution: { daemonActions: true, contributionPoints: false } };
-    return { BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [artifactGraph, accountGraph].map((graph, index) => ({
+    return { BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [uiDeclaration, pointlessDeclaration],
+        BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [artifactGraph, accountGraph].map((graph, index) => ({
         pluginId: manifest.id, releaseVersion: manifest.version, artifactId: graph.artifactId, tier: graph.tier,
-        digest: graph.digest, artifactGraph: graph, uiDeclaration, files: [{ relativePath: graph.entry, asset: index + 1 }],
+        digest: graph.digest, artifactGraph: graph, files: [{ relativePath: graph.entry, asset: index + 1 }],
     })).concat([artifactGraph, accountGraph].map((graph, index) => ({
         pluginId: pointlessManifest.id, releaseVersion: pointlessManifest.version, artifactId: graph.artifactId, tier: graph.tier,
-        digest: graph.digest, artifactGraph: graph, uiDeclaration: pointlessDeclaration, files: [{ relativePath: graph.entry, asset: index + 1 }],
+        digest: graph.digest, artifactGraph: graph, files: [{ relativePath: graph.entry, asset: index + 1 }],
     }))), BUNDLED_PLUGIN_BRAND_MARKS: [] };
 });
 vi.mock('expo-asset', () => ({ Asset: { fromModule: () => ({
@@ -186,7 +187,7 @@ const { NavigationTitleChromeProvider } = await import('@/components/ui/layout/n
 const { PluginAppPageScreen } = await import('@/components/appShell/plugins/PluginAppPageScreen');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } = await import('./projection');
-const { BUNDLED_PLUGIN_UI_APP_ARTIFACTS } = await import('./generatedBundledPluginUiArtifacts');
+const { BUNDLED_PLUGIN_UI_APP_ARTIFACTS, BUNDLED_PLUGIN_UI_APP_DECLARATIONS } = await import('./generatedBundledPluginUiArtifacts');
 const { PluginMachineMaterializationV1Schema } = await import('@happier-dev/protocol/plugins/availability');
 const { normalizePluginInstalledUiDeclarations } = await import('@/sync/domains/plugins/ui/projection');
 const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
@@ -239,11 +240,11 @@ it('retains bundled Account custody across admission reads while observing curre
     const declarationHashes = digests.mock.calls.filter(([domain]) => domain === 'happier.plugin.account.declaration.v1').length;
     const custodyHashes = digests.mock.calls.filter(([domain]) => domain === 'happier.plugin.account.bundled-custody.v1').length;
     console.info('R-C bundled reader digest counts', { reads: selections.length, declarationHashes, custodyHashes });
-    expect(declarationHashes).toBe(1);
-    expect(custodyHashes).toBe(1);
+    expect(declarationHashes).toBe(0);
+    expect(custodyHashes).toBe(0);
     digests.mockClear();
     expect(reader.readCurrentAccountExecutionDeclarations()).toMatchObject([{ kind: 'available', manifest,
-        sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle' } } }]);
+        sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@happier-dev/plugins-fixture' } } }]);
     expect(reader.readCurrentArtifact({ pluginId: manifest.id, contributionId: 'read', tier: 'reactNative', platform: 'web' }))
         .toMatchObject({ kind: 'available', artifact: { artifactId: graph.artifactId, digest: graph.digest } });
     expect(reader.readCurrentAccountKvCapability({ pluginId: manifest.id })).toMatchObject({ kind: 'available' });
@@ -390,8 +391,7 @@ it('reuses prepared Account target semantics across unchanged mounted contributi
     const selected = availability.readCurrentAccountExecution('happier.fixture');
     if (selected.kind !== 'available') throw new Error('Expected current Account target');
     const read = () => readMountedAccountTargetedContributions({ pluginId: 'happier.fixture',
-        origin: { ...lifetime.scope, custodyId: selected.custodyId, sourceCustody: selected.sourceCustody,
-            declarationDigest: availability.readBundledAccountDeclarationDigest('happier.fixture')! },
+        origin: { ...lifetime.scope, custodyId: selected.custodyId, sourceCustody: selected.sourceCustody },
         accountLifetime: lifetime, signal: new AbortController().signal, isCurrent: lifetime.isCurrent });
     expect((await read()).targetedSurfaceMounts).toHaveLength(1);
     const schemaParses = vi.spyOn(PluginJsonSchemaV2Schema, 'safeParse');
@@ -425,9 +425,7 @@ it.each([
     const { DaemonPluginStructuredMessageActionExecuteRequestSchema } = await import('@happier-dev/protocol/plugins/actions/daemonInvocationV1');
     const selected = readPluginAccountAvailability(lifetime.scope).readCurrentAccountExecution('happier.fixture');
     if (selected.kind !== 'available' || selected.sourceCustody.kind !== 'bundled_first_party') throw new Error('Expected admitted Account bundle');
-    const { computePluginAccountBundledDeclarationDigestV1 } = await import('@happier-dev/protocol/plugins/availability');
-    const origin = { ...lifetime.scope, custodyId: selected.custodyId, sourceCustody: selected.sourceCustody,
-        declarationDigest: computePluginAccountBundledDeclarationDigestV1(selected.manifest) };
+    const origin = { ...lifetime.scope, custodyId: selected.custodyId, sourceCustody: selected.sourceCustody };
     const projected = await readMountedAccountTargetedContributions({ pluginId: 'happier.fixture', origin,
         accountLifetime: lifetime, signal: new AbortController().signal, isCurrent: lifetime.isCurrent });
     const surface = projected.targetedContributions.points[0]!.protocols[0]!.contributions[0]!.surfaces[0]!;
@@ -540,7 +538,7 @@ it('uses the current Machine action map on a pointless physical surface while re
     replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: {
         availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
     } });
-    const declaration = BUNDLED_PLUGIN_UI_APP_ARTIFACTS.find(row => row.pluginId === pluginId)!.uiDeclaration!;
+    const declaration = BUNDLED_PLUGIN_UI_APP_DECLARATIONS.find(row => row.pluginId === pluginId)!;
     const { PluginProjectionV2Schema, RPC_METHODS } = await import('@happier-dev/protocol');
     const { DaemonPluginUiArtifactBytesReadRequestSchema, DaemonPluginUiArtifactBytesReadResponseSchema,
         DaemonPluginActionSchemasReadRequestSchema, DaemonPluginActionSchemasReadResponseSchema,
@@ -622,6 +620,11 @@ it('uses the current Machine action map on a pointless physical surface while re
             const action = readCurrentAppShellPluginUiProjection()?.actionsById[`${pluginId}/nested`];
             expect(action && resolvePluginUiClientActionRegistration({ action, platform: 'web' })).not.toBeNull();
         });
+        const { PluginReactNativeSurface } = await import('@/components/plugins/reactNative/PluginReactNativeSurface');
+        const surface = screen.tree.root.findByType(PluginReactNativeSurface).props.renderContext.surface;
+        expect(surface.targetedContributions.points).toEqual([]);
+        expect(Object.isFrozen(surface.targetedContributions.target)).toBe(true);
+        expect(Object.isFrozen(surface.targetedContributions.points)).toBe(true);
         await act(async () => { await screen.tree.root.findByProps({ testID: 'account-page-nested-invoke' }).props.onPress(); });
         expect(JSON.parse(screen.tree.root.findByProps({ testID: 'account-page-result' }).props.children))
             .toEqual({ rows: ['current Machine'] });
@@ -719,7 +722,7 @@ it('admits a direct RN surface from its target Home while the active Account Hom
     replacePluginAccountAvailabilityProjection({ scope, snapshot: {
         availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
     } });
-    const projection = normalizePluginInstalledUiDeclarations(BUNDLED_PLUGIN_UI_APP_ARTIFACTS[0]!.uiDeclaration!.entriesById);
+    const projection = normalizePluginInstalledUiDeclarations(BUNDLED_PLUGIN_UI_APP_DECLARATIONS[0]!.entriesById);
     const placement = projection.surfacePlacementsById['surfacePlacement:happier.fixture:account-page']!;
     const lifetime = captureActiveServerAccountScopeLifetime()!;
     // Model the direct projection producer through its real cache-custody seam;
@@ -787,7 +790,7 @@ it('renders a cold bundled Account page with shared state across navigation chro
         expect(packaged.machineRpc).not.toHaveBeenCalled();
         await act(async () => {
             await account.publishMachines(account.serverId, [createMachineFixture({ id: 'machine-asleep', active: false, activeAt: 0 })]);
-            const declared = BUNDLED_PLUGIN_UI_APP_ARTIFACTS[0]!.uiDeclaration!.entriesById;
+            const declared = BUNDLED_PLUGIN_UI_APP_DECLARATIONS[0]!.entriesById;
             const materialization = PluginMachineMaterializationV1Schema.parse({
                 pluginId: 'happier.fixture', version: '1.0.0', machineId: 'machine-asleep', serverIdentityId: 'srv_bundled_account_page',
                 materializationId: 'bundled-install', sourceClass: 'bundledFirstParty', portableRelease: false,
@@ -850,7 +853,7 @@ it('keeps the Account page usable when its optional contribution points belong t
             sourceCustody, executionOrigin,
             declaresContributionPoints: true } },
         familiesById: { pluginUi: { family: 'pluginUi',
-            entriesById: Object.fromEntries(Object.entries(BUNDLED_PLUGIN_UI_APP_ARTIFACTS[0]!.uiDeclaration!.entriesById)
+            entriesById: Object.fromEntries(Object.entries(BUNDLED_PLUGIN_UI_APP_DECLARATIONS[0]!.entriesById)
                 .map(([id, entry]) => [id, { ...entry, occurrenceId: 'fixture-occurrence', executionOrigin }])) } },
     });
     const offline = unionPluginUiProjections([{ machineId, serverId: account.serverId,

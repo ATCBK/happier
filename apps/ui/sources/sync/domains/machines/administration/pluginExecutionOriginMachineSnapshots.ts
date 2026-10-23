@@ -246,9 +246,29 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
         const targets = inventory.state.settings.machineAdministrationTargetsLocalV1;
         const storedTarget = spec.contextualTarget !== undefined ? null : readPluginMachineExecutionTargetPreference(targets, demand.inputs.pluginId);
         const lastUsedTarget = readPluginMachineExecutionLastUsedTarget(targets, demand.inputs.pluginId);
+        const rememberedTarget = storedTarget ?? (spec.storedOrigin && {
+            serverIdentityId: spec.storedOrigin.serverIdentityId,
+            machineId: getPluginMachineExecutionOriginRef(spec.storedOrigin).machineId,
+        });
+        const readLoading = (state: PluginMachineExecutionOriginStateV1) => {
+            const readinessHome = state.kind === 'selected' ? state.origin.serverIdentityId
+                : rememberedTarget?.serverIdentityId ?? spec.homeServerIdentityId;
+            const establishingTarget = state.kind === 'selected' ? { serverIdentityId: state.origin.serverIdentityId,
+                machineId: getPluginMachineExecutionOriginRef(state.origin).machineId }
+                : spec.contextualTarget !== undefined ? spec.contextualTarget : rememberedTarget;
+            const projectionPending = spec.contextualTarget !== null && (state.kind === 'unavailable' || state.kind === 'selected')
+                && spec.establishingTargets?.some(target => establishingTarget ? sameTarget(target, establishingTarget)
+                    : target.serverIdentityId === readinessHome) === true;
+            const selectedContentPending = state.kind === 'selected'
+                && inventory.homes.get(state.origin.serverIdentityId)?.snapshot.executionPendingMachineIds
+                    ?.includes(getPluginMachineExecutionOriginRef(state.origin).machineId) === true;
+            return spec.availabilityNotLoaded === true || selectedContentPending
+                || ((inventory.pendingHomes.has(readinessHome ?? '') && state.kind !== 'selected') || projectionPending);
+        };
         const matches = (description: NonNullable<Demand['description']>) => description.key === key
             && sameSelectionInputs(description.inputs, demand.inputs) && sameTarget(description.storedTarget, storedTarget)
-            && sameTarget(description.lastUsedTarget, lastUsedTarget);
+            && sameTarget(description.lastUsedTarget, lastUsedTarget)
+            && description.value.loading === readLoading(description.value.state);
         if (demand.description && matches(demand.description)) return demand.description.value;
         const sibling = [...demand.context.demands].find(other => other !== demand && other.description && matches(other.description));
         if (sibling?.description) { demand.description = sibling.description; return sibling.description.value; }
@@ -259,10 +279,6 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
                 machineSnapshots: inventory.snapshots, readMachineFact: inventory.readMachineFact, machineRejections: spec.machineRejections,
             }), buildPluginMachineSourceExecutionOriginCandidates({ pluginId: demand.inputs.pluginId, sources: demand.inputs.sources,
                 machineSnapshots: inventory.snapshots, readMachineFact: inventory.readMachineFact })));
-        const rememberedTarget = storedTarget ?? (spec.storedOrigin && {
-            serverIdentityId: spec.storedOrigin.serverIdentityId,
-            machineId: getPluginMachineExecutionOriginRef(spec.storedOrigin).machineId,
-        });
         const presence = rememberedTarget ? inventory.readMachineFact(rememberedTarget).rejection
             ?? spec.machineRejections?.find(entry => sameTarget(entry, rememberedTarget))?.reason ?? null : null;
         const resolved = resolvePluginMachineExecutionOriginState({ pluginId: demand.inputs.pluginId,
@@ -277,15 +293,7 @@ export function createExecutionOriginMachineSnapshotPublication(dependencies: Pu
             inventoryPending: inventory.pendingHomes.has(rememberedTarget?.serverIdentityId ?? spec.homeServerIdentityId ?? ''),
         });
         const state = retainDescriptiveState(previous?.value.state, resolved);
-        const readinessHome = state.kind === 'selected' ? state.origin.serverIdentityId
-            : rememberedTarget?.serverIdentityId ?? spec.homeServerIdentityId;
-        const establishingTarget = state.kind === 'selected' ? { serverIdentityId: state.origin.serverIdentityId,
-            machineId: getPluginMachineExecutionOriginRef(state.origin).machineId }
-            : spec.contextualTarget !== undefined ? spec.contextualTarget : rememberedTarget;
-        const projectionPending = spec.contextualTarget !== null && (state.kind === 'unavailable' || state.kind === 'selected')
-            && spec.establishingTargets?.some(target => establishingTarget ? sameTarget(target, establishingTarget)
-                : target.serverIdentityId === readinessHome) === true;
-        const loading = spec.availabilityNotLoaded === true || ((inventory.pendingHomes.has(readinessHome ?? '') && state.kind !== 'selected') || projectionPending);
+        const loading = readLoading(state);
         const value = previous?.value.candidates === candidates && previous.value.state === state && previous.value.loading === loading
             ? previous.value : Object.freeze({ candidates, state, loading });
         demand.description = { inputs: demand.inputs, key, eligibilityKey, storedTarget, lastUsedTarget, value };

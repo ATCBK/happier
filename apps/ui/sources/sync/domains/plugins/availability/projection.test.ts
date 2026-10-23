@@ -13,6 +13,7 @@ import {
     retirePluginAccountAvailabilityProjection,
     replacePluginAccountAvailabilityProjection,
     useActivePluginAccountAvailabilityReader,
+    useActivePluginAccountUiProjectionInputs,
 } from './projection';
 import type { PluginAccountAvailabilitySnapshot } from './reader';
 import { InvalidateSync } from '@/utils/sessions/sync';
@@ -26,6 +27,56 @@ const snapshot: PluginAccountAvailabilitySnapshot = {
 };
 
 describe('Plugin Account Availability React publication', () => {
+    it('keeps semantic consumers quiet through twenty cursor/time publications without hiding raw currentness', async () => {
+        expect(useActivePluginAccountUiProjectionInputs).toEqual(expect.any(Function));
+        const materialization: PluginMachineMaterializationV1 = {
+            serverIdentityId: 'srv_fixture', machineId: 'machine-a', materializationId: 'external-install',
+            pluginId: 'example.external', version: '1.0.0', sourceClass: 'localPath', portableRelease: false,
+            uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: 1,
+        };
+        const value = { ...snapshot, materializations: [materialization] };
+        replacePluginAccountAvailabilityProjection({ scope, snapshot: value });
+        let semanticRenders = 0;
+        const semantic = await renderHook(() => {
+            semanticRenders += 1;
+            return useActivePluginAccountUiProjectionInputs();
+        });
+        const raw = await renderHook(() => useActivePluginAccountAvailabilityReader());
+        const first = semantic.getCurrent();
+        const originalReader = raw.getCurrent();
+        const settledRenders = semanticRenders;
+        for (let cursor = 2; cursor <= 21; cursor += 1) {
+            await act(async () => {
+                replacePluginAccountAvailabilityProjection({ scope, snapshot: { ...value,
+                    availabilityCursor: cursor, materializations: [{ ...materialization, observedAt: cursor }],
+                } });
+            });
+            expect(semantic.getCurrent()).toBe(first);
+            expect(semanticRenders).toBe(settledRenders);
+            expect(raw.getCurrent()).not.toBe(originalReader);
+            expect(originalReader?.readMaterializations()).toMatchObject({ availabilityCursor: cursor,
+                materializations: [{ observedAt: cursor }],
+            });
+        }
+        await act(async () => {
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: { ...value,
+                materializations: [{ ...materialization, enabled: false }],
+            } });
+        });
+        expect(semantic.getCurrent()).not.toBe(first);
+        expect(semantic.getCurrent()?.materializations[0]?.enabled).toBe(false);
+        const disabled = semantic.getCurrent();
+        await act(async () => { retirePluginAccountAvailabilityProjection([materialization.pluginId]); });
+        expect(semantic.getCurrent()).not.toBe(disabled);
+        const nextScope = { ...scope, accountId: 'account-b' };
+        await act(async () => { storage.setState({ profileScope: nextScope }); });
+        expect(semantic.getCurrent()).toBeNull();
+        expect(raw.getCurrent()?.readMaterializations()).toMatchObject({ kind: 'unavailable', code: 'account_availability_scope_mismatch' });
+        await act(async () => { replacePluginAccountAvailabilityProjection({ scope: nextScope, snapshot: value }); });
+        expect(semantic.getCurrent()).not.toBeNull();
+        expect(originalReader?.readMaterializations().kind).toBe('unavailable');
+    });
+
     it('publishes materializations before surfacing an incomplete census with no named failures', async () => {
         const hook = await renderHook(() => useActivePluginAccountAvailabilityReader()?.readMaterializations());
         await act(async () => {

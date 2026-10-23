@@ -28,7 +28,7 @@ import type { PluginProjectionInstalledPackageV2 } from '@happier-dev/protocol/d
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
-import { PluginDeclarativeProjectedModelV1Schema, projectPluginDeclarativeModelComparisonV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeProjectedModelV1';
+import { projectPluginDeclarativeModelComparisonV1, type PluginDeclarativeProjectedModelV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeProjectedModelV1';
 import type { PluginUiProjectionPhase } from './usePluginUiProjectionCurrentness';
 import { composePluginMachineExecutionOriginV1, type PluginMachineSourceExecutionOriginCandidateV1, type PluginMachineExecutionOriginRejectionV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolveFleetSupplyAgreement } from '@/sync/domains/machines/administration/fleetUnion';
@@ -282,6 +282,7 @@ export function createPluginUiProjectionUnionPublication() {
     let snapshot = EMPTY_PLUGIN_UI_PROJECTION_UNION;
     return {
         getSnapshot: (): PluginUiProjectionUnion => snapshot,
+        // Inputs are immutable producer publications; changed selections publish a new Map.
         publish(nextMembers: readonly PluginUiProjectionUnionMember[], nextSelections?: PluginUiProjectionUnionOriginSelections): PluginUiProjectionUnion {
             if (publishedMembers === nextMembers && publishedSelections === nextSelections) return snapshot;
             if (members && source) {
@@ -1019,25 +1020,32 @@ function declarationContent(entry: unknown): unknown {
         enabled, availability, available, runtimeMode, runtimeDiagnostics, diagnostics, ...content } = record;
     const renderer = asRecord(content.renderer);
     if (renderer?.kind !== 'declarative' || renderer.model === undefined) return content;
-    const model = PluginDeclarativeProjectedModelV1Schema.safeParse(renderer.model);
-    return model.success ? { ...content, renderer: { ...renderer, model: projectPluginDeclarativeModelComparisonV1(model.data) } } : content;
+    // Registry projection already owns model admission. Fleet agreement compares
+    // authored semantics, excluding generated occurrence/availability facts.
+    return { ...content, renderer: { ...renderer,
+        model: projectPluginDeclarativeModelComparisonV1(renderer.model as PluginDeclarativeProjectedModelV1),
+    } };
 }
 
 type DeclarationComparisons = {
-    entries: Map<UnknownRecord, JsonValue>;
+    entries: WeakMap<UnknownRecord, JsonValue>;
     projections: Map<PluginUiProjectionModel, ProjectionDeclarationComparison>;
-    recordsByProjection: Map<PluginUiProjectionModel, ReadonlySet<UnknownRecord>>;
     materializations: Map<PluginMachineMaterializationV1, MaterializationDeclarationComparison>;
 };
 
 function createDeclarationComparisons(): DeclarationComparisons {
-    return { entries: new Map(), projections: new Map(), recordsByProjection: new Map(), materializations: new Map() };
+    return { entries: new WeakMap(), projections: new Map(), materializations: new Map() };
 }
 
 /** Current inputs bound retention; unchanged source rows keep their prepared facts. */
 function retainDeclarationComparisons(models: readonly PluginUiProjectionModel[], previous: DeclarationComparisons,
     materializations: readonly PluginMachineMaterializationV1[] = []): DeclarationComparisons {
     const next = createDeclarationComparisons();
+    // Declaration rows are immutable publications. Weak keys follow their
+    // lifetime without enumerating/copying every surviving authored dictionary
+    // when just a currentness carrier changes. Selection and currentness stay
+    // in the freshly bounded projection/materialization indexes below.
+    next.entries = previous.entries;
     // Register every surviving descriptive fact before preparing new inputs.
     // A replaced report may keep the same owned manifest/artifact roots; no
     // phase, trust, selection or execution admission decision is retained here.
@@ -1051,23 +1059,9 @@ function retainDeclarationComparisons(models: readonly PluginUiProjectionModel[]
         if (facts) next.materializations.set(materialization, facts);
     }
     for (const model of models) {
-        if (next.recordsByProjection.has(model)) continue;
-        let records = previous.recordsByProjection.get(model);
-        if (!records) {
-            const entries = [...declarationMaps(model), model.resourcesById].flatMap(map => Object.values(map));
-            records = new Set(entries.flatMap(entry => {
-                const record = asRecord(entry);
-                const definition = asRecord(record?.definition);
-                return record ? definition ? [record, definition] : [record] : [];
-            }));
-        }
-        next.recordsByProjection.set(model, records);
+        if (next.projections.has(model)) continue;
         const comparison = previous.projections.get(model);
         if (comparison) next.projections.set(model, comparison);
-        for (const record of records) {
-            const snapshot = previous.entries.get(record);
-            if (snapshot !== undefined) next.entries.set(record, snapshot);
-        }
     }
     return next;
 }

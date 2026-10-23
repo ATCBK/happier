@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@/sync/api/session/apiSocket', () => ({ apiSocket: { request: vi.fn() } }));
 
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import * as pluginAvailability from '@happier-dev/protocol/plugins/availability';
 import {
     createPackageAssetArchiveV1,
     decodePackageAssetArchiveBodyV1,
@@ -94,7 +95,11 @@ function fixture() {
 describe('exact daemon package-asset publication', () => {
     it('publishes a complete verified asset archive from the selected daemon through the real Account publisher', async () => {
         const current = fixture();
+        // Observe real Protocol verification without replacing the publisher's integrity boundary.
+        const archiveOpens = vi.spyOn(pluginAvailability, 'openPackageAssetArchiveV1');
         await expect(acquireAndPublishPluginAccountPackageAssets(current.input, current)).resolves.toMatchObject({ kind: 'published' });
+        expect(archiveOpens).toHaveBeenCalledOnce();
+        archiveOpens.mockRestore();
         expect(current.request).toHaveBeenCalledOnce();
         expect(current.resourceRead.mock.calls[0]).toMatchObject(['machine-a', {
             serverId: 'server-a', expectedCallerOccurrenceId: 'assets-occurrence-a', callerPluginId: 'acme.assets',
@@ -175,10 +180,11 @@ describe('exact daemon package-asset publication', () => {
         expect(current.request).not.toHaveBeenCalled();
     });
 
-    it('continues exact-source acquisition across an unrelated Account availability change', async () => {
+    it('continues exact-source acquisition across unrelated Account and plugin projection changes', async () => {
         const current = fixture();
         const read = current.resourceRead.getMockImplementation()!;
         current.resourceRead.mockImplementation(async (machineId, options) => {
+            current.input.projection.generation += 1;
             current.store.replace({ scope, snapshot: {
                 ...current.snapshot,
                 availabilityCursor: 8,
@@ -192,7 +198,7 @@ describe('exact daemon package-asset publication', () => {
         expect(current.resourceRead).toHaveBeenCalledOnce();
     });
 
-    it.each(['account', 'availability', 'projection', 'cancelled'] as const)(
+    it.each(['account', 'availability', 'selected-generation', 'selected-occurrence', 'disabled', 'cancelled'] as const)(
         'does not publish after %s changes during Resource acquisition', async (failure) => {
             const current = fixture();
             const abort = new AbortController();
@@ -201,7 +207,10 @@ describe('exact daemon package-asset publication', () => {
                 capturedSignal = options.signal;
                 if (failure === 'account') current.retire();
                 if (failure === 'availability') current.store.clear();
-                if (failure === 'projection') current.input.projection.generation += 1;
+                const installed = current.input.projection.installedPackagesById[current.input.pluginId]!;
+                if (failure === 'selected-generation') installed.immutableGenerationId = 'generation-b';
+                if (failure === 'selected-occurrence') installed.occurrenceId = 'assets-occurrence-b';
+                if (failure === 'disabled') installed.enabled = false;
                 if (failure === 'cancelled') abort.abort();
                 return { supported: true, result: { ok: true,
                     resource: { pluginId: current.input.pluginId, localId: 'image' }, kind: 'asset',
@@ -211,7 +220,9 @@ describe('exact daemon package-asset publication', () => {
             });
             await acquireAndPublishPluginAccountPackageAssets({ ...current.input, signal: abort.signal }, current);
             expect(current.request).not.toHaveBeenCalled();
-            if (failure !== 'projection') expect(capturedSignal?.aborted).toBe(true);
+            if (failure === 'account' || failure === 'availability' || failure === 'cancelled') {
+                expect(capturedSignal?.aborted).toBe(true);
+            }
         },
     );
 });

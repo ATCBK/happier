@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { BUNDLED_PLUGIN_UI_APP_ARTIFACTS } from './generatedBundledPluginUiArtifacts';
+import { BUNDLED_PLUGIN_UI_APP_DECLARATIONS } from './generatedBundledPluginUiArtifacts';
 
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability';
 
@@ -21,15 +21,18 @@ import {
 
 import {
     createPluginAccountAvailabilityReaderStore,
-    readHostBundledPluginUiDeclarations,
     projectPluginAccountAvailabilityMaterializationIdentity,
     type PluginAccountAvailabilityReader,
     type PluginAccountAvailabilityReleaseClassificationV1,
     type PluginAccountAvailabilitySnapshot,
+    type PluginAccountUiProjectionInputs,
 } from './reader';
 
 const readerStore = createPluginAccountAvailabilityReaderStore({
-    loadHostBundledUi: () => readHostBundledPluginUiDeclarations(BUNDLED_PLUGIN_UI_APP_ARTIFACTS),
+    loadHostBundledUi: () => {
+        if (!BUNDLED_PLUGIN_UI_APP_DECLARATIONS) throw new Error('Bundled Plugin UI declarations are not prepared');
+        return BUNDLED_PLUGIN_UI_APP_DECLARATIONS;
+    },
 });
 
 function subscribeToReactProjection(listener: () => void): () => void {
@@ -142,12 +145,7 @@ export function useActivePluginAccountAvailabilityReader(pluginId?: string): Plu
     const serverId = scope?.serverId ?? null;
     const accountId = scope?.accountId ?? null;
 
-    React.useEffect(() => {
-        const lifetime = captureActiveServerAccountScopeLifetime();
-        if (!lifetime) return;
-        const subscription = lifetime.onRetire(clearPluginAccountAvailabilityProjection);
-        return () => subscription.dispose();
-    }, [accountId, serverId]);
+    useAvailabilityScopeRetirement(accountId, serverId);
 
     return React.useMemo(() => {
         if (!scope) return null;
@@ -155,6 +153,24 @@ export function useActivePluginAccountAvailabilityReader(pluginId?: string): Plu
         // consumers; its methods remain the canonical scope-bound live readers.
         return Object.freeze({ ...readPluginAccountAvailability(scope) });
     }, [accountId, snapshot, scope, serverId]);
+}
+
+function useAvailabilityScopeRetirement(accountId: string | null, serverId: string | null): void {
+    React.useEffect(() => {
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) return;
+        const subscription = lifetime.onRetire(clearPluginAccountAvailabilityProjection);
+        return () => subscription.dispose();
+    }, [accountId, serverId]);
+}
+
+/** Descriptive App/UI consumers do not subscribe to transport observation revisions. */
+export function useActivePluginAccountUiProjectionInputs(): PluginAccountUiProjectionInputs | null {
+    const scope = useActiveServerAccountScope();
+    useAvailabilityScopeRetirement(scope?.accountId ?? null, scope?.serverId ?? null);
+    const readSnapshot = React.useCallback(() => scope
+        ? readPluginAccountAvailability(scope).readUiProjectionInputs() : null, [scope]);
+    return React.useSyncExternalStore(subscribeToReactProjection, readSnapshot, readSnapshot);
 }
 
 /**

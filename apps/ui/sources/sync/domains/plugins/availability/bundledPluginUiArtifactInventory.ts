@@ -4,7 +4,7 @@ import type { PluginUiArtifactsManifestEntryV2 } from '@happier-dev/protocol/plu
 import type { PluginDeclaredUiEntriesV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginCollectionContractRefV1 } from '@happier-dev/protocol/plugins/data/collectionContractRefV1';
 import type { PluginUiDeclaredExecution } from '../ui/projection';
-import type { PluginPortableReleaseManifestV1, computePluginAccountBundledCustodyV1 } from '@happier-dev/protocol/plugins/availability';
+import type { PluginPortableReleaseManifestV1 } from '@happier-dev/protocol/plugins/availability';
 
 export type PluginHostBundledUiDeclaration = Readonly<{
     pluginId: string;
@@ -17,9 +17,6 @@ export type PluginHostBundledUiDeclaration = Readonly<{
     normalizedManifest?: PluginPortableReleaseManifestV1;
     /** Exact compiler output, including portable Account activation exports. */
     artifactGraphs?: readonly PluginUiArtifactsManifestEntryV2[];
-    /** Immutable first-party correspondence emitted by the app inventory compiler,
-     * like collectionContracts below. Never supplied by a Machine or Account response. */
-    accountCustody?: ReturnType<typeof computePluginAccountBundledCustodyV1>;
     /** Static requirements remain known before a Machine publishes its runtime catalog. */
     declaredExecution?: PluginUiDeclaredExecution;
     /** Reader identities compiled from this app's bundled manifest, never daemon writer refs. */
@@ -28,8 +25,8 @@ export type PluginHostBundledUiDeclaration = Readonly<{
 
 /**
  * The immutable app-package projection of one Plugin UI Artifact. Availability
- * remains the owner of selection and currentness; this projection retains the
- * app's first-party UI declarations beside bytes it already contains.
+ * remains the owner of selection and currentness; this projection supplies
+ * only the bytes the app already contains.
  */
 export type BundledPluginUiAppArtifactFile = Readonly<{
     relativePath: string;
@@ -43,7 +40,6 @@ export type BundledPluginUiAppArtifact = Readonly<{
     digest: PluginUiArtifactDigestV1;
     releaseVersion: string;
     artifactGraph?: PluginUiArtifactsManifestEntryV2;
-    uiDeclaration?: PluginHostBundledUiDeclaration;
     files: readonly BundledPluginUiAppArtifactFile[];
 }>;
 

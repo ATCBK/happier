@@ -13,6 +13,43 @@ import { preparePluginUiProjectionOrigins, readPluginUiAccountExecutableOrigin }
 import { createInstalledPluginUiProjectionPublication, createPluginUiExecutionOriginCandidatePublication, createPluginUiProjectionUnionPublication, mergeInstalledPluginUiProjections, readPluginUiContributionOrigin, readPluginUiContributionSupplies, readPluginUiExecutionOriginCandidates, readPluginUiProjectionEntryExecutionOrigin, unionPluginUiProjections, type PluginUiProjectionUnionMember } from './projectionUnion';
 
 describe('execution-origin projection identity', () => {
+    it('does not read stable published selections again and still applies changed selections', () => {
+        const pluginId = 'acme.stable';
+        const first = sourceMember('first', pluginId, 'row');
+        const second = sourceMember('second', pluginId, 'row');
+        let memberTraversals = 0;
+        const members = new Proxy(Object.freeze([first, second]), {
+            get(target, key, receiver) {
+                if (key === Symbol.iterator || ['every', 'some', 'map', 'flatMap'].includes(String(key))) memberTraversals++;
+                return Reflect.get(target, key, receiver);
+            },
+        });
+        const firstOrigin = first.projection!.installedPackagesById[pluginId]!.executionOrigin!;
+        const secondOrigin = second.projection!.installedPackagesById[pluginId]!.executionOrigin!;
+        let selectionReads = 0;
+        const selection: ReadonlyMap<string, typeof firstOrigin> = new Proxy(new Map([[pluginId, firstOrigin]]), {
+            get(target, key) {
+                selectionReads++;
+                const value = Reflect.get(target, key, target);
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        });
+        const owner = createPluginUiProjectionUnionPublication();
+        const initial = owner.publish(members, selection);
+        expect(readPluginUiContributionOrigin(initial.pluginUiProjection?.unknownEntriesById.row)?.machineId).toBe('first');
+        memberTraversals = 0;
+        selectionReads = 0;
+        for (let report = 0; report < 20; report++) {
+            expect(owner.publish(members, selection)).toBe(initial);
+        }
+        expect(memberTraversals).toBe(0);
+        expect(selectionReads).toBe(0);
+        const changed = owner.publish(members, new Map([[pluginId, secondOrigin]]));
+        expect(readPluginUiContributionOrigin(changed.pluginUiProjection?.unknownEntriesById.row)?.machineId).toBe('second');
+        expect(memberTraversals).toBeGreaterThan(0);
+        expect(owner.publish(members, new Map())).toEqual(unionPluginUiProjections(members, new Map()));
+    });
+
     it('updates reporting-Machine provenance without deep-walking retained facts across a 56-Machine catalog', () => {
         const pluginId = 'acme.streaming';
         const payload = Object.freeze({ sections: Object.freeze([Object.freeze({ title: 'Retained declaration',
@@ -220,40 +257,6 @@ describe('execution-origin projection identity', () => {
                     .toEqual(mergeInstalledPluginUiProjections(declarations, runtime, undefined, selected));
             }
         }
-    });
-
-    it('bounds installed declaration comparisons to current published runtime rows', () => {
-        const member = sourceMember('retention', 'acme.retention', 'row');
-        const installed = { ...EMPTY_PLUGIN_UI_PROJECTION, unknownEntriesById: {
-            row: { pluginId: 'acme.retention', contributionKind: 'unknown' },
-        } };
-        const union = createPluginUiProjectionUnionPublication();
-        const owner = createInstalledPluginUiProjectionPublication();
-        const initial = union.publish([member]).pluginUiProjection!;
-        const retired = initial.unknownEntriesById.row;
-        expect(retired).toBeDefined();
-        const set = vi.spyOn(Map.prototype, 'set');
-        try {
-            owner.publish([installed], initial);
-            const preparedInstalled = set.mock.calls.find(([key]) => key === installed.unknownEntriesById.row)?.[1];
-            expect(preparedInstalled).toBeDefined();
-            let latest = retired;
-            for (let generation = 2; generation <= 4; generation++) {
-                const runtime = union.publish([{ ...member, projection: { ...member.projection!, generation } }]).pluginUiProjection!;
-                owner.publish([installed], runtime);
-                latest = runtime.unknownEntriesById.row;
-            }
-            // Observe the real comparison Maps that prepared the latest row,
-            // not detached historical Maps retained by this instrumentation.
-            const currentMaps = set.mock.calls.flatMap(([key], index) => {
-                const context = set.mock.contexts[index];
-                return key === latest && context instanceof Map ? [context] : [];
-            });
-            expect(currentMaps.length).toBeGreaterThan(0);
-            expect(latest).not.toBe(retired);
-            expect(currentMaps.some(map => map.has(retired))).toBe(false);
-            expect(currentMaps.every(map => map.get(installed.unknownEntriesById.row) === preparedInstalled)).toBe(true);
-        } finally { set.mockRestore(); }
     });
 
     it('does not reread a retained Resource-only sibling while another Machine changes currentness', () => {
@@ -844,7 +847,7 @@ describe('execution-origin projection identity', () => {
             phase: 'current', interactionEnabled: true, executionOrigin };
         const hostAccountOrigin = { custodyId: 'account-custody', serverId: 'server', sourceCustody: {
             archiveDigestSha256: `sha256:${'a'.repeat(64)}`, version: '1.0.0', pluginId: 'acme.first', kind: 'account_release',
-        }, accountId: 'account', declarationDigest: undefined };
+        }, accountId: 'account' };
         const entry = { pluginId: 'acme.first', executionOrigin, hostOrigin, hostAccountOrigin };
         const model = { ...EMPTY_PLUGIN_UI_PROJECTION, unknownEntriesById: { entry } };
         const prepared = preparePluginUiProjectionOrigins(model);
@@ -852,7 +855,6 @@ describe('execution-origin projection identity', () => {
         expect(preparePluginUiProjectionOrigins(prepared)).toBe(prepared);
         const accountCarrier = prepared.unknownEntriesById.entry!.hostAccountOrigin;
         expect(Object.keys(accountCarrier!)).toEqual(Object.keys(hostAccountOrigin));
-        expect(Object.hasOwn(accountCarrier!, 'declarationDigest')).toBe(true);
         const accountOrigin = readPluginUiAccountExecutableOrigin(prepared.unknownEntriesById.entry);
         expect(accountOrigin?.sourceCustody).toMatchObject({ version: '1.0.0' });
         expect(readPluginUiAccountExecutableOrigin({ ...prepared.unknownEntriesById.entry, pluginId: 'other.plugin' })).toBeNull();

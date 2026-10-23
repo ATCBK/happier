@@ -140,8 +140,7 @@ describe('active Plugin Account Availability projection hydrator', () => {
             const acquired = await hydrator.refresh();
             if (!acquired) throw new Error('Expected current RPC acquisition');
             store.replace(acquired);
-            // The React Availability owner publishes a new facade when its observation changes.
-            owner.publishSources({ ...sources, availabilityReader: Object.freeze({ ...reader }) });
+            owner.publishSources({ ...sources, availabilityInputs: reader.readUiProjectionInputs() });
             const installed = reader.readInstalledPlugins();
             if (installed.kind !== 'available') throw new Error('Expected installed declarations');
             return installed.plugins[0]!.installations[0]!;
@@ -157,6 +156,7 @@ describe('active Plugin Account Availability projection hydrator', () => {
             phase: 'current', interactionEnabled: true, platform: 'web' });
         owner.publishExecutionOrigin(pluginId, null, origin, [origin]);
         const initialUnion = owner.getSnapshot().projectionUnion;
+        const initialDeclarations = owner.getSnapshot().executionOriginMaterializations;
         expect(readPluginUiContributionOrigin(initialUnion.pluginUiProjection?.surfacePlacementsById[pageId])?.interactionEnabled).toBe(true);
         const normalize = vi.spyOn(uiProjection, 'normalizePluginInstalledUiDeclarations');
         try {
@@ -165,7 +165,7 @@ describe('active Plugin Account Availability projection hydrator', () => {
                 const next = await refresh();
                 expect(next.materialization.observedAt).toBe(observedAt);
                 expect(next.uiModel).toBe(first.uiModel);
-                expect(owner.getSnapshot().executionOriginMaterializations[0]?.observedAt).toBe(observedAt);
+                expect(owner.getSnapshot().executionOriginMaterializations).toBe(initialDeclarations);
                 expect(owner.getSnapshot().projectionUnion).toBe(initialUnion);
             }
             expect(normalize).not.toHaveBeenCalled();
@@ -180,7 +180,7 @@ describe('active Plugin Account Availability projection hydrator', () => {
             expect(readPluginUiContributionOrigin(owner.getSnapshot().projectionUnion.pluginUiProjection?.surfacePlacementsById[pageId])?.interactionEnabled).toBe(false);
             materialization = { ...initialMaterialization, materializationId: 'replacement-installation' };
             expect((await refresh()).materialization.materializationId).toBe('replacement-installation');
-            expect(owner.getSnapshot().unionMembers[0]?.materializationsByPluginId?.[pluginId]?.materializationId)
+            expect(owner.getSnapshot().executionOriginMaterializations[0]?.materializationId)
                 .toBe('replacement-installation');
             materialization = { ...initialMaterialization, declaredUiEntries: { [pageId]: {
                 ...initialMaterialization.declaredUiEntries![pageId]!, display: { title: 'Changed page' },

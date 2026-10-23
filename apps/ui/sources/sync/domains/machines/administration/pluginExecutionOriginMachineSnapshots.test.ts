@@ -152,6 +152,43 @@ describe('execution-origin Machine publication', () => {
         expect(first.getSnapshot().selection?.state).toMatchObject({ kind: 'selected', origin: secondSource.source.origin, selectionSource: 'auto' });
     });
 
+    it('marks the selected Machine pending until its newer content opens without waiting for another Machine', () => {
+        vi.useFakeTimers();
+        const { inputs, connect, home, machine, source, now } = fixture();
+        const other = createMachineFixture({ id: 'other-pending-machine', activeAt: now - 1 });
+        storage.setState({ machineListByServerId: { [home.id]: [machine, other] } });
+        storage.getState().applyMachines([machine, other], false, { sourceServerId: home.id });
+        const connection = connect({ ...inputs, selection: { availabilityRevision: {}, storedOrigin: null,
+            homeServerIdentityId: home.serverIdentityId,
+            classifyRelease: () => ({ releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }),
+        } });
+        const selected = { kind: 'selected', origin: source.source.origin };
+        expect(connection.getSnapshot().selection).toMatchObject({ state: selected, loading: false });
+
+        const otherPending = { ...other, keyBasis: { metadataVersion: other.metadataVersion + 1,
+            daemonStateVersion: other.daemonStateVersion + 1, dataEncryptionKey: other.dataEncryptionKey ?? null } };
+        storage.getState().applyMachines([otherPending], false, { sourceServerId: home.id });
+        expect(connection.readCurrent().snapshots).toContainEqual(expect.objectContaining({
+            executionPendingMachineIds: [other.id],
+        }));
+        expect(connection.getSnapshot().selection).toMatchObject({ state: selected, loading: false });
+
+        const selectedPending = { ...machine, keyBasis: { metadataVersion: machine.metadataVersion + 1,
+            daemonStateVersion: machine.daemonStateVersion + 1, dataEncryptionKey: machine.dataEncryptionKey ?? null } };
+        storage.getState().applyMachines([selectedPending], false, { sourceServerId: home.id });
+        expect(connection.readCurrent().snapshots).toContainEqual(expect.objectContaining({
+            executionPendingMachineIds: expect.arrayContaining([machine.id, other.id]),
+        }));
+        expect(connection.getSnapshot().selection).toMatchObject({ state: selected, loading: true });
+
+        storage.getState().applyMachines([{ ...selectedPending, metadataVersion: selectedPending.keyBasis.metadataVersion,
+            daemonStateVersion: selectedPending.keyBasis.daemonStateVersion }], false, { sourceServerId: home.id });
+        expect(connection.readCurrent().snapshots).toContainEqual(expect.objectContaining({
+            executionPendingMachineIds: [other.id],
+        }));
+        expect(connection.getSnapshot().selection).toMatchObject({ state: selected, loading: false });
+    });
+
     it('retains equal descriptive output when a custom classifier callback changes and publishes actual classification changes', () => {
         const { inputs, connect, home, machine } = fixture();
         const materialization = { serverIdentityId: home.serverIdentityId, machineId: machine.id, pluginId: inputs.pluginId,

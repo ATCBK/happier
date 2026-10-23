@@ -3,7 +3,7 @@ import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projecti
 import { readPluginUiContributionOrigin, readPluginUiContributionSupplies } from '@/sync/domains/plugins/ui/projectionUnion';
 
 /** Preserve every proven supplier, including its retained offline declaration. */
-export function projectPluginRegistrySources(projection: PluginUiProjectionModel | null): readonly RegistrySourceDescriptorV1[] {
+export function projectPluginRegistrySources(projection: Pick<PluginUiProjectionModel, 'registrySourcesById'> | null): readonly RegistrySourceDescriptorV1[] {
     return Object.values(projection?.registrySourcesById ?? {}).map(entry => {
         const origin = readPluginUiContributionOrigin(entry);
         const supplies = readPluginUiContributionSupplies(entry);

@@ -71,11 +71,12 @@ vi.mock('./generatedBundledPluginUiArtifacts', async () => {
     const githubDeclaration = { pluginId: githubManifest.id, pluginVersion: githubManifest.version, displayName: githubManifest.displayName,
         packageName: '@happier-dev/plugins-scm-github', normalizedManifest: githubManifest, artifactGraphs: [githubArtifact],
         entriesById: projectPluginPortableUiDeclarationsV1(githubManifest, [githubArtifact]) };
-    return { BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [{ pluginId: manifest.id, releaseVersion: manifest.version,
+    return { BUNDLED_PLUGIN_UI_APP_DECLARATIONS: [uiDeclaration, githubDeclaration],
+        BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [{ pluginId: manifest.id, releaseVersion: manifest.version,
         artifactId: artifact.artifactId, tier: artifact.tier, digest: artifact.digest, artifactGraph: artifact,
-        uiDeclaration, files: [{ relativePath, asset: 1 }] }, { pluginId: githubManifest.id, releaseVersion: githubManifest.version,
+        files: [{ relativePath, asset: 1 }] }, { pluginId: githubManifest.id, releaseVersion: githubManifest.version,
         artifactId: githubArtifact.artifactId, tier: githubArtifact.tier, digest: githubArtifact.digest, artifactGraph: githubArtifact,
-        uiDeclaration: githubDeclaration, files: [{ relativePath: githubPath, asset: 2 }] }], BUNDLED_PLUGIN_BRAND_MARKS: [] };
+        files: [{ relativePath: githubPath, asset: 2 }] }], BUNDLED_PLUGIN_BRAND_MARKS: [] };
 });
 vi.mock('expo-asset', () => ({ Asset: { fromModule: (asset: number) => ({ localUri: `file:///test-app/${asset}.bundle`,
     downloadAsync: async () => undefined }) } }));
@@ -108,7 +109,7 @@ const { resolvePluginUiClientActionRegistration } = await import('@/components/p
 const { readPluginUiAccountExecutableOrigin } = await import('@/components/plugins/reactNative/executableModuleHost');
 const { createPluginUiProjectedActionResolver } = await import('@/sync/domains/plugins/ui/projection');
 const { createBoundPluginSurfaceController } = await import('@/components/plugins/surfaces/boundPluginSurfaceController');
-const { BUNDLED_PLUGIN_UI_APP_ARTIFACTS } = await import('./generatedBundledPluginUiArtifacts');
+const { BUNDLED_PLUGIN_UI_APP_DECLARATIONS } = await import('./generatedBundledPluginUiArtifacts');
 const { PluginAccountAvailabilityIntentReadResponseV1Schema } = await import('@happier-dev/protocol/plugins/availability');
 const { normalizePluginAccountCollectionContractV1, PluginCollectionGetRequestV1Schema, PluginCollectionQueryRequestV1Schema,
     PluginCollectionContractReadRequestV1Schema, PluginCollectionRowV1Schema } = await import('@happier-dev/protocol');
@@ -147,9 +148,9 @@ it.each(['mixed sources', 'personal CRUD', 'unavailable optional Machine', 'avai
         features: createRootLayoutFeaturesResponse({ features: { plugins: { enabled: true,
             ui: { enabled: true, hostedWeb: { enabled: true }, reactNativeBundles: { enabled: true } } } } }) });
     const lifetime = captureActiveServerAccountScopeLifetime()!;
-    const declaration = BUNDLED_PLUGIN_UI_APP_ARTIFACTS[0]!.uiDeclaration!;
+    const declaration = BUNDLED_PLUGIN_UI_APP_DECLARATIONS[0]!;
     if (availableMachine) {
-        const github = BUNDLED_PLUGIN_UI_APP_ARTIFACTS[1]!.uiDeclaration!;
+        const github = BUNDLED_PLUGIN_UI_APP_DECLARATIONS[1]!;
         const manifest = github.normalizedManifest!;
         const occurrenceId = 'github-current';
         const sourceCustody = { kind: 'development' as const, registeredRootId: 'github-source-root' };
