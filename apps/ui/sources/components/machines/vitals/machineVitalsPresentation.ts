@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+
 import type {
   MachinePublishedResourceSummaryV1,
   MachineResourceAttentionV1,
@@ -341,6 +343,15 @@ function mean(values: readonly (number | null)[]): number | null {
 function maximum(values: readonly (number | null)[]): number | null {
   const known = values.filter((value): value is number => value !== null);
   return known.length === 0 ? null : Math.max(...known);
+}
+
+const NO_LIVE_TIMELINE_SAMPLES: readonly MachineVitalsSampleV1[] = [];
+
+/** Long ranges consume daemon buckets; only the hour consumes the changing live tail. */
+export function useMachineVitalsTimeline(input: Parameters<typeof buildMachineVitalsTimeline>[0]): MachineVitalsTimeline | null {
+  const { range, history } = input;
+  const samples = range === '1h' ? input.samples : NO_LIVE_TIMELINE_SAMPLES;
+  return useMemo(() => buildMachineVitalsTimeline({ range, history, samples }), [range, history, samples]);
 }
 
 /**

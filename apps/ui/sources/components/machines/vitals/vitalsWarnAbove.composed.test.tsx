@@ -144,6 +144,37 @@ describe('a Metric widget’s “Warn above” on the Overview tiles (plan 60 rw
 });
 
 describe('retained vitals readings', () => {
+  it('rebuilds zero historical memory series for ten live readings with unchanged chart inputs', async () => {
+    const at = Date.now();
+    const timeline = buildMachineVitalsTimeline({ range: '24h', samples: [], history: {
+      range: '24h', bucketMs: 300_000, today: { rxBytes: 0, txBytes: 0 },
+      points: Array.from({ length: 288 }, (_, index) => ({ t: at - (288 - index) * 300_000,
+        cpu: 10, cpuMax: 20, mem: 60 * GB, memMax: 65 * GB, lvl: 'calm', swp: null, rx: null, tx: null })),
+    } });
+    const axis = ['then', 'now'] as const;
+    let update = (_value: MachineVitalsSampleV1) => { throw new Error('Memory tile not mounted'); };
+    function Reading() {
+      const [value, setValue] = React.useState(sample(at));
+      update = setValue;
+      return <MemoryTile sample={value} attention={null} timeline={timeline} axis={axis} freshness="live" live={false} nowMs={at} />;
+    }
+    const screen = await renderScreen(<Reading />);
+    let publications = 0;
+    for (let arrival = 1; arrival <= 10; arrival++) {
+      const previous = screen.findByType(VitalsHistoryChart).props.series;
+      const next = sample(at + arrival * 2_000);
+      if (!next.memory.reported) throw new Error('Fixture memory must be reported');
+      act(() => update({ ...next, memory: { ...next.memory, availableBytes: next.memory.availableBytes + arrival, usedBytes: next.memory.usedBytes - arrival } }));
+      if (screen.findByType(VitalsHistoryChart).props.series !== previous) publications++;
+    }
+    expect(publications).toBe(0);
+    const previous = screen.findByType(VitalsHistoryChart).props.series;
+    const next = sample(at);
+    if (!next.memory.reported) throw new Error('Fixture memory must be reported');
+    act(() => update({ ...next, memory: { ...next.memory, totalBytes: next.memory.totalBytes * 2 } }));
+    expect(screen.findByType(VitalsHistoryChart).props.series).not.toBe(previous);
+  });
+
   it('stops live chart motion when its retained Overview is hidden', async () => {
     const at = Date.now();
     const timeline = buildMachineVitalsTimeline({ range: '1h', history: null, samples: [sample(at - 2_000), sample(at)] });

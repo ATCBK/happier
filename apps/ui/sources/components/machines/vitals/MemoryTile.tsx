@@ -100,9 +100,10 @@ export const MemoryTile = React.memo(function MemoryTile(
           : undefined,
     [theme.colors],
   );
+  const memoryTotalBytes = memory?.totalBytes ?? null;
   const chart = React.useMemo(() => {
-    if (!props.timeline || !memory) return null;
-    const total = memory.totalBytes;
+    if (!props.timeline || memoryTotalBytes === null) return null;
+    const total = memoryTotalBytes;
     if (pressured) {
       // On a fixed scale, the minutes spent under pressure take the machine's tone.
       const series: readonly HappierSeries[] = [
@@ -173,7 +174,7 @@ export const MemoryTile = React.memo(function MemoryTile(
       // The same percent, in the chart's own unit (bytes in use) on the zoomed scale.
       thresholdValue: props.warnAbovePct === undefined || total <= 0 ? null : (props.warnAbovePct / 100) * total,
     };
-  }, [language, accent, levelInk, memory, pressured, props.timeline, props.warnAbovePct, theme.dark]);
+  }, [language, accent, levelInk, memoryTotalBytes, pressured, props.timeline, props.warnAbovePct, theme.dark]);
 
   if (!memory) {
     return (
