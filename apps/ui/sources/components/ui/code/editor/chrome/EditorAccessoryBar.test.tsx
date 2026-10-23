@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
-import { EditorAccessoryChip } from './EditorAccessoryBar';
+import { EditorAccessoryBar, EditorAccessoryChip } from './EditorAccessoryBar';
+import { SessionCockpitBottomChromeHeightContext } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -76,5 +77,21 @@ describe('EditorAccessoryChip', () => {
       screen.findByTestId('key')!.props.onPress?.({});
     });
     expect(onPress).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('EditorAccessoryBar', () => {
+  it('keeps the key row above the phone floating tab bar, so Save and the keys stay tappable', async () => {
+    const { StyleSheet } = await import('react-native');
+    const tabBarHeight = 84;
+    const screen = await renderScreen(
+      <SessionCockpitBottomChromeHeightContext.Provider value={tabBarHeight}>
+        <EditorAccessoryBar testID="key-row"><EditorAccessoryChip text="Tab" label="Tab" onPress={() => {}} /></EditorAccessoryBar>
+      </SessionCockpitBottomChromeHeightContext.Provider>,
+    );
+    expect(StyleSheet.flatten(screen.findHostByTestId('key-row')?.props.style)).toMatchObject({ paddingBottom: tabBarHeight });
+    // With no floating chrome over the page, the row keeps its own edge.
+    await screen.update(<EditorAccessoryBar testID="key-row"><EditorAccessoryChip text="Tab" label="Tab" onPress={() => {}} /></EditorAccessoryBar>);
+    expect(StyleSheet.flatten(screen.findHostByTestId('key-row')?.props.style).paddingBottom).toBeUndefined();
   });
 });

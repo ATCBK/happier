@@ -3,6 +3,7 @@ import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
+import { useFloatingChromeClearance } from '@/components/ui/layout/useFloatingChromeClearance';
 import { HorizontalScrollableRow } from '@/components/ui/scroll/HorizontalScrollableRow';
 import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
 import { Text } from '@/components/ui/text/Text';
@@ -27,6 +28,8 @@ export function EditorAccessoryBar(props: EditorAccessoryBarProps) {
     const { theme } = useUnistyles();
     const paintColor = useHappierMaterialColorResolver();
     const isInline = props.variant === 'inline';
+    // A page under the phone's floating tab bar: the key row sits above it, the band beneath stays the row's paint.
+    const chromeClearance = useFloatingChromeClearance();
     const content = <HorizontalScrollableRow
         testID={props.testID ? `${props.testID}:scroll` : undefined}
         contentTestID={props.testID ? `${props.testID}:scroll-content` : undefined}
@@ -43,7 +46,8 @@ export function EditorAccessoryBar(props: EditorAccessoryBarProps) {
 
     const bar = <View testID={props.testID} accessibilityRole="toolbar" accessibilityLabel={props.accessibilityLabel}
         style={[stylesheet.bar, props.leading || props.trailing ? stylesheet.pinnedBar : null,
-            { backgroundColor: paintColor(theme.colors.surface.inset, 'transparent') }]}>
+            { backgroundColor: paintColor(theme.colors.surface.inset, 'transparent') },
+            chromeClearance > 0 ? { paddingBottom: chromeClearance } : null]}>
         {props.leading ? <View style={[stylesheet.pinned, stylesheet.pinnedLeading]}>{props.leading}</View> : null}
         <View style={stylesheet.scrollSlot}>{content}</View>
         {props.trailing ? <View style={[stylesheet.pinned, stylesheet.pinnedTrailing]}>{props.trailing}</View> : null}
