@@ -344,8 +344,9 @@ export function createActionToolExecutorBridge(params: Readonly<{
     pluginToolCatalog: params.pluginToolCatalog,
     requiredDirectActionIds: params.requiredDirectActionIds,
   });
-  const resolveAvailability = (actionId: string) => resolveActionToolCatalogAvailability({
+  const resolveAvailability = (actionId: string, toolName?: string) => resolveActionToolCatalogAvailability({
     actionId,
+    toolName,
     surface,
     isActionEnabled,
     actionsSettings: readActionsSettings(),
@@ -416,7 +417,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
       if (!actionId) {
         return { ok: false, errorCode: 'unknown_tool', error: `Unknown action-backed tool: ${toolName}` };
       }
-      const availability = resolveAvailability(actionId);
+      const availability = resolveAvailability(actionId, toolName);
       if (!availability.available) {
         return { ok: false, errorCode: 'action_disabled', error: 'Action is disabled', details: availability };
       }

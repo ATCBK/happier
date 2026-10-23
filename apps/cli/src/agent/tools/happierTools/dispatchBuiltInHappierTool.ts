@@ -9,7 +9,6 @@ import {
   getActionToolIdForToolName,
   getEquivalentActionIdForBuiltInTool,
   isDirectManualToolAvailable,
-  isActionDirectToolAvailableOnToolSurface,
   resolveActionToolCatalogAvailability,
 } from './actionToolCatalog';
 import type { HappierBuiltInToolDispatchResult } from './types';
@@ -130,8 +129,9 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
   const surface = params.surface ?? 'agent';
   const readActionsSettings = () => params.getActionsSettings?.() ?? params.actionsSettings ?? null;
   const actionsSettings = readActionsSettings();
-  const resolveAvailability = (actionId: ActionId | string) => resolveActionToolCatalogAvailability({
+  const resolveAvailability = (actionId: ActionId | string, toolName?: string) => resolveActionToolCatalogAvailability({
     actionId,
+    toolName,
     surface,
     isActionEnabled,
     actionsSettings,
@@ -152,19 +152,11 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
     pluginToolCatalog: params.pluginToolCatalog,
   });
   if (actionBackedActionId) {
-    const availability = resolveAvailability(actionBackedActionId);
+    const availability = resolveAvailability(actionBackedActionId, params.toolName);
     if (!availability.available) {
       return actionDisabled(availability);
     }
-    const isDirectToolAvailable = isActionDirectToolAvailableOnToolSurface({
-      actionId: actionBackedActionId,
-      surface,
-      isActionEnabled,
-      actionsSettings,
-      registry: params.registry,
-      pluginToolCatalog: params.pluginToolCatalog,
-      requiredDirectActionIds: params.requiredDirectActionIds,
-    }) || isDirectManualToolAvailable({
+    const isDirectToolAvailable = isDirectManualToolAvailable({
       toolName: params.toolName,
       actionId: actionBackedActionId,
       surface,

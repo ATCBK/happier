@@ -75,9 +75,6 @@ const BUILT_IN_ACTION_TOOL_CATALOG = indexActionToolEntries(BUILT_IN_ACTION_TOOL
 
 const MANUAL_TOOL_EQUIVALENT_ACTION_IDS = new Map<string, ActionId>([
   ['change_title', 'session.title.set'],
-  ['action_spec_search', 'action.spec.search'],
-  ['action_spec_get', 'action.spec.get'],
-  ['action_options_resolve', 'action.options.resolve'],
 ]);
 const DIRECT_MANUAL_TOOL_NAMES = new Set(['change_title']);
 
