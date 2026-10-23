@@ -404,7 +404,15 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
 - Pair modal tasks with appropriate focus treatment; do not dim the world for parallel, non-blocking work.
 - Material transitions should feel like the surface arrives and departs, not like arbitrary opacity toggles.
 - **One material recipe.** A surface is drawn by its role, not by hand: an ink border, one raised
-  edge and a very low elevation (a hair of grounding, about 5% on light) sized by how far it floats.
+  edge and a very low elevation (a hair of grounding, about 5% on light for controls) sized by how far
+  it floats.
+- **Light cards are grounded, not drawn (W3).** Every in-flow card on light — page and grouped sheets,
+  widgets and `SurfaceCard`, core and plugin alike — carries the faintest trace of each cue: the page
+  under 0.4% of the theme's ink, a 0.6% foot band, a 1.2% lip over its 8% hairline and a 2% grounding
+  shadow (`shadowCard`), below a control's 5%. Controls, floating surfaces, the composer and every
+  dark value keep their own treatment. The card's band and lip are a share of the theme's finish and
+  edge inks, so a profile that sets either keeps its colour and relative strength. The edge owner
+  (`theme/raisedEdge.ts`, `resolveThemeCardChromeStyle`) decides this once; no screen paints its own.
   The raised edge is one side of the border drawn a breath different — a dark lip along the bottom on
   light, a light line along the top on dark. The composer has no lip: one even hairline (owner,
   2026-10-15).
@@ -418,7 +426,8 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
   raised surface (`surface.elevated`), floating surfaces one quiet step above it, and the sidebar's
   list sheets the page colour, one quiet step above the sidebar. Fields, rows, chips and ghost buttons stay flat.
   Dark Soft lifts the card surface's own hue and saturation with a peak alpha of 0.025 at the top
-  edge, fading out over the band; light shades the bottom edge to its ink alpha (0.024) over the band. The theme's single editable
+  edge, fading out over the band; light shades the bottom edge to its ink alpha (0.024) over the band
+  for floating surfaces and the composer, and to a quarter of it (0.006) for in-flow cards. The theme's single editable
   `effect.surfaceFinish` ink controls colour and strength, with custom values left as authored.
 - **Flat edge in flow; the rim only for what floats.** Controls, rows, cards, grouped sheets and the
   composer use the flat edge, in every theme. Popovers, menus, dialogs, sheets over content, toasts,
@@ -630,8 +639,13 @@ live in the page-presentation owners in code.
 - **Every page has an identity.** A page header states the title and one sentence of purpose. Where
   native navigation already shows the title, the header shows only the purpose.
 - **Sections read before their controls.** A sentence-case section title with its explanation above
-  the rows, then one hairline sheet with full-width row dividers. No uppercase group labels or
-  after-the-fact footers on page surfaces.
+  the rows, then one card sheet. Row dividers use the divider ink and run from the rows' text edge
+  (past the leading column when the section reserves one) to the trailing row inset; the last row
+  draws none. No uppercase group labels or after-the-fact footers on page surfaces.
+- **Configure on sheets, browse flat.** Configuration and hub pages keep their sections on sheets. A
+  section that indexes entities (all services, all machines, usage accounts) lies flat on the page
+  (`ItemGroup surface="none"`) with the same text-inset dividers; it gains no card, finish, lip or
+  shadow. Dashboards and heroes do not gain cards either.
 - **One row, one decision, one control.**
   - A switch for on/off.
   - A segmented control for two to four short choices, all visible.
