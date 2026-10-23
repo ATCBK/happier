@@ -7,6 +7,7 @@ import { admitDirectSessionRecipientEnvelope, type DirectSessionRecipientEnvelop
 import { inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { ShareAccessLevel, TeamMembershipStatus, TeamSessionCreationPolicy } from "@/storage/prisma";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import { beforeAccountChangePublication, markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     isStructurallyValidSessionDataKeyEnvelope,
@@ -547,10 +548,10 @@ export async function teamPolicyStillRequiresGrant(tx: Tx, teamId: string): Prom
 /** Evaluate the same required-Team floor once for a complete grant roster. */
 export async function teamsPolicyStillRequireGrants(tx: Tx, teamIds: readonly string[]): Promise<ReadonlySet<string>> {
     if (teamIds.length === 0) return new Set();
-    const teams = await tx.team.findMany({
-        where: { id: { in: [...new Set(teamIds)] } },
+    const teams = (await Promise.all(portableQueryChunks({ values: [...new Set(teamIds)], bindingsPerValue: 1, fixedBindings: 1 }).map(ids => tx.team.findMany({
+        where: { id: { in: [...ids] } },
         select: { id: true, sessionCreationPolicy: true, archivedAt: true },
-    });
+    })))).flat();
     return new Set(teams.filter(teamPolicyRequiresGrant).map((team) => team.id));
 }
 
