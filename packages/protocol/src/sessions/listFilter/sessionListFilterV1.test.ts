@@ -2,10 +2,78 @@ import { describe, expect, it } from 'vitest';
 
 import { ScopeActionInputSchemas } from '../../actions/scopeActionFamily.js';
 import { SESSION_LIST_PAGE_MAX_LIMIT } from '../listing/query.js';
-import { projectSessionListFilterHomeQueriesV1 } from './sessionListFilterQueryV1.js';
+import { projectSessionListFilterAfterHomeQueryV1, projectSessionListFilterHomeQueriesV1 } from './sessionListFilterQueryV1.js';
 import { canSessionListFilterIncludeRunsV1, matchSessionBotFilterV1, matchSessionProjectFilterV1, matchSessionListFilterV1, normalizeSessionListFilterV1, readSessionListStartedByV1, SessionListFilterV1Schema } from './sessionListFilterV1.js';
+import { buildBackendTargetKeyV2 } from '../../backends/targets/backendTargetRefV2.js';
+
+const CODEX_TARGET = buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' });
 
 describe('SessionListFilterV1', () => {
+    it('does not turn an explicit empty Home selection into a structural-query proof', () => {
+        const filter = normalizeSessionListFilterV1({ homeServerIds: [], scope: 'all_accessible', startedBy: ['you'] });
+        const local = projectSessionListFilterAfterHomeQueryV1(filter, 'home');
+        expect(local.homeServerIds).toEqual([]);
+        expect(matchSessionListFilterV1(local, { serverId: 'home', kind: 'session', startedBy: 'you' })).toBe('miss');
+    });
+    it('admits canonical qualified Agent targets, not display names or unqualified routing ids', () => {
+        const base = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' });
+        for (const target of [CODEX_TARGET, buildBackendTargetKeyV2({ kind: 'agent',
+            identity: { pluginId: 'acme.assistant', localId: 'assistant' } })]) {
+            const filter = SessionListFilterV1Schema.parse({ ...base, agents: { include: [target], exclude: [] } });
+            expect(matchSessionListFilterV1(filter, { serverId: 'home', kind: 'session', startedBy: 'you', agent: target })).toBe('match');
+        }
+        for (const target of ['Codex display name', 'codex', 'backend:codex', 'agent:unqualified']) {
+            expect(SessionListFilterV1Schema.safeParse({ ...base, agents: { include: [], exclude: [target] } }).success).toBe(false);
+        }
+    });
+    it('projects qualified positive Sections before paging and removes only explicit query proof locally', () => {
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['a', 'b', 'c'], scope: 'all_accessible',
+            sections: { include: [{ serverId: 'a', sectionId: 'one' }, { serverId: 'b', sectionId: 'two' }],
+                exclude: [{ serverId: 'a', sectionId: 'private' }] }, includeInactive: false });
+        const queries = projectSessionListFilterHomeQueriesV1(filter, { storage: 'active', includeInactive: true,
+            mountedHomeServerIds: ['a', 'b', 'c'] });
+        expect(queries.map(({ serverId, query }) => [serverId, query.folderIds, query.includeInactive])).toEqual([
+            ['a', ['one'], false], ['b', ['two'], false],
+        ]);
+        expect(projectSessionListFilterAfterHomeQueryV1(filter, 'a').sections).toEqual(filter.sections);
+        expect(projectSessionListFilterAfterHomeQueryV1(filter, 'a', { folderIds: ['one'] }).sections).toEqual({
+            include: [], exclude: [{ serverId: 'a', sectionId: 'private' }],
+        });
+        expect(projectSessionListFilterAfterHomeQueryV1(filter, 'a', { folderIds: ['different'] }).sections).toEqual(filter.sections);
+    });
+    it('matches qualified local selections with unknown exclusions kept unavailable', () => {
+        const filter = SessionListFilterV1Schema.parse({ ...normalizeSessionListFilterV1({
+            homeServerIds: ['home-a'], scope: 'all_accessible',
+        }), machines: { include: [{ serverId: 'home-a', machineId: 'm' }], exclude: [] },
+        owners: { include: [{ serverId: 'home-a', accountId: 'a' }], exclude: [] },
+        sections: { include: [], exclude: [{ serverId: 'home-a', sectionId: 'private' }] },
+        agents: { include: [CODEX_TARGET], exclude: [] }, updated: { op: 'between', fromMs: 10, toMs: 20 } });
+        const facts = { serverId: 'home-a', kind: 'session' as const, startedBy: 'you' as const,
+            machine: { serverId: 'home-a', machineId: 'm' }, owner: { serverId: 'home-a', accountId: 'a' },
+            agent: CODEX_TARGET, updatedAt: 10 };
+        expect(matchSessionListFilterV1(filter, facts)).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, section: null })).toBe('match');
+        expect(matchSessionListFilterV1(filter, { ...facts, section: { serverId: 'home-a', sectionId: 'private' } })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, machine: { serverId: 'home-b', machineId: 'm' } })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, updatedAt: 21 })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, kind: 'run' })).toBe('miss');
+        const excludedOtherHome = normalizeSessionListFilterV1({ homeServerIds: ['home-a'], scope: 'all_accessible',
+            machines: { include: [], exclude: [{ serverId: 'home-b', machineId: 'm' }] } });
+        expect(matchSessionListFilterV1(excludedOtherHome, { serverId: 'home-a', kind: 'session', startedBy: 'you' })).toBe('match');
+    });
+
+    it('keeps Branch list-only, distinguishes empty from unavailable, and validates absolute ranges', () => {
+        const filter = SessionListFilterV1Schema.parse({ ...normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' }),
+            branches: { include: [], exclude: ['main'] } });
+        const facts = { serverId: 'home', kind: 'session' as const, startedBy: 'you' as const };
+        expect(matchSessionListFilterV1(filter, facts)).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, branch: null })).toBe('match');
+        expect(matchSessionListFilterV1(filter, { ...facts, branch: 'main' })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, branch: 'feature' }, 'daemonRule')).toBe('unavailable');
+        for (const updated of [{ op: 'between', fromMs: 20, toMs: 10 }, { op: 'before', atMs: 1.5 }, { op: 'after', atMs: Infinity }]) {
+            expect(SessionListFilterV1Schema.safeParse({ ...filter, updated }).success).toBe(false);
+        }
+    });
     it('lets exhaustive previews omit attention promotion while preserving the structural corpus and transport page bound', () => {
         const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible',
             projects: { include: [{ serverId: 'home', projectKey: 'private-project' }], exclude: [] } });
@@ -71,9 +139,10 @@ describe('SessionListFilterV1', () => {
         const filter = normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['home-a'], projects: { include: [], exclude: [project] }, statuses: ['failed'] });
         const facts = { serverId: 'home-a', kind: 'session' as const, startedBy: 'you' as const, source: 'persisted' as const, status: 'failed' as const };
         expect(matchSessionListFilterV1(filter, { ...facts, metadata: null })).toBe('unavailable');
-        expect(matchSessionListFilterV1(filter, { ...facts, metadata: { projectId: 'payments' } })).toBe('miss');
-        expect(matchSessionListFilterV1(filter, { ...facts, metadata: { projectId: 'other' } })).toBe('match');
-        expect(matchSessionListFilterV1(filter, { ...facts, metadata: { projectId: 'other' }, status: undefined })).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, metadata: { projectId: 'payments' } })).toBe('unavailable');
+        expect(matchSessionListFilterV1(filter, { ...facts, projectKey: 'payments' })).toBe('miss');
+        expect(matchSessionListFilterV1(filter, { ...facts, projectKey: 'other' })).toBe('match');
+        expect(matchSessionListFilterV1(filter, { ...facts, projectKey: 'other', status: undefined })).toBe('unavailable');
         expect(matchSessionListFilterV1(filter, { ...facts, serverId: 'home-b', metadata: null })).toBe('miss');
         const under = normalizeSessionListFilterV1({ ...filter, projects: undefined, underSessionId: 'manager' });
         expect(matchSessionListFilterV1(under, facts)).toBe('unavailable');
@@ -98,10 +167,12 @@ describe('SessionListFilterV1', () => {
         const project = { serverId: 'home-a', projectKey: 'anchor' };
         const refs = [{ id: 'checkout', serverId: 'home-a', projectKey: 'anchor', machineId: 'machine', rootPath: 'C:\\repo', createdAtMs: 1 }];
         const match = (metadata: unknown, serverId = 'home-a') => matchSessionProjectFilterV1(metadata, serverId, project, refs);
-        expect(match({ projectId: 'anchor' })).toBe('match');
+        expect(match({ projectId: 'anchor' })).toBe('unavailable');
         expect(match({ projectId: 'anchor' }, 'home-b')).toBe('miss');
-        expect(match({ projectId: 'other', workspaceId: 'checkout' })).toBe('miss');
+        expect(match({ projectId: 'other', workspaceId: 'checkout' })).toBe('unavailable');
         expect(match({ workspaceId: 'checkout' })).toBe('match');
+        expect(match({ workspaceId: 'checkout', machineId: 'sandbox', path: '/repo/child' })).toBe('match');
+        expect(matchSessionProjectFilterV1(null, 'home-a', project, undefined, { projectKey: 'anchor' })).toBe('match');
         expect(match({ machineId: 'machine', path: 'c:/repo/' })).toBe('match');
         expect(match({ machineId: 'machine', path: 'c:/repo/child' })).toBe('miss');
         expect(match({ machineId: 'foreign', path: 'c:/repo' })).toBe('miss');

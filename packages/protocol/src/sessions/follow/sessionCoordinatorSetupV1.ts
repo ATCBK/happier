@@ -3,6 +3,7 @@ import { QualifiedProjectKeyV1Schema, type QualifiedProjectKeyV1 } from '../../w
 import { normalizeSessionListFilterV1, type SessionListFilterV1 } from '../listFilter/sessionListFilterV1.js';
 import { OpenedSessionFollowRuleV1Schema, type OpenedSessionFollowRuleV1, type SessionFollowActionOutputV1 } from './actions.js';
 import { SessionCoordinatorRuleSuggestionV1Schema, type SessionCoordinatorEnableInputV1 } from './sessionCoordinatorActionsV1.js';
+import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '../../json/strictJsonValue.js';
 
 export type SessionCoordinatorCreationDefaultsV1 = Pick<AccountSettings,
   'coordinationCoordinatorRoleId' | 'coordinationCoordinatorKeep' | 'coordinationCoordinatorAnswersWorkerQuestions'
@@ -39,7 +40,7 @@ function isHomeWide(filter: SessionListFilterV1, serverId: string): boolean {
     projects: filter.projects && (filter.projects.include.length > 0 || filter.projects.exclude.length > 0) ? filter.projects : undefined,
     statuses: filter.statuses?.length ? filter.statuses : undefined,
   };
-  return JSON.stringify(effective) === JSON.stringify(baseline);
+  return sameStrictJsonValue(projectNativeJsonValueForTransport(effective), baseline);
 }
 
 function suggestManager(serverId: string, sessionId: string, census?: SessionCoordinatorRuleCensusV1 | null): string | null {

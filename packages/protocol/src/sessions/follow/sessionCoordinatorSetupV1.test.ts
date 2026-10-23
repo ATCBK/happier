@@ -15,6 +15,15 @@ const rule = (sessionId: string, ruleId = 'daily') => OpenedSessionFollowRuleV1S
 const input = { serverId: 'home', sessionId: 'new', scope: 'project' as const, project, settings, ruleIds };
 
 describe('coordinator setup preparation', () => {
+  it('recognizes the same Home-wide filter after strict schema projection changes object-key insertion order', () => {
+    const candidate = rule('daily');
+    const { source, ...otherSelections } = homeFilter;
+    const filter = { source, ...otherSelections };
+    const reordered = OpenedSessionFollowRuleV1Schema.parse({ ...candidate,
+      definition: { ...candidate.definition, filter } });
+    expect(prepareSessionCoordinatorSetupV1({ ...input,
+      ruleCensus: { serverId: 'home', coverage: 'complete', rules: [reordered] } }).managedBySessionId).toBe('daily');
+  });
   it('prepares project-first and Home Started-by-me rules from creation defaults, with exact caller-owned identities and explicit keep resolution', () => {
     const prepared = prepareSessionCoordinatorSetupV1(input);
     expect(prepared).toMatchObject({ roleId: 'orchestrator', answersWorkerQuestions: true,

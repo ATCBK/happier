@@ -4,7 +4,8 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionIdSchema } from '../idsV1.js';
 import { isAccountScopedBlobCiphertextForKind } from '../../crypto/accountScopedCipherEnvelope.js';
-import { SessionListFilterV1Schema } from '../listFilter/sessionListFilterV1.js';
+import { SessionListFilterDaemonRuleV1Schema } from '../listFilter/sessionListFilterV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { FollowPolicyV1Schema } from './sessionFollowPolicyV1.js';
 import { FollowReceiverRefV1Schema, type FollowReceiverRefV1 } from './sessionDeliveryMuteV1.js';
 import { SessionFollowFrontierV1Schema } from './sessionFollowFrontierV1.js';
@@ -52,14 +53,16 @@ export const SessionFollowRuleInceptionV1Schema = lazyZodSchema(() => z.strictOb
 
 /** Private authoring definition; matching and delivery stay at their canonical policy owners. */
 export const SessionFollowRuleDefinitionV1Schema = lazyZodSchema(() => z.strictObject({
-  v: z.literal(1), enabled: z.boolean(), filter: SessionListFilterV1Schema, policy: FollowPolicyV1Schema,
+  v: z.literal(1), enabled: z.boolean(), filter: SessionListFilterDaemonRuleV1Schema, policy: FollowPolicyV1Schema,
 }));
 export type SessionFollowRuleDefinitionV1 = z.infer<typeof SessionFollowRuleDefinitionV1Schema>;
+export const SessionFollowRuleDefinitionStoredReadV1Schema = createStoredReadSchema(SessionFollowRuleDefinitionV1Schema);
 export const SessionFollowRuleContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.strictObject({ t: z.literal('plain'), v: SessionFollowRuleDefinitionV1Schema }),
   z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1)) }),
 ]));
 export type SessionFollowRuleContentV1 = z.infer<typeof SessionFollowRuleContentV1Schema>;
+export const SessionFollowRuleContentStoredReadV1Schema = createStoredReadSchema(SessionFollowRuleContentV1Schema);
 const ruleSourcesSchema = lazyZodSchema(() => z.array(z.strictObject({
   sourceSessionId: asProtocolZod(SessionIdSchema), delivered: SessionFollowFrontierV1Schema,
 })).check(z.superRefine((sources, context) => {
@@ -71,12 +74,12 @@ const ruleSourcesSchema = lazyZodSchema(() => z.array(z.strictObject({
 })));
 /** Physical row grammar: content-free receiver identity plus one Account-mode definition. */
 export const SessionFollowRuleStoredRowV1Schema = lazyZodSchema(() => z.strictObject({
-  version, receiver: FollowReceiverRefV1Schema, content: SessionFollowRuleContentV1Schema, sources: z.optional(ruleSourcesSchema),
+  version, receiver: FollowReceiverRefV1Schema, content: SessionFollowRuleContentStoredReadV1Schema, sources: z.optional(ruleSourcesSchema),
   inception: z.optional(SessionFollowRuleInceptionV1Schema),
 }));
 export type SessionFollowRuleStoredRowV1 = z.infer<typeof SessionFollowRuleStoredRowV1Schema>;
 export const SessionFollowRuleV1Schema = lazyZodSchema(() => z.strictObject({
-  ruleId: SessionFollowRuleIdV1Schema, receiver: FollowReceiverRefV1Schema, content: SessionFollowRuleContentV1Schema, version,
+  ruleId: SessionFollowRuleIdV1Schema, receiver: FollowReceiverRefV1Schema, content: SessionFollowRuleContentStoredReadV1Schema, version,
   sources: z.optional(ruleSourcesSchema),
   inception: z.optional(SessionFollowRuleInceptionV1Schema),
 }));

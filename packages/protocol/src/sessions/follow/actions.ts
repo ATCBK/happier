@@ -5,11 +5,11 @@ import { GetSessionFollowResponseSchema, SetSessionFollowResponseSchema, RemoveS
 import { SetSessionFollowSourceResponseSchema } from './sessionFollowSourcesApi.js';
 import { FollowReceiverRefV1Schema, ChangeDeliveryMuteRequestV1Schema, ChangeDeliveryMuteResponseV1Schema, ListDeliveryMutesResponseV1Schema } from './sessionDeliveryMuteV1.js';
 import { FollowSourceRefV1Schema } from './sessionDeliveryMuteV1.js';
-import { SessionFollowRuleDefinitionV1Schema, SessionFollowRuleIdV1Schema, SessionFollowRuleV1Schema, SetSessionFollowRuleRequestV1Schema, RemoveSessionFollowRuleRequestV1Schema, RemoveSessionFollowRuleResponseV1Schema } from './sessionFollowRuleV1.js';
+import { SessionFollowRuleDefinitionV1Schema, SessionFollowRuleDefinitionStoredReadV1Schema, SessionFollowRuleIdV1Schema, SessionFollowRuleV1Schema, SetSessionFollowRuleRequestV1Schema, RemoveSessionFollowRuleRequestV1Schema, RemoveSessionFollowRuleResponseV1Schema } from './sessionFollowRuleV1.js';
 import { FollowPolicyV1Schema } from './sessionFollowPolicyV1.js';
 import { PersonalFollowOnceV1Schema, AccountFollowRelationV1Schema } from './accountFollow.js';
 import { FollowSourceRelationV1Schema } from './sessionFollowSourcesApi.js';
-import { SessionListFilterV1Schema } from '../listFilter/sessionListFilterV1.js';
+import { SessionListFilterStoredReadV1Schema } from '../listFilter/sessionListFilterV1.js';
 import { FollowRulePreviewResultV1Schema } from './sessionFollowRulePreviewV1.js';
 import { SessionTargetV1Schema } from '../../actions/sessionTargetV1.js';
 import { FollowListPageRequestV1Schema, FollowListRequestV1Schema, FollowListPageResultFieldsV1 } from './sessionFollowListV1.js';
@@ -29,7 +29,7 @@ export const OpenedSessionFollowRuleV1Schema = lazyZodSchema(() => z.strictObjec
   version: SessionFollowRuleV1Schema.shape.version,
   sources: SessionFollowRuleV1Schema.shape.sources,
   inception: SessionFollowRuleV1Schema.shape.inception,
-  definition: SessionFollowRuleDefinitionV1Schema,
+  definition: SessionFollowRuleDefinitionStoredReadV1Schema,
 }));
 export type OpenedSessionFollowRuleV1 = z.infer<typeof OpenedSessionFollowRuleV1Schema>;
 const ruleSource = z.strictObject({ kind: z.literal('rule'), ruleId: SessionFollowRuleIdV1Schema });
@@ -79,7 +79,7 @@ export const FollowListActionOutputV1Schema = lazyZodSchema(() => z.strictObject
   peopleCount: z.optional(z.number().check(z.int(), z.nonnegative())),
   ...FollowListPageResultFieldsV1,
 }));
-export const FollowPreviewActionInputV1Schema = z.strictObject({ receiver: FollowActionReceiverV1Schema, filter: SessionListFilterV1Schema });
+export const FollowPreviewActionInputV1Schema = z.strictObject({ receiver: FollowActionReceiverV1Schema, filter: SessionListFilterStoredReadV1Schema });
 export type FollowPreviewActionInputV1 = z.output<typeof FollowPreviewActionInputV1Schema>;
 export const SessionFollowActionInputSchemasV1 = Object.freeze({
   'follow.get': FollowGetActionInputV1Schema,

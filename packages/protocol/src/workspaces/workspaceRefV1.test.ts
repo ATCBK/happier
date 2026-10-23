@@ -1,9 +1,59 @@
 import { describe, expect, it } from 'vitest';
 
 import { ProjectKeyV1Schema, WorkspaceRefV1Schema } from './workspaceRefV1.js';
-import { resolveWorkspaceRefV1, enrichWorkspaceRefV1, projectWorkspaceRefV1 } from './workspaceRefResolutionV1.js';
+import { matchSessionProjectFilterV1 } from '../sessions/listFilter/sessionListFilterV1.js';
+import { resolveWorkspaceRefV1, enrichWorkspaceRefV1, projectWorkspaceRefV1, resolveSessionProjectKeyV1, createSessionProjectKeyResolverV1 } from './workspaceRefResolutionV1.js';
 
 describe('workspaceRefV1', () => {
+  it('resolves accepted Session Project identity without private refs and qualifies it by Home', () => {
+    for (const serverId of ['a', 'b']) {
+      expect(resolveSessionProjectKeyV1(null, serverId, undefined, { projectKey: 'anchor' }))
+        .toEqual({ kind: 'resolved', projectKey: { serverId, projectKey: 'anchor' } });
+    }
+    expect(resolveSessionProjectKeyV1({ projectId: 'anchor' }, 'a', [])).toEqual({ kind: 'unavailable' });
+    expect(resolveSessionProjectKeyV1({}, 'a')).toEqual({ kind: 'unavailable' });
+    expect(resolveSessionProjectKeyV1({}, 'a', [])).toEqual({ kind: 'none' });
+    expect(resolveSessionProjectKeyV1({}, 'a', [], { censusComplete: false })).toEqual({ kind: 'unavailable' });
+  });
+
+  it('uses a qualified explicit checkout regardless of subdirectory or sandbox machine, checking legacy Project markers', () => {
+    const ref = { id: 'checkout', serverId: 'a', projectKey: 'anchor', machineId: 'machine', rootPath: '/repo', createdAtMs: 1 };
+    const metadata = { workspaceId: 'checkout', projectId: 'anchor', machineId: 'sandbox', path: '/repo/child' };
+    expect(resolveSessionProjectKeyV1(metadata, 'a', [ref]))
+      .toEqual({ kind: 'resolved', projectKey: { serverId: 'a', projectKey: 'anchor' }, ref });
+    expect(resolveSessionProjectKeyV1({ ...metadata, projectId: 'other' }, 'a', [ref])).toEqual({ kind: 'unavailable' });
+    expect(resolveSessionProjectKeyV1(metadata, 'b', [ref])).toEqual({ kind: 'unavailable' });
+    expect(resolveSessionProjectKeyV1(metadata, 'a', [ref, { ...ref, projectKey: 'other' }])).toEqual({ kind: 'unavailable' });
+  });
+
+  it('uses exact normalized host machinePath, never container paths or containment, for unmarked Sessions', () => {
+    const ref = { id: 'checkout', serverId: 'a', projectKey: 'anchor', machineId: 'machine', rootPath: 'C:\\Work\\Repo', createdAtMs: 1 };
+    const metadata = { machineId: 'machine', path: '/sandbox/repo', sessionWorkspaceLocationV1: {
+      v: 1, machineId: 'machine', agentPath: '/sandbox/repo', machinePath: 'c:/work/repo/',
+    } };
+    expect(resolveSessionProjectKeyV1(metadata, 'a', [ref])).toMatchObject({ kind: 'resolved', ref });
+    for (const path of ['c:/work/repo/child', 'c:/work/repo2']) {
+      expect(resolveSessionProjectKeyV1({ machineId: 'machine', path }, 'a', [ref])).toEqual({ kind: 'none' });
+    }
+    expect(resolveSessionProjectKeyV1({ machineId: 'foreign', path: 'c:/work/repo' }, 'a', [ref])).toEqual({ kind: 'none' });
+  });
+
+  it('indexes one admitted census once so a thousand keyless rows do not scan unrelated refs', () => {
+    let rootReads = 0;
+    const refs = Array.from({ length: 1_000 }, (_, index) => ({ id: `checkout-${index}`, serverId: 'a',
+      machineId: 'machine', get rootPath() { rootReads += 1; return `/repo-${index}`; }, createdAtMs: index }));
+    const resolve = createSessionProjectKeyResolverV1(refs);
+    rootReads = 0;
+    for (let index = 0; index < 1_000; index += 1) {
+      const metadata = { machineId: 'machine', path: `/repo-${index}` };
+      expect(resolve(metadata, 'a'))
+        .toMatchObject({ kind: 'resolved', projectKey: { serverId: 'a', projectKey: `checkout-${index}` } });
+      expect(matchSessionProjectFilterV1(metadata, 'a', { serverId: 'a', projectKey: `checkout-${index}` }, refs,
+        { sessionProjectKeyResolver: resolve })).toBe('match');
+    }
+    expect(rootReads).toBe(2_000);
+    expect(resolve(null, 'b', 'published')).toEqual({ kind: 'resolved', projectKey: { serverId: 'b', projectKey: 'published' } });
+  });
   it('resolves exact Home addresses and preserves ambiguity across Homes and duplicate scopes', () => {
     const refs = ['a', 'b'].map(serverId => ({ id: 'same', serverId, machineId: 'machine', rootPath: '/repo', createdAtMs: 1 }));
     expect(resolveWorkspaceRefV1(refs, { id: 'same' })).toEqual({ kind: 'ambiguous', candidates: refs });

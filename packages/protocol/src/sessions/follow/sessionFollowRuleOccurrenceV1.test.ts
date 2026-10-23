@@ -14,7 +14,7 @@ const definition: SessionFollowRuleDefinitionV1 = { v: 1, enabled: true, filter,
 const rules = [{ ruleId: 'project', version: 1, receiver: { kind: 'session' as const, sessionId: 'coordinator' }, definition }];
 const evidence = { v: 1 as const, ownerAccountId: 'alice', event: { kind: 'failed_or_stopped' as const },
   facts: { serverId: 'home', kind: 'session' as const, startedBy: 'you' as const } };
-const currentFacts = { ...evidence.facts, metadata: { projectId: 'payments' } };
+const currentFacts = { ...evidence.facts, projectKey: 'payments' };
 
 describe('current readable Follow rule matching', () => {
   it('requires needs_you evidence to name a current request original, never an immutable message', () => {
@@ -84,7 +84,7 @@ describe('current readable Follow rule matching', () => {
 
   it('evaluates a moved source using current Project facts, never original private facts', () => {
     const result = evaluateSessionFollowRuleOccurrenceV1({ accountId: 'alice', evaluator: 'source', sourceSessionId: 'source',
-      production: 'source', evidence, currentFacts: { ...evidence.facts, metadata: { projectId: 'other' } }, rules });
+      production: 'source', evidence, currentFacts: { ...evidence.facts, projectKey: 'other' }, rules });
     expect(result).toMatchObject({ status: 'evaluated', routes: [], pendingRuleIds: [] });
     const movedIn = evaluateSessionFollowRuleOccurrenceV1({ accountId: 'alice', evaluator: 'source', sourceSessionId: 'source',
       production: 'source', evidence, currentFacts, rules });
@@ -130,7 +130,7 @@ describe('current readable Follow rule matching', () => {
     const benchmarkRules = Array.from({ length: 20 }, (_, index) => ({ ...rules[0], ruleId: `rule-${index}`,
       receiver: { kind: 'session' as const, sessionId: `coordinator-${index % 5}` } }));
     const corpus = Array.from({ length: 200 }, (_, index) => ({ ...evidence,
-      facts: { ...evidence.facts, metadata: { projectId: index % 2 === 0 ? 'payments' : 'other' } } }));
+      facts: { ...evidence.facts, projectKey: index % 2 === 0 ? 'payments' : 'other' } }));
     const cycles = 100;
     let routes = 0;
     const cpuStart = process.cpuUsage();

@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeSessionListFilterV1 } from '../listFilter/sessionListFilterV1.js';
 import { evaluateFollowRulePreviewV1, excludeProjectFromSessionFollowRuleV1, FollowRulePreviewResultV1Schema, includeExcludedProjectInSessionFollowRuleV1 } from './sessionFollowRulePreviewV1.js';
+import { FollowPreviewActionInputV1Schema } from './actions.js';
 
 describe('Follow rule preview', () => {
+    it.each([{ futureCore: { value: 'narrow' } }, { attention: 'needs_my_attention' }])('reopens stored unavailable narrowing through read-only Action preview (%j)', narrowing => {
+        const filter = { ...normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['home'], startedBy: ['you', 'agents', 'triggers'] }), ...narrowing };
+        const parsed = FollowPreviewActionInputV1Schema.safeParse({ receiver: { kind: 'account' }, filter });
+        expect(parsed.success).toBe(true);
+        if (!parsed.success) return;
+        expect(parsed.data.filter).toEqual(filter);
+        expect(evaluateFollowRulePreviewV1({ filter: parsed.data.filter, coverage: 'complete', candidates: [{
+            source: { kind: 'session', sessionId: 'source' }, facts: { serverId: 'home', kind: 'session', attentionRequired: true },
+        }] })).toMatchObject({ coverage: 'partial', matches: [], matchCount: 0,
+            unavailable: [{ serverId: 'home', source: { kind: 'session', sessionId: 'source' } }] });
+    });
     it('does not enroll an attention Run that the rule starter facet excludes', () => {
         const result = evaluateFollowRulePreviewV1({ filter: normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['home'], startedBy: ['you'] }),
             coverage: 'complete', candidates: [{ source: { kind: 'workflow_run', runId: 'trigger' },
@@ -13,7 +25,8 @@ describe('Follow rule preview', () => {
         const filter = normalizeSessionListFilterV1({ startedBy: ['you', 'agents', 'triggers'], scope: 'all_accessible', homeServerIds: ['home'],
             projects: { include: [], exclude: [{ serverId: 'home', projectKey: 'other' }] } });
         const candidates = ['payments', null, 'other'].map((projectId, index) => ({ source: { kind: 'session' as const, sessionId: `s${index}` },
-            facts: { serverId: 'home', kind: 'session' as const, projectMetadata: projectId === null ? null : { projectId } } }));
+            facts: { serverId: 'home', kind: 'session' as const, projectMetadata: null,
+                ...(projectId === null ? {} : { projectKey: projectId }) } }));
         const preview = evaluateFollowRulePreviewV1({ filter, candidates, coverage: 'complete', otherRules: [{ ruleId: 'daily', enabled: true, filter }] });
         expect(FollowRulePreviewResultV1Schema.parse(preview)).toEqual({ coverage: 'partial', matchCount: 1,
             matches: [{ serverId: 'home', source: { kind: 'session', sessionId: 's0' } }],

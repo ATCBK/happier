@@ -81,7 +81,7 @@ export function evaluateSessionFollowRuleOccurrenceV1(input: Readonly<{
     const facts = input.evidence.ownerAccountId === input.accountId
       ? { ...input.currentFacts, scopeMatches: { ...input.currentFacts.scopeMatches, my_work: true } }
       : { ...input.currentFacts, ...(input.currentFacts.startedBy === 'you' ? { startedBy: 'other_account' as const } : {}) };
-    const match = matchSessionListFilterV1(rule.definition.filter, facts);
+    const match = matchSessionListFilterV1(rule.definition.filter, facts, 'daemonRule');
     if (match === 'unavailable') { pendingRuleIds.push(rule.ruleId); continue; }
     if (match !== 'match') continue;
     const key = rule.receiver.kind === 'account' ? 'account' : `session:${rule.receiver.sessionId}`;
@@ -97,7 +97,7 @@ export function evaluateSessionFollowRuleOccurrenceV1(input: Readonly<{
     ? normalizeSessionFollowDefaultRulesV1({ ...input.defaults, serverId: input.currentFacts.serverId }) : null;
   const pendingDefaultKeys = [...(defaults?.pendingKeys ?? [])];
   for (const rule of defaults?.rules ?? []) {
-    const match = matchSessionListFilterV1(rule.definition.filter, input.currentFacts);
+    const match = matchSessionListFilterV1(rule.definition.filter, input.currentFacts, 'daemonRule');
     if (match === 'unavailable') { pendingDefaultKeys.push(rule.key); continue; }
     if (match !== 'match') continue;
     let candidate = candidates.get('account');

@@ -40,6 +40,20 @@ export {
 } from './content.js';
 
 export {
+  QualifiedSessionSectionV1Schema,
+  SessionOrganizationLockedReasonV1Schema,
+  SessionSectionDisplayV1Schema,
+  SessionSectionDisplayStateV1Schema,
+  SessionSectionV1Schema,
+  readSessionSectionDisplayV1,
+  projectSessionSectionV1,
+  compareSessionSectionOrderV1,
+  type QualifiedSessionSectionV1,
+  type SessionOrganizationLockedReasonV1,
+  type SessionOrganizationOpenedDisplayStateV1,
+  type SessionSectionDisplayV1,
+  type SessionSectionDisplayStateV1,
+  type SessionSectionV1,
   SessionFolderAssignmentMutationResultSchema,
   SessionFolderAssignmentSchema,
   SessionOrganizationFolderSchema,

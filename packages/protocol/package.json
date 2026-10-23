@@ -7,6 +7,16 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./collections/filter/entityListFilterV1": {
+      "happier-source": "./src/collections/filter/entityListFilterV1.ts",
+      "types": "./dist/collections/filter/entityListFilterV1.d.ts",
+      "default": "./dist/collections/filter/entityListFilterV1.js"
+    },
+    "./collections/filter/fieldRegistryV1": {
+      "happier-source": "./src/collections/filter/fieldRegistryV1.ts",
+      "types": "./dist/collections/filter/fieldRegistryV1.d.ts",
+      "default": "./dist/collections/filter/fieldRegistryV1.js"
+    },
     "./discussions/attachmentsUpload": {
       "happier-source": "./src/discussions/attachmentsUpload.ts",
       "types": "./dist/discussions/attachmentsUpload.d.ts",
@@ -8729,6 +8739,21 @@
       "happier-source": "./src/sessions/control/sessionReadinessV1.ts",
       "types": "./dist/sessions/control/sessionReadinessV1.d.ts",
       "default": "./dist/sessions/control/sessionReadinessV1.js"
+    },
+    "./workflows/listing/workflowListFilterV1": {
+      "happier-source": "./src/workflows/listing/workflowListFilterV1.ts",
+      "types": "./dist/workflows/listing/workflowListFilterV1.d.ts",
+      "default": "./dist/workflows/listing/workflowListFilterV1.js"
+    },
+    "./discussions/listing/discussionListFilterV1": {
+      "happier-source": "./src/discussions/listing/discussionListFilterV1.ts",
+      "types": "./dist/discussions/listing/discussionListFilterV1.d.ts",
+      "default": "./dist/discussions/listing/discussionListFilterV1.js"
+    },
+    "./collections/filter/pluginListFilterFieldV1": {
+      "happier-source": "./src/collections/filter/pluginListFilterFieldV1.ts",
+      "types": "./dist/collections/filter/pluginListFilterFieldV1.d.ts",
+      "default": "./dist/collections/filter/pluginListFilterFieldV1.js"
     },
     "./actions/settings/sessionAutoFollowSettingsAction": {
       "happier-source": "./src/actions/settings/sessionAutoFollowSettingsAction.ts",

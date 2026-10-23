@@ -1,4 +1,5 @@
 export * from './content.js';
+export * from './listing/discussionListFilterV1.js';
 export * from './attachments.js';
 export * from './attachmentsUpload.js';
 export * from './settings.js';

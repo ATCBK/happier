@@ -6,9 +6,10 @@ import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type 
 import { FollowReceiverRefV1Schema, type FollowReceiverRefV1 } from './sessionDeliveryMuteV1.js';
 import {
   SESSION_FOLLOW_RULE_CIPHER_KIND_V1, SessionFollowRuleIdV1Schema, SessionFollowRuleDefinitionV1Schema,
-  SessionFollowRuleContentV1Schema, assertSessionFollowRuleContentForModeV1, equalFollowRuleReceiverV1,
+  SessionFollowRuleContentStoredReadV1Schema, assertSessionFollowRuleContentForModeV1, equalFollowRuleReceiverV1,
   type SessionFollowRuleDefinitionV1, type SessionFollowRuleContentV1,
 } from './sessionFollowRuleV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 const bindingSchema = lazyZodSchema(() => z.strictObject({
   ruleId: SessionFollowRuleIdV1Schema, receiver: FollowReceiverRefV1Schema, definition: SessionFollowRuleDefinitionV1Schema,
@@ -20,7 +21,7 @@ export function openSessionFollowRuleContentV1(input: Readonly<{
 }>): Readonly<{ status: 'opened'; definition: SessionFollowRuleDefinitionV1 }> | Readonly<{
   status: 'unavailable'; reason: 'account-mode-mismatch' | 'encryption-material-unavailable' | 'invalid-stored-content';
 }> {
-  const parsed = SessionFollowRuleContentV1Schema.safeParse(input.content);
+  const parsed = SessionFollowRuleContentStoredReadV1Schema.safeParse(input.content);
   if (!parsed.success) return { status: 'unavailable', reason: 'invalid-stored-content' };
   try { assertSessionFollowRuleContentForModeV1(parsed.data, input.mode); }
   catch { return { status: 'unavailable', reason: 'account-mode-mismatch' }; }
@@ -28,7 +29,7 @@ export function openSessionFollowRuleContentV1(input: Readonly<{
   if (parsed.data.t === 'plain') return { status: 'opened', definition: parsed.data.v };
   if (!input.material) return { status: 'unavailable', reason: 'encryption-material-unavailable' };
   const opened = openAccountScopedBlobCiphertext({ kind: SESSION_FOLLOW_RULE_CIPHER_KIND_V1, material: input.material, ciphertext: parsed.data.c });
-  const binding = bindingSchema.safeParse(opened?.value);
+  const binding = createStoredReadSchema(bindingSchema).safeParse(opened?.value);
   return binding.success && binding.data.ruleId === input.ruleId && equalFollowRuleReceiverV1(binding.data.receiver, input.receiver)
     ? { status: 'opened', definition: binding.data.definition }
     : { status: 'unavailable', reason: 'invalid-stored-content' };

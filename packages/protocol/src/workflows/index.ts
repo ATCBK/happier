@@ -1,4 +1,5 @@
 export * from './workflowReferenceV1.js';
+export * from './listing/workflowListFilterV1.js';
 export * from './workflowIdsV1.js';
 export * from './workflowInvocationIdentityV1.js';
 export * from './workflowInvocationStructureV1.js';

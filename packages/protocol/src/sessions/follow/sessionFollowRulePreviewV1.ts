@@ -2,7 +2,8 @@ import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { FollowSourceRefV1Schema, followDeliveryMuteScopeKeyV1, type FollowSourceRefV1 } from './sessionDeliveryMuteV1.js';
 import { SessionFollowRuleIdV1Schema, SessionFollowRuleDefinitionV1Schema, type SessionFollowRuleDefinitionV1 } from './sessionFollowRuleV1.js';
-import { matchSessionListFilterV1, normalizeSessionListFilterV1, type SessionListFilterFactsV1, type SessionListFilterV1 } from '../listFilter/sessionListFilterV1.js';
+import { sessionWorkFilterFields, normalizeSessionListFilterV1, type SessionListFilterFactsV1, type SessionListFilterV1 } from '../listFilter/sessionListFilterV1.js';
+import { compileEntityListFilterV1 } from '../../collections/filter/entityListFilterV1.js';
 import type { QualifiedProjectKeyV1 } from '../../workspaces/workspaceRefV1.js';
 
 const QualifiedFollowPreviewSourceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -31,10 +32,12 @@ export type EvaluateFollowRulePreviewV1Input = Readonly<{
 
 /** Preview is a projection, never enrollment or delivery history. Matching has one owner. */
 export function evaluateFollowRulePreviewV1(input: EvaluateFollowRulePreviewV1Input): FollowRulePreviewResultV1 {
+    const matchFilter = compileEntityListFilterV1(sessionWorkFilterFields, input.filter, 'daemonRule');
     const matches: FollowRulePreviewResultV1['matches'] = [];
     const unavailable: FollowRulePreviewResultV1['unavailable'] = [];
     const overlaps = (input.otherRules ?? []).filter(rule => rule.enabled).map(rule => ({
-        rule, matches: [] as FollowRulePreviewResultV1['matches'],
+        ruleId: rule.ruleId, match: compileEntityListFilterV1(sessionWorkFilterFields, rule.filter, 'daemonRule'),
+        matches: [] as FollowRulePreviewResultV1['matches'],
     }));
     const seen = new Set<string>();
     let incomplete = input.coverage !== 'complete';
@@ -44,12 +47,12 @@ export function evaluateFollowRulePreviewV1(input: EvaluateFollowRulePreviewV1In
         if (seen.has(key)) continue;
         seen.add(key);
         const source = { serverId, source: candidate.source };
-        const match = matchSessionListFilterV1(input.filter, candidate.facts);
+        const match = matchFilter(candidate.facts);
         if (match === 'unavailable') { unavailable.push(source); incomplete = true; }
         if (match !== 'match') continue;
         matches.push(source);
         for (const overlap of overlaps) {
-            const otherMatch = matchSessionListFilterV1(overlap.rule.filter, candidate.facts);
+            const otherMatch = overlap.match(candidate.facts);
             if (otherMatch === 'match') overlap.matches.push(source);
             else if (otherMatch === 'unavailable') incomplete = true;
         }
@@ -57,7 +60,7 @@ export function evaluateFollowRulePreviewV1(input: EvaluateFollowRulePreviewV1In
     return {
         coverage: input.coverage === 'unavailable' ? 'unavailable' : incomplete ? 'partial' : 'complete',
         matchCount: matches.length, matches, unavailable,
-        overlaps: overlaps.filter(overlap => overlap.matches.length > 0).map(overlap => ({ ruleId: overlap.rule.ruleId, matches: overlap.matches })),
+        overlaps: overlaps.filter(overlap => overlap.matches.length > 0).map(overlap => ({ ruleId: overlap.ruleId, matches: overlap.matches })),
         ...(input.continuation === undefined ? {} : { continuation: input.continuation }),
     };
 }
