@@ -3,33 +3,50 @@ import { resolveAnchoredListMoveV1, type AnchoredListPositionV1 } from '@happier
 
 /** Device-local placement policy shared by the app and workspace rails and the Session bar. */
 export type NavigationPlacement = 'pinned' | 'overflow' | 'hidden';
+/** Automatic is catalog policy only; preferences continue to store explicit choices. */
+export type NavigationDefaultPlacement = NavigationPlacement | 'auto';
+export type NavigationPlacementPolicy = Readonly<{
+    defaultPlacement?: NavigationDefaultPlacement;
+    hasContent?: boolean | null;
+    allowedPlacements?: readonly NavigationPlacement[];
+    pending?: boolean;
+}>;
 export type NavigationPlacementPreferences = Readonly<{
     orderedIds: readonly string[];
     placements: Readonly<Record<string, NavigationPlacement>>;
 }>;
-export const NAVIGATION_SURFACE_IDS = ['appRail', 'sessionRail', 'workspaceRail', 'sessionTabBar', 'phoneLauncher'] as const;
+export const NAVIGATION_SURFACE_IDS = ['appRail', 'sessionRail', 'workspaceRail', 'sessionTabBar', 'phoneLauncher', 'composer'] as const;
 export type NavigationSurfaceId = typeof NAVIGATION_SURFACE_IDS[number];
 export type NavigationSurfacePlacementsV1 = Readonly<Partial<Record<NavigationSurfaceId, NavigationPlacementPreferences>>>;
 
 const navigationItemIdSchema = z.string().check(z.trim(), z.minLength(1));
-export const NavigationPlacementPreferencesSchema = z.strictObject({
+const completeNavigationPlacementPreferencesSchema = z.strictObject({
     orderedIds: z.array(navigationItemIdSchema),
     placements: z.record(navigationItemIdSchema, z.enum(['pinned', 'overflow', 'hidden'])),
 });
+export const NavigationPlacementPreferencesSchema = z.union([
+    completeNavigationPlacementPreferencesSchema,
+    z.pipe(z.strictObject({}), z.transform(() => ({ orderedIds: [] as string[], placements: {} as Record<string, NavigationPlacement> }))),
+]);
 export const NavigationSurfacePlacementsV1Schema = z.strictObject({
     appRail: z.optional(NavigationPlacementPreferencesSchema),
     sessionRail: z.optional(NavigationPlacementPreferencesSchema),
     workspaceRail: z.optional(NavigationPlacementPreferencesSchema),
     sessionTabBar: z.optional(NavigationPlacementPreferencesSchema),
     phoneLauncher: z.optional(NavigationPlacementPreferencesSchema),
+    composer: z.optional(NavigationPlacementPreferencesSchema),
 });
-const storedNavigationPlacementPreferencesSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(NavigationPlacementPreferencesSchema);
+const storedNavigationPlacementPreferencesSchema = z.union([
+    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(completeNavigationPlacementPreferencesSchema),
+    z.pipe(z.strictObject({}), z.transform(() => ({ orderedIds: [] as string[], placements: {} as Record<string, NavigationPlacement> }))),
+]);
 export const StoredNavigationSurfacePlacementsV1Schema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(z.extend(NavigationSurfacePlacementsV1Schema, {
     appRail: z.optional(storedNavigationPlacementPreferencesSchema),
     sessionRail: z.optional(storedNavigationPlacementPreferencesSchema),
     workspaceRail: z.optional(storedNavigationPlacementPreferencesSchema),
     sessionTabBar: z.optional(storedNavigationPlacementPreferencesSchema),
     phoneLauncher: z.optional(storedNavigationPlacementPreferencesSchema),
+    composer: z.optional(storedNavigationPlacementPreferencesSchema),
 }));
 export const EMPTY_NAVIGATION_PLACEMENT_PREFERENCES: NavigationPlacementPreferences = Object.freeze({ orderedIds: Object.freeze([]), placements: Object.freeze({}) });
 export const SESSION_COCKPIT_DEFAULT_BAR_SURFACE_IDS = Object.freeze(['browse', 'git', 'companion', 'terminal'] as const);
@@ -41,27 +58,39 @@ function uniqueIds(ids: readonly string[]): string[] {
     }))];
 }
 
-export function resolveNavigationPlacements<T extends Readonly<{ id: string; defaultPlacement?: NavigationPlacement }>>(
+export function resolveNavigationPlacements<T extends Readonly<{ id: string }> & NavigationPlacementPolicy>(
     items: readonly T[], preferences: NavigationPlacementPreferences = EMPTY_NAVIGATION_PLACEMENT_PREFERENCES,
-): Readonly<{ ordered: readonly T[]; pinned: readonly T[]; overflow: readonly T[]; hidden: readonly T[] }> {
+): Readonly<{ ordered: readonly T[]; pinned: readonly T[]; overflow: readonly T[]; hidden: readonly T[]; effectivePlacements: Readonly<Record<string, NavigationPlacement>> }> {
     const byId = new Map(items.map(item => [item.id, item]));
     const orderedIds = uniqueIds([...preferences.orderedIds, ...items.map(item => item.id)]);
     const ordered: T[] = [], pinned: T[] = [], overflow: T[] = [], hidden: T[] = [];
+    const effectivePlacements: Record<string, NavigationPlacement> = {};
     for (const id of orderedIds) {
         const item = byId.get(id);
         if (!item) continue;
         ordered.push(item);
-        const placement = preferences.placements[id] ?? item.defaultPlacement ?? 'pinned';
+        const defaultPlacement = item.defaultPlacement === 'auto' ? item.hasContent === true ? 'pinned' : 'overflow' : item.defaultPlacement ?? 'pinned';
+        let placement = preferences.placements[id] ?? defaultPlacement;
+        if (item.allowedPlacements && !item.allowedPlacements.includes(placement)) {
+            placement = item.allowedPlacements.includes(defaultPlacement) ? defaultPlacement : item.allowedPlacements[0] ?? defaultPlacement;
+        }
+        if (item.pending) placement = 'pinned';
+        effectivePlacements[id] = placement;
         (placement === 'pinned' ? pinned : placement === 'overflow' ? overflow : hidden).push(item);
     }
-    return { ordered, pinned, overflow, hidden };
+    return { ordered, pinned, overflow, hidden, effectivePlacements };
 }
 
 export function updateNavigationPlacement(
-    preferences: NavigationPlacementPreferences, id: string, placement: NavigationPlacement,
+    preferences: NavigationPlacementPreferences, id: string, placement: NavigationDefaultPlacement,
 ): NavigationPlacementPreferences {
     const normalized = normalizeSurfaceId(id);
     if (!normalized || preferences.placements[normalized] === placement) return preferences;
+    if (placement === 'auto') {
+        if (!(normalized in preferences.placements)) return preferences;
+        const { [normalized]: _removed, ...placements } = preferences.placements;
+        return { orderedIds: preferences.orderedIds, placements };
+    }
     return { orderedIds: preferences.orderedIds, placements: { ...preferences.placements, [normalized]: placement } };
 }
 

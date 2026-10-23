@@ -6,9 +6,47 @@ import {
     resolveNavigationOverflow,
     resolveNavigationPlacements,
     updateNavigationPlacement,
+    NavigationSurfacePlacementsV1Schema,
 } from './mobileSurfacePinning';
 
 describe('navigation placements', () => {
+    it('resolves automatic defaults from known content while saved choices win and Automatic clears only its override', () => {
+        const items = [
+            { id: 'positive', defaultPlacement: 'auto' as const, hasContent: true },
+            { id: 'empty', defaultPlacement: 'auto' as const, hasContent: false },
+            { id: 'unknown', defaultPlacement: 'auto' as const, hasContent: null },
+        ];
+        const defaults = resolveNavigationPlacements(items);
+        expect(defaults.pinned.map(item => item.id)).toEqual(['positive']);
+        expect(defaults.overflow.map(item => item.id)).toEqual(['empty', 'unknown']);
+        expect(defaults.effectivePlacements).toEqual({ positive: 'pinned', empty: 'overflow', unknown: 'overflow' });
+        const saved = { orderedIds: ['unknown'], placements: { positive: 'hidden' as const, empty: 'pinned' as const, unknown: 'overflow' as const } };
+        const overridden = resolveNavigationPlacements(items, saved);
+        expect(overridden.effectivePlacements).toEqual({ unknown: 'overflow', positive: 'hidden', empty: 'pinned' });
+        const automatic = updateNavigationPlacement(saved, 'positive', 'auto');
+        expect(automatic).toEqual({ ...saved, placements: { empty: 'pinned', unknown: 'overflow' } });
+        expect(resolveNavigationPlacements(items, automatic).effectivePlacements.positive).toBe('pinned');
+        expect(NavigationSurfacePlacementsV1Schema.safeParse({ sessionRail: { orderedIds: [], placements: { positive: 'auto' } } }).success).toBe(false);
+    });
+    it('resolves legal and pending placement once without rewriting saved preferences', () => {
+        const preferences = { orderedIds: ['goal', 'permission'], placements: { permission: 'hidden' as const, goal: 'hidden' as const } };
+        const controls = [
+            { id: 'permission', defaultPlacement: 'pinned' as const, allowedPlacements: ['pinned', 'overflow'] as const },
+            { id: 'goal', defaultPlacement: 'overflow' as const, pending: true },
+        ];
+        const result = resolveNavigationPlacements(controls, preferences);
+        expect(result.pinned.map(item => item.id)).toEqual(['goal', 'permission']);
+        expect(result.effectivePlacements).toEqual({ goal: 'pinned', permission: 'pinned' });
+        expect(resolveNavigationPlacements(controls.map(item => ({ ...item, pending: false })), preferences).hidden.map(item => item.id)).toEqual(['goal']);
+        expect(preferences.placements).toEqual({ permission: 'hidden', goal: 'hidden' });
+    });
+
+    it('admits composer and explicit empty defaults while rejecting malformed nonempty preferences', () => {
+        expect(NavigationSurfacePlacementsV1Schema.parse({ composer: {} })).toEqual({ composer: { orderedIds: [], placements: {} } });
+        expect(NavigationSurfacePlacementsV1Schema.safeParse({ composer: { placements: {} } }).success).toBe(false);
+        expect(readNavigationSurfacePlacements({ navigationSurfacePlacementsV1: { composer: { orderedIds: ['resume'], placements: { resume: 'overflow' }, future: true } } }).composer)
+            .toEqual({ orderedIds: ['resume'], placements: { resume: 'overflow' } });
+    });
     const items = [{ id: 'files' }, { id: 'git' }, { id: 'terminal' }, { id: 'agents', defaultPlacement: 'hidden' as const }];
 
     it('orders, pins, overflows and hides through one owner without dropping removed ids', () => {
