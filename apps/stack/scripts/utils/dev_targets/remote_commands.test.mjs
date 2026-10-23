@@ -323,7 +323,7 @@ test('host and first-party plugin source Vitest skip emitted publication while r
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
   const artifact = fileURLToPath(new URL('./native_command_policy.sh', import.meta.url));
   assert.equal(readFileSync(artifact, 'utf8'), renderNativeCommandPolicy());
-  for (const component of ['apps/server', 'packages/sdk', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/scm-gitlab', 'packages/plugins/app-context', 'packages/plugins/inspector']) {
+  for (const component of ['apps/server', 'packages/cli-common', 'packages/sdk', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/scm-gitlab', 'packages/plugins/app-context', 'packages/plugins/inspector']) {
     const args = ['node', 'node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.config.ts', 'src/ingress.test.ts'];
     const cases = [
       { args, kind: 'source-test' },

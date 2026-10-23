@@ -21,7 +21,7 @@ export { resolveHeavyweightPressureRetryMilliseconds } from './heavyweight_press
 // while argv and path normalization remain thin transport adapters.
 export const REMOTE_COMMAND_CLASSIFICATION = Object.freeze({
   packageManagerCommands: Object.freeze(['npm', 'npx', 'pnpm', 'yarn']),
-  sourceTestComponents: Object.freeze(['apps/cli', 'apps/ui', 'apps/server', 'packages/sdk', 'packages/plugin-ui', 'packages/plugins/triage', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/scm-gitlab', 'packages/plugins/app-context', 'packages/plugins/inspector', 'packages/plugins/linear', 'packages/plugins/jira', 'packages/plugins/sentry', 'packages/plugins/posthog', 'packages/plugins/claude']),
+  sourceTestComponents: Object.freeze(['apps/cli', 'apps/ui', 'apps/server', 'packages/cli-common', 'packages/sdk', 'packages/plugin-ui', 'packages/plugins/triage', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/scm-gitlab', 'packages/plugins/app-context', 'packages/plugins/inspector', 'packages/plugins/linear', 'packages/plugins/jira', 'packages/plugins/sentry', 'packages/plugins/posthog', 'packages/plugins/claude']),
   sourceTestConfigs: Object.freeze(['vitest.config.ts']),
   // Server Vitest lanes share the workspace-source resolver. Derive their
   // configs from the package so specialized lanes also skip dist publication.
