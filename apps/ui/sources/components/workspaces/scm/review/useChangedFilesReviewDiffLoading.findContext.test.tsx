@@ -8,6 +8,7 @@ import { useChangedFilesReviewDiffLoading } from './useChangedFilesReviewDiffLoa
 import { createChangedFilesReviewFind } from './useChangedFilesReviewFind';
 import { fetchWorkspaceUnifiedDiffForPath } from '@/scm/diff/fetchWorkspaceUnifiedDiffForPath';
 import { ScmComparisonFileSchema } from '@happier-dev/protocol/scm';
+import type { FindStatus } from '@happier-dev/plugin-ui/presentation';
 
 const scm = vi.hoisted(() => ({ read: vi.fn(), diff: vi.fn() }));
 // The exact-Machine SCM transport is external; revision validation, loader,
@@ -32,6 +33,57 @@ const capturedFile = ScmComparisonFileSchema.parse({ path: 'coast.ts', previousP
 const capturedDiffs = new Map([['coast.ts', diff]]);
 
 describe('review Find context loading', () => {
+    it.each([false, true])('preserves a loaded Find corpus while revalidating a snapshot (changed patch=%s)', async (changedPatch) => {
+        scm.diff.mockResolvedValue({ success: true, diff });
+        const bytes = Buffer.from(baseText);
+        scm.read.mockResolvedValue({ success: true, contentBase64: bytes.toString('base64'), sizeBytes: bytes.length,
+            sha256: createHash('sha256').update(bytes).digest('hex') });
+        const reveal = vi.fn();
+        let signature = `refresh-${changedPatch}-first`;
+        const hook = await renderHook(() => {
+            const loading = useChangedFilesReviewDiffLoading({ sessionId: '', isRepo: true, reviewFiles: files,
+                diffArea: 'pending', selectedPath: 'coast.ts', tooLarge: false, normalizeError: String, fallbackError: 'unavailable',
+                fetchUnifiedDiffForPath: fetchDiff, workspaceScope, findContext: true, snapshotSignature: signature });
+            const [find] = React.useState(createChangedFilesReviewFind);
+            React.useEffect(() => find.connect({ paths: ['coast.ts'], diffStateSource: loading.diffStateSource, reveal }), [find, loading.diffStateSource]);
+            return { ...loading, find };
+        });
+        await vi.waitFor(async () => {
+            await flushHookEffects();
+            expect(hook.getCurrent().diffStateSource.getDiffState('coast.ts').context?.status).toBe('loaded');
+        });
+        await act(() => { hook.getCurrent().find.open(); hook.getCurrent().find.setQuery('hidden cedar'); });
+        const corpus = hook.getCurrent().find.getFileSnapshot('coast.ts');
+        const duringRefresh: FindStatus[] = [];
+        const unsubscribe = hook.getCurrent().find.subscribe(() => duringRefresh.push(hook.getCurrent().find.status));
+        reveal.mockClear(); scm.read.mockClear();
+        const rereading = createDeferred<unknown>();
+        scm.read.mockReturnValue(rereading.promise);
+        if (changedPatch) scm.diff.mockResolvedValue({ success: true, diff: diff.replace('+changed 2', '+updated 2') });
+        signature = `refresh-${changedPatch}-second`;
+        await hook.rerender();
+        await flushHookEffects();
+        expect(hook.getCurrent().find.getFileSnapshot('coast.ts')).toBe(corpus);
+        expect(duringRefresh.every(status => 'total' in status && status.total === 1)).toBe(true);
+        expect(reveal).not.toHaveBeenCalled();
+        await act(async () => rereading.resolve({ success: true, contentBase64: bytes.toString('base64'), sizeBytes: bytes.length,
+            sha256: createHash('sha256').update(bytes).digest('hex') }));
+        await flushHookEffects();
+        if (!changedPatch) expect(hook.getCurrent().find.getFileSnapshot('coast.ts')).toBe(corpus);
+        expect(hook.getCurrent().diffStateSource.getDiffState('coast.ts').diff).toBe(changedPatch ? diff.replace('+changed 2', '+updated 2') : diff);
+        expect(hook.getCurrent().find.status).toMatchObject({ current: 1, total: 1 });
+        expect(reveal).not.toHaveBeenCalled();
+        const changed = Buffer.from(baseText.replace('coast 16', 'hidden cedar again'));
+        scm.read.mockResolvedValue({ success: true, contentBase64: changed.toString('base64'), sizeBytes: changed.length,
+            sha256: createHash('sha256').update(changed).digest('hex') });
+        signature = `refresh-${changedPatch}-third`;
+        await hook.rerender();
+        await flushHookEffects();
+        expect(hook.getCurrent().find.getSnapshot()).toMatchObject({ open: true, query: 'hidden cedar',
+            status: { kind: 'results', current: 1, total: 2, coverage: 'complete' } });
+        expect(reveal).not.toHaveBeenCalled();
+        unsubscribe();
+    });
     it.each(['workspace', 'captured'] as const)('reads the %s revision on Find demand through the real loader and matcher', async (kind) => {
         scm.diff.mockResolvedValue({ success: true, diff });
         const reading = createDeferred<unknown>();

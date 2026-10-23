@@ -76,6 +76,7 @@ export function createChangedFilesReviewFind() {
     };
     const refresh = (resetCurrent = false) => {
         const previousCurrent = current;
+        const previousIndex = matches.indexOf(previousCurrent!);
         matches = [];
         let pending = false;
         let partial = false;
@@ -117,7 +118,7 @@ export function createChangedFilesReviewFind() {
         }
         current = previousCurrent && !resetCurrent ? matches.find((match) => match.filePath === previousCurrent.filePath
             && match.lineId === previousCurrent.lineId && match.start === previousCurrent.start && match.end === previousCurrent.end) ?? null : null;
-        current ??= matches[0] ?? null;
+        current ??= matches[resetCurrent ? 0 : Math.max(0, Math.min(previousIndex, matches.length - 1))] ?? null;
         const status: FindStatus = !snapshot.open || !snapshot.query ? { kind: 'idle' } : invalid ? { kind: 'invalidPattern' }
             : pending ? { kind: 'searching', current: current ? matches.indexOf(current) + 1 : null, total: matches.length }
             : { kind: 'results', total: matches.length, current: current ? matches.indexOf(current) + 1 : null,

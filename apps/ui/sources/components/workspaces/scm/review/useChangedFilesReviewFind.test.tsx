@@ -11,6 +11,26 @@ const patch = ['@@ -1,11 +1,11 @@', ...Array.from({ length: 10 }, (_, i) => ` co
 const paths = ['a.ts', 'unloaded.ts', 'image.png', 'failed.ts'];
 
 describe('review Find', () => {
+    it('keeps the current occurrence on equal refresh and clamps its index when it disappears', () => {
+        const source = createChangedFilesReviewDiffStateSource();
+        const diff = '@@ -1,3 +1,3 @@\n needle one\n needle two\n needle three';
+        source.setDiffState('a.ts', { status: 'loaded', diff, error: null });
+        const model = createChangedFilesReviewFind();
+        const reveal = vi.fn();
+        const dispose = model.connect({ paths: ['a.ts'], diffStateSource: source, reveal });
+        model.open(); model.setQuery('needle'); model.setOptions({ matchCase: true, regex: false });
+        model.step(1); model.step(1);
+        const selected = model.getFileSnapshot('a.ts');
+        reveal.mockClear();
+        source.setDiffState('a.ts', { status: 'loaded', diff, error: null });
+        expect(model.getFileSnapshot('a.ts')).toBe(selected);
+        expect(reveal).not.toHaveBeenCalled();
+        source.setDiffState('a.ts', { status: 'loaded', diff: diff.replace(' needle three', ' absent'), error: null });
+        expect(model.getSnapshot()).toMatchObject({ open: true, query: 'needle', options: { matchCase: true, regex: false },
+            status: { current: 2, total: 2 } });
+        expect([...model.getFileSnapshot('a.ts').ranges.values()].flat().filter(range => range.current)).toHaveLength(1);
+        dispose();
+    });
     it('keeps pending, unreadable and mismatched revision context out of complete-empty results', () => {
         const source = createChangedFilesReviewDiffStateSource();
         const model = createChangedFilesReviewFind();
