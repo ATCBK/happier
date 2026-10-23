@@ -227,7 +227,6 @@ import {
   serializeActionFieldOptions,
 } from './actionCatalog.js';
 import { projectActionSpecSchemaSections } from './actionSpecSections.js';
-import { resolveActionApprovalFlow } from './actionApprovalMetadata.js';
 import { parseInputTypeOptionsSourceId } from '../inputs/inputTypes.js';
 import { readInputFieldOptionsSourceId } from '../inputs/inputTypeRuntime.js';
 import { isSharedRequesterActionV1, resolveActionApprovalRouting, SURFACE_AUTHORITY_AGENT_FLOOR } from './actionApprovalPolicy.js';
@@ -1319,13 +1318,6 @@ function sameSessionCreationDirectoryApproval(
     && left?.executionTarget.serverId === right?.executionTarget.serverId
     && left?.executionTarget.machineId === right?.executionTarget.machineId
     && left?.directory === right?.directory;
-}
-
-function buildApprovalMetadata(spec: ActionSpec): NonNullable<ApprovalRequestV1['approval']> {
-  return {
-    flow: resolveActionApprovalFlow(spec.approval),
-    result: spec.approval.result,
-  };
 }
 
 async function resolveComputerActionSelection(
@@ -11177,6 +11169,16 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         if (ctx.signal?.aborted) {
           return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
         }
+        // Explicit creation returns an Artifact, never a retained invocation.
+        // Use the same surface/custody owner as ordinary Action admission;
+        // private live-only result custody still keeps its declared flow.
+        const approvalRouting = resolveActionApprovalRouting({
+          actionId: targetActionId,
+          spec: targetSpec,
+          input: approvalActionArgs,
+          context: { surface: ctx.surface, authority: resolveHostStampedAuthority(ctx), actionCaller: ctx.actionCaller },
+          requiredByPolicy: true,
+        });
         const request: ApprovalRequestV2 = {
           v: 2,
           status: 'open',
@@ -11187,7 +11189,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           ...(approvalOrigin ? { origin: approvalOrigin } : {}),
           executionOriginV1,
           ...(requesterConfirmation ? { requesterConfirmation } : {}),
-          approval: buildApprovalMetadata(targetSpec),
+          approval: { flow: approvalRouting.flow, result: approvalRouting.result },
           actionId: targetActionId,
           actionArgs: approvalActionArgs,
           summary,

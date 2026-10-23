@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { getActionSpec } from './actionSpecs.js';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
-import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { ApprovalRequestV2Schema, type ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 
@@ -19,7 +19,11 @@ const ensureInput = {
 } as const;
 
 describe('createActionExecutor (plugin webhook endpoints)', () => {
-  it('settles approved movePending through the existing Account approval executor', async () => {
+  it.each([
+    { surface: 'cli', miswired: false },
+    { surface: 'ui', miswired: false },
+    { surface: 'cli', miswired: true },
+  ] as const)('settles explicit $surface movePending after invocation ends (miswired=$miswired)', async ({ surface, miswired }) => {
     const actionId = 'plugin.webhook.delivery.movePending';
     const input = { webhookEndpointId: 'wh_ep_AAAAAAAAAAAAAAAAAAAAAA', endpointRevision: 3,
       targetMaterialization: ensureInput.targetMaterialization, pageSize: 500 };
@@ -27,24 +31,43 @@ describe('createActionExecutor (plugin webhook endpoints)', () => {
     let stored: ApprovalRequest | null = null;
     const effects: unknown[] = [];
     // HTTP execution and Artifact persistence are genuine boundaries; admission/replay are real.
-    const executor = createActionExecutor({
+    const deps = {
       pluginWebhookAction: async args => { effects.push(args); return result; },
       isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id,
         context.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), context),
       isApprovalExecutionOriginCurrent: async () => true,
-      approvalsCreate: async ({ request }) => { stored = request; return { artifactId: 'move-approval' }; },
+      approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { artifactId: 'move-approval' }; },
       approvalsGet: async () => stored,
-      approvalsUpdate: async ({ request }) => { stored = request; return { ok: true as const }; },
-    } satisfies ActionExecutorDeps);
+      approvalsUpdate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { ok: true as const }; },
+    } satisfies ActionExecutorDeps;
+    const executor = createActionExecutor(deps);
     const requested = await executor.execute('approval.request.create', {
-      actionId, actionArgs: input, summary: 'Move pending deliveries', createdBy: { surface: 'cli' },
+      actionId, actionArgs: input, summary: 'Move pending deliveries', createdBy: { surface: 'system' },
     }, {
-      surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' },
+      surface, authority: 'account_automation', actionCaller: { kind: 'host' },
       serverId: 'home-1', runtimeAccountId: 'account-1', actionRequestId: 'move-request',
     });
     expect(requested, JSON.stringify(requested)).toMatchObject({ ok: true, result: { artifactId: 'move-approval' } });
+    expect(stored).toMatchObject({ approval: { flow: 'deferred', result: 'required' } });
     expect(effects).toEqual([]);
-    expect(await executor.execute('approval.request.decide', { artifactId: 'move-approval', decision: 'approve' }, {
+    // A different executor consumes the real producer's strict stored request;
+    // no originating invocation or plugin source lifetime can be restored here.
+    const decidingExecutor = createActionExecutor(deps);
+    if (miswired) {
+      // Mis-bind durable custody to a blocking continuation. The consumer must
+      // refuse rather than relaxing the live-invocation consent guard.
+      const request = ApprovalRequestV2Schema.parse(stored);
+      stored = ApprovalRequestV2Schema.parse({ ...request, approval: { ...request.approval, flow: 'blocking' } });
+      expect(await decidingExecutor.execute('approval.request.decide', { artifactId: 'move-approval', decision: 'approve' }, {
+        surface: 'ui', authority: 'present_user', serverId: 'home-1', runtimeAccountId: 'account-1',
+      })).toMatchObject({ ok: true, result: { status: 'failed', execution: {
+        ok: false, errorCode: 'approval_stale', effectAttempted: false,
+        details: { reason: 'live_invocation_unavailable' },
+      } } });
+      expect(effects).toEqual([]);
+      return;
+    }
+    expect(await decidingExecutor.execute('approval.request.decide', { artifactId: 'move-approval', decision: 'approve' }, {
       surface: 'ui', authority: 'present_user', serverId: 'home-1', runtimeAccountId: 'account-1',
     })).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true, result } } });
     expect(effects).toEqual([expect.objectContaining({ actionId, input, caller: { kind: 'host' } })]);
