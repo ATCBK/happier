@@ -2,6 +2,19 @@ import { expect, it } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { reconcileExternalActionTarget, resolveExternalActionMachineTarget } from './reconcileExternalActionTarget';
 
+it('refuses an execution Run retargeting its authenticated receiver with noRunCreated evidence', () => {
+  const start = { actionId: 'execution.run.start' as const, rawInput: {
+    sessionId: null, machineId: 'worker', cwd: '/worker', intent: 'delegate',
+    backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }, instructions: 'Inspect this checkout.',
+    permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response' } };
+  expect(getActionSpec(start.actionId).inputSchema.safeParse(start.rawInput).success).toBe(true);
+  expect(resolveExternalActionMachineTarget({ ...start, ownerMachineId: 'worker' }))
+    .toEqual({ kind: 'ready', machineId: 'worker' });
+  expect(resolveExternalActionMachineTarget({ ...start, ownerMachineId: 'source' }))
+    .toMatchObject({ kind: 'rejected', execution: { ok: false, errorCode: 'target_not_local',
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } } });
+});
+
 it('selects a nested worker destination instead of SOURCE and refuses conflicting receiver custody', () => {
   const status = { actionId: 'projects.worker.status' as const,
     rawInput: { workspace: { serverId: 'home', refId: 'source-ref' },

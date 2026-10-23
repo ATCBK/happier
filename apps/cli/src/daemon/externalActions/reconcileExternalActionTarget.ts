@@ -6,6 +6,7 @@ import type { ActionExecuteResult, ActionExecutorContext, ExternalActionTargetV1
 import { readActionSessionTargetField } from '@happier-dev/protocol/actions/executor/sessionTargets';
 import { normalizeSessionTargetV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import { PluginSettingsAdministrationActionIdV1Schema, resolvePluginSettingsAdministrationTargetV1 } from '@happier-dev/protocol/plugins/settingsAdministration';
+import { withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
 /**
  * The external ingress has one deliberately bounded selector vocabulary. It
@@ -243,20 +244,27 @@ export function resolveExternalActionMachineTarget(input: Readonly<{
   rawInput: unknown;
   target?: ExternalActionTargetV1;
   fallbackMachineId?: string | null;
-  /** Authenticated Session ownership, when the semantic Action addresses a linked Session. */
+  /** Authenticated receiving-Machine or linked-Session ownership; input cannot retarget it. */
   ownerMachineId?: string | null;
 }>): Readonly<{ kind: 'ready'; machineId: string }> | Readonly<{ kind: 'rejected'; execution: ActionExecuteResult }> {
+  // Selection has not dispatched Start, so a refusal proves no Run was created.
+  const reject = (execution: ActionExecuteResult): Readonly<{ kind: 'rejected'; execution: ActionExecuteResult }> => ({
+    kind: 'rejected',
+    execution: input.actionId === 'execution.run.start' && !execution.ok
+      ? { ...execution, details: withExecutionRunStartFailureDetails(execution.details, 'noRunCreated') }
+      : execution,
+  });
   const parsed = parseActionTargetInput(input.actionId, input.rawInput);
-  if (!parsed.success) return { kind: 'rejected', execution: { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' } };
+  if (!parsed.success) return reject({ ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' });
   const machineIds = readMachineSelectorIds(input.actionId, asRecord(parsed.data) ?? {});
   const explicitMachineId = input.target?.kind === 'machine' ? input.target.machineId : null;
   const distinctMachineIds = new Set([...machineIds, ...(explicitMachineId ? [explicitMachineId] : [])]);
-  if (distinctMachineIds.size > 1) return { kind: 'rejected', execution: targetNotLocal() };
+  if (distinctMachineIds.size > 1) return reject(targetNotLocal());
   const machineId = input.ownerMachineId ?? machineIds[0] ?? explicitMachineId ?? readNonEmptyString(input.fallbackMachineId);
-  if (!machineId) return { kind: 'rejected', execution: targetRequired() };
-  if (explicitMachineId && explicitMachineId !== machineId) return { kind: 'rejected', execution: targetNotLocal() };
+  if (!machineId) return reject(targetRequired());
+  if (explicitMachineId && explicitMachineId !== machineId) return reject(targetNotLocal());
   const reconciliation = reconcileExternalActionTarget({
     actionId: input.actionId, rawInput: parsed.data, target: input.target, currentMachineId: machineId,
   });
-  return reconciliation.kind === 'rejected' ? reconciliation : { kind: 'ready', machineId };
+  return reconciliation.kind === 'rejected' ? reject(reconciliation.execution) : { kind: 'ready', machineId };
 }
