@@ -1,23 +1,53 @@
+import { execFile } from 'node:child_process';
 import { once } from 'node:events';
+import { readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { describe, expect, it, vi } from 'vitest';
+import { join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+import { build } from 'esbuild';
+import { describe, expect, it } from 'vitest';
 
-// The shipped runtime bundles undici as CommonJS (`export default require_undici()`), so a
-// bundled `import('undici')` exposes only `default`; Node source also exposes named exports.
-// The daemon control client must dial the control port under the bundled shape.
-vi.mock('undici', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('undici')>();
-  return { default: { Agent: actual.Agent } };
-});
+import { SOURCE_CONDITION, SOURCE_RUNTIME_OUTPUT_OPTIONS } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
+import { withTempDir } from '@/testkit/fs/tempDir';
 
-import { readDaemonControlHttpResponse } from './controlHttp';
-
-describe('daemon control HTTP under the bundled undici module shape', () => {
-  it('reaches the daemon control port', async () => {
+describe('daemon control HTTP in the compiled runtime', () => {
+  it('dials with bundled undici and preserves HTTP refusals and cancellation', async () => withTempDir('happier-control-bundle-', async (outputDir) => {
+    // Match the source/guest bundle's split ESM, source condition and CJS require bridge.
+    // Execute emitted exports in Node, outside Vitest's module transformer and mocks.
+    const source = fileURLToPath(new URL('./controlHttp.ts', import.meta.url));
+    const result = await build({
+      stdin: { contents: `export { readDaemonControlHttpResponse } from ${JSON.stringify(source)};`,
+        resolveDir: fileURLToPath(new URL('.', import.meta.url)), loader: 'ts' },
+      outdir: outputDir, bundle: true, splitting: true, format: 'esm', platform: 'node', target: 'node20',
+      ...SOURCE_RUNTIME_OUTPUT_OPTIONS,
+      conditions: [SOURCE_CONDITION], metafile: true, logLevel: 'silent',
+      // Deliberate regression probe only: compile the original PERF import behavior.
+      plugins: [{ name: 'legacy-undici-import-probe', setup(bundler) {
+        bundler.onLoad({ filter: /[/\\]daemon[/\\]controlHttp\.ts$/ }, async ({ path }) => ({
+          contents: (await readFile(path, 'utf8')).replace('await loadUndici()', "await import('undici')"),
+          loader: 'ts',
+        }));
+      } }],
+      banner: { js: "import { createRequire as __artifactCreateRequire } from 'node:module'; import { fileURLToPath as __artifactFileURLToPath } from 'node:url'; import { dirname as __artifactDirname } from 'node:path'; const require = __artifactCreateRequire(import.meta.url); const __artifactFilename = __artifactFileURLToPath(import.meta.url); const __artifactDirectory = __artifactDirname(__artifactFilename);" },
+      define: { __dirname: '__artifactDirectory', __filename: '__artifactFilename' },
+    });
+    expect(Object.keys(result.metafile.inputs).some(path => /node_modules\/undici\//.test(path))).toBe(true);
+    const entryOutput = Object.entries(result.metafile.outputs)
+      .find(([, output]) => output.exports.includes('readDaemonControlHttpResponse'));
+    expect(entryOutput).toBeDefined();
+    await writeFile(join(outputDir, 'package.json'), '{"type":"module"}');
+    const observed: Array<{ path: string | undefined; method: string | undefined; body: string }> = [];
     const server = createServer((request, response) => {
-      request.resume();
-      response.setHeader('content-type', 'application/json');
-      response.end('{"ok":true}');
+      let body = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk: string) => { body += chunk; });
+      request.on('end', () => {
+        observed.push({ path: request.url, method: request.method, body });
+        response.statusCode = request.url === '/refused' ? 409 : 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(request.url === '/refused' ? '{"errorCode":"approval_required"}' : '{"ok":true}');
+      });
     });
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
@@ -25,17 +55,28 @@ describe('daemon control HTTP under the bundled undici module shape', () => {
     if (!address || typeof address === 'string')
       throw new Error('Missing server address');
     try {
-      await expect(
-        readDaemonControlHttpResponse({
-          httpPort: address.port,
-          path: '/ping',
-          body: {},
-          headers: {},
-        }),
-      ).resolves.toEqual({ ok: true, status: 200, body: '{"ok":true}' });
+      const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+        const { readDaemonControlHttpResponse: read } = await import(process.argv[1]);
+        const input = { httpPort: Number(process.argv[2]), body: { hello: 'bundle' }, headers: {} };
+        const accepted = await read({ ...input, path: '/ping' });
+        const refused = await read({ ...input, path: '/refused' });
+        const cancellation = new AbortController();
+        cancellation.abort();
+        let cancelled;
+        try { await read({ ...input, path: '/cancelled', signal: cancellation.signal }); }
+        catch (error) { cancelled = error.name; }
+        console.log(JSON.stringify({ accepted, refused, cancelled }));
+      `, pathToFileURL(resolve(entryOutput![0])).href, String(address.port)], { encoding: 'utf8' });
+      expect(JSON.parse(stdout)).toEqual({
+        accepted: { ok: true, status: 200, body: '{"ok":true}' },
+        refused: { ok: false, status: 409, body: '{"errorCode":"approval_required"}' },
+        cancelled: 'AbortError',
+      });
+      expect(observed).toEqual(['/ping', '/refused'].map(path => ({ path, method: 'POST', body: '{"hello":"bundle"}' })));
     } finally {
-      server.close();
-      await once(server, 'close');
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
     }
-  });
+  // Same compilation budget as startup/idleGraph.integration.test.ts, not a timing assertion.
+  }), 180_000);
 });
