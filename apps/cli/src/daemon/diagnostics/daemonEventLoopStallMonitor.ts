@@ -65,7 +65,9 @@ export function createDaemonEventLoopStallMonitor(input: Readonly<{
 
   return {
     start: () => {
-      if (timer) return;
+      // Periodic stall warnings are opt-in performance diagnostics, not liveness.
+      // Doctor's native measurements below remain available without this sampler.
+      if (timer || process.env.HAPPIER_WEB_LATENCY_TRACE !== '1') return;
       if (reportsRuntimeCounters) utilizationBaseline = performance.eventLoopUtilization();
       expectedSampleAtMs = nowMs() + SAMPLE_INTERVAL_MS;
       timer = setIntervalFn(sample, SAMPLE_INTERVAL_MS);

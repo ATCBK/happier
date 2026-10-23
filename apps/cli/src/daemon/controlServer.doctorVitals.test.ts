@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { DoctorSnapshotResourceVitalsSchema, DoctorSnapshotSchema } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
 import { startDaemonControlServer } from './controlServer';
 import { createDaemonEventLoopStallMonitor } from './diagnostics/daemonEventLoopStallMonitor';
@@ -12,7 +12,10 @@ import { buildDoctorSnapshotFromInventory } from '@/doctor/inv/snapshot';
 import { clearDaemonStateForTestTeardown, writeDaemonState } from '@/persistence';
 import { readDoctorRuntimeInventory } from '@/doctor/inv/runtime';
 
+afterEach(() => { vi.unstubAllEnvs(); });
+
 it('reads canonical sampler/attention/self facts through authenticated Doctor wiring and the snapshot schema', async () => {
+  vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '0');
   const directory = await mkdtemp(join(tmpdir(), 'happier-doctor-vitals-'));
   const history = await createMinuteHistoryStore({ directory });
   let reads = 0;
