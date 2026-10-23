@@ -181,7 +181,7 @@ export function buildDiffBlocks(input: unknown): DiffBlockInput[] {
             : '';
     if (!unifiedDiff) return [];
 
-    return splitUnifiedDiffByFile(unifiedDiff).map((block) => ({ unifiedDiff: block, filePath: undefined } satisfies DiffBlockInput));
+    return splitUnifiedDiffByFile(unifiedDiff, { preserveText: true }).map((block) => ({ unifiedDiff: block, filePath: undefined } satisfies DiffBlockInput));
 }
 
 export function buildDiffFileEntries(blocks: DiffBlockInput[]): DiffFileEntry[] {
