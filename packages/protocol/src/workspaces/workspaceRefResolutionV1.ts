@@ -12,6 +12,12 @@ export type WorkspaceRefResolutionContextV1 = Readonly<{
   normalizeServerId?: (serverId: string) => string;
   normalizeRootPath?: (rootPath: string, ref?: WorkspaceRefV1) => string | null;
   rootsEqual?: (left: string, right: string) => boolean;
+  /** Accepted non-content Session row projection, independent of private metadata/ref availability. */
+  projectKey?: string | null;
+  /** Supplied refs are a complete admitted census unless explicitly marked incomplete. */
+  censusComplete?: boolean;
+  /** Collection-owned index over this same admitted census; never a second identity decision. */
+  sessionProjectKeyResolver?: (metadata: unknown, serverId: string, projectKey?: string | null) => SessionProjectKeyResolutionV1;
 }>;
 
 /** Existing checkout display semantics, shared by clients and native Project labels. */
@@ -86,41 +92,90 @@ export function projectWorkspaceRefV1(ref: WorkspaceRefV1): QualifiedProjectKeyV
   return { serverId: ref.serverId, projectKey: ref.projectKey ?? ref.id };
 }
 
-type SessionProjectAssociationUnavailableV1 = Readonly<{ kind: 'pending'; reason: 'project_association_unavailable' }>;
-type SessionProjectWorkspaceAddressV1 = Readonly<{
-  machineId: string; rootPath: string; workspaceId?: string; projectId: unknown;
-}>;
+export type SessionProjectKeyResolutionV1<T extends WorkspaceRefV1 = WorkspaceRefV1> =
+  | Readonly<{ kind: 'resolved'; projectKey: QualifiedProjectKeyV1; ref?: T }>
+  | Readonly<{ kind: 'none' }>
+  | Readonly<{ kind: 'unavailable' }>;
 
-/** Birth directory intent and explicit markers share one exact-checkout association rule. */
-export function readSessionProjectWorkspaceAddressV1(input: Readonly<{
-  metadata: unknown; machineId: string | null; directory?: string;
-}>): Readonly<{ kind: 'none' }> | SessionProjectAssociationUnavailableV1
-  | Readonly<{ kind: 'ready'; address: SessionProjectWorkspaceAddressV1 }> {
-  const pending = { kind: 'pending', reason: 'project_association_unavailable' } as const;
-  const metadata = input.metadata;
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return { kind: 'none' };
-  const workspaceId: unknown = Reflect.get(metadata, 'workspaceId');
-  const projectId: unknown = Reflect.get(metadata, 'projectId');
-  const associated = workspaceId !== undefined || projectId !== undefined;
-  if (associated && (typeof workspaceId !== 'string' || !workspaceId.trim())) return pending;
-  const path: unknown = input.directory ?? Reflect.get(metadata, 'path');
-  if (typeof path !== 'string' || !path.trim() || !input.machineId?.trim()) return associated ? pending : { kind: 'none' };
-  const root = resolveSessionWorkspaceRootForMachine({ metadata, machineId: input.machineId, candidatePath: path });
-  return { kind: 'ready', address: { machineId: input.machineId, rootPath: root.machinePath, projectId,
-    ...(typeof workspaceId === 'string' ? { workspaceId } : {}) } };
+/** One accepted Project association for row grouping, filtering and private Project consumers. */
+export function resolveSessionProjectKeyV1<T extends WorkspaceRefV1>(
+  metadata: unknown,
+  serverId: string,
+  refs?: readonly T[],
+  context: WorkspaceRefResolutionContextV1 = {},
+): SessionProjectKeyResolutionV1<T> {
+  return resolveSessionProjectKeyUsingV1(metadata, serverId, refs, context,
+    target => resolveWorkspaceRefV1(refs ?? [], target, context));
 }
 
-/** An unavailable/ambiguous explicit association is not an absent Project. No containment inference. */
-export function resolveSessionProjectWorkspaceRefV1<T extends WorkspaceRefV1>(refs: readonly T[], input: Readonly<{
-  serverId: string; address: SessionProjectWorkspaceAddressV1;
-}>): Readonly<{ kind: 'none' }> | SessionProjectAssociationUnavailableV1 | Readonly<{ kind: 'resolved'; ref: T }> {
-  const { projectId, ...address } = input.address;
-  const resolved = resolveWorkspaceRefV1(refs, { ...address, serverId: input.serverId });
-  if (resolved.kind === 'missing' && address.workspaceId === undefined) return { kind: 'none' };
-  if (resolved.kind !== 'resolved' || projectId !== undefined && projectId !== projectWorkspaceRefV1(resolved.ref).projectKey) {
-    return { kind: 'pending', reason: 'project_association_unavailable' };
+type SessionProjectCheckoutTargetV1 =
+  | Readonly<{ serverId: string; id: string }>
+  | Readonly<{ serverId: string; machineId: string; rootPath: string }>;
+
+/** A visible collection shares one admitted census index; it retains no Session bodies. */
+export function createSessionProjectKeyResolverV1<T extends WorkspaceRefV1>(
+  refs: readonly T[] | undefined,
+  context: WorkspaceRefResolutionContextV1 = {},
+): (metadata: unknown, serverId: string, projectKey?: string | null) => SessionProjectKeyResolutionV1<T> {
+  const home = context.normalizeServerId ?? ((value: string) => value.trim());
+  const normalizeRoot = context.normalizeRootPath ?? ((value: string) => normalizeWorkspaceRootPathV1(value));
+  const byId = new Map<string, T[]>();
+  const byRoot = new Map<string, T[]>();
+  const append = (index: Map<string, T[]>, key: string, ref: T) => {
+    const previous = index.get(key);
+    if (previous) previous.push(ref); else index.set(key, [ref]);
+  };
+  for (const ref of refs ?? []) {
+    append(byId, JSON.stringify([home(ref.serverId), ref.id.trim()]), ref);
+    append(byRoot, JSON.stringify([home(ref.serverId), ref.machineId.trim(), normalizeRoot(ref.rootPath, ref)]), ref);
   }
-  return resolved;
+  const resolve = (target: SessionProjectCheckoutTargetV1) => {
+    const candidates = 'id' in target
+      ? byId.get(JSON.stringify([home(target.serverId), target.id.trim()])) ?? []
+      : context.rootsEqual ? refs ?? []
+        : byRoot.get(JSON.stringify([home(target.serverId), target.machineId.trim(), normalizeRoot(target.rootPath)])) ?? [];
+    return resolveWorkspaceRefV1(candidates, target, context);
+  };
+  return (metadata, serverId, projectKey = context.projectKey) => resolveSessionProjectKeyUsingV1(
+    metadata, serverId, refs, { ...context, projectKey }, resolve);
+}
+
+function resolveSessionProjectKeyUsingV1<T extends WorkspaceRefV1>(
+  metadata: unknown,
+  serverId: string,
+  refs: readonly T[] | undefined,
+  context: WorkspaceRefResolutionContextV1,
+  resolveRef: (target: SessionProjectCheckoutTargetV1) => WorkspaceRefResolutionV1<T>,
+): SessionProjectKeyResolutionV1<T> {
+  const home = context.normalizeServerId ?? ((value: string) => value.trim());
+  const qualifiedHome = home(serverId);
+  if (!qualifiedHome) return { kind: 'unavailable' };
+  if (context.projectKey != null) {
+    return context.projectKey.trim()
+      ? { kind: 'resolved', projectKey: { serverId: qualifiedHome, projectKey: context.projectKey } }
+      : { kind: 'unavailable' };
+  }
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata) || refs === undefined || context.censusComplete === false) {
+    return { kind: 'unavailable' };
+  }
+  const workspaceId: unknown = Reflect.get(metadata, 'workspaceId');
+  const projectId: unknown = Reflect.get(metadata, 'projectId');
+  const explicit = workspaceId !== undefined && workspaceId !== null;
+  if (explicit && (typeof workspaceId !== 'string' || !workspaceId.trim())) return { kind: 'unavailable' };
+  const machineId: unknown = Reflect.get(metadata, 'machineId');
+  const path: unknown = Reflect.get(metadata, 'path');
+  const target = typeof workspaceId === 'string'
+    ? { serverId: qualifiedHome, id: workspaceId }
+    : typeof machineId === 'string' && machineId.trim() && typeof path === 'string' && path.trim()
+      ? { serverId: qualifiedHome, machineId, rootPath: resolveSessionWorkspaceRootForMachine({ metadata, machineId, candidatePath: path }).machinePath }
+      : null;
+  if (!target) return { kind: projectId != null ? 'unavailable' : 'none' };
+  const resolved = resolveRef(target);
+  if (resolved.kind === 'missing' && !explicit && projectId == null) return { kind: 'none' };
+  if (resolved.kind !== 'resolved') return { kind: 'unavailable' };
+  const projectKey = projectWorkspaceRefV1(resolved.ref);
+  if (projectId != null && projectId !== projectKey.projectKey) return { kind: 'unavailable' };
+  return { kind: 'resolved', projectKey: { ...projectKey, serverId: home(projectKey.serverId) }, ref: resolved.ref };
 }
 
 export function workspaceAddressFromRefV1(ref: WorkspaceRefV1): WorkspaceAddressV1 {
