@@ -13,7 +13,7 @@ import {
     type AutomationRunAdmissionResult,
 } from "./automationRunAdmissionService";
 import { decodeAutomationSessionLifecycleConfiguration } from "./automationSessionLifecycleConfigurationCodec";
-import { automationPortableQueryChunks } from "./automationPortableQueryChunks";
+import { portableQueryChunks as automationPortableQueryChunks } from "@/storage/portableQueryChunks";
 import { lockScopedAutomationTriggerInTx } from "./automationScopedTrigger";
 import { readAutomationLifecycleOriginRunIdTx, readAutomationOriginTriggerIdsTx } from "./automationTriggerCauseChain";
 

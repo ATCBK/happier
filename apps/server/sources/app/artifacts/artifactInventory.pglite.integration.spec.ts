@@ -54,8 +54,8 @@ describe('Artifact inventory through PostgreSQL wire protocol', () => {
             "dataEncryptionKey", "seq", "createdAt", "updatedAt")
             SELECT $1 || lpad(n::text, 5, '0'), "accountId", "header", "headerVersion", "body", "bodyVersion",
                 "dataEncryptionKey", "seq", "createdAt", "updatedAt"
-            FROM generate_series(1, 32768) n CROSS JOIN "Artifact" WHERE "Artifact"."id" = $2`, `${owner.id}-`, template.id);
-        const newest = await db.artifact.create({ data: data(owner.id) });
+            FROM generate_series(1, 35000) n CROSS JOIN "Artifact" WHERE "Artifact"."id" = $2`, `pg-${template.id.slice(0, 8)}-`, template.id);
+        const newest = await db.artifact.create({ data: { ...data(owner.id), updatedAt: new Date(template.updatedAt.getTime() + 1) } });
         const publication = await db.publicSessionShare.create({ data: { artifactId: newest.id,
             createdByUserId: owner.id, keyDerivation: 'fragment_v1', tokenHash: new Uint8Array(32) } });
         await withAuthenticatedTestApp(artifactsRoutes, async app => {
@@ -78,17 +78,28 @@ describe('Artifact inventory through PostgreSQL wire protocol', () => {
             const expected = await db.artifact.findMany({ where: { accountId: owner.id },
                 orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }], take: 4, select: { id: true } });
             expect(ids).toEqual(expected.map(row => row.id));
+            const fullPage = await app.inject({ method: 'GET', url: '/v1/artifacts?limit=500', headers });
+            expect(fullPage.statusCode, fullPage.body).toBe(200);
+            expect(fullPage.json()).toHaveLength(500);
+            expect(fullPage.json()[0]).toMatchObject({ id: newest.id, publicAudience: 'retained' });
             await db.publicSessionShare.delete({ where: { id: publication.id } });
             expect((await read())[0]).toMatchObject({ id: newest.id, publicAudience: 'none', headerVersion: 1, bodyVersion: 1 });
-            const retained = await db.artifact.findMany({ where: { accountId: owner.id }, take: 500, select: { id: true } });
+            const retained = await db.artifact.findMany({ where: { accountId: owner.id }, take: 35000, select: { id: true } });
+            await db.publicSessionShare.create({ data: { artifactId: retained[0].id,
+                createdByUserId: owner.id, keyDerivation: 'fragment_v1', tokenHash: new Uint8Array(32) } });
             const detail = await app.inject({ method: 'POST', url: '/v1/artifacts/read', headers,
                 payload: { artifactIds: [...retained.map(row => row.id), hidden.id] } });
-            expect(detail.statusCode).toBe(200);
+            expect(detail.statusCode, detail.body).toBe(200);
             const items = detail.json().items;
-            expect(items).toHaveLength(501);
-            expect(items.slice(0, 500).every((item: { ok: boolean; artifact?: { access: string; bodyVersion: number }; recipientCensus: unknown }) =>
-                item.ok && item.artifact?.access === 'owner' && item.artifact.bodyVersion === 1 && item.recipientCensus === null)).toBe(true);
-            expect(items[500]).toMatchObject({ artifactId: hidden.id, ok: false, error: 'artifact_not_found' });
+            expect(items).toHaveLength(35001);
+            const expectedBody = encodePlainArtifactStoredContent({ value: 'fixture' });
+            expect(items.slice(0, 35000).every((item: { ok: boolean; artifact?: { access: string; bodyVersion: number; body: string }; recipientCensus: unknown }) =>
+                item.ok && item.artifact?.access === 'owner' && item.artifact.bodyVersion === 1
+                && item.artifact.body === expectedBody && item.recipientCensus === null)).toBe(true);
+            expect(items[0]).toMatchObject({ artifact: { publicAudience: 'retained' } });
+            expect(items.slice(1, 35000).every((item: { artifact: { publicAudience: string } }) => item.artifact.publicAudience === 'none')).toBe(true);
+            expect(items.map((item: { artifactId: string }) => item.artifactId)).toEqual([...retained.map(row => row.id), hidden.id]);
+            expect(items[35000]).toMatchObject({ artifactId: hidden.id, ok: false, error: 'artifact_not_found' });
         });
     });
 
@@ -113,6 +124,18 @@ describe('Artifact inventory through PostgreSQL wire protocol', () => {
         await db.artifactGroupGrant.create({ data: { artifactId: artifacts[2].id, teamGroupId: group.id,
             accessLevel: 'view', createdByAccountId: owner.id } });
         await withAuthenticatedTestApp(artifactsRoutes, async app => {
+            const selectedIds = [...artifacts.map(row => row.id), ...Array.from({ length: 34997 }, (_, index) => `missing-${index}`)];
+            const readBatch = async () => {
+                const response = await app.inject({ method: 'POST', url: '/v1/artifacts/read', headers: {
+                    'x-test-user-id': reader.id,
+                    'x-happier-account-stored-content-protocol': String(CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION),
+                }, payload: { artifactIds: selectedIds } });
+                expect(response.statusCode, response.body).toBe(200);
+                const items = response.json().items;
+                expect(items.map((item: { artifactId: string }) => item.artifactId)).toEqual(selectedIds);
+                expect(items.slice(3).every((item: { ok: boolean; error: string }) => !item.ok && item.error === 'artifact_not_found')).toBe(true);
+                return items.slice(0, 3);
+            };
             const read = async () => {
                 const result = await app.inject({ method: 'GET', url: '/v1/artifacts?kind=skill&limit=3', headers: {
                     'x-test-user-id': reader.id,
@@ -122,10 +145,14 @@ describe('Artifact inventory through PostgreSQL wire protocol', () => {
                 return result.json();
             };
             expect((await read()).items.map((row: { id: string }) => row.id).sort()).toEqual(artifacts.map(row => row.id).sort());
+            expect(await readBatch()).toMatchObject(artifacts.map(() => ({ ok: true, artifact: { access: 'view' }, recipientCensus: null })));
             await db.team.update({ where: { id: team.id }, data: { archivedAt: new Date() } });
             expect((await read()).items).toMatchObject([{ id: artifacts[0].id, access: 'view' }]);
+            expect(await readBatch()).toMatchObject([{ ok: true, artifact: { access: 'view' } },
+                { ok: false, error: 'artifact_not_found' }, { ok: false, error: 'artifact_not_found' }]);
             await db.artifactAccountGrant.deleteMany({ where: { accountId: reader.id } });
             expect((await read()).items).toEqual([]);
+            expect(await readBatch()).toMatchObject(artifacts.map(() => ({ ok: false, error: 'artifact_not_found' })));
         });
     });
 });

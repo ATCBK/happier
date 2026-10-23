@@ -29,7 +29,7 @@ import { registerAutomationV3Routes } from "@/app/api/routes/automations/registe
 import { deleteOwnedSession } from "@/app/session/delete/deleteOwnedSession";
 import { deleteWorkflowRun } from "@/app/workflows/workflowRunService";
 
-import { automationPortableQueryChunks } from "./automationPortableQueryChunks";
+import { portableQueryChunks as automationPortableQueryChunks } from "@/storage/portableQueryChunks";
 import { admitSessionLifecycleAutomationRunsTx } from "./automationSessionLifecycleAdmission";
 import { encodeAutomationSessionLifecycleConfiguration } from "./automationSessionLifecycleConfigurationCodec";
 import { claimAutomationRun } from "./automationClaimService";

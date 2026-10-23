@@ -5,7 +5,7 @@ import { type PluginMachineMaterializationRefV1 } from '@happier-dev/protocol/pl
 
 import { db } from "@/storage/db";
 
-import { automationPortableQueryChunks } from "./automationPortableQueryChunks";
+import { portableQueryChunks as automationPortableQueryChunks } from "@/storage/portableQueryChunks";
 import type { AutomationListItem, AutomationTriggerItem } from "./automationTypes";
 
 export type AutomationEventStatusProjection = Readonly<{

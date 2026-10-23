@@ -3,7 +3,7 @@ import type { AutomationSessionLifecycleTriggerStatus } from '@happier-dev/proto
 import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 
-import { automationPortableQueryChunks } from "./automationPortableQueryChunks";
+import { portableQueryChunks as automationPortableQueryChunks } from "@/storage/portableQueryChunks";
 import { AUTOMATION_SESSION_LIFECYCLE_TERMINAL_NO_RUN_ACTIONS } from "./automationSessionLifecycleTerminalTruth";
 import { decodeAutomationSessionLifecycleConfiguration } from "./automationSessionLifecycleConfigurationCodec";
 import {

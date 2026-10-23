@@ -5,6 +5,7 @@ import { parseEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/en
 import { type ArtifactAccessErrorCodeV1, type ArtifactAccessGrantSetStorageInputV1, type ArtifactAccessGrantRemoveInputV1, type ArtifactAccessGrantsListResponseV1, type ArtifactAccessGrantMutationResponseV1, type ArtifactAccessRecipientCensusResponseV1, type ArtifactCallerAccessV1, type ArtifactRecipientKeyEnvelopeCommitInputV1, type ArtifactRecipientKeyEnvelopeCommitResponseV1, type ArtifactRecipientKeyEnvelopeInputV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
+import { portableQueryChunks } from "@/storage/portableQueryChunks";
 import { readArtifactStorageEnv } from "@/app/features/catalog/readFeatureEnv";
 import type { AccountAdmissionIntent } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
@@ -399,19 +400,33 @@ type ArtifactBatchReadItem = Readonly<{
 
 /** Capture the same admission and census facts for the whole request in one snapshot. */
 async function captureArtifactBatchInTx(tx: Tx, input: Readonly<{ actorAccountId: string; artifactIds: readonly string[] }>, includeContent: boolean) {
-    const rows = await tx.artifact.findMany({ where: { id: { in: [...input.artifactIds] }, ...artifactVisibleWhere }, select: {
+    const readRows = (artifactIds: readonly string[]) => tx.artifact.findMany({ where: { id: { in: [...artifactIds] }, ...artifactVisibleWhere }, select: {
         ...artifactReadAdmissionSelect(), body: includeContent, bodyVersion: true, provenance: includeContent,
     } });
+    const rows: Awaited<ReturnType<typeof readRows>> = [];
+    // One id binding per row; Prisma's unbounded findMany also binds OFFSET.
+    // Chunks stay inside this capture's snapshot, including its final readmission.
+    for (const ids of portableQueryChunks({ values: input.artifactIds, bindingsPerValue: 1, fixedBindings: 1 })) {
+        rows.push(...await readRows(ids));
+    }
     const audienceByArtifact = new Map(rows.flatMap(row =>
         resolveArtifactAccessFromFacts(row, input.actorAccountId)?.encryptionMode === 'e2ee'
             ? [[row.id, resolveArtifactAudienceFromFacts(row)] as const] : []));
-    const recipientIds = [...new Set([...audienceByArtifact.values()].flat())];
-    const [accounts, publications] = await Promise.all([
-        recipientIds.length === 0 ? [] : tx.account.findMany({ where: { id: { in: recipientIds } },
-            select: RECIPIENT_READINESS_SELECT, orderBy: { id: 'asc' } }),
-        includeContent ? tx.publicSessionShare.findMany({ where: { artifactId: { in: rows.map(row => row.id) } },
-            select: { artifactId: true, expiresAt: true } }) : [],
-    ]);
+    const recipientIds = [...new Set([...audienceByArtifact.values()].flat())].sort();
+    const readAccounts = (ids: readonly string[]) => tx.account.findMany({ where: { id: { in: [...ids] } },
+        select: RECIPIENT_READINESS_SELECT, orderBy: { id: 'asc' } });
+    const accounts: Awaited<ReturnType<typeof readAccounts>> = [];
+    for (const ids of portableQueryChunks({ values: recipientIds, bindingsPerValue: 1, fixedBindings: 1 })) {
+        accounts.push(...await readAccounts(ids));
+    }
+    const readPublications = (ids: readonly string[]) => tx.publicSessionShare.findMany({ where: { artifactId: { in: [...ids] } },
+        select: { artifactId: true, expiresAt: true } });
+    const publications: Awaited<ReturnType<typeof readPublications>> = [];
+    if (includeContent) {
+        for (const ids of portableQueryChunks({ values: rows.map(row => row.id), bindingsPerValue: 1, fixedBindings: 1 })) {
+            publications.push(...await readPublications(ids));
+        }
+    }
     return { rows, audienceByArtifact, accounts, publications };
 }
 

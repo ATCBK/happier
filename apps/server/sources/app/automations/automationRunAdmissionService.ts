@@ -24,7 +24,7 @@ import {
 } from "./automationRecipeFeaturePolicy";
 
 import { automationRunItemSelect } from "./automationPersistenceSelect";
-import { automationPortableQueryChunks } from "./automationPortableQueryChunks";
+import { portableQueryChunks as automationPortableQueryChunks } from "@/storage/portableQueryChunks";
 import { lockScopedAutomationTriggerInTx } from "./automationScopedTrigger";
 import { matchesScopedAutomationConversationTriggerTx } from "./automationConversationTargetVerificationService";
 import { applyAutomationRunTerminalEffectsTx } from "./automationRunSucceeded";

@@ -74,7 +74,7 @@ import {
 } from "./automationEventCurrentness";
 import { rejoinAutomationOccurrenceInsertRace } from "./automationOccurrencePersistence";
 import { readAutomationRunCauseChainTx } from "./automationTriggerCauseChain";
-import { automationPortableQueryChunks } from "./automationPortableQueryChunks";
+import { portableQueryChunks as automationPortableQueryChunks } from "@/storage/portableQueryChunks";
 import { parseStoredSessionTurnFacts } from "@/app/session/turns/parseSessionTurnState";
 import { checkCurrentPluginWebhookEndpointCorrespondenceTxV1 } from "@/app/plugins/webhooks/endpointCorrespondence";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";

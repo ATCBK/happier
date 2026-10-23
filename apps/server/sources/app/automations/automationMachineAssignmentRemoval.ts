@@ -14,7 +14,7 @@ import { getWorkflowPublicationAudienceInTx, type WorkflowPublicationScope, type
 import type { AccountEncryptionInconsistencyReason } from "@/app/encryption/accountContentKeyAdmission";
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { cancelWorkflowRunTx, WorkflowRunServiceError } from "@/app/workflows/workflowRunService";
-import { automationPortableQueryChunks } from "./automationPortableQueryChunks";
+import { portableQueryChunks as automationPortableQueryChunks } from "@/storage/portableQueryChunks";
 import { automationRunItemSelect } from "./automationPersistenceSelect";
 import {
     cancelAutomationRunRowTx,
