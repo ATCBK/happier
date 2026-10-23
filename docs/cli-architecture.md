@@ -2606,8 +2606,11 @@ recorded reply custody and sequence order without opening other rounds or
 issuing one request per participant.
 Selected conditionals retain the same invocation scope, so the narrow reader
 follows their admitted branches when locating peer collections and preparation.
-Protocol's `readWorkflowInvocationMembersV1` owns structural recovery for both
-the round projector and the durable coordinator's slot/member reads. A replacement
+Protocol's `readWorkflowInvocationMembersV1` owns structural recovery for
+the round projector, Action retry binding and the durable coordinator's slot/member reads. Action binding
+resolves superseded ancestors to their current physical slots before selecting
+the requested logical Action attempt, preserving exact Run, Action and envelope
+binding and fresh typed Session authorization. A replacement
 parent inherits its predecessor's nearest unreplaced slots through
 `previousAttemptRecordId`; newer and skipped slots mask older ones. Completed
 descendants survive a replaced parent, while skipped and superseded children
