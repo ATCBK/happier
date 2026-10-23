@@ -1,21 +1,42 @@
 import * as React from 'react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { countStoreNotifications, renderScreen } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { HomePlanet } from './HomePlanet';
 import { PlanetCanvas } from './PlanetCanvas';
+import { AtmosphereDissolve } from './AtmosphereDissolve';
 import { useHomeWelcome, type HomeWelcome } from './moments/useHomeWelcome';
 
+const host = vi.hoisted(() => ({ appState: 'active', visibility: 'visible',
+  appListeners: new Set<() => void>(), documentListeners: new Set<() => void>() }));
 vi.mock('react-native', async () =>
-  (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
+  (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ AppState: {
+    get currentState() { return host.appState; },
+    addEventListener: (_event: string, listener: () => void) => {
+      host.appListeners.add(listener); return { remove: () => host.appListeners.delete(listener) };
+    },
+  } }),
 );
 vi.mock('react-native-unistyles', async () =>
   (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock(),
 );
+const nativePictures = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@shopify/react-native-skia', async () => ({
+  ...(await import('@/dev/testkit/mocks/reactNativeSkia')).createReactNativeSkiaMock(),
+  // Font readiness and native picture allocation are genuine platform boundaries.
+  useFont: () => ({}),
+  createPicture: () => { nativePictures.count += 1; return { dispose() {} }; },
+}));
 
 const pane = { width: 280, height: 240 };
+beforeEach(() => {
+  host.appState = 'active'; host.visibility = 'visible';
+  vi.stubGlobal('document', { get visibilityState() { return host.visibility; },
+    addEventListener: (event: string, listener: () => void) => { if (event === 'visibilitychange') host.documentListeners.add(listener); } });
+});
+afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('Rise foot fade', () => {
   it('draws the planet down to the end of its ordered foot fade when the hero runs past the first fold', async () => {
@@ -65,7 +86,7 @@ describe('Rise foot fade', () => {
   });
 });
 
-describe('Welcome retype subscription locality', () => {
+describe('Welcome digits subscription locality', () => {
   let previous: ReturnType<typeof storage.getState>;
   beforeEach(() => {
     vi.useFakeTimers({
@@ -79,6 +100,7 @@ describe('Welcome retype subscription locality', () => {
       ],
     });
     previous = storage.getState();
+    nativePictures.count = 0;
     storage.setState((state) => ({
       ...state,
       localSettings: { ...localSettingsDefaults, homeWelcomeSeenAt: null },
@@ -89,9 +111,14 @@ describe('Welcome retype subscription locality', () => {
       storage.setState(previous, true);
     });
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  it('ticks only the planet, holds while writing or unfocused, and ends after leaving Home', async () => {
+  it('redraws only the digits leaf every two seconds over settled Home, and pauses for writing, focus and reduced motion', async () => {
+    let ticks = 0;
+    const interval = globalThis.setInterval;
+    vi.spyOn(globalThis, 'setInterval').mockImplementation((callback, delay, ...args) =>
+      interval(() => { ticks += 1; callback(...args); }, delay));
     let homeRenders = 0;
     let unrelatedRenders = 0;
     let welcome: HomeWelcome;
@@ -104,6 +131,7 @@ describe('Welcome retype subscription locality', () => {
         eligible?: boolean;
         writing?: boolean;
         reducedMotion?: boolean;
+        hidden?: boolean;
       }>,
     ) {
       homeRenders += 1;
@@ -124,12 +152,13 @@ describe('Welcome retype subscription locality', () => {
             theme="dark"
             phone={false}
             hero={null}
-            hidden={welcome.playing}
+            hidden={welcome.playing || props.hidden === true}
             leave="fade"
             reducedMotion={props.reducedMotion ?? false}
             focused={props.eligible ?? true}
             writing={props.writing ?? false}
             retype={welcome.retype}
+            answerFinishes
           />
         </>
       );
@@ -140,33 +169,69 @@ describe('Welcome retype subscription locality', () => {
     });
     const initialHomeRenders = homeRenders;
     const initialContentRenders = unrelatedRenders;
-    const time = () => screen.findByType(PlanetCanvas).props.options.time;
-    await act(async () => {
-      vi.advanceTimersByTime(2000);
-    });
-    expect(time()).toBe(2);
+    const canvasProps = screen.findByType(PlanetCanvas).props;
+    const dissolveProps = screen.findByType(AtmosphereDissolve).props;
+    const watch = () => screen.find(node => typeof node.type === 'function' && node.type.name === 'SessionFinishWatch');
+    const watchProps = watch().props;
+    const notifications = countStoreNotifications(storage);
+    const initialPictures = nativePictures.count;
+    for (let tick = 0; tick < 150; tick++) {
+      await act(async () => { vi.advanceTimersByTime(2000); });
+    }
+    expect.soft(ticks).toBe(150);
+    expect(nativePictures.count - initialPictures).toBe(150);
+    // Ancestor-rendered outputs stay stable while only the drawing leaf updates.
+    expect.soft(screen.findByType(PlanetCanvas).props === canvasProps).toBe(true);
+    expect.soft(screen.findByType(AtmosphereDissolve).props === dissolveProps).toBe(true);
+    expect.soft(watch().props === watchProps).toBe(true);
+    expect(notifications.read()).toEqual([]);
+    notifications.stop();
     expect(homeRenders).toBe(initialHomeRenders);
     expect(unrelatedRenders).toBe(initialContentRenders);
     await screen.update(<Home writing />);
+    const held = ticks;
+    await act(async () => { vi.advanceTimersByTime(4000); });
+    expect(ticks).toBe(held);
+    await screen.update(<Home />);
     await act(async () => {
       vi.advanceTimersByTime(2000);
     });
-    expect(time()).toBe(2);
+    expect(ticks).toBe(held + 1);
+    await screen.update(<Home reducedMotion />);
+    await act(async () => { vi.advanceTimersByTime(4000); });
+    expect(ticks).toBe(held + 1);
     await screen.update(<Home />);
-    await act(async () => {
-      vi.advanceTimersByTime(500);
-    });
-    expect(time()).toBe(2.5);
+    await act(async () => { vi.advanceTimersByTime(2000); });
+    expect(ticks).toBe(held + 2);
+    await screen.update(<Home hidden />);
+    await act(async () => { vi.advanceTimersByTime(4000); });
+    expect(ticks).toBe(held + 2);
+    await screen.update(<Home />);
+    for (const key of ['visibility', 'appState'] as const) {
+      await act(async () => {
+        host[key] = key === 'visibility' ? 'hidden' : 'background';
+        for (const listener of key === 'visibility' ? host.documentListeners : host.appListeners) listener();
+      });
+      await act(async () => { vi.advanceTimersByTime(4000); });
+      expect(ticks).toBe(held + 2);
+      await act(async () => {
+        host[key] = key === 'visibility' ? 'visible' : 'active';
+        for (const listener of key === 'visibility' ? host.documentListeners : host.appListeners) listener();
+      });
+    }
     await screen.update(<Home eligible={false} />);
-    const atBlur = time();
+    const atBlur = ticks;
     await act(async () => {
       vi.advanceTimersByTime(2000);
     });
-    expect(time()).toBe(atBlur);
+    expect(ticks).toBe(atBlur);
     await screen.update(<Home />);
     await act(async () => {
       vi.advanceTimersByTime(2000);
     });
-    expect(time()).toBe(atBlur);
+    expect(ticks).toBe(atBlur + 1);
+    expect(welcome!.playing).toBe(false);
+    await screen.unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
