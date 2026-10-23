@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { encodeBase64 } from "privacy-kit";
 import tweetnacl from "tweetnacl";
 import {
@@ -23,6 +23,7 @@ import { resolveCurrentSessionRecipientAccountIdsInTx } from "./sessionRecipient
 import { inspectSessionAccessGrants } from "./sessionAccessGrantInspection";
 import { resolveSessionAccessForOperation } from "./sessionAccess";
 import { setSessionFollowSource } from "@/app/session/follow/sessionFollowEdgeService";
+import { resolveSessionAccessGrantSubjectsInTx } from "./sessionAccessGrantEligibility";
 
 const TEST_AUTHENTICATION = {
     env: process.env,
@@ -106,6 +107,29 @@ describe("Session access grant service (SQLite integration)", () => {
             () => db.session.deleteMany(),
             () => db.account.deleteMany(),
         ]);
+    });
+
+    it("resolves initial collective grant eligibility with one membership-set read for 120 Groups", async () => {
+        const actor = await createAccount("eligibility-cost");
+        const team = await db.team.create({ data: { name: "Initial grant cost" } });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: "owner" } });
+        const groups = Array.from({ length: 120 }, (_, index) => ({
+            id: crypto.randomUUID(), teamId: team.id, name: `Group ${index}`, nameKey: `group-${index}`,
+        }));
+        await db.teamGroup.createMany({ data: groups });
+        await inTx(async tx => {
+            const membershipReads = vi.fn(tx.teamMembership.findMany.bind(tx.teamMembership));
+            const instrumentedTx = Object.assign(Object.create(tx), {
+                teamMembership: Object.assign(Object.create(tx.teamMembership), { findMany: membershipReads }),
+            });
+            const result = await resolveSessionAccessGrantSubjectsInTx(instrumentedTx, {
+                actorAccountId: actor.id, sessionOwnerAccountId: actor.id, hasExistingGrant: false,
+                subjects: groups.map(group => ({ kind: "group", teamId: team.id, groupId: group.id })),
+            });
+            expect(result).toHaveLength(120);
+            expect(result.every(row => row.eligibility.ok)).toBe(true);
+            expect(membershipReads).toHaveBeenCalledTimes(1);
+        });
     });
 
     async function createFixture(options?: { collaboratorTeamRole?: "member" | "guest" }) {
