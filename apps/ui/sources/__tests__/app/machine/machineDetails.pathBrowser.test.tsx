@@ -3,7 +3,7 @@ import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -42,6 +42,7 @@ const { AppPaneProvider } = await import('@/components/appShell/panes/AppPanePro
 const { Modal, ModalProvider } = await import('@/modal');
 const { EmbeddedTerminalPaneFrame } = await import('@/components/terminal/embedded/EmbeddedTerminalPaneFrame');
 const { showMachineTerminalSheet } = await import('@/components/machines/terminal/MachineTerminalSheet');
+const { AuthProvider } = await import('@/auth/context/AuthContext');
 
 describe('Machine detail navigation and terminal entry', () => {
     let serverId: string;
@@ -73,7 +74,11 @@ describe('Machine detail navigation and terminal entry', () => {
     });
     afterEach(async () => { await act(async () => Modal.hideAll()); await standardCleanup(); disposeLoader?.(); disposeLoader = undefined; });
 
-    const render = (body: React.ReactNode) => renderScreen(<AppPaneProvider><ModalProvider>{body}</ModalProvider></AppPaneProvider>);
+    const render = (body: React.ReactNode) => renderScreen(
+        <AuthProvider initialCredentials={{ token: createAccountTokenForTests('account-a', { currentAccount: true }) }}>
+            <AppPaneProvider><ModalProvider>{body}</ModalProvider></AppPaneProvider>
+        </AuthProvider>,
+    );
 
     it('shows the inherited effective host without implying that override-off disables hosting', async () => {
         storage.getState().applySettings({ ...settingsDefaults, sessionTerminalHost: 'herdr' }, (storage.getState().settingsVersion ?? 0) + 1);
