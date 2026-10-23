@@ -1071,13 +1071,13 @@ describe('Neighboring user Run Stop admission', () => {
             return async () => { await act(async () => screen.findByTestId('session-subagent-actions:execution_run:run_1')!.props.onSelect('stop')); };
         }
         const { router } = await import('expo-router');
-        // Runs now live on the Machine's Project work sub-page, not its Overview.
-        router.setParams(surface === 'machine' ? { id: 'm1', page: 'work', serverId } : {});
+        // Project work, including Runs, lives on the Machine Overview.
+        router.setParams(surface === 'machine' ? { id: 'm1', tab: 'overview', serverId } : {});
         const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
         const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
         const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl);
         const Screen = surface === 'runs' ? (await import('@/app/(app)/runs')).default
-            : (await import('@/app/(app)/machines/[id]/[page]')).WorkspaceRouteBody;
+            : (await import('@/app/(app)/machines/[id]/index')).WorkspaceRouteBody;
         screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><AppPaneProvider><Screen /></AppPaneProvider></InjectedAuthProvider>);
         await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length,
             screen.getTextContent()).toBeGreaterThan(0));
@@ -1205,12 +1205,12 @@ describe('Session Stop fallback Action policy', () => {
         let operation: Promise<void> | undefined;
         if (surface !== 'details') {
             const { router } = await import('expo-router');
-            router.setParams(surface === 'machine' ? { id: 'm1', page: 'work', serverId } : {});
+            router.setParams(surface === 'machine' ? { id: 'm1', tab: 'overview', serverId } : {});
             const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
             const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
             const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl);
             const Runs = surface === 'runs' ? (await import('@/app/(app)/runs')).default
-                : (await import('@/app/(app)/machines/[id]/[page]')).WorkspaceRouteBody;
+                : (await import('@/app/(app)/machines/[id]/index')).WorkspaceRouteBody;
             screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><AppPaneProvider><Runs /></AppPaneProvider></InjectedAuthProvider>);
             await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length).toBeGreaterThan(0));
             await act(async () => { operation = screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress(); });
