@@ -8,16 +8,17 @@ import { readTypecheckAmbientModules, readTypecheckProject } from './deriveTypec
 import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
 import { readWorkspaceBuildInputs, readWorkspaceComponentDependencyGraph } from './ensureWorkspacePackagesBuilt.mjs';
 import { readBuildInputIdentity } from './buildInputConvergence.mjs';
-import { runWorkspaceBuildAdmission } from '../../apps/stack/scripts/utils/proc/workspace_build_admission.mjs';
+import { runWorkspaceBuildAdmission, withWorkspaceBuildResources } from '../../apps/stack/scripts/utils/proc/workspace_build_admission.mjs';
+import { resolveRemoteCommandPolicy } from '../../apps/stack/scripts/utils/dev_targets/remote_commands.mjs';
 import { requiresTypeScriptAdmission } from './resolveTypeScriptCliInvocation.mjs';
 import { runCommand, exitWithCommandResult } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 import { coerceHappyMonorepoRootFromPath } from '../../apps/stack/scripts/utils/paths/paths.mjs';
 import { collectInternalWorkspaceDependencyNames } from './workspacePackageDependencies.mjs';
 import { callerHoldsWorkspaceBundleLock } from './workspaceBundleLock.mjs';
+import { resolveWorkspacePackageBuildLockPath } from './workspacePackageBuildLock.mjs';
+import { callerHoldsDependencyConsumption } from '../../apps/stack/scripts/utils/proc/dependency_refresh.mjs';
 import { resolvePackageBuildOutputTargetMatches } from './packageBuildOutputTargets.mjs';
-import { packageNameOfSpecifier } from '../../packages/cli-common/sourceRuntimeEntries.mjs';
 import { createDistTypeScriptProjectConfig, readTypeScriptBuildInputFileNames } from './buildTypeScriptPackageDist.mjs';
-import { resolveTypeScriptProjectPathFromArgs } from './prepareTypeScriptProjectBuild.mjs';
 
 function declarationTarget(value) {
   if (typeof value === 'string') return /\.d\.[cm]?ts$/.test(value) ? value : undefined;
@@ -28,9 +29,8 @@ function declarationTarget(value) {
 async function workspaceDeclarationInputs(componentDir) {
   const repoDir = coerceHappyMonorepoRootFromPath(componentDir);
   const graph = await readWorkspaceComponentDependencyGraph(componentDir);
-  if (!graph) return { paths: {}, ordered: [], repoDir };
+  if (!graph) return { ordered: [], repoDir };
   const packages = new Map();
-  const paths = {};
   for (const name of graph.closure) {
     const dir = graph.packageDirsByName.get(name);
     if (!relative(repoDir, dir).replaceAll('\\', '/').startsWith('packages/')) continue;
@@ -38,20 +38,22 @@ async function workspaceDeclarationInputs(componentDir) {
     if (!existsSync(configPath)) continue;
     const source = readTypecheckProject(configPath);
     if (!source.parsed.options.outDir || !source.parsed.options.declaration) continue;
-    const cache = resolve(dir, 'node_modules/.cache/typecheck-declarations');
-    const output = resolve(cache, 'output');
+    const cacheRoot = resolve(repoDir, '.project/tmp/typecheck-declarations');
+    const cache = resolve(cacheRoot, 'projects', relative(repoDir, dir));
+    // Consumers resolve the producer's public package identity. Private output
+    // redirects make native inferred declarations unnameable (TS2742/TS2883).
+    const output = source.parsed.options.outDir;
     const manifest = graph.packageJsonByDir.get(dir);
     const exports = manifest.exports;
     const entries = Object.keys(exports ?? {}).some(key => key.startsWith('.'))
       ? Object.entries(exports) : [['.', exports ?? manifest.types]];
     const targets = [];
-    for (const [key, value] of entries) {
+    for (const [, value] of entries) {
       const target = declarationTarget(value);
       if (!target) continue;
       const suffix = relative(source.parsed.options.outDir, resolve(dir, target));
       if (suffix.startsWith('..')) continue;
       const path = resolve(output, suffix);
-      paths[key === '.' ? name : name + key.slice(1)] = [path];
       targets.push(path);
     }
     if (targets.length) {
@@ -69,22 +71,7 @@ async function workspaceDeclarationInputs(componentDir) {
     ordered.push(pkg);
   };
   for (const name of packages.keys()) visit(name);
-  for (const pkg of ordered) {
-    const dependencies = new Set();
-    const collect = name => {
-      if (dependencies.has(name) || name === pkg.name || !packages.has(name)) return;
-      dependencies.add(name);
-      for (const dependency of collectInternalWorkspaceDependencyNames(packages.get(name).manifest, name,
-        { workspacePackageNames: packages.keys() })) collect(dependency);
-    };
-    for (const name of collectInternalWorkspaceDependencyNames(pkg.manifest, pkg.name,
-      { workspacePackageNames: packages.keys() })) collect(name);
-    // A shared producer's config must not change when a different consumer
-    // happens to admit more unrelated workspace packages into its graph.
-    pkg.paths = Object.fromEntries(Object.entries(paths).filter(([name]) => dependencies.has(packageNameOfSpecifier(name)))
-      .sort(([a], [b]) => a.localeCompare(b)));
-  }
-  return { paths, ordered, repoDir };
+  return { ordered, repoDir };
 }
 
 async function declarationInputKey(pkg, dependencyKeys, env) {
@@ -93,7 +80,6 @@ async function declarationInputKey(pkg, dependencyKeys, env) {
     incremental: true, declarationMap: false, sourceMap: false,
     outDir: pkg.output, tsBuildInfoFile: resolve(pkg.cache, 'incremental.tsbuildinfo'),
     typeRoots: ts.getEffectiveTypeRoots(pkg.source.parsed.options, { getCurrentDirectory: () => pkg.dir }),
-    paths: pkg.paths,
   } });
   const compiler = resolveTypeScriptCliInvocation({ invocationKind: 'build', env });
   const sourceInputs = readWorkspaceBuildInputs(pkg.dir, {
@@ -109,14 +95,33 @@ async function declarationInputKey(pkg, dependencyKeys, env) {
   return { key, config };
 }
 
-function declarationCacheCurrent(pkg, key) {
+async function declarationOutputKey(pkg) {
+  const files = [];
+  const visit = async directory => {
+    for (const entry of await readdir(directory, { withFileTypes: true }).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    })) {
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else if (/\.d\.[cm]?ts$/.test(path)) files.push(relative(pkg.output, path));
+    }
+  };
+  await visit(pkg.output);
+  return await readBuildInputIdentity({ sourceDir: pkg.output, files });
+}
+
+async function declarationCacheCurrent(pkg, key) {
   try {
     const record = JSON.parse(readFileSync(resolve(pkg.cache, 'inputs.json'), 'utf8'));
     return record.key === key && Array.isArray(record.outputs)
       && record.outputs.every(file => existsSync(resolve(pkg.output, file)))
       && pkg.targets.every(target => resolvePackageBuildOutputTargetMatches({ packageDir: pkg.dir,
         outputDir: pkg.output, target }).length > 0)
-      && existsSync(resolve(pkg.cache, 'incremental.tsbuildinfo'));
+      && existsSync(resolve(pkg.cache, 'incremental.tsbuildinfo'))
+      // Package publication can replace canonical dist independently of this
+      // emitter. Reuse the existing digest owner to detect changed/extra .d.ts.
+      && record.outputKey === await declarationOutputKey(pkg);
   } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
@@ -148,27 +153,38 @@ async function pruneObsoleteDeclarations(pkg, project, config) {
   return [...expected].map(file => relative(pkg.output, file));
 }
 
-/** Private declarations are derived once on the consuming worker. Never enter
- * package builds, publish dist or reserve one package envelope per dependency.
- * The existing admission owner jointly acquires the shared cache writer before
- * capacity, so concurrent consumers cannot queue while holding an envelope.
+/** Derive canonical declarations without touching JavaScript or build stamps.
+ * Existing package publication locks and dependency custody are acquired jointly
+ * within the consumer's compilation envelope; warm consumers start no emitter
+ * or package build. Publication custody ends before the consumer starts.
  */
 export async function prepareWorkspaceTypecheckDeclarations(componentDir, {
-  env = process.env, projects = [], cwd = process.cwd(), runPreparation = runWorkspaceBuildAdmission, underLock = false, prepare = true,
+  env = process.env, runPreparation = runWorkspaceBuildAdmission, underLock = false,
+  withinTypecheckAdmission = false, signal,
+  admissionClass = resolveRemoteCommandPolicy(['node', 'scripts/workspaces/runTypeScriptCli.mjs', '--noEmit'],
+    { cwd: componentDir, repoRoot: coerceHappyMonorepoRootFromPath(componentDir) ?? componentDir }).heavyClass,
 } = {}) {
   const started = performance.now();
-  const { paths, ordered, repoDir } = await workspaceDeclarationInputs(componentDir);
-  if (underLock && !callerHoldsWorkspaceBundleLock(resolve(repoDir, '.project/tmp/typecheck-declarations.lock'),
-    env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD)) throw new Error('Declaration preparation requires its inherited cache writer');
+  const { ordered, repoDir } = await workspaceDeclarationInputs(componentDir);
+  const locks = ordered.map(pkg => ({ path: resolveWorkspacePackageBuildLockPath(pkg.dir, pkg.manifest) }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  if (underLock) {
+    const leases = JSON.parse(env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]');
+    const values = [env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD, ...leases];
+    if (!callerHoldsDependencyConsumption(env) || locks.some(({ path }) =>
+      !values.some(value => callerHoldsWorkspaceBundleLock(path, value)))) {
+      throw new Error('Declaration preparation requires inherited package publication and dependency custody');
+    }
+  }
   const keys = new Map();
   const stale = [];
   const pending = [];
-  for (const pkg of prepare ? ordered : []) {
+  for (const pkg of ordered) {
     const dependencies = collectInternalWorkspaceDependencyNames(pkg.manifest, pkg.name,
       { workspacePackageNames: keys.keys() }).map(name => keys.get(name));
     const { key, config } = await declarationInputKey(pkg, dependencies, env);
     keys.set(pkg.name, key);
-    if (declarationCacheCurrent(pkg, key)) continue;
+    if (await declarationCacheCurrent(pkg, key)) continue;
     stale.push(pkg.name);
     if (!underLock) continue;
     await mkdir(pkg.cache, { recursive: true });
@@ -182,54 +198,68 @@ export async function prepareWorkspaceTypecheckDeclarations(componentDir, {
     // solution builder's root-file timestamp shortcut.
     const args = ['--build', ...pending.map(({ project }) => project), '--singleThreaded', '--force'];
     const invocation = resolveTypeScriptCliInvocation({ args, workspaceDir: repoDir, env,
-      invocationKind: 'build', admissionClass: 'declaration-emit' });
-    const result = await runCommand(invocation.command, [...invocation.argsPrefix, ...args], { cwd: repoDir, env, stdio: 'inherit' });
+      invocationKind: 'build', admissionClass });
+    if (env.HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS === '1') process.stderr.write(`[typecheck-declarations] starting ${JSON.stringify({ at: new Date().toISOString(), declarations: pending.length })}\n`);
+    const result = await runCommand(invocation.command, [...invocation.argsPrefix, ...args], { cwd: repoDir, env, signal, stdio: 'inherit' });
     if (result.error) throw result.error;
     if (result.signal || result.status !== 0) throw Object.assign(new Error('Dependency declaration emission failed'), { exitCode: result.status, signal: result.signal });
     for (const { pkg, key, project, config } of pending) {
       const outputs = await pruneObsoleteDeclarations(pkg, project, config);
-      await writeJsonAtomic(resolve(pkg.cache, 'inputs.json'), { key, outputs });
+      await writeJsonAtomic(resolve(pkg.cache, 'inputs.json'), { key, outputs, outputKey: await declarationOutputKey(pkg) });
     }
   }
   if (stale.length && !underLock) {
+    if (withinTypecheckAdmission) {
+      return await withWorkspaceBuildResources({ locks, dependencyInstallDir: repoDir, env, signal,
+        typecheckDeclarationPhase: true }, async acquiredEnv => await prepareWorkspaceTypecheckDeclarations(componentDir, {
+          env: acquiredEnv, underLock: true, admissionClass, signal,
+        }));
+    }
     const workerArgs = [fileURLToPath(import.meta.url), '--workspace-declarations', componentDir];
     const measure = process.platform === 'linux' && env.HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS === '1';
     const result = await runPreparation({ command: measure ? '/usr/bin/time' : process.execPath,
       args: measure ? ['-v', process.execPath, ...workerArgs] : workerArgs,
-      locks: [{ path: resolve(repoDir, '.project/tmp/typecheck-declarations.lock') }],
-      admissionClass: 'declaration-emit', admissionRequired: requiresTypeScriptAdmission({ env }),
+      locks,
+      admissionClass, admissionRequired: requiresTypeScriptAdmission({ env }),
       dependencyInstallDir: repoDir, repoDir, cwd: repoDir, env, stdio: 'inherit',
     });
     if (result.error) throw result.error;
     if (result.signal || result.status !== 0) throw Object.assign(new Error('Dependency declaration preparation failed'), { exitCode: result.status, signal: result.signal });
   }
-  const consumers = Object.keys(paths).length ? projects.flatMap(project => {
-    const sourcePath = resolveTypeScriptProjectPathFromArgs(project.args, { cwd }) || resolve(cwd, project.project ?? 'tsconfig.json');
-    if (!existsSync(sourcePath)) return [];
-    const authored = project.authoredProject
-      ? resolveTypeScriptProjectPathFromArgs(['-p', project.authoredProject], { cwd }) : sourcePath;
-    const target = resolve(dirname(authored), 'node_modules/.cache/tsc/workspace-declarations', relative(repoDir, sourcePath));
-    return [{ project, sourcePath, target }];
-  }) : [];
-  const projections = new Map(consumers.map(({ sourcePath, target }) => [sourcePath, target]));
-  for (const { project, sourcePath, target } of consumers) {
-    project.authoredProject ??= sourcePath;
-    project.authoredArgs ??= project.args;
-    const source = readTypecheckProject(sourcePath);
-    await mkdir(dirname(target), { recursive: true });
-    await writeJsonAtomic(target, { extends: sourcePath, compilerOptions: {
-      paths: { ...absoluteTypecheckPaths(source, sourcePath), ...paths },
-      typeRoots: ts.getEffectiveTypeRoots(source.parsed.options, { getCurrentDirectory: () => dirname(sourcePath) }),
-    }, references: (source.config.references ?? []).map(reference => {
-      const path = resolve(dirname(sourcePath), reference.path);
-      return { ...reference, path: projections.get(path) ?? path };
-    }) });
-    project.args = project.args.map((arg, index) => ['--project', '-p'].includes(project.args[index - 1])
-      ? target : arg.startsWith('--project=') ? `--project=${target}` : arg);
-    if (!project.args.some(arg => ['--project', '-p'].includes(arg) || arg.startsWith('--project='))) project.args.push('--project', target);
-    project.project = target;
+  return { ok: true, built: [], declarations: stale, elapsedMs: Math.round(performance.now() - started) };
+}
+
+if (process.argv[2] === '--prepare-for-typecheck' && process.argv[1]
+  && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  const [componentDir, admissionClass, delimiter, command, ...args] = process.argv.slice(3);
+  if (delimiter !== '--' || !command) throw new Error('Invalid admitted typecheck invocation');
+  const cancellation = new AbortController();
+  let cancelledSignal;
+  const handlers = new Map(['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => [signal, () => {
+    cancelledSignal ??= signal;
+    cancellation.abort();
+  }]));
+  for (const [signal, handler] of handlers) process.on(signal, handler);
+  try {
+    const started = performance.now();
+    process.stderr.write(`[typecheck-preparation] starting ${JSON.stringify({ component: componentDir,
+      admissionClass, at: new Date().toISOString() })}\n`);
+    const result = await prepareWorkspaceTypecheckDeclarations(resolve(componentDir), {
+      admissionClass, withinTypecheckAdmission: true, signal: cancellation.signal,
+    });
+    cancellation.signal.throwIfAborted();
+    process.stderr.write(`[typecheck-preparation] ${JSON.stringify({ component: componentDir, packageBuilds: 0,
+      declarations: result.declarations.length, elapsedMs: Math.round(performance.now() - started), at: new Date().toISOString() })}\n`);
+    process.stderr.write(`[typescript] starting ${JSON.stringify({ at: new Date().toISOString() })}\n`);
+    exitWithCommandResult(await runCommand(command, args, { cwd: process.cwd(), env: process.env,
+      signal: cancellation.signal, stdio: 'inherit', ownedProcessGroup: true }));
+  } catch (error) {
+    if (!cancelledSignal) process.stderr.write(`[typecheck-preparation] failed ${error.stack ?? error}\n`);
+    exitWithCommandResult({ error: !cancelledSignal && error.exitCode === undefined ? error : undefined,
+      status: error.exitCode, signal: cancelledSignal ?? error.signal });
+  } finally {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
   }
-  return { ok: true, built: [], declarations: stale, paths, elapsedMs: Math.round(performance.now() - started) };
 }
 
 if (process.argv[2] === '--workspace-declarations' && process.argv[1]

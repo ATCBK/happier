@@ -69,9 +69,8 @@ export async function prepareRemoteValidationWorkspace({
     return { ok: true, built: [], skipped: ['workspace-source-test'] };
   }
   if (validationKind === 'typecheck') {
-    // The compiler reads published dependency declarations and owns its
-    // project declarations. A reader must not republish plugins or dist before
-    // it can run; missing declarations remain visible compiler diagnostics.
+    // The compiler leaf prepares declarations within its own admission.
+    // Preflight must not queue a subordinate compilation envelope.
     return { ok: true, built: [], skipped: ['workspace-typecheck-reader'] };
   }
   env = resolveRemoteValidationPreparationEnv(env, validationKind, defaultBuildMode);

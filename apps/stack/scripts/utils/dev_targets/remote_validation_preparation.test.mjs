@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -14,6 +14,9 @@ import { resolveWorkspacePackageBuildLockPath } from '../../../../../scripts/wor
 import { resolveTypeScriptCliInvocation } from '../../../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 import { prepareWorkspaceTypecheckDeclarations } from '../../../../../scripts/workspaces/prepareReferencedTypecheckDeclarations.mjs';
 import { runWorkspaceBuildAdmission } from '../proc/workspace_build_admission.mjs';
+import { isPidAlive } from '../proc/pids.mjs';
+import { resolveDependencyRefreshLockPath, withDependencyRefreshLock } from '../proc/dependency_refresh.mjs';
+import { withJsonOwnerFileLock } from '../proc/jsonOwnerFileLock.mjs';
 import { resolveRemoteCommandPolicy } from './remote_commands.mjs';
 
 import { prepareRemoteValidationWorkspace } from './remote_validation_preparation.mjs';
@@ -69,7 +72,7 @@ printf 'compiled\\n' >> '${buildRecord}'
   assert.throws(() => readFileSync(join(repoDir, '.project/tmp/cli-dist-build.lock')), { code: 'ENOENT' });
 });
 
-test('typecheck consumers share current declaration-only inputs without package publication', async t => {
+test('typecheck consumers share current canonical declarations without JavaScript publication or redirects', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-typecheck-current-declarations-' });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true }));
   writeFileSync(join(root, 'pnpm-lock.yaml'), '# fixture\n');
@@ -100,6 +103,10 @@ test('typecheck consumers share current declaration-only inputs without package 
       dependencies: { '@happier-dev/protocol': 'workspace:*' } }));
   }
   const extra = join(root, 'packages/extra');
+  mkdirSync(join(root, 'node_modules/@happier-dev'), { recursive: true });
+  mkdirSync(join(root, 'node_modules/@fixture'), { recursive: true });
+  symlinkSync(dependency, join(root, 'node_modules/@happier-dev/protocol'), 'junction');
+  symlinkSync(extra, join(root, 'node_modules/@fixture/extra'), 'junction');
   mkdirSync(join(extra, 'src'), { recursive: true });
   writeFileSync(join(extra, 'package.json'), JSON.stringify({ name: '@fixture/extra', type: 'module', types: './dist/index.d.ts',
     dependencies: { '@happier-dev/protocol': 'workspace:*' } }));
@@ -154,7 +161,7 @@ test('typecheck consumers share current declaration-only inputs without package 
     await prepare(component === 'ui' ? 'cli' : 'ui');
     assert.equal(emissions, index + 1, 'unchanged inputs do not start another emitter');
   }
-  assert.equal(readFileSync(join(dependency, 'dist/index.d.ts'), 'utf8'), 'export declare const value: "stale";\n');
+  assert.match(readFileSync(join(dependency, 'dist/widget.d.ts'), 'utf8'), /moving-server/);
   assert.equal(readFileSync(join(dependency, 'dist/index.js'), 'utf8'), 'export const value = "stale";\n');
   assert.equal(existsSync(join(root, 'apps/cli/dist')), false, 'typecheck preparation does not build the CLI host');
   for (const initial of [
@@ -166,7 +173,27 @@ test('typecheck consumers share current declaration-only inputs without package 
     const result = spawnSync(compiler.command, [...compiler.argsPrefix, ...projects[0].args], { cwd: consumer, encoding: 'utf8' });
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
-  unlinkSync(join(dependency, 'node_modules/.cache/typecheck-declarations/output/widget.d.ts'));
+  writeFileSync(join(consumer, 'portable.ts'), 'import { extra } from "@fixture/extra"; export function inferredPlan() { return extra(); }');
+  const portable = join(consumer, 'tsconfig.portable.json');
+  writeFileSync(portable, JSON.stringify({ extends: './tsconfig.json', compilerOptions: {
+    noEmit: false, declaration: true, emitDeclarationOnly: true, outDir: './portable',
+  }, files: ['portable.ts'] }));
+  const portableProjects = [{ project: portable, args: ['-p', portable] }];
+  await prepareWorkspaceTypecheckDeclarations(join(root, 'apps/ui'), { projects: portableProjects, cwd: consumer, env, runPreparation });
+  const portability = spawnSync(compiler.command, [...compiler.argsPrefix, ...portableProjects[0].args], { cwd: consumer, encoding: 'utf8' });
+  assert.equal(portability.status, 0, portability.stdout + portability.stderr);
+  assert.doesNotMatch(readFileSync(join(consumer, 'portable/portable.d.ts'), 'utf8'), /node_modules\/\.cache|typecheck-declarations/,
+    'an emitting consumer names inferred dependency types through public exports');
+  assert.equal(portableProjects[0].project, portable, 'package preparation must not redirect a consumer');
+  assert.deepEqual(portableProjects[0].args, ['-p', portable]);
+  const canonicalWidget = join(dependency, 'dist/widget.d.ts');
+  writeFileSync(canonicalWidget, readFileSync(canonicalWidget, 'utf8').replace('moving-server', 'overwritten'));
+  await prepare('server');
+  writeFileSync(join(dependency, 'dist/removed.d.ts'), 'export declare const obsolete: true;');
+  await prepare('server');
+  assert.equal(existsSync(join(dependency, 'dist/removed.d.ts')), false,
+    'a package publisher cannot resurrect a removed wildcard declaration');
+  unlinkSync(join(dependency, 'dist/widget.d.ts'));
   await prepare('server');
   unlinkSync(source);
   writeFileSync(join(dependency, 'src/index.ts'), 'export const value = "after-delete";');
@@ -179,7 +206,201 @@ test('typecheck consumers share current declaration-only inputs without package 
   assert.match(removed.stdout, /TS2307/);
 });
 
-test('declaration projections retain producer admission and reference ownership', async t => {
+test('public compiler derives current dependency declarations inside its single compilation admission', { skip: process.platform !== 'linux', timeout: 60000 }, async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-typecheck-one-admission-' });
+  writeFileSync(join(root, 'package.json'), '{"private":true}');
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
+  for (const name of ['cli', 'ui']) {
+    mkdirSync(join(root, 'apps', name), { recursive: true });
+    writeFileSync(join(root, 'apps', name, 'package.json'), JSON.stringify({ name: `@fixture/${name}` }));
+  }
+  const dependency = join(root, 'packages/protocol');
+  const consumer = join(root, 'apps/server');
+  mkdirSync(join(dependency, 'src'), { recursive: true });
+  mkdirSync(join(dependency, 'dist'), { recursive: true });
+  mkdirSync(consumer, { recursive: true });
+  const metadata = { name: '@happier-dev/protocol', type: 'module', types: './dist/index.d.ts' };
+  writeFileSync(join(dependency, 'package.json'), JSON.stringify(metadata));
+  writeFileSync(join(dependency, 'tsconfig.json'), JSON.stringify({ compilerOptions: {
+    declaration: true, rootDir: 'src', outDir: 'dist', types: [],
+  }, include: ['src/**/*.ts'] }));
+  writeFileSync(join(dependency, 'src/index.ts'), 'export const current = "source";');
+  writeFileSync(join(dependency, 'dist/index.d.ts'), 'export declare const current = "stale";');
+  writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: '@fixture/server', dependencies: {
+    '@happier-dev/protocol': 'workspace:*',
+  } }));
+  writeFileSync(join(consumer, 'consumer.ts'), 'import { current } from "@happier-dev/protocol"; const value: "source" = current;');
+  writeFileSync(join(consumer, 'tsconfig.json'), JSON.stringify({ compilerOptions: {
+    strict: true, noEmit: true, types: [], moduleResolution: 'bundler', module: 'esnext',
+    paths: { '@happier-dev/protocol': [join(dependency, 'dist/index.d.ts')] },
+  }, files: ['consumer.ts'] }));
+  const native = await installWorkspaceAdmissionProcessFixture(t, root, { env: { PATH: process.env.PATH,
+    HAPPIER_STACK_REPO_DIR: root, HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root,
+    HAPPIER_STACK_PM_CACHE_BASE_DIR: join(root, 'worker-cache'), HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS: '1' } });
+  const liveOwners = () => readdirSync(join(native.admissionRoot, 'owners')).filter(name => {
+    try { return isPidAlive(Number(readFileSync(join(native.admissionRoot, 'owners', name, 'process'), 'utf8').split(' ')[0])); }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  });
+  const runner = fileURLToPath(new URL('../../../../../scripts/workspaces/runTypeScriptCli.mjs', import.meta.url));
+  let runIndex = 0;
+  const check = async (onStderr, { cancelled = false } = {}) => {
+    const began = performance.now();
+    const child = spawn(process.execPath, [runner, '-p', 'tsconfig.json', '--pretty', 'false'], {
+      cwd: consumer, env: native.env, signal: t.signal, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '', stderr = '';
+    const admissions = [];
+    const publication = [];
+    child.stdout.on('data', value => { stdout += value; });
+    child.stderr.on('data', value => {
+      stderr += value;
+      if (/\[typecheck-declarations\] starting|\[typescript\] starting/.test(String(value))) {
+        admissions.push(liveOwners());
+        publication.push({ emitting: String(value).includes('[typecheck-declarations] starting'),
+          locked: existsSync(resolveWorkspacePackageBuildLockPath(dependency, metadata)) });
+      }
+      onStderr?.(String(value), child);
+    });
+    const result = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (status, signal) => resolve({ status, signal })); });
+    if (cancelled) {
+      assert.ok(result.status === 130 || result.signal === 'SIGINT', JSON.stringify(result) + stderr);
+      assert.doesNotMatch(stderr, /\[typescript\] starting|\[typecheck-preparation\] failed/,
+        'caller cancellation is not a preparation failure');
+      return stderr;
+    }
+    assert.equal(result.status, 0, stdout + stderr);
+    assert.ok(admissions.length > 0, stderr);
+    assert.equal(admissions[0].length, 1, 'compilation owns one envelope');
+    for (const owners of admissions) assert.deepEqual(owners, admissions[0],
+      'Microsoft preparation and the consumer retain the same authenticated admission');
+    for (const phase of publication) assert.equal(phase.locked, phase.emitting,
+      'publication custody protects emission and ends before the consumer compiler starts');
+    assert.doesNotMatch(stderr, /class=declaration-emit|TS2883|TS2742|node_modules\/\.cache/);
+    assert.ok(stderr.indexOf('[typecheck-preparation]') < stderr.indexOf('[typescript] starting'), stderr);
+    const preparation = [...stderr.matchAll(/\[typecheck-preparation\] (\{[^\n]+\})/g)].map(match => JSON.parse(match[1])).at(-1);
+    t.diagnostic(JSON.stringify({ run: ['cold', 'warm', 'held-publication', 'busy-capacity'][runIndex++],
+      totalMs: Math.round(performance.now() - began), phaseMs: preparation.elapsedMs,
+      declarations: preparation.declarations, capacityWaitSeconds: Number(/waited=(\d+)s/.exec(stderr)?.[1] ?? 0),
+      admissionOwners: admissions[0].length }));
+    return stderr;
+  };
+  const cold = await check();
+  assert.match(cold, /"declarations":1/);
+  const warm = await check();
+  assert.match(warm, /"declarations":0/);
+  writeFileSync(join(dependency, 'src/index.ts'), 'export const current = "source"; export const changed = true;');
+  let terminal;
+  await withWorkspaceBundleLock(async () => {
+    let blocked;
+    const waiting = new Promise(resolve => { blocked = resolve; });
+    terminal = check(value => { if (/workspace-lease-busy|Workspace publication lease is busy/.test(value)) blocked(); });
+    await Promise.race([waiting, terminal.then(() => assert.fail('compiler did not wait for package publication'))]);
+    assert.equal(liveOwners().length, 1,
+      'the contended declaration phase retains its containing compilation admission');
+  }, { lockPath: resolveWorkspacePackageBuildLockPath(dependency, metadata), signal: t.signal });
+  const contended = await terminal;
+  assert.match(contended, /"declarations":1/);
+  assert.equal(liveOwners().length, 0);
+  // Simulate only physical memory, then occupy it through real native
+  // admission. A busy worker must queue once for compilation, before emission.
+  writeFakeBin({ root, binDirName: 'native-owner/node_modules/.bin', name: 'awk', content: `#!/bin/sh
+case "$*" in
+  */proc/meminfo*) printf '25165824 25165824\\n' ;;
+  */proc/pressure/memory*) printf '0\\n' ;;
+  *) exec /usr/bin/awk "$@" ;;
+esac
+` });
+  const holder = spawn(native.launcher, ['--heavyweight-admission', '--class=validation', '--machine=worker',
+    '--exec-admitted', '--', process.execPath, '-e', 'console.log("ready"); process.stdin.once("data", () => {});'], {
+    cwd: root, env: native.env, signal: t.signal, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const holderTerminal = new Promise((resolve, reject) => { holder.once('error', reject); holder.once('close', resolve); });
+  await Promise.race([new Promise(resolve => holder.stdout.once('data', resolve)),
+    holderTerminal.then(status => assert.fail(`capacity holder exited ${status}`))]);
+  let blocked;
+  const waiting = new Promise(resolve => { blocked = resolve; });
+  terminal = check(value => { if (/waiting for heavyweight admission/.test(value)) blocked(); });
+  try { await Promise.race([waiting, terminal.then(() => assert.fail('compiler did not wait for busy capacity'))]); }
+  finally { holder.stdin.end('release'); }
+  assert.equal(await holderTerminal, 0);
+  const busy = await terminal;
+  assert.match(busy, /class=compilation/);
+  assert.match(busy, /"declarations":0/);
+  assert.equal(liveOwners().length, 0);
+  writeFileSync(join(dependency, 'src/index.ts'), 'export const current = "source"; export const cancel = true;');
+  await withWorkspaceBundleLock(async () => {
+    await check((value, child) => {
+      if (/Workspace publication lease is busy/.test(value)) child.kill('SIGINT');
+    }, { cancelled: true });
+  }, { lockPath: resolveWorkspacePackageBuildLockPath(dependency, metadata), signal: t.signal });
+});
+
+test('native declaration admission waits for dependency refresh, queue and package-build locks before emitting once', { skip: process.platform !== 'linux' }, async t => {
+  for (const mode of ['refresh', 'queue', 'package']) await t.test(mode, async t => {
+    const { root } = await createTempFixture(t, { prefix: 'hstack-declaration-busy-lock-' });
+    writeFileSync(join(root, 'package.json'), '{"private":true}');
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
+    const dependency = join(root, 'packages/protocol');
+    mkdirSync(join(dependency, 'src'), { recursive: true });
+    writeFileSync(join(dependency, 'package.json'), '{"name":"@happier-dev/protocol","types":"./dist/index.d.ts"}');
+    writeFileSync(join(dependency, 'src/index.ts'), 'export const current = true;');
+    writeFileSync(join(dependency, 'tsconfig.json'), JSON.stringify({ compilerOptions: {
+      declaration: true, rootDir: 'src', outDir: 'dist', types: [],
+    }, include: ['src/**/*.ts'] }));
+    const consumers = ['cli', 'ui', 'server'].map(name => {
+      const dir = join(root, 'apps', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@fixture/${name}`,
+        dependencies: { '@happier-dev/protocol': 'workspace:*' } }));
+      return dir;
+    }).filter(dir => !dir.endsWith('/ui'));
+    // Only physical-worker process/OS observations are adapted; native disk,
+    // admission, dependency queue and Microsoft declaration emission stay real.
+    const native = await installWorkspaceAdmissionProcessFixture(t, root, {
+      env: { PATH: process.env.PATH, HAPPIER_STACK_REPO_DIR: root,
+        HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root, HAPPIER_STACK_PM_CACHE_BASE_DIR: join(root, 'worker-cache') },
+    });
+    const lockPath = resolveDependencyRefreshLockPath(root, native.env);
+    let complete;
+    const blocked = new Promise(resolve => { complete = resolve; });
+    const blockedConsumers = new Set();
+    const diagnostics = [];
+    let terminal;
+    const started = performance.now();
+    const run = async () => {
+      terminal = Promise.all(consumers.map((consumer, index) => prepareWorkspaceTypecheckDeclarations(consumer, {
+        env: native.env, runPreparation: async options => {
+          const result = await runWorkspaceBuildAdmission({ ...options, launcherPath: native.launcher, stdio: 'pipe', signal: t.signal,
+            onStderr: value => {
+              if (String(value).includes('workspace-lease-busy')) {
+                blockedConsumers.add(index);
+                if (blockedConsumers.size === consumers.length) complete();
+              }
+            } });
+          diagnostics.push(result.stderr ?? '');
+          if (result.status !== 0) t.diagnostic(result.stderr ?? String(result.status));
+          return result;
+        },
+      })));
+      await Promise.race([blocked, terminal.then(() => assert.fail('declaration consumers did not wait for the held lock'))]);
+      assert.deepEqual(readdirSync(join(native.admissionRoot, 'owners')), [], 'busy producers reserve no capacity');
+      assert.equal(existsSync(join(dependency, 'dist/index.d.ts')), false);
+    };
+    if (mode === 'refresh') await withDependencyRefreshLock({ installDir: root, env: native.env, signal: t.signal }, run);
+    else if (mode === 'queue') await withJsonOwnerFileLock(run, { lockPath: `${lockPath}.queue.lock`, signal: t.signal });
+    else await withWorkspaceBundleLock(run, { lockPath: resolveWorkspacePackageBuildLockPath(dependency,
+      { name: '@happier-dev/protocol' }), signal: t.signal });
+    await terminal;
+    const emitted = diagnostics.flatMap(value => [...value.matchAll(/\[typecheck-declarations\] (\{[^\n]+\})/g)])
+      .flatMap(match => JSON.parse(match[1]).emitted);
+    assert.deepEqual(emitted, ['@happier-dev/protocol'], 'concurrent cold consumers emit once after lock release');
+    assert.match(readFileSync(join(dependency, 'dist/index.d.ts'), 'utf8'), /current = true/);
+    t.diagnostic(JSON.stringify({ mode, concurrentConsumers: consumers.length, emitted: emitted.length,
+      packageBuilds: 0, elapsedMs: Math.round(performance.now() - started) }));
+  });
+});
+
+test('declaration preparation leaves consumer admission and references untouched', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-declaration-producer-ownership-' });
   writeFileSync(join(root, 'package.json'), '{"private":true}');
   writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
@@ -219,6 +440,57 @@ test('declaration projections retain producer admission and reference ownership'
   const consumer = JSON.parse(readFileSync(projects[1].project, 'utf8'));
   assert.equal(consumer.references[0].path, projects[0].project,
     'a prepared consumer references the producer config with the same current dependency aliases');
+});
+
+test('newer declarations preserve build stamps and cannot hide stale JavaScript from workspace preparation', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-declaration-js-freshness-' });
+  writeFileSync(join(root, 'package.json'), '{"private":true}');
+  writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n');
+  const consumer = join(root, 'apps/server');
+  const dependency = join(root, 'packages/example');
+  for (const app of ['cli', 'ui']) {
+    mkdirSync(join(root, 'apps', app), { recursive: true });
+    writeFileSync(join(root, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
+  }
+  mkdirSync(consumer, { recursive: true });
+  mkdirSync(join(dependency, 'src'), { recursive: true });
+  writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: '@fixture/server',
+    dependencies: { '@happier-dev/example': 'workspace:*' } }));
+  writeFileSync(join(dependency, 'package.json'), JSON.stringify({ name: '@happier-dev/example', type: 'module',
+    main: './dist/index.js', types: './dist/index.d.ts', scripts: { build: 'fixture-compiler' } }));
+  writeFileSync(join(dependency, 'tsconfig.json'), JSON.stringify({ compilerOptions: {
+    declaration: true, rootDir: 'src', outDir: 'dist', types: [],
+  }, include: ['src/**/*.ts'] }));
+  const source = join(dependency, 'src/index.ts');
+  const output = join(dependency, 'dist/index.js');
+  const stamp = join(dependency, 'dist/.happier-build-inputs.json');
+  let builds = 0;
+  // Only the package compiler process is replaced. Declaration emission,
+  // freshness, output integrity, locks and publication are real.
+  const workspaceBuildBoundary = { prepareEnv: async (_dir, env) => env,
+    runPackageBuild: async (dir, { env }) => {
+      builds++;
+      writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), readFileSync(join(dir, 'src/index.ts')));
+      writeFileSync(join(env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.d.ts'), 'export declare const value: string;');
+    } };
+  const env = { CI: 'true', PATH: process.env.PATH, HAPPIER_STACK_REPO_DIR: root,
+    HAPPIER_STACK_RUNTIME_IDENTITY_REPO_DIR: root };
+  writeFileSync(source, 'export const value = "before";');
+  await ensureWorkspacePackagesBuiltForComponent(consumer, { env, workspaceBuildBoundary });
+  const previousStamp = readFileSync(stamp, 'utf8');
+  const previousJs = readFileSync(output, 'utf8');
+  writeFileSync(source, 'export const value = "after";');
+  await prepareWorkspaceTypecheckDeclarations(consumer, { env });
+  assert.match(readFileSync(join(dependency, 'dist/index.d.ts'), 'utf8'), /after/);
+  assert.ok(statSync(join(dependency, 'dist/index.d.ts')).mtimeMs > statSync(output).mtimeMs);
+  assert.equal(readFileSync(output, 'utf8'), previousJs);
+  assert.equal(readFileSync(stamp, 'utf8'), previousStamp);
+  const result = await ensureWorkspacePackagesBuiltForComponent(consumer, { env, workspaceBuildBoundary });
+  assert.deepEqual(result.built, ['@happier-dev/example']);
+  assert.equal(builds, 2);
+  assert.equal(readFileSync(output, 'utf8'), 'export const value = "after";');
+  const warm = await ensureWorkspacePackagesBuiltForComponent(consumer, { env, workspaceBuildBoundary });
+  assert.deepEqual(warm.built, []);
 });
 
 test('runtime preparation publishes captured inputs and preserves last-green after compiler failure', async t => {

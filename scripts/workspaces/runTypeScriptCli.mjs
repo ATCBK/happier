@@ -154,8 +154,8 @@ if (process.platform !== 'win32' && (executorArgs.length > 0 || shouldRouteTypeS
       prepareTypeScriptProjectBuildFromArgs(project.authoredArgs, { cwd: process.cwd() });
       // Declaration preparation is a UI workload. Expose its actual project
       // to the existing classifier instead of charging it to the CLI consumer.
-      const invocation = resolveTypeScriptCliInvocation({ args: project.args, repoRoot,
-        workspaceDir: process.cwd(), processExecPath: process.execPath });
+      const invocation = resolveTypeScriptCliInvocation({ args: project.args, admissionArgs: project.authoredArgs, repoRoot,
+        workspaceDir: process.cwd(), processExecPath: process.execPath, prepareWorkspaceDeclarations: true });
       const projectResult = await runCompiler(invocation, project, () => cancelled);
       if (projectResult.error || projectResult.signal || projectResult.status == null) {
         result = projectResult;
