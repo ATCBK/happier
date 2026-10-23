@@ -4,6 +4,7 @@ import { processIdentityMatches } from '@happier-dev/cli-common/processInstance'
 import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { readSessionPreparationFailureCode, type SessionPreparationFailureCode } from '@/agent/runtime/session/errors/sessionPreparationFailure';
+import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import {
   AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema,
@@ -173,11 +174,13 @@ export async function awaitTrackedRunnerAgentSessionOpen(
       const issue = tracked ? await input.readStartupFailure?.(tracked) : null;
       input.signal?.throwIfAborted();
       const code = readSessionPreparationFailureCode(issue?.code);
+      const runnerStartTimeMs = tracked ? resolveTrackedSessionRunnerIdentity(tracked)?.processStartTimeMs : undefined;
       // A retained failure from an older runner cannot explain this launch.
       if (code && tracked?.happySessionId === sessionId && issue?.scope === 'primary_session'
-        && issue.status === 'failed' && issue.source === 'agent_session_error'
-        && typeof tracked.processStartTimeMs === 'number' && Number.isFinite(tracked.processStartTimeMs)
-        && issue.occurredAt >= tracked.processStartTimeMs) {
+        && issue.status === 'failed' && (ProviderBrokerAdmissionFailureCodeV1Schema.safeParse(code).success
+          ? issue.source === 'team_credential' : issue.source === 'agent_session_error')
+        && typeof runnerStartTimeMs === 'number' && Number.isFinite(runnerStartTimeMs)
+        && issue.occurredAt >= runnerStartTimeMs) {
         return Object.freeze({ status: 'runner_exited' as const, code });
       }
     } catch {

@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ChildProcess } from 'node:child_process';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { SessionTeamCredentialLaunchUnavailableError } from '@/session/services/sessionTeamCredentialLaunch';
 
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import type { TrackedSession } from '@/daemon/types';
@@ -48,6 +51,23 @@ function createFixture() {
 }
 
 describe('runner-owned Agent session-open attestation', () => {
+  it.each(['current', 'predecessor'] as const)('attributes a broker startup cause only to its %s runner birth', async age => {
+    const { tracked, runner } = createFixture();
+    tracked.pid = runner.pid - 1;
+    tracked.sessionRunnerPid = runner.pid;
+    tracked.processStartTimeMs = runner.processStartTimeMs - 100;
+    tracked.runnerProcessIdentity = runner;
+    // The OS child-exit fact is the only substituted boundary.
+    tracked.childProcess = new ChildProcess();
+    tracked.childProcess.exitCode = 1;
+    const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error',
+      error: new SessionTeamCredentialLaunchUnavailableError('broker_unavailable'),
+      occurredAt: runner.processStartTimeMs + (age === 'current' ? 1 : -1) });
+    expect(await awaitTrackedRunnerAgentSessionOpen({ sessionId: 'session-child',
+      getTrackedSessions: () => [tracked], readStartupFailure: async () => issue, timeoutMs: null,
+    })).toEqual(age === 'current' ? { status: 'runner_exited', code: 'broker_unavailable' } : { status: 'runner_exited' });
+  });
+
   it('keeps a native fork attestation owned until a slow provider lifecycle commits it', async () => {
     vi.useFakeTimers();
     try {
