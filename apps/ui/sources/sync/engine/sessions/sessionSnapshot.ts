@@ -9,6 +9,7 @@ import { StoredSessionSharedMetadataV1Schema } from '@happier-dev/protocol/sessi
 import { isSessionEncryptionModeAllowedByClientRequirement, type ClientEncryptionRequirement } from '@happier-dev/protocol/encryption/clientEncryptionRequirement';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 import type { V2SessionListResponse } from '@happier-dev/protocol/sessions/control/contract';
+import { matchSessionListStartedByV1, readSessionListStartedByV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { serverFetch } from '@/sync/http/client';
@@ -1334,6 +1335,8 @@ function createHydratedSessionApplyBatcher(params: {
 export async function fetchAndApplySessions(params: {
     serverId?: string | null;
     source?: SessionListPageSource;
+    /** Query-only predicate demand: proven public provenance misses need no private summary. */
+    candidateStartedBy?: Readonly<{ selection: SessionListFilterV1['startedBy']; viewerAccountId: string }>;
     sessionListPath?: string;
     /** Cancellation belongs to this acquisition's caller, not its corpus or Encryption object. */
     signal?: AbortSignal;
@@ -1501,6 +1504,11 @@ export async function fetchAndApplySessions(params: {
         for (const row of rows) {
             if (seenSessionIds.has(row.id)) continue;
             seenSessionIds.add(row.id);
+            if (isQuerySource && params.candidateStartedBy && matchSessionListStartedByV1(
+                params.candidateStartedBy.selection,
+                readSessionListStartedByV1({ origin: row.origin, ownerAccountId: row.ownerAccountId,
+                    viewerAccountId: params.candidateStartedBy.viewerAccountId }),
+            ) === 'miss') continue;
             sessions.push(row);
         }
     };

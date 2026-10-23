@@ -13,6 +13,7 @@ import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredCo
 import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import type { FollowReceiverRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { Encryption } from '@/sync/encryption/encryption';
+import { SessionEncryption } from '@/sync/encryption/sessionEncryption';
 import { encodeBase64 } from '@/encryption/base64';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -110,7 +111,7 @@ it('keeps mounted rule counts current after source changes without restarting us
     await hook.unmount();
 });
 
-it.each(['cold', 'newer-row'] as const)('settles Matching from %s encrypted query summaries without opening each Session', async state => {
+it.each(['cold', 'newer-row', 'provenance-filter'] as const)('settles Matching from %s encrypted query summaries without opening each Session', async state => {
     const serverUrl = 'https://cold-encrypted-preview.test';
     const secret = new Uint8Array(32).fill(4);
     const credentials = { token: createAccountTokenForTests('alice', { currentAccount: true }), secret: encodeBase64(secret, 'base64') };
@@ -133,7 +134,7 @@ it.each(['cold', 'newer-row'] as const)('settles Matching from %s encrypted quer
         metadata: { path: '/payments', host: 'test', projectId: 'payments' } }));
     if (base.ownerMetadata?.t !== 'plain') throw new Error('Expected the canonical plaintext fixture owner envelope');
     const [metadata] = await cipher.encrypt([JSON.parse(base.metadata)]);
-    const row = { ...base, encryptionMode: 'e2ee', metadata: encodeBase64(metadata!, 'base64'),
+    const row = { ...base, ownerAccountId: 'alice', origin: { kind: 'none' as const }, encryptionMode: 'e2ee', metadata: encodeBase64(metadata!, 'base64'),
         ownerMetadata: sealSessionOwnerMetadataEnvelopeV1({ ownerMetadata: base.ownerMetadata.v,
             material: material.material, randomBytes: length => new Uint8Array(length).fill(3) }),
         dataEncryptionKey: encodeBase64(await encryption.encryptEncryptionKey(key), 'base64') };
@@ -143,21 +144,55 @@ it.each(['cold', 'newer-row'] as const)('settles Matching from %s encrypted quer
             metadata: null, metadataVersion: row.metadataVersion, agentStateVersion: row.agentStateVersion ?? 1 }),
     } } });
     homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
-    homes.answer(serverId, '/v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({ sessions: [row],
-        hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null }) });
+    const foreignBase = queryRow(createSessionFixture({ id: 'other-account', accessLevel: 'view',
+        metadata: { path: '/payments', host: 'test', projectId: 'payments' } }));
+    const rows = state === 'provenance-filter' ? [
+        ...Array.from({ length: 1_000 }, (_, index) => ({ ...row, id: `automation-${index}`,
+            origin: { kind: 'run_step' as const, runId: 'workflow' } })),
+        { ...row, ...foreignBase, ownerAccountId: 'other', origin: { kind: 'none' as const },
+            encryptionMode: 'e2ee', metadata: row.metadata, dataEncryptionKey: row.dataEncryptionKey, ownerMetadata: undefined },
+        row,
+    ] : [row];
+    const pageOffsets = new Map<string, number>();
+    homes.answer(serverId, '/v2/sessions/query', { select: body => {
+        const query = SessionListQueryV1Schema.parse(body);
+        const offset = query.cursor ? pageOffsets.get(query.cursor)! : 0;
+        const end = offset + SESSION_LIST_PAGE_MAX_LIMIT;
+        const nextCursor = end < rows.length ? encodeV2SessionListCursorV1(`offset-${end}`) : null;
+        if (nextCursor) pageOffsets.set(nextCursor, end);
+        return { body: SessionListQueryResponseV1Schema.parse({ sessions: rows.slice(offset, end),
+            hasNext: nextCursor !== null, nextCursor, attentionHasNext: false, attentionNextCursor: null }) };
+    } });
     const filter = normalizeSessionListFilterV1({ show: 'sessions', homeServerIds: [serverId], scope: 'all_accessible',
-        startedBy: ['you', 'agents', 'triggers'], projects: { include: [{ serverId, projectKey: 'payments' }], exclude: [] } });
+        startedBy: state === 'provenance-filter' ? ['you'] : ['you', 'agents', 'triggers'], projects: { include: [{ serverId, projectKey: 'payments' }], exclude: [] } });
+    const decrypts = vi.spyOn(SessionEncryption.prototype, 'decryptMetadataPayload');
     const preview = await createDefaultActionExecutor().execute('follow.preview', { receiver: { kind: 'account' }, filter },
         { surface: 'ui', serverId, expectedAccountId: 'alice' });
-    expect(homes.requests.filter(request => request.path === '/v2/sessions/query'), JSON.stringify(preview)).toHaveLength(1);
+    expect(homes.requests.filter(request => request.path === '/v2/sessions/query'), JSON.stringify(preview)).toHaveLength(Math.ceil(rows.length / SESSION_LIST_PAGE_MAX_LIMIT));
     const applied = getStorage().getState().sessionListRowsByServerId[serverId]?.['cold-member'];
     expect(applied, JSON.stringify(applied)).toMatchObject({ encryptedContentAvailability: 'ready',
         metadata: { projectId: 'payments' }, seq: state === 'newer-row' ? row.seq + 1 : row.seq });
     expect(preview, JSON.stringify(preview)).toMatchObject({ ok: true, result: { coverage: 'complete', matchCount: 1,
         matches: [{ source: { kind: 'session', sessionId: 'cold-member' } }] } });
+    if (state === 'provenance-filter') expect(decrypts.mock.calls).toHaveLength(1);
+    decrypts.mockRestore();
     expect(await createDefaultActionExecutor().previewSessionTargets({ selector: 'matching', filter },
         { surface: 'ui', serverId, expectedAccountId: 'alice' })).toMatchObject({ coverage: 'complete',
         addresses: [{ serverId, sessionId: 'cold-member' }] });
+    if (state === 'provenance-filter') {
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'ui' as const, serverId, expectedAccountId: 'alice' };
+        const [narrow, broad, empty] = await Promise.all([
+            executor.previewSessionTargets({ selector: 'matching', filter }, context),
+            executor.previewSessionTargets({ selector: 'matching', filter: { ...filter, startedBy: ['you', 'agents', 'triggers'], projects: undefined } }, context),
+            executor.previewSessionTargets({ selector: 'matching', filter: { ...filter, startedBy: [] } }, context),
+        ]);
+        // Same HTTP corpus, distinct demanded summaries: sharing a narrowed page would lose valid targets.
+        expect(narrow).toMatchObject({ coverage: 'complete', addresses: [{ serverId, sessionId: 'cold-member' }] });
+        expect(broad).toMatchObject({ coverage: 'complete' });
+        expect(broad.addresses).toHaveLength(rows.length);
+        expect(empty).toMatchObject({ coverage: 'complete', addresses: [] });
+    }
     expect(homes.requests.filter(request => /^\/v[12]\/sessions\/cold-member(?:\?|$)/.test(request.path))).toEqual([]);
 });
 

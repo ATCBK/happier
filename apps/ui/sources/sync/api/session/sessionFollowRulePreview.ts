@@ -52,6 +52,7 @@ export async function previewSessionFollowRule(input: Readonly<{
                 for (;;) {
                     input.assertCurrent();
                     let page = await fetchSessionListQueryPageForHome(home.serverId, { membership: 'rowOnly', hydration: 'required',
+                        candidateStartedBy: { selection: filter.startedBy, viewerAccountId: input.accountId },
                         source: { kind: 'query', body: { ...home.query, cursor, attentionCursor }, allowV1Fallback: false },
                         cursor, attentionCursor, signal: input.signal });
                     input.assertCurrent();

@@ -162,7 +162,8 @@ export function fetchSessionListQueryPageForHome(
     const serverId = String(serverIdRaw ?? '').trim();
     const key = JSON.stringify([
         serverId, readHomeAccountReadRevision(serverId), readSessionListQueryReadEpoch(serverId),
-        page.source, readSharedMembership(page.membership), page.hydration ?? null, page.limit ?? null, page.cursor ?? null, page.attentionCursor ?? null,
+        page.source, readSharedMembership(page.membership), page.hydration ?? null, page.candidateStartedBy ?? null,
+        page.limit ?? null, page.cursor ?? null, page.attentionCursor ?? null,
     ]);
     return pageReads.run(key, signal => readSessionListQueryPageForHome(serverId, { ...page, signal }), { signal: page.signal });
 }
