@@ -61,7 +61,7 @@ export type GithubCheckObservationV1 = Readonly<{
   completedAtMs: number | null;
   /** Immutable provider time when GraphQL omits the Check Run's own timestamps. */
   checkSuiteCreatedAtMs?: number;
-  /** GitHub Check Run output, when the provider published diagnostic evidence. */
+  /** Provider Check Run output or legacy status description, when supplied. */
   logExcerpt?: string | null;
 }>;
 
@@ -159,7 +159,7 @@ function decodeCommitStatus(raw: unknown): GithubCheckObservationV1 | null {
     detailsUrl: readTrimmedString(raw.target_url),
     startedAtMs: readEpochMs(raw.created_at),
     completedAtMs: state === 'pending' ? null : readEpochMs(raw.updated_at),
-    logExcerpt: null,
+    logExcerpt: readTrimmedString(raw.description),
   });
 }
 

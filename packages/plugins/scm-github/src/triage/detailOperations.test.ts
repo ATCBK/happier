@@ -982,13 +982,15 @@ describe('GitHub checks plane', () => {
     const stub = checksTransport({
       checkRuns: jsonResponse(githubCheckRunsResponse({
         runs: [
-          githubCheckRun({ id: 9001, name: 'build', status: 'completed', conclusion: 'failure' }),
+          githubCheckRun({ id: 9001, name: 'build', status: 'completed', conclusion: 'failure',
+            output: { title: 'Build failed', summary: 'Typecheck found 2 errors.', text: 'Failing step: Compile\nTS2322 in src/main.ts' },
+          }),
           githubCheckRun({ id: 9002, name: 'build', status: 'in_progress' }),
         ],
       })),
       status: jsonResponse(githubCombinedStatusResponse({
         state: 'success',
-        statuses: [githubCommitStatus({ id: 7701, context: 'legacy/ci', state: 'success' })],
+        statuses: [{ ...githubCommitStatus({ id: 7701, context: 'legacy/ci', state: 'success' }), description: 'Legacy build completed.' }],
       })),
     });
 
@@ -1010,6 +1012,17 @@ describe('GitHub checks plane', () => {
     expect(result.failingCount).toBe(1);
     expect(result.runningCount).toBe(1);
     expect(result.passingCount).toBe(1);
+    expect(result.rows[0]).toMatchObject({
+      conclusion: 'failure', startedAtMs: Date.parse('2026-08-12T18:00:00Z'),
+      completedAtMs: Date.parse('2026-08-12T18:04:00Z'),
+      detailsUrl: 'https://ci.example.com/octo-org/example-app/checks',
+      logExcerpt: 'Build failed\n\nTypecheck found 2 errors.\n\nFailing step: Compile\nTS2322 in src/main.ts',
+    });
+    expect(result.rows[2]).toMatchObject({
+      conclusion: 'success', startedAtMs: Date.parse('2026-08-12T18:00:00Z'),
+      completedAtMs: Date.parse('2026-08-12T18:04:00Z'),
+      detailsUrl: 'https://ci.example.com/octo-org/example-app/status', logExcerpt: 'Legacy build completed.',
+    });
   });
 
   it('fits unbounded provider diagnostics through the canonical Action result envelope', async () => {
