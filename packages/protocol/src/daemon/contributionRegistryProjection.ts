@@ -385,8 +385,8 @@ export type DaemonContributionRegistryProjectionAutomationEligibleEventsV1 = z.i
 
 /**
  * The per-mount read: only the current contributions to one target plugin's
- * declared points. It never carries the machine-wide projection; a mount reads
- * that from the per-machine projection it already holds.
+ * declared points and complete Resource declarations for its selected plugins.
+ * It never carries or requires the machine-wide projection.
  */
 export const DaemonPluginUiTargetedContributionsReadRequestSchema = lazyZodSchema(() => z.strictObject({
   ...DaemonContributionRegistryProjectionClientContextV1Shape,
@@ -428,7 +428,8 @@ export const DaemonPluginTargetedSourceDeclarationV1Schema: z.ZodMiniType<Daemon
 
 export type DaemonPluginUiTargetedContributionsReadResponse =
   | { status: 'sourceDeclarations'; pluginId: string; sourceDeclarations: DaemonPluginTargetedSourceDeclarationV1[] }
-  | { status: 'current'; targetedContributions: PluginUiTargetedContributionsV1; targetedSurfaceMounts: DaemonPluginUiTargetedSurfaceMountV1[] }
+  | { status: 'current'; targetedContributions: PluginUiTargetedContributionsV1; targetedSurfaceMounts: DaemonPluginUiTargetedSurfaceMountV1[];
+      resourceDeclarationsByPluginId?: DaemonPluginUiResourceDeclarationsByPluginIdV1 }
   | { status: 'unavailable'; code: string };
 
 export const DaemonPluginUiTargetedContributionsReadResponseSchema: z.ZodMiniType<DaemonPluginUiTargetedContributionsReadResponse> = lazyZodSchema(() => z.discriminatedUnion('status', [
@@ -453,6 +454,8 @@ export const DaemonPluginUiTargetedContributionsReadResponseSchema: z.ZodMiniTyp
     targetedContributions: PluginUiTargetedContributionsV1Schema,
     /** Host-private selected embedded-Surface mounts for the same snapshot. */
     targetedSurfaceMounts: z.lazy(() => DaemonPluginUiTargetedSurfaceMountsV1Schema),
+    /** Present plugin keys are complete, including {}; absent keys/field remain unknown. */
+    resourceDeclarationsByPluginId: z.optional(z.lazy(() => DaemonPluginUiResourceDeclarationsByPluginIdV1Schema)),
   }),
   z.strictObject({
     status: z.literal('unavailable'),
@@ -1384,6 +1387,23 @@ export const PluginProjectedResourceV2Schema = lazyZodSchema(() => z.strictObjec
   validateProjectedExecutionOrigin(resource.executionOrigin, resource, context);
 })));
 export type PluginProjectedResourceV2 = z.infer<typeof PluginProjectedResourceV2Schema>;
+
+/** Descriptive declaration census, not permission to invoke a Resource. */
+export const DaemonPluginUiResourceDeclarationsByPluginIdV1Schema = lazyZodSchema(() => z.record(
+  PluginIdSchema,
+  z.record(z.string(), PluginProjectedResourceV2Schema),
+).check(z.superRefine((declarations, context) => {
+  for (const [pluginId, resources] of Object.entries(declarations)) {
+    for (const [key, resource] of Object.entries(resources)) {
+      const identity = parseQualifiedPluginContributionKey(key);
+      if (!identity || identity.pluginId !== pluginId
+        || resource.pluginId !== pluginId || identity.localId !== resource.id) {
+        context.addIssue({ code: 'custom', path: [pluginId, key], message: 'Resource key and declaration must match their producer plugin.' });
+      }
+    }
+  }
+})));
+export type DaemonPluginUiResourceDeclarationsByPluginIdV1 = z.infer<typeof DaemonPluginUiResourceDeclarationsByPluginIdV1Schema>;
 
 /**
  * The only Resource fact a selected plugin UI surface may receive from the

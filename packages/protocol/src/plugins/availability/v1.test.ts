@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { defineProtocolObject, defineProtocolString } from '../actions/protocolComposableSchema.js';
@@ -50,6 +50,38 @@ function packageAssetArchive(resources: readonly Record<string, unknown>[] = [])
 }
 
 describe('Plugin Account availability v1', () => {
+  it('admits raw release facts once and compares typed facts without re-admission or signing', () => {
+    const input = {
+      ref: { pluginId: 'com.acme.fixture', version: '1.2.3' },
+      archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+      normalizedManifest: manifest(),
+      collectionContracts: [], uiSlots: [], packageAssetArchive: packageAssetArchive(),
+    };
+    const parse = vi.spyOn(PluginReleaseFactsV1Schema, 'parse');
+    const serialize = vi.spyOn(JSON, 'stringify');
+    try {
+      const admitted = normalizePluginReleaseFactsV1(input);
+      expect(parse).toHaveBeenCalledTimes(1);
+      const independentlyParsed = PluginReleaseFactsV1Schema.parse(input);
+      parse.mockClear(); serialize.mockClear();
+      expect(pluginReleaseFactsEqualV1(admitted, independentlyParsed)).toBe(true);
+      expect(parse).not.toHaveBeenCalled();
+      expect(serialize).not.toHaveBeenCalled();
+      expect(Object.isFrozen(admitted.normalizedManifest.engines)).toBe(true);
+      const raw = Object.freeze({ ...input });
+      const copied = normalizePluginReleaseFactsV1(raw);
+      expect(copied).not.toBe(raw);
+      expect(parse.mock.calls.length).toBeGreaterThan(0);
+      input.normalizedManifest.displayName = 'Changed caller';
+      expect(normalizePluginReleaseFactsV1(raw).normalizedManifest.displayName).toBe('Changed caller');
+      expect(copied.normalizedManifest.displayName).toBe('Fixture');
+      expect(admitted.normalizedManifest.displayName).toBe('Fixture');
+      expect(pluginReleaseFactsEqualV1(admitted, normalizePluginReleaseFactsV1(raw))).toBe(false);
+      expect(() => normalizePluginReleaseFactsV1(Object.freeze({ ...input, unexpected: true }))).toThrow();
+      expect(() => normalizePluginReleaseFactsV1({ ...admitted, normalizedManifest: { ...admitted.normalizedManifest, id: 'com.acme.other' } })).toThrow();
+      expect(() => normalizePluginReleaseFactsV1({ ...admitted, archiveDigestSha256: 'invalid' })).toThrow();
+    } finally { parse.mockRestore(); serialize.mockRestore(); }
+  });
   it('prepares exact declaration bytes without rejecting an Account release for unsupported point semantics', () => {
     const schemas = [defineProtocolObject({ id: defineProtocolString() }, { policy: 'closed' }).jsonSchema,
       { not: { type: 'null' } }, { $ref: '#/$defs/missing' }, { type: 'string', enum: undefined }];
@@ -64,17 +96,7 @@ describe('Plugin Account availability v1', () => {
       .pluginContributionPoints[3]!.protocols[0]!)).toBeNull();
     const normalized = normalizePluginReleaseFactsV1(parsed);
     expect(JSON.stringify(normalized.normalizedManifest)).toBe(JSON.stringify(parsed.normalizedManifest));
-    const custody = (declaration: typeof normalized.normalizedManifest) => availability.computePluginAccountBundledCustodyV1({
-      packageName: '@acme/fixture', manifest: declaration, artifacts: [],
-    });
-    const strictDeclaration = (declaration: typeof normalized.normalizedManifest) => ({ ...declaration,
-      contributes: { ...declaration.contributes, pluginContributionPoints: declaration.contributes.pluginContributionPoints.slice(0, 3) },
-    });
-    expect(custody(strictDeclaration(normalized.normalizedManifest))).toEqual(custody(strictDeclaration(parsed.normalizedManifest)));
-    // Raw non-JSON data was never valid bundled signing input. Preparation
-    // preserves that refusal while Account release selection stays point-local.
-    expect(() => custody(parsed.normalizedManifest)).toThrow(/strict JSON/u);
-    expect(() => custody(normalized.normalizedManifest)).toThrow(/strict JSON/u);
+    expect(pluginReleaseFactsEqualV1(normalized, normalized)).toBe(true);
     const semantics = normalized.normalizedManifest.contributes.pluginContributionPoints.map(point =>
       rehydratePluginContributionPointSemanticsV1(point.protocols[0]!));
     expect(semantics[0]).not.toBeNull();
@@ -99,21 +121,32 @@ describe('Plugin Account availability v1', () => {
     expect(rehydratePluginContributionPointSemanticsV1(normalized.normalizedManifest.contributes
       .pluginContributionPoints[3]!.protocols[0]!)).toBeNull();
   });
-  it('binds bundled Account custody to normalized declaration and artifact content', () => {
+  it('selects host declarations by package and version independently of contribution content', () => {
     const declaration = availability.PluginPortableReleaseManifestV1Schema.parse(manifest());
-    const input = { packageName: '@acme/fixture', manifest: declaration, artifacts: [{ artifactId: 'portable', digest: `sha256:${'a'.repeat(64)}` as const }] };
-    const first = availability.computePluginAccountBundledCustodyIdV1(input);
-    expect(availability.computePluginAccountBundledCustodyIdV1({ ...input,
-      artifacts: input.artifacts.map((artifact) => ({ ...artifact, tier: 'reactNative', entry: 'portable/entry.cjs.bundle' })),
-    })).toBe(first);
-    expect(availability.computePluginAccountBundledCustodyIdV1({ ...input, manifest: {
+    const input = { packageName: '@acme/fixture', manifest: declaration };
+    const first = availability.createPluginAccountBundledSelectionV1(input);
+    expect(first.manifest).toBe(declaration);
+    expect(first.sourceCustody).toEqual({ kind: 'bundled_first_party', packagedRuntime: {
+      kind: 'source_declaration', packageName: input.packageName,
+    } });
+    expect(availability.createPluginAccountBundledSelectionV1({ ...input, manifest: {
       ...declaration, contributes: { ...declaration.contributes, actions: [{
         id: 'read', title: 'Read', scopes: ['global'], surfaces: ['plugin'], dangerLevel: 'safe',
         execution: { target: 'daemon' },
       }] },
-    } })).not.toBe(first);
-    expect(availability.computePluginAccountBundledCustodyIdV1({ ...input, artifacts: [{ artifactId: 'portable', digest: `sha256:${'b'.repeat(64)}` }] })).not.toBe(first);
-    expect(availability.computePluginAccountBundledDeclarationDigestV1(declaration)).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    } }).custodyId).toBe(first.custodyId);
+    expect(availability.createPluginAccountBundledSelectionV1({ ...input,
+      manifest: { ...declaration, version: '2.0.0' },
+    }).custodyId).not.toBe(first.custodyId);
+    expect(availability.createPluginAccountBundledSelectionV1({ ...input,
+      packageName: '@acme/other',
+    }).custodyId).not.toBe(first.custodyId);
+    const packaged = { kind: 'bundled_first_party', packagedRuntime: {
+      kind: 'pinned_runner_snapshot', snapshotId: 'runner-snapshot',
+    } } as const;
+    expect(availability.createPluginAccountBundledSelectionV1({ ...input,
+      sourceCustody: packaged,
+    }).sourceCustody).toBe(packaged);
   });
   it('selects explicit enabled Account releases before bundled custody and fails closed', () => {
     const bundled = {
@@ -354,7 +387,7 @@ describe('Plugin Account availability v1', () => {
     }).success).toBe(false);
   });
 
-  it('deeply snapshots and freezes every normalized release fact before it becomes signing input', () => {
+  it('deeply snapshots and freezes every normalized release fact before publication', () => {
     const release = {
       ref: { pluginId: 'com.acme.fixture', version: '1.2.3' },
       archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
@@ -461,7 +494,10 @@ describe('Plugin Account availability v1', () => {
         { pluginId: 'com.acme.fixture', collectionId: 'zeta', schemaVersion: 1, contractDigest: contractDigest('z') },
         { pluginId: 'com.acme.fixture', collectionId: 'alpha', schemaVersion: 2, contractDigest: contractDigest('a') },
       ],
-      uiSlots: [],
+      uiSlots: [{
+        contributionId: 'panel', artifactId: 'panel', tier: 'reactNative', platform: 'web',
+        artifactDigest: `sha256:${'f'.repeat(64)}`, hostUiApiRange: '^1.0.0',
+      }],
       packageAssetArchive: packageAssetArchive([{
         resourceId: 'brand',
         path: 'assets/brand.png',
@@ -489,12 +525,21 @@ describe('Plugin Account availability v1', () => {
       // a caller can only compare this canonical release representation.
     };
 
-    expect(pluginReleaseFactsEqualV1(canonical, reordered)).toBe(true);
-    expect(pluginReleaseFactsEqualV1(canonical, {
+    const first = normalizePluginReleaseFactsV1(canonical);
+    expect(pluginReleaseFactsEqualV1(first, normalizePluginReleaseFactsV1(reordered))).toBe(true);
+    expect(pluginReleaseFactsEqualV1(first, normalizePluginReleaseFactsV1({
+      ...reordered,
+      normalizedManifest: { ...reordered.normalizedManifest, displayName: 'Changed declaration' },
+    }))).toBe(false);
+    expect(pluginReleaseFactsEqualV1(first, normalizePluginReleaseFactsV1({
+      ...reordered,
+      uiSlots: [{ ...reordered.uiSlots[0], artifactDigest: `sha256:${'c'.repeat(64)}` }],
+    }))).toBe(false);
+    expect(pluginReleaseFactsEqualV1(first, normalizePluginReleaseFactsV1({
       ...reordered,
       archiveDigestSha256: `sha256:${'b'.repeat(64)}`,
-    })).toBe(false);
-    expect(pluginReleaseFactsEqualV1(canonical, {
+    }))).toBe(false);
+    expect(pluginReleaseFactsEqualV1(first, normalizePluginReleaseFactsV1({
       ...reordered,
       collectionContracts: [{
         pluginId: 'com.acme.fixture',
@@ -502,14 +547,14 @@ describe('Plugin Account availability v1', () => {
         schemaVersion: 2,
         contractDigest: contractDigest('c'),
       }],
-    })).toBe(false);
-    expect(pluginReleaseFactsEqualV1(canonical, {
+    }))).toBe(false);
+    expect(pluginReleaseFactsEqualV1(first, normalizePluginReleaseFactsV1({
       ...reordered,
       packageAssetArchive: {
         ...reordered.packageAssetArchive,
         archiveDigestSha256: `sha256:${'e'.repeat(64)}`,
       },
-    })).toBe(false);
+    }))).toBe(false);
   });
 
   it('keeps exact materialization identity portable while rejecting server-local and generation fields from its ref', () => {

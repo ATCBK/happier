@@ -1,48 +1,28 @@
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
-import { computeCanonicalDomainSeparatedHexDigest } from '../../crypto/canonicalDigest.js';
-import type { PluginUiArtifactDigestV1 } from '../ui/artifactIntegrity.js';
 import type { PluginSourceCustodyV1 } from '../runtime/sourceCustody.js';
 import type { PluginPortableReleaseManifestV1 } from './compatibilityProjectionV1.js';
 import type { PluginAccountAvailabilityIntentReadResponseV1, PluginReleaseFactsV1 } from './v1.js';
 
-/** Cross-host correspondence of the canonical manifest parser's output,
- * independent of each host's executable bytes. Acquisition/selection already
- * parses this typed value; hashing must not repeat the whole contribution walk.
+/** Host-selected declarations are trusted code, not content-based grants.
+ * Account policy and the invoking host's occurrence lifetime own admission.
  */
-export function computePluginAccountBundledDeclarationDigestV1(
-  manifest: PluginPortableReleaseManifestV1,
-): `sha256:${string}` {
-  return `sha256:${computeCanonicalDomainSeparatedHexDigest('happier.plugin.account.declaration.v1', [
-    createCanonicalJsonSigningInput(manifest),
-  ])}`;
-}
-
-type PluginAccountBundledCustodyInput = Readonly<{
+export function createPluginAccountBundledSelectionV1(input: Readonly<{
   packageName: string;
   manifest: PluginPortableReleaseManifestV1;
-  artifacts: readonly Readonly<{ artifactId: string; digest: PluginUiArtifactDigestV1 }>[];
-}>;
-
-/** One immutable declaration acquisition supplies both content correspondence and custody. */
-export function computePluginAccountBundledCustodyV1(input: PluginAccountBundledCustodyInput): Readonly<{
-  declarationDigest: `sha256:${string}`;
+  sourceCustody?: PluginSourceCustodyV1;
+}>): Readonly<{
+  manifest: PluginPortableReleaseManifestV1;
+  sourceCustody: PluginSourceCustodyV1;
   custodyId: string;
 }> {
-  const declarationDigest = computePluginAccountBundledDeclarationDigestV1(input.manifest);
-  const custodyId = computeCanonicalDomainSeparatedHexDigest('happier.plugin.account.bundled-custody.v1', [
-    createCanonicalJsonSigningInput({ packageName: input.packageName,
-      declarationDigest,
-      artifacts: input.artifacts.map(({ artifactId, digest }) => ({ artifactId, digest }))
-        .sort((left, right) => left.artifactId.localeCompare(right.artifactId)
-        || left.digest.localeCompare(right.digest)),
+  return Object.freeze({
+    manifest: input.manifest,
+    sourceCustody: input.sourceCustody ?? Object.freeze({
+      kind: 'bundled_first_party' as const,
+      packagedRuntime: Object.freeze({ kind: 'source_declaration' as const, packageName: input.packageName }),
     }),
-  ]);
-  return Object.freeze({ declarationDigest, custodyId });
-}
-
-/** Content custody changes for declaration-only edits as well as portable bundle changes. */
-export function computePluginAccountBundledCustodyIdV1(input: PluginAccountBundledCustodyInput): string {
-  return computePluginAccountBundledCustodyV1(input).custodyId;
+    custodyId: JSON.stringify([input.packageName, input.manifest.id, input.manifest.version]),
+  });
 }
 
 export type PluginAccountExecutionSelectionV1 =

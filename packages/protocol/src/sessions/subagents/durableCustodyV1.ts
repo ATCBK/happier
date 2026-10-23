@@ -95,9 +95,7 @@ export function createSessionSubagentSourceCustodyStorageIdentityV1(
     ? [normalized.kind, normalized.packagedRuntime.kind, normalized.packagedRuntime.versionRootId]
     : normalized.packagedRuntime.kind === 'pinned_runner_snapshot'
       ? [normalized.kind, normalized.packagedRuntime.kind, normalized.packagedRuntime.snapshotId]
-      : normalized.packagedRuntime.kind === 'app_bundle'
-        ? [normalized.kind, normalized.packagedRuntime.kind, normalized.packagedRuntime.bundleId]
-        : [normalized.kind, normalized.packagedRuntime.kind, normalized.packagedRuntime.packageName, normalized.packagedRuntime.declarationDigest];
+      : [normalized.kind, normalized.packagedRuntime.kind, normalized.packagedRuntime.packageName];
   return Object.freeze({
     kind: normalized.kind,
     id: `sha256:${bytesToHex(sha256(utf8ToBytes(JSON.stringify(identity))))}`,

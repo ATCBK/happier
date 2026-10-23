@@ -5,7 +5,7 @@ import { DaemonPluginStructuredMessageActionExecuteRequestSchema } from './daemo
 describe('client Action automated invocation provenance', () => {
   it('keeps Account caller package correspondence inside the existing closed binding', () => {
     const clientActionBinding = {
-      pluginId: 'com.acme.account', pluginVersion: '1.2.3', declarationDigest: `sha256:${'b'.repeat(64)}`,
+      pluginId: 'com.acme.account', pluginVersion: '1.2.3',
       contributionLocalId: 'aggregate', occurrenceId: 'local-account',
       sourceCustody: { kind: 'account_release', pluginId: 'com.acme.account', version: '1.2.3', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
     };
@@ -15,9 +15,6 @@ describe('client Action automated invocation provenance', () => {
     expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.safeParse(request).success).toBe(true);
     expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.safeParse({ ...request,
       invocation: { ...request.invocation, clientActionBinding: { ...clientActionBinding, pluginVersion: ' ' } },
-    }).success).toBe(false);
-    expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.safeParse({ ...request,
-      invocation: { ...request.invocation, clientActionBinding: { ...clientActionBinding, declarationDigest: 'not-a-digest' } },
     }).success).toBe(false);
     expect(DaemonPluginStructuredMessageActionExecuteRequestSchema.safeParse({ ...request,
       invocation: { ...request.invocation, clientActionBinding: { ...clientActionBinding, authority: 'present_user' } },

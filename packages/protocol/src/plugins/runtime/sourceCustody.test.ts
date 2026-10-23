@@ -14,6 +14,23 @@ import {
 } from './sourceCustody';
 
 describe('PluginSourceCustodyV1', () => {
+  it('admits a trusted host declaration by package identity without a content witness', () => {
+    const source = { kind: 'bundled_first_party', packagedRuntime: {
+      kind: 'source_declaration', packageName: '@acme/portable-actions',
+    } } as const;
+    const admitted = normalizePluginSourceCustodyV1(source);
+    expect(admitted).toEqual(source);
+    expect(pluginSourceCustodyV1Equal(admitted, normalizePluginSourceCustodyV1(source))).toBe(true);
+    expect(pluginSourceCustodyV1Equal(admitted, normalizePluginSourceCustodyV1({
+      ...source, packagedRuntime: { ...source.packagedRuntime, packageName: '@acme/other-actions' },
+    }))).toBe(false);
+    expect(PluginSourceCustodyV1Schema.safeParse({ ...source,
+      packagedRuntime: { ...source.packagedRuntime, authority: 'unrestricted' },
+    }).success).toBe(false);
+    expect(() => normalizePluginSourceCustodyV1({
+      kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'retired-content-custody' },
+    })).toThrow();
+  });
   it('retains exact Account-release custody without manufacturing a Machine generation', () => {
     const custody = { kind: 'account_release', pluginId: 'acme.account', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` };
     const admitted = PluginSourceCustodyV1Schema.parse(custody);
@@ -53,7 +70,7 @@ describe('PluginSourceCustodyV1', () => {
     for (const value of [
       { kind: 'account_release', pluginId: 'acme.plugin', version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}` },
       { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId: 'app-content' } },
-      { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@happier-dev/plugins-triage', declarationDigest: `sha256:${'b'.repeat(64)}` } },
+      { kind: 'bundled_first_party', packagedRuntime: { kind: 'source_declaration', packageName: '@happier-dev/plugins-triage' } },
       { kind: 'managed', immutableGenerationId: 'generation-a', installSource: 'archive' },
       { kind: 'bundled_first_party', packagedRuntime: { kind: 'pinned_runner_snapshot', snapshotId: 'snapshot-a' } },
       { kind: 'development', registeredRootId: 'root-a' },

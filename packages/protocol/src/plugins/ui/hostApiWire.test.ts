@@ -230,6 +230,7 @@ describe('plugin UI host API wire envelope', () => {
   it('requires nonce-bound identity on negotiation, requests, results, subscriptions, and disconnects', () => {
     for (const envelope of [
       { wireVersion: 1, kind: 'negotiate', identity, apiRange: '^1' },
+      { wireVersion: 1, kind: 'negotiated', identity, apiVersion: '1.0.0', methods: ['context'] },
       { wireVersion: 1, kind: 'request', identity, requestId: 'r1', method: 'context' },
       { wireVersion: 1, kind: 'cancel', identity, requestId: 'r1' },
       { wireVersion: 1, kind: 'result', identity, requestId: 'r1', method: 'context', result: null },
@@ -243,6 +244,14 @@ describe('plugin UI host API wire envelope', () => {
       delete withoutNonce.identity.mountNonce;
       expect(PluginUiHostApiWireEnvelopeV1Schema.safeParse(withoutNonce).success).toBe(false);
     }
+    expect(PluginUiHostApiWireEnvelopeV1Schema.safeParse({
+      wireVersion: 1,
+      kind: 'negotiated',
+      identity,
+      apiVersion: '1.0.0',
+      methods: ['context'],
+      surface: {},
+    }).success).toBe(false);
     expect(PluginUiHostApiWireEnvelopeV1Schema.safeParse({
       wireVersion: 1,
       kind: 'negotiate',

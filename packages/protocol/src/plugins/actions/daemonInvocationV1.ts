@@ -25,9 +25,8 @@ const PluginRuntimeOccurrenceIdSchema = asProtocolZod(PluginUiRuntimeOccurrenceI
  */
 export const DaemonPluginStructuredMessageActionMountedBindingSchema = lazyZodSchema(() => z.strictObject({
   pluginId: PluginIdWireSchema,
-  /** Package correspondence for Account callers from another invoking host. */
+  /** Account caller placement and package version from the invoking host. */
   pluginVersion: z.optional(PluginReleaseVersionV1Schema),
-  declarationDigest: z.optional(z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/))),
   contributionLocalId: PluginContributionLocalIdSchema,
   occurrenceId: PluginRuntimeOccurrenceIdSchema,
   sourceCustody: zMini.optional(PluginSourceCustodyV1Schema),

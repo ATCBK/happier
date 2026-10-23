@@ -118,7 +118,7 @@ const PluginUiHostApiWireRequestEnvelopeV1Schema = (<T extends z.ZodMiniObject>(
 
 export const PluginUiHostApiWireEnvelopeV1Schema = z.discriminatedUnion('kind', [
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WireBase, { kind: z.literal('negotiate'), apiRange: z.string().check(z.trim(), z.minLength(1)) })),
-  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WireBase, { kind: z.literal('negotiated'), apiVersion: z.string().check(z.trim(), z.minLength(1)), methods: z.array(PluginUiHostMethodV1Schema), surface: PluginUiJsonValueV1Schema })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WireBase, { kind: z.literal('negotiated'), apiVersion: z.string().check(z.trim(), z.minLength(1)), methods: z.array(PluginUiHostMethodV1Schema) })),
   PluginUiHostApiWireRequestEnvelopeV1Schema,
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RequestBase, { kind: z.literal('cancel') })),
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(RequestBase, { kind: z.literal('result'), method: PluginUiHostMethodV1Schema, result: z.optional(PluginUiJsonValueV1Schema) })),

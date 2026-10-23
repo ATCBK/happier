@@ -5,7 +5,7 @@ import { ManagedResourceDependencyV1Schema } from '../../machines/managed/manage
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 import { preparePluginContributionPointDeclarationsV1 } from '../contributions/targetedContributions.js';
 
-import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
+import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { SERVER_IDENTITY_ID_PATTERN } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 import { PluginCollectionContractRefV1Schema, pluginCollectionContractKeyV1 as collectionContractKey } from '../data/collectionContractRefV1.js';
 import { PluginAccountPluginIntentV1Schema, type PluginAccountPluginIntentV1 } from './accountIntentV1.js';
@@ -29,7 +29,6 @@ import { PluginUiArtifactDigestV1Schema } from '../ui/artifactIntegrity.js';
 import {
   isPackageAssetArchiveDescriptorDeclaredByManifestV1,
   PackageAssetArchiveDescriptorV1Schema,
-  normalizePackageAssetArchiveDescriptorV1,
 } from './packageAssetV1.js';
 import {
   PluginMachineMaterializationIdV1Schema,
@@ -178,14 +177,14 @@ export const PluginReleaseFactsV1Schema = lazyZodSchema(() => z.strictObject({
 })));
 export type PluginReleaseFactsV1 = z.infer<typeof PluginReleaseFactsV1Schema>;
 
-function cloneReleaseFactValue(value: unknown): unknown {
+function cloneReleaseFactValue<T>(value: T): T {
   if (Array.isArray(value)) {
-    return value.map((entry) => cloneReleaseFactValue(entry));
+    return value.map((entry) => cloneReleaseFactValue(entry)) as T;
   }
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([key, entry]) => (
       [key, cloneReleaseFactValue(entry)]
-    )));
+    ))) as T;
   }
   return value;
 }
@@ -201,69 +200,39 @@ function deepFreezeReleaseFactValue<T>(value: T): T {
 }
 
 /**
- * Release facts become immutable publication and conflict-comparison input.
- * Copy the complete schema-owned graph before recursively freezing it so no
- * caller or registry reader can mutate a later canonical signing payload.
+ * Prepares already-validated release facts for immutable publication. Copy the
+ * complete schema-owned graph so a caller cannot mutate a published snapshot.
+ * Collection and UI slots have canonical key order; the Asset descriptor's
+ * schema already requires canonical resource order.
  */
-function snapshotPluginReleaseFactsV1(value: PluginReleaseFactsV1): PluginReleaseFactsV1 {
-  const parsed = PluginReleaseFactsV1Schema.parse(
-    cloneReleaseFactValue(value),
-  );
-  return deepFreezeReleaseFactValue({ ...parsed, normalizedManifest: { ...parsed.normalizedManifest,
-    contributes: preparePluginContributionPointDeclarationsV1(parsed.normalizedManifest.contributes),
-  } });
-}
-
-// Only this owner's recursively frozen outputs can reuse admission. Caller
-// freezing cannot vouch for nested declarations or their signing semantics.
-const admittedReleaseFacts = new WeakMap<object, {
-  facts: PluginReleaseFactsV1;
-  comparison?: string;
-}>();
-
-/**
- * Produces the one comparison representation for immutable release facts. It does
- * not invent a release digest or identity: callers still use pluginId@version.
- */
-export function normalizePluginReleaseFactsV1(input: unknown): PluginReleaseFactsV1 {
-  if (input !== null && typeof input === 'object') {
-    const admitted = admittedReleaseFacts.get(input);
-    if (admitted) return admitted.facts;
-  }
-  const parsed = PluginReleaseFactsV1Schema.parse(input);
-  const facts = snapshotPluginReleaseFactsV1({
-    ...parsed,
-    ref: { ...parsed.ref },
-    collectionContracts: Object.freeze([...parsed.collectionContracts]
-      .sort((left, right) => collectionContractKey(left).localeCompare(collectionContractKey(right)))
-      .map((contract) => ({ ...contract }))),
-    uiSlots: Object.freeze([...parsed.uiSlots]
-      .sort((left, right) => uiSlotKey(left).localeCompare(uiSlotKey(right)))
-      .map((slot) => ({ ...slot }))),
-    packageAssetArchive: normalizePackageAssetArchiveDescriptorV1(parsed.packageAssetArchive),
+export function snapshotPluginReleaseFactsV1(value: PluginReleaseFactsV1): PluginReleaseFactsV1 {
+  const copied = cloneReleaseFactValue(value);
+  return deepFreezeReleaseFactValue({
+    ...copied,
+    normalizedManifest: { ...copied.normalizedManifest,
+      contributes: preparePluginContributionPointDeclarationsV1(copied.normalizedManifest.contributes),
+    },
+    collectionContracts: [...copied.collectionContracts]
+      .sort((left, right) => collectionContractKey(left).localeCompare(collectionContractKey(right))),
+    uiSlots: [...copied.uiSlots]
+      .sort((left, right) => uiSlotKey(left).localeCompare(uiSlotKey(right))),
   });
-  admittedReleaseFacts.set(facts, { facts });
-  return facts;
 }
 
-function releaseFactsComparison(input: unknown): string {
-  const facts = normalizePluginReleaseFactsV1(input);
-  const admission = admittedReleaseFacts.get(facts)!;
-  // Manifest normalization may preserve unsupported contribution-point JSON.
-  // Signing must succeed before its immutable comparison can be retained.
-  return admission.comparison ??= createCanonicalJsonSigningInput(facts);
+/** Strict ingress admission followed by the canonical immutable preparation. */
+export function normalizePluginReleaseFactsV1(input: unknown): PluginReleaseFactsV1 {
+  return snapshotPluginReleaseFactsV1(PluginReleaseFactsV1Schema.parse(input));
 }
 
 /**
- * Compares the immutable facts bound to one public `pluginId@version` release.
- * This intentionally does not create a digest or an alternate release identity:
- * the canonical JSON comparison is only the first-publication conflict guard.
+ * Compares canonically prepared facts at the first-publication conflict guard.
+ * Unknown input belongs at the release schema/normalizer, not this comparison.
  */
 export function pluginReleaseFactsEqualV1(
-  left: unknown,
-  right: unknown,
+  left: PluginReleaseFactsV1,
+  right: PluginReleaseFactsV1,
 ): boolean {
-  return releaseFactsComparison(left) === releaseFactsComparison(right);
+  return sameStrictJsonValue(left, right);
 }
 
 export const PluginUiArtifactHostingCapabilityV1Schema = lazyZodSchema(() => z.union([

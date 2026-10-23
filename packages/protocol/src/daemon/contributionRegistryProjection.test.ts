@@ -1708,6 +1708,21 @@ describe('daemon contribution registry projection (wire)', () => {
       targetedContributions: { target, points: [] },
       targetedSurfaceMounts: [],
     });
+    const resource = { id: 'rows', pluginId: target.pluginId, resourceKind: 'config', scope: 'global' };
+    const complete = { ...current, resourceDeclarationsByPluginId: {
+      [target.pluginId]: { [`${target.pluginId}/rows`]: resource }, 'acme.empty': {},
+    } };
+    expect(DaemonPluginUiTargetedContributionsReadResponseSchema.parse(complete)).toEqual(complete);
+    for (const declarations of [
+      { [target.pluginId]: { 'acme.other/rows': resource } },
+      { 'acme.other': { [`${target.pluginId}/rows`]: resource } },
+      { [target.pluginId]: { [`${target.pluginId}/different`]: resource } },
+      { [target.pluginId]: { [`${target.pluginId}/rows`]: { ...resource, unexpected: true } } },
+    ]) {
+      expect(DaemonPluginUiTargetedContributionsReadResponseSchema.safeParse({
+        ...current, resourceDeclarationsByPluginId: declarations,
+      }).success).toBe(false);
+    }
     expect(DaemonPluginUiTargetedContributionsReadResponseSchema.safeParse({
       status: 'current',
       projection: { v: 2, generation: 1, familiesById: {} },
@@ -1723,6 +1738,23 @@ describe('daemon contribution registry projection (wire)', () => {
       status: 'unavailable',
       code: 'plugin_targeted_contributions_unavailable',
     })).toEqual({ status: 'unavailable', code: 'plugin_targeted_contributions_unavailable' });
+  });
+
+  it('parses current Machine source declarations independently of the handler import graph', () => {
+    const empty = { status: 'sourceDeclarations', pluginId: 'acme.target', sourceDeclarations: [] };
+    expect(DaemonPluginUiTargetedContributionsReadResponseSchema.parse(empty)).toEqual(empty);
+    const withSource = { ...empty, sourceDeclarations: [{
+      manifest: { id: 'acme.source', contributes: {
+        actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['plugin'],
+          execution: { target: 'daemon' }, dangerLevel: 'safe' }],
+        pluginContributionPoints: [],
+        targetedPluginContributions: [{ id: 'source', target: { pluginId: 'acme.target', pointId: 'providers' },
+          protocol: { id: 'detail', version: 1 }, operations: { read: 'read' } }],
+        ui: { renderers: [] },
+      } },
+      occurrenceId: 'source-occurrence', sourceCustody: CONTRIBUTOR_SOURCE_CUSTODY,
+    }] };
+    expect(DaemonPluginUiTargetedContributionsReadResponseSchema.parse(withSource)).toMatchObject(withSource);
   });
 
   it('carries current Event Automation composer siblings without changing PluginProjectionV2', () => {

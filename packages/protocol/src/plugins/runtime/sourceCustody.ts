@@ -29,19 +29,13 @@ const PinnedRunnerSnapshot = defineProtocolObject({
   kind: defineProtocolLiteral('pinned_runner_snapshot'),
   snapshotId: Identity,
 }, { policy: 'closed' });
-const AppBundle = defineProtocolObject({
-  kind: defineProtocolLiteral('app_bundle'),
-  bundleId: Identity,
-}, { policy: 'closed' });
 const BundledSourceDeclaration = defineProtocolObject({
   kind: defineProtocolLiteral('source_declaration'),
   packageName: Identity,
-  declarationDigest: defineProtocolString({ pattern: '^sha256:[a-f0-9]{64}$' }),
 }, { policy: 'closed' });
 export const BundledPackagedRuntimeCustodyV1ProtocolSchema = defineProtocolUnion([
   CliVersionRoot,
   PinnedRunnerSnapshot,
-  AppBundle,
   BundledSourceDeclaration,
 ]);
 export const BundledFirstPartyPluginSourceCustodyV1ProtocolSchema = defineProtocolObject({
@@ -91,9 +85,8 @@ function trimCustodyIdentityStrings(input: unknown): unknown {
     ...value,
     packagedRuntime: packaged.kind === 'cli_version_root'
       ? { ...packaged, versionRootId: trimIdentity(packaged.versionRootId) }
-      : packaged.kind === 'app_bundle' ? { ...packaged, bundleId: trimIdentity(packaged.bundleId) }
       : packaged.kind === 'source_declaration' ? { ...packaged,
-          packageName: trimIdentity(packaged.packageName), declarationDigest: trimIdentity(packaged.declarationDigest),
+          packageName: trimIdentity(packaged.packageName),
         }
       : { ...packaged, snapshotId: trimIdentity(packaged.snapshotId) },
   };
@@ -144,11 +137,8 @@ export function pluginSourceCustodyV1Equal(left: PluginSourceCustodyV1, right: P
   }
   if (left.kind !== 'bundled_first_party' || right.kind !== 'bundled_first_party') return false;
   if (left.packagedRuntime.kind !== right.packagedRuntime.kind) return false;
-  return left.packagedRuntime.kind === 'app_bundle' && right.packagedRuntime.kind === 'app_bundle'
-    ? left.packagedRuntime.bundleId === right.packagedRuntime.bundleId
-    : left.packagedRuntime.kind === 'source_declaration' && right.packagedRuntime.kind === 'source_declaration'
+  return left.packagedRuntime.kind === 'source_declaration' && right.packagedRuntime.kind === 'source_declaration'
       ? left.packagedRuntime.packageName === right.packagedRuntime.packageName
-        && left.packagedRuntime.declarationDigest === right.packagedRuntime.declarationDigest
     : left.packagedRuntime.kind === 'cli_version_root' && right.packagedRuntime.kind === 'cli_version_root'
     ? left.packagedRuntime.versionRootId === right.packagedRuntime.versionRootId
     : left.packagedRuntime.kind === 'pinned_runner_snapshot'

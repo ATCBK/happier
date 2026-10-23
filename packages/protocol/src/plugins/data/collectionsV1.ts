@@ -1535,6 +1535,17 @@ export function normalizePluginAccountCollectionContractV1(input: Readonly<{
   pluginId: string;
   contribution: PluginAccountCollectionContributionV1;
 }>): NormalizedPluginAccountCollectionContractV1 {
+  return preparePluginAccountCollectionContractV1(input).normalized;
+}
+
+/** Admit a raw declaration once and retain it beside its canonical static contract. */
+export function preparePluginAccountCollectionContractV1(input: Readonly<{
+  pluginId: string;
+  contribution: unknown;
+}>): Readonly<{
+  contribution: PluginAccountCollectionContributionV1;
+  normalized: NormalizedPluginAccountCollectionContractV1;
+}> {
   const pluginId = PluginIdSchema.parse(input.pluginId);
   const contribution = PluginAccountCollectionContributionV1Schema.parse(input.contribution);
   const schema = normalizeSchema(contribution.schema);
@@ -1624,7 +1635,7 @@ export function normalizePluginAccountCollectionContractV1(input: Readonly<{
       ...(identityFields.length === 0 ? {} : { identityFields }),
     })]),
   );
-  return Object.freeze({ ...canonical, migrations, identityFields, contractDigest });
+  return { contribution, normalized: Object.freeze({ ...canonical, migrations, identityFields, contractDigest }) };
 }
 
 /**
