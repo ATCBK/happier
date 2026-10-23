@@ -96,7 +96,7 @@ function createRunScopedMcpSessionView(
     ...(session.getSessionRoleContext
       ? { getSessionRoleContext: () => session.getSessionRoleContext!() } : {}),
     ...(session.readRoleSources
-      ? { readRoleSources: (signal?: AbortSignal) => session.readRoleSources!(signal) } : {}),
+      ? { readRoleSources: (...args: Parameters<NonNullable<HappyMcpSessionClient['readRoleSources']>>) => session.readRoleSources!(...args) } : {}),
     getMcpRequestAuthPort: () => session.getMcpRequestAuthPort?.(),
     getPluginMcpPort: () => session.getPluginMcpPort?.() ?? null,
     ...(session.getEphemeralStreamConnectionEpoch

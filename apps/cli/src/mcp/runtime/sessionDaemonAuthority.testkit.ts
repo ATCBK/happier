@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { vi } from 'vitest';
 import type { ActionExecuteResult } from '@happier-dev/protocol';
+import type { RequesterAgentStartPolicyV1 } from '@/daemon/sessionEncryption/requesterAgentStartPolicy';
 import { configuration } from '@/configuration';
 import * as processIdentity from '@/daemon/processIdentity';
 import { hashProcessCommand } from '@/daemon/sessionRegistry';
@@ -25,6 +26,8 @@ export async function createSessionDaemonAuthorityFixture(input: Readonly<{
   sessionId: string;
   retainedAgent?: ReturnType<typeof createAgentSessionRunnerFactoryBinding>;
   execute(operation: ActionOperation): Promise<ActionExecuteResult>;
+  /** Explicit policy at the remote daemon boundary; absent never means defaults. */
+  agentStartPolicy?: RequesterAgentStartPolicyV1;
   dispatchService?: (request: AgentRuntimeDaemonServiceRequestV1) => Promise<unknown>;
 }>) {
   const command = 'node /runtime/.runner-snapshots/mcp-authority/dist/index.mjs';
@@ -48,8 +51,18 @@ export async function createSessionDaemonAuthorityFixture(input: Readonly<{
       const parsed = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
       if (parsed.context.sessionId !== input.sessionId || parsed.context.token !== capability) throw new Error('Invalid daemon Action authority');
       if (parsed.operation.kind !== 'action.execute') {
-        if (!input.dispatchService) throw new Error(`Unexpected daemon service: ${parsed.operation.kind}`);
-        const result = AgentRuntimeDaemonServiceResponseV1Schema.parse(await input.dispatchService(parsed));
+        if (!input.dispatchService && parsed.operation.kind !== 'agent_start.policy.read') {
+          throw new Error(`Unexpected daemon service: ${parsed.operation.kind}`);
+        }
+        const policy = input.agentStartPolicy;
+        const result = AgentRuntimeDaemonServiceResponseV1Schema.parse(input.dispatchService
+          ? await input.dispatchService(parsed)
+          : parsed.operation.kind === 'agent_start.policy.read' && policy
+            ? { ok: true, result: { kind: 'agent_start.policy', policy: {
+              workDepthLimit: policy.workDepthLimit, sessionAgentStartAllowListsV1: policy.sessionAgentStartAllowListsV1,
+              sessionAgentSpawnPolicyV1: policy.sessionAgentSpawnPolicyV1,
+            } } }
+            : { ok: false, error: { code: 'requester_agent_start_policy_unavailable', message: 'Fixture policy unavailable' } });
         response.setHeader('Content-Type', 'application/json');
         response.end(JSON.stringify(result));
         return;

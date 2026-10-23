@@ -83,7 +83,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
         catalog = projectMcpServerCatalogRefreshFailure({ error, current: current(), signal: requestInput.signal });
       }
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
-      if (refreshAfterInFlight.delete(key)) { requestInput = { credentials: input.credentials, maintainSource: input.maintainSource }; continue; }
+      if (refreshAfterInFlight.delete(key)) { requestInput = { credentials: input.credentials, maintainSource: false }; continue; }
       // A synchronous publication wake must start a new read, not join an
       // admission that has already chosen its terminal result.
       entry.refreshing = false;
@@ -100,8 +100,9 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
 }
 
 export function refreshActiveMcpServerCatalog(input: RefreshInput): Promise<McpServerCatalogSnapshotV1> { return refresh(input); }
+/** Row invalidation reobserves current authority; full hydration resumes retained-source maintenance. */
 export function refreshActiveMcpServerCatalogAfterChange(input: RefreshInput & CapturedAccount): Promise<McpServerCatalogSnapshotV1> {
-  return refresh({ credentials: input.credentials }, input, true);
+  return refresh({ credentials: input.credentials, maintainSource: false }, input, true);
 }
 
 /** Demand waits for admission, not optional source/history maintenance. */

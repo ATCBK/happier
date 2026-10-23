@@ -52,6 +52,7 @@ vi.mock('@/daemon/controlServer', async importOriginal => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); boundary.control = null; });
 
 it('logs the requester admission refusal before issuance without disclosing Home exception text', async () => {
+  vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
   const diagnostics = vi.spyOn(logger, 'infoFile');
   const h = await createInstalledProjectAgentDaemonFixture(() => boundary.control);
   const post = vi.mocked(axios.post).getMockImplementation()!;
@@ -72,6 +73,7 @@ it('logs the requester admission refusal before issuance without disclosing Home
   expect(JSON.stringify(phases)).not.toContain('private-requester-http-body');
   expect(JSON.stringify(phases)).not.toContain('private-resource');
   expect(JSON.stringify(phases)).not.toContain(h.requester.bootstrap.credentials.token);
+  expect(phases[0]?.[1]).not.toHaveProperty('requestId');
   expect(diagnostics.mock.calls.some(([message]) => message === '[mcp] Request-auth issuance phase')).toBe(false);
 });
 
@@ -79,6 +81,7 @@ it('correlates parallel MCP opens through requester and signed Machine Home veri
   vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
   const h = await createInstalledProjectAgentDaemonFixture(() => boundary.control);
   const diagnostics = vi.spyOn(logger, 'warnLocalFile');
+  const phaseDiagnostics = vi.spyOn(logger, 'infoFile');
   const requestIds = ['4f67d9d2-e6dc-48ab-a1f1-4545d72cab01', '4f67d9d2-e6dc-48ab-a1f1-4545d72cab02'];
   await Promise.all(requestIds.map(requestId => h.dispatch({
     kind: 'mcp.request_auth.open', requestId, serverId: 'absent-oauth',
@@ -87,6 +90,10 @@ it('correlates parallel MCP opens through requester and signed Machine Home veri
   const records = diagnostics.mock.calls.filter(([message]) => message === '[web-latency]')
     .map(([, fields]) => fields);
   for (const requestId of requestIds) {
+    expect(phaseDiagnostics.mock.calls).toEqual(expect.arrayContaining([
+      ['[mcp] Request-auth dispatch phase', expect.objectContaining({ requestId, sessionId: h.sessionId })],
+      ['[mcp] Request-auth issuance phase', expect.objectContaining({ requestId, sessionId: h.sessionId, phase: 'initial_admission' })],
+    ]));
     const owned = records.filter(fields => fields && typeof fields === 'object' && 'requestId' in fields && fields.requestId === requestId);
     for (const phase of ['mcp.requester_resolution', 'mcp.requester_currentness']) {
       expect(owned).toEqual(expect.arrayContaining([expect.objectContaining({ requestId, phase, status: 'completed' })]));
@@ -124,7 +131,7 @@ it('correlates parallel MCP opens through requester and signed Machine Home veri
   expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private-resource');
 });
 
-it('shares one requester observation within each warm MCP admission and reobserves on the next open', async () => {
+it('shares one opening requester observation through warm MCP catalog admission and reobserves on the next open', async () => {
   const h = await createInstalledProjectAgentDaemonFixture(() => boundary.control);
   const get = vi.mocked(axios.get).getMockImplementation()!;
   let sessionReads = 0;
@@ -141,13 +148,15 @@ it('shares one requester observation within each warm MCP admission and reobserv
   });
   for (let open = 0; open < 2; open++) {
     sessionReads = 0;
-    await h.dispatch({ kind: 'mcp.request_auth.open', requestId: `warm-admission-${open}`,
-      serverId: 'absent-oauth', resource: 'https://oauth.example.test/mcp', materializationId: `warm-admission-${open}` });
-    // Count the real Home Session reads at the dispatch checkpoint, before
-    // the separately admitted issuer starts. Resolution and its assertion
-    // prove one requester; the next open must obtain a new Home observation.
+    expect(await h.dispatch({ kind: 'mcp.request_auth.open', requestId: `warm-admission-${open}`,
+      serverId: 'absent-oauth', resource: 'https://oauth.example.test/mcp', materializationId: `warm-admission-${open}` }))
+      .toMatchObject({ ok: false, error: { code: 'mcp_catalog_unavailable' } });
+    // An unavailable catalog refuses before grant/effect admission. Dispatch
+    // and the issuer's catalog preparation prove the same opening requester;
+    // the next open must obtain a new Home observation.
     expect(admissions).toHaveLength(open + 1);
     expect(admissions[open]).toBe(1);
+    expect(sessionReads).toBe(1);
   }
 });
 
@@ -344,6 +353,8 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
     expect(issuancePhases).toEqual(expect.arrayContaining(['catalog_admission', 'initial_admission', 'capability_staging', 'authority_commit']
       .map(phase => expect.objectContaining({ phase, status: 'completed', sessionId: h.sessionId }))));
     for (const requestId of openRequestIds) {
+      expect(issuancePhases).toEqual(expect.arrayContaining(['catalog_admission', 'initial_admission', 'capability_staging', 'authority_commit']
+        .map(phase => expect.objectContaining({ requestId, sessionId: h.sessionId, phase, status: 'completed' }))));
       expect(traceDiagnostics.mock.calls).toEqual(expect.arrayContaining(['mcp.credentials', 'mcp.initial_admission', 'mcp.authority_commit']
         .map(phase => ['[web-latency]', expect.objectContaining({ requestId, sessionId: h.sessionId, phase, status: 'completed' })])));
     }
@@ -483,5 +494,9 @@ it('admits an OAuth server from the Session requester catalog and supplies reque
   expect(refusedAtCommit).toMatchObject({ ok: false });
   if (!refusedAtCommit.ok) expect(['mcp_request_auth_not_active', 'mcp_request_auth_unavailable'])
     .toContain(refusedAtCommit.error.code);
-  expect((await readdir(requester.connectedServicesMaterializationBaseDir)).filter(name => name.startsWith('mcp-'))).toEqual([]);
+  // stop() retires through the async port: absence of the capability file above
+  // precedes release of its sibling mutation lock. Join the complete cleanup.
+  await vi.waitFor(async () => {
+    expect((await readdir(requester.connectedServicesMaterializationBaseDir)).filter(name => name.startsWith('mcp-'))).toEqual([]);
+  });
 }, 120_000);

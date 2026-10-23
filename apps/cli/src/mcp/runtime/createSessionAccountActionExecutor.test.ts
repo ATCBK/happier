@@ -60,6 +60,10 @@ describe('Session MCP Account routing', () => {
     { actionId: 'scm.blame.get' as const, input: { cwd: '/run/workspace', path: 'file.ts' }, uncertain: false },
     { actionId: 'session.transcript.get' as const, input: { sessionId: 'caller-session', limit: 10 }, uncertain: false },
     { actionId: 'session.notes.set' as const, input: { sessionId: 'led-child', notes: 'Delegated notes' }, uncertain: false },
+    ...(['none', 'wait', 'return'] as const).map(reply => ({
+      actionId: 'session.message.send' as const,
+      input: { sessionId: 'led-child', message: 'Report your findings', reply }, uncertain: false,
+    })),
     { actionId: 'session.roles.apply_to_reports' as const, input: { sessionId: 'caller-session' }, uncertain: false },
     { actionId: 'session.spawn_new' as const, input: {
       executionTarget: { serverId: 'home', machineId: 'shared-machine' },
@@ -114,8 +118,15 @@ describe('Session MCP Account routing', () => {
         outcome: { ok: true, result: { attemptedChannels: 1, deliveredChannels: 1 } } } }), { status: 200 });
     });
     try {
-      const executor = createSessionAccountActionExecutor({ base: createRestrictedExecutor(), client: {
+      const executor = createSessionAccountActionExecutor({ base: createRestrictedExecutor(),
+        // Native runners can hold Account credentials while their Machine input
+        // transport remains bound to their own Session. Cross-Session Actions
+        // must still enter the daemon's credentialed executor.
+        hasAccountAuthority: actionId === 'session.message.send', client: {
         sessionId: 'caller-session', getServerBinding: () => ({ serverId: 'home', serverUrl: 'https://home.test' }),
+        ...(actionId === 'session.message.send' ? { getMachineAdmissionTransport: () => async () => {
+          throw new Error('Cross-Session input cannot use the bound runner transport');
+        } } : {}),
         rpcHandlerManager: { invokeLocal: async () => null, registerHandler() {} }, updateMetadata() {},
         getCurrentSessionLocation: () => ({ machineId: 'shared-machine', path: '/run/workspace' }),
         getActiveTurnAdmissionWitness: () => witness,
@@ -123,10 +134,14 @@ describe('Session MCP Account routing', () => {
           lifetimeSignal: new AbortController().signal, isCurrent: () => true,
           run: { runId: 'child-run', occurrenceId: 'child-occurrence', sidechainId: 'child-sidechain' } }) } : {}),
       } });
-      await expect(executor.execute(actionId, input, {
+      const result = await executor.execute(actionId, input, {
         surface: 'cli', defaultSessionId: 'forged-session', actionRequestId: 'request-1',
         approvalOrigin: { kind: 'transcript_tool_call', sessionId: 'forged-session', toolCallId: 'tool-1', toolName: 'action_execute' },
-      })).resolves.toEqual(uncertain
+      });
+      // Admission must reach the authenticated source-daemon boundary rather
+      // than trying the runner's own-Session input transport.
+      expect(requests).toHaveLength(1);
+      expect(result).toEqual(uncertain
         ? { ok: false, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' }
         : { ok: true, result: { attemptedChannels: 1, deliveredChannels: 1 } });
       expect(requests[0]).toEqual({ v: 1, context: { token: 'A'.repeat(43), sessionId: 'caller-session' },

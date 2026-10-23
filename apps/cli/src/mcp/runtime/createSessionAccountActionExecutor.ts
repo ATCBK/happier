@@ -16,6 +16,8 @@ import { NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE } from '@/agent/runtim
 import { WorkflowProjectTargetV1Schema } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
 import { requiresExplicitScmMachineTarget } from '@happier-dev/protocol/actions/actionSpecs';
 import { readContributedActionExecutionPlacement } from '@/session/actions/readContributedActionExecutionPlacement';
+import { readActionSessionTargetField } from '@happier-dev/protocol/actions/executor/sessionTargets';
+import { normalizeSessionTargetV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 
 type ActionExecutor = Readonly<{
   execute(actionId: ActionId, input: unknown, context?: ActionExecutorContext): Promise<ActionExecuteResult>;
@@ -48,7 +50,7 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       }
       // Restricted child reads use the bound Session's admitted corpus reader.
       // Account forwarding would replace that authority with the daemon's scope.
-      if (actionId === 'session.list' && context?.sessionListAccess === 'current_session') {
+      if ((actionId === 'session.list' || actionId === 'session.targets.resolve') && context?.sessionListAccess === 'current_session') {
         return await params.base.execute(actionId, input, context);
       }
       // Contributed ids remain with the existing plugin catalog/execution owner.
@@ -70,6 +72,19 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       }
       const requestedSessionId = input && typeof input === 'object' && 'sessionId' in input
         && typeof input.sessionId === 'string' ? input.sessionId.trim() : params.client.sessionId;
+      const path = process.env[HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY];
+      let needsSessionTargetTransport = false;
+      if ((!params.hasAccountAuthority || path) && spec?.sessionTarget && input && typeof input === 'object' && !Array.isArray(input)) {
+        const operand = readActionSessionTargetField(input as Readonly<Record<string, unknown>>, spec.sessionTarget.field);
+        if (operand !== undefined) {
+          try {
+            // A daemon-bound runner's input bridge is scoped to its own Session,
+            // even when that runner also holds Account credentials.
+            // Selector expansion and other Sessions retain credentialed admission.
+            needsSessionTargetTransport = normalizeSessionTargetV1(operand) !== params.client.sessionId;
+          } catch { /* The canonical Action validator reports malformed operands. */ }
+        }
+      }
       // The bound host holds its own Board stored-content key. Other
       // Session readers use the credentialed owner, including reads of children.
       const boundRead = requestedSessionId === params.client.sessionId
@@ -103,7 +118,7 @@ export function createSessionAccountActionExecutor(params: Readonly<{
         && !(actionId === 'session.needs_you.raise' && requestedSessionId === params.client.sessionId);
       if (!builtIn.success || (executionPlacement !== 'account'
         && executionPlacement !== 'client'
-        && !sessionRead && !persistedRead && !sessionLifecycle && !nativeInventoryRead && !sessionOriginRpc
+        && !sessionRead && !persistedRead && !sessionLifecycle && !nativeInventoryRead && !sessionOriginRpc && !needsSessionTargetTransport
         && builtIn.data !== 'session.spawn_new'
         // Admission inspects the executing Machine's workspace and plugin
         // runtime before sealing Account storage; a Session runner has neither.
@@ -128,7 +143,6 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       const signal = context?.signal && lifetime
         ? AbortSignal.any([context.signal, lifetime]) : context?.signal ?? lifetime ?? undefined;
       if (signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
-      const path = process.env[HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY];
       if (!path) return unavailable();
       const hostWitness = params.client.getActiveTurnAdmissionWitness?.();
       if (!hostWitness) return unavailable();

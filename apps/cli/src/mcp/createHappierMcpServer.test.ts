@@ -378,7 +378,7 @@ describe('createHappierMcpServer real host admission', () => {
     const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
     process.env.HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT = '1';
     vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
-    const sessionAuthority = await createSessionDaemonAuthorityFixture({ sessionId,
+    const sessionAuthority = await createSessionDaemonAuthorityFixture({ sessionId, agentStartPolicy: accountSettingsParse({}),
       execute: operation => daemon.executor.execute(ActionIdSchema.parse(operation.actionId), operation.input, {
         surface: operation.surface, authority: 'account_automation', actionCaller: { kind: 'host' }, defaultSessionId: sessionId,
       }) });
@@ -426,7 +426,7 @@ describe('createHappierMcpServer real host admission', () => {
     const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
     process.env.HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT = '1';
     vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
-    const sessionAuthority = await createSessionDaemonAuthorityFixture({ sessionId,
+    const sessionAuthority = await createSessionDaemonAuthorityFixture({ sessionId, agentStartPolicy: accountSettingsParse({}),
       execute: operation => daemon.executor.execute(ActionIdSchema.parse(operation.actionId), operation.input, {
         surface: operation.surface, authority: 'account_automation', actionCaller: { kind: 'host' }, defaultSessionId: sessionId,
       }) });
@@ -507,7 +507,7 @@ describe('createHappierMcpServer real host admission', () => {
       getServerFeaturesSnapshot: features, onManagerCreated: created => { manager = created; },
     });
     const daemonExecute = createProductionSessionDaemonExecutor(credentials);
-    const authority = authorityScope === 'session' ? await createSessionDaemonAuthorityFixture({ sessionId,
+    const authority = authorityScope === 'session' ? await createSessionDaemonAuthorityFixture({ sessionId, agentStartPolicy: accountSettingsParse({}),
       execute: operation => daemonExecute(operation, { sessionId, isCurrent: async () => true }),
     }) : null;
     process.env.HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT = '1';
@@ -1050,6 +1050,48 @@ describe('createHappierMcpServer real host admission', () => {
         expect(result.actionSpecs.map((spec) => spec.id)).toContain('memory.search');
       }
     } finally { await runtime.mcp.close(); await daemon.close(); }
+  });
+
+  it('discovers and posts a Session update through the Session agent MCP Action without a manager', async () => {
+    const sessionId = 'c111111111111111111111119';
+    vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    const committed: unknown[] = [];
+    // Home HTTP and the durable transcript append are the system boundaries.
+    // MCP registration, discovery, Action policy and the publication owner stay real.
+    const runtime = createHappierMcpServer(hostClient(sessionId, {
+      getPermissionMode: () => 'default',
+      getServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated',
+        features: FeaturesResponseSchema.parse({ features: { sessions: { enabled: true } }, capabilities: {} }) }),
+      enqueueSessionEventCommitted: async event => {
+        committed.push(event);
+        return { persisted: true, localId: 'session-update-original' };
+      },
+    }), {
+      authorityScope: 'session', sessionCredentials: { token: 'session-token', encryption: null },
+      actionsSettingsProvider: createActionSettingsProvider({ allowEnvironmentOverride: false,
+        accountSettings: accountSettingsParse({ actionsSettingsV1: { v: 1, actions: {},
+          approvalWaivedSurfaces: { 'session.update.post': ['agent'] } } }),
+      }),
+    });
+    try {
+      await withMcpClient(runtime, async client => {
+        const read = async (name: string, args: Record<string, unknown>) => {
+          const response = CallToolResultSchema.parse(await client.callTool({ name, arguments: args }));
+          const text = response.content.find(item => item.type === 'text');
+          if (text?.type !== 'text') throw new Error('Missing MCP Action result');
+          expect(response.isError, text.text).toBe(false);
+          return JSON.parse(text.text);
+        };
+        const discovery = await read('action_spec_search', { query: 'session.update.post', limit: 10 });
+        expect(discovery.actionSpecs).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'session.update.post' })]));
+        const result = await read('action_execute', { actionId: 'session.update.post', input: { summary: 'Ready for review' } });
+        expect(result).toEqual({ sessionId, localId: 'session-update-original', persisted: true });
+        expect(committed).toEqual([{ type: 'worker-report', summary: 'Ready for review' }]);
+      });
+    } finally {
+      await daemon.close();
+    }
   });
 
   it.each(['plain', 'e2ee'] as const)('uses live Session memory choice for direct tools, discovery and generic write admission (%s)', async (mode) => {
@@ -1710,7 +1752,7 @@ describe('createHappierMcpServer', () => {
       kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only',
     } as const;
     const operations: Array<Parameters<Parameters<typeof createSessionDaemonAuthorityFixture>[0]['execute']>[0]> = [];
-    const daemon = await createSessionDaemonAuthorityFixture({ sessionId, execute: async operation => {
+    const daemon = await createSessionDaemonAuthorityFixture({ sessionId, agentStartPolicy: accountSettingsParse({}), execute: async operation => {
       operations.push(operation);
       return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     } });

@@ -7,13 +7,14 @@ import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerpr
 import { AccountSettingsPersistedObjectSchema } from '@happier-dev/protocol/account/settings/accountSettingsPersistedObject';
 import { SharedSavedSecretPromoteInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import * as persistence from '@/persistence';
 import type { StoredCredentials } from '@/persistence';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken, resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createDeferred } from '@/testkit/async/deferred';
-import { prepareActiveMcpServerCatalog, projectMcpServerCatalogRefreshFailure, refreshActiveMcpServerCatalog, refreshActiveMcpServerCatalogAfterChange } from './hydrateMcpServerCatalog';
+import { prepareActiveMcpServerCatalog, projectMcpServerCatalogRefreshFailure, refreshActiveMcpServerCatalog, refreshActiveMcpServerCatalogAfterChange, refreshDemandedActiveMcpServerCatalog } from './hydrateMcpServerCatalog';
 import { createCliMcpServerStore, createCliMcpServerStoreForOperation } from './mcpServerStore';
 import { createProjectSessionRuntimeFixture } from '@/daemon/testkit/projectSessionRuntimeFixture';
 import { prepareRequesterSessionBootstrap } from "@/daemon/sessionEncryption/requesterSessionCredentials";
@@ -63,6 +64,22 @@ function mockAccountReads(readRow: () => Promise<unknown>, readHistory: () => Pr
 }
 
 describe('CLI MCP catalog Account publication', () => {
+  it('refreshes a demanded destination without starting source or historical maintenance', async () => {
+    const credentials = seedAccount();
+    vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+    let revision = 1;
+    mockAccountReads(async () => present(revision));
+    await refreshActiveMcpServerCatalog({ credentials, maintainSource: false });
+    vi.mocked(axios.get).mockClear();
+    revision = 2;
+    await refreshDemandedActiveMcpServerCatalog({ token: credentials.token });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(getActiveAccountSettingsSnapshot()?.mcpServerCatalog).toMatchObject({ status: 'ready', revision: 2 });
+    expect(vi.mocked(axios.get).mock.calls.map(([url]) => new URL(String(url)).pathname))
+      .toEqual(expect.arrayContaining(['/v1/account/entity-rows/mcp', '/v1/account/encryption/currentness']));
+    expect(vi.mocked(axios.get).mock.calls.map(([url]) => new URL(String(url)).pathname)
+      .filter(path => path !== '/v1/account/entity-rows/mcp' && path !== '/v1/account/encryption/currentness')).toEqual([]);
+  });
   it.each(['server_error', 'network'] as const)('preserves a transient Account currentness %s for startup recovery without reading private rows', async failure => {
     const credentials = seedAccount();
     let recovered = false;

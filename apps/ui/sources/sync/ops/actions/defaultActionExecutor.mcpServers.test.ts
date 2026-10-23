@@ -578,7 +578,7 @@ describe('UI MCP per-Agent tool facts', () => {
             { agentId: 'acme.mcp-facts/native', off: 'hidden', approval: 'native', loading: 'on_demand', tokens: null },
             { agentId: 'acme.mcp-facts/host', off: 'blocked', approval: 'host', loading: 'every_turn', tokens: null },
         ]);
-        expect(describeMcpToolAgents(listed.perAgent, ids => ids.map(id => toolFactsProjection.agentsById[id]!.title!),
+        expect(describeMcpToolAgents(listed.perAgent, (ids: readonly string[]) => ids.map(id => toolFactsProjection.agentsById[id]!.title!),
             ['acme.mcp-facts/native', 'acme.mcp-facts/host'])).toEqual({
             onDemand: ['Native Agent'], notApply: [], blocked: ['Host Agent'], hidden: ['Native Agent'],
         });
@@ -601,14 +601,42 @@ describe('UI MCP per-Agent tool facts', () => {
         ] } } });
     });
 
-    it.each(['no-machine', 'unsupported', 'foreign-home'] as const)('keeps %s facts unavailable', async reason => {
-        const home = await prepareToolFactsHome(reason !== 'no-machine');
-        if (reason === 'foreign-home') {
-            const foreign = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
-                homeServerIdentityId: 'srv_foreign_mcp_tool_facts', canonicalServerUrl: 'https://foreign-mcp-tool-facts.test', revision: 1,
-                endpoints: [{ kind: 'https', url: 'https://foreign-mcp-tool-facts.test' }] } });
-            await setActiveServerId(foreign.id);
+    it.each([true, false])('keeps tool facts scoped to the captured Home after focus moves (eligible Machine: %s)', async includeMachine => {
+        const home = await prepareToolFactsHome(includeMachine);
+        const focused = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
+            homeServerIdentityId: 'srv_foreign_mcp_tool_facts', canonicalServerUrl: 'https://foreign-mcp-tool-facts.test', revision: 1,
+            endpoints: [{ kind: 'https', url: 'https://foreign-mcp-tool-facts.test' }] } });
+        await setActiveServerId(focused.id);
+        const focusedMachine = createMachineFixture({ id: 'focused-machine', activeAt: Date.now(),
+            metadata: { ...createMachineFixture().metadata!,
+                agentInventory: { checkedAt: Date.now(), installedAgentIds: ['acme.mcp-facts/host'] } } });
+        getStorage().setState(state => ({ machines: { [focusedMachine.id]: focusedMachine },
+            machineListByServerId: { ...state.machineListByServerId, [focused.id]: [focusedMachine] },
+            machineListStatusByServerId: { ...state.machineListStatusByServerId, [focused.id]: 'idle' } }));
+        projectionRpc.mockResolvedValue({ protocolVersion: 1, projection: toolFactsProjection });
+        const receipt = await createDefaultActionExecutor().execute('mcp.servers.tools.list', { serverId: 'server' },
+            { serverId: home.id, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+        if (!receipt.ok) throw new Error(receipt.errorCode);
+        const listed = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.tools.list'].parse(receipt.result);
+        if (includeMachine) {
+            expect(listed.perAgent).toEqual({ status: 'ready', machineId: 'facts-machine', agents: [
+                { agentId: 'acme.mcp-facts/native', off: 'hidden', approval: 'native', loading: 'on_demand', tokens: null },
+                { agentId: 'acme.mcp-facts/host', off: 'blocked', approval: 'host', loading: 'every_turn', tokens: null },
+                { agentId: 'acme.mcp-facts/unproven', off: null, approval: null, loading: 'every_turn', tokens: null },
+                { agentId: 'acme.mcp-facts/no-tools', off: null, approval: null, loading: 'every_turn', tokens: null },
+            ] });
+            expect(projectionRpc).toHaveBeenCalledWith(expect.objectContaining({
+                method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+                serverId: home.serverIdentityId, accountId: 'tool-owner', machineId: 'facts-machine',
+            }));
+        } else {
+            expect(listed.perAgent).toMatchObject({ status: 'unavailable', agents: [] });
+            expect(projectionRpc).not.toHaveBeenCalled();
         }
+    });
+
+    it.each(['no-machine', 'unsupported'] as const)('keeps %s facts unavailable', async reason => {
+        const home = await prepareToolFactsHome(reason !== 'no-machine');
         projectionRpc.mockImplementation(async () => {
             if (reason === 'unsupported') throw Object.assign(new Error('Projection not supported'), { code: 'RPC_METHOD_NOT_AVAILABLE' });
             // A mistaken fallback would receive usable facts and wrongly claim readiness.

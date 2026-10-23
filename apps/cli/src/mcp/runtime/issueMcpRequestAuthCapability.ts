@@ -103,7 +103,7 @@ export async function issueMcpRequestAuthCapability(
       if (operationContext) await observe('catalog_admission', () =>
         createCliMcpServerStoreForOperation({ operationContext, signal }).readCatalogForOperation());
       await assertAdmitted(signal);
-    }));
+    }, { readOnly: true }));
   } catch (error) {
     throw new Error(readMcpRequestAuthFailureCode(error));
   }
