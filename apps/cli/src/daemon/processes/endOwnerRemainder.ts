@@ -109,6 +109,7 @@ export function createEndOwnerRemainder(input: Readonly<{
             } finally { await firstPass(owner); }
         },
         async end(owner, captured) {
+            let departedCapturedTreeWithoutOtherMembers = false;
             try {
                 const view = await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' });
                 if (view.status !== 'ok') { reportUnavailable(); return { status: 'unavailable', outcomes: [] }; }
@@ -144,6 +145,18 @@ export function createEndOwnerRemainder(input: Readonly<{
                             },
                         }));
                     }
+                    const capturedStarts = new Map(targets.map(target => [target.pid, target.start]));
+                    // The fresh view already observed this entire tree gone. A
+                    // second machine inventory has no survivor to confirm unless
+                    // another observed member belongs to this retiring owner.
+                    // Mutating, incomplete and unreadable cleanup still resample.
+                    departedCapturedTreeWithoutOtherMembers = results.every(result => result.status === 'complete'
+                        && result.outcomes.every(outcome => outcome.outcome === 'gone_before'))
+                        && !view.rows.some(row => {
+                            if (!row.owner || processOwnerKey(row.owner) !== key) return false;
+                            const start = capturedStarts.get(row.pid);
+                            return !start || !equalProcessStart(row.start, start);
+                        });
                     return { status: results.some(result => result.status === 'unavailable') ? 'unavailable'
                         : results.some(result => result.status === 'incomplete') ? 'incomplete' : 'complete',
                         outcomes: results.flatMap(result => result.outcomes) };
@@ -199,7 +212,7 @@ export function createEndOwnerRemainder(input: Readonly<{
                 const incomplete = ownedRows.length > targets.length || result.outcomes.some(row => row.outcome === 'refused' || row.outcome === 'survived');
                 return { status: result.status === 'unavailable' ? 'unavailable' : incomplete || result.status === 'incomplete' ? 'incomplete' : 'complete', outcomes: result.outcomes };
             } finally {
-                await firstPass(owner);
+                if (!departedCapturedTreeWithoutOtherMembers) await firstPass(owner);
             }
         },
     };

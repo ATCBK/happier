@@ -14,30 +14,34 @@ import type { TrackedSession } from '../types';
 import { formatProcessOwnerTag, resolveProcessOwnerScopeKey } from '@/processes/ownerTag';
 import { spawn } from 'node:child_process';
 
-it.each(['absent', 'zombie', 'unreadable'] as const)('settles a departed captured tree using its native evidence (%s)', async state => {
+it.each(['absent', 'zombie', 'unreadable', 'outside_survivor'] as const)('settles a departed captured tree using its native evidence (%s)', async state => {
     const owner = { kind: 'session', sessionId: 'departed-tree' } as const;
     let censusReads = 0;
     const censusDependencies: ProcessCensusDependencies = { platform: 'linux', selfPid: process.pid, linuxBoundary: {
-        async readdir() { censusReads++; return [String(process.pid), ...(state === 'absent' ? [] : ['5100'])]; },
+        async readdir() { censusReads++; return [String(process.pid), ...(state === 'outside_survivor' ? ['6000'] : state === 'absent' ? [] : ['5100'])]; },
         async readlink() { return '/fixture'; },
         async readFile(path) {
             const pid = Number(path.split('/')[2]);
             if (pid === 5100 && state === 'unreadable') throw Object.assign(new Error('unreadable'), { code: 'EACCES' });
             if (path.endsWith('/status')) return 'Uid:\t1000\n';
             if (path.endsWith('/stat')) return pid + ' (fixture) ' + [pid === 5100 ? 'Z' : 'S', '1', '5000', '1', '0', '0',
-                ...Array(13).fill('0'), pid === 5100 ? '110' : '10', '0', '0'].join(' ');
+                ...Array(13).fill('0'), pid === 6000 ? '210' : pid === 5100 ? '110' : '10', '0', '0'].join(' ');
+            if (pid === 6000 && path.endsWith('/environ')) return 'HAPPIER_PROCESS_OWNER=v1.123456789abc.session.departed-tree\0';
             return '';
         },
     } };
     const runtime = createProcessOwnershipRuntime({ platform: 'linux', daemonScopeKey: '123456789abc',
-        censusDependencies, listRoots: () => [] });
+        censusDependencies, listRoots: () => state === 'outside_survivor' ? [{ owner, pid: 5000,
+            start: { startTimeMs: 1000 }, ownerCreatedAtMs: 0, ownerCreatedStartTimeMs: 1000, live: false }] : [] });
+    const leftBehind = createLeftBehindPass({ processOwnershipRuntime: runtime });
     const signals: number[] = [];
     const remainder = createEndOwnerRemainder({ platform: 'linux', processOwnershipRuntime: runtime,
-        daemonScopeKey: '123456789abc', firstPass: () => {}, systemBoundary: { platform: 'linux', censusDependencies,
+        daemonScopeKey: '123456789abc', firstPass: leftBehind.firstPass, systemBoundary: { platform: 'linux', censusDependencies,
             kill(pid) { signals.push(pid); return true; } } });
     const roots = Array.from({ length: 70 }, (_, index): HappierProcessRoot => ({ owner, pid: 5100 + index,
         start: { startTimeMs: 1100 + index }, live: true, ownerCreatedAtMs: 0 }));
     const result = await remainder.end(owner, { scope: 'subtree', ownership: [], roots });
+    leftBehind.dispose();
     expect(result.outcomes).toHaveLength(roots.length);
     expect(signals).toEqual([]);
     if (state === 'unreadable') {
@@ -47,6 +51,12 @@ it.each(['absent', 'zombie', 'unreadable'] as const)('settles a departed capture
     }
     expect(result.status).toBe('complete');
     expect(result.outcomes.every(outcome => outcome.outcome === 'gone_before')).toBe(true);
+    if (state === 'outside_survivor') {
+        // A complete captured tree does not erase another observed member of
+        // this owner: its Left-behind observation still needs a fresh pass.
+        expect(censusReads).toBe(2);
+        return;
+    }
     // A fresh complete census already proves all captured generations absent.
     // Repeating whole-machine reads per departed PID delays the owning respawn.
     expect(censusReads).toBe(1);
