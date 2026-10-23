@@ -1,9 +1,10 @@
+import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 import { PluginAgentAcpTransportSchema } from '@happier-dev/protocol/plugins/contributions/agentAcpTransport';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { isGenericSubAgentToolName } from '@happier-dev/protocol/tools/v2/subAgentFamilies';
 import type { PluginAgentAcpTransport } from '@happier-dev/protocol';
-import { AgentLaunchEnvironmentV1Schema, AgentRuntimeJsonValueV1Schema, AgentSessionConfigurationSnapshotV1Schema, AgentSessionConfigurationUpdateV1Schema, AgentSessionProviderCheckpointV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { AgentLaunchEnvironmentV1Schema, AgentRuntimeDiagnosticDataV1Schema, AgentRuntimeJsonValueV1Schema, AgentSessionConfigurationSnapshotV1Schema, AgentSessionConfigurationUpdateV1Schema, AgentSessionProviderCheckpointV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import {
   isWorkflowInteractionCapacityError,
   WORKFLOW_INTERACTION_CAPACITY_EXCEEDED,
@@ -101,6 +102,7 @@ import {
   readSessionModelStateFromSessionResponseAwaitable,
 } from '@/agent/acp/sessionSettings/sessionSettingsState';
 
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { classifyProviderLimitEvidence } from '@/daemon/connectedServices/quotas/normalization';
 import { readConnectedServiceChildSelectionsFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { createPublicAcpPermissionHandler } from './createPublicAcpPermissionHandler';
@@ -338,15 +340,25 @@ function validateGeneratedMediaDescriptors(
   return Object.freeze(descriptors);
 }
 
-function diagnostic(code: string, message?: string, error?: unknown) {
+function diagnostic(code: string, message?: string, error?: unknown): PluginDiagnosticData {
+  const errorRecord = error && typeof error === 'object' && !Array.isArray(error)
+    ? error as Record<string, unknown> : null;
+  const supplied = AgentRuntimeDiagnosticDataV1Schema.safeParse(errorRecord?.diagnostic);
+  if (supplied.success) return Object.freeze(supplied.data);
   const requestErrorCode = readAcpRequestErrorCode(error);
+  const issue = error === undefined ? null : classifyPrimarySessionRuntimeIssue({ cause: 'status_error', error });
+  const details = {
+    ...(requestErrorCode !== null ? { requestErrorCode } : {}),
+    ...(issue?.source === 'usage_limit' && issue.usageLimit
+      ? { v: 1, source: 'usage_limit', usageLimit: issue.usageLimit } : {}),
+  };
   return Object.freeze({
     code,
     severity: 'error' as const,
     // AcpAgentPeer owns redaction and its transport byte budget. The strict
     // runtime diagnostic has its own existing string bound; preserve its cause.
     ...(message ? { message: message.slice(0, AGENT_SESSION_RUNTIME_LIMITS_CANDIDATE_V1.descriptionMaxCodeUnits) } : {}),
-    ...(requestErrorCode !== null ? { details: { requestErrorCode } } : {}),
+    ...(Object.keys(details).length ? { details: AgentRuntimeJsonValueV1Schema.parse(details) } : {}),
   });
 }
 
@@ -418,19 +430,29 @@ function readParameterizedModelPicker(
 
 function validateCompletionEvidenceOutcome(
   outcome: AgentAcpCompletionEvidenceOutcome,
-): Readonly<{ kind: 'completed' | 'cancelled' | 'failed'; message?: string }> | null {
+): AgentAcpCompletionEvidenceOutcome | null {
   if (!outcome || typeof outcome !== 'object' || Array.isArray(outcome)) return null;
   const keys = Object.keys(outcome);
   if (outcome.kind === 'completed' || outcome.kind === 'cancelled') {
     return keys.length === 1 ? { kind: outcome.kind } : null;
   }
   if (outcome.kind !== 'failed') return null;
-  if (keys.some((key) => key !== 'kind' && key !== 'message')) return null;
-  if (outcome.message === undefined) return { kind: 'failed' };
-  if (typeof outcome.message !== 'string' || outcome.message.length > COMPLETION_FAILURE_MESSAGE_MAX_CODE_UNITS) {
+  if (keys.some((key) => key !== 'kind' && key !== 'message' && key !== 'diagnostic')) return null;
+  if (outcome.message !== undefined
+    && (typeof outcome.message !== 'string' || outcome.message.length > COMPLETION_FAILURE_MESSAGE_MAX_CODE_UNITS)) {
     return null;
   }
-  return { kind: 'failed', message: outcome.message };
+  const supplied = outcome.diagnostic === undefined ? null : AgentRuntimeDiagnosticDataV1Schema.safeParse(outcome.diagnostic);
+  if (supplied && !supplied.success) return null;
+  return { kind: 'failed',
+    ...(outcome.message === undefined ? {} : { message: outcome.message }),
+    ...(supplied?.success ? { diagnostic: {
+      ...supplied.data,
+      ...(supplied.data.message === undefined ? {} : {
+        message: redactBugReportSensitiveText(supplied.data.message).slice(0, AGENT_SESSION_RUNTIME_LIMITS_CANDIDATE_V1.descriptionMaxCodeUnits),
+      }),
+    } } : {}),
+  };
 }
 
 function validateProjectedModelUpdate(

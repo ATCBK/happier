@@ -12,12 +12,13 @@ import { ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/error
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
-import { AGENT_STARTUP_FAILURE_PREVIEWS, readAgentStartupFailureCode, SessionRuntimeIssueSourceV1Schema, SessionRuntimeTeamCredentialDenialDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { AGENT_STARTUP_FAILURE_PREVIEWS, readAgentStartupFailureCode, SessionRuntimeIssueSourceV1Schema, SessionRuntimeTeamCredentialDenialDetailsV1Schema, SessionRuntimeUsageLimitDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 import { hasConnectedServiceRuntimeAuthRecoveryContext } from './connectedServiceRuntimeAuthRecoveryContext';
 import { readSessionPreparationFailureCode, SESSION_PREPARATION_FAILURE_PREVIEWS, TEAM_CREDENTIAL_FAILURE_PREVIEW } from './sessionPreparationFailure';
 import { AGENT_CLI_MISSING_PREVIEW } from '@/packagedRuntime/managedTools/agentCliNotFoundError';
 import { inspectOwnErrorCodeDataProperty } from '@/agent/runtime/session/process/agentRuntimeBridgeError';
+import { classifyProviderLimitEvidence, parseProviderResetAt } from '@/daemon/connectedServices/quotas/normalization';
 import { classifyProviderOutputFailure } from '@/agent/runtime/classifyProviderOutputFailure';
 import { AgentRuntimeDiagnosticDataV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
@@ -146,21 +147,27 @@ function readDeclaredRuntimeIssueSource(error: unknown): SessionRuntimeIssueSour
   return parsed.success ? parsed.data : null;
 }
 
-function refineStatusErrorSource(input: ClassifyPrimarySessionRuntimeIssueInput): SessionRuntimeIssueSourceV1 {
+function readProviderLimitCategory(error: unknown) {
+  const data = readRecord(readRecord(error)?.data);
+  return readConnectedServiceLimitCategoryV1(data?.limitCategory)
+    ?? classifyProviderLimitEvidence([error, data]).category;
+}
+
+function refineProviderFailureSource(
+  input: ClassifyPrimarySessionRuntimeIssueInput,
+  fallback: SessionRuntimeIssueSourceV1,
+): SessionRuntimeIssueSourceV1 {
   const text = extractErrorText(input.error).toLowerCase();
   if (/\btemporar(?:y|ily)\s+limiting\s+requests\b/u.test(text) && /\bnot\s+your\s+usage\s+limit\b/u.test(text)) {
     return 'agent_status_error';
   }
-  if (classifyProviderOutputFailure(text).authenticationError) {
-    return 'auth_error';
-  }
-  if (/\b(quota|usage limit|rate limit|limit reached|max turns|insufficient credits|credits exhausted|billing)\b/u.test(text)) {
-    return 'usage_limit';
-  }
+  if (classifyProviderOutputFailure(text).authenticationError) return 'auth_error';
   if (/\b(permission denied|permission blocked|blocked by policy|not allowed|access denied)\b/u.test(text)) {
     return 'permission_blocked';
   }
-  return 'agent_status_error';
+  const category = readProviderLimitCategory(input.error);
+  if (category === 'usage_limit' || category === 'rate_limit') return 'usage_limit';
+  return category === 'unknown' ? fallback : 'agent_status_error';
 }
 
 function normalizeNonEmptyString(value: unknown): string | null {
@@ -293,36 +300,24 @@ function normalizeUrl(value: unknown): string | null {
   }
 }
 
-function readStableRetryTimeResetAtMs(text: string, nowMs: number): number | null {
-  const match = /\btry\s+again\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b/iu.exec(text);
-  if (!match) return null;
-  const rawHour = Number(match[1]);
-  const minute = Number(match[2] ?? '00');
-  const period = match[3]?.toUpperCase();
-  if (!Number.isInteger(rawHour) || !Number.isInteger(minute)) return null;
-  if (rawHour < 1 || rawHour > 12 || minute < 0 || minute > 59) return null;
-
-  let hour = rawHour % 12;
-  if (period === 'PM') hour += 12;
-  const candidate = new Date(nowMs);
-  candidate.setHours(hour, minute, 0, 0);
-  if (candidate.getTime() <= nowMs) {
-    candidate.setDate(candidate.getDate() + 1);
-  }
-  const parsed = candidate.getTime();
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-}
-
-function buildUsageLimitDetailsFromStableText(
+function buildUsageLimitDetailsFromProviderFailure(
   error: unknown,
   nowMs: number,
 ): SessionRuntimeUsageLimitDetailsV1 {
+  const details = readRecord(readRecord(error)?.details);
+  const declared = SessionRuntimeUsageLimitDetailsV1Schema.safeParse(details?.usageLimit);
+  if (declared.success) return declared.data;
+  const record = readRecord(error);
+  const data = readRecord(record?.data);
+  const timing = parseProviderResetAt({ body: data ?? error, headers: record?.headers ?? data?.headers, nowMs });
+  const limitCategory = readProviderLimitCategory(error);
   return {
     v: 1,
-    resetAtMs: readStableRetryTimeResetAtMs(extractErrorText(error), nowMs),
-    retryAfterMs: null,
+    resetAtMs: normalizeNonNegativeInteger(record?.resetAtMs ?? data?.resetAtMs) ?? timing.resetAtMs,
+    retryAfterMs: normalizeNonNegativeInteger(record?.retryAfterMs ?? data?.retryAfterMs) ?? timing.retryAfterMs,
     quotaScope: 'unknown',
     recoverability: 'wait',
+    ...(limitCategory === 'usage_limit' || limitCategory === 'rate_limit' ? { limitCategory } : {}),
   };
 }
 
@@ -572,11 +567,11 @@ export function classifyPrimarySessionRuntimeIssue(
     : input.cause === 'process_exit' && agentProcessExitAfterSwitch
     ? 'agent_process_exit_after_switch'
     : input.cause === 'status_error'
-    ? refineStatusErrorSource(input)
+    ? refineProviderFailureSource(input, causeSourceMap[input.cause])
     : causeSourceMap[input.cause ?? 'unknown'] ?? 'unknown';
   const occurredAt = normalizeNonNegativeInteger(input.occurredAt) ?? Date.now();
   const usageLimit = runtimeAuthUsageLimit ?? (source === 'usage_limit'
-    ? buildUsageLimitDetailsFromStableText(input.error, occurredAt)
+    ? buildUsageLimitDetailsFromProviderFailure(input.error, occurredAt)
     : null);
   const temporaryThrottle = source === 'agent_status_error'
     ? buildTemporaryThrottleDetails(input.error)

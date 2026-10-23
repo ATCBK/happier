@@ -42,7 +42,7 @@ import type {
   SessionId,
   StartSessionResult,
 } from '../core';
-import type { AgentSessionMcpLaunchConfig } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentAcpCompletionEvidenceOutcome, AgentSessionMcpLaunchConfig } from '@happier-dev/plugin-sdk/agents/runtime';
 import type {
   AcpPromptSubmissionResult,
   AcpPromptSubmissionSettledResult,
@@ -509,10 +509,7 @@ export class AcpBackend implements CatalogAcpBackend {
   }
 
   /** Host-private sink for provider evidence correlated by the public session owner. */
-  submitCompletionEvidence(outcome: Readonly<{
-    kind: 'completed' | 'cancelled' | 'failed';
-    message?: string;
-  }>): boolean {
+  submitCompletionEvidence(outcome: AgentAcpCompletionEvidenceOutcome): boolean {
     if (this.disposed || !this.waitingForResponse || this.isCurrentTurnGenerationClosed()) {
       return false;
     }
@@ -525,7 +522,8 @@ export class AcpBackend implements CatalogAcpBackend {
         ? { kind: 'completed', stopReason: 'end_turn' }
         : outcome.kind === 'cancelled'
           ? { kind: 'aborted', stopReason: 'cancelled' }
-          : { kind: 'failed', error: new Error(failureMessage || 'Provider reported prompt failure') },
+          : { kind: 'failed', error: Object.assign(new Error(failureMessage || 'Provider reported prompt failure'),
+              outcome.diagnostic ? { diagnostic: outcome.diagnostic } : {}) },
     );
     return true;
   }

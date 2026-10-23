@@ -471,9 +471,8 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
     expect(issue.usageLimit?.connectedService).toBeUndefined();
   });
 
-  it('extracts reset times from stable usage-limit retry wording when structured details are absent', () => {
+  it('keeps provider wall-clock retry wording advisory when its timezone is absent', () => {
     const occurredAt = new Date(2026, 4, 18, 13, 2, 41, 0).getTime();
-    const resetAt = new Date(2026, 4, 18, 13, 48, 0, 0).getTime();
 
     expect(classifyPrimarySessionRuntimeIssue({
       provider: 'codex',
@@ -484,7 +483,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
       source: 'usage_limit',
       usageLimit: {
         v: 1,
-        resetAtMs: resetAt,
+        resetAtMs: null,
         retryAfterMs: null,
         quotaScope: 'unknown',
         recoverability: 'wait',

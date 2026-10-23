@@ -27,6 +27,8 @@ import { createCustomAcpAgentRuntime } from '../../../../../../../packages/plugi
 import { createKiloAgentRuntime } from '../../../../../../../packages/plugins/kilo/src/agent/runtime/factory';
 import { PLUGIN_MANIFEST as GEMINI_PLUGIN_MANIFEST } from '../../../../../../../packages/plugins/gemini/src/manifest';
 import { createGeminiConnectedServiceRuntimeAuthAdapter } from '../../../../../../../packages/plugins/gemini/src/agent/connectedServices/runtimeAuthAdapter';
+import { handleGrokPromptComplete, GROK_PROMPT_COMPLETE_METHOD } from '../../../../../../../packages/plugins/grok/src/agent/acp/completion';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { buildGrokAcpRuntimeDefinition } from '../../../../../../../packages/plugins/grok/src/agent/acp/definition';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
@@ -640,7 +642,14 @@ function writePublicComposerAgent(dir: string): string {
             ok(request.id, { success: true });
           } else if (request.method === 'session/prompt') {
             const sessionId = request.params.sessionId;
-            if (scenario.startsWith('gemini-request-error-')) {
+            if (scenario.startsWith('provider-limit-request-')) {
+              send({ jsonrpc: '2.0', id: request.id, error: {
+                code: -32603, message: 'Fixture provider rejection',
+                data: { status: 429, token: 'private-provider-token',
+                  ...(scenario.endsWith('retry') ? { retryAfterMs: 120000 } : { resetAt: 1900000000000 }),
+                },
+              } });
+            } else if (scenario.startsWith('gemini-request-error-')) {
               // Gemini CLI v0.60.0 acpSession.ts:453-457 (also v0.8.2 zedIntegration.ts:300-305)
               // emits numeric ACP RequestError(429), not a provider-message quota parser.
               send({ jsonrpc: '2.0', id: request.id, error: {
@@ -5284,6 +5293,76 @@ describe('createPublicAcpSession', () => {
         subscription.dispose();
         await session.dispose();
       }
+    });
+  });
+
+  it.each(['completion-retry', 'completion-error-retry', 'request-retry', 'request-reset'] as const)('retains ACP provider limit evidence through canonical Session issue classification (%s)', async failurePath => {
+    await withTempDir('happier-public-acp-limit-evidence-', async dir => {
+      const fixture = createFixture(dir, failurePath.startsWith('completion') ? 'extension-completion' : 'provider-limit-' + failurePath);
+      const session = await createPublicAcpSession({ kind: 'create', sessionId: 'host-limit-evidence', cwd: dir }, {
+        ...fixture.options,
+        extensions: { requests: { 'acme/echo': (params, context) => {
+          const evidence = params as Readonly<{ providerSessionId: string; promptId: string }>;
+          return { accepted: handleGrokPromptComplete({ sessionId: evidence.providerSessionId, promptId: evidence.promptId,
+            stopReason: failurePath === 'completion-error-retry' ? 'error' : 'rate_limit',
+            agentResult: { retryAfterMs: 120000, ...(failurePath === 'completion-error-retry' ? { status: 429 } : {}), token: 'private-provider-token' },
+          }, { ...context, method: GROK_PROMPT_COMPLETE_METHOD }) };
+        } } },
+      }, fixture.dependencies);
+      const events: AgentSessionRuntimeEvent[] = [];
+      const subscription = session.watch(event => { events.push(event); });
+      try {
+        await session.send({ inputIds: ['limit-input'], input: { text: 'continue' }, delivery: { kind: 'newTurn', turnId: 'limit-turn' } });
+        await waitForCondition(() => events.some(event => event.kind === 'turn-failed' || event.kind === 'input-rejected'),
+          { timeoutMs: 5000, intervalMs: 10, label: 'provider limit failure' });
+        const failure = events.find(event => event.kind === 'turn-failed' || event.kind === 'input-rejected');
+        if (!failure || (failure.kind !== 'turn-failed' && failure.kind !== 'input-rejected')) throw new Error('Expected provider failure evidence');
+        const issue = classifyPrimarySessionRuntimeIssue({ provider: 'grok', cause: 'session_error', error: failure.diagnostic });
+        expect(issue).toMatchObject({ source: 'usage_limit', usageLimit: { limitCategory: 'rate_limit',
+          ...(failurePath === 'request-reset' ? { resetAtMs: 1900000000000 } : { resetAtMs: null, retryAfterMs: 120000 }),
+        } });
+        expect(JSON.stringify(issue)).not.toContain('private-provider-token');
+        expect(JSON.stringify(events)).not.toContain('private-provider-token');
+        expect(events.some(event => event.kind === 'turn-complete')).toBe(false);
+      } finally { subscription.dispose(); await session.dispose(); }
+    });
+  });
+
+  it.each([false, true])('rejects arbitrary provider payloads and redacts accepted completion messages (diagnostic=%s)', async structured => {
+    await withTempDir('happier-public-acp-completion-diagnostic-safety-', async dir => {
+      const fixture = createFixture(dir, 'extension-completion');
+      const admissions: boolean[] = [];
+      const session = await createPublicAcpSession({ kind: 'create', sessionId: 'host-diagnostic-safety', cwd: dir }, {
+        ...fixture.options,
+        extensions: { requests: { 'acme/echo': (params, context) => {
+          if (!context.currentTurn) throw new Error('Expected an active turn');
+          const evidence = params as Readonly<{ providerSessionId: string; promptId: string }>;
+          const invalidDiagnostic = { code: 'provider_rate_limit', severity: 'error' as const,
+            rawProviderPayload: { token: 'private-provider-token' } };
+          admissions.push(context.currentTurn.submitCompletionEvidence({ ...evidence,
+            outcome: { kind: 'failed', diagnostic: invalidDiagnostic },
+          }));
+          return { accepted: context.currentTurn.submitCompletionEvidence({ ...evidence, outcome: {
+            kind: 'failed', message: JSON.stringify({ token: 'private-completion-token' }),
+            ...(structured ? { diagnostic: { code: 'provider_rate_limit', severity: 'error' as const,
+              message: JSON.stringify({ token: 'private-diagnostic-token' }), details: { requestErrorCode: -32000 } } } : {}),
+          } }) };
+        } } },
+      }, fixture.dependencies);
+      const events: AgentSessionRuntimeEvent[] = [];
+      const subscription = session.watch(event => { events.push(event); });
+      try {
+        await session.send({ inputIds: ['diagnostic-input'], input: { text: 'finish' }, delivery: { kind: 'newTurn', turnId: 'diagnostic-turn' } });
+        await collectUntil(events, 'turn-failed');
+        expect(admissions).toEqual([false]);
+        expect(events.some(event => event.kind === 'turn-complete')).toBe(false);
+        expect(JSON.stringify(events)).not.toContain('private-completion-token');
+        expect(JSON.stringify(events)).not.toContain('private-diagnostic-token');
+        if (structured) expect(events.find(event => event.kind === 'turn-failed')).toMatchObject({
+          diagnostic: { code: 'provider_rate_limit', details: { requestErrorCode: -32000 } },
+        });
+        expect(JSON.stringify(events)).not.toContain('private-provider-token');
+      } finally { subscription.dispose(); await session.dispose(); }
     });
   });
 
