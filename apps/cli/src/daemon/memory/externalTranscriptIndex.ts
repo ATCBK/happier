@@ -6,6 +6,7 @@ import { isAgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sess
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY, type BoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
 import type { AgentExternalSessionSource } from '@happier-dev/plugin-sdk/sessions/external';
 import type { DeepIndexDbHandle } from './deepIndex/deepIndexDb';
+import type { SummaryShardIndexDbHandle } from './summaryShardIndexDb';
 import { logger } from '@/ui/logger';
 import { setImmediate } from 'node:timers/promises';
 import { extractMemoryIndexableTranscriptItemFromDecryptedRow } from './transcript/extractIndexableItem';
@@ -13,6 +14,16 @@ import { applyMemoryCoveragePolicy, memoryIndexPolicyKey, resolveMemoryIndexPoli
 
 export function externalMemoryStorageId(source: MemoryExternalTranscriptSourceV1): string {
   return JSON.stringify(['external_transcript', source.agentId, source.sourceKey, source.nativeSessionId]);
+}
+
+/** Native cursors share failure storage, but never identify Happier Sessions. */
+export function isExternalMemoryStorageId(value: string): boolean {
+  if (!value.startsWith('[')) return false;
+  try {
+    const decoded: unknown = JSON.parse(value);
+    return Array.isArray(decoded) && decoded.length === 4 && decoded[0] === 'external_transcript'
+      && decoded.slice(1).every(part => typeof part === 'string');
+  } catch { return false; }
 }
 
 /** Keep the host's closed diagnostic tokens; never log a plugin's free text. */
@@ -74,20 +85,28 @@ type Frontier = Readonly<{ type: 'page' | 'tail'; cursor?: string; tailCursor?: 
 export async function syncExternalMemoryTranscriptsBatch(input: Readonly<
   Omit<Parameters<typeof syncExternalMemoryTranscriptOnce>[0], 'source' | 'native'> & {
     candidates: readonly Readonly<{ source: MemoryExternalTranscriptSourceV1; native: MemoryExternalSourceReader }>[];
+    tier1?: Pick<SummaryShardIndexDbHandle, 'getSessionCursors' | 'markDeepIndexFailure' | 'markDeepIndexSuccess'>;
     onSourceResult?(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error', failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'>): void;
   }
 >): Promise<void> {
-  const { candidates, onSourceResult, ...operation } = input;
+  const { candidates, onSourceResult, tier1, ...operation } = input;
   operation.signal.throwIfAborted();
   for (const candidate of candidates) {
     operation.signal.throwIfAborted();
+    const sessionId = externalMemoryStorageId(candidate.source);
+    const failureState = tier1?.getSessionCursors({ sessionId, nowMs: operation.nowMs, readOnly: true });
+    if (failureState && failureState.nextDeepEligibleAtMs > operation.nowMs) continue;
     try {
       const result = await syncExternalMemoryTranscriptOnce({ ...operation, ...candidate });
+      if (failureState?.consecutiveDeepFailures) tier1?.markDeepIndexSuccess({ sessionId, seqTo: 0, nowMs: operation.nowMs });
       onSourceResult?.(candidate.source, result);
     }
     catch (error) {
-      onSourceResult?.(candidate.source, 'error', memoryExternalSourceFailure(error));
       operation.signal.throwIfAborted();
+      tier1?.markDeepIndexFailure({ sessionId, nowMs: operation.nowMs,
+        backoffBaseMs: operation.settings.deep.failureBackoffBaseMs,
+        backoffMaxMs: operation.settings.deep.failureBackoffMaxMs });
+      onSourceResult?.(candidate.source, 'error', memoryExternalSourceFailure(error));
     }
     operation.signal.throwIfAborted();
   }

@@ -71,7 +71,7 @@ import {
   resolveMemoryIndexPolicy,
 } from './transcript/coveragePolicy';
 import { createMemoryExternalTranscriptSources, type MemoryExternalObservation } from './externalTranscriptSources';
-import { resolveExternalMemoryIndexPolicy, syncExternalMemoryTranscriptsBatch } from './externalTranscriptIndex';
+import { isExternalMemoryStorageId, resolveExternalMemoryIndexPolicy, syncExternalMemoryTranscriptsBatch } from './externalTranscriptIndex';
 import { runMemoryWorkerSourcesTick } from './runMemoryWorkerSourcesTick';
 import { readCliProjectPromptStackContext } from '@/agent/prompting/coding/sessionProjectPromptStack';
 
@@ -639,7 +639,7 @@ export async function startMemoryWorker(params: Readonly<{
   const listIndexedSessionIds = (): readonly string[] => {
     return withRetainedIndexHandles((handles) => {
       const retained = new Set<string>();
-      for (const sessionId of handles.tier1?.listIndexedSessionIds() ?? []) retained.add(sessionId);
+      for (const sessionId of handles.tier1?.listIndexedSessionIds() ?? []) if (!isExternalMemoryStorageId(sessionId)) retained.add(sessionId);
       const external = new Set(handles.deep?.listExternalSourceStates().map(state => state.sessionId) ?? []);
       for (const sessionId of handles.deep?.listIndexedSessionIds() ?? []) if (!external.has(sessionId)) retained.add(sessionId);
       return [...retained];
@@ -1391,7 +1391,7 @@ export async function startMemoryWorker(params: Readonly<{
       await externalSources.refresh(settings, signal);
       externalSourcesNeedRefresh = false;
     }
-    if (!settings.enabled || !settings.conversationSearch.indexExternal.enabled || !deep) return;
+    if (!settings.enabled || !settings.conversationSearch.indexExternal.enabled || !deep || !tier1) return;
     const inventory = await externalSources.inventory(signal);
     if (inventory) {
       for (const retained of deep.listExternalSourceStates()) {
@@ -1403,7 +1403,7 @@ export async function startMemoryWorker(params: Readonly<{
     if (maxSources === 0) return;
     const embeddings = resolveOperationalMemoryEmbeddingsSettings(settings.embeddings);
     const resolution = embeddings?.enabled ? await refreshEmbeddingsDiagnostics(signal) : null;
-    await syncExternalMemoryTranscriptsBatch({ candidates: externalSources.take(maxSources), db: deep, settings, nowMs: Date.now(), signal,
+    await syncExternalMemoryTranscriptsBatch({ candidates: externalSources.take(maxSources), db: deep, tier1, settings, nowMs: Date.now(), signal,
         onSourceResult: externalSources.noteSyncResult,
         ...(resolution?.provider ? { embedDocuments: resolution.provider.embedDocuments } : {}),
         ...(embeddings?.enabled && embeddings.providerKind && embeddings.modelId
