@@ -675,7 +675,10 @@ describe('managed acquisition durable custody', () => {
         await recover(2, 'succeeded');
         expect(roles).toEqual(['bootstrap', 'exec', 'bootstrap', 'exec', 'bootstrap', 'exec']);
         expect(requests).toEqual([expect.objectContaining({ resource: retained.resource!.value,
-            processConfig: { environment: { HOME: '/persistent/home', HAPPIER_HOME_DIR: '/persistent/home/.happier' } },
+            processConfig: {
+                environment: { HOME: '/persistent/home', HAPPIER_HOME_DIR: '/persistent/home/.happier' },
+                detachedDaemonStartArgv: ['sh', '-c', expect.stringContaining("'/persistent/home/.happier/cli/current/happier' 'daemon' 'start' '--json'")],
+            },
             argv: ['sh', '-c', expect.stringContaining("'/persistent/home/.happier/cli/current/happier' 'daemon' 'start-sync'")],
         }), expect.anything(), expect.anything()]);
         expect(requests[1]).toEqual(requests[0]);

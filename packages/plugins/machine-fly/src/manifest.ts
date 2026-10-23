@@ -218,7 +218,9 @@ export const PLUGIN = definePlugin({
       async run(input, context) {
         if (input.processConfig) {
           if (input.inputBase64 !== undefined) throw new Error('invalid_request');
-          const configured = await runtime(context).configureProcess(input.resource, { command: [...input.argv], environment: input.processConfig.environment });
+          const configured = await runtime(context).configureProcess(input.resource, {
+            command: [...input.argv], environment: input.processConfig.environment,
+          });
           if (configured.kind !== 'configured' || context.signal.aborted) throw new Error('native_boot_unconfirmed');
           return { kind: 'process-configured' };
         }

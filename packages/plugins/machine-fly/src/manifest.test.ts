@@ -350,7 +350,10 @@ describe('public fly machine provisioner', () => {
   });
   it('uses an explicit private process-config request to persist boot without claiming daemon termination', async () => {
     const argv = ['/home/happier/.happier/cli/current/happier', 'daemon', 'start-sync'];
-    const processConfig = { environment: { HOME: '/home/happier', HAPPIER_HOME_DIR: '/home/happier/.happier' } };
+    const processConfig = {
+      environment: { HOME: '/home/happier', HAPPIER_HOME_DIR: '/home/happier/.happier' },
+      detachedDaemonStartArgv: ['/home/happier/.happier/cli/current/happier', 'daemon', 'start', '--json'],
+    };
     const input = { resource, argv, processConfig };
     const runtime = await activated(request => ({ id: resource.machineId, state: 'started', region: 'ams', config: {
       mounts: [{ volume: resource.volume.id, path: '/home/happier' }], services: [],
@@ -358,6 +361,9 @@ describe('public fly machine provisioner', () => {
     } }));
     expect(exports.ROLE_SCHEMAS.execInput.safeParse(input).success).toBe(true);
     expect(await runtime.handlers.get('exec')!(input, runtime.context)).toEqual({ kind: 'process-configured' });
+    const update = runtime.requests.find(request => request.method === 'POST');
+    if (!update?.body) throw new Error('Missing Fly process configuration update');
+    expect(JSON.parse(new TextDecoder().decode(update.body)).config.init.exec).toEqual(argv);
     expect(runtime.requests.every(request => !request.url.endsWith('/exec'))).toBe(true);
   });
   it('returns native process custody for a retained stopped Machine so boot-configuration retry can use the same identity', async () => {

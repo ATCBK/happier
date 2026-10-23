@@ -13,6 +13,7 @@ import { ManagedEnrollmentCorrelationV1Schema, type ManagedEnrollmentCorrelation
 import { ManagedBootstrapCarrierV1Schema } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { SavedSecretRefV1 } from '@happier-dev/protocol';
+import type { MachineProvisionerProcessConfigV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { ManagedMachineControllerError } from './controllerErrors';
 import { REMOTE_HOME_ENROLLMENT_POLL_INTERVAL_MS, TERMINAL_AUTH_POLL_INTERVAL_MS, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 import { deliverManagedNativeFile } from './nativeFileDelivery';
@@ -20,7 +21,7 @@ import { deliverManagedNativeFile } from './nativeFileDelivery';
 export type ManagedNativeBootstrapIO = Readonly<{
   /** Buffered stdout/stderr/status is sufficient; output observers are optional. */
   exec(input: Readonly<{ command: string; input?: string; signal?: AbortSignal; timeoutMs?: number | null; onStdoutChunk?: (text: string) => void;
-    processConfig?: Readonly<{ environment: Readonly<{ HOME: string; HAPPIER_HOME_DIR: string }> }> }>): Promise<Readonly<{ status: number; stdout: string; stderr: string }>>;
+    processConfig?: MachineProvisionerProcessConfigV1 }>): Promise<Readonly<{ status: number; stdout: string; stderr: string }>>;
   putFile(input: Readonly<{ path: string; bytes: Uint8Array; signal?: AbortSignal }>): Promise<void>;
 }>;
 export type ManagedMachineEnrollmentDependencies = Readonly<{
@@ -136,11 +137,12 @@ export async function runManagedMachineEnrollment(input: Readonly<{
     throw new SystemTaskExecutionError('resource_mismatch', 'Native bootstrap transport does not address the retained resource.');
   }
   const native = deps.native;
+  const wrapNativeCommand = (command: string) => nativeGuestHome
+    ? `export HOME=${safeBashSingleQuote(nativeGuestHome.homeDir)} HAPPIER_HOME_DIR=${safeBashSingleQuote(nativeGuestHome.happyHomeDir)}; cd ${safeBashSingleQuote(nativeGuestHome.homeDir)} && ${command}`
+    : command;
   const exec: ManagedNativeBootstrapIO['exec'] = async (request) => {
     await assertCurrent();
-    const command = nativeGuestHome
-      ? `export HOME=${safeBashSingleQuote(nativeGuestHome.homeDir)} HAPPIER_HOME_DIR=${safeBashSingleQuote(nativeGuestHome.happyHomeDir)}; cd ${safeBashSingleQuote(nativeGuestHome.homeDir)} && ${request.command}`
-      : request.command;
+    const command = wrapNativeCommand(request.command);
     return await native.exec({ ...request, command, signal: request.signal ?? input.signal });
   };
   const putFile: ManagedNativeBootstrapIO['putFile'] = async (request) => {
@@ -149,8 +151,13 @@ export async function runManagedMachineEnrollment(input: Readonly<{
   };
   const configureNativeBoot = async (installedBinaryPath: string) => {
     if (!nativeGuestHome) return;
-    const configured = await exec({ command: `exec env ${buildRemoteHappierInvocationCommand({ binaryPath: installedBinaryPath, args: ['daemon', 'start-sync'], channel: configuration.channel })}`,
-      processConfig: { environment: { HOME: nativeGuestHome.homeDir, HAPPIER_HOME_DIR: nativeGuestHome.happyHomeDir } } });
+    const foregroundCommand = `exec env ${buildRemoteHappierInvocationCommand({ binaryPath: installedBinaryPath, args: ['daemon', 'start-sync'], channel: configuration.channel })}`;
+    const detachedCommand = `exec env ${buildRemoteHappierInvocationCommand({ binaryPath: installedBinaryPath, args: ['daemon', 'start', '--json'], channel: configuration.channel })}`;
+    const configured = await exec({ command: foregroundCommand,
+      processConfig: {
+        environment: { HOME: nativeGuestHome.homeDir, HAPPIER_HOME_DIR: nativeGuestHome.happyHomeDir },
+        detachedDaemonStartArgv: ['sh', '-c', wrapNativeCommand(detachedCommand)],
+      } });
     if (configured.status !== 0) throw new SystemTaskExecutionError('native_boot_unconfirmed', 'The native daemon boot configuration was not confirmed.');
     await assertCurrent();
   };

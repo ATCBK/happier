@@ -490,6 +490,7 @@ describe('public machine provisioner role schemas', () => {
           HOME: '/volume/home',
           HAPPIER_HOME_DIR: '/volume/home/.happier',
         },
+        detachedDaemonStartArgv: ['/volume/home/.happier/cli/current/happier', 'daemon', 'start', '--json'],
       },
     };
     expect(roles.execInput.parse(request)).toEqual(request);

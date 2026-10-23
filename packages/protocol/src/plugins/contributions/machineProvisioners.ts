@@ -463,6 +463,12 @@ export const MachineProvisionerNativeExecResultV1Schema = defineProtocolUnion([d
   }, closedRole),
   stdoutBase64: roleBase64, stderrBase64: roleBase64, stdoutTruncated: roleBoolean, stderrTruncated: roleBoolean,
 }, closedRole), defineProtocolObject({ kind: defineProtocolLiteral('process-configured') }, closedRole)]);
+export type MachineProvisionerProcessConfigV1 = Readonly<{
+  environment: Readonly<{ HOME: string; HAPPIER_HOME_DIR: string }>;
+  /** The top-level argv is the supervised foreground alternative. Providers
+   * with a finite native process model select this host-built alternative. */
+  detachedDaemonStartArgv: readonly string[];
+}>;
 export function defineMachineProvisionerSchemas<TLaunchInput, TLaunch, TResourceInput, TResource>(schemas: Readonly<{
   launch: ProtocolComposableSchema<TLaunchInput, TLaunch>; resource: ProtocolComposableSchema<TResourceInput, TResource>;
   continueAcquire?: true;
@@ -483,7 +489,10 @@ export function defineMachineProvisionerSchemas<TLaunchInput, TLaunch, TResource
     ]) }, closed),
     execInput: defineProtocolObject({ resource: schemas.resource, argv: defineProtocolArray(defineProtocolString(), { minItems: 1 }),
       inputBase64: roleBase64.optional(), timeoutMs: defineProtocolNumber({ integer: true, minimum: 0 }).nullable().optional(),
-      processConfig: defineProtocolObject({ environment: defineProtocolObject({ HOME: roleString, HAPPIER_HOME_DIR: roleString }, closed) }, closed).optional() }, closed),
+      processConfig: defineProtocolObject({
+        environment: defineProtocolObject({ HOME: roleString, HAPPIER_HOME_DIR: roleString }, closed),
+        detachedDaemonStartArgv: defineProtocolArray(defineProtocolString(), { minItems: 1 }),
+      }, closed).optional() }, closed),
     putFileInput: defineProtocolObject({ resource: schemas.resource, guestPath: defineProtocolString({ minLength: 1 }),
       bytesBase64: defineProtocolString({ pattern: roleBase64Pattern, maxLength: MACHINE_PROVISIONER_PUT_FILE_BASE64_MAX_LENGTH_V1 }),
       mode: defineProtocolNumber({ integer: true, minimum: 0 }).optional() }, closed),

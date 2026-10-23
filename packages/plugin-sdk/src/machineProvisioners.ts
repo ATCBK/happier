@@ -85,6 +85,7 @@ export const MachineProvisionerRebuildResultV1Schema: ProtocolComposableSchema<M
 export const MachineProvisionerPutFileResultV1Schema: ProtocolComposableSchema<MachineProvisionerPowerResultV1> = /* @__PURE__ */ projectProtocolValue(canonical.MachineProvisionerPutFileResultV1Schema);
 export type MachineProvisionerNativeExecResultV1 = (Omit<PluginProcessResult, 'stdout' | 'stderr'> & Readonly<{ stdoutBase64: string; stderrBase64: string }>)
   | Readonly<{ kind: 'process-configured' }>;
+export type MachineProvisionerProcessConfigV1 = canonical.MachineProvisionerProcessConfigV1;
 export const MachineProvisionerNativeExecResultV1Schema: ProtocolComposableSchema<MachineProvisionerNativeExecResultV1> = /* @__PURE__ */ projectProtocolValue(canonical.MachineProvisionerNativeExecResultV1Schema);
 export const defineMachineProvisionerSchemas: <LI, LO, RI, RO, C extends true | undefined = undefined>(schemas: Readonly<{ launch: ProtocolComposableSchema<LI, LO>; resource: ProtocolComposableSchema<RI, RO>; continueAcquire?: C }>) => Readonly<{
   checkInput: typeof MachineProvisionerCheckInputV1Schema;
@@ -96,7 +97,7 @@ export const defineMachineProvisionerSchemas: <LI, LO, RI, RO, C extends true | 
   bootstrapInput: ProtocolComposableSchema<Readonly<{ resource: RI; credentialRef?: Readonly<{ kind: 'shared_resource'; resourceId: string }>; bootstrapPublicKey?: string }>, Readonly<{ resource: RO; credentialRef?: Readonly<{ kind: 'shared_resource'; resourceId: string }>; bootstrapPublicKey?: string }>>;
   resourceInput: ProtocolComposableSchema<Readonly<{ resource: RI }>, Readonly<{ resource: RO }>>;
   powerInput: ProtocolComposableSchema<Readonly<{ resource: RI; intent: MachineProvisionerNativeIntentV1 }>, Readonly<{ resource: RO; intent: MachineProvisionerNativeIntentV1 }>>;
-  execInput: ProtocolComposableSchema<Readonly<{ resource: RI; argv: readonly string[]; inputBase64?: string; timeoutMs?: number | null; processConfig?: Readonly<{ environment: Readonly<{ HOME: string; HAPPIER_HOME_DIR: string }> }> }>, Readonly<{ resource: RO; argv: readonly string[]; inputBase64?: string; timeoutMs?: number | null; processConfig?: Readonly<{ environment: Readonly<{ HOME: string; HAPPIER_HOME_DIR: string }> }> }>>;
+  execInput: ProtocolComposableSchema<Readonly<{ resource: RI; argv: readonly string[]; inputBase64?: string; timeoutMs?: number | null; processConfig?: MachineProvisionerProcessConfigV1 }>, Readonly<{ resource: RO; argv: readonly string[]; inputBase64?: string; timeoutMs?: number | null; processConfig?: MachineProvisionerProcessConfigV1 }>>;
   /** One bounded fragment at a host-selected private path. Host assembly owns
    * atomic publication of the complete archive; confirmed means all bytes of
    * this fragment were written, including native process settlement. */
