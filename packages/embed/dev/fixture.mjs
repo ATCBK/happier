@@ -71,19 +71,67 @@ export function createFixtureStore() {
   };
 }
 
+function readTypedSdkErrorCode(error) {
+  if (!error || typeof error !== 'object') return null;
+  if (typeof error.code === 'string' && error.code.trim()) return error.code;
+  if (typeof error.result?.code === 'string' && error.result.code.trim()) return error.result.code;
+  const initialInput = error.result?.initialInput;
+  return initialInput && typeof initialInput.code === 'string' && initialInput.code.trim()
+    ? initialInput.code : null;
+}
+
+function readRetainedSdkSessionId(error) {
+  if (!error || typeof error !== 'object') return undefined;
+  if (typeof error.session?.id === 'string' && error.session.id.trim()) return error.session.id;
+  return typeof error.result?.sessionId === 'string' && error.result.sessionId.trim()
+    ? error.result.sessionId : undefined;
+}
+
+function fixtureSdkFailure(error, sessionId) {
+  const code = readTypedSdkErrorCode(error) ?? 'fixture_sdk_error';
+  const failure = Object.assign(new Error(code), { code, sessionId });
+  if (error && typeof error === 'object' && typeof error.status === 'number') failure.status = error.status;
+  return failure;
+}
+
+/** Content-free HTTP projection; typed SDK failures never expose exception text. */
+export function projectFixtureErrorResponse(error) {
+  const code = error && typeof error === 'object' && typeof error.code === 'string' && error.code.trim()
+    ? error.code : error instanceof Error ? error.message : 'fixture_error';
+  const status = error && typeof error === 'object' && typeof error.status === 'number'
+    ? error.status : code === 'session_forbidden' || code === 'lead_forbidden' ? 403
+      : code === 'idempotency_conflict' ? 409 : 400;
+  const sessionId = error && typeof error === 'object' && typeof error.sessionId === 'string' && error.sessionId.trim()
+    ? error.sessionId : null;
+  return { status, body: { error: code, ...(sessionId ? { sessionId } : {}) } };
+}
+
 /** Claim CRM ownership before the agent can call the business Actions in its first turn. */
 export async function createLeadChat({ happier, store, userId, leadId }) {
   const lead = store.listLeads(userId).find((entry) => entry.id === leadId);
   if (!lead) throw new Error('lead_forbidden');
-  const session = lead.sessionId ? happier.sessions.get(lead.sessionId)
-    : await happier.embed.createSession({ title: lead.name }, { requestId: store.leadCreationRequestId(userId, lead.id) });
+  let session;
+  if (lead.sessionId) {
+    session = happier.sessions.get(lead.sessionId);
+  } else {
+    try {
+      session = await happier.embed.createSession({ title: lead.name }, { requestId: store.leadCreationRequestId(userId, lead.id) });
+    } catch (error) {
+      throw fixtureSdkFailure(error, readRetainedSdkSessionId(error));
+    }
+  }
   store.attachLeadSession(userId, lead.id, session.id);
-  const result = await session.send(
-    `Analyze this lead. Call the dev.leads-fixture/actions/record-analysis Action with leadId=${lead.id}, score (0-100), summary and nextStep.\n${lead.notes}`,
-    { requestId: `fixture-analysis-${userId}-${lead.id}` },
-  );
+  let result;
+  try {
+    result = await session.send(
+      `Analyze this lead. Call the dev.leads-fixture/actions/record-analysis Action with leadId=${lead.id}, score (0-100), summary and nextStep.\n${lead.notes}`,
+      { requestId: `fixture-analysis-${userId}-${lead.id}` },
+    );
+  } catch (error) {
+    throw fixtureSdkFailure(error, session.id);
+  }
   if (result.status !== 'accepted' && result.status !== 'alreadyAccepted' && result.status !== 'outcomeUnknown') {
-    throw new Error(`fixture_initial_input_${result.status}`);
+    throw fixtureSdkFailure(result, session.id);
   }
   return session.id;
 }

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'vitest';
-import { buildFixtureHappierUrl, createFixtureStore, createCredentialIssuer, createLeadChat } from './fixture.mjs';
+import { buildFixtureHappierUrl, createFixtureStore, createCredentialIssuer, createLeadChat,
+  projectFixtureErrorResponse } from './fixture.mjs';
 import { actionSchemas } from './leads-fixture/contracts.mjs';
 import { activate, manifest } from './leads-fixture/index.ts';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
@@ -109,7 +110,7 @@ test('business callbacks require an owned session and refuse another salesperson
   assert.equal(store.listLeads('salesperson')[1].stage, 'contacted');
 });
 
-test('lead initialization owns the session before sending notes and retains it on an ambiguous send failure', async () => {
+test('lead initialization reports a typed SDK failure with its retained Session and no exception text', async () => {
   const store = createFixtureStore();
   const creationInputs = [];
   const sendOptions = [];
@@ -119,7 +120,9 @@ test('lead initialization owns the session before sending notes and retains it o
     assert.match(message, /Northstar|research team/);
     assert.match(message, /dev\.leads-fixture\/actions\/record-analysis/);
     sendOptions.push(options);
-    if (rejectSend) throw new Error('network_lost');
+    if (rejectSend) throw Object.assign(new Error('sensitive transport detail'), {
+      code: 'target_unavailable', status: 503,
+    });
     store.apply('record_analysis', analysis, 'analysis-result', leadSessionId);
     return { status: 'accepted', localId: 'first-turn' };
   } };
@@ -128,7 +131,13 @@ test('lead initialization owns the session before sending notes and retains it o
     creationInputs.push({ input, options });
     return session;
   } }, sessions: { get: () => session } };
-  await assert.rejects(createLeadChat({ happier, store, userId: 'salesperson', leadId: 'northstar' }), /network_lost/);
+  const failure = await createLeadChat({ happier, store, userId: 'salesperson', leadId: 'northstar' })
+    .then(() => null, (error) => error);
+  assert.deepEqual(projectFixtureErrorResponse(failure), {
+    status: 503,
+    body: { error: 'target_unavailable', sessionId: leadSessionId },
+  });
+  assert.doesNotMatch(JSON.stringify(projectFixtureErrorResponse(failure)), /sensitive transport detail/);
   assert.equal(store.listLeads('salesperson')[0].sessionId, leadSessionId);
   rejectSend = false;
   assert.equal(await createLeadChat({ happier, store, userId: 'salesperson', leadId: 'northstar' }), leadSessionId);
@@ -139,6 +148,28 @@ test('lead initialization owns the session before sending notes and retains it o
   assert.notEqual(sendOptions[0].requestId, creationInputs[0].options.requestId);
   assert.deepEqual(sendOptions[1], sendOptions[0]);
   await assert.rejects(createLeadChat({ happier, store, userId: 'other-salesperson', leadId: 'northstar' }), /lead_forbidden/);
+});
+
+test('lead creation projects a typed SDK spawn failure without exception text', async () => {
+  const store = createFixtureStore();
+  const happier = {
+    embed: { async createSession() {
+      throw Object.assign(new Error('sensitive spawn detail'), {
+        session: { id: leadSessionId },
+        result: { type: 'error', code: 'spawn_failed', retryable: false },
+      });
+    } },
+    sessions: { get() { throw new Error('Unexpected retained Session'); } },
+  };
+
+  const failure = await createLeadChat({ happier, store, userId: 'salesperson', leadId: 'northstar' })
+    .then(() => null, (error) => error);
+  assert.deepEqual(projectFixtureErrorResponse(failure), {
+    status: 400,
+    body: { error: 'spawn_failed', sessionId: leadSessionId },
+  });
+  assert.doesNotMatch(JSON.stringify(projectFixtureErrorResponse(failure)), /sensitive spawn detail/);
+  assert.equal(store.listLeads('salesperson')[0].sessionId, null);
 });
 
 test('an ambiguous initial send returns the retained Session for recovery', async () => {
@@ -162,17 +193,19 @@ test('lead creation identity is stable for retries but fresh after fixture state
   const observedRequestIds = [];
   const createHappier = () => ({ embed: { async createSession(_input, options) {
     observedRequestIds.push(options.requestId);
-    throw new Error('session_spawn_failed');
+    throw Object.assign(new Error('private spawn detail'), {
+      result: { type: 'error', code: 'spawn_failed', retryable: false },
+    });
   } }, sessions: { get() { throw new Error('Unexpected retained Session'); } } });
 
   const firstStore = createFixtureStore();
   await assert.rejects(createLeadChat({ happier: createHappier(), store: firstStore,
-    userId: 'salesperson', leadId: 'northstar' }), /session_spawn_failed/);
+    userId: 'salesperson', leadId: 'northstar' }), /spawn_failed/);
   await assert.rejects(createLeadChat({ happier: createHappier(), store: firstStore,
-    userId: 'salesperson', leadId: 'northstar' }), /session_spawn_failed/);
+    userId: 'salesperson', leadId: 'northstar' }), /spawn_failed/);
   const replacementStore = createFixtureStore();
   await assert.rejects(createLeadChat({ happier: createHappier(), store: replacementStore,
-    userId: 'salesperson', leadId: 'northstar' }), /session_spawn_failed/);
+    userId: 'salesperson', leadId: 'northstar' }), /spawn_failed/);
 
   assert.equal(observedRequestIds[0], observedRequestIds[1]);
   assert.notEqual(observedRequestIds[2], observedRequestIds[0]);

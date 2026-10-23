@@ -31,7 +31,7 @@ for that stack and the current-source development plugin lifecycle.
    owner if they have not been built. Start the dev-only server from this checkout:
 
    ```sh
-   node packages/embed/dev/server.mjs
+   node --conditions=happier-source --import tsx packages/embed/dev/server.mjs
    ```
 
    Use the existing development command environment for the three variables;
