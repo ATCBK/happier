@@ -10,8 +10,10 @@ const context = new AsyncLocalStorage<Readonly<{
 }>>();
 
 export function withWebLatencyTrace<T>(requestId: unknown, operation: () => T, sessionId?: string): T {
+    // Nested action dispatch keeps the request's identity and span sequence.
+    if (context.getStore()) return operation();
     return process.env.HAPPIER_WEB_LATENCY_TRACE === '1'
-        && typeof requestId === 'string' && /^(?:new-session-attempt-)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(requestId)
+        && typeof requestId === 'string' && /^(?:req-[0-9a-z]+|(?:new-session-attempt-)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/iu.test(requestId)
         ? context.run({ requestId, ...(sessionId ? { sessionId } : {}), sequence: { next: 0 } }, operation) : operation();
 }
 

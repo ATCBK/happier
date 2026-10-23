@@ -164,10 +164,12 @@ describe("inTx", () => {
         );
     });
 
-    it("attributes transaction timings to their owner without losing request correlation", async () => {
+    it.each(["23b2ed82-2ef7-4e4e-af0f-f64d599a08c6", "req-142h"])("attributes transaction timings to their owner without losing request correlation (%s)", async (requestId) => {
         applyEnvValues({ HAPPIER_WEB_LATENCY_TRACE: "1", HAPPIER_DB_PROVIDER: "postgres" });
-        const requestId = "23b2ed82-2ef7-4e4e-af0f-f64d599a08c6";
-        await expect(withWebLatencyTrace(requestId, () => inTx(async () => "committed", {
+        await expect(withWebLatencyTrace(requestId, () => inTx(async (tx) => {
+            expect(inTxModule.getTransactionContext(tx, { optional: true })?.requestId).toBe(requestId);
+            return "committed";
+        }, {
             transactionClass: "qualified-provider-account-usage.write",
         }))).resolves.toBe("committed");
 

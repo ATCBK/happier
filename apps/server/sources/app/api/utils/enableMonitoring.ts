@@ -15,7 +15,6 @@ import {
     sendDatabaseReadinessResponse,
 } from "@/app/monitoring/readiness";
 import { isShutdown } from "@/utils/process/shutdown";
-import { randomUUID } from 'node:crypto';
 import { recordWebLatencyPhase, withWebLatencyTrace } from '@/utils/webLatencyTrace';
 
 type EnableMonitoringOptions = Readonly<{
@@ -29,7 +28,7 @@ export function enableMonitoring(app: Fastify, options: EnableMonitoringOptions 
         request.startTime = Date.now();
         // Continue Fastify inside the diagnostic scope so authentication and DB
         // reads share it too. Caller headers and query values never supply ids.
-        withWebLatencyTrace(process.env.HAPPIER_WEB_LATENCY_TRACE === '1' ? randomUUID() : null, done);
+        withWebLatencyTrace(request.id, done);
     });
 
     app.addHook('onResponse', async (request, reply) => {

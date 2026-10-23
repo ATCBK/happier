@@ -4,8 +4,9 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { symbols, type DestinationStream } from 'pino';
 
 import { logger } from './logging/log';
-import { timeWebLatencyPhase, withWebLatencyTrace } from './webLatencyTrace';
+import { annotateWebLatencyQuery, readWebLatencyRequestId, timeWebLatencyPhase, withWebLatencyTrace } from './webLatencyTrace';
 import { enableMonitoring } from '@/app/api/utils/enableMonitoring';
+import type { Fastify as HappierFastify } from '@/app/api/types';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -59,19 +60,31 @@ describe('web latency request correlation', () => {
     it('correlates ordinary concurrent HTTP reads through the real monitoring hooks', async () => {
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
         const sink = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
-        const app = Fastify().withTypeProvider<ZodTypeProvider>();
+        const requestRecords: { reqId?: string; req?: object; res?: object }[] = [];
+        const stream = (logger as unknown as { [symbols.streamSym]: DestinationStream })[symbols.streamSym];
+        vi.spyOn(stream, 'write').mockImplementation(message => { requestRecords.push(JSON.parse(message)); });
+        const requestIds = new Map<string, string>();
+        const traceObservations = new Map<string, { requestId?: string; sql: string }>();
+        const app = Fastify({ loggerInstance: logger }).withTypeProvider<ZodTypeProvider>() as unknown as HappierFastify;
         enableMonitoring(app);
         app.addHook('preHandler', async () => {
             await timeWebLatencyPhase('probe.admission', async () => { await Promise.resolve(); });
         });
         app.get<{ Params: { id: string } }>('/trace/:id', async (request) => {
-            await timeWebLatencyPhase(`probe.${request.params.id}`, async () => { await Promise.resolve(); });
+            requestIds.set(request.params.id, request.id);
+            await withWebLatencyTrace('23b2ed82-2ef7-4e4e-af0f-f64d599a08c6', () =>
+                timeWebLatencyPhase(`probe.${request.params.id}`, async () => {
+                    await Promise.resolve();
+                    traceObservations.set(request.params.id, {
+                        requestId: readWebLatencyRequestId(), sql: annotateWebLatencyQuery('SELECT 1'),
+                    });
+                }));
             return { ok: true };
         });
         try {
             const responses = await Promise.all([
-                app.inject('/trace/a?private=must-not-be-logged'),
-                app.inject('/trace/b?private=must-not-be-logged'),
+                app.inject({ url: '/trace/a?private=must-not-be-logged', headers: { 'request-id': 'private-header-input' } }),
+                app.inject({ url: '/trace/b?private=must-not-be-logged', headers: { 'request-id': 'private-header-input' } }),
             ]);
             expect(responses.map(response => response.json())).toEqual([{ ok: true }, { ok: true }]);
             const records = sink.mock.calls.map(([record]) => record).filter(
@@ -79,16 +92,25 @@ describe('web latency request correlation', () => {
             );
             const first = records.find(record => record?.phase === 'probe.a');
             const second = records.find(record => record?.phase === 'probe.b');
-            expect(first).toEqual(expect.objectContaining({ requestId: expect.stringMatching(/^[0-9a-f-]{36}$/u) }));
-            expect(second).toEqual(expect.objectContaining({ requestId: expect.stringMatching(/^[0-9a-f-]{36}$/u) }));
+            expect(first).toEqual(expect.objectContaining({ requestId: requestIds.get('a') }));
+            expect(second).toEqual(expect.objectContaining({ requestId: requestIds.get('b') }));
             expect(first?.requestId).not.toBe(second?.requestId);
+            for (const [key, requestId] of requestIds) {
+                expect(traceObservations.get(key)?.requestId).toBe(requestId);
+                expect(traceObservations.get(key)?.sql).toContain(`happier-web-latency:${requestId}:`);
+            }
             for (const requestId of [first?.requestId, second?.requestId]) {
+                expect(requestRecords).toEqual(expect.arrayContaining([
+                    expect.objectContaining({ reqId: requestId, req: expect.any(Object) }),
+                    expect.objectContaining({ reqId: requestId, res: expect.any(Object) }),
+                ]));
                 expect(records).toEqual(expect.arrayContaining([
                     expect.objectContaining({ phase: 'probe.admission', requestId }),
                     expect.objectContaining({ phase: 'http.GET./trace/:id', requestId }),
                 ]));
             }
             expect(JSON.stringify(records)).not.toContain('must-not-be-logged');
+            expect(JSON.stringify(records)).not.toContain('private-header-input');
         } finally {
             await app.close();
         }
@@ -128,10 +150,11 @@ describe('web latency request correlation', () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
-    it('omits arbitrary input and leaves tracing disabled unless requested', async () => {
+    it.each(['private free-form input', 'req-private/input', "req-private'input", 'req-private\ninput'])(
+        'omits arbitrary input (%s) and leaves tracing disabled unless requested', async (requestId) => {
         const sink = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
-        await withWebLatencyTrace('private free-form input', () => timeWebLatencyPhase('dispatch', () => 'ok'));
+        await withWebLatencyTrace(requestId, () => timeWebLatencyPhase('dispatch', () => 'ok'));
         expect(sink).toHaveBeenCalledWith(expect.not.objectContaining({ requestId: expect.anything() }), '[web-latency]');
         sink.mockClear();
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '0');
