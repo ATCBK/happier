@@ -52,6 +52,10 @@ export function createTriageSourceSessionRelations(
             .then(([sources, configured]) => ({ sources, configured }));
     }
     return {
+        async findConfiguredInstance(sourceInstanceId: string) {
+            const { configured } = await readView();
+            return configured.records.find((record) => record.value.configured.instance.sourceInstanceId === sourceInstanceId) ?? null;
+        },
         async write(input: TriageSessionRelationWriteV1): Promise<Readonly<{ status: 'linked' | 'unlinked' | 'conflict' | 'failed' }>> {
             try {
                 const { sources, configured } = await readView();

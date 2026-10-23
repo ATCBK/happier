@@ -18,7 +18,7 @@ import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollecti
 import { testkitEntryRef, testkitLocator } from '../corpus/testkit/observations.test-support.js';
 import { TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1, TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1, TriageReadSourceSessionLinksResultV1Schema } from './sessionLinksProtocol.js';
 import { TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1, TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1 } from './entrySessionProtocol.js';
-import { TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1 } from './entryDetailProtocol.js';
+import { TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1, TriageReadEntryDetailResultV1Schema } from './entryDetailProtocol.js';
 import { triageEntryDragSourceRuntime, triageEntrySessionDropTargetRuntime } from '../ui/list/entryDragDrop.js';
 import { testkitConfiguredInstance, testkitReadOnlySourceSnapshot, TESTKIT_DELIVERY_REQUEST, createTestkitActionInvoker } from '../sessions/testkit/entrySessionTestkit.test-support.js';
 import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
@@ -98,6 +98,55 @@ async function readLinkRows(
 }
 
 describe('the session-link writer Action', () => {
+    it('reads exact detail and source links through one current configuration view', async () => {
+        const { collections: backing, control } = createTestkitCorpusCollections();
+        let configurationReads = 0;
+        // Account Collection I/O is the boundary; query admission/decoding and
+        // the registered detail/relationship owners still execute unchanged.
+        const collections: CorpusCollectionsV1 = { ...backing, sourceInstances: {
+            ...backing.sourceInstances,
+            query: async (input, options) => {
+                configurationReads++;
+                return await backing.sourceInstances.query(input, options);
+            },
+        } };
+        const configured = testkitConfiguredInstance();
+        const row = {
+            instanceTag: `a${'0'.repeat(42)}`, lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.active,
+            configuredAtMs: 1, sourceQualifiedId: `${configured.instance.source.pluginId}/${configured.instance.source.localId}`,
+            configured,
+        } as const;
+        control.sourceInstances.seed(toCorpusStoredValue(row));
+        const base = createContext(collections);
+        const snapshot = testkitReadOnlySourceSnapshot();
+        let sourceReads = 0;
+        const context = { ...base, surface: 'api', services: { ...base.services,
+            targetedContributions: { observeForSelf: () => ({ readCurrent: async () => ({ contributions: [
+                { ...snapshot.contributions[0], operations: { readSessionLinks: { role: 'readSessionLinks' } } },
+            ] }), dispose: () => {} }) },
+            actions: { executeAdmittedTargetedOperation: async () => {
+                sourceReads++;
+                return { kind: 'complete', links: [{
+                    localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                    sessionId: 'session-a', linkedAtMs: 10, displayPath: 'Linked work',
+                }] };
+            } },
+        } } as unknown as PluginInvocationContext;
+        const handler = registeredLinkHandler(TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1);
+        const input = { v: 1, entryRef: testkitEntryRef(), sourceInstanceId: configured.instance.sourceInstanceId };
+        expect(TriageReadEntryDetailResultV1Schema.parse(await handler(input, context)))
+            .toMatchObject({ kind: 'read', instance: configured, linkedSessions: [{ sessionId: 'session-a' }] });
+        expect(sourceReads).toBe(1);
+        expect(configurationReads).toBe(1);
+
+        control.sourceInstances.seed(toCorpusStoredValue({ ...row,
+            lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.retired, retiredReason: 'userRemoved',
+        }));
+        expect(await handler(input, context)).toEqual({ kind: 'unavailable' });
+        expect(configurationReads).toBe(2);
+        expect(sourceReads).toBe(1);
+    });
+
     it.each(['cli', 'agent', 'self'] as const)('returns healthy source links and explicit unavailable coverage to %s callers', async (caller) => {
         const { collections, control } = createTestkitCorpusCollections();
         const configured = testkitConfiguredInstance();

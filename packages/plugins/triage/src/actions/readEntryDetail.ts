@@ -13,7 +13,6 @@ import {
 import { findConfiguredSourceInstanceRow } from '../corpus/configuration/administerConfiguredSourceInstance.js';
 import { readTriageSessionLinksPageV1 } from '../sessions/readEntrySessionLinks.js';
 import { createTriageSourceSessionRelations, type TriageSourceSessionLinkV1 } from '../sessions/sourceSessionRelations.js';
-import type { TriageReadSourceSessionLinksResultV1 } from './sessionLinksProtocol.js';
 import { requireTriageAccountStorage } from '../requiredAccountStorage.js';
 import { isTriageAccountCaller, isTriageHostActionCaller, resolveTriageCallerSource } from './callerSource.js';
 import type {
@@ -59,9 +58,7 @@ export type TriageReadEntryDetailDepsV1 = Readonly<{
     sourceInstances: Pick<CorpusCollectionHandleV1, 'query'>;
     sessionLinks: Pick<CorpusCollectionHandleV1, 'query' | 'identityTag'>;
     readSessionSummary: TriageLinkedSessionSummaryReaderV1;
-    readSourceLinks?: (input: Readonly<{ entryRef: TriageEntryRefV1; sourceInstanceId: string }>) => Promise<Readonly<{
-        kind: TriageReadSourceSessionLinksResultV1['kind']; links: readonly TriageSourceSessionLinkV1[]; sourceOwned: boolean;
-    }>>;
+    sourceRelations?: Pick<ReturnType<typeof createTriageSourceSessionRelations>, 'findConfiguredInstance' | 'read'>;
     signal?: AbortSignal;
 }>;
 
@@ -116,11 +113,15 @@ export async function readTriageEntryDetail(
     const options: PluginCancellationOptions | undefined = deps.signal
         ? { signal: deps.signal }
         : undefined;
-    const row = await findConfiguredSourceInstanceRow(
-        deps.sourceInstances,
-        input.sourceInstanceId,
-        options,
-    );
+    // Source-role reads already need a current configured view. Use that same
+    // invocation's records; direct Account readers keep their private-id lookup.
+    const row = deps.sourceRelations
+        ? await deps.sourceRelations.findConfiguredInstance(input.sourceInstanceId)
+        : await findConfiguredSourceInstanceRow(
+            deps.sourceInstances,
+            input.sourceInstanceId,
+            options,
+        );
     // A retired row is not a connection a detail may be read through. It is kept
     // so an explicit reactivation stays possible, not so a mounted surface can
     // keep opening it.
@@ -136,7 +137,7 @@ export async function readTriageEntryDetail(
         return UNAVAILABLE;
     }
 
-    const sourceLinks = await deps.readSourceLinks?.({ entryRef: input.entryRef, sourceInstanceId: input.sourceInstanceId });
+    const sourceLinks = await deps.sourceRelations?.read({ entryRef: input.entryRef, sourceInstanceId: input.sourceInstanceId });
     if (sourceLinks !== undefined && sourceLinks.kind !== 'complete') throw new Error('triage:sessionLinks:sourceUnavailable');
     const linkedSessionPage = await readLinkedSessions(
         input.entryRef,
@@ -175,7 +176,7 @@ export function createTriageReadEntryDetailActionHandler(): TriageDataActionHand
         return await readTriageEntryDetail(input, {
             sourceInstances,
             sessionLinks,
-            readSourceLinks: createTriageSourceSessionRelations(context, { sourceInstances, sessionLinks }).read,
+            sourceRelations: createTriageSourceSessionRelations(context, { sourceInstances, sessionLinks }),
             // Portable Account execution has no Session service. These optional
             // display facts stay absent while authoritative links remain present.
             readSessionSummary: async () => null,
