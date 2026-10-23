@@ -99,6 +99,44 @@ describe('native usage-limit recovery composition', () => {
     } finally { recovery.dispose(); }
   });
 
+  it('remembers auto-wait as the Account preference when an explicit enable asks for it', async () => {
+    const sessionId = 'remember-quota-preference';
+    const credentials = { token: 'remember-quota-test', encryption: null };
+    const issue: SessionRuntimeIssueV1 = { v: 1, scope: 'primary_session', status: 'failed', source: 'usage_limit',
+      code: 'usage_limit', agentId: 'codex', agentTurnId: 'interrupted-turn', occurredAt: 100,
+      usageLimit: { v: 1, resetAtMs: 200, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' } };
+    let metadata = createTestMetadata({ flavor: 'codex', machineId: 'machine-local' });
+    const raw = createSessionRecordFixture({ id: sessionId, active: true, encryptionMode: 'plain',
+      metadata: JSON.stringify(metadata), latestTurnStatus: 'failed', latestTurnId: 'failed-turn', lastRuntimeIssue: issue });
+    const recovery = createSessionUsageLimitRecoveryRuntime({ sessionId, currentMachineId: 'machine-local',
+      getMetadata: () => metadata, updateMetadata: async update => { metadata = update(metadata); },
+      readContext: async () => ({ credentials, rawSession: raw, metadata, mode: 'plain', ctx: null }),
+      runRequest: async operation => await operation(), isFeatureEnabled: async () => true, nowMs: () => 150,
+      getAccountSettings: () => null,
+    });
+    // Account Settings HTTP is the external boundary; mutation preparation and retry stay real.
+    let stored: Record<string, unknown> = { usageLimitRecoverySettingsV1: { v: 1, mode: 'ask', customResumePrompt: 'Keep going.' } };
+    let version = 4;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (String(url).endsWith('/v2/account/settings')) return { status: 200, data: { content: { t: 'plain', v: stored }, version } };
+      if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      throw new Error(`Unexpected Home read: ${url}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, input: unknown) => {
+      if (!String(url).endsWith('/v2/account/settings')) throw new Error(`Unexpected Home write: ${url}`);
+      const body = input as { content: { t: 'plain'; v: Record<string, unknown> } };
+      stored = body.content.v;
+      version += 1;
+      return { status: 200, data: { success: true, version } };
+    });
+    try {
+      await expect(recovery.controls.enableUsageLimitWaitResume({ sessionId, rememberPreference: true }))
+        .resolves.toMatchObject({ ok: true });
+      expect(accountSettingsParse(stored).usageLimitRecoverySettingsV1).toMatchObject({
+        v: 1, mode: 'auto_wait', customResumePrompt: 'Keep going.' });
+    } finally { recovery.dispose(); }
+  });
+
   it('delivers auto-wait continuation through Pending into the next real Codex turn', async () => {
     const resetAt = new Date(Date.now() - 1_000).toISOString();
     await withCodexNativeAttachFixture(async native => {

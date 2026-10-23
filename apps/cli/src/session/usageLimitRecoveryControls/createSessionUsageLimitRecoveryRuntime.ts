@@ -2,6 +2,7 @@ import { accountSettingsParse, buildUsageLimitIssueFingerprint, SESSION_USAGE_LI
   type AccountSettings, type SessionRuntimeIssueV1,
   type SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import type { Metadata } from '@/api/types';
 import type { StoredCredentials } from '@/persistence';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
@@ -150,8 +151,8 @@ export function createSessionUsageLimitRecoveryRuntime(deps: Readonly<{
       ...(request.issueFingerprint ? { issueFingerprint: request.issueFingerprint } : {}) });
     if (!intent) return { ok: false, errorCode: 'usage_limit_issue_unavailable' };
     if (request.rememberPreference) await updateAccountSettingsV2WithRetry({ credentials: context.credentials,
-      mutate: (settings) => ({ ...settings, usageLimitRecoverySettingsV1: {
-        ...accountSettingsParse(settings).usageLimitRecoverySettingsV1, v: 1, mode: 'auto_wait' } }) });
+      prepareMutation: (raw) => AccountSettingMutationV1Schema.parse({ operations: [{ op: 'set', key: 'usageLimitRecoverySettingsV1',
+        value: { ...accountSettingsParse(raw).usageLimitRecoverySettingsV1, v: 1, mode: 'auto_wait' } }] }) });
     return await arm(intent, probeUnknownTiming && intent.resetAtMs === null
       && readLatestUsageLimitFailureIssue(context.rawSession)?.usageLimit?.retryAfterMs == null);
     });
