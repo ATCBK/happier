@@ -78,7 +78,7 @@ afterEach(() => { standardCleanup(); actionOperationStore.reset(); inspectionTra
     inspectionTransport.workerAnswer = null; inspectionTransport.hold = null; inspectionTransport.failure = null; });
 
 describe('Scripts canonical operation subscriptions', () => {
-    it('keeps hidden inspection idle and retains one shared checkout result through close, reopen and remount', async () => {
+    it.each([false, true])('keeps hidden inspection idle and retains one shared checkout result through close, reopen and remount (initially presented: %s)', async initiallyPresented => {
         const disposeExecutor = await installRealActionExecutorModuleLoader();
         const connection = await restoreServerAccountForTest({
             serverUrl: 'https://script-definition-demand.test', serverIdentityId: 'srv_script_definition_demand', accountId: 'account',
@@ -95,7 +95,7 @@ describe('Scripts canonical operation subscriptions', () => {
             },
         });
         const refreshing = createDeferred<void>();
-        let presented = false;
+        let presented = initiallyPresented;
         const wrapper = ({ children }: React.PropsWithChildren) => <PluginSurfaceFocusEligibilityProvider active={presented}>{children}</PluginSurfaceFocusEligibilityProvider>;
         try {
             const workspace: WorkspaceAddressV1 = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), machineId: 'source-machine', workspaceId: 'source', rootPath: '/source' };
@@ -104,19 +104,35 @@ describe('Scripts canonical operation subscriptions', () => {
                 setupReadiness: { kind: 'current', reviewedEffectDigest: 'inspected-effect', completedAtMs: 123 },
                 setupConsent: { kind: 'admitted' } });
             const homes = [workspace.serverId];
-            const useInspection = () => useProjectDefinitionInspection(workspace, useServerCredentialAccountScopeBindings(homes).get(workspace.serverId) ?? null);
+            const useInspection = () => {
+                const binding = useServerCredentialAccountScopeBindings(homes).get(workspace.serverId) ?? null;
+                return { ...useProjectDefinitionInspection(workspace, binding), binding };
+            };
             const hook = await renderHook(useInspection, { wrapper });
-            expect(inspectionTransport.accounts).toEqual([]);
+            expect(inspectionTransport.accounts).toEqual(initiallyPresented ? ['account'] : []);
             presented = true;
             await hook.rerender();
             await vi.waitFor(() => expect(hook.getCurrent().read).toHaveProperty('value'));
             const success = hook.getCurrent().read;
             if (!success || !('value' in success)) throw new Error('Expected admitted inspection');
+            const mainBinding = hook.getCurrent().binding;
             expect(inspectionTransport.accounts).toEqual(['account']);
+            const sibling = await renderHook(useInspection, { wrapper });
+            await vi.waitFor(() => expect(sibling.getCurrent().read).toHaveProperty('value'));
+            expect(inspectionTransport.accounts).toEqual(['account']);
+            expect(sibling.getCurrent().read).toBe(success);
+            await sibling.unmount();
+            // Two children can also consume one parent-owned binding. Releasing one
+            // must not withdraw the other's remaining demand or currentness.
+            const sameBinding = await renderHook(() => useProjectDefinitionInspection(workspace, mainBinding), { wrapper });
+            expect(inspectionTransport.accounts).toEqual(['account']);
+            await sameBinding.unmount();
+            await act(async () => { hook.getCurrent().retry(); });
+            await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account']));
             presented = false;
             await hook.rerender();
             await act(async () => { hook.getCurrent().retry(); });
-            expect(inspectionTransport.accounts).toEqual(['account']);
+            expect(inspectionTransport.accounts).toEqual(['account', 'account']);
             inspectionTransport.hold = refreshing.promise;
             presented = true;
             await hook.rerender();
@@ -124,15 +140,16 @@ describe('Scripts canonical operation subscriptions', () => {
             const reopened = hook.getCurrent().read;
             expect(reopened && 'value' in reopened ? reopened.value : null).not.toHaveProperty('setupConsent');
             expect(reopened && 'value' in reopened ? reopened.value : null).not.toHaveProperty('setupReadiness');
-            await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account']));
+            await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account', 'account']));
             await act(async () => { refreshing.resolve(); });
             await vi.waitFor(() => expect(hook.getCurrent().read).toMatchObject({ refreshing: false }));
             await hook.unmount();
             const nextRead = createDeferred<void>();
             inspectionTransport.hold = nextRead.promise;
             const remounted = await renderHook(useInspection, { wrapper });
-            expect(remounted.getCurrent().read).toMatchObject({ refreshing: true, value: { definition: success.value.definition } });
-            await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account', 'account']));
+            // A new credential hook must resolve its Account before exposing retained data.
+            await vi.waitFor(() => expect(remounted.getCurrent().read).toMatchObject({ refreshing: true, value: { definition: success.value.definition } }));
+            await vi.waitFor(() => expect(inspectionTransport.accounts).toEqual(['account', 'account', 'account', 'account']));
             await act(async () => { nextRead.resolve(); });
             inspectionTransport.failure = 'permission_denied';
             await act(async () => { remounted.getCurrent().retry(); });
