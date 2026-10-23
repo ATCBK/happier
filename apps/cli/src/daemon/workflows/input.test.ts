@@ -4,6 +4,8 @@ import { deriveAutomationOccurrenceKeyV1 } from '@happier-dev/protocol/automatio
 import { WorkflowValueReferenceSchema } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import type { WorkflowCondition } from '@happier-dev/protocol/workflows';
 import { MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES } from '@happier-dev/protocol/automations/automationStoredContentEnvelopeV1';
+import { Session } from 'node:inspector/promises';
+import { projectWorkflowPromptContext, renderWorkflowPromptContext } from './workflowPromptContext';
 
 import {
   bindAutomationWorkflowInputs,
@@ -36,6 +38,28 @@ const contextGoal = { id: 'goal', kind: 'goal' as const, origin: 'happier' as co
 function promptValues(text: string): Record<string, unknown>[] {
   return text.split('<happier_discussion_context>\n')[1]!.split('\n</happier_discussion_context>')[0]!
     .split('\n').slice(1).map(line => JSON.parse(JSON.parse(line.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')).text));
+}
+
+async function materializeWithRenderCount(params: Parameters<typeof materializeWorkflowStepInput>[0]) {
+  const profiler = new Session();
+  profiler.connect();
+  try {
+    // Observe real complete-prompt serialization without replacing internal logic.
+    await profiler.post('Profiler.enable');
+    await profiler.post('Profiler.startPreciseCoverage', { callCount: true, detailed: false });
+    const materialized = await materializeWorkflowStepInput(params);
+    const coverage = await profiler.post('Profiler.takePreciseCoverage');
+    const render = coverage.result.filter(script => script.url.endsWith('/workflows/workflowPromptContext.ts'))
+      .flatMap(script => script.functions).find(fn => fn.functionName === 'renderWorkflowPromptContext');
+    const serialization = coverage.result.filter(script => script.url.endsWith('/workflows/workflowPromptContext.ts'))
+      .flatMap(script => script.functions).find(fn => fn.functionName === 'serializeWorkflowPromptContextEntry');
+    expect(render).toBeDefined();
+    expect(serialization).toBeDefined();
+    return { materialized, renders: render!.ranges[0]!.count, serializedEntries: serialization!.ranges[0]!.count };
+  } finally {
+    try { await profiler.post('Profiler.stopPreciseCoverage'); }
+    finally { profiler.disconnect(); }
+  }
 }
 
 describe('workflow input materialization', () => {
@@ -165,6 +189,56 @@ describe('workflow input materialization', () => {
       expect.objectContaining({ source: expect.objectContaining({ discussion: { serverId: 'home', discussionId: 'discussion' } }) }),
     ]));
   });
+  it('compacts a large Discussion context with linear entry serialization and the maximal retained suffix', async () => {
+    const context = { discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'question', throughSeq: 500,
+      messages: Array.from({ length: 500 }, (_, index) => ({ id: `message-${index}`, authorAccountId: 'person',
+        content: `${index}: ${'old'.repeat(340)} <🐈\n"` })) };
+    const document = { text: 'Answer the original question', references: [], attachments: [] };
+    const references = [{ kind: 'input' as const, name: 'question' },
+      { kind: 'discussion_context' as const, scope: 'addressing_message' as const }];
+    const { materialized, serializedEntries } = await materializeWithRenderCount({ document, references,
+      runtime: { ...runtime, inputs: { question: 'QUESTION-TO-KEEP' }, resolveDiscussionContext: async () => context } });
+    // Two complete projections plus each candidate's original/compact entry.
+    expect(serializedEntries).toBeLessThanOrEqual(4 * (context.messages.length + references.length));
+    expect(Buffer.byteLength(materialized.text, 'utf8')).toBeLessThanOrEqual(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
+    expect(materialized.text).toContain('QUESTION-TO-KEEP');
+    const messages = promptValues(materialized.text).filter(entry => entry.source);
+    const discarded = messages.filter(entry => entry.incomplete === true).length;
+    expect(discarded).toBeGreaterThan(0);
+    expect(messages.slice(0, discarded).every(entry => entry.value === null && entry.incomplete === true)).toBe(true);
+    expect(messages.slice(discarded).map(entry => entry.value)).toEqual(context.messages.slice(discarded));
+    const withOneOlderMessage = references.flatMap((reference, index) => projectWorkflowPromptContext({ reference,
+      value: index === 0 ? 'QUESTION-TO-KEEP' : context }));
+    for (const entry of withOneOlderMessage.slice(1, discarded)) {
+      entry.value = null;
+      entry.incomplete = true;
+    }
+    const largerPrompt = `${document.text}\n\n${renderWorkflowPromptContext(withOneOlderMessage)}`;
+    expect(Buffer.byteLength(largerPrompt, 'utf8')).toBeGreaterThan(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
+    expect(context.messages).toHaveLength(500);
+    expect(context.messages[0]!.content).toContain('old');
+  });
+  it('keeps the first fitting Discussion prefix when compacting a later tiny value increases bytes', async () => {
+    const reference = { kind: 'discussion_context' as const, scope: 'addressing_message' as const };
+    const context = { discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'question', throughSeq: 4,
+      messages: [{ id: 'old', content: 'x'.repeat(128) }, null,
+        { id: 'middle', content: 'x'.repeat(128) }, { id: 'newest', content: 'newest' }] };
+    const entries = projectWorkflowPromptContext({ reference, value: context });
+    const renderPrefix = (count: number) => renderWorkflowPromptContext(entries.map((entry, index) => index < count
+      ? { ...entry, value: null, incomplete: true } : entry));
+    const document = { text: 'x'.repeat(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES - Buffer.byteLength(renderPrefix(1), 'utf8') - 2),
+      references: [], attachments: [] };
+    const promptWithPrefix = (count: number) => `${document.text}\n\n${renderPrefix(count)}`;
+    expect(Buffer.byteLength(promptWithPrefix(0), 'utf8')).toBeGreaterThan(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
+    expect(Buffer.byteLength(promptWithPrefix(1), 'utf8')).toBe(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
+    expect(Buffer.byteLength(promptWithPrefix(2), 'utf8')).toBeGreaterThan(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
+    expect(Buffer.byteLength(promptWithPrefix(3), 'utf8')).toBeLessThan(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
+    const materialized = await materializeWorkflowStepInput({ document, references: [reference],
+      runtime: { ...runtime, resolveDiscussionContext: async () => context } });
+    expect(Buffer.byteLength(materialized.text, 'utf8')).toBe(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
+    expect(promptValues(materialized.text)).toEqual(promptValues(promptWithPrefix(1)));
+    expect(promptValues(materialized.text).slice(1).every(entry => entry.incomplete === undefined)).toBe(true);
+  });
   it('enforces declared string choices for occurrence evidence, constants, and defaults', () => {
     const definition = { inputs: [{ name: 'apply', valueType: 'string' as const, required: false,
       default: 'fix', enum: ['fix', 'report'] }] };
@@ -240,15 +314,27 @@ describe('workflow input materialization', () => {
 
   it('drops oldest context turns to fit the complete rendered input while preserving the goal and other inputs', async () => {
     const context = { goal: contextGoal, usage: { kind: 'unavailable' as const },
-      turns: [{ initiator: 'user' as const, text: 'old'.repeat(50_000) }, { initiator: 'workflow' as const, text: 'recent' }], truncated: false };
-    const materialized = await materializeWorkflowStepInput({
-      document: { text: 'Prompt'.repeat(20_000), references: [], attachments: [] },
-      references: [{ kind: 'session_context', recentTurns: 2 }, { kind: 'literal', value: 'other'.repeat(4_000) }],
-      runtime: { ...runtime, resolveSessionContext: async () => context },
-    });
-    expect(Buffer.byteLength(materialized.text, 'utf8')).toBeLessThanOrEqual(256 * 1024);
-    expect(materialized.values[0]).toEqual({ ...context, turns: [context.turns[1]], truncated: true });
-    expect(context.turns).toHaveLength(2);
+      turns: Array.from({ length: 500 }, (_, index) => ({ initiator: 'user' as const,
+        text: `${index}: ${'old'.repeat(340)} <🐈\n"` })), truncated: false };
+    const references = [{ kind: 'session_context' as const, recentTurns: context.turns.length },
+      { kind: 'literal' as const, value: 'other'.repeat(4_000) }];
+    const document = { text: 'Prompt'.repeat(20_000), references: [], attachments: [] };
+    const { materialized, renders } = await materializeWithRenderCount({ document, references,
+      runtime: { ...runtime, resolveSessionContext: async () => context } });
+    expect(renders).toBeLessThanOrEqual(Math.ceil(Math.log2(context.turns.length)) + 3);
+    expect(Buffer.byteLength(materialized.text, 'utf8')).toBeLessThanOrEqual(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
+    const selected = materialized.values[0];
+    expect(selected).toMatchObject({ goal: context.goal, usage: context.usage, truncated: true });
+    if (!selected || typeof selected !== 'object' || Array.isArray(selected) || !Array.isArray(selected.turns)) {
+      throw new Error('Expected selected Session context');
+    }
+    expect(selected.turns.length).toBeGreaterThan(0);
+    expect(selected.turns).toEqual(context.turns.slice(-selected.turns.length));
+    const withOneOlderTurn = { ...context, turns: context.turns.slice(-selected.turns.length - 1), truncated: true };
+    const largerPrompt = `${document.text}\n\n${renderWorkflowPromptContext(references.flatMap((reference, index) =>
+      projectWorkflowPromptContext({ reference, value: index === 0 ? withOneOlderTurn : materialized.values[index]! })))}`;
+    expect(Buffer.byteLength(largerPrompt, 'utf8')).toBeGreaterThan(MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES);
+    expect(context.turns).toHaveLength(500);
     expect(materialized.values[1]).toBe('other'.repeat(4_000));
   });
 

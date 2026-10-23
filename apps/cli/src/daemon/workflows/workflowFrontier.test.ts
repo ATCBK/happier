@@ -1,10 +1,13 @@
 import { createTestWorkflowCoordinator as createWorkflowCoordinator } from './workflowCoordinator.testkit';
 import { performance } from 'node:perf_hooks';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import * as workflowStoredContent from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import {
   openWorkflowCheckpointStoredEnvelopeV1,
+  materializeWorkflowAcceptedSnapshotV1,
   parseWorkflowStoredContentEnvelopeV1,
   sealWorkflowCheckpointStoredEnvelopeV1,
+  sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
   sealWorkflowProgressStoredEnvelopeV1,
   serializeWorkflowStoredContentEnvelopeV1,
   type WorkflowBlock,
@@ -25,9 +28,22 @@ const workspace = { machineId: 'machine-1', directory: '/repo', checkoutRootPath
 const step = (id: string, input: WorkflowStep['input'] = []): WorkflowStep => ({ kind: 'step', id,
   document: { text: id, references: [], attachments: [] }, input, result: { kind: 'text' } });
 
-async function fixture(blocks: readonly WorkflowBlock[]) {
+async function fixture(blocks: readonly WorkflowBlock[], options: Readonly<{ projectProgress?: boolean }> = {}) {
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {
+    agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } },
+  }, blocks: [...blocks] };
+  let acceptedEnvelope = '{}';
+  if (options.projectProgress) {
+    const materialized = await materializeWorkflowAcceptedSnapshotV1({ definition,
+      context: { source: { kind: 'inline' }, inputs: {}, machineId: workspace.machineId,
+        executionTarget: { kind: 'session' }, workspaceTarget: { project: workspace }, origin: { kind: 'direct' }, authorization },
+      admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+    if (!materialized.ok) throw new Error(`workflow_fixture_not_materialized:${materialized.error.code}`);
+    acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: materialized.snapshot }));
+  }
   const boundary = createWorkflowRunStorageTestkit({ runId, machineId: workspace.machineId,
-    origin: { kind: 'direct' }, acceptedEnvelope: '{}', invocationPageSize: 31 });
+    origin: { kind: 'direct' }, invocationPageSize: 31, acceptedEnvelope });
   const checkpoint: WorkflowCheckpointEnvelopeV1 = { kind: 'happier.workflow-checkpoint.v1', rootRecordId: rootId,
     nextSequence: '1', frontier: { nextBlockOrdinal: 0, paused: false } };
   const serializedCheckpoint = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({
@@ -40,9 +56,6 @@ async function fixture(blocks: readonly WorkflowBlock[]) {
       progress: { kind: 'happier.workflow-progress.v1', invocationPath: { blockId: '$root', scope: [] },
         blockKind: 'root', attempt: '0', logicalInvocationRecordId: rootId },
     })) } });
-  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {
-    agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } },
-  }, blocks: [...blocks] };
   const kinds = new Map<string, WorkflowBlock['kind']>();
   const visit = (blocks: readonly WorkflowBlock[]) => { for (const block of blocks) {
     kinds.set(block.id, block.kind);
@@ -58,7 +71,8 @@ async function fixture(blocks: readonly WorkflowBlock[]) {
     });
     if (opened.kind !== 'available') throw new Error('checkpoint_unavailable');
     return await DurableWorkflowCoordinatorStore.load({ accountId, runId, parentAttempt: 0, storage, encryption,
-      rootRecordId: rootId, revision: boundary.run().revision, checkpoint: opened.content });
+      rootRecordId: rootId, revision: boundary.run().revision, checkpoint: opened.content,
+      ...(options.projectProgress ? { authoredDefinition: definition, definition } : {}) });
   };
   const seed = await load();
   let row = 0;
@@ -93,6 +107,57 @@ async function fixture(blocks: readonly WorkflowBlock[]) {
 }
 
 describe('recorded durable workflow frontier', () => {
+  it.each(['pending', 'cancel_requested'] as const)('reads fresh root control from its one authoritative snapshot (%s)', async lifecycle => {
+    const f = await fixture(Array.from({ length: 500 }, (_, index) => step(`control-${index}`)));
+    const store = await f.load();
+    const root = await f.seed.readByLogicalInvocation(rootId);
+    expect(root).toBeDefined();
+    if (lifecycle === 'cancel_requested') await f.seed.commitFact({ key: root!.key, lifecycle });
+    const callsAt = f.boundary.calls.length;
+    expect(await store.readControl()).toBe(lifecycle === 'cancel_requested' ? 'cancel_requested' : 'running');
+    // get already contains the exact root row from this same authoritative
+    // snapshot. Fetching it again adds a request at every effect admission.
+    expect(f.boundary.calls.slice(callsAt).map(call => call.operation)).toEqual(['get']);
+  });
+
+  it.each(['omitted', 'wrong_row'] as const)('keeps root control authoritative when the snapshot projection is %s', async projection => {
+    const f = await fixture([step('decoy')]);
+    const leaf = await f.intent('decoy', 0);
+    const store = await f.load({ execute: async (...args) => {
+      const response = await f.boundary.execute(...args);
+      return args[0].operation === 'get' && response && typeof response === 'object'
+        ? { ...response, rootProgress: projection === 'omitted' ? undefined : f.boundary.rowById(leaf.recordId) }
+        : response;
+    } });
+    const root = await f.seed.readByLogicalInvocation(rootId);
+    await f.seed.commitFact({ key: root!.key, lifecycle: 'cancel_requested' });
+    if (projection === 'wrong_row') await expect(store.readControl()).rejects.toThrow('workflow_storage_response_invalid');
+    else await expect(store.readControl()).resolves.toBe('cancel_requested');
+  });
+
+  it('shares the admitted 500-member loop projection with recovery scheduling', async () => {
+    const items = Array.from({ length: 500 }, (_, index) => index);
+    const loop: WorkflowBlock = { kind: 'loop', id: 'projected-items', repetition: { kind: 'items',
+      items: { kind: 'literal', value: items },
+      execution: 'parallel', maxConcurrent: 2, failurePolicy: 'fail_stop' }, body: [step('work')] };
+    const f = await fixture([loop], { projectProgress: true });
+    const owner = await f.intent(loop.id, 0, { lifecycle: 'running', container: { kind: 'loop', mode: 'items',
+      source: { kind: 'definition', reference: { kind: 'literal', value: items } },
+      itemCount: '500', nextMemberIndex: '500', nextBodyBlockOrdinal: '0' } });
+    for (let index = 0; index < 500; index++) await f.intent(loop.id, index, { parentKey: owner.key,
+      path: { blockId: loop.id, scope: [{ kind: 'iteration', blockId: loop.id, index }] },
+      frame: { ownerBlockId: loop.id, source: { kind: 'item', index: String(index) } },
+      container: { kind: 'body', nextBlockOrdinal: '1' } });
+    const callsAt = f.boundary.calls.length;
+    const members = await f.seed.listCurrentMembers(owner.key);
+    expect(members).toHaveLength(500);
+    expect(members.every(row => row.lifecycle === 'completed')).toBe(true);
+    expect(await f.seed.listCurrentMembers(owner.key)).toEqual(members);
+    // The executing owner has already acquired and maintained these exact
+    // member indices for loop progress. A second consumer must reuse them.
+    expect(f.boundary.calls.slice(callsAt)).toEqual([]);
+  });
+
   it('reserves distinct child root shared gates when two frozen child uses retain native input', async () => {
     const nested: WorkflowBlock = { kind: 'workflow', id: 'nested-native', workflowRef: 'builtin:child', input: {} };
     const siblings = [{ ...nested, id: 'left-child' }, { ...nested, id: 'right-child' }];
@@ -239,7 +304,7 @@ describe('recorded durable workflow frontier', () => {
   });
 
   it('measures four successive hold wakes without reopening an unrelated completed prefix', async () => {
-    const prefix = Array.from({ length: 80 }, (_, index) => step(`wake-prefix-${index}`));
+    const prefix = Array.from({ length: 500 }, (_, index) => step(`wake-prefix-${index}`));
     const loop: WorkflowBlock = { kind: 'loop', id: 'held-items', repetition: { kind: 'items',
       items: { kind: 'literal', value: [0, 1, 2, 3] }, execution: 'parallel', maxConcurrent: 2, failurePolicy: 'fail_stop' },
       body: [{ kind: 'wait', id: 'person', document: { text: 'Continue', references: [], attachments: [] }, result: { kind: 'text' } }] };
@@ -294,10 +359,83 @@ describe('recorded durable workflow frontier', () => {
       expect(held.result.state).toBe(wake === 3 ? 'succeeded' : 'waiting_for_review');
       // Accumulate all measurements before the deliberate baseline falsifier.
       if (wake === 3) {
-        process.stdout.write(`FIN_E4_HOLD_METRICS=${JSON.stringify({ fixture: '80x8192-byte completed prefix; four item holds resolved one at a time; cap 2', measurements })}\n`);
+        process.stdout.write(`FIN_E4_HOLD_METRICS=${JSON.stringify({ fixture: '500x8192-byte completed prefix; four item holds resolved one at a time; authored concurrency 2', measurements })}\n`);
         expect(openedIds).not.toContain(f.boundary.rows().find((row) => row.index.parentRecordId === rootId && row.index.memberOrdinal === '0')!.index.id);
       }
     }
+  });
+
+  it('measures admission and one-at-a-time resolution of 500 parked item holds', async () => {
+    const itemCount = 500;
+    const loop: WorkflowBlock = { kind: 'loop', id: 'parked-items', repetition: { kind: 'items',
+      items: { kind: 'literal', value: Array.from({ length: itemCount }, (_, index) => index) },
+      execution: 'parallel', maxConcurrent: 2, failurePolicy: 'fail_stop' },
+      body: [{ kind: 'wait', id: 'person', document: { text: 'Continue', references: [], attachments: [] }, result: { kind: 'text' } }] };
+    const f = await fixture([loop], { projectProgress: true });
+    const measure = () => {
+      const metrics = { requests: 0, acquiredEnvelopes: 0, acquiredEnvelopeBytes: 0, openedEnvelopes: 0, openedEnvelopeBytes: 0, responseBytes: 0,
+        byOperation: {} as Record<string, number> };
+      return { metrics, storage: { execute: async (...args: Parameters<typeof f.boundary.execute>) => {
+        const operation = String(args[0].operation);
+        metrics.requests++;
+        metrics.byOperation[operation] = (metrics.byOperation[operation] ?? 0) + 1;
+        const response = await f.boundary.execute(...args);
+        metrics.responseBytes += Buffer.byteLength(JSON.stringify(response));
+        if (response && typeof response === 'object' && 'invocation' in response && response.invocation
+          && typeof response.invocation === 'object' && 'contentEnvelope' in response.invocation
+          && typeof response.invocation.contentEnvelope === 'string') {
+          metrics.acquiredEnvelopes++;
+          metrics.acquiredEnvelopeBytes += Buffer.byteLength(response.invocation.contentEnvelope);
+        }
+        return response;
+      } } };
+    };
+    let activeMetrics: ReturnType<typeof measure>['metrics'] | undefined;
+    const originalOpen = workflowStoredContent.openWorkflowProgressStoredEnvelopeV1;
+    // Observe the real codec without substituting any validation or opening
+    // behavior. Snapshot-embedded roots open without a detail acquisition.
+    const openObserver = vi.spyOn(workflowStoredContent, 'openWorkflowProgressStoredEnvelopeV1').mockImplementation(params => {
+      if (activeMetrics) {
+        activeMetrics.openedEnvelopes++;
+        activeMetrics.openedEnvelopeBytes += Buffer.byteLength(JSON.stringify(params.envelope));
+      }
+      return originalOpen(params);
+    });
+    onTestFinished(() => openObserver.mockRestore());
+    const admission = measure();
+    activeMetrics = admission.metrics;
+    let held = await f.run(await f.load(admission.storage));
+    expect(held.result.state).toBe('waiting_for_review');
+    expect(f.boundary.rows().filter(row => row.index.lifecycle === 'waiting_for_review')).toHaveLength(2);
+    const wakes: Array<Readonly<{ resolution: ReturnType<typeof measure>['metrics']; restart: ReturnType<typeof measure>['metrics'] }>> = [];
+    // The normal owner suite samples the beginning of the retained set. The
+    // explicit measurement run resolves all 500 in order over these same bytes.
+    const wakeCount = process.env.HAPPIER_FIN_PERF_FULL_HOLDS === '1' ? itemCount : 4;
+    for (let wake = 0; wake < wakeCount; wake++) {
+      await f.boundary.execute({ operation: 'transition', runId, expectedRevision: held.result.parkRevision,
+        state: 'waiting_for_review', checkpointEnvelope: f.boundary.checkpointEnvelope() });
+      const resolution = measure();
+      activeMetrics = resolution.metrics;
+      const humanStore = await f.load(resolution.storage);
+      const row = f.boundary.rows().find(row => row.index.lifecycle === 'waiting_for_review');
+      expect(row).toBeDefined();
+      const invocation = await humanStore.readByLogicalInvocation(row!.index.id);
+      await humanStore.commitFact({ key: invocation!.key, lifecycle: 'completed', result: `accepted-${wake}` });
+      await f.boundary.execute({ operation: 'resume', runId, expectedRevision: f.boundary.run().revision });
+      const restart = measure();
+      activeMetrics = restart.metrics;
+      const restartCallsAt = f.boundary.calls.length;
+      held = await f.run(await f.load(restart.storage));
+      wakes.push({ resolution: resolution.metrics, restart: restart.metrics });
+      expect(held.result.state).toBe(wake === itemCount - 1 ? 'succeeded' : 'waiting_for_review');
+      expect(held.effects).toEqual([]);
+      const parentPages = f.boundary.calls.slice(restartCallsAt).filter(call => call.operation === 'invocations.list'
+        && call.parentRecordId !== undefined && call.lifecycles === undefined).map(call => JSON.stringify(call));
+      expect(new Set(parentPages).size).toBe(parentPages.length);
+      expect(f.boundary.rows().filter(row => row.index.lifecycle === 'waiting_for_review')).toHaveLength(Math.min(2, itemCount - wake - 1));
+    }
+    await new Promise<void>(resolve => process.stdout.write(
+      `FIN_PARKED_500_METRICS=${JSON.stringify({ itemCount, admission: admission.metrics, wakes })}\n`, () => resolve()));
   });
 
   it.each(['latest', 'all'] as const)('loads selected %s evaluator history without replaying completed bodies', async (history) => {
