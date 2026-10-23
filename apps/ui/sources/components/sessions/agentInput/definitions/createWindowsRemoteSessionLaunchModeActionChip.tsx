@@ -22,6 +22,7 @@ type WindowsRemoteSessionLaunchModeChipProps = Readonly<{
     mode: WindowsRemoteSessionLaunchMode;
     windowsTerminalAvailable: boolean;
     onModeChange: (next: WindowsRemoteSessionLaunchMode) => void;
+    onIntent?: () => void;
     ctx: AgentInputExtraActionChipRenderContext;
 }>;
 
@@ -94,6 +95,9 @@ const WindowsRemoteSessionLaunchModeChip = React.memo(function WindowsRemoteSess
                 <Pressable
                     testID="agent-input-windows-launch-mode-chip"
                     onPress={() => setOpen((current) => !current)}
+                    onPressIn={props.onIntent}
+                    onFocus={props.onIntent}
+                    onHoverIn={props.onIntent}
                     hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
                     style={({ pressed }) => props.ctx.chipStyle(Boolean(pressed))}
                     accessibilityRole="button"
@@ -167,6 +171,7 @@ export function createWindowsRemoteSessionLaunchModeActionChip(params: Readonly<
                 mode={params.mode}
                 windowsTerminalAvailable={params.windowsTerminalAvailable}
                 onModeChange={params.onModeChange}
+                onIntent={params.onIntent}
                 ctx={ctx}
             />
         ),
