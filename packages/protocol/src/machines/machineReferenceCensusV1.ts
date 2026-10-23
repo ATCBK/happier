@@ -70,19 +70,16 @@ export async function readMachineReferenceCensusV1(input: Readonly<{
     if (catalog.status === 'partial') unavailable.add('profiles');
     const profileRows = catalog.source === 'destination' ? catalog.records.map(row => row.record)
       : Array.isArray(settings.profiles) ? settings.profiles : [];
-    const profileArtifactCoverage = { partial: false };
     const artifactsById = await loadAiLaunchProfileArtifacts(profileRows, {
       read: (artifactId, options) => ports.artifacts.read(artifactId, { ...options, fresh: true }),
-      list: async options => {
-        const page = await ports.artifacts.list({ ...options, kind: 'launch-profile.v1', coarseKind: 'other' });
-        if (page.coverage !== 'complete') profileArtifactCoverage.partial = true;
-        return page;
-      },
     }, input.signal);
-    if (profileArtifactCoverage.partial) unavailable.add('profiles');
+    // The catalog gives exact ids for referenced profile Artifacts. Shared-only
+    // profiles remain undiscoverable until Artifacts expose a narrow public
+    // exact-kind source; do not scan the entire coarse `other` inventory here.
+    unavailable.add('profiles');
     const profiles = catalog.source === 'destination'
-      ? readAiLaunchProfileRecords(profileRows, { artifactsById, includeShared: true })
-      : readAiLaunchProfileCollection(profileRows, { artifactsById, includeShared: true });
+      ? readAiLaunchProfileRecords(profileRows, { artifactsById })
+      : readAiLaunchProfileCollection(profileRows, { artifactsById });
     if (profiles.diagnostics.length > 0) unavailable.add('profiles');
     for (const entry of profiles.entries) {
       if (entry.kind === 'opaque') continue;
