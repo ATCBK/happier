@@ -100,37 +100,30 @@ function readPassageRootContent(message: DiscussionOpenedMessageV1): DocPassageR
     && passage.revision.bodyVersion === message.replyTarget.doc.revision.bodyVersion ? passage : null;
 }
 
-/** Reads the exact committed message through C3's existing paging owner. */
+/** Reads one committed message through C3's current access and projection owner. */
 export async function readCommittedDiscussionMessage(parent: DiscussionMessageRefV1 | Readonly<{
   kind: 'discussion'; discussion: DiscussionMessageRefV1['discussion']; localId: string;
 }>, context: ActionExecutorContext,
   discussionAction: NonNullable<ActionExecutorDeps['discussionAction']>, options?: Readonly<{ throughSeq: number }>,
   sameHome: SameHome = areServerProfileIdentifiersEquivalent): Promise<
     { ok: true; message: DiscussionOpenedMessageV1 } | ActionExecuteFailure> {
-  let beforeSeq: number | undefined;
-  for (;;) {
-    context.signal?.throwIfAborted();
-    const result = await discussionAction({ actionId: 'discussion.read',
-      input: { discussionId: parent.discussion.discussionId, ...(beforeSeq === undefined ? {} : { beforeSeq }),
-        ...(options ? { throughSeq: options.throughSeq } : {}) }, context,
-      ...(context.signal ? { signal: context.signal } : {}) });
-    const failure = readActionFailureEnvelope(result);
-    if (failure) return failure;
-    const page = DiscussionReadResultV1Schema.safeParse(result);
-    if (!page.success || !sameHome(page.data.serverId, context.serverId)
-      || page.data.discussionId !== parent.discussion.discussionId) return refuse('invalid_action_output');
-    const message = page.data.messages.find(item => 'messageId' in parent ? item.id === parent.messageId : item.localId === parent.localId);
-    if (message) {
-      if (options && message.seq > options.throughSeq
-        || message.discussionId !== parent.discussion.discussionId
-        || !sameHome(message.messageRef.discussion.serverId, parent.discussion.serverId)) return refuse('invalid_action_output');
-      return { ok: true, message };
-    }
-    if (!page.data.hasMoreOlder) return refuse(page.data.incomplete ? 'content_unavailable' : 'not_found');
-    const next = Math.min(...page.data.messages.map(message => message.seq));
-    if (!Number.isFinite(next) || (beforeSeq !== undefined && next >= beforeSeq)) return refuse('invalid_action_output');
-    beforeSeq = next;
-  }
+  context.signal?.throwIfAborted();
+  const result = await discussionAction({ actionId: 'discussion.read',
+    input: { discussionId: parent.discussion.discussionId,
+      ...('messageId' in parent ? { messageId: parent.messageId } : { localId: parent.localId }),
+      ...(options ? { throughSeq: options.throughSeq } : {}) }, context,
+    ...(context.signal ? { signal: context.signal } : {}) });
+  const failure = readActionFailureEnvelope(result);
+  if (failure) return failure;
+  const page = DiscussionReadResultV1Schema.safeParse(result);
+  if (!page.success || !sameHome(page.data.serverId, context.serverId)
+    || page.data.discussionId !== parent.discussion.discussionId) return refuse('invalid_action_output');
+  const message = page.data.messages.find(item => 'messageId' in parent ? item.id === parent.messageId : item.localId === parent.localId);
+  if (!message) return refuse(page.data.incomplete ? 'content_unavailable' : 'not_found');
+  if (options && message.seq > options.throughSeq
+    || message.discussionId !== parent.discussion.discussionId
+    || !sameHome(message.messageRef.discussion.serverId, parent.discussion.serverId)) return refuse('invalid_action_output');
+  return { ok: true, message };
 }
 
 /** Parent refs identify a committed passage root, never a caller-authored substitute anchor. */

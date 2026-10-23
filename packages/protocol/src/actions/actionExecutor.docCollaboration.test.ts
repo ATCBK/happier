@@ -49,7 +49,7 @@ function discussionFixture() {
     const request = DISCUSSION_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
     if (actionId === 'discussion.read') {
       const read = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.read'].parse(request);
-      const older = read.beforeSeq === 2;
+      const older = read.messageId === rootMessage.id;
       return { v: 1, serverId: 'home', discussionId: 'thread',
         messages: older ? [rootMessage] : [{ ...rootMessage, id: 'later', seq: 2,
           messageRef: { ...rootMessage.messageRef, messageId: 'later' } }],
@@ -169,7 +169,7 @@ describe('Doc collaboration Actions', () => {
       },
       discussionAction: async request => {
         if (request.actionId === 'discussion.read') {
-          const isProposal = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.read'].parse(request.input).beforeSeq === undefined;
+          const isProposal = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.read'].parse(request.input).messageId === proposalRef.messageId;
           return { v: 1, serverId: 'home', discussionId: 'thread', messageSeq: 2, hasMoreOlder: isProposal, incomplete: false,
             messages: [isProposal ? { ...rootMessage, id: 'candidate', seq: 2, messageRef: proposalRef,
               content: { kind: 'doc_edit_proposal', proposal: { target: { ...target,

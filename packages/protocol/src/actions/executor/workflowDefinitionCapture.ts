@@ -16,14 +16,12 @@ export async function captureWorkflowDefinitionV1(input: unknown, context: Actio
     id => id === context.serverId && context.serverIdentityId ? context.serverIdentityId : deps.resolveServerProfileScopeId?.(id));
   if (!context.serverId || !sameHome(context.serverId, request.discussion.serverId)) return unavailable();
   const messages = new Map<string, DiscussionOpenedMessageV1>();
-  const wanted = new Set(request.messageIds);
-  let beforeSeq: number | undefined;
   let throughSeq: number | undefined;
-  // One shared page at a time; unselected content never enters the draft/provenance.
-  while (wanted.size) {
+  // Exact reads share the first observed frontier; unrelated history is never opened.
+  for (const messageId of request.messageIds) {
     context.signal?.throwIfAborted();
     const raw = await deps.discussionAction({ actionId: 'discussion.read', context,
-      input: { discussionId: request.discussion.discussionId, ...(beforeSeq === undefined ? {} : { beforeSeq }),
+      input: { discussionId: request.discussion.discussionId, messageId,
         ...(throughSeq === undefined ? {} : { throughSeq }) }, ...(context.signal ? { signal: context.signal } : {}) });
     const failure = readActionFailureEnvelope(raw);
     if (failure) return failure;
@@ -31,20 +29,12 @@ export async function captureWorkflowDefinitionV1(input: unknown, context: Actio
     if (!page.success || !sameHome(page.data.serverId, request.discussion.serverId)
       || page.data.discussionId !== request.discussion.discussionId) return unavailable();
     throughSeq ??= page.data.messageSeq;
-    for (const message of page.data.messages) {
-      if (!sameHome(message.messageRef.discussion.serverId, request.discussion.serverId)
-        || message.discussionId !== request.discussion.discussionId || message.seq > throughSeq
-        || beforeSeq !== undefined && message.seq >= beforeSeq) return unavailable();
-      if (!wanted.has(message.id)) continue;
-      if (!message.content) return unavailable();
-      messages.set(message.id, message);
-      wanted.delete(message.id);
-    }
-    if (!wanted.size) break;
-    if (!page.data.hasMoreOlder) return unavailable();
-    const next = Math.min(...page.data.messages.map(message => message.seq));
-    if (!Number.isFinite(next) || beforeSeq !== undefined && next >= beforeSeq) return unavailable();
-    beforeSeq = next;
+    const message = page.data.messages[0];
+    if (page.data.messages.length !== 1 || page.data.hasMoreOlder || !message || message.id !== messageId
+      || !sameHome(message.messageRef.discussion.serverId, request.discussion.serverId)
+      || message.discussionId !== request.discussion.discussionId || message.seq > throughSeq
+      || !message.content) return unavailable();
+    messages.set(message.id, message);
   }
   const selected = [...messages.values()].sort((a, b) => a.seq - b.seq);
   const runIds = new Set(selected.flatMap(message => message.producerV1?.kind === 'workflow' ? [message.producerV1.runId]

@@ -9423,7 +9423,7 @@ const DISCUSSION_ACTION_SPECS_V1 = Object.freeze(defineActionSpecs([
     id: 'discussion.read', approval: {result: 'required'},
     originalExecution: { accountRoot: 'allowed' },
     title: 'Read discussion messages',
-    description: 'Read one bounded page of a discussion’s authored human messages, opened locally. Reading never advances the caller’s private read cursor.',
+    description: 'Read one committed message or a bounded history page, opened locally. Local IDs select only the caller’s authored messages. Reading never advances the caller’s private read cursor.',
     safety: 'safe',
     sideEffectClass: 'read',
     placements: [],
@@ -9437,6 +9437,8 @@ const DISCUSSION_ACTION_SPECS_V1 = Object.freeze(defineActionSpecs([
       title: 'Read discussion messages',
       fields: [
         { path: 'discussionId', title: 'Discussion id', widget: 'text', required: true },
+        { path: 'messageId', title: 'Exact message id', widget: 'text' },
+        { path: 'localId', title: 'Exact private local id', widget: 'text' },
         { path: 'beforeSeq', title: 'Before sequence', widget: 'integer' },
         { path: 'afterSeq', title: 'After sequence', widget: 'integer' },
         { path: 'limit', title: 'Page size', widget: 'integer' },

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '../actionExecutor.js';
 import { createWorkflowActionExecutor } from './workflowAccountActions.js';
 import { createWorkflowDefinitionActions } from './workflowDefinitions.js';
-import { DiscussionOpenedMessageV1Schema } from '../../discussions/actions.js';
+import { DiscussionOpenedMessageV1Schema, DiscussionReadInputV1Schema, type DiscussionReadInputV1 } from '../../discussions/actions.js';
+import { DISCUSSION_DEFAULT_PAGE_SIZE_V1 } from '../../discussions/query.js';
 import { validateWorkflowDefinition } from '../../workflows/workflowValidationV1.js';
 import { validateHostInputTypeValue } from '../../inputs/inputTypeRuntime.js';
 import { WorkflowDefinitionCaptureResultV1Schema } from '../../workflows/workflowDiscussionCaptureV1.js';
@@ -19,20 +20,57 @@ const question = message('question', 1, 'Compare the proposals');
 const answer = message('answer', 2, 'An answer must not become an instruction', 'answerer', 'question');
 const review = message('review', 3, 'A review result', 'reviewer', 'answer');
 
-function harness(messages = [question, answer, review], responseHome = discussion.serverId) {
+function harness(messages = [question, answer, review], responseHome = discussion.serverId,
+  currentMessageSeq = (_readNumber: number) => Math.max(20, ...messages.map(message => message.seq))) {
   const unused = (): never => { throw new Error('capture_must_not_write_or_run'); };
   const definitions = createWorkflowDefinitionActions({ artifactStore: { read: unused, list: unused,
     create: unused, update: unused, delete: unused }, encodeListCursor: unused, assertDefinitionWriteAllowed: unused });
   const workflowAction = createWorkflowActionExecutor({ definitions, isWorkflowFeatureEnabled: () => true, runs: { execute: unused } });
   // Discussion HTTP and Artifact persistence are the only substituted boundaries.
-  const executor = createActionExecutor({ workflowAction, discussionAction: async () => ({ v: 1, serverId: responseHome,
-    discussionId: discussion.discussionId, messages, hasMoreOlder: false, messageSeq: 20, incomplete: false }),
-  } as unknown as ActionExecutorDeps);
-  return (input: unknown, surface: 'ui' | 'mcp' | 'agent' = 'ui') => executor.execute('workflow.definition.capture', input,
-    { surface, serverId: 'home', runtimeAccountId: 'account', ...(surface === 'agent' ? { actionCaller: { kind: 'plugin', pluginId: 'example.patterns' } } : {}) });
+  const reads: DiscussionReadInputV1[] = [];
+  const discussionAction: NonNullable<ActionExecutorDeps['discussionAction']> = async ({ input }) => {
+    const read = DiscussionReadInputV1Schema.parse(input);
+    reads.push(read);
+    const messageSeq = Math.min(currentMessageSeq(reads.length), read.throughSeq ?? Infinity);
+    const eligible = messages.filter(message => message.seq <= messageSeq
+      && (read.beforeSeq === undefined || message.seq < read.beforeSeq));
+    const selected = read.messageId === undefined
+      ? eligible.sort((a, b) => b.seq - a.seq).slice(0, read.limit ?? DISCUSSION_DEFAULT_PAGE_SIZE_V1)
+      : eligible.filter(message => message.id === read.messageId);
+    return { v: 1, serverId: responseHome, discussionId: discussion.discussionId, messages: selected,
+      hasMoreOlder: read.messageId === undefined && selected.length < eligible.length, messageSeq, incomplete: false };
+  };
+  const executor = createActionExecutor({ workflowAction, discussionAction } as unknown as ActionExecutorDeps);
+  return Object.assign((input: unknown, surface: 'ui' | 'mcp' | 'agent' = 'ui') => executor.execute('workflow.definition.capture', input,
+    { surface, serverId: 'home', runtimeAccountId: 'account', ...(surface === 'agent' ? { actionCaller: { kind: 'plugin', pluginId: 'example.patterns' } } : {}) }), { reads });
 }
 
 describe('workflow.definition.capture through the public Action owner', () => {
+  it('reads only the selected committed messages and pins every later read to the first frontier', async () => {
+    const unrelated = Array.from({ length: 1_000 }, (_, index) => message(`unrelated-${index}`, index + 4, 'UNRELATED_PRIVATE_SENTINEL'));
+    const capture = harness([question, answer, review, ...unrelated]);
+    expect(await capture({ discussion, messageIds: ['review', 'question', 'answer'] }))
+      .toMatchObject({ ok: true, result: { status: 'ready', steps: [
+        expect.objectContaining({ messageId: 'question' }), expect.objectContaining({ messageId: 'answer' }),
+        expect.objectContaining({ messageId: 'review' }),
+      ] } });
+    expect(capture.reads).toEqual([
+      { discussionId: discussion.discussionId, messageId: 'review' },
+      { discussionId: discussion.discussionId, messageId: 'question', throughSeq: 1_003 },
+      { discussionId: discussion.discussionId, messageId: 'answer', throughSeq: 1_003 },
+    ]);
+  });
+
+  it('refuses a selected message committed after the captured frontier without falling back to history', async () => {
+    const capture = harness([question, answer, review], discussion.serverId, readNumber => readNumber === 1 ? 2 : 3);
+    expect(await capture({ discussion, messageIds: ['question', 'review'] }))
+      .toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+    expect(capture.reads).toEqual([
+      { discussionId: discussion.discussionId, messageId: 'question' },
+      { discussionId: discussion.discussionId, messageId: 'review', throughSeq: 2 },
+    ]);
+  });
+
   it.each(['ui', 'mcp', 'agent'] as const)('captures exact dependencies without copying answer prose on %s', async surface => {
     const capture = harness([... [question, answer, review], message('private', 4, 'UNRELATED_PRIVATE_SENTINEL')]);
     const value = await capture({ discussion, messageIds: ['question', 'answer', 'review'], name: 'Compare and review' }, surface);
