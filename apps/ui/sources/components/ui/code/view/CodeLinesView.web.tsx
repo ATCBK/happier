@@ -12,12 +12,13 @@ import { shikiTokenizeLines } from '@/components/ui/code/highlighting/shiki/shik
 
 export function CodeLinesView(props: CodeLinesViewProps) {
     const { theme } = useUnistyles();
+    const syntaxLines = props.syntaxHighlightingLines ?? props.lines;
 
     const effectiveSyntaxHighlighting = React.useMemo(() => {
-        return resolveEffectiveSyntaxHighlighting({ lines: props.lines, config: props.syntaxHighlighting });
-    }, [props.lines, props.syntaxHighlighting]);
+        return resolveEffectiveSyntaxHighlighting({ lines: syntaxLines, config: props.syntaxHighlighting });
+    }, [syntaxLines, props.syntaxHighlighting]);
 
-    const [advancedTokensByIndex, setAdvancedTokensByIndex] = React.useState<readonly (readonly ShikiInlineToken[] | null)[] | null>(null);
+    const [advancedTokensByLine, setAdvancedTokensByLine] = React.useState<ReadonlyMap<CodeLine, readonly ShikiInlineToken[]> | null>(null);
     const [advancedTokensRevision, setAdvancedTokensRevision] = React.useState(0);
 
     const isDark = theme.dark === true;
@@ -27,17 +28,17 @@ export function CodeLinesView(props: CodeLinesViewProps) {
 
     const codeLinesForShiki = React.useMemo(() => {
         if (!shikiEnabled) return null;
-        return props.lines.map((l) => (l.renderIsHeaderLine ? '' : (l.renderCodeText ?? '')));
-    }, [props.lines, shikiEnabled]);
+        return syntaxLines.map((l) => (l.renderIsHeaderLine ? '' : (l.renderCodeText ?? '')));
+    }, [syntaxLines, shikiEnabled]);
 
     React.useEffect(() => {
         if (!shikiEnabled) {
-            setAdvancedTokensByIndex(null);
+            setAdvancedTokensByLine(null);
             return;
         }
         const syntaxLanguage = effectiveSyntaxHighlighting.language;
         if (!syntaxLanguage) {
-            setAdvancedTokensByIndex(null);
+            setAdvancedTokensByLine(null);
             return;
         }
         const inputLines = codeLinesForShiki;
@@ -47,34 +48,32 @@ export function CodeLinesView(props: CodeLinesViewProps) {
 
         fireAndForget((async () => {
             try {
-                const { tokensByLine, fg } = await shikiTokenizeLines({
+                const { tokensByLine } = await shikiTokenizeLines({
                     isDark,
                     language: syntaxLanguage,
                     lines: inputLines,
                     colors: theme.colors,
                 });
 
-                const out: Array<readonly ShikiInlineToken[] | null> = [];
-                for (let i = 0; i < props.lines.length; i++) {
-                    const line: CodeLine | undefined = props.lines[i];
+                const out = new Map<CodeLine, readonly ShikiInlineToken[]>();
+                for (let i = 0; i < syntaxLines.length; i++) {
+                    const line = syntaxLines[i];
                     if (!line || line.renderIsHeaderLine) {
-                        out.push(null);
                         continue;
                     }
                     if ((line.renderCodeText ?? '').length > effectiveSyntaxHighlighting.maxLineLength) {
-                        out.push(null);
                         continue;
                     }
-                    const row = tokensByLine[i] ?? [];
-                    out.push(row.map((t) => ({ text: t.text, color: t.color ?? fg })));
+                    const row = tokensByLine[i];
+                    if (row) out.set(line, row);
                 }
 
                 if (cancelled) return;
-                setAdvancedTokensByIndex(out);
+                setAdvancedTokensByLine(out);
                 setAdvancedTokensRevision((v) => v + 1);
             } catch {
                 if (cancelled) return;
-                setAdvancedTokensByIndex(null);
+                setAdvancedTokensByLine(null);
             }
         })());
 
@@ -86,7 +85,7 @@ export function CodeLinesView(props: CodeLinesViewProps) {
         effectiveSyntaxHighlighting.language,
         effectiveSyntaxHighlighting.maxLineLength,
         isDark,
-        props.lines,
+        syntaxLines,
         shikiEnabled,
         theme.colors,
     ]);
@@ -95,7 +94,10 @@ export function CodeLinesView(props: CodeLinesViewProps) {
         <CodeLinesViewCore
             {...props}
             advancedTokensRevision={advancedTokensRevision}
-            getAdvancedTokens={(idx) => advancedTokensByIndex?.[idx] ?? null}
+            getAdvancedTokens={(idx) => {
+                const line = props.lines[idx];
+                return line ? advancedTokensByLine?.get(line) ?? null : null;
+            }}
         />
     );
 }

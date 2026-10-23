@@ -166,6 +166,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
         <View style={[props.virtualized ? styles.virtualizedBody : null, !wrapLines ? styles.fillScroll : null]}>
             <CodeLinesView
                 lines={folded.lines}
+                syntaxHighlightingLines={lines}
                 selectedLineIds={props.selectedLineIds}
                 interactionMode={props.interactionMode}
                 rangeSelectionActive={props.rangeSelectionActive}

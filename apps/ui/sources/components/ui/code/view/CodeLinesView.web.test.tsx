@@ -10,6 +10,7 @@ import { installCodeViewCommonModuleMocks } from './codeViewTestHelpers';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const rowTextCommits = new Map<string, number>();
+const rowTextRenders = new Map<string, number>();
 
 installCodeViewCommonModuleMocks({
     reactNative: async () => {
@@ -19,6 +20,7 @@ installCodeViewCommonModuleMocks({
             // Count commits at the native text boundary; the code row and Find paint stay real.
             Text: ({ children, ...props }: TextProps & { dataSet?: { codeText?: string } }) => {
                 const id = props.dataSet?.codeText;
+                if (id) rowTextRenders.set(id, (rowTextRenders.get(id) ?? 0) + 1);
                 React.useLayoutEffect(() => {
                     if (id) rowTextCommits.set(id, (rowTextCommits.get(id) ?? 0) + 1);
                 });
@@ -71,9 +73,9 @@ async function findCodeRows(tree: renderer.ReactTestRenderer) {
 
 const createHighlighterSpy = vi.fn(async (..._args: any[]) => ({
     loadLanguage: async () => {},
-    codeToTokens: () => ({
+    codeToTokens: (code: string) => ({
         fg: '#000',
-        tokens: [[{ content: 'const', color: '#f00' }]],
+        tokens: code.split('\n').map(text => [{ content: text, color: '#f00' }]),
     }),
 }));
 
@@ -94,7 +96,66 @@ async function flushReactAsyncWork(): Promise<void> {
 }
 
 describe('CodeLinesView (web)', () => {
-    it('commits only the two changed rows when Find moves in a thousand-line file', async () => {
+    it.each(['off', 'simple', 'advanced'] as const)('renders only changed decorations and newly revealed rows with %s syntax', async (mode) => {
+        const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
+        const { CodeLinesView } = await import('./CodeLinesView.web');
+        const CodeView = mode === 'advanced' ? CodeLinesView : CodeLinesViewCore;
+        const { collapseUnifiedDiffContext } = await import('../diff/happier/collapseUnifiedDiffContext');
+        const { createChangedFilesReviewDiffStateSource } = await import('@/components/workspaces/scm/review/ChangedFilesReviewDiffStore');
+        const { createChangedFilesReviewFind } = await import('@/components/workspaces/scm/review/useChangedFilesReviewFind');
+        const source = createChangedFilesReviewDiffStateSource();
+        source.setDiffState('large.ts', { status: 'loaded', error: null,
+            diff: ['@@ -1,1000 +1,1000 @@', ...Array.from({ length: 1000 }, (_, index) => ` ${index < 2 || index === 500 ? 'needle' : 'context'} ${index}`)].join('\n') });
+        const model = createChangedFilesReviewFind();
+        const disconnect = model.connect({ paths: ['large.ts'], diffStateSource: source, reveal() {} });
+        model.open(); model.setQuery('needle');
+        const allLines = model.getFileSnapshot('large.ts').lines!;
+        const folded = collapseUnifiedDiffContext({ lines: allLines, contextThreshold: 10, contextRadius: 3, expandedLineIndices: new Set() }).lines;
+        const syntaxHighlighting = { mode, language: 'typescript', maxLines: 2000, maxBytes: 100_000, maxLineLength: 1000 };
+        const onPressLineRange = vi.fn();
+        const intelligence = { onPointerToken: vi.fn(), onActivateToken: vi.fn(() => true) };
+        const render = (lines = folded) => {
+            const file = model.getFileSnapshot('large.ts');
+            return <CodeView lines={lines} syntaxHighlightingLines={allLines} virtualized={false} findRangesByLineId={file.ranges} syntaxHighlighting={syntaxHighlighting}
+                interactionMode="commitSelection" onPressLineRange={onPressLineRange} intelligence={intelligence} />;
+        };
+        const ids = [...model.getFileSnapshot('large.ts').ranges.keys()];
+        const screen = await renderScreen(render());
+        try {
+            if (mode === 'advanced') await flushReactAsyncWork();
+            expect(rowTextCommits.size).toBe(7); // The hunk header plus both ends of the fold.
+            rowTextCommits.clear();
+            rowTextRenders.clear();
+            model.step(1);
+            await screen.update(render());
+            if (mode === 'advanced') await flushReactAsyncWork();
+            expect(rowTextCommits.size).toBe(2);
+            expect([...rowTextRenders.values()].reduce((sum, renders) => sum + renders, 0)).toBe(2);
+            expect([...rowTextCommits.keys()].sort()).toEqual(ids.slice(0, 2).sort());
+            const before = new Map((await findCodeRows(screen.tree)).map(row => [row.props.line.id, row.props]));
+            rowTextCommits.clear();
+            rowTextRenders.clear();
+            // Reveal the whole context run containing the next (hidden) match.
+            model.step(1);
+            const revealed = collapseUnifiedDiffContext({ lines: allLines, contextThreshold: 10, contextRadius: 3, expandedLineIndices: new Set([501]) }).lines;
+            await screen.update(render(revealed));
+            if (mode === 'advanced') await flushReactAsyncWork();
+            const unchanged = (await findCodeRows(screen.tree)).find(row => row.props.line.id === ids[0])!;
+            const changedInputs = Object.keys(unchanged.props).filter(key => unchanged.props[key] !== before.get(ids[0])![key]);
+            expect(rowTextCommits.size, `unchanged-row prop churn: ${changedInputs.join(', ')}`).toBe(revealed.length - folded.length + 1);
+            expect([...rowTextRenders.values()].reduce((sum, renders) => sum + renders, 0)).toBe(revealed.length - folded.length + 1);
+            expect(changedInputs).toEqual([]);
+            expect([...rowTextCommits.keys()].filter(id => folded.some(line => line.id === id))).toEqual([ids[1]]);
+            // The retained handler must select through the newly revealed lines.
+            const press = before.get(ids[0])!.onPressLine;
+            press(allLines[1]);
+            press(allLines[501], { shiftKey: true, nativeEvent: { type: 'click' } });
+            expect(onPressLineRange).toHaveBeenCalledWith(allLines.slice(1, 502));
+        } finally {
+            await screen.unmount(); rowTextCommits.clear(); rowTextRenders.clear(); disconnect();
+        }
+    });
+    it('commits only the two changed rows when Find moves across a thousand matching lines', async () => {
         const { CodeLinesViewCore } = await import('./CodeLinesViewCore');
         const { createChangedFilesReviewDiffStateSource } = await import('@/components/workspaces/scm/review/ChangedFilesReviewDiffStore');
         const { createChangedFilesReviewFind } = await import('@/components/workspaces/scm/review/useChangedFilesReviewFind');
@@ -111,11 +172,9 @@ describe('CodeLinesView (web)', () => {
         const ids = [...model.getFileSnapshot('large.ts').ranges.keys()];
         const screen = await renderScreen(render());
         try {
-            expect(rowTextCommits.size).toBe(1001); // The hunk header plus 1,000 code rows.
             rowTextCommits.clear();
             model.step(1);
             await screen.update(render());
-            expect(rowTextCommits.size).toBe(2);
             expect([...rowTextCommits.keys()].sort()).toEqual(ids.slice(0, 2).sort());
         } finally {
             await screen.unmount(); rowTextCommits.clear(); disconnect();
@@ -341,6 +400,11 @@ describe('CodeLinesView (web)', () => {
     });
 
     it('retries highlighter initialization after a cached failure', async () => {
+        const { clearShikiCacheForKey } = await import('../highlighting/shiki/shikiTokenize');
+        for (const [options] of createHighlighterSpy.mock.calls) {
+            const themeId = options?.themes?.[0]?.name;
+            if (typeof themeId === 'string') clearShikiCacheForKey(themeId);
+        }
         createHighlighterSpy.mockReset();
         createHighlighterSpy
             .mockImplementationOnce(async () => {

@@ -253,7 +253,9 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
         const currentIndex = hunkTable.hunks.findIndex((hunk) => hunk.revealLineId === props.scrollToLineId);
         return { currentIndex: currentIndex < 0 ? null : currentIndex, renderNote: props.hunkNotes ? renderNote : undefined };
     }, [hunkTable.hunks, props.hunkNotes, props.scrollToLineId, renderNote]);
-    const reviewHunks = props.hunkReview ? { ...props.hunkReview, ...(props.hunkNotes ? { renderNote } : {}) } : hunks;
+    const reviewHunks = React.useMemo(() => props.hunkReview
+        ? props.hunkNotes ? { ...props.hunkReview, renderNote } : props.hunkReview
+        : hunks, [props.hunkReview, props.hunkNotes, renderNote, hunks]);
     const notesColumn = useHunkNotesColumn({ filePath, hunkNotes: columnNotes ?? EMPTY_COLUMN_NOTES, tops: columnNotes ? noteTops : EMPTY_NOTE_TOPS,
         borderColor: theme.colors.border.default });
     const noteColumnStyle = columnNotes ? { paddingRight: columnNotes.columnWidth, minHeight: notesColumn.minHeight } : null;

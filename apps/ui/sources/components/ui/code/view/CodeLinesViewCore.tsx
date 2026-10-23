@@ -24,6 +24,7 @@ import { resolveAgentWashColor, resolveCodeSelectionColor } from '../editor/edit
 import { EditorAgentCaret } from '@/components/ui/motion/EditorAgentCaret';
 import { useCodeTextSelectionPaint } from './useCodeTextSelectionPaint';
 import { DiffLeadingContent } from '@/components/ui/code/diff/happier/DiffLeadingContent';
+import { useEventCallback } from '@/hooks/ui/useEventCallback';
 
 // The list projects global decorations into row-local props. Unchanged code rows retain
 // their text/token tree when Find moves to another row in the same file.
@@ -122,6 +123,8 @@ export type CodeLinesViewProps = {
     reviewLaneWidth?: number;
     showPrefix?: boolean;
     syntaxHighlighting?: CodeLinesSyntaxHighlightingConfig;
+    /** Full source before folding; grammar state and token budgets follow the source, not its visible projection. */
+    syntaxHighlightingLines?: readonly CodeLine[];
     scrollToLineId?: string;
     scrollToLineAlignment?: 'start';
     onRememberReadingLine?: (line: number) => void;
@@ -304,11 +307,11 @@ export function CodeLinesViewCore(
         pendingTouchToken.current = token;
     }, [intelligenceLines, onActivateToken]);
     // Native rows resolve a tap themselves (tap-to-name); they report no anchor rect.
-    const onRowActivateToken = React.useCallback((lineId: string, offset16: number) => {
+    const onRowActivateToken = useEventCallback((lineId: string, offset16: number) => {
         const newLine = intelligenceLines?.get(lineId)?.newLine;
         return rangeSelectionActive !== true && typeof newLine === 'number'
             && onActivateToken?.(lineId, offset16, { via: 'touch', rect: null }, newLine) === true;
-    }, [intelligenceLines, onActivateToken, rangeSelectionActive]);
+    });
     const intelligenceEvents = Platform.OS === 'web' && props.intelligence
         ? { onPointerMove: handlePointerMove, onPointerLeave: onPointerAway } : {};
     // Resolve touch coordinates in capture; the row's real press owns both touch and modifier activation.
@@ -337,22 +340,23 @@ export function CodeLinesViewCore(
     const dragStartLineIdRef = React.useRef<string | null>(null);
     const dragCurrentLineIdRef = React.useRef<string | null>(null);
 
+    const syntaxLines = props.syntaxHighlightingLines ?? props.lines;
     const effectiveSyntaxHighlighting = React.useMemo(() => {
-        return resolveEffectiveSyntaxHighlighting({ lines: props.lines, config: props.syntaxHighlighting });
-    }, [props.lines, props.syntaxHighlighting]);
+        return resolveEffectiveSyntaxHighlighting({ lines: syntaxLines, config: props.syntaxHighlighting });
+    }, [syntaxLines, props.syntaxHighlighting]);
 
     const isHighlighted = React.useCallback((lineId: string) => {
         return props.highlightLineId === lineId || props.highlightLineIds?.has(lineId) === true;
     }, [props.highlightLineId, props.highlightLineIds]);
 
-    const resolveRange = React.useCallback((startLineId: string, endLineId: string): readonly CodeLine[] => {
+    const resolveRange = useEventCallback((startLineId: string, endLineId: string): readonly CodeLine[] => {
         return resolveCodeLineRangeSelection({
             lines: props.lines,
             startLineId,
             endLineId,
             includeLine: (line) => !line.renderIsHeaderLine,
         });
-    }, [props.lines]);
+    });
 
     const completeRange = React.useCallback((startLineId: string, endLineId: string) => {
         const range = resolveRange(startLineId, endLineId);
@@ -360,7 +364,7 @@ export function CodeLinesViewCore(
         onPressLineRange?.(range);
     }, [onPressLineRange, resolveRange]);
 
-    const handlePressLine = React.useCallback((line: CodeLine, event?: CodeLinePressEvent) => {
+    const handlePressLine = useEventCallback((line: CodeLine, event?: CodeLinePressEvent) => {
         const touch = pendingTouchToken.current;
         pendingTouchToken.current = null;
         const via = event ? resolveCodeTokenPress(event.nativeEvent, touch?.lineId === line.id, rangeSelectionActive === true) : null;
@@ -398,7 +402,7 @@ export function CodeLinesViewCore(
 
         lastPressedLineIdRef.current = line.id;
         onPressLine?.(line, event);
-    }, [completeRange, intelligenceLines, onActivateToken, onPressLine, rangeGesturesEnabled, rangeSelectionActive]);
+    });
 
     const handleLongPressLine = React.useCallback((line: CodeLine) => {
         pendingTouchToken.current = null;
