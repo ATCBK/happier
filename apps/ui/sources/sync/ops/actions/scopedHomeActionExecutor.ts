@@ -22,15 +22,19 @@ const executorsByScope = new Map<
 
 export function scopedHomeActionExecutor(
     scope: ServerAccountScope,
-    options?: Pick<NonNullable<Parameters<typeof createDefaultActionExecutor>[0]>, 'teamMembershipHistoryAction' | 'onBlockingApprovalPending'>,
+    options?: Pick<NonNullable<Parameters<typeof createDefaultActionExecutor>[0]>, 'teamMembershipHistoryAction' | 'onBlockingApprovalPending'> & Readonly<{
+        /** Invocation-local cancellation of a snapshot loader's admitted catalog page walk. */
+        homeDomainReadCurrentness?: () => boolean;
+    }>,
 ): ReturnType<typeof createFrontDoorActionExecute> {
     const key = serverAccountScopeKeySuffix(scope);
     const existing = executorsByScope.get(key);
     if (existing && !options) return existing;
 
+    const { homeDomainReadCurrentness, ...ordinaryOptions } = options ?? {};
     const executorOptions = {
-        homeDomainAction: createHomeDomainActionExecutorForScope(scope),
-        ...options,
+        homeDomainAction: createHomeDomainActionExecutorForScope(scope, undefined, homeDomainReadCurrentness),
+        ...ordinaryOptions,
     };
     const ordinary = createFrontDoorActionExecute(createDefaultActionExecutor(executorOptions));
     const execute: typeof ordinary = Object.assign(async (...args: Parameters<typeof ordinary>) => {

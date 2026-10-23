@@ -769,7 +769,8 @@ const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentia
         beginTeamCredentialResourceCatalogLoad(scope, address, application);
         let outcome: Awaited<ReturnType<typeof listEntitledTeamCredentialResources>>;
         try {
-            outcome = await listEntitledTeamCredentialResources({ scope, address, ...(application ? { application } : {}) });
+            outcome = await listEntitledTeamCredentialResources({ scope, address, shouldContinue: loadContext.isCurrent,
+                ...(application ? { application } : {}) });
         } catch {
             applyTeamCredentialResourceCatalogFailure({
                 scope,

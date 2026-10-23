@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import * as React from 'react';
-import { NO_TEAM_CAPABILITIES_V1, TeamCredentialResourceEntitledPageV1Schema, TeamCredentialResourceReadInputV1Schema, TeamsListInputV1Schema, teamDirectoryQueryKeyV1, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
+import { NO_TEAM_CAPABILITIES_V1, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceDiscoverInputV1Schema, TeamCredentialResourceDiscoveryPageV1Schema, TeamsListInputV1Schema, teamDirectoryQueryKeyV1, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { HomeGovernanceEligibilityV1Schema, HomeGovernanceProjectionV1Schema } from '@happier-dev/protocol/home/governance';
 
@@ -253,8 +253,7 @@ describe('useTeamsDirectory', () => {
             teamsEnabled: true, credentialResourcesEnabled: true });
         expect(named).not.toBe('srv_team_alias');
         home.answer(named, '/v1/teams/list', { body: { items: [team('shared-id', 'Named Team')], nextCursor: null } });
-        const catalogRequest = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: 'shared-id' });
-        home.answer(named, catalogRequest.path, { body: TeamCredentialResourceEntitledPageV1Schema.parse({ resources: [], nextCursor: null }) });
+        home.answer(named, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, { body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: [], nextCursor: null, failures: [] }) });
         home.answer(named, bindHomeDomainActionHttpRequestV1('home.governance.get', {}).path, {
             body: HomeGovernanceProjectionV1Schema.parse(homeGovernanceProjectionFixture({
                 viewer: { accountId: 'named-account', homeRole: 'owner', status: 'active' },
@@ -314,7 +313,7 @@ describe('useTeamsDirectory', () => {
             serverIdentityId: 'srv_team_models', accountId: 'account', currentAccount: true,
             teamsEnabled: true, credentialResourcesEnabled: true });
         home.answer(serverId, '/v1/teams/list', { body: { items: [team('team-1')], nextCursor: null } });
-        const path = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: 'team-1' }).path;
+        const path = TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1;
         let revision = 1;
         let applicationFailureStatus: number | null = null;
         let applicationUnreachable = false;
@@ -333,7 +332,7 @@ describe('useTeamsDirectory', () => {
             } } },
         }) : null;
         home.answer(serverId, path, { select: (input) => {
-            const { application } = TeamCredentialResourceReadInputV1Schema.parse(input);
+            const { application } = TeamCredentialResourceDiscoverInputV1Schema.parse(input);
             if (application && applicationUnreachable) throw new TypeError('fetch failed');
             if (application && applicationFailureStatus) return { respondAfter, status: applicationFailureStatus,
                 body: { error: applicationFailureStatus === 403 ? 'forbidden' : 'unavailable' } };
@@ -350,11 +349,11 @@ describe('useTeamsDirectory', () => {
                 }] : [], connectedServiceSelections: [],
                 sourcePresentation: { kind: 'provider', provider: { identity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' }, definitionRevision: 1 } },
             };
-            return { respondAfter, body: TeamCredentialResourceEntitledPageV1Schema.parse({ resources: application ? [resource]
+            return { respondAfter, body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: application ? [resource]
                 : [resource, { ...resource, id: 'generic-only',
                     sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.service.test', localId: 'chat' } },
                     connectedServiceSelections: [{ source: 'team_resource', resourceId: 'generic-only', deliveryMode: 'brokered' }],
-                }], nextCursor: null }) };
+                }], nextCursor: null, failures: [] }) };
         } });
         getCredentialsForServerUrlMock.mockImplementation(async (url) => {
             const token = home.findByServerUrl(url)?.token;

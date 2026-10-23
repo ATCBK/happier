@@ -1,6 +1,6 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TeamCredentialResourceEntitledPageV1Schema, TeamCredentialResourcePageV1Schema } from '@happier-dev/protocol/teams';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceDiscoveryPageV1Schema, TeamCredentialResourcePageV1Schema } from '@happier-dev/protocol/teams';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
 
@@ -112,12 +112,12 @@ describe('Team credential resource demand', () => {
         const scope = { serverId, accountId: 'account-ada' };
         const address = { serverId, teamId: 'team-1' };
         const list = bindHomeDomainActionHttpRequestV1('teams.credentials.list', { teamId: address.teamId });
-        const entitled = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: address.teamId });
+        const discoveryPath = TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1;
         home.answer(serverId, list.path, { body: TeamCredentialResourcePageV1Schema.parse({
             resources: [teamCredentialResourceFixture()], nextCursor: null,
             viewer: teamCredentialViewerFixture({ manageCredentials: true }),
         }) });
-        home.answer(serverId, entitled.path, { body: TeamCredentialResourceEntitledPageV1Schema.parse({ resources: [], nextCursor: null }) });
+        home.answer(serverId, discoveryPath, { body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: [], nextCursor: null, failures: [] }) });
         const input = { scope, address, enabled: true };
         const administration = await renderHook(() => ({
             first: useTeamCredentialResources(input), second: useTeamCredentialResources(input),
@@ -125,20 +125,20 @@ describe('Team credential resource demand', () => {
         await waitForHomeGovernance(() => expect(administration.getCurrent().first.isCurrent).toBe(true));
         expect(administration.getCurrent().second.rows).toHaveLength(1);
         expect(home.requestsFor(list.path)).toHaveLength(1);
-        expect(home.requestsFor(entitled.path)).toHaveLength(0);
+        expect(home.requestsFor(discoveryPath)).toHaveLength(0);
 
         await act(async () => { await administration.getCurrent().first.reload(); });
         expect(home.requestsFor(list.path)).toHaveLength(2);
-        expect(home.requestsFor(entitled.path)).toHaveLength(0);
+        expect(home.requestsFor(discoveryPath)).toHaveLength(0);
 
         const recipient = await renderHook((values: typeof input) => useTeamCredentialResourceCatalog(values), { initialProps: input });
         await waitForHomeGovernance(() => expect(recipient.getCurrent().isCurrent).toBe(true));
-        expect(home.requestsFor(entitled.path)).toHaveLength(1);
+        expect(home.requestsFor(discoveryPath)).toHaveLength(1);
         expect(home.requestsFor(list.path)).toHaveLength(2);
         const reloadRecipient = recipient.getCurrent().reload;
         await recipient.rerender({ ...input, scope: { ...scope }, address: { ...address } });
         await waitForHomeGovernance(() => expect(recipient.getCurrent().isCurrent).toBe(true));
-        expect(home.requestsFor(entitled.path)).toHaveLength(1);
+        expect(home.requestsFor(discoveryPath)).toHaveLength(1);
         expect(recipient.getCurrent().reload).toBe(reloadRecipient);
 
         // Real credential writes invalidate both snapshots; the Home's content-free
@@ -151,7 +151,7 @@ describe('Team credential resource demand', () => {
             expect(administration.getCurrent().first.isCurrent).toBe(true);
             expect(recipient.getCurrent().isCurrent).toBe(true);
             expect(home.requestsFor(list.path)).toHaveLength(3);
-            expect(home.requestsFor(entitled.path)).toHaveLength(2);
+            expect(home.requestsFor(discoveryPath)).toHaveLength(2);
         });
     });
 });

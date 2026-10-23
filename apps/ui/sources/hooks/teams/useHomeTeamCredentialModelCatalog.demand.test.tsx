@@ -1,0 +1,165 @@
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
+
+import { createDeferred, renderHook, standardCleanup, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { useHomeTeamCredentialModelCatalog } = await import('./useHomeTeamCredentialModelCatalog');
+const { observeTeamCredentialResourceCatalog, refreshTeamCredentialResourceCatalog, resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const { getTeamCredentialResourceCatalogSnapshot, resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+
+const LIST = '/v1/teams/credential-resources/entitled/list';
+const DISCOVER = '/v1/teams/credential-resources/entitled/discover';
+const catalogRequests = () => [...home.requestsFor(LIST), ...home.requestsFor(DISCOVER)];
+
+beforeEach(async () => {
+    resetTeamsDirectoryEngineForTests();
+    resetTeamsSnapshotsForTests();
+    resetTeamActionClientForTests();
+    await home.reset();
+});
+
+afterEach(async () => {
+    standardCleanup();
+    resetTeamsDirectoryEngineForTests();
+    resetTeamsSnapshotsForTests();
+    resetTeamActionClientForTests();
+    await home.reset();
+});
+
+describe('Account-scoped Team credential catalog demand', () => {
+    it.each([6, 40])('opens %i Teams with one read per application and stays quiet without a Team wake', async teamCount => {
+        const serverId = await home.addHome({ name: 'Catalog Home', serverUrl: `https://catalog-${teamCount}.example.test`,
+            accountId: 'account-ada', teamsEnabled: true, credentialResourcesEnabled: true });
+        home.answer(serverId, '/v1/teams/list', { body: {
+            items: Array.from({ length: teamCount }, (_, index) => teamSummaryFixture({ id: `team-${index}` })), nextCursor: null,
+        } });
+        home.answer(serverId, LIST, { body: { resources: [], nextCursor: null } });
+        home.answer(serverId, DISCOVER, { body: { resources: [], nextCursor: null, failures: [] } });
+
+        const catalog = await renderHook(() => useHomeTeamCredentialModelCatalog({ serverId, enabled: true,
+            agentTargetKey: 'agent:happier.agent.codex/codex', declarationProjection: null }));
+        await waitForHomeGovernance(() => expect(catalog.getCurrent().current).toBe(true));
+        // Generic Connected Account discovery plus the two bundled Codex applications;
+        // physical request count must be independent of Team membership count.
+        expect(catalogRequests()).toHaveLength(3);
+
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+        try {
+            await act(async () => {
+                for (let minute = 0; minute < 5; minute += 1) {
+                    publishHomeAccountChange(serverId, [`session-${minute}`, `machine-${minute}`]);
+                    await vi.advanceTimersByTimeAsync(60_000);
+                }
+            });
+            expect(catalogRequests()).toHaveLength(3);
+            expect(catalog.getCurrent().current).toBe(true);
+        } finally { vi.useRealTimers(); }
+
+        // A real reconnect remains a freshness boundary. It revalidates every
+        // demanded Team's authority, but still gathers each application once.
+        await act(async () => { publishHomeAccountChange(serverId, undefined, { source: 'connected' }); });
+        await waitForHomeGovernance(() => {
+            expect(catalog.getCurrent().current).toBe(true);
+            expect(catalogRequests()).toHaveLength(6);
+        });
+    });
+
+    it('drains one shared page sequence, keeps each Team refusal and cancels abandoned continuations', async () => {
+        const serverId = await home.addHome({ name: 'Catalog Home', serverUrl: 'https://catalog-pages.example.test',
+            accountId: 'account-ada', teamsEnabled: true, credentialResourcesEnabled: true });
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-ada' };
+        const addresses = ['team-1', 'team-2', 'team-3'].map(teamId => ({ serverId: scope.serverId, teamId }));
+        const held = createDeferred<void>();
+        const resource = TeamCredentialResourceCatalogEntryV1Schema.parse({ id: 'resource-1', teamId: 'team-1', displayName: 'Shared', resourceRevision: 1,
+            readiness: { kind: 'available' }, recoveryAction: null, mayBroker: true, mayReceiveDirect: false,
+            directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed',
+            providerModels: [], connectedServiceSelections: [],
+            sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.service.test', localId: 'chat' } } });
+        home.answer(serverId, DISCOVER, { select: input => {
+            const cursor = typeof input === 'object' && input !== null && 'cursor' in input ? input.cursor : null;
+            return cursor ? { respondAfter: held.promise, body: { resources: [{ ...resource, id: 'resource-2', teamId: 'team-2' }],
+                failures: [], nextCursor: null } }
+                : { body: { resources: [resource], failures: [{ teamId: 'team-3', error: 'not_found_or_not_visible' }], nextCursor: 'next-page' } };
+        } });
+        const releases = addresses.map(address => observeTeamCredentialResourceCatalog(scope, address));
+        await waitForHomeGovernance(() => expect(home.requestsFor(DISCOVER)).toHaveLength(2));
+        expect(getTeamCredentialResourceCatalogSnapshot(scope, addresses[0]!)?.selectionCurrent).toBe(false);
+        await act(async () => { held.resolve(); });
+        await waitForHomeGovernance(() => {
+            expect(getTeamCredentialResourceCatalogSnapshot(scope, addresses[0]!)?.data?.map(row => row.id)).toEqual(['resource-1']);
+            expect(getTeamCredentialResourceCatalogSnapshot(scope, addresses[1]!)?.data?.map(row => row.id)).toEqual(['resource-2']);
+            expect(getTeamCredentialResourceCatalogSnapshot(scope, addresses[2]!)?.error).toMatchObject({ kind: 'forbidden', code: 'not_found_or_not_visible' });
+        });
+        releases.forEach(release => release());
+
+        // A later observer gap owns a new read. Leaving all targets while its
+        // second page is pending must not launch the advertised third page.
+        const pending = createDeferred<void>();
+        home.answer(serverId, DISCOVER, { select: input => {
+            const cursor = typeof input === 'object' && input !== null && 'cursor' in input ? input.cursor : null;
+            return cursor ? { respondAfter: pending.promise, body: { resources: [], failures: [], nextCursor: 'unused-third-page' } }
+                : { body: { resources: [], failures: [], nextCursor: 'next-page' } };
+        } });
+        const resumed = addresses.map(address => observeTeamCredentialResourceCatalog(scope, address));
+        await waitForHomeGovernance(() => expect(home.requestsFor(DISCOVER)).toHaveLength(4));
+        resumed.forEach(release => release());
+        await act(async () => { pending.resolve(); });
+        expect(home.requestsFor(DISCOVER)).toHaveLength(4);
+    });
+
+    it('keeps unsupported and refused discovery typed without retrying a different transport', async () => {
+        const serverId = await home.addHome({ name: 'Older Home', serverUrl: 'https://catalog-old.example.test',
+            accountId: 'account-ada', teamsEnabled: true, credentialResourcesEnabled: true });
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-ada' };
+        home.answer(serverId, DISCOVER, { status: 404, body: { statusCode: 404, error: 'Not Found', message: 'Route not found' } });
+        home.answer(serverId, LIST, { body: { resources: [], nextCursor: null } });
+        const addresses = ['team-1', 'team-2'].map(teamId => ({ serverId: scope.serverId, teamId }));
+        const releases = addresses.map(address => observeTeamCredentialResourceCatalog(scope, address));
+        await Promise.all(addresses.map(address => refreshTeamCredentialResourceCatalog(scope, address)));
+        expect(addresses.map(address => getTeamCredentialResourceCatalogSnapshot(scope, address)?.error?.kind)).toEqual(['unsupported', 'unsupported']);
+        expect(home.requestsFor(DISCOVER)).toHaveLength(1);
+        expect(home.requestsFor(LIST)).toHaveLength(0);
+        releases.forEach(release => release());
+
+        home.answer(serverId, DISCOVER, { status: 403, body: { error: 'forbidden' } });
+        const next = addresses.map(address => observeTeamCredentialResourceCatalog(scope, address));
+        await Promise.all(addresses.map(address => refreshTeamCredentialResourceCatalog(scope, address)));
+        expect(addresses.map(address => getTeamCredentialResourceCatalogSnapshot(scope, address)?.error?.kind)).toEqual(['forbidden', 'forbidden']);
+        expect(home.requestsFor(DISCOVER)).toHaveLength(2);
+        expect(home.requestsFor(LIST)).toHaveLength(0);
+        next.forEach(release => release());
+
+        home.answer(serverId, DISCOVER, { body: { resources: [], nextCursor: null,
+            failures: addresses.map(address => ({ teamId: address.teamId, error: 'team_authentication_policy_unavailable' })) } });
+        const temporary = addresses.map(address => observeTeamCredentialResourceCatalog(scope, address));
+        await Promise.all(addresses.map(address => refreshTeamCredentialResourceCatalog(scope, address)));
+        for (const address of addresses) {
+            expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.error).toMatchObject({
+                code: 'team_authentication_policy_unavailable', retryable: true,
+            });
+        }
+        expect(home.requestsFor(LIST)).toHaveLength(0);
+        temporary.forEach(release => release());
+    });
+
+    it('keeps the original read Action policy ahead of discovery transport', async () => {
+        const serverId = await home.addHome({ name: 'Policy Home', serverUrl: 'https://catalog-policy.example.test',
+            accountId: 'account-ada', teamsEnabled: true, credentialResourcesEnabled: true, currentAccount: true });
+        await home.requireUiApproval(serverId, 'teams.credentials.entitled.list');
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-ada' };
+        const address = { serverId: scope.serverId, teamId: 'team-1' };
+        const release = observeTeamCredentialResourceCatalog(scope, address);
+        await waitForHomeGovernance(() => expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.status).toBe('error'));
+        expect(home.requestsFor(DISCOVER)).toHaveLength(0);
+        expect(home.requestsFor(LIST)).toHaveLength(0);
+        expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.selectionCurrent).toBe(false);
+        release();
+    });
+});

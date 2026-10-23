@@ -5,6 +5,7 @@ import {
     decodePlainArtifactStoredContent,
     type ApprovalRequestV2,
 } from '@happier-dev/protocol';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceDiscoveryPageV1Schema } from '@happier-dev/protocol/teams';
 
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -218,7 +219,7 @@ describe('TeamCredentialExternalApiScreen', () => {
         const serverId = await addManagedHome([pendingKey]);
         harness.answer(serverId, TEAM_GET_PATH, { body: teamSummaryFixture({ viewerRole: 'member', capabilities: teamCapabilitiesFixture({}) }) });
         harness.answer(serverId, CREDENTIAL_GET_PATH, { status: 404, body: { error: 'not_found_or_not_visible' } });
-        harness.answer(serverId, '/v1/teams/credential-resources/entitled/list', { body: { resources: [{
+        harness.answer(serverId, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, { body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ nextCursor: null, failures: [], resources: [{
             id: 'resource-1', teamId: 'team-1', displayName: 'Acme Provider', resourceRevision: 7,
             readiness: { kind: 'available' }, recoveryAction: null,
             mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered',
@@ -226,7 +227,7 @@ describe('TeamCredentialExternalApiScreen', () => {
             sourcePresentation: { kind: 'provider', provider: {
                 identity: { pluginId: 'happier.provider.openrouter', localId: 'openrouter' }, definitionRevision: 1,
             } },
-        }] } });
+        }] }) });
         harness.answer(serverId, EXTERNAL_KEY_AUTHORIZE_PATH, { status: 403, body: { error: 'team_authentication_required' } });
         const { TeamCredentialExternalApiScreen } = await import('./TeamCredentialExternalApiScreen');
         const screen = await renderScreen(<TeamCredentialExternalApiScreen serverId={serverId} teamId="team-1" resourceId="resource-1" />);

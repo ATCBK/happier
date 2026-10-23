@@ -1,5 +1,6 @@
 import { bindHomeDomainActionHttpRequestV1, bindPublicProfilePreparedHttpRequestV1, homeDomainActionOutputSchemaV1, readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { ExternalActionHttpErrorSchema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -11,6 +12,7 @@ import {
 import {
     TeamCredentialErrorCodeV1Schema,
     teamCredentialErrorHttpStatusV1,
+    type TeamCredentialResourceReadInputV1,
     TeamErrorCodeV1Schema,
     teamErrorHttpStatusV1,
 } from '@happier-dev/protocol/teams';
@@ -18,6 +20,7 @@ import {
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 import { homeDomainFailureKindForHttpStatus, requestHomeDomain, type HomeDomainFailure } from './homeServerActionTransport';
+import { requestTeamCredentialCatalogDiscovery } from './teamCredentialCatalogDiscovery';
 
 /**
  * The UI's Home family port.
@@ -90,6 +93,7 @@ const HOME_DOMAIN_FAILURE_KINDS = [
  */
 export function homeDomainFailureFromActionFailure(
     failure: Readonly<{ errorCode?: string | undefined; details?: unknown }>,
+    actionId?: ActionId,
 ): HomeDomainFailure<string> {
     const code = failure.errorCode ?? '';
     // The shared Action executor emits this only after its mutation dependency
@@ -129,19 +133,24 @@ export function homeDomainFailureFromActionFailure(
             code: null,
         });
     }
+    const credential = TeamCredentialErrorCodeV1Schema.safeParse(code);
+    // Discovery's per-Team error has no failed HTTP response. Its original
+    // Action family supplies the same retry semantics as the single-Team route;
+    // shared code names in ordinary Team operations retain their own policy.
+    const credentialRetryable = actionId?.startsWith('teams.credentials.') === true
+        && credential.success && teamCredentialErrorHttpStatusV1(credential.data) >= 500;
     const team = TeamErrorCodeV1Schema.safeParse(code);
     if (team.success) {
         return withDetails({
             kind: homeDomainFailureKindForHttpStatus(teamErrorHttpStatusV1(team.data), team.data),
-            retryable: false,
+            retryable: credentialRetryable,
             code: team.data,
         });
     }
-    const credential = TeamCredentialErrorCodeV1Schema.safeParse(code);
     if (credential.success) {
         return withDetails({
             kind: homeDomainFailureKindForHttpStatus(teamCredentialErrorHttpStatusV1(credential.data), credential.data),
-            retryable: false,
+            retryable: credentialRetryable,
             code: credential.data,
         });
     }
@@ -199,11 +208,21 @@ export function createHomeDomainActionExecutorForScope(
     errorSchema?: Readonly<{
         safeParse: (value: unknown) => { success: true; data: string } | { success: false };
     }>,
+    readCurrentness?: () => boolean,
 ): HomeDomainActionExecutor {
     return async ({ actionId, input, preparedRequest, signal }) => {
         const spec = getActionSpec(actionId);
         const request = preparedRequest ? bindPublicProfilePreparedHttpRequestV1(actionId, preparedRequest)
             : bindHomeDomainActionHttpRequestV1(actionId, input);
+        if (actionId === 'teams.credentials.entitled.list' && readCurrentness
+            && !(input as TeamCredentialResourceReadInputV1).cursor) {
+            // The original Action schema, settings, approval and scope have all
+            // admitted this input before reaching the HTTP dependency.
+            const result = await requestTeamCredentialCatalogDiscovery({ scope,
+                input: input as TeamCredentialResourceReadInputV1, shouldContinue: readCurrentness,
+                ...(signal ? { signal } : {}) });
+            return result.ok ? result.value : toActionFailure(actionId, result.failure);
+        }
         const result = await requestHomeDomain<unknown, string>({
             scope,
             method: request.method,

@@ -6,6 +6,7 @@ import {
     machinePoolActionEndpointPathV1,
     type MachinePoolViewV1,
 } from '@happier-dev/protocol';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceDiscoveryPageV1Schema } from '@happier-dev/protocol/teams';
 
 import { collectRenderedTestIds, createDeferred, renderScreen, standardCleanup, teamCapabilitiesFixture, teamCredentialResourceFixture, teamCredentialSourceCandidateFixture, teamCredentialViewerFixture, teamSummaryFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -45,7 +46,6 @@ const TEAM_GET_PATH = '/v1/teams/get';
 const CREDENTIALS_LIST_PATH = '/v1/teams/credential-resources/list';
 const CREDENTIAL_GET_PATH = '/v1/teams/credential-resources/get';
 const CREDENTIAL_UPDATE_PATH = '/v1/teams/credential-resources/update';
-const ENTITLED_LIST_PATH = '/v1/teams/credential-resources/entitled/list';
 const LIMITS_LIST_PATH = '/v1/teams/credential-resources/limits/list';
 const ARTIFACT_CREATE_PATH = '/v1/artifacts';
 
@@ -234,7 +234,7 @@ async function renderEditor(params?: Readonly<{
         },
     });
     harness.answer(serverId, CREDENTIAL_GET_PATH, { body: resource });
-    harness.answer(serverId, ENTITLED_LIST_PATH, { body: { resources: [] } });
+    harness.answer(serverId, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, { body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: [], nextCursor: null, failures: [] }) });
     harness.answer(serverId, LIMITS_LIST_PATH, { body: { limits: [], nextCursor: null } });
     if (params?.sourceReadFails) {
         harness.answer(serverId, '/v1/teams/credential-resources/sources/list', { status: 503 });
@@ -308,13 +308,13 @@ describe('TeamCredentialEditScreen broker placement', () => {
         });
         const exactRead = createDeferred<{ status?: number; body: typeof resource | { error: string } }>();
         harness.answer(serverId, CREDENTIAL_GET_PATH, { select: () => exactRead.promise });
-        harness.answer(serverId, ENTITLED_LIST_PATH, { body: { resources: [{
+        harness.answer(serverId, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, { body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ nextCursor: null, failures: [], resources: [{
             id: resource.id, teamId: resource.teamId, displayName: resource.displayName,
             resourceRevision: resource.revision, sourcePresentation: resource.sourcePresentation,
             readiness: resource.readiness, recoveryAction: resource.recoveryAction,
             mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered',
             sessionUsePolicy: resource.sessionUsePolicy, providerModels: [], connectedServiceSelections: [],
-        }] } });
+        }] }) });
         harness.answer(serverId, LIMITS_LIST_PATH, { body: { limits: [], nextCursor: null } });
         const { getTeamCredentialResourceCatalogSnapshot } = await import('@/sync/store/teams/teamsSnapshots');
         const { TeamCredentialEditScreen } = await import('./TeamCredentialEditScreen');

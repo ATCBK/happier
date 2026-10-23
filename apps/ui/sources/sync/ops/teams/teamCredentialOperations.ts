@@ -166,21 +166,24 @@ export function getTeamCredentialResource(params: Readonly<{
     });
 }
 
-/** Recipient-safe choices are read independently from administration rows. */
+/** Recipient-safe choices retain their exact Action admission before transport batching. */
 export function listEntitledTeamCredentialResources(params: Readonly<{
     scope: ServerAccountScope;
     address: TeamAddress;
     application?: ProviderBrokerApplicationBindingV1;
     signal?: AbortSignal;
     cursor?: string | null;
+    /** The snapshot loader's existing page-walk lifetime; finite probes omit it. */
+    shouldContinue?: () => boolean;
 }>): Promise<TeamCredentialOutcome<TeamCredentialResourceEntitledPageV1>> {
     return runTeamAction({
         scope: params.scope,
         actionId: 'teams.credentials.entitled.list',
         input: { teamId: params.address.teamId, ...(params.application ? { application: params.application } : {}),
             ...(params.cursor ? { cursor: params.cursor } : {}) },
-        parse: (value) => TeamCredentialResourceEntitledPageV1Schema.parse(value),
+        parse: value => TeamCredentialResourceEntitledPageV1Schema.parse(value),
         ...(params.signal ? { signal: params.signal } : {}),
+        ...(params.shouldContinue ? { executorOptions: { homeDomainReadCurrentness: params.shouldContinue } } : {}),
     });
 }
 

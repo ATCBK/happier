@@ -172,7 +172,7 @@ export async function runTeamAction<TValue>(params: Readonly<{
         ...(params.signal ? { signal: params.signal } : {}),
     });
 
-    const outcome = classifyHomeActionOutcome(result);
+    const outcome = classifyHomeActionOutcome(result, params.actionId);
     if (outcome.kind === 'failed') {
         return Object.freeze({
             kind: 'failed' as const,

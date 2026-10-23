@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_PROTOCOLS_V1 } from '@happier-dev/protocol';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceDiscoveryPageV1Schema } from '@happier-dev/protocol/teams';
 
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
@@ -46,7 +47,6 @@ const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamAct
 const TEAM_GET_PATH = '/v1/teams/get';
 const LIST_PATH = '/v1/teams/credential-resources/list';
 const GET_PATH = '/v1/teams/credential-resources/get';
-const ENTITLED_LIST_PATH = '/v1/teams/credential-resources/entitled/list';
 const UPDATE_PATH = '/v1/teams/credential-resources/update';
 const DELETE_PATH = '/v1/teams/credential-resources/delete';
 const PREPARATION_READ_PATH = '/v2/teams/team-1/credential-resources/resource-1/direct-material?view=readiness';
@@ -215,8 +215,10 @@ describe('TeamCredentialDetailScreen', () => {
         harness.answer(serverId, LIST_PATH, {
             body: { resources: [], viewer: teamCredentialViewerFixture({ manageCredentials: false }) },
         });
-        harness.answer(serverId, ENTITLED_LIST_PATH, {
-            body: {
+        harness.answer(serverId, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, {
+            body: TeamCredentialResourceDiscoveryPageV1Schema.parse({
+                nextCursor: null,
+                failures: [],
                 resources: [{
                     id: 'resource-1', teamId: 'team-1', displayName: 'Acme Provider', resourceRevision: 7,
                     readiness: { kind: 'available' }, recoveryAction: null,
@@ -230,7 +232,7 @@ describe('TeamCredentialDetailScreen', () => {
                         },
                     },
                 }],
-            },
+            }),
         });
         harness.answer(serverId, GET_PATH, { status: 404, body: { error: 'not_found_or_not_visible' } });
 
@@ -261,7 +263,7 @@ describe('TeamCredentialDetailScreen', () => {
         harness.answer(serverId, LIST_PATH, {
             body: { resources: [], viewer: teamCredentialViewerFixture({ manageCredentials: false }) },
         });
-        harness.answer(serverId, ENTITLED_LIST_PATH, { body: { resources: [] } });
+        harness.answer(serverId, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, { body: TeamCredentialResourceDiscoveryPageV1Schema.parse({ resources: [], nextCursor: null, failures: [] }) });
         harness.answer(serverId, GET_PATH, { status: 404, body: { error: 'not_found_or_not_visible' } });
 
         const { TeamCredentialDetailScreen } = await import('./TeamCredentialDetailScreen');

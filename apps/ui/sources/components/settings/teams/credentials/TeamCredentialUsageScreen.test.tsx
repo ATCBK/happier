@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, TeamCredentialResourceDiscoveryPageV1Schema } from '@happier-dev/protocol/teams';
 
 import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamCredentialResourceFixture, teamGroupFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -18,6 +19,10 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+// Load real owners after HTTP installation, outside a timed per-case setup.
+const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
 
 vi.mock('@/components/ui/popover', async (importOriginal) =>
     (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
@@ -25,7 +30,6 @@ vi.mock('@/components/ui/popover', async (importOriginal) =>
 const TEAM_GET_PATH = '/v1/teams/get';
 const CREDENTIAL_GET_PATH = '/v1/teams/credential-resources/get';
 const USAGE_QUERY_PATH = '/v1/teams/credential-resources/usage/query';
-const ENTITLED_LIST_PATH = '/v1/teams/credential-resources/entitled/list';
 const GROUPS_LIST_PATH = '/v1/teams/groups/list';
 const MEMBERS_LIST_PATH = '/v1/teams/members/list';
 
@@ -140,9 +144,6 @@ async function waitForTestId(
 }
 
 beforeEach(async () => {
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
-    const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
     resetTeamActionClientForTests();
@@ -172,8 +173,10 @@ async function addRecipientHome(): Promise<string> {
         status: 404,
         body: { error: 'not_found_or_not_visible' },
     });
-    harness.answer(serverId, ENTITLED_LIST_PATH, {
-        body: {
+    harness.answer(serverId, TEAM_CREDENTIAL_RESOURCE_DISCOVERY_PATH_V1, {
+        body: TeamCredentialResourceDiscoveryPageV1Schema.parse({
+            nextCursor: null,
+            failures: [],
             resources: [{
                 id: 'resource-1', teamId: 'team-1', displayName: 'Acme Provider', resourceRevision: 7,
                 readiness: { kind: 'available' }, recoveryAction: null,
@@ -194,7 +197,7 @@ async function addRecipientHome(): Promise<string> {
                     },
                 },
             }],
-        },
+        }),
     });
     return serverId;
 }

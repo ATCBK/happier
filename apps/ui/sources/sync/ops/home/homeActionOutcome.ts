@@ -2,6 +2,7 @@ import {
     ActionApprovalRequestCreatedResultSchema,
     type ActionExecuteResult,
 } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 
 import { homeDomainFailureFromActionFailure } from '@/sync/api/home/homeDomainActions';
 import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
@@ -19,11 +20,11 @@ export type HomeActionOutcome =
 
 export type HomeActionFailure = Extract<HomeActionOutcome, { kind: 'failed' }>['failure'];
 
-export function classifyHomeActionOutcome(result: ActionExecuteResult): HomeActionOutcome {
+export function classifyHomeActionOutcome(result: ActionExecuteResult, actionId?: ActionId): HomeActionOutcome {
     if (!result.ok) {
         return Object.freeze({
             kind: 'failed' as const,
-            failure: homeDomainFailureFromActionFailure(result),
+            failure: homeDomainFailureFromActionFailure(result, actionId),
         });
     }
     const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);

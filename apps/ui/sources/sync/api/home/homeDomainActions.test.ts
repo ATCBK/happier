@@ -88,6 +88,18 @@ it('keeps a disabled Team route unsupported after the Action envelope is decoded
     expect(homeDomainFailureFromActionFailure({ errorCode: 'teams_unavailable' }).kind).toBe('unsupported');
 });
 
+it('retains retryable Team qualification failure inside a successful discovery transport', () => {
+    // Discovery carries per-Team refusals in HTTP 200. The original single-Team
+    // owner serves this exact refusal as 503, so it must still offer Retry.
+    expect(homeDomainFailureFromActionFailure({ errorCode: 'team_authentication_policy_unavailable' },
+        'teams.credentials.entitled.list')).toMatchObject({
+        kind: 'conflict', retryable: true, code: 'team_authentication_policy_unavailable',
+    });
+    // This code is also a non-retryable 409 in the ordinary Team family.
+    expect(homeDomainFailureFromActionFailure({ errorCode: 'team_authentication_policy_unavailable' },
+        'teams.members.list').retryable).toBe(false);
+});
+
 afterEach(() => {
     vi.clearAllMocks();
 });
