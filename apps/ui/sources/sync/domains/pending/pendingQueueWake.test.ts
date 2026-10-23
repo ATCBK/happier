@@ -421,7 +421,7 @@ describe('getPendingQueueWakeResumeOptions', () => {
             .toMatchObject({ sessionId: 's1', machineId: 'm1', resume: 'c1' });
     });
 
-    it('retires a known stale permission observation after foreground completion', () => {
+    it('keeps an unresolved permission gated after foreground completion regardless of its age', () => {
         vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
         const session = createSessionFixture({
             id: 's1', active: true, presence: 'online', latestTurnStatus: 'completed',
@@ -429,8 +429,7 @@ describe('getPendingQueueWakeResumeOptions', () => {
             metadata: { machineId: 'm1', path: '/tmp', host: 'tester.local', flavor: 'claude', claudeSessionId: 'c1', claudeTranscriptPath: '/tmp/c1.jsonl' },
         });
 
-        expect(getPendingQueueWakeResumeOptions({ sessionId: 's1', session, resumeCapabilityOptions: { accountSettings: {} } }))
-            .toMatchObject({ sessionId: 's1', machineId: 'm1', resume: 'c1' });
+        expect(getPendingQueueWakeResumeOptions({ sessionId: 's1', session, resumeCapabilityOptions: { accountSettings: {} } })).toBeNull();
     });
 
     it('returns null when the caller cannot wake the target machine', () => {
