@@ -23,6 +23,8 @@ type CaptureFixtureControl = {
 declare global {
     // eslint-disable-next-line no-var
     var __HAPPIER_CAPTURE_RETIREMENT_FIXTURE__: CaptureFixtureControl | undefined;
+    // eslint-disable-next-line no-var
+    var __HAPPIER_CAPTURE_RETIREMENT_MODULES__: number | undefined;
 }
 
 describe('manifest capture activation and retirement', () => {
@@ -34,17 +36,19 @@ describe('manifest capture activation and retirement', () => {
         const observeUnhandled = (reason: unknown) => { unhandled.push(reason); };
         process.on('unhandledRejection', observeUnhandled);
         try {
+            globalThis.__HAPPIER_CAPTURE_RETIREMENT_MODULES__ = 0;
             await mkdir(join(pluginRoot, '.happier-plugin'));
             await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify({
                 schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Capture retirement fixture',
                 engines: { happier: '^0.2.0' }, runtime: { apiVersion: 1 },
-                entrypoints: { daemon: './daemon.mjs' }, activation: { events: [{ kind: 'startup' }] },
+                entrypoints: { daemon: './daemon.mjs' },
                 hostAccess: { required: [], optional: [] },
                 contributes: { captureSources: [{ id: 'screen', displayName: 'Fixture screen',
                     streamFamily: 'screen', supportedCodecs: ['image.mjpeg'] }] },
             }), 'utf8');
             // This external authored plugin is the genuine producer boundary; no runtime registry is mocked.
-            await writeFile(join(pluginRoot, 'daemon.mjs'), `export function activate(api) {
+            await writeFile(join(pluginRoot, 'daemon.mjs'), `globalThis.__HAPPIER_CAPTURE_RETIREMENT_MODULES__ = (globalThis.__HAPPIER_CAPTURE_RETIREMENT_MODULES__ ?? 0) + 1;
+            export function activate(api) {
                 api.captureSources.register('screen', { async start(input) {
                     const control = { stops: 0, signal: input.signal, offerFrame: input.offerFrame };
                     globalThis.__HAPPIER_CAPTURE_RETIREMENT_FIXTURE__ = control;
@@ -57,15 +61,20 @@ describe('manifest capture activation and retirement', () => {
             }));
             const generationAuthority = await readCurrentCommittedPluginGenerations(resolvePluginStorePaths({ happyHomeDir }), {});
             if (!generationAuthority) throw new Error('Expected committed capture fixture generation');
-            const runtime = await resolveExecutablePluginRuntimeRegistry({ contributes, happyHomeDir, generationAuthority, pluginIds: [pluginId],
+            const runtime = await resolveExecutablePluginRuntimeRegistry({ contributes, happyHomeDir, generationAuthority,
                 resolveDevelopmentSourceAuthority: ({ pluginId: id, rootPath }) => ({ kind: 'development',
                     registeredRootId: `capture-fixture:${id}`, canonicalRoot: rootPath, observedRevision: 1 }),
             });
             try {
+                expect(globalThis.__HAPPIER_CAPTURE_RETIREMENT_MODULES__, 'Idle startup must not import a capture-only plugin').toBe(0);
                 const registry = createMachineLiveStreamCaptureRegistry();
+                expect(await registerPluginCaptureSource({ runtimeRegistry: runtime, captureRegistry: registry,
+                    reference: { pluginId, localId: 'undeclared' } })).toBeNull();
+                expect(globalThis.__HAPPIER_CAPTURE_RETIREMENT_MODULES__, 'Undeclared capture demand must not import the plugin').toBe(0);
                 const source = await registerPluginCaptureSource({ runtimeRegistry: runtime, captureRegistry: registry,
                     reference: { pluginId, localId: 'screen' } });
                 expect(source).not.toBeNull();
+                expect(globalThis.__HAPPIER_CAPTURE_RETIREMENT_MODULES__).toBe(1);
                 if (!source) throw new Error('Expected activated capture source');
                 const caps = { maxBitrateBps: 64_000, maxFramesPerSecond: 12, maxFrameBytes: 8_192,
                     maxDurationMs: 60_000, maxTotalBytes: 128_000 };
@@ -101,6 +110,7 @@ describe('manifest capture activation and retirement', () => {
         } finally {
             process.removeListener('unhandledRejection', observeUnhandled);
             delete globalThis.__HAPPIER_CAPTURE_RETIREMENT_FIXTURE__;
+            delete globalThis.__HAPPIER_CAPTURE_RETIREMENT_MODULES__;
             await rm(pluginRoot, { recursive: true, force: true });
             await rm(happyHomeDir, { recursive: true, force: true });
         }
