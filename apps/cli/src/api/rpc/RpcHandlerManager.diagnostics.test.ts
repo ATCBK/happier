@@ -17,8 +17,70 @@ import { verifyMachineRpcAdmissionCurrent } from '@/api/machine/machineRpcAuthor
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import type { Socket } from 'socket.io-client';
 import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
+import { AgentModelsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
 
 describe('RPC completion diagnostics', () => {
+    it.each(['plain', 'encrypted', 'local'] as const)('records the closed nested model probe outcome through %s dispatch', async transport => {
+        const logger = vi.fn();
+        const key = new Uint8Array(32).fill(7);
+        const content: SocketRpcContent = { mode: 'e2ee', cipher: {
+            encryptRaw: async value => encodeBase64(encrypt(key, 'dataKey', value)),
+            decryptRaw: async value => decrypt(key, 'dataKey', decodeBase64(value)),
+        } };
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', logger,
+            ...(transport === 'encrypted' ? { encryptionKey: key, encryptionVariant: 'dataKey' as const } : { encryptionMode: 'plain' as const }) });
+        const cases = [
+            { source: 'unavailable', refreshError: true, availableModels: [],
+                spawnFailure: { reason: 'too_many_open_files', errno: 'EMFILE' } },
+            { source: 'static', refreshError: true, availableModels: [{ id: 'never-log-model-id', name: 'never-log-model-name' }] },
+            { source: 'dynamic', refreshError: false, availableModels: [] },
+        ] as const;
+        for (const [index, observation] of cases.entries()) {
+            const response = { ok: true, result: { ...AgentModelsProbeObservationSchema.parse({ ...observation, supportsFreeform: false }),
+                rawError: 'never-log-error /private/path', token: 'never-log-secret' } };
+            rpc.registerHandler(RPC_METHODS.CAPABILITIES_INVOKE, () => response);
+            const params = { id: 'cli.test', method: 'probeModels', params: { token: 'never-log-input' } };
+            const method = `machine:${RPC_METHODS.CAPABILITIES_INVOKE}`;
+            const callId = index.toString(16).padStart(32, '0');
+            const result = transport === 'local' ? await rpc.invokeLocal(RPC_METHODS.CAPABILITIES_INVOKE, params)
+                : await rpc.handleRequest({ method, params: transport === 'encrypted'
+                    ? await socketRpcCodec.encodeParams(content, params, { method, callId }) : params });
+            expect(transport === 'encrypted' ? await socketRpcCodec.decodeResult(content, { ok: true, result }, callId) : result)
+                .toEqual(response);
+            const completions = logger.mock.calls.filter(([message]) => message === '[RPC] Request completed');
+            expect(completions).toHaveLength(index + 1);
+            expect(completions.at(-1)).toEqual(['[RPC] Request completed', expect.objectContaining({
+                method: RPC_METHODS.CAPABILITIES_INVOKE, outcomeCode: 'ok', modelProbe: {
+                    source: observation.source, refreshError: observation.refreshError,
+                    availableModelsCount: observation.availableModels.length,
+                    ...('spawnFailure' in observation ? { spawnFailure: { code: observation.spawnFailure.reason } } : {}),
+                },
+            })]);
+        }
+        expect(JSON.stringify(logger.mock.calls)).not.toMatch(/never-log|EMFILE|\/private/);
+    });
+
+    it('projects model counts without visiting model rows and rejects open diagnostic strings', async () => {
+        const logger = vi.fn();
+        const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger });
+        let modelReads = 0;
+        const model = { get id() { modelReads += 1; return 'never-log-model'; }, name: 'never-log-model-name' };
+        const response = { ok: true, result: { source: 'never-log-source', refreshError: 'never-log-error',
+            availableModels: Array.from({ length: 1000 }, () => model),
+            spawnFailure: { reason: 'never-log-classifier', code: 'never-log-code', errno: 'never-log-errno' } } };
+        rpc.registerHandler(RPC_METHODS.CAPABILITIES_INVOKE, () => response);
+        expect(await rpc.invokeLocal(RPC_METHODS.CAPABILITIES_INVOKE, { method: 'probeModels' })).toBe(response);
+        expect(modelReads).toBe(0);
+        expect(logger.mock.calls).toEqual([['[RPC] Request completed', expect.objectContaining({
+            outcomeCode: 'ok', modelProbe: { availableModelsCount: 1000 },
+        })]]);
+        expect(JSON.stringify(logger.mock.calls)).not.toContain('never-log');
+        logger.mockClear();
+        rpc.registerHandler('demo', () => response);
+        await rpc.invokeLocal('demo', {});
+        expect(logger.mock.calls[0]?.[1]).not.toHaveProperty('modelProbe');
+    });
+
     it.each([true, false])('joins received, manager admission and completion through real Home verification (admitted=%s)', async admitted => {
         const logger = vi.fn();
         const key = tweetnacl.sign.keyPair();

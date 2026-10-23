@@ -54,6 +54,8 @@ import { isRoleActionIdV1 } from '@happier-dev/protocol/prompts/roles/roleAction
 import { isWorkspaceSyncTargetInstalledContent, openWorkspaceSyncTargetContent } from './workspaceSyncTargetContent';
 import { waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { timeWebLatencyPhase, withStorageReadTrace, withWebLatencyTrace } from '@/daemon/externalActions/webLatencyTrace';
+import { AgentModelsProbeObservationSchema, type AgentModelsProbeObservation } from '@happier-dev/protocol/capabilities';
+import { SpawnFailureV1Schema, type SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 
 type OwnedHandlerRegistrationContext = {
     ownerId: string;
@@ -81,6 +83,13 @@ type RegistrationReadinessWaiter = Readonly<{
     timeout: ReturnType<typeof setTimeout>;
 }>;
 
+type ModelProbeDiagnostic = Readonly<{
+    source?: AgentModelsProbeObservation['source'];
+    refreshError?: boolean;
+    availableModelsCount: number;
+    spawnFailure?: Readonly<{ code: SpawnFailureV1['reason'] }>;
+}>;
+
 type RequestDiagnostic = {
     requestId: string;
     method: string;
@@ -91,6 +100,7 @@ type RequestDiagnostic = {
     admissionDenied?: boolean;
     acknowledgementOutcomeCode?: string;
     goalControlFailure?: SessionGoalControlFailureV1;
+    modelProbe?: ModelProbeDiagnostic;
     failure?: Readonly<{
         failedPhase?: string;
         cancelled?: boolean;
@@ -133,6 +143,29 @@ function readOutcomeCode(value: unknown, thrown = false): string {
     if (thrown && result.name === 'AbortError') return 'request_cancelled';
     return thrown || code !== undefined || typeof result.error === 'string' || result.ok === false || result.status === 'error'
         ? 'unclassified_error' : 'ok';
+}
+
+function readModelProbeDiagnostic(method: string, value: unknown): ModelProbeDiagnostic | undefined {
+    if (method !== RPC_METHODS.CAPABILITIES_INVOKE || !value || typeof value !== 'object'
+        || !('ok' in value) || value.ok !== true || !('result' in value)) return;
+    const observation = value.result;
+    if (!observation || typeof observation !== 'object' || !('availableModels' in observation)
+        || !Array.isArray(observation.availableModels)) return;
+    // Project only closed scalar facts. Revalidating model rows would add work
+    // proportional to the catalog and risk disclosing native model/error text.
+    const source = AgentModelsProbeObservationSchema.shape.source.safeParse('source' in observation ? observation.source : undefined);
+    const failure = 'spawnFailure' in observation ? observation.spawnFailure : undefined;
+    const reason = SpawnFailureV1Schema.shape.reason.safeParse(
+        failure && typeof failure === 'object' && 'reason' in failure ? failure.reason : undefined,
+    );
+    return {
+        ...(source.success && source.data !== undefined ? { source: source.data } : {}),
+        ...('refreshError' in observation && typeof observation.refreshError === 'boolean'
+            ? { refreshError: observation.refreshError } : {}),
+        availableModelsCount: observation.availableModels.length,
+        // The diagnostic code is the canonical closed cause, never a raw OS error.
+        ...(reason.success ? { spawnFailure: { code: reason.data } } : {}),
+    };
 }
 
 export class RpcHandlerManager {
@@ -314,6 +347,7 @@ export class RpcHandlerManager {
                 () => timeWebLatencyPhase('storage.dispatch', () => dispatch(diagnostic))) : dispatch(diagnostic));
             if (local) {
                 diagnostic.outcomeCode = readOutcomeCode(response);
+                diagnostic.modelProbe = readModelProbeDiagnostic(diagnostic.method, response);
                 const failure = SessionGoalControlFailureV1Schema.safeParse(
                     response && typeof response === 'object' ? Reflect.get(response, 'goalControlFailure') : undefined);
                 if (failure.success) diagnostic.goalControlFailure = failure.data;
@@ -331,6 +365,7 @@ export class RpcHandlerManager {
                     ? { admissionPredicate: diagnostic.admissionPredicate } : {}),
                 ...(diagnostic.acknowledgementOutcomeCode ? { acknowledgementOutcomeCode: diagnostic.acknowledgementOutcomeCode } : {}),
                 ...(diagnostic.goalControlFailure ? { goalControlFailure: diagnostic.goalControlFailure } : {}),
+                ...(diagnostic.modelProbe ? { modelProbe: diagnostic.modelProbe } : {}),
                 ...(diagnostic.failure ?? {}),
             });
         }
@@ -360,6 +395,7 @@ export class RpcHandlerManager {
         let callId: string | null = null;
         const respond = (request: RpcRequest, result: unknown, acknowledgement: SocketRpcTransportAcknowledgementV1 | null = null) => {
             diagnostic.outcomeCode = readOutcomeCode(result);
+            diagnostic.modelProbe = readModelProbeDiagnostic(diagnostic.method, result);
             const failure = SessionGoalControlFailureV1Schema.safeParse(
                 result && typeof result === 'object' ? Reflect.get(result, 'goalControlFailure') : undefined);
             if (failure.success) diagnostic.goalControlFailure = failure.data;
