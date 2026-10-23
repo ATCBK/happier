@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 
 import { encodeBase64, encryptLegacy } from '@/api/encryption';
+import * as encryptionApi from '@/api/encryption';
 import { createSessionListResponseFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
 import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { SESSION_ORGANIZATION_MAX_SCOPED_SNAPSHOT_IDS } from '@happier-dev/protocol/sessions/organization/constants';
+import { SESSION_LIST_PAGE_MAX_LIMIT } from '@happier-dev/protocol/sessions/listing/query';
 import { readCliSessionListTagAssignmentsV1 } from '@/cli/output/session/sessionListFilterFacts';
 import {
   SessionAwarenessListResultV1Schema,
@@ -70,6 +72,42 @@ describe('listSessions', () => {
     fetchSessionsPage.mockReset();
     fetchSessionsQueryPage.mockReset();
     getSessionTranscript.mockReset();
+  });
+
+  it('opens no metadata for proven provenance misses while previewing a thousand encrypted Sessions', async () => {
+    const unrelated = encryptedMetadata({ path: '/private-unrelated', projectId: 'payments' });
+    const matching = encryptedMetadata({ path: '/private-match', projectId: 'payments' });
+    const rows = [
+      ...Array.from({ length: 1_000 }, (_, index) => createSessionRecordFixture({ id: `automation-${index}`,
+        ownerAccountId: 'owner', origin: { kind: 'run_step', runId: 'workflow' }, metadata: unrelated })),
+      createSessionRecordFixture({ id: 'foreign', ownerAccountId: 'other', origin: { kind: 'none' }, metadata: unrelated,
+        share: { accessLevel: 'view', canApprovePermissions: false } }),
+      createSessionRecordFixture({ id: 'matching', ownerAccountId: 'owner', origin: { kind: 'none' }, metadata: matching }),
+      createSessionRecordFixture({ id: 'unknown', ownerAccountId: 'owner', origin: undefined, metadata: matching }),
+    ];
+    for (let offset = 0; offset < rows.length; offset += SESSION_LIST_PAGE_MAX_LIMIT) {
+      const end = offset + SESSION_LIST_PAGE_MAX_LIMIT;
+      fetchSessionsPage.mockResolvedValueOnce({ sessions: rows.slice(offset, end),
+        nextCursor: end < rows.length ? encodeV2SessionListCursorV1(`offset-${end}`) : null, hasNext: end < rows.length });
+    }
+    const filter = normalizeSessionListFilterV1({ show: 'sessions', scope: 'all_accessible', homeServerIds: ['home'],
+      startedBy: ['you'], projects: { include: [{ serverId: 'home', projectKey: 'payments' }], exclude: [] } });
+    const candidates: FollowRulePreviewCandidateV1[] = [];
+    // Instrument the real crypto boundary without replacing opening or internal projection logic.
+    const decrypts = vi.spyOn(encryptionApi, 'decryptResult');
+    try {
+      const { listSessions } = await import('./listSessions');
+      await listSessions({ credentials, accountSettings: null, includeSystem: false, resumableOnly: false,
+        filterCandidates: { serverId: 'home', viewerAccountId: 'owner', filters: [filter],
+          collect: candidate => candidates.push(candidate) } });
+      expect(evaluateFollowRulePreviewV1({ filter, candidates, coverage: 'complete' })).toMatchObject({
+        coverage: 'partial', matchCount: 1, matches: [{ source: { kind: 'session', sessionId: 'matching' } }],
+        unavailable: [{ source: { kind: 'session', sessionId: 'unknown' } }],
+      });
+      expect(decrypts.mock.calls.filter(([, , bytes]) => encodeBase64(bytes) === unrelated).length).toBe(0);
+      expect(decrypts.mock.calls.filter(([, , bytes]) => encodeBase64(bytes) === matching).length).toBeGreaterThan(0);
+      expect(fetchSessionsPage).toHaveBeenCalledTimes(Math.ceil(rows.length / SESSION_LIST_PAGE_MAX_LIMIT));
+    } finally { decrypts.mockRestore(); }
   });
 
   it('projects authorized preview candidates from real opened owner metadata and preserves locked facts as unavailable', async () => {

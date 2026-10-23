@@ -21,7 +21,7 @@ import { projectCliSessionListFilterFactsV1, readCliSessionListTagAssignmentsV1 
 import { mapWithConcurrency } from '@/utils/async/mapWithConcurrency';
 import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
 import type { SessionAwarenessListResultV1, SessionListQueryV1, SessionListViewV1 } from '@happier-dev/protocol';
-import { matchSessionBotFilterV1, matchSessionProjectFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { matchSessionBotFilterV1, matchSessionProjectFilterV1, matchSessionListStartedByV1, readSessionListStartedByV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import type { FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
 import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
@@ -322,6 +322,12 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
   const appendPageRows = (rawRows: typeof initialPage.sessions) => {
     for (const rawRow of rawRows) {
       if (allowedSessionIds && !allowedSessionIds.has(rawRow.id)) continue;
+      const candidateFilters = params.filterCandidates?.filters;
+      if (candidateFilters?.length) {
+        const startedBy = readSessionListStartedByV1({ origin: rawRow.origin, ownerAccountId: rawRow.ownerAccountId,
+          viewerAccountId: params.filterCandidates?.viewerAccountId });
+        if (candidateFilters.every(filter => matchSessionListStartedByV1(filter.startedBy, startedBy) === 'miss')) continue;
+      }
       if (params.project) {
         if (readSessionAccessProjectionRoleV1(rawRow) !== 'owner') continue;
         const match = matchSessionProjectFilterV1(tryDecryptSessionOwnerMetadataView({ credentials: params.credentials,
