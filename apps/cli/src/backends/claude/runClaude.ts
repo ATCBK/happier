@@ -684,10 +684,9 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     }
 
     await runClaudeStartupPhase('terminal_side_effects', startupPhaseContext, async () => {
-        if (!unifiedTerminalRuntimeActive) {
-            await persistTerminalAttachmentInfoIfNeeded({ sessionId: baseSession.id, terminal, startedBy: options.startedBy ?? 'terminal' });
-            await bindHerdrAgentIfNeeded({ session, sessionId: baseSession.id, agent: 'claude', terminal });
-        }
+        if (unifiedTerminalRuntimeActive) return;
+        await persistTerminalAttachmentInfoIfNeeded({ sessionId: baseSession.id, terminal, startedBy: options.startedBy ?? 'terminal' });
+        await bindHerdrAgentIfNeeded({ session, sessionId: baseSession.id, agent: 'claude', terminal });
         sendTerminalFallbackMessageIfNeeded({ session, terminal });
     });
 
@@ -2075,6 +2074,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                     }),
                     allowOfflineStub: true,
                     startupSideEffectsOrder: 'persist-first',
+                    terminalHostOwner: unifiedTerminalRuntimeActive ? 'runtime' : 'startup',
                     runtimeActivityLifecycle: runtimeActivity.lifecycle,
                     deferPendingFirstInputCommitUntilRuntimeReady: true,
                     onSessionSwap: (newSession) => {
