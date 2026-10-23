@@ -5,8 +5,8 @@ import { createMemorySearchSnippet } from '@happier-dev/protocol/memory/memorySe
 import { resolveMemorySearchCorporaV1 } from '@happier-dev/protocol/memory/memorySearch';
 
 import type { OperationalMemoryEmbeddingsSettings } from './resolveOperationalMemoryEmbeddingsSettings';
-import { openSummaryShardIndexDb } from './summaryShardIndexDb';
-import { openDeepIndexDb } from './deepIndex/deepIndexDb';
+import { openSummaryShardIndexReader } from './summaryShardIndexDb';
+import { openDeepIndexReader } from './deepIndex/deepIndexDb';
 import type { MemoryDocumentSearchScope } from './syncMemoryDocuments';
 import { rerankHitsWithEmbeddings } from './deepIndex/embeddings/rerankHitsWithEmbeddings';
 
@@ -81,7 +81,7 @@ export function searchTier1Memory(params: Readonly<{
   const maxResults = params.query.maxResults ?? 20;
   const minScore = params.query.minScore ?? 0;
 
-  const db = openSummaryShardIndexDb({ dbPath: params.dbPath });
+  const db = openSummaryShardIndexReader({ dbPath: params.dbPath });
   try {
     if (project && admitted && (admitted.state === 'ready' || admitted.state === 'partial')) admitted.assertCurrent();
     const key = pageKey(params.query, { tier: 'hints', poolSize: maxResults });
@@ -148,8 +148,8 @@ export async function searchTier2Memory(params: Readonly<{
   const candidateLimitRaw = params.candidateLimit ?? maxResults;
   const candidateLimit = Math.max(maxResults, Math.max(1, Math.floor(candidateLimitRaw)));
 
-  const db = openDeepIndexDb({ dbPath: params.dbPath });
-  let summaryDb: ReturnType<typeof openSummaryShardIndexDb> | null = null;
+  const db = openDeepIndexReader({ dbPath: params.dbPath });
+  let summaryDb: ReturnType<typeof openSummaryShardIndexReader> | null = null;
   try {
     // Project admission owns both transcript membership and direct attachments.
     // It precedes candidate windows, reranking, limits and cursors.
@@ -165,7 +165,7 @@ export async function searchTier2Memory(params: Readonly<{
       : params.query.eligibleSessionIds;
     let projectMembershipChanged = false;
     summaryDb = params.sessionSummaryDbPath && sessionsRequested
-      ? openSummaryShardIndexDb({ dbPath: params.sessionSummaryDbPath }) : null;
+      ? openSummaryShardIndexReader({ dbPath: params.sessionSummaryDbPath }) : null;
     const key = pageKey(params.query, { tier: 'deep', poolSize: candidateLimit,
       hintedSessions: summaryDb !== null, externalAgentIds: params.externalAgentIds ? [...params.externalAgentIds].sort() : null, embeddings });
     let cursor = readPageCursor(params.query.cursor, key);

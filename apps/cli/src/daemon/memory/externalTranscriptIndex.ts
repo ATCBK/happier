@@ -95,7 +95,12 @@ export async function syncExternalMemoryTranscriptsBatch(input: Readonly<
     operation.signal.throwIfAborted();
     const sessionId = externalMemoryStorageId(candidate.source);
     const failureState = tier1?.getSessionCursors({ sessionId, nowMs: operation.nowMs, readOnly: true });
-    if (failureState && failureState.nextDeepEligibleAtMs > operation.nowMs) continue;
+    if (failureState && failureState.nextDeepEligibleAtMs > operation.nowMs) {
+      // A fresh demand child has no predecessor traversal Map. Persisted
+      // backoff defers this source; it is not an admitted continuation.
+      onSourceResult?.(candidate.source, 'error');
+      continue;
+    }
     try {
       const result = await syncExternalMemoryTranscriptOnce({ ...operation, ...candidate });
       if (failureState?.consecutiveDeepFailures) tier1?.markDeepIndexSuccess({ sessionId, seqTo: 0, nowMs: operation.nowMs });

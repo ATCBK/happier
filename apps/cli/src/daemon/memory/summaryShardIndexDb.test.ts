@@ -1,11 +1,11 @@
 import { chmod, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { join } from 'node:path';
-import { StatementSync } from 'node:sqlite';
+import { DatabaseSync, StatementSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 
 import { openSqliteDatabaseSync } from '../persistence/sqliteSync';
-import { openSummaryShardIndexDb } from './summaryShardIndexDb';
+import { openSummaryShardIndexDb, openSummaryShardIndexReader } from './summaryShardIndexDb';
 
 function countRows(dbPath: string, table: string): number {
   const db = openSqliteDatabaseSync(dbPath);
@@ -18,6 +18,83 @@ function countRows(dbPath: string, table: string): number {
 }
 
 describe('summaryShardIndexDb', () => {
+  it('reports the same next hint deadline that permit admission enforces without seeding cursors', async () => {
+    const dir = await mkdtemp(join(os.tmpdir(), 'happier-summary-hint-deadline-'));
+    const dbPath = join(dir, 'memory.sqlite');
+    const db = openSummaryShardIndexDb({ dbPath });
+    try {
+      const request = { sessionId: 'session', nowMs: 8_000, maxRunsPerHour: 1 };
+      expect(db.getNextHintRunAtMs(request)).toBe(8_000);
+      expect(countRows(dbPath, 'session_cursors')).toBe(0);
+      expect(db.tryAcquireHintRunPermit(request)).toBe(true);
+      const windowEnd = 8_000 + 60 * 60 * 1_000;
+      db.markHintRunFailure({ sessionId: 'session', nowMs: 9_000, backoffBaseMs: 4_000, backoffMaxMs: 16_000 });
+      expect(db.getNextHintRunAtMs({ ...request, nowMs: 9_000 })).toBe(windowEnd);
+      expect(db.tryAcquireHintRunPermit({ ...request, nowMs: windowEnd - 1 })).toBe(false);
+      expect(db.getNextHintRunAtMs({ ...request, nowMs: windowEnd })).toBe(windowEnd);
+      expect(db.tryAcquireHintRunPermit({ ...request, nowMs: windowEnd })).toBe(true);
+
+      db.markHintRunFailure({ sessionId: 'backoff', nowMs: 10_000, backoffBaseMs: 4_000, backoffMaxMs: 16_000 });
+      const backedOff = { sessionId: 'backoff', nowMs: 10_000, maxRunsPerHour: 2 };
+      expect(db.getNextHintRunAtMs(backedOff)).toBe(14_000);
+      expect(db.tryAcquireHintRunPermit({ ...backedOff, nowMs: 13_999 })).toBe(false);
+      expect(db.getNextHintRunAtMs({ ...backedOff, nowMs: 14_000 })).toBe(14_000);
+      expect(db.tryAcquireHintRunPermit({ ...backedOff, nowMs: 14_000 })).toBe(true);
+    } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('opens a real read-only reader without schema or file-protection writes and preserves FTS results', async () => {
+    const dir = await mkdtemp(join(os.tmpdir(), 'happier-summary-reader-'));
+    const dbPath = join(dir, 'memory.sqlite');
+    try {
+      const writer = openSummaryShardIndexDb({ dbPath });
+      writer.insertSummaryShard({ sessionId: 'session', seqFrom: 3, seqTo: 7, createdAtFromMs: 1, createdAtToMs: 2, summary: 'quasar handoff', keywords: [], entities: [], decisions: [] });
+      const query = { query: 'quasra', scope: { type: 'global' as const }, maxResults: 10 };
+      const expected = writer.search(query);
+      const walReader = openSummaryShardIndexReader({ dbPath });
+      try { expect(walReader.search(query)).toEqual(expected); }
+      finally { walReader.close(); }
+      writer.close();
+      if (process.platform !== 'win32') await chmod(dbPath, 0o400);
+      const exec = vi.spyOn(DatabaseSync.prototype, 'exec');
+      const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
+      try {
+        const reader = openSummaryShardIndexReader({ dbPath });
+        try {
+          expect(reader.search(query)).toEqual(expected);
+          expect(reader.getSummaryIndexStats().lightShardCount).toBe(1);
+          expect(reader.getMemorySessionIndexStatus('missing')).toBeNull();
+          expect(reader.getSessionCursors({ sessionId: 'missing', nowMs: 10 })).toMatchObject({ lastObservedSeq: 0, lastHintedSeq: 0, lastDeepIndexedSeq: 0 });
+          expect(reader.listIndexedSessionIds()).toEqual(['session']);
+          expect('insertSummaryShard' in reader).toBe(false);
+          expect(exec.mock.calls.flat().filter(sql => !/^PRAGMA busy_timeout=/i.test(sql))).toEqual([]);
+          const connection = prepare.mock.contexts[0];
+          expect(() => connection.exec('DELETE FROM summary_shards')).toThrow(/readonly|read-only/i);
+          if (process.platform !== 'win32') expect((await stat(dbPath)).mode & 0o777).toBe(0o400);
+        } finally { reader.close(); }
+      } finally { exec.mockRestore(); prepare.mockRestore(); }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('never creates a missing reader database or migrates an unprepared schema', async () => {
+    const dir = await mkdtemp(join(os.tmpdir(), 'happier-summary-reader-schema-'));
+    const dbPath = join(dir, 'memory.sqlite');
+    try {
+      expect(() => openSummaryShardIndexReader({ dbPath })).toThrow();
+      await expect(stat(dbPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      const legacy = openSqliteDatabaseSync(dbPath);
+      legacy.exec('CREATE TABLE legacy_marker (value TEXT); PRAGMA user_version=1;');
+      legacy.close();
+      if (process.platform !== 'win32') await chmod(dbPath, 0o600);
+      expect(() => openSummaryShardIndexReader({ dbPath })).toThrow();
+      const inspect = openSqliteDatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(inspect.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 1 });
+        expect(inspect.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([{ name: 'legacy_marker' }]);
+      } finally { inspect.close(); }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('reads the queue status from the retained SQLite row without inferring absent Session state', async () => {
     const directory = await mkdtemp(join(os.tmpdir(), 'happier-memory-queue-status-'));
     const db = openSummaryShardIndexDb({ dbPath: join(directory, 'memory.sqlite') });
@@ -89,6 +166,8 @@ describe('summaryShardIndexDb', () => {
       await symlink(outsidePath, `${dbPath}-wal`);
 
       expect(() => openSummaryShardIndexDb({ dbPath }))
+        .toThrow('Protected local state must not be a symbolic link');
+      expect(() => openSummaryShardIndexReader({ dbPath }))
         .toThrow('Protected local state must not be a symbolic link');
     } finally {
       await rm(dir, { recursive: true, force: true });

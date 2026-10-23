@@ -271,6 +271,14 @@ export async function verifyProtectedLocalStatePath(
   await assertProtectedPath(path, kind, options);
 }
 
+export function verifyProtectedLocalStatePathSync(
+  path: string,
+  kind: ProtectedLocalStateKind,
+  options: ProtectedLocalStateOptions = {},
+): void {
+  assertProtectedPathSync(path, kind, options);
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await lstat(path);

@@ -24,11 +24,13 @@ await import('@/plugins/testkit/admittedRuntime');
 await import('./externalTranscriptSources');
 
 type ConfigureInventory = (next: (page: number) => string | null,
-  options?: Readonly<{ available?: boolean; watchedFiles?: number; candidates?: boolean; headId?: string; unavailableIds?: readonly string[] }>) => void;
+  options?: Readonly<{ available?: boolean; watchedFiles?: number; candidates?: boolean; headId?: string; unavailableIds?: readonly string[]; searchIncomplete?: boolean }>) => void;
 
 async function withInventory(run: (sources: ReturnType<typeof createMemoryExternalTranscriptSources>, configure: ConfigureInventory,
   signal: AbortSignal, settings: ReturnType<typeof normalizeMemorySettings>, demands: WeakRef<Disposable>[], db: ReturnType<typeof openDeepIndexDb>,
-  notifyTopology: (kind?: 'file' | 'topology') => void) => Promise<void>) {
+  notifyTopology: (kind?: 'file' | 'topology') => void,
+  inspectSplit?: Readonly<{ stopReader(): Promise<void>; readSnapshot(): unknown; createReader(): Promise<number>;
+    readCounts(): Readonly<{ inventory: number; transcript: number }>; readTranscript(): Promise<unknown> }>) => Promise<void>, split = false) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-memory-inventory-'));
   const db = openDeepIndexDb({ dbPath: join(directory, 'index.sqlite') });
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
@@ -80,10 +82,14 @@ let watchedFiles = 0;
 let candidates = false;
 let headId = 'fixture-0';
 let unavailableIds = new Set();
+let searchIncomplete = false;
+const readCounts = { inventory: 0, transcript: 0 };
+export function counts() { return { ...readCounts }; }
 export function configure(value, options = {}) {
   next = value; available = options.available ?? true; watchedFiles = options.watchedFiles ?? 0; candidates = options.candidates ?? false;
   headId = options.headId ?? 'fixture-0';
   unavailableIds = new Set(options.unavailableIds ?? []);
+  searchIncomplete = options.searchIncomplete ?? false;
 }
 export function createFixtureAgentRuntime() { return { sessions: {} }; }
 export const externalSessions = {
@@ -93,18 +99,19 @@ export const externalSessions = {
       },
     } } : {}) } } : { ok: false, code: 'unavailable', retryable: true }; },
     async listCandidates({ cursor }) {
+      readCounts.inventory++;
       const page = cursor ? JSON.parse(Buffer.from(cursor, 'base64url').toString()).rolloutOffset : 0;
-      return { ok: true, value: { candidates: candidates ? [{ remoteSessionId: page === 0 ? headId : 'fixture-' + page, updatedAtMs: Date.now() }] : [], nextCursor: next(page) } };
+      return { ok: true, value: { candidates: candidates ? [{ remoteSessionId: page === 0 ? headId : 'fixture-' + page, updatedAtMs: Date.now() }] : [], nextCursor: next(page), ...(searchIncomplete ? { searchIncomplete: true } : {}) } };
     },
     async resolveLinkIdentity({ source, remoteSessionId }) { return unavailableIds.has(remoteSessionId)
       ? { ok: false, code: 'unavailable', retryable: true }
       : { ok: true, value: { source, remoteSessionId, linkData: {} } }; },
     async resolveLinkedIdentity({ source, remoteSessionId, linkData }) { return { ok: true, value: { source, remoteSessionId, linkData } }; },
-    async pageTranscript() { return { ok: true, value: { items: [], nextCursor: null } }; },
+    async pageTranscript() { readCounts.transcript++; return { ok: true, value: { items: [], nextCursor: null } }; },
     async readAfterTranscript() { return { ok: true, value: { outcome: 'already_current' } }; },
 };`, 'daemon.mjs': `
 import { createFixtureAgentRuntime, externalSessions } from './factory.mjs';
-export { configure } from './factory.mjs';
+export { configure, counts } from './factory.mjs';
 export function activate(api) {
   api.agents.register('fixture', createFixtureAgentRuntime, { sessionRunnerFactory: {
     module: './factory', export: 'createFixtureAgentRuntime', runtimeApiVersion: 1, externalSessionsExport: 'externalSessions',
@@ -119,7 +126,35 @@ export function activate(api) {
     if (typeof configureExport !== 'function') throw new Error('Synthetic plugin configuration export unavailable');
     const configure: ConfigureInventory = (next, options) => { configureExport(next, options); };
     const { createMemoryExternalTranscriptSources: createSources } = await import('./externalTranscriptSources');
-    sources = createSources({ credentials: { token: 'fixture', encryption: null }, onChange() {} });
+    let inspectSplit: Parameters<typeof run>[7];
+    if (split) {
+      const { createMemoryExternalTranscriptObservation, createMemoryExternalTranscriptReader } = await import('./externalTranscriptSources');
+      const daemon = createMemoryExternalTranscriptObservation({ credentials: { token: 'fixture', encryption: null }, onChange() {} });
+      const makeReader = () => createMemoryExternalTranscriptReader({
+        resolveReader: async id => runtime?.registry.agentRuntimesByAgentId.get(id)?.externalSessions ?? null,
+        onChange() {},
+      });
+      let reader = makeReader();
+      sources = { ...reader, attach: daemon.attach,
+        async refresh(settings, signal) { await daemon.refresh(settings, signal); await reader.refresh(daemon.takeSnapshot(), settings, signal); },
+        async dispose() { await reader.dispose(); await daemon.dispose(); },
+      };
+      const readCounts = runtime.modulesByPluginId.get(pluginId)?.counts;
+      if (typeof readCounts !== 'function') throw new Error('Synthetic plugin counts export unavailable');
+      inspectSplit = { stopReader: () => reader.dispose(), readSnapshot: daemon.getSnapshot,
+        readCounts: () => readCounts() as { inventory: number; transcript: number },
+        readTranscript: () => {
+          const source = daemon.getSnapshot().sources[0]!;
+          return reader.readPage({ source: { type: 'external_transcript', agentId: source.agentId,
+            sourceKey: source.sourceKey, nativeSessionId: 'fixture-0' } }, settings, signal);
+        },
+        async createReader() {
+          reader = makeReader();
+          await reader.refresh(JSON.parse(JSON.stringify(daemon.takeSnapshot())), settings, signal);
+          await reader.inventory(signal);
+          return reader.getReadySourceCount();
+        } };
+    } else sources = createSources({ credentials: { token: 'fixture', encryption: null }, onChange() {} });
     const demands: WeakRef<Disposable>[] = [];
     sources.attach({ registerAccountingSource: async input => {
       const demand = await observation.registerAccountingSource(input);
@@ -134,7 +169,7 @@ export function activate(api) {
       const notify = (kind === 'file' ? contentChanges : topologyChanges).get('/synthetic');
       if (!notify) throw new Error('Synthetic source has no admitted topology watcher');
       notify('/synthetic/new-sibling.jsonl');
-    });
+    }, inspectSplit);
   } finally {
     await sources?.dispose();
     await observation.dispose();
@@ -150,6 +185,52 @@ export function activate(api) {
 const cursor = (page: number) => encodeCodexExternalSessionIndexCursor({ ...createInitialCodexExternalSessionIndexCursor(), rolloutOffset: page });
 
 describe('native inventory cursor lifetime', () => {
+  it('does not re-demand an already removed native source retained by incomplete inventory', async () => {
+    await withInventory(async (sources, configure, signal, settings, _demands, _db, notifyTopology) => {
+      configure(() => null, { watchedFiles: 1, candidates: true });
+      await sources.refresh(settings, signal);
+      await sources.inventory(signal);
+      const candidate = sources.take(1)[0]!;
+      sources.noteSyncResult(candidate.source, 'current');
+      configure(() => null, { watchedFiles: 1, searchIncomplete: true });
+      notifyTopology();
+      await sources.inventory(signal);
+      sources.noteSyncResult(candidate.source, 'removed');
+      expect(sources.hasPendingWork()).toBe(true);
+      await sources.inventory(signal);
+      sources.noteSyncResult(candidate.source, 'removed');
+      expect(sources.hasPendingWork()).toBe(false);
+    });
+  });
+  it('settles an incomplete terminal inventory and retries on a later source observation', async () => {
+    await withInventory(async (sources, configure, signal, settings, _demands, _db, notifyTopology) => {
+      configure(() => null, { watchedFiles: 1, searchIncomplete: true });
+      await sources.refresh(settings, signal);
+      expect((await sources.inventory(signal))?.completeSources.size).toBe(0);
+      expect(sources.hasPendingWork()).toBe(false);
+      configure(() => null, { watchedFiles: 1 });
+      notifyTopology();
+      expect((await sources.inventory(signal))?.completeSources.size).toBe(1);
+      expect(sources.hasPendingWork()).toBe(false);
+    });
+  });
+  it('keeps daemon observation alive without an indexer and transfers serializable hints to a fresh reader', async () => {
+    await withInventory(async (sources, configure, signal, settings, _demands, _db, notifyTopology, split) => {
+      configure(() => null, { watchedFiles: 1, candidates: true });
+      await sources.refresh(settings, signal);
+      expect(sources.getReadySourceCount()).toBe(0);
+      expect(split!.readCounts()).toEqual({ inventory: 0, transcript: 0 });
+      await split!.stopReader();
+      notifyTopology();
+      expect(split!.readSnapshot()).toMatchObject({ sources: [{ agentId }], changes: [{ agentId, refreshSources: true }] });
+      expect(split!.readSnapshot()).toMatchObject({ changes: [{ agentId, refreshSources: true }] });
+      expect(split!.readCounts()).toEqual({ inventory: 0, transcript: 0 });
+      expect(await split!.createReader()).toBe(1);
+      expect(split!.readCounts()).toEqual({ inventory: 1, transcript: 0 });
+      await split!.readTranscript();
+      expect(split!.readCounts()).toEqual({ inventory: 1, transcript: 1 });
+    }, true);
+  });
   it('prioritizes a newly discovered sibling after inventory completes while transcript backfill remains', async () => {
     await withInventory(async (sources, configure, signal, settings, _demands, _db, notifyTopology) => {
       configure(() => null, { watchedFiles: 1, candidates: true });
@@ -182,6 +263,9 @@ describe('native inventory cursor lifetime', () => {
         sources.noteSyncResult(candidate.source, 'current');
       }
       expect(sources.getIndexSources(db)).toMatchObject([{ state: 'indexing' }]);
+      // Unavailable identities preserve incomplete coverage; they are not an
+      // admitted continuation that may spin a finite demand indefinitely.
+      expect(sources.hasPendingWork()).toBe(false);
     });
   });
   it.each(['file', 'topology'] as const)('discovers new siblings from a %s event during a retained crawl without starving its initial coverage', async kind => {

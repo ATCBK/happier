@@ -556,7 +556,7 @@ it('exposes fresh scoped preparation and exact indexed facts through daemon stat
   await withCurrentDocumentFixture(async ({ credentials, serverId, artifactId, setSessionWork }) => {
     const { DEFAULT_MEMORY_SETTINGS, writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ ...DEFAULT_MEMORY_SETTINGS, enabled: true, indexMode: 'deep' });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials, machineId: 'session-machine' });
     try {
       const { registerMachineMemoryRpcHandlers } = await import('@/api/machine/rpcHandlers.memory');

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import axios from 'axios';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY } from '@/session/external/agentExternalSessionsInvocation';
@@ -33,19 +33,28 @@ vi.mock('node:fs/promises', async importOriginal => {
   } };
 });
 
+// This file has one scenario. Select its isolated Home before loading the real
+// graph, so workload setup does not discard the warmed configuration/registry.
+const directory = await mkdtemp(join(tmpdir(), 'happier-memory-native-worker-'));
+const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'CLAUDE_CONFIG_DIR']);
+env.patch({ HAPPIER_HOME_DIR: join(directory, 'home'), HAPPIER_SERVER_URL: 'https://home.test',
+  HAPPIER_WEBAPP_URL: 'https://home.test', CLAUDE_CONFIG_DIR: join(directory, 'claude') });
+(await import('@/configuration')).reloadConfiguration();
+afterAll(async () => {
+  env.restore();
+  vi.resetModules();
+  await rm(directory, { recursive: true, force: true });
+});
+
 // Transform the real registry and worker graph outside the workload deadline.
 await import('@/api/api');
 await import('@/plugins/testkit/admittedRuntime');
-await import('./memoryWorker');
+await import('./testkit/startMemoryWorker');
+await import('./testkit/inProcessMemoryIndexer');
 await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
 
 describe('memory worker native source readiness', () => {
   it('finishes an idle native source and discovers new in-window transcripts through the shared observer', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'happier-memory-native-worker-'));
-    const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'CLAUDE_CONFIG_DIR']);
-    env.patch({ HAPPIER_HOME_DIR: join(directory, 'home'), HAPPIER_SERVER_URL: 'https://home.test',
-      HAPPIER_WEBAPP_URL: 'https://home.test', CLAUDE_CONFIG_DIR: join(directory, 'claude') });
-    vi.resetModules();
     const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
       if (path === '/v1/account/profile') return { status: 200, data: { id: 'account', connectedServicesV2: [] } };
@@ -75,11 +84,28 @@ describe('memory worker native source readiness', () => {
     let releaseDisk = () => {};
     let pendingSync: Promise<void> | undefined;
     const heap = process.env.HAPPIER_R224_PROFILE ? new Session() : null;
-    const measurements: Array<{ phase: string; rss: number; heapUsed: number }> = [];
+    const measurements: Array<{ phase: string; rss: number; heapUsed: number; details: unknown }> = [];
+    const loopDelay = monitorEventLoopDelay({ resolution: 10 });
     const measure = async (phase: string) => {
       if (!heap) return;
       await heap.post('HeapProfiler.collectGarbage');
-      measurements.push({ phase, ...process.memoryUsage() });
+      const report: unknown = process.report.getReport();
+      const heapReport = (value: unknown): unknown => {
+        if (!value || typeof value !== 'object') return null;
+        const record = value as Record<string, unknown>;
+        return { heap: record.javascriptHeap, workers: Array.isArray(record.workers) ? record.workers.map(heapReport) : [] };
+      };
+      const { openSqliteDatabaseSync } = await import('../persistence/sqliteSync');
+      const databases = [worker?.getTier1DbPhysicalPath?.(), worker?.getDeepDbPhysicalPath?.()].flatMap(path => {
+        if (!path) return [];
+        const db = openSqliteDatabaseSync(path, { readOnly: true });
+        try { return [{ path, cache: db.prepare('PRAGMA cache_size').get(), mmap: db.prepare('PRAGMA mmap_size').get(),
+          page: db.prepare('PRAGMA page_size').get(), pages: db.prepare('PRAGMA page_count').get() }]; }
+        finally { db.close(); }
+      });
+      const item = { phase, ...process.memoryUsage(), details: { isolates: heapReport(report), databases,
+        loopDelayMaxMs: loopDelay.max / 1e6, sources: worker?.getIndexSources?.().length, watchedFiles: fileChanges.size } };
+      measurements.push(item);
     };
     try {
       const project = join(directory, 'claude', 'projects', 'project');
@@ -131,7 +157,7 @@ describe('memory worker native source readiness', () => {
         coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: {
           enabled: true, agents: ['claude'], historyDays: 1, includeToolOutput: false,
         } } });
-      const { startMemoryWorker } = await import('./memoryWorker');
+      const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
       worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine' });
       if (heap) {
         heap.connect();
@@ -200,11 +226,9 @@ describe('memory worker native source readiness', () => {
       await writeMemorySettingsToDisk({ ...oneDaySettings, conversationSearch: { ...oneDaySettings.conversationSearch,
         indexExternal: { ...oneDaySettings.conversationSearch.indexExternal, historyDays: 14 } } });
       await worker.reloadSettings();
-      // Widening selects three conversations. Their native directory order is
-      // opaque; drain the existing worker allowance, not an assumed first slot.
-      for (let index = 0; index < Math.ceil(3 / worker.getSettings().worker.maxSessionsPerTick); index++) {
-        await worker.ensureUpToDate();
-      }
+      // Explicit refresh settles the newly admitted history regardless of its
+      // native directory order or the scheduler's per-tick allowance.
+      await worker.ensureUpToDate();
       expect.soft(search('obsolete')).toHaveLength(1);
       expect.soft(indexedNativeIds()).toContain('old');
       await writeMemorySettingsToDisk(oneDaySettings);
@@ -235,14 +259,15 @@ describe('memory worker native source readiness', () => {
       notifyTopology(join(project, 'bulk-0.jsonl'));
       pendingSync = worker.ensureUpToDate();
       expect(await Promise.race([pendingSync.then(() => 'tick finished'), secondPageEntered.then(() => 'waiting on next page')]))
-        .toBe('tick finished');
+        .toBe('waiting on next page');
+      // A finite demand remains active for its admitted continuation, but its
+      // first page is already queryable before the next OS read completes.
+      expect(search('corundum').length).toBeGreaterThan(0);
       expect(nativeSources()[0]?.state).toBe('indexing');
       // An already-indexed conversation stays fresh while initial work on
       // other conversations is queued. This must use the same worker budget.
       await appendFile(firstPath, row('concurrent-append', 'zircon concurrent backlog append'));
       fileChanges.get(firstPath)!(firstPath);
-      pendingSync = worker.ensureUpToDate();
-      await secondPageEntered;
       const { MemoryWorkerStatusV1Schema } = await import('@happier-dev/protocol/memory/memoryStatus');
       expect(MemoryWorkerStatusV1Schema.parse(worker.getWorkerStatus()).activeOperations).toEqual([
         { kind: 'transcript', sessionIds: [] },
@@ -252,21 +277,7 @@ describe('memory worker native source readiness', () => {
       disk.project = '';
       disk.armOnWatch = '';
       disk.armed = false;
-      // A file event has source identity, not necessarily a native conversation
-      // id. Refresh the three completed peers ahead of the 150 new candidates.
-      for (let index = 0; index < 3; index++) await worker.ensureUpToDate();
-      expect.soft(search('zircon'), 'append must be searchable before the initial backlog drains').toHaveLength(1);
-      expect(nativeSources()[0]?.state).toBe('indexing');
-      // Drain the real worker's existing per-tick transcript allowance.
-      const pagesPerConversation = heap
-        ? Math.ceil(padding.length / EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxSerializedBytes) + 1 : 1;
-      for (let index = 0; index < backlogSize * pagesPerConversation + 3; index++) {
-        // Steady changes must not erase the initial coverage of every sibling.
-        await appendFile(firstPath, row(`steady-${index}`, 'steady active native conversation'));
-        fileChanges.get(firstPath)!(firstPath);
-        await worker.ensureUpToDate();
-        if (nativeSources()[0]?.state === 'ready') break;
-      }
+      expect(search('zircon'), 'the active run must consume an append received during inventory').toHaveLength(1);
       expect(search('corundum').length).toBeGreaterThan(0);
       expect(nativeSources()[0]?.state).toBe('ready');
       if (heap) {
@@ -287,16 +298,9 @@ describe('memory worker native source readiness', () => {
       // deliberately ignores it rather than scheduling duplicate observation.
       fileChanges.get(addedPath)!(addedPath);
       notifyTopology(addedPath);
-      // Drain the existing source allowance after invalidating source freshness.
-      for (let index = 0; index < Math.ceil((backlogSize + 3) / worker.getSettings().worker.maxSessionsPerTick); index++) {
-        await worker.ensureUpToDate();
-      }
-      // The deleted transcript can occupy the final traversal slot. Its
-      // source_unavailable result requests fresh inventory absence proof;
-      // drain that inventory's existing candidate-page allowance as well.
-      for (let index = 0; index < Math.ceil((backlogSize + 3) / pageSize); index++) {
-        await worker.ensureUpToDate();
-      }
+      // The demand includes retained transcript work and any fresh inventory
+      // absence proof requested by a removed transcript's result.
+      await worker.ensureUpToDate();
       expect(search('topaz')).toEqual([]);
       expect(nativeSources()[0]?.state).toBe('ready');
       await rm(project, { recursive: true });
@@ -336,9 +340,12 @@ describe('memory worker native source readiness', () => {
       await worker.ensureUpToDate();
       expect(search('sapphire')).toHaveLength(1);
       await worker.stop();
-      // A retained handle must not keep native reader/inventory references
-      // alive after the worker's lifetime ends.
-      expect(nativeSources()).toEqual([]);
+      // The daemon may retain serializable coverage facts after Stop. Resource
+      // release is established by observation disposal and closed DB paths.
+      expect(fileChanges.size).toBe(0);
+      expect(topologyChanges.size).toBe(0);
+      expect(worker.getTier1DbPath()).toBeNull();
+      expect(worker.getDeepDbPath()).toBeNull();
     } catch (error) {
       console.error('Native readiness workload failed before cleanup', error);
       throw error;
@@ -358,9 +365,6 @@ describe('memory worker native source readiness', () => {
       await runtime?.dispose();
       await shutdownRegistry?.();
       get.mockRestore();
-      env.restore();
-      vi.resetModules();
-      await rm(directory, { recursive: true, force: true });
     }
   }, process.env.HAPPIER_R224_PROFILE ? 0 : undefined);
 });

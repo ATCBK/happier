@@ -1,22 +1,16 @@
-import type { Disposable } from '@happier-dev/plugin-sdk';
 import { createHash } from 'node:crypto';
 import type { MemoryExternalTranscriptSourceV1 } from '@happier-dev/protocol/memory/memorySearch';
 import type { MemorySettingsV1 } from '@happier-dev/protocol/memory/memorySettings';
 import type { MemoryIndexSourceStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
 import type { DeepIndexDbHandle } from './deepIndex/deepIndexDb';
-import { configuration } from '@/configuration';
-import { fetchAccountProfile } from '@/api/accountProfile';
 import type { StoredCredentials } from '@/persistence';
-import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import type { NativeUsageSourceBoundary } from '@/usage/collector/nativeUsageSourceDiscovery';
-import type { discoverNativeUsageSourceMetadata as DiscoverNativeUsageSourceMetadata } from '@/usage/collector/nativeUsageSourceDiscovery';
-import type { createExternalSessionObservationDaemonProjection } from '@/api/session/external/leases/createExternalSessionObservationDaemonProjection';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY } from '@/session/external/agentExternalSessionsInvocation';
 import { externalMemoryStorageId, memoryExternalSourceReadError, memoryExternalSourceFailure, type MemoryExternalSourceReader } from './externalTranscriptIndex';
 import { resolveMemoryCoverageCreatedAtCutoffMs } from './transcript/coveragePolicy';
 import { logger } from '@/ui/logger';
-
-export type MemoryExternalObservation = Pick<ReturnType<typeof createExternalSessionObservationDaemonProjection>, 'registerAccountingSource'>;
+import { createMemoryExternalTranscriptObservation, type MemoryExternalTranscriptSourcesSnapshot } from './externalTranscriptObservation';
+export { createMemoryExternalTranscriptObservation, discoverMemoryExternalTranscriptSources } from './externalTranscriptObservation';
+export type { MemoryExternalObservation, MemoryExternalTranscriptSourceDescriptor, MemoryExternalTranscriptSourceChange, MemoryExternalTranscriptSourcesSnapshot } from './externalTranscriptObservation';
 
 type MemoryExternalTranscriptCandidate = Readonly<{
   source: MemoryExternalTranscriptSourceV1;
@@ -72,6 +66,10 @@ export function createMemoryExternalTranscriptTraversal() {
       }
     },
     size() { return candidates.size; },
+    hasPendingWork() {
+      for (const entry of candidates.values()) if (entry.refresh || entry.state === undefined || entry.state === 'more') return true;
+      return false;
+    },
     invalidate(agentId?: string, sourceKey?: string) {
       for (const entry of candidates.values()) {
         const candidate = entry.candidate;
@@ -89,30 +87,43 @@ export function createMemoryExternalTranscriptTraversal() {
     noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error', failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'>) {
       const entry = candidates.get(externalMemoryStorageId(source));
       if (entry) {
+        const changed = entry.state !== state;
         entry.state = state;
-        entry.failure = state === 'error' ? failure : undefined;
+        entry.failure = state === 'error' ? failure ?? entry.failure : undefined;
         // Replacement first clears the old index and returns more. Keep that
         // requested refresh ahead of the backlog until its new pages complete.
         if (state !== 'more') entry.refresh = false;
+        return changed;
       }
+      return false;
     },
     getIndexSources(db: Pick<DeepIndexDbHandle, 'getExternalSourceState'> | null): MemoryIndexSourceStatusV1[] {
       const groups = new Map<string, MemoryIndexSourceStatusV1>();
-      for (const { candidate, state: result, failure } of candidates.values()) {
+      // Establish group order and decisive in-memory facts before consulting
+      // persisted coverage. Candidate rotation cannot turn a pending sibling
+      // into a scan of every already-settled frontier.
+      for (const { candidate, state, failure } of candidates.values()) {
         const { agentId, sourceKey } = candidate.source;
+        const key = JSON.stringify([agentId, sourceKey]);
+        const previous = groups.get(key);
+        if (!previous) groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state: 'ready' });
+        if (state === 'error') groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state: 'error', ...failure });
+        else if (state !== 'current' && state !== 'more' && previous?.state !== 'error') {
+          groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state: 'indexing' });
+        }
+      }
+      for (const { candidate, state: result } of candidates.values()) {
+        const { agentId, sourceKey } = candidate.source;
+        const key = JSON.stringify([agentId, sourceKey]);
+        const previous = groups.get(key);
+        if (previous?.state !== 'ready') continue;
         const id = externalMemoryStorageId(candidate.source);
-        const retained = result === 'current' || result === 'more' ? db?.getExternalSourceState({ sessionId: id }) : null;
+        const retained = db?.getExternalSourceState({ sessionId: id });
         // An append may have several tail pages; it does not reopen completed
         // initial history. Replacement deletes this persisted frontier.
         const initialComplete = retained?.coverageComplete === true && (result === 'current' || (retained.cursor
           && (JSON.parse(retained.cursor) as { type?: unknown }).type === 'tail'));
-        const state = result === 'error' ? 'error' : result !== undefined && initialComplete ? 'ready' : 'indexing';
-        const key = JSON.stringify([agentId, sourceKey]);
-        const previous = groups.get(key);
-        if (!previous || state === 'error' || (previous.state !== 'error' && state !== 'ready')) {
-          groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state,
-            ...(state === 'error' ? failure : {}) });
-        }
+        if (!initialComplete) groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state: 'indexing' });
       }
       return [...groups.values()];
     },
@@ -164,32 +175,13 @@ export function createMemoryExternalTranscriptTraversal() {
   };
 }
 
-/** Configured topology and executable source readiness have distinct authority. */
-export async function discoverMemoryExternalTranscriptSources(input: Parameters<typeof DiscoverNativeUsageSourceMetadata>[0]) {
-  const [{ discoverNativeUsageSourceMetadata }, {
-    materializeConfiguredExternalSessionSourceCandidates, resolveConfiguredExternalSessionSourceAtAdmission,
-  }] = await Promise.all([import('@/usage/collector/nativeUsageSourceDiscovery'), import('@/session/external/configuredSourceMaterializer')]);
-  const configuredSourceKeys = new Set<string>();
-  for (const candidate of materializeConfiguredExternalSessionSourceCandidates(input)) {
-    if (candidate.refusal) continue;
-    const boundary = await input.resolveBoundary(candidate.agentId).catch(() => null);
-    const admitted = await resolveConfiguredExternalSessionSourceAtAdmission({ ...input,
-      agentId: candidate.agentId, source: candidate.source, catalogEntry: boundary?.catalogEntry ?? null });
-    if (admitted.ok) configuredSourceKeys.add(JSON.stringify([candidate.agentId, admitted.sourceKey]));
-  }
-  const descriptors = await discoverNativeUsageSourceMetadata({ ...input, includeAccountingSource: false });
-  return { descriptors, configuredSourceKeys };
-}
-
-/** Configured native sources consume the incumbent observation resource owner. */
-export function createMemoryExternalTranscriptSources(input: Readonly<{
-  credentials: StoredCredentials;
+/** Child-owned inventories and executable native readers; admission stays in the daemon. */
+export function createMemoryExternalTranscriptReader(input: Readonly<{
+  resolveReader(agentId: string): Promise<MemoryExternalSourceReader['reader'] | null>;
   onChange(refreshSources: boolean): void;
 }>) {
-  let observation: MemoryExternalObservation | null = null;
-  // Observation handles own watch snapshots; only the executable reader may
-  // outlive a demand refresh in inventories and transcript candidates.
-  let records: ReadonlyArray<{ native: MemoryExternalSourceReader; demand: Disposable | null }> = [];
+  let records: ReadonlyArray<{ native: MemoryExternalSourceReader; occurrenceId: string; observationId?: string; lifetime?: AbortController;
+    observationState?: { value: NonNullable<MemoryExternalSourceReader['observation']> } }> = [];
   const traversal = createMemoryExternalTranscriptTraversal();
   const inventories = new Map<string, NativeInventory>();
   let inventoryChanged = false;
@@ -197,11 +189,9 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
   const completeSources = new Set<string>();
   let stopped = false;
   let indexSettings: MemorySettingsV1 | null = null;
-  let unsubscribeRegistry: (() => void) | null = null;
-  const lifetime = new AbortController();
 
   const releaseSources = async () => {
-    const prior = records;
+    for (const record of records) record.lifetime?.abort();
     records = [];
     traversal.replace([]);
     configuredSourceKeys.clear();
@@ -209,9 +199,6 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     inventories.clear();
     inventoryChanged = false;
     indexSettings = null;
-    unsubscribeRegistry?.();
-    unsubscribeRegistry = null;
-    await Promise.all(prior.map(record => record.demand?.dispose()));
   };
 
   const invalidateInventory = (agentId?: string, sourceKey?: string, changed = true) => {
@@ -220,28 +207,15 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         && (sourceKey === undefined || state.native.sourceKey === sourceKey)
         && (changed || state.pending === null)) {
         state.needsInventory = true;
-        if (changed && state.pending !== null) state.refreshRequested = true;
+        state.refreshRequested = true;
         completeSources.delete(key);
       }
     }
   };
 
-  const acquire = async (agentId: string): Promise<NativeUsageSourceBoundary | null> => {
-    const [{ readRegistryCatalogHook }, { acquireAuthoritativePluginRuntimeRegistryLease }] = await Promise.all([
-      import('@/agent/catalog/runtimeEntry'), import('@/plugins/runtime/reload/runtimeLease'),
-    ]);
-    const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
-    try {
-      const catalogEntry = await readRegistryCatalogHook(lease.registry, agentId, entry => entry);
-      const runtime = lease.registry.agentRuntimesByAgentId.get(agentId);
-      return runtime?.externalSessions && runtime.isCurrent() && !runtime.retirementSignal.aborted
-        ? { catalogEntry, externalSessions: runtime.externalSessions, occurrenceId: runtime.occurrenceId,
-          retirementSignal: runtime.retirementSignal, isCurrent: runtime.isCurrent } : null;
-    } finally { await lease.release(); }
-  };
-
-  const refresh = async (settings: MemorySettingsV1, signal: AbortSignal) => {
-    if (stopped || !observation || !settings.enabled || !settings.conversationSearch.indexExternal.enabled
+  const refresh = async (snapshot: MemoryExternalTranscriptSourcesSnapshot, settings: MemorySettingsV1, signal: AbortSignal) => {
+    signal.throwIfAborted();
+    if (stopped || !settings.enabled || !settings.conversationSearch.indexExternal.enabled
       || settings.conversationSearch.indexExternal.agents.length === 0) {
       await releaseSources();
       return;
@@ -249,79 +223,55 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     if (indexSettings && indexSettings.conversationSearch.indexExternal.historyDays
       !== settings.conversationSearch.indexExternal.historyDays) invalidateInventory();
     indexSettings = settings;
-    const operationSignal = AbortSignal.any([signal, lifetime.signal]);
-    if (!unsubscribeRegistry) {
-      const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
-      unsubscribeRegistry = pluginReloadController.subscribe(() => { invalidateInventory(); traversal.invalidate(); input.onChange(true); });
-    }
-    const [{ acquireAuthoritativePluginRuntimeRegistryLease }, { configuredExternalSessionSourcesUseConnectedProfiles },
-      { resolveNativeUsageSourceMetadata }] = await Promise.all([
-      import('@/plugins/runtime/reload/runtimeLease'), import('@/session/external/configuredSourceMaterializer'),
-      import('@/usage/collector/nativeUsageSourceDiscovery'),
-    ]);
-    const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
-    const agents = lease.registry.contributes.agents;
-    await lease.release();
-    const selected = agents.filter(agent => settings.conversationSearch.indexExternal.agents.includes(agent.id));
-    const account = configuredExternalSessionSourcesUseConnectedProfiles(selected)
-      ? await fetchAccountProfile({ token: input.credentials.token, signal: operationSignal }) : { connectedServicesV2: [] };
-    const { descriptors, configuredSourceKeys: nextConfiguredSourceKeys } = await discoverMemoryExternalTranscriptSources({ agents: selected, account,
-      agentSettings: getActiveAccountSettingsSnapshot()?.settings,
-      activeServerId: configuration.activeServerId, activeServerDir: configuration.activeServerDir,
-      resolveBoundary: acquire, signal: operationSignal });
-    operationSignal.throwIfAborted();
     const next: typeof records[number][] = [];
     try {
-      for (const descriptor of descriptors) {
-        const agentId = selected.find(agent => agent.identity?.pluginId === descriptor.agent.pluginId
-          && agent.identity.localId === descriptor.agent.localId)?.id;
-        if (!agentId) continue;
-        const boundary = await acquire(agentId);
-        if (!boundary) continue;
-        const resolved = await resolveNativeUsageSourceMetadata({ agents: selected, agentId,
-          source: descriptor.source, boundary, activeServerDir: configuration.activeServerDir, signal: operationSignal });
-        if (!resolved) continue;
-        const sourceObservation = resolved.metadata.accountingSource;
-        const demand = sourceObservation ? await observation.registerAccountingSource({
-          resource: { pluginId: descriptor.agent.pluginId, agentLocalId: descriptor.agent.localId,
-            occurrenceId: boundary.occurrenceId, resourceKey: sourceObservation.resourceKey,
-            retirementSignal: AbortSignal.any([lifetime.signal, boundary.retirementSignal]) },
-          source: resolved.descriptor.source, changeObservation: sourceObservation.changeObservation,
-          ...(sourceObservation.watchFileChanges ? { watchFileChanges: sourceObservation.watchFileChanges } : {}),
-          onChange: ({ reason, changedNativeSessionIds }) => {
-            // Known-file changes go through the retained transcript frontier.
-            // Only structural/source changes need a fresh source-wide file set.
-            const refreshSources = reason !== 'file_changed';
-            if (refreshSources) invalidateInventory(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey);
-            traversal.changed(agentId, descriptor.configuredSourceKey ?? descriptor.sourceKey, changedNativeSessionIds);
-            input.onChange(refreshSources);
-          },
-        }) : null;
-        next.push({ native: { agentId, sourceKey: descriptor.configuredSourceKey ?? descriptor.sourceKey,
-          source: resolved.descriptor.source, reader: boundary.externalSessions,
-          ...(demand?.observation ? { observation: demand.observation,
-            readObservation: demand.readObservation } : {}) }, demand });
+      for (const descriptor of snapshot.sources) {
+        const previous = records.find(record => record.native.agentId === descriptor.agentId && record.native.sourceKey === descriptor.sourceKey);
+        const reader = previous?.occurrenceId === descriptor.occurrenceId
+          ? previous.native.reader : await input.resolveReader(descriptor.agentId);
+        signal.throwIfAborted();
+        if (!reader) continue;
+        const retained = previous?.native.reader === reader && previous.occurrenceId === descriptor.occurrenceId
+          && previous.observationId === descriptor.observation?.id
+          && JSON.stringify(previous.native.source) === JSON.stringify(descriptor.source);
+        const lifetime = descriptor.observation ? retained ? previous.lifetime : new AbortController() : undefined;
+        const observation = lifetime ? { lifetime: lifetime.signal,
+          ...(descriptor.observation?.changedFiles ? { changedFiles: descriptor.observation.changedFiles } : {}) } : undefined;
+        const observationState = observation ? retained && previous.observationState ? previous.observationState : { value: observation } : undefined;
+        if (observationState && observation) {
+          const pending = observationState.value;
+          observationState.value = { lifetime: observation.lifetime, ...(pending.changedFiles && observation.changedFiles
+            ? { changedFiles: [...new Set([...pending.changedFiles, ...observation.changedFiles])] } : {}) };
+        }
+        next.push({ native: { agentId: descriptor.agentId, sourceKey: descriptor.sourceKey, source: descriptor.source, reader,
+          ...(observationState ? { observation: observationState.value, readObservation() {
+            const value = observationState.value;
+            observationState.value = { lifetime: value.lifetime, changedFiles: [] };
+            return value;
+          } } : {}) }, occurrenceId: descriptor.occurrenceId,
+          ...(descriptor.observation ? { observationId: descriptor.observation.id, lifetime, observationState } : {}) });
       }
-      operationSignal.throwIfAborted();
-    } catch (error) { await Promise.all(next.map(record => record.demand?.dispose())); throw error; }
+    } catch (error) {
+      for (const record of next) if (!records.some(prior => prior.lifetime === record.lifetime)) record.lifetime?.abort();
+      throw error;
+    }
     const prior = records;
     records = next;
-    configuredSourceKeys = nextConfiguredSourceKeys;
+    configuredSourceKeys = new Set(snapshot.configuredSourceKeys);
     const retainedKeys = new Set<string>();
     for (const { native } of records) {
       const key = JSON.stringify([native.agentId, native.sourceKey]);
       retainedKeys.add(key);
       const previous = inventories.get(key);
-      // Refreshing observation demand must not restart an in-progress crawl.
-      // A replaced reader or physical source does require fresh absence proof.
       if (previous?.native.reader === native.reader
         && previous.native.observation?.lifetime === native.observation?.lifetime
         && JSON.stringify(previous.native.source) === JSON.stringify(native.source)) {
         previous.native = native;
         continue;
       }
+      if (previous) traversal.invalidate(native.agentId, native.sourceKey);
       inventories.set(key, { native, candidates: new Map(), pending: null, pendingIdentitiesComplete: true, seenCursorDigests: new Set(),
-        refresh: null, refreshRequested: false, preferRefresh: true,
+        refresh: null, refreshRequested: true, preferRefresh: true,
         needsInventory: true, failed: false, initialInventoryComplete: false });
       inventoryChanged = true;
       completeSources.delete(key);
@@ -331,11 +281,15 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       completeSources.delete(key);
       inventoryChanged = true;
     }
-    await Promise.all(prior.map(record => record.demand?.dispose()));
+    for (const record of prior) if (!records.some(next => next.lifetime === record.lifetime)) record.lifetime?.abort();
+    for (const change of snapshot.changes) {
+      if (change.refreshSources) invalidateInventory(change.agentId, change.sourceKey);
+      traversal.changed(change.agentId, change.sourceKey, change.changedNativeSessionIds);
+    }
   };
 
   const inventory = async (signal: AbortSignal) => {
-    if (!observation || !indexSettings) return null;
+    if (!indexSettings) return null;
     const cutoff = resolveMemoryCoverageCreatedAtCutoffMs({ nowMs: Date.now(), enabledAtMs: 0,
       historyDays: indexSettings.conversationSearch.indexExternal.historyDays });
     let changed = inventoryChanged;
@@ -350,6 +304,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         state.cursor = undefined;
         state.seenCursorDigests.clear();
         state.needsInventory = false;
+        state.refreshRequested = false;
         completeSources.delete(key);
       }
       if (state.pending === null) continue;
@@ -421,6 +376,9 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
           } else {
             // Changes during a crawl or an incomplete page cannot prove absence.
             state.candidates = new Map([...state.candidates, ...state.pending]);
+            // A real topology invalidation still owns a clean absence pass.
+            // Unreadable identities/partial pages wait for later observation.
+            if (!page.value.searchIncomplete && state.pendingIdentitiesComplete) state.refreshRequested = true;
             state.needsInventory = true;
           }
           // A later topology change does not erase completed initial coverage.
@@ -461,8 +419,8 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     // A periodic inventory request does not invalidate an unfinished crawl.
     invalidate() { invalidateInventory(undefined, undefined, false); },
     noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error', failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'>) {
-      traversal.noteSyncResult(source, state, failure);
-      if (state === 'removed') {
+      const changed = traversal.noteSyncResult(source, state, failure);
+      if (state === 'removed' && changed) {
         invalidateInventory(source.agentId, source.sourceKey);
         input.onChange(true);
       }
@@ -482,15 +440,9 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       });
     },
     getReadySourceCount: traversal.size,
-    attach(next: MemoryExternalObservation) {
-      observation = next;
-      invalidateInventory();
-      input.onChange(true);
-      return () => { if (observation === next) { observation = null; invalidateInventory(); input.onChange(true); } };
-    },
     take: traversal.take,
     async readPage(request: Readonly<{ source: MemoryExternalTranscriptSourceV1; cursor?: string }>, settings: MemorySettingsV1, signal: AbortSignal) {
-      if (!records.length) await refresh(settings, signal);
+      signal.throwIfAborted();
       const native = records.find(({ native }) => native.agentId === request.source.agentId && native.sourceKey === request.source.sourceKey)?.native;
       if (!native) return null;
       const identity = await native.reader.resolveLinkIdentity({ source: native.source,
@@ -504,6 +456,50 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         maxSerializedBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxSerializedBytes, signal });
       return result.ok ? result.value : null;
     },
-    async dispose() { stopped = true; lifetime.abort(); await releaseSources(); observation = null; },
+    hasPendingWork() {
+      if (traversal.hasPendingWork()) return true;
+      // Incomplete absence proof needs a later observation/admission, not an
+      // immediate retry. Only a cursor or an actual requested refresh keeps a
+      // finite run alive; needsInventory alone is retained coverage state.
+      for (const state of inventories.values()) if (state.pending !== null || state.refreshRequested) return true;
+      return false;
+    },
+    async dispose() { stopped = true; await releaseSources(); },
+  };
+}
+
+/** Incumbent in-process composition, also used by source-driven integration tests. */
+export function createMemoryExternalTranscriptSources(input: Readonly<{
+  credentials: StoredCredentials;
+  onChange(refreshSources: boolean): void;
+}>) {
+  const daemon = createMemoryExternalTranscriptObservation(input);
+  const reader = createMemoryExternalTranscriptReader({ onChange: input.onChange, resolveReader: async agentId => {
+    const { acquireAuthoritativePluginRuntimeRegistryLease } = await import('@/plugins/runtime/reload/runtimeLease');
+    const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
+    try {
+      const runtime = lease.registry.agentRuntimesByAgentId.get(agentId);
+      return runtime?.isCurrent() && !runtime.retirementSignal.aborted ? runtime.externalSessions ?? null : null;
+    } finally { await lease.release(); }
+  } });
+  let indexSettings: MemorySettingsV1 | null = null;
+  return {
+    ...reader,
+    attach: daemon.attach,
+    async refresh(settings: MemorySettingsV1, signal: AbortSignal) {
+      indexSettings = settings;
+      await daemon.refresh(settings, signal);
+      await reader.refresh(daemon.takeSnapshot(), settings, signal);
+    },
+    async inventory(signal: AbortSignal) {
+      if (indexSettings) await reader.refresh(daemon.takeSnapshot(), indexSettings, signal);
+      return reader.inventory(signal);
+    },
+    async readPage(request: Readonly<{ source: MemoryExternalTranscriptSourceV1; cursor?: string }>, settings: MemorySettingsV1, signal: AbortSignal) {
+      if (!indexSettings) { await daemon.refresh(settings, signal); indexSettings = settings; }
+      await reader.refresh(daemon.takeSnapshot(), settings, signal);
+      return reader.readPage(request, settings, signal);
+    },
+    async dispose() { await reader.dispose(); await daemon.dispose(); },
   };
 }

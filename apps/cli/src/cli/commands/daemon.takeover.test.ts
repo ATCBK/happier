@@ -1,3 +1,6 @@
+// Prepare the real normal-command runtime during collection, as before lazy worker dispatch.
+import './daemonControl';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -5,10 +8,12 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { captureConsoleText } from '@/testkit/logger/captureOutput';
 import type { DaemonRunningInspection } from '@/daemon/controlClient';
 
-const spawnDetachedDaemonStartSyncMock = vi.fn(async () => ({ unref() {} }));
-const startDaemonMock = vi.fn(async () => undefined);
-const checkIfDaemonRunningMock = vi.fn(async () => true);
-const inspectDaemonRunningStateMock = vi.fn<() => Promise<DaemonRunningInspection>>(async () => ({ status: 'not-running' }));
+const { spawnDetachedDaemonStartSyncMock, startDaemonMock, checkIfDaemonRunningMock, inspectDaemonRunningStateMock } = vi.hoisted(() => ({
+    spawnDetachedDaemonStartSyncMock: vi.fn(async () => ({ unref() {} })),
+    startDaemonMock: vi.fn(async () => undefined),
+    checkIfDaemonRunningMock: vi.fn(async () => true),
+    inspectDaemonRunningStateMock: vi.fn<() => Promise<DaemonRunningInspection>>(async () => ({ status: 'not-running' })),
+}));
 
 vi.mock('@/daemon/runtime/spawnDetachedDaemonStartSync', () => ({
     spawnDetachedDaemonStartSync: spawnDetachedDaemonStartSyncMock,

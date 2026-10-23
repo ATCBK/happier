@@ -4,6 +4,7 @@ import { openSqliteDatabaseSync, type SqliteDatabaseSync } from '@happier-dev/pl
 import {
   ensureProtectedLocalStateDirectorySync,
   ensureProtectedLocalStateFileSync,
+  verifyProtectedLocalStatePathSync,
 } from '@/utils/fs/protectedLocalState';
 
 export { openSqliteDatabaseSync } from '@happier-dev/plugin-sdk/fs';
@@ -51,4 +52,19 @@ export function openProtectedSqliteDatabaseSync(filePath: string): SqliteDatabas
   const db = openSqliteDatabaseSync(filePath);
   protectSqliteDatabaseFilesSync(filePath);
   return db;
+}
+
+/** Validates retained plaintext without repairing permissions or creating state. */
+export function openProtectedSqliteDatabaseReaderSync(filePath: string): SqliteDatabaseSync {
+  if (!isAbsolute(filePath)) {
+    throw new Error('Protected SQLite state requires an absolute file path');
+  }
+  verifyProtectedLocalStatePathSync(dirname(filePath), 'directory');
+  // The default admitted authority checks existing paths without chmod or ACL
+  // writes. Missing sidecars are normal; the native read-only open owns missing
+  // database refusal and can never create the main file.
+  for (const path of [filePath, `${filePath}-wal`, `${filePath}-shm`]) {
+    ensureProtectedLocalStateFileSync(path);
+  }
+  return openSqliteDatabaseSync(filePath, { readOnly: true });
 }

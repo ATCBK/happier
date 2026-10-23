@@ -4,8 +4,66 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { openSummaryShardIndexDb } from './summaryShardIndexDb';
+import { syncMemoryHintsForSessionsOnce } from './syncMemoryHintsForSessionsOnce';
 
 describe('syncMemoryHintsForSessionsOnce', () => {
+  it.each(['onIdle', 'rate', 'backoff', 'modelFailure', 'commitFailure', 'recoveredFailure'] as const)(
+    'reports the authoritative hint deferral deadline for %s', async (reason) => {
+      const dir = await mkdtemp(join(os.tmpdir(), 'happier-hint-deferred-'));
+      const tier1 = openSummaryShardIndexDb({ dbPath: join(dir, 'memory.sqlite') });
+      try {
+        let nowMs = 10_000;
+        let summarized = 0;
+        let committed = 0;
+        const deferred: number[] = [];
+        const settings = { enabled: true, indexMode: 'hints' as const, backfillPolicy: 'all_history' as const,
+          hints: { enabled: true, updateMode: reason === 'onIdle' ? 'onIdle' as const : 'continuous' as const,
+            idleDelayMs: 5_000, windowSizeMessages: reason === 'recoveredFailure' ? 1 : 40, maxShardChars: 12_000, maxSummaryChars: 500,
+            maxKeywords: 5, maxEntities: 5, maxDecisions: 5, maxRunsPerHour: reason === 'rate' || reason === 'recoveredFailure' ? 1 : 999,
+            maxShardsPerSession: 250, failureBackoffBaseMs: 4_000, failureBackoffMaxMs: 16_000 } };
+        if (reason === 'rate') tier1.tryAcquireHintRunPermit({ sessionId: 'session', nowMs: 8_000, maxRunsPerHour: 1 });
+        if (reason === 'backoff') tier1.markHintRunFailure({ sessionId: 'session', nowMs: 9_000, backoffBaseMs: 4_000, backoffMaxMs: 16_000 });
+        const sync = () => syncMemoryHintsForSessionsOnce({
+          sessionIds: ['session'], tier1, settings, now: () => nowMs,
+          onDeferred: atMs => deferred.push(atMs),
+          fetchRecentDecryptedRows: async () => (reason === 'recoveredFailure' ? [1, 2] : [1]).map(seq => ({ seq, createdAtMs: 9_000, role: 'user' as const, content: { type: 'text', text: 'quasar handoff' } })),
+          runSummarizer: async () => {
+            summarized += 1;
+            const seq = reason === 'recoveredFailure' ? 2 : 1;
+            return reason === 'modelFailure' || (reason === 'recoveredFailure' && summarized === 1) ? 'invalid model output' : JSON.stringify({
+              shard: { v: 1, seqFrom: seq, seqTo: seq, createdAtFromMs: 9_000, createdAtToMs: 9_000,
+                summary: 'quasar handoff', keywords: [], entities: [], decisions: [] }, synopsis: null });
+          },
+          commitArtifacts: async () => {
+            if (reason === 'commitFailure') throw new Error('Artifact transport failed');
+            committed += 1;
+          },
+        });
+        await sync();
+        if (reason === 'recoveredFailure') {
+          expect(committed).toBe(1);
+          expect(summarized).toBe(2);
+          expect(deferred).toEqual([]);
+          return;
+        }
+        const deadline = reason === 'rate' ? 8_000 + 60 * 60 * 1_000 : reason === 'backoff' ? 13_000 : 14_000;
+        expect(deferred).toEqual([deadline]);
+        expect(committed).toBe(0);
+        if (reason === 'onIdle' || reason === 'rate' || reason === 'backoff') {
+          expect(summarized).toBe(0);
+          nowMs = deadline - 1;
+          await sync();
+          expect(summarized).toBe(0);
+          nowMs = deadline;
+          await sync();
+          expect(committed).toBe(1);
+          expect(tier1.search({ query: 'quasar', scope: { type: 'global' }, maxResults: 10 })).toHaveLength(1);
+          expect(deferred).toEqual([deadline, deadline]);
+        }
+      } finally { tier1.close(); await rm(dir, { recursive: true, force: true }); }
+    },
+  );
+
   it('rebuilds edited same-sequence summaries and keeps empty projections empty across repeated ticks', async () => {
     const { syncMemoryHintsForSessionsOnce } = await import('./syncMemoryHintsForSessionsOnce');
     const dir = await mkdtemp(join(os.tmpdir(), 'happier-memory-edited-hints-'));

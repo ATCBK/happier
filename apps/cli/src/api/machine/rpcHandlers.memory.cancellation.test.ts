@@ -13,24 +13,10 @@ describe('rpcHandlers.memory cancellation', () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-rpc-memory-cancel-'));
     let observedSignal: AbortSignal | undefined;
     try {
-      const resolveEmbeddingsProvider = vi.fn(async (signal?: AbortSignal) => ({
-          provider: {
-            providerKind: 'local_transformers',
-            modelId: 'test-model',
-            embedDocuments: async () => [],
-            embedQuery: async (_text: string, signal?: AbortSignal) => {
-              observedSignal = signal;
-              return new Float32Array([1]);
-            },
-          },
-          mode: 'preset',
-          presetId: 'balanced',
-          providerKind: 'local_transformers',
-          modelId: 'test-model',
-          runtimeState: 'ready',
-          usingFallback: false,
-          lastError: null,
-        }));
+      const embedQuery = vi.fn(async (_text: string, signal?: AbortSignal) => {
+        observedSignal = signal;
+        return new Float32Array([1]);
+      });
 
       const dbPath = join(dir, 'deep.sqlite');
       const { openDeepIndexDb } = await import('@/daemon/memory/deepIndex/deepIndexDb');
@@ -65,7 +51,7 @@ describe('rpcHandlers.memory cancellation', () => {
           }),
           getDeepDbPath: () => dbPath,
           getTier1DbPath: () => null,
-          resolveEmbeddingsProvider,
+          embedQuery,
         } as never,
       });
 
@@ -78,7 +64,7 @@ describe('rpcHandlers.memory cancellation', () => {
       }, { signal: controller.signal });
 
       expect(observedSignal).toBe(controller.signal);
-      expect(resolveEmbeddingsProvider).toHaveBeenCalledWith(controller.signal);
+      expect(embedQuery).toHaveBeenCalledWith('cancellation', controller.signal);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -1,11 +1,12 @@
 import {
   openProtectedSqliteDatabaseSync,
+  openProtectedSqliteDatabaseReaderSync,
   protectSqliteDatabaseFilesSync,
   resolveSqliteSupportedValueBatchSize,
   type SqliteDatabaseSync,
 } from '../../persistence/sqliteSync';
 import { tokenizeMemoryText } from '../tokenizeMemoryText';
-import { createMemoryFtsIndex, type MemoryFtsSearchFilter } from '../memoryFtsIndex';
+import { createMemoryFtsIndex, ensureMemoryFtsIndexSchema, type MemoryFtsSearchFilter } from '../memoryFtsIndex';
 import type { AccountArtifactRevision } from '../../../api/artifacts/accountArtifactStore';
 import { MemoryDocumentSearchHitV1Schema, MemorySourceV1Schema, MemoryExternalTranscriptSourceV1Schema, type MemoryDocumentSearchHitV1, type MemorySourceV1, type MemoryExternalTranscriptSourceV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -158,6 +159,12 @@ export type ExternalSourceState = Readonly<{
   /** Reader progress survives budget eviction; complete searchable coverage does not. */
   coverageComplete: boolean;
 }>;
+
+export type DeepIndexReader = Pick<DeepIndexDbHandle,
+  'getExternalSourceState' | 'listExternalSourceStates' | 'getExternalSourceItemCursor' |
+  'loadEmbeddings' | 'listChunksWithoutEmbeddings' | 'getDeepIndexStats' | 'getDocumentFactCounts' |
+  'searchDocuments' | 'listIndexedSessionIds' | 'hasSessionChunks' | 'hasSessionArtifactsOutsidePolicy' |
+  'search' | 'close'>;
 
 function normalizeQuery(raw: string): string {
   return String(raw ?? '')
@@ -408,17 +415,52 @@ function ensureSchema(db: SqliteDatabaseSync): void {
   if (!sourceStateColumns.some((entry) => entry.name === 'coverageComplete')) {
     db.exec('ALTER TABLE external_source_state ADD COLUMN coverageComplete INTEGER NOT NULL DEFAULT 0;');
   }
-  createMemoryFtsIndex(db, { table: 'message_chunks', id: 'chunkId', fts: 'chunk_fts' });
+  ensureMemoryFtsIndexSchema(db, { table: 'message_chunks', id: 'chunkId', fts: 'chunk_fts' });
   if (userVersion === DEEP_INDEX_SCHEMA_VERSION) return;
   rebuildChunkFts(db);
   db.exec(`PRAGMA user_version=${DEEP_INDEX_SCHEMA_VERSION}`);
 }
 
+/** The daemon reads only an index that the child writer has already prepared. */
+export function openDeepIndexReader(args: Readonly<{ dbPath: string }>): DeepIndexReader {
+  const db = openProtectedSqliteDatabaseReaderSync(args.dbPath);
+  try {
+    db.exec('PRAGMA busy_timeout=5000;');
+    const handle = createDeepIndexDbHandle(db);
+    return {
+      getExternalSourceState: handle.getExternalSourceState,
+      listExternalSourceStates: handle.listExternalSourceStates,
+      getExternalSourceItemCursor: handle.getExternalSourceItemCursor,
+      loadEmbeddings: handle.loadEmbeddings,
+      listChunksWithoutEmbeddings: handle.listChunksWithoutEmbeddings,
+      getDeepIndexStats: handle.getDeepIndexStats,
+      getDocumentFactCounts: handle.getDocumentFactCounts,
+      searchDocuments: handle.searchDocuments,
+      listIndexedSessionIds: handle.listIndexedSessionIds,
+      hasSessionChunks: handle.hasSessionChunks,
+      hasSessionArtifactsOutsidePolicy: handle.hasSessionArtifactsOutsidePolicy,
+      search: handle.search,
+      close: handle.close,
+    };
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
 export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDbHandle {
   const db = openProtectedSqliteDatabaseSync(args.dbPath);
-  ensureSchema(db);
-  protectSqliteDatabaseFilesSync(args.dbPath);
+  try {
+    ensureSchema(db);
+    protectSqliteDatabaseFilesSync(args.dbPath);
+    return createDeepIndexDbHandle(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
 
+function createDeepIndexDbHandle(db: SqliteDatabaseSync): DeepIndexDbHandle {
   const insertChunkStmt = db.prepare(`
     INSERT INTO message_chunks (
       chunkId,

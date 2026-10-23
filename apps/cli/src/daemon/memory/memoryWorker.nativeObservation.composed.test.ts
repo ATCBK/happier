@@ -1,10 +1,17 @@
-import { appendFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
+
+// Transform the real source graph before the per-scenario hook deadline.
+// Each scenario still reloads modules after selecting its isolated Home.
+await import('@/api/api');
+await import('@/plugins/testkit/admittedRuntime');
+await import('./testkit/startMemoryWorker');
+await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
 
 describe('registered native transcript source observation', () => {
   let directory: string;
@@ -23,7 +30,7 @@ describe('registered native transcript source observation', () => {
     // Reset first, then load the real graph against this case's isolated Home.
     // Loading it before reset charged a second cold graph to the reader test.
     await import('@/plugins/testkit/admittedRuntime');
-    await import('./memoryWorker');
+    await import('./testkit/startMemoryWorker');
     await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
   });
   afterEach(async () => {
@@ -31,7 +38,224 @@ describe('registered native transcript source observation', () => {
     vi.resetModules();
     if (directory) await rm(directory, { recursive: true, force: true });
   });
-  it.each([
+  it.each(['all_history', 'new_only'] as const)('publishes pre-opt-in Codex history, append and rewrite in both linked and user partitions with %s Happier backfill', async backfillPolicy => {
+    const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
+    const { createAdmittedPluginRuntimeFixture } = await import('@/plugins/testkit/admittedRuntime');
+    const { createResolvedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
+    const { resolveBuiltInContributions } = await import('@/plugins/projection/registry/resolveBuiltInContributions');
+    const { configuration } = await import('@/configuration');
+    const { resolveConnectedServiceHomeDir } = await import('@/daemon/connectedServices/homes/resolveConnectedServiceHomeDir');
+    const { CODEX_CONNECTED_SERVICE_HOME_DIRECTORY_NAME } = await import('@happier-dev/plugin-sdk/first-party/connected-accounts');
+    const { createMemoryExternalTranscriptSources } = await import('./externalTranscriptSources');
+    const { createExternalSessionObservationDaemonProjection } = await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
+    const { normalizeMemorySettings } = await import('@happier-dev/protocol/memory/memorySettings');
+    const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
+    const { syncExternalMemoryTranscriptsBatch, externalMemoryStorageId } = await import('./externalTranscriptIndex');
+    const profileId = '7e9ced1f-60ac-4618-bcf0-31adc1c2e4aa';
+    const id = '11111111-1111-4111-8111-111111111111';
+    const sessions = join(directory, '.codex', 'sessions');
+    const day = join(sessions, '2026', '10', '22');
+    await mkdir(day, { recursive: true });
+    await mkdir(join(directory, '.codex', 'archived_sessions'), { recursive: true });
+    const home = join(resolveConnectedServiceHomeDir({ activeServerDir: configuration.activeServerDir,
+      agentId: 'codex', serviceId: 'openai-codex', profileId }), CODEX_CONNECTED_SERVICE_HOME_DIRECTORY_NAME);
+    await mkdir(home, { recursive: true });
+    await mkdir(join(home, 'archived_sessions'), { recursive: true });
+    await symlink(sessions, join(home, 'sessions'), process.platform === 'win32' ? 'junction' : 'dir');
+    const timestamp = new Date(Date.now() - 60_000).toISOString();
+    const header = JSON.stringify({ type: 'session_meta', timestamp, payload: { id, cwd: '/fixture' } }) + '\n';
+    const row = (ordinal: number, text: string) => JSON.stringify({ type: 'response_item', timestamp, payload: {
+      type: 'message', role: ordinal % 2 ? 'assistant' : 'user', content: [{ type: ordinal % 2 ? 'output_text' : 'input_text',
+        text: `${text} ordinal${ordinal} café 東京` }],
+    } }) + '\n';
+    const path = join(day, `rollout-2026-10-22T00-00-00-${id}.jsonl`);
+    // The file exists before source opt-in; neither alias receives a creation event.
+    await writeFile(path, header + row(0, 'quartz') + row(1, 'quartz'));
+    const unreadableId = '00000000-0000-4000-8000-000000000001';
+    await writeFile(join(day, `rollout-2026-10-22T00-00-00-${unreadableId}.jsonl`), Buffer.concat([
+      Buffer.from(JSON.stringify({ type: 'session_meta', timestamp, payload: { id: unreadableId, cwd: '/fixture' } }) + '\n'
+        + '{"type":"response_item","payload":{"type":"message","role":"user","content":"'),
+      Buffer.from([0xff]), Buffer.from('"}}\n'),
+    ]));
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (new URL(String(url)).pathname === '/v1/account/profile') return { status: 200, data: { id: 'account', connectedServicesV2: [{
+        serviceId: 'openai-codex', profiles: [{ profileId, status: 'connected', kind: 'oauth', providerEmail: null,
+          providerAccountId: null, expiresAt: null, lastUsedAt: null, health: null }], groups: [],
+      }] } };
+      throw new Error('Unexpected HTTP request in two-partition fixture');
+    });
+    const runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      runtimeOptions: { contributes: createResolvedContributionRegistry(resolveBuiltInContributions()), pluginIds: ['happier.agent.codex'] } });
+    const observation = createExternalSessionObservationDaemonProjection({
+      publishField: async () => { throw new Error('Native indexing cannot create a linked Session'); },
+    });
+    let refresh = true;
+    let changes = 0;
+    const sources = createMemoryExternalTranscriptSources({ credentials: { token: 'fixture', encryption: null },
+      onChange: changed => { refresh ||= changed; changes++; } });
+    const db = openDeepIndexDb({ dbPath: join(directory, 'r274.sqlite') });
+    const lifetime = new AbortController();
+    const settings = normalizeMemorySettings({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy, enabledAtMs: Date.now(),
+      coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: { enabled: true, agents: ['codex'], historyDays: 1 } } });
+    sources.attach(observation);
+    const tick = async () => {
+      if (refresh) { refresh = false; await sources.refresh(settings, lifetime.signal); }
+      await sources.inventory(lifetime.signal);
+      await syncExternalMemoryTranscriptsBatch({ candidates: sources.take(1), db, settings, nowMs: Date.now(),
+        signal: lifetime.signal, onSourceResult: sources.noteSyncResult });
+    };
+    const partitions = () => db.listExternalSourceStates().filter(state => state.source.nativeSessionId === id);
+    const texts = (query: string, sessionId: string) => db.search({ query, scope: { type: 'session', sessionId },
+      maxResults: 10, includeExternal: true, includeSessions: false }).map(hit => hit.text);
+    try {
+      await tick();
+      for (let turn = 1; turn < sources.getReadySourceCount(); turn++) await tick();
+      expect(partitions()).toHaveLength(2);
+      const ids = partitions().map(state => externalMemoryStorageId(state.source));
+      for (const sessionId of ids) expect(texts('quartz', sessionId)).toHaveLength(2);
+      const before = changes;
+      await appendFile(path, row(2, 'garnet'));
+      await vi.waitFor(() => expect(changes).toBeGreaterThan(before));
+      for (let turn = 0; turn < ids.length * 2; turn++) await tick();
+      for (const sessionId of ids) expect(texts('garnet', sessionId), sessionId).toHaveLength(1);
+      const beforeRewrite = changes;
+      const beforeBytes = await stat(path);
+      await writeFile(path, header + row(0, 'zircon') + row(1, 'zircon') + row(2, 'garnet'));
+      expect((await stat(path)).size).toBe(beforeBytes.size);
+      await vi.waitFor(() => expect(changes).toBeGreaterThan(beforeRewrite));
+      // Refresh alternates with the unreadable sibling; rewrite detection and
+      // its replacement page are two turns per partition under that allowance.
+      for (let turn = 0; turn < ids.length * 4; turn++) {
+        await tick();
+        expect(partitions(), 'a rewrite is not a source deletion').toHaveLength(2);
+      }
+      for (const sessionId of ids) {
+        expect(texts('quartz', sessionId)).toEqual([]);
+        expect(texts('zircon', sessionId)).toHaveLength(2);
+        expect(texts('garnet', sessionId)).toHaveLength(1);
+      }
+      const beforeTopology = changes;
+      const siblingId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+      await writeFile(join(day, `rollout-2026-10-22T00-00-00-${siblingId}.jsonl`),
+        JSON.stringify({ type: 'session_meta', timestamp, payload: { id: siblingId, cwd: '/fixture' } }) + '\n' + row(0, 'tourmaline'));
+      await vi.waitFor(() => expect(changes).toBeGreaterThan(beforeTopology));
+      await tick();
+      const beforeSecondAppend = changes;
+      await appendFile(path, row(3, 'citrine'));
+      await vi.waitFor(() => expect(changes).toBeGreaterThan(beforeSecondAppend));
+      for (let turn = 0; turn < sources.getReadySourceCount() * 2; turn++) await tick();
+      for (const sessionId of ids) {
+        expect(texts('citrine', sessionId)).toHaveLength(1);
+        expect(texts('ordinal', sessionId).map(text => Number(/ordinal(\d+)/.exec(text)?.[1])).sort()).toEqual([0, 1, 2, 3]);
+      }
+    } finally {
+      lifetime.abort();
+      await sources.dispose();
+      await observation.dispose();
+      await runtime.dispose();
+      db.close();
+      get.mockRestore();
+    }
+  });
+  it('discovers a real Codex sibling during multi-page backfill through native directory delivery', async () => {
+    const { pluginReloadController } = await import('@/plugins/runtime/reload/singleton');
+    const { createAdmittedPluginRuntimeFixture } = await import('@/plugins/testkit/admittedRuntime');
+    const { createResolvedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
+    const { resolveBuiltInContributions } = await import('@/plugins/projection/registry/resolveBuiltInContributions');
+    const { createMemoryExternalTranscriptSources } = await import('./externalTranscriptSources');
+    const { createExternalSessionObservationDaemonProjection } = await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
+    const { normalizeMemorySettings } = await import('@happier-dev/protocol/memory/memorySettings');
+    const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
+    const { syncExternalMemoryTranscriptsBatch } = await import('./externalTranscriptIndex');
+    const now = new Date().toISOString();
+    const day = join(directory, '.codex', 'sessions', '2026', '10', '22');
+    await mkdir(day, { recursive: true });
+    const put = async (id: string, count: number, text: string) => {
+      await writeFile(join(day, `rollout-2026-10-22T00-00-00-${id}.jsonl`),
+        JSON.stringify({ type: 'session_meta', timestamp: now, payload: { id, cwd: '/fixture' } }) + '\n'
+        + Array.from({ length: count }, (_, ordinal) => JSON.stringify({ type: 'response_item', timestamp: now, payload: {
+          type: 'message', role: 'user', content: [{ type: 'input_text', text: `${text} ordinal${ordinal} ${'coastal walk '.repeat(600)}` }],
+        } }) + '\n').join(''));
+    };
+    const main = 'ffffffff-ffff-4fff-8fff-fffffffffff0';
+    await put(main, 200, 'r261main');
+    await Promise.all(Array.from({ length: 100 }, (_, index) => put(
+      `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, 1, 'r261backlog')));
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (new URL(String(url)).pathname === '/v1/account/profile') return { status: 200, data: { id: 'account', connectedServicesV2: [] } };
+      throw new Error('Unexpected HTTP request in native source fixture');
+    });
+    const runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      runtimeOptions: { contributes: createResolvedContributionRegistry(resolveBuiltInContributions()), pluginIds: ['happier.agent.codex'] } });
+    const observation = createExternalSessionObservationDaemonProjection({
+      publishField: async () => { throw new Error('Native indexing cannot create a linked Session'); },
+    });
+    let refresh = true;
+    let changes = 0;
+    const sources = createMemoryExternalTranscriptSources({ credentials: { token: 'fixture', encryption: null },
+      onChange: changed => { refresh ||= changed; changes++; } });
+    const db = openDeepIndexDb({ dbPath: join(directory, 'r261.sqlite') });
+    const lifetime = new AbortController();
+    const settings = normalizeMemorySettings({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+      coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: { enabled: true, agents: ['codex'], historyDays: 1 } } });
+    sources.attach(observation);
+    const tick = async () => {
+      if (refresh) { refresh = false; await sources.refresh(settings, lifetime.signal); }
+      await sources.inventory(lifetime.signal);
+      await syncExternalMemoryTranscriptsBatch({ candidates: sources.take(1), db, settings, nowMs: Date.now(),
+        signal: lifetime.signal, onSourceResult: sources.noteSyncResult });
+    };
+    const search = (query: string) => db.search({ query, scope: { type: 'global' }, maxResults: 201,
+      includeExternal: true, includeSessions: false });
+    try {
+      await sources.refresh(settings, lifetime.signal);
+      refresh = false;
+      let mainCandidate: ReturnType<typeof sources.take>[number] | undefined;
+      let inventory;
+      do {
+        inventory = await sources.inventory(lifetime.signal);
+        expect(inventory).not.toBeNull();
+        mainCandidate ??= sources.take(sources.getReadySourceCount()).find(candidate => candidate.source.nativeSessionId === main);
+        expect(sources.getIndexSources(db).some(source => source.state === 'error')).toBe(false);
+      } while (!inventory?.completeSources.size);
+      expect(mainCandidate, JSON.stringify({ sources: sources.getIndexSources(db), count: sources.getReadySourceCount() })).toBeDefined();
+      await syncExternalMemoryTranscriptsBatch({ candidates: [mainCandidate!], db, settings, nowMs: Date.now(),
+        signal: lifetime.signal, onSourceResult: sources.noteSyncResult });
+      expect(search('r261main').length).toBeGreaterThan(0);
+      expect(search('r261main').length).toBeLessThan(200);
+      const before = changes;
+      const started = performance.now();
+      await put('ffffffff-ffff-4fff-8fff-ffffffffffff', 2, 'r261sibling');
+      await vi.waitFor(() => expect(changes).toBeGreaterThan(before));
+      for (let turn = 0; turn < 4 && search('r261sibling').length === 0; turn++) await tick();
+      expect(search('r261sibling')).toHaveLength(2);
+      expect(sources.getIndexSources(db).some(source => source.state === 'indexing')).toBe(true);
+      // A topology refresh replaces the accounting demand but keeps admitted
+      // transcript work. Its next read must consume the new demand's hints.
+      await sources.refresh(settings, lifetime.signal);
+      mainCandidate!.native.readObservation?.();
+      expect(mainCandidate!.native.readObservation?.()?.changedFiles).toEqual([]);
+      const changedBefore = changes;
+      const mainPath = join(day, `rollout-2026-10-22T00-00-00-${main}.jsonl`);
+      await appendFile(mainPath, JSON.stringify({ type: 'response_item', timestamp: now, payload: {
+        type: 'message', role: 'user', content: [{ type: 'input_text', text: 'r268 observed append' }],
+      } }) + '\n');
+      await vi.waitFor(() => expect(changes).toBeGreaterThan(changedBefore));
+      // The reader consumes daemon watch facts at the serialized snapshot
+      // boundary; OS notification alone does not mutate a child-owned reader.
+      await sources.inventory(lifetime.signal);
+      expect(mainCandidate!.native.readObservation?.()?.changedFiles).toContain(mainPath);
+      expect(mainCandidate!.native.readObservation?.()?.changedFiles).toEqual([]);
+    } finally {
+      lifetime.abort();
+      await sources.dispose();
+      await observation.dispose();
+      await runtime.dispose();
+      db.close();
+      get.mockRestore();
+    }
+  });
+  describe.each([
     { agentId: 'codex', pluginId: 'happier.agent.codex' },
     { agentId: 'pi', pluginId: 'happier.agent.pi' },
     { agentId: 'ohMyPi', pluginId: 'happier.agent.ohmypi' },
@@ -49,25 +273,35 @@ describe('registered native transcript source observation', () => {
     { agentId: 'kiro', pluginId: 'happier.agent.kiro' },
     { agentId: 'kimi', pluginId: 'happier.agent.kimi' },
     { agentId: 'devin', pluginId: 'happier.agent.devin' },
-  ])('$agentId indexes append and removal through the shared source observer', async ({ agentId, pluginId }) => {
-    const agentDir = join(directory, 'agent');
-    // Home HTTP and OS watch delivery are the only controlled boundaries.
-    const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
-      const path = new URL(String(url)).pathname;
-      if (path === '/v1/account/profile') return { status: 200, data: { id: 'account', connectedServicesV2: [] } };
-      if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
-        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
-      } };
-      if (path === '/v2/sessions') return { status: 200, data: { sessions: [], nextCursor: null, hasNext: false } };
-      throw new Error(`Unexpected native worker HTTP path: ${path}`);
-    });
-    let runtime: Awaited<ReturnType<typeof import('@/plugins/testkit/admittedRuntime').createAdmittedPluginRuntimeFixture>> | undefined;
-    let worker: Awaited<ReturnType<typeof import('./memoryWorker').startMemoryWorker>> | undefined;
-    let observation: ReturnType<typeof import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection').createExternalSessionObservationDaemonProjection> | undefined;
-    const fileChanges = new Map<string, (path: string) => void>();
-    const topologyChanges = new Map<string, (path?: string) => void>();
-    let devinFixture: ReturnType<typeof import('../../../../../packages/plugins/devin/src/agent/externalSessions/__fixtures__/nativeSession.test-support').createDevinNativeFixture> | undefined;
-    try {
+  ])('$agentId native source', ({ agentId, pluginId }) => {
+    let runScenario: (() => Promise<void>) | undefined;
+    let cleanup: (() => Promise<void>) | undefined;
+    let codexCorpus: Readonly<{ prepare(): Promise<void>; demand(): Promise<void>; appendSibling(): Promise<void> }> | undefined;
+    beforeEach(async () => {
+      const agentDir = join(directory, 'agent');
+      // Home HTTP and OS watch delivery are the only controlled boundaries.
+      const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/profile') return { status: 200, data: { id: 'account', connectedServicesV2: [] } };
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+          mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        } };
+        if (path === '/v2/sessions') return { status: 200, data: { sessions: [], nextCursor: null, hasNext: false } };
+        throw new Error(`Unexpected native worker HTTP path: ${path}`);
+      });
+      let runtime: Awaited<ReturnType<typeof import('@/plugins/testkit/admittedRuntime').createAdmittedPluginRuntimeFixture>> | undefined;
+      let worker: Awaited<ReturnType<typeof import('./memoryWorker').startMemoryWorker>> | undefined;
+      let observation: ReturnType<typeof import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection').createExternalSessionObservationDaemonProjection> | undefined;
+      const fileChanges = new Map<string, (path: string) => void>();
+      const topologyChanges = new Map<string, (path?: string) => void>();
+      let devinFixture: ReturnType<typeof import('../../../../../packages/plugins/devin/src/agent/externalSessions/__fixtures__/nativeSession.test-support').createDevinNativeFixture> | undefined;
+      cleanup = async () => {
+        await worker?.stop();
+        await observation?.dispose();
+        await runtime?.dispose();
+        devinFixture?.close();
+        get.mockRestore();
+      };
       const isCodex = agentId === 'codex';
       const isAntigravity = agentId === 'antigravity';
       const isKilo = agentId === 'kilo';
@@ -273,171 +507,19 @@ describe('registered native transcript source observation', () => {
       });
       const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
       await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+        // This journey exercises immediate recovery from a deliberately missing
+        // store. The separate batch keeper verifies the real backoff boundary.
+        deep: { failureBackoffBaseMs: 0, failureBackoffMaxMs: 0 },
         coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: {
           enabled: true, agents: [agentId], historyDays: isCodex ? 1 : null, includeToolOutput: isFx,
         } } });
-      const { startMemoryWorker } = await import('./memoryWorker');
+      const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
       worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine' });
-      worker.attachExternalObservation!(observation);
-      await worker.ensureUpToDate();
-      const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
-      const search = (query: string) => {
-        const db = openDeepIndexDb({ dbPath: worker!.getDeepDbPath()! });
-        try { return db.search({ query, scope: { type: 'global' }, maxResults: 10, includeExternal: true, includeSessions: false }); }
-        finally { db.close(); }
-      };
-      const readFrontier = () => {
-        const db = openDeepIndexDb({ dbPath: worker!.getDeepDbPath()! });
-        try { return db.listExternalSourceStates()[0]!; }
-        finally { db.close(); }
-      };
-      expect(search('quartz'), JSON.stringify({ sources: worker.getIndexSources(), status: worker.getWorkerStatus(),
-        observedTranscript: fileChanges.has(transcriptPath) })).toHaveLength(1);
-      if (isCodex) expect(worker.getIndexSources!()).toContainEqual({
-        source: { type: 'external_transcript', agentId: 'codex', sourceKey: 'codexHome:user:::' }, state: 'ready',
-      });
-      expect(search('garnet')).toEqual([]);
-      if (isGemini || isQwen) {
-        expect(search('topaz')).toEqual([]);
-        expect(search('citrine')).toEqual([]);
-      }
-      const initialFrontier = readFrontier();
-      // A retained tail makes the next tick consume readAfterTranscript rather
-      // than rebuilding the initial page; this is the production frontier.
-      expect(JSON.parse(initialFrontier.cursor!)).toMatchObject({ type: 'tail', cursor: expect.any(String) });
-      // A successful initial inventory alone does not establish observation.
-      expect(fileChanges.has(transcriptPath)).toBe(true);
-      if (sidecarPath) expect(fileChanges.has(sidecarPath)).toBe(true);
-      const notifyFile = fileChanges.get(transcriptPath)!;
-      if (isDevin) {
-        expect(fileChanges.has(transcriptPath + '-wal')).toBe(true);
-        await rename(transcriptPath, transcriptPath + '.retained');
-        notifyFile(transcriptPath);
-        await expect(worker.ensureUpToDate()).rejects.toThrow('unavailable');
-        expect(search('quartz')).toHaveLength(1);
-        await rename(transcriptPath + '.retained', transcriptPath);
-      }
-      if (isAuggie) {
-        // An interrupted native snapshot is unavailable, not authoritative
-        // disappearance. Retain the prior projection until a valid read.
-        await writeFile(transcriptPath, '{');
-        notifyFile(transcriptPath);
-        await expect(worker.ensureUpToDate()).rejects.toThrow('unsupported');
-        expect(search('quartz')).toHaveLength(1);
-      }
-      const appendedPath = isKilo ? join(kiloRoot, 'part', 'msg_02', 'prt_05.json') : transcriptPath;
-      if (isDevin) {
-        devinFixture!.append('garnet appended native message');
-        fileChanges.get(transcriptPath + '-wal')!(transcriptPath + '-wal');
-      } else if (isAuggie) {
-        await writeAuggie(['quartz initial native message', 'garnet appended native message']);
-        notifyFile(transcriptPath);
-      } else if (isKilo) {
-        await putKilo(appendedPath, { id: 'prt_05', sessionID: 'ses_fixture', messageID: 'msg_02', type: 'text', text: 'garnet appended native message' });
-        expect(topologyChanges.has(kiloRoot)).toBe(true);
-        topologyChanges.get(kiloRoot)!(appendedPath);
-      } else {
-        await appendFile(transcriptPath, row('second', isQwen ? 'native-tool-result' : 'first', 'garnet appended native message'));
-        notifyFile(transcriptPath);
-      }
-      await worker.ensureUpToDate();
-      expect(search('garnet')).toHaveLength(1);
-      expect(search('quartz')).toHaveLength(1);
-      if (isKimi) expect(search('jade')).toHaveLength(1);
-      expect(readFrontier().nextOrdinal).toBeGreaterThan(initialFrontier.nextOrdinal);
-      if (isFx) {
-        // A referenced result can change without any event-log append. The
-        // incumbent observer invalidates the same reader's prefix witness.
-        expect(search('olivine')).toHaveLength(1);
-        expect(fileChanges.has(fxResultPath)).toBe(true);
-        await writeFile(fxResultPath, 'citrine native output');
-        fileChanges.get(fxResultPath)!(fxResultPath);
-        await worker.ensureUpToDate();
-        await worker.ensureUpToDate();
-        expect(search('olivine')).toEqual([]);
-        expect(search('citrine')).toHaveLength(1);
-        expect(search('quartz')).toHaveLength(1);
-        expect(search('garnet')).toHaveLength(1);
-      }
-      if (kimiFixture) {
-        // An unavailable wire is not proof the native Session was deleted.
-        const savedWire = await readFile(transcriptPath);
-        await rm(transcriptPath);
-        topologyChanges.get(join(directory, '.kimi-code'))!();
-        await expect(worker.ensureUpToDate()).rejects.toThrow('unavailable');
-        expect(search('quartz')).toHaveLength(1);
-        expect(search('garnet')).toHaveLength(1);
-        await writeFile(transcriptPath, savedWire);
-        topologyChanges.get(join(directory, '.kimi-code'))!();
-        await worker.ensureUpToDate();
-        await worker.ensureUpToDate();
-        await appendFile(transcriptPath, kimiFixture.kimiWire([{ type: 'context.undo', count: 1 }]));
-        fileChanges.get(transcriptPath)!(transcriptPath);
-        await worker.ensureUpToDate();
-        await worker.ensureUpToDate();
-        expect(search('garnet')).toEqual([]);
-        expect(search('quartz')).toHaveLength(1);
-        expect(search('jade')).toHaveLength(1);
-      }
-      if (isKilo) {
-        // A settled part can change without a message/session timestamp update.
-        await putKilo(appendedPath, { id: 'prt_05', sessionID: 'ses_fixture', messageID: 'msg_02', type: 'text', text: 'opal replacement native message' });
-        expect(fileChanges.has(appendedPath)).toBe(true);
-        fileChanges.get(appendedPath)!(appendedPath);
-        await worker.ensureUpToDate();
-        expect(search('garnet')).toEqual([]);
-        // Replacement retires the old projection; the next worker turn
-        // reads the current source again through the initial page boundary.
-        await worker.ensureUpToDate();
-        expect(search('opal')).toHaveLength(1);
-        await putKilo(transcriptPath, { id: 'ses_fixture', projectID: 'project', directory: '/repo', title: 'Ordinary title',
-          version: '1.0.25', time: { created: Date.now(), updated: Date.now() }, revert: { messageID: 'msg_02' } });
-        fileChanges.get(transcriptPath)!(transcriptPath);
-        await worker.ensureUpToDate();
-        expect(search('opal')).toEqual([]);
-        await worker.ensureUpToDate();
-        expect(search('quartz')).toHaveLength(1);
-      }
-      if (isDevin || isKimi || isGemini || isQwen || isFx || isAuggie || isCopilot || isDroid || isCodeBuddy || isCursor || isGrok || isKiro) {
-        if (isDevin) {
-          devinFixture!.db.prepare('UPDATE message_nodes SET chat_message=? WHERE node_id=1').run(JSON.stringify({
-            role: 'user', message_id: 'message-1', content: 'amethyst replacement message',
-          }));
-          devinFixture!.db.prepare('UPDATE sessions SET main_chain_id=1').run();
-        } else if (isAuggie) await writeAuggie(['amethyst replacement message']);
-        else await writeFile(transcriptPath, header + row(isFx ? 'first' : 'replacement', null, 'amethyst replacement message'));
-        fileChanges.get(transcriptPath)!(transcriptPath);
-        await worker.ensureUpToDate();
-        await worker.ensureUpToDate();
-        expect(search('quartz')).toEqual([]);
-        expect(search('garnet')).toEqual([]);
-        expect(search('amethyst')).toHaveLength(1);
-        if (sidecarPath) {
-          const metadata: Record<string, unknown> = JSON.parse(await readFile(sidecarPath, 'utf8'));
-          await writeFile(sidecarPath, JSON.stringify({ ...metadata, ...(isGrok ? { generated_title: 'Renamed title' } : { title: 'Renamed title' }) }));
-          fileChanges.get(sidecarPath)!(sidecarPath);
-          await worker.ensureUpToDate();
-          expect(search('amethyst')).toHaveLength(1);
-        }
-      }
-      if (isDevin) {
-        // An authoritative deletion inside a readable shared DB retires rows;
-        // losing the whole DB above must retain them.
-        devinFixture!.db.prepare('DELETE FROM message_nodes').run();
-        devinFixture!.db.prepare('DELETE FROM sessions').run();
-      } else if (isKimi) await rm(dirname(sidecarPath!), { recursive: true });
-      else await rm(transcriptPath);
-      fileChanges.get(transcriptPath)!(transcriptPath);
-      await worker.ensureUpToDate();
-      expect(search('garnet')).toEqual([]);
-      expect(search('quartz')).toEqual([]);
-      expect(search('amethyst')).toEqual([]);
-      if (isFx) expect(search('citrine')).toEqual([]);
-      const removedDb = openDeepIndexDb({ dbPath: worker.getDeepDbPath()! });
-      try { expect(removedDb.listExternalSourceStates()).toEqual([]); }
-      finally { removedDb.close(); }
+      const startedWorker = worker;
+      const sourceObservation = observation;
       if (isCodex) {
         const { EXTERNAL_SESSIONS_INVOCATION_POLICY } = await import('@/session/external/agentExternalSessionsInvocation');
+        const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
         const backlogCount = EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxItems * 6;
         const putRollout = async (id: string, day: string, text: string) => {
           const path = join(dirname(transcriptPath), `rollout-${day}T10-00-00-${id}.jsonl`);
@@ -446,45 +528,236 @@ describe('registered native transcript source observation', () => {
             + row('first', null, text));
           return path;
         };
-        const notifyTopology = (path: string) => {
-          let parent = dirname(path);
-          while (!topologyChanges.has(parent)) {
-            const next = dirname(parent);
-            if (next === parent) throw new Error('Codex fixture has no covering topology observer');
-            parent = next;
-          }
-          topologyChanges.get(parent)!(path);
+        const readIndex = <T>(read: (db: ReturnType<typeof openDeepIndexDb>) => T) => {
+          const db = openDeepIndexDb({ dbPath: startedWorker.getDeepDbPath()! });
+          try { return read(db); } finally { db.close(); }
         };
-        const backlog = await Promise.all(Array.from({ length: backlogCount }, (_, index) => putRollout(
-          `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, '2026-10-20', 'corundum initial inventory')));
-        notifyTopology(backlog[0]!);
-        await worker.ensureUpToDate();
-        expect(worker.getIndexSources!().find(item => item.source.type === 'external_transcript')?.state).toBe('indexing');
-        const beforeSibling = openDeepIndexDb({ dbPath: worker.getDeepDbPath()! });
-        let completedPeerCount: number;
-        try { completedPeerCount = beforeSibling.listExternalSourceStates().length; }
-        finally { beforeSibling.close(); }
-        // The newer filename is before the retained descending crawl frontier.
-        // Its discovery and indexing must not wait for that crawl to finish.
-        const sibling = await putRollout('ffffffff-ffff-4fff-8fff-ffffffffffff', '2026-10-21', 'tourmaline fresh sibling');
-        notifyTopology(sibling);
-        // Refresh and backfill alternate. Existing completed peers may consume
-        // their refresh first; derive the turns from that real queue allowance.
-        const refreshTurns = Math.ceil(2 * (completedPeerCount + 1) / worker.getSettings().worker.maxSessionsPerTick);
-        for (let turn = 0; turn < refreshTurns; turn++) await worker.ensureUpToDate();
-        expect(search('tourmaline')).toHaveLength(1);
-        expect(search('corundum').length).toBeGreaterThan(0);
-        expect(worker.getIndexSources!().find(item => item.source.type === 'external_transcript')?.state).toBe('indexing');
+        const assertReady = () => expect(startedWorker.getIndexSources!()
+          .find(item => item.source.type === 'external_transcript')?.state).toBe('ready');
+        codexCorpus = {
+          async prepare() {
+            await rm(transcriptPath);
+            await Promise.all(Array.from({ length: backlogCount }, (_, index) => putRollout(
+              `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, '2026-10-20', 'corundum initial inventory')));
+            startedWorker.attachExternalObservation!(sourceObservation);
+          },
+          async demand() {
+            await startedWorker.ensureUpToDate();
+            expect(readIndex(db => db.listExternalSourceStates().length)).toBe(backlogCount);
+            assertReady();
+          },
+          async appendSibling() {
+            const sibling = await putRollout('ffffffff-ffff-4fff-8fff-ffffffffffff', '2026-10-21', 'tourmaline fresh sibling');
+            let parent = dirname(sibling);
+            while (!topologyChanges.has(parent)) {
+              const next = dirname(parent);
+              if (next === parent) throw new Error('Codex fixture has no covering topology observer');
+              parent = next;
+            }
+            topologyChanges.get(parent)!(sibling);
+            await startedWorker.ensureUpToDate();
+            expect(readIndex(db => db.search({ query: 'tourmaline', scope: { type: 'global' },
+              maxResults: 10, includeExternal: true, includeSessions: false }))).toHaveLength(1);
+            expect(readIndex(db => db.listExternalSourceStates().length)).toBe(backlogCount + 1);
+            assertReady();
+          },
+        };
       }
-      await worker.stop();
-      expect(fileChanges.size).toBe(0);
-      expect(topologyChanges.size).toBe(0);
-    } finally {
-      await worker?.stop();
-      await observation?.dispose();
-      await runtime?.dispose();
-      devinFixture?.close();
-      get.mockRestore();
+      runScenario = async () => {
+        const worker = startedWorker;
+        worker.attachExternalObservation!(sourceObservation);
+        await worker.ensureUpToDate();
+        const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
+        const search = (query: string) => {
+          const db = openDeepIndexDb({ dbPath: worker!.getDeepDbPath()! });
+          try { return db.search({ query, scope: { type: 'global' }, maxResults: 10, includeExternal: true, includeSessions: false }); }
+          finally { db.close(); }
+        };
+        const readFrontier = () => {
+          const db = openDeepIndexDb({ dbPath: worker!.getDeepDbPath()! });
+          try { return db.listExternalSourceStates()[0]!; }
+          finally { db.close(); }
+        };
+        expect(search('quartz'), JSON.stringify({ sources: worker.getIndexSources(), status: worker.getWorkerStatus(),
+          observedTranscript: fileChanges.has(transcriptPath) })).toHaveLength(1);
+        if (isCodex) expect(worker.getIndexSources!()).toContainEqual({
+          source: { type: 'external_transcript', agentId: 'codex', sourceKey: 'codexHome:user:::' }, state: 'ready',
+        });
+        expect(search('garnet')).toEqual([]);
+        if (isGemini || isQwen) {
+          expect(search('topaz')).toEqual([]);
+          expect(search('citrine')).toEqual([]);
+        }
+        const initialFrontier = readFrontier();
+        // A retained tail makes the next tick consume readAfterTranscript rather
+        // than rebuilding the initial page; this is the production frontier.
+        expect(JSON.parse(initialFrontier.cursor!)).toMatchObject({ type: 'tail', cursor: expect.any(String) });
+        // A successful initial inventory alone does not establish observation.
+        expect(fileChanges.has(transcriptPath)).toBe(true);
+        if (sidecarPath) expect(fileChanges.has(sidecarPath)).toBe(true);
+        const notifyFile = fileChanges.get(transcriptPath)!;
+        if (isDevin) {
+          expect(fileChanges.has(transcriptPath + '-wal')).toBe(true);
+          await rename(transcriptPath, transcriptPath + '.retained');
+          notifyFile(transcriptPath);
+          await expect(worker.ensureUpToDate()).resolves.toBeUndefined();
+          expect(worker.getIndexSources()).toContainEqual(expect.objectContaining({
+            source: expect.objectContaining({ agentId }), state: 'error', errorCode: expect.any(String),
+          }));
+          expect(search('quartz')).toHaveLength(1);
+          await rename(transcriptPath + '.retained', transcriptPath);
+        }
+        if (isAuggie) {
+          // An interrupted native snapshot is unavailable, not authoritative
+          // disappearance. Retain the prior projection until a valid read.
+          await writeFile(transcriptPath, '{');
+          notifyFile(transcriptPath);
+          await expect(worker.ensureUpToDate()).resolves.toBeUndefined();
+          expect(worker.getIndexSources()).toContainEqual(expect.objectContaining({
+            source: expect.objectContaining({ agentId }), state: 'error', errorCode: expect.any(String),
+          }));
+          expect(search('quartz')).toHaveLength(1);
+        }
+        const appendedPath = isKilo ? join(kiloRoot, 'part', 'msg_02', 'prt_05.json') : transcriptPath;
+        if (isDevin) {
+          devinFixture!.append('garnet appended native message');
+          fileChanges.get(transcriptPath + '-wal')!(transcriptPath + '-wal');
+        } else if (isAuggie) {
+          await writeAuggie(['quartz initial native message', 'garnet appended native message']);
+          notifyFile(transcriptPath);
+        } else if (isKilo) {
+          await putKilo(appendedPath, { id: 'prt_05', sessionID: 'ses_fixture', messageID: 'msg_02', type: 'text', text: 'garnet appended native message' });
+          expect(topologyChanges.has(kiloRoot)).toBe(true);
+          topologyChanges.get(kiloRoot)!(appendedPath);
+        } else {
+          await appendFile(transcriptPath, row('second', isQwen ? 'native-tool-result' : 'first', 'garnet appended native message'));
+          notifyFile(transcriptPath);
+        }
+        await worker.ensureUpToDate();
+        expect(search('garnet')).toHaveLength(1);
+        expect(search('quartz')).toHaveLength(1);
+        if (isKimi) expect(search('jade')).toHaveLength(1);
+        expect(readFrontier().nextOrdinal).toBeGreaterThan(initialFrontier.nextOrdinal);
+        if (isFx) {
+          // A referenced result can change without any event-log append. The
+          // incumbent observer invalidates the same reader's prefix witness.
+          expect(search('olivine')).toHaveLength(1);
+          expect(fileChanges.has(fxResultPath)).toBe(true);
+          await writeFile(fxResultPath, 'citrine native output');
+          fileChanges.get(fxResultPath)!(fxResultPath);
+          await worker.ensureUpToDate();
+          await worker.ensureUpToDate();
+          expect(search('olivine')).toEqual([]);
+          expect(search('citrine')).toHaveLength(1);
+          expect(search('quartz')).toHaveLength(1);
+          expect(search('garnet')).toHaveLength(1);
+        }
+        if (kimiFixture) {
+          // An unavailable wire is not proof the native Session was deleted.
+          const savedWire = await readFile(transcriptPath);
+          await rm(transcriptPath);
+          topologyChanges.get(join(directory, '.kimi-code'))!();
+          await expect(worker.ensureUpToDate()).resolves.toBeUndefined();
+          expect(worker.getIndexSources()).toContainEqual(expect.objectContaining({
+            source: expect.objectContaining({ agentId }), state: 'error', errorCode: expect.any(String),
+          }));
+          expect(search('quartz')).toHaveLength(1);
+          expect(search('garnet')).toHaveLength(1);
+          await writeFile(transcriptPath, savedWire);
+          topologyChanges.get(join(directory, '.kimi-code'))!();
+          await worker.ensureUpToDate();
+          await worker.ensureUpToDate();
+          await appendFile(transcriptPath, kimiFixture.kimiWire([{ type: 'context.undo', count: 1 }]));
+          fileChanges.get(transcriptPath)!(transcriptPath);
+          await worker.ensureUpToDate();
+          await worker.ensureUpToDate();
+          expect(search('garnet')).toEqual([]);
+          expect(search('quartz')).toHaveLength(1);
+          expect(search('jade')).toHaveLength(1);
+        }
+        if (isKilo) {
+          // A settled part can change without a message/session timestamp update.
+          await putKilo(appendedPath, { id: 'prt_05', sessionID: 'ses_fixture', messageID: 'msg_02', type: 'text', text: 'opal replacement native message' });
+          expect(fileChanges.has(appendedPath)).toBe(true);
+          fileChanges.get(appendedPath)!(appendedPath);
+          await worker.ensureUpToDate();
+          expect(search('garnet')).toEqual([]);
+          // Replacement retires the old projection; the next worker turn
+          // reads the current source again through the initial page boundary.
+          await worker.ensureUpToDate();
+          expect(search('opal')).toHaveLength(1);
+          await putKilo(transcriptPath, { id: 'ses_fixture', projectID: 'project', directory: '/repo', title: 'Ordinary title',
+            version: '1.0.25', time: { created: Date.now(), updated: Date.now() }, revert: { messageID: 'msg_02' } });
+          fileChanges.get(transcriptPath)!(transcriptPath);
+          await worker.ensureUpToDate();
+          expect(search('opal')).toEqual([]);
+          await worker.ensureUpToDate();
+          expect(search('quartz')).toHaveLength(1);
+        }
+        if (isDevin || isKimi || isGemini || isQwen || isFx || isAuggie || isCopilot || isDroid || isCodeBuddy || isCursor || isGrok || isKiro) {
+          if (isDevin) {
+            devinFixture!.db.prepare('UPDATE message_nodes SET chat_message=? WHERE node_id=1').run(JSON.stringify({
+              role: 'user', message_id: 'message-1', content: 'amethyst replacement message',
+            }));
+            devinFixture!.db.prepare('UPDATE sessions SET main_chain_id=1').run();
+          } else if (isAuggie) await writeAuggie(['amethyst replacement message']);
+          else await writeFile(transcriptPath, header + row(isFx ? 'first' : 'replacement', null, 'amethyst replacement message'));
+          fileChanges.get(transcriptPath)!(transcriptPath);
+          await worker.ensureUpToDate();
+          await worker.ensureUpToDate();
+          expect(search('quartz')).toEqual([]);
+          expect(search('garnet')).toEqual([]);
+          expect(search('amethyst')).toHaveLength(1);
+          if (sidecarPath) {
+            const metadata: Record<string, unknown> = JSON.parse(await readFile(sidecarPath, 'utf8'));
+            await writeFile(sidecarPath, JSON.stringify({ ...metadata, ...(isGrok ? { generated_title: 'Renamed title' } : { title: 'Renamed title' }) }));
+            fileChanges.get(sidecarPath)!(sidecarPath);
+            await worker.ensureUpToDate();
+            expect(search('amethyst')).toHaveLength(1);
+          }
+        }
+        if (isDevin) {
+          // An authoritative deletion inside a readable shared DB retires rows;
+          // losing the whole DB above must retain them.
+          devinFixture!.db.prepare('DELETE FROM message_nodes').run();
+          devinFixture!.db.prepare('DELETE FROM sessions').run();
+        } else if (isKimi) await rm(dirname(sidecarPath!), { recursive: true });
+        else await rm(transcriptPath);
+        fileChanges.get(transcriptPath)!(transcriptPath);
+        await worker.ensureUpToDate();
+        expect(search('garnet')).toEqual([]);
+        expect(search('quartz')).toEqual([]);
+        expect(search('amethyst')).toEqual([]);
+        if (isFx) expect(search('citrine')).toEqual([]);
+        const removedDb = openDeepIndexDb({ dbPath: worker.getDeepDbPath()! });
+        try { expect(removedDb.listExternalSourceStates()).toEqual([]); }
+        finally { removedDb.close(); }
+        await worker.stop();
+        expect(fileChanges.size).toBe(0);
+        expect(topologyChanges.size).toBe(0);
+      };
+    });
+    it('indexes append and removal through the shared source observer', async () => {
+      if (!runScenario) throw new Error('Native observation fixture did not initialize');
+      await runScenario();
+    });
+    if (agentId === 'codex') {
+      it('settles all 300 admitted transcripts before its explicit demand returns', async () => {
+        await codexCorpus!.prepare();
+        await codexCorpus!.demand();
+      });
+      describe('with a settled 300-transcript corpus', () => {
+        beforeEach(async () => { await codexCorpus!.prepare(); await codexCorpus!.demand(); });
+        it('indexes a new sibling through the retained daemon observation on the next demand', async () => {
+          await codexCorpus!.appendSibling();
+        });
+      });
     }
+    afterEach(async () => {
+      await cleanup?.();
+      runScenario = undefined;
+      cleanup = undefined;
+      codexCorpus = undefined;
+    });
   });
 });

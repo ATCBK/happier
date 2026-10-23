@@ -35,7 +35,149 @@ vi.mock('../../../../../apps/ui/sources/sync/runtime/orchestration/serverScopedR
 vi.mock('../../../../../apps/ui/sources/sync/ops/machineExternalSessions', () => ({ machineExternalSessionsCandidatesList: transports.list }));
 
 describe('external memory transcript ingestion', () => {
-  it('finishes a multi-page Codex backfill before starting the remaining backlog, then indexes its append', async () => {
+  it('does not read every retained native frontier after a source group is already indexing', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-memory-native-status-cost-'));
+    const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    try {
+      const reader = createBoundedAgentExternalSessionsContribution({ contribution: createClaudeExternalSessionsContribution({ env: {} }),
+        identity: { pluginId: 'fixture.claude', agentId: 'claude', occurrenceId: 'current',
+          contributionQualifiedId: 'fixture.claude/agents/claude', sourceCustody: { kind: 'development', registeredRootId: 'fixture-root' } },
+        retirementSignal: new AbortController().signal, isCurrent: () => true,
+        createInvocationExec: async () => createUnavailablePluginServices().exec });
+      const native: MemoryExternalSourceReader = { agentId: 'claude', sourceKey: 'local',
+        source: { kind: 'claudeConfig', configDir: dir }, reader };
+      const candidates = Array.from({ length: 1001 }, (_, index) => ({ native,
+        source: { type: 'external_transcript' as const, agentId: 'claude', sourceKey: 'local', nativeSessionId: `native-${index}` } }));
+      const traversal = createMemoryExternalTranscriptTraversal();
+      traversal.replace(candidates);
+      for (const candidate of candidates.slice(1)) {
+        db.setExternalSourceState({ sessionId: externalMemoryStorageId(candidate.source), source: candidate.source,
+          cursor: JSON.stringify({ type: 'tail' }), nextOrdinal: 1 });
+        traversal.noteSyncResult(candidate.source, 'current');
+      }
+      // Instrument the real SQLite frontier boundary; no read is substituted.
+      const reads = vi.spyOn(db, 'getExternalSourceState');
+      expect(traversal.getIndexSources(db)).toMatchObject([{ state: 'indexing' }]);
+      expect(reads.mock.calls.length).toBe(0);
+      const pending = candidates[0]!;
+      traversal.replace([]);
+      traversal.replace([...candidates.slice(1), pending]);
+      for (const candidate of candidates.slice(1)) traversal.noteSyncResult(candidate.source, 'current');
+      expect(traversal.getIndexSources(db)).toMatchObject([{ state: 'indexing' }]);
+      expect(reads.mock.calls.length).toBe(0);
+      db.setExternalSourceState({ sessionId: externalMemoryStorageId(pending.source), source: pending.source,
+        cursor: JSON.stringify({ type: 'tail' }), nextOrdinal: 1 });
+      traversal.noteSyncResult(pending.source, 'current');
+      expect(traversal.getIndexSources(db)).toMatchObject([{ state: 'ready' }]);
+      traversal.noteSyncResult(candidates.at(-1)!.source, 'error', { errorCode: 'agent_unavailable' });
+      expect(traversal.getIndexSources(db)).toMatchObject([{ state: 'error', errorCode: 'agent_unavailable' }]);
+      reads.mockRestore();
+    } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+  it('reuses deep-index failure backoff for unavailable native reads and recovers when eligible', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-memory-native-backoff-'));
+    const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    const tier1 = openSummaryShardIndexDb({ dbPath: join(dir, 'summary.sqlite') });
+    const lifetime = new AbortController();
+    let invocations = 0;
+    try {
+      await mkdir(join(dir, 'sessions'));
+      const reader = createBoundedAgentExternalSessionsContribution({
+        contribution: createCodexExternalSessionsContribution({ env: { CODEX_HOME: dir } }),
+        identity: { pluginId: 'fixture.codex', agentId: 'codex', occurrenceId: 'current',
+          contributionQualifiedId: 'fixture.codex/agents/codex', sourceCustody: { kind: 'development', registeredRootId: 'fixture' } },
+        retirementSignal: lifetime.signal, isCurrent: () => true,
+        createInvocationExec: async () => { invocations++; return createUnavailablePluginServices().exec; },
+      });
+      const source = { type: 'external_transcript' as const, agentId: 'codex', sourceKey: 'local', nativeSessionId: 'recoverable' };
+      const native = { agentId: 'codex', sourceKey: 'local', source: { kind: 'codexHome', home: 'user' }, reader };
+      const settings = normalizeMemorySettings({ enabled: true, indexMode: 'deep', coveragePolicy: { type: 'full' },
+        conversationSearch: { indexExternal: { enabled: true, agents: ['codex'] } } });
+      const traversal = createMemoryExternalTranscriptTraversal();
+      traversal.replace([{ source, native }]);
+      const tick = (nowMs: number) => syncExternalMemoryTranscriptsBatch({
+        candidates: traversal.take(1), db, tier1, settings, nowMs, signal: lifetime.signal, onSourceResult: traversal.noteSyncResult,
+      });
+      await tick(10_000);
+      expect(invocations).toBe(1);
+      await tick(10_001);
+      expect(invocations).toBe(1);
+      expect(traversal.getIndexSources(db)).toMatchObject([{ state: 'error', errorCode: 'agent_unavailable' }]);
+      const sessionId = externalMemoryStorageId(source);
+      const eligibleAt = 10_000 + settings.deep.failureBackoffBaseMs;
+      expect(tier1.getSessionCursors({ sessionId, nowMs: 10_001 })).toMatchObject({ consecutiveDeepFailures: 1, nextDeepEligibleAtMs: eligibleAt });
+      // A new child inherits persisted backoff, not the previous child's Map.
+      const restarted = createMemoryExternalTranscriptTraversal();
+      restarted.replace([{ source, native }]);
+      await syncExternalMemoryTranscriptsBatch({ candidates: restarted.take(1), db, tier1, settings,
+        nowMs: 10_001, signal: lifetime.signal, onSourceResult: restarted.noteSyncResult });
+      expect(invocations).toBe(1);
+      expect(restarted.hasPendingWork(), 'A future eligibility deadline must settle the current child').toBe(false);
+      expect(restarted.getIndexSources(db)).toMatchObject([{ state: 'error' }]);
+      await writeFile(join(dir, 'sessions', 'rollout-recoverable.jsonl'),
+        JSON.stringify({ type: 'session_meta', payload: { id: 'recoverable' } }) + '\n'
+        + JSON.stringify({ type: 'response_item', timestamp: new Date().toISOString(), payload: { type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: 'quartz recovery' }] } }) + '\n');
+      await tick(eligibleAt);
+      expect(invocations).toBe(2);
+      expect(db.search({ query: 'quartz', scope: { type: 'global' }, maxResults: 10, includeExternal: true })).toHaveLength(1);
+      expect(tier1.getSessionCursors({ sessionId, nowMs: eligibleAt })).toMatchObject({ consecutiveDeepFailures: 0, nextDeepEligibleAtMs: 0 });
+    } finally { lifetime.abort(); db.close(); tier1.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+  it('admits pre-existing Codex history while a sibling refresh and another backfill remain active', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-memory-codex-initial-fairness-'));
+    const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    const lifetime = new AbortController();
+    try {
+      const project = join(dir, 'sessions');
+      await mkdir(project);
+      const timestamp = new Date(Date.now() - 60_000).toISOString();
+      const row = (text: string) => JSON.stringify({ type: 'response_item', timestamp, payload: {
+        type: 'message', role: 'user', content: [{ type: 'input_text', text }],
+      } }) + '\n';
+      const write = async (id: string, count: number) => writeFile(join(project, `rollout-${id}.jsonl`),
+        JSON.stringify({ type: 'session_meta', timestamp, payload: { id } }) + '\n'
+        + Array.from({ length: count }, (_, ordinal) => row(`r278${id} ordinal${ordinal}${id === 'backfill' ? ' coastal walk'.repeat(600) : ''}`)).join(''));
+      await write('main', 200);
+      await write('backfill', 2000);
+      const reader = createBoundedAgentExternalSessionsContribution({ contribution: createCodexExternalSessionsContribution({ env: { CODEX_HOME: dir } }),
+        identity: { pluginId: 'fixture.codex', agentId: 'codex', occurrenceId: 'current',
+          contributionQualifiedId: 'fixture.codex/agents/codex', sourceCustody: { kind: 'development', registeredRootId: 'fixture' } },
+        retirementSignal: lifetime.signal, isCurrent: () => true,
+        createInvocationExec: async () => createUnavailablePluginServices().exec });
+      const native = { agentId: 'codex', sourceKey: 'local', source: { kind: 'codexHome', home: 'user' }, reader };
+      const candidate = (nativeSessionId: string) => ({ native,
+        source: { type: 'external_transcript' as const, agentId: 'codex', sourceKey: 'local', nativeSessionId } });
+      const main = candidate('main'), backfill = candidate('backfill'), sibling = candidate('sibling');
+      const traversal = createMemoryExternalTranscriptTraversal();
+      traversal.replace([backfill]);
+      const settings = normalizeMemorySettings({ enabled: true, indexMode: 'deep', backfillPolicy: 'new_only',
+        enabledAtMs: Date.now(), coveragePolicy: { type: 'full' },
+        conversationSearch: { indexExternal: { enabled: true, agents: ['codex'], historyDays: 1 } } });
+      // A retained continuation and a continuously written discovered sibling
+      // must leave an admission slot for the file that existed before opt-in.
+      await syncExternalMemoryTranscriptsBatch({ candidates: traversal.take(1), db, settings, nowMs: Date.now(), signal: lifetime.signal,
+        onSourceResult: traversal.noteSyncResult });
+      expect(JSON.parse(db.getExternalSourceState({ sessionId: externalMemoryStorageId(backfill.source) })!.cursor!)).toMatchObject({ type: 'page' });
+      await write('sibling', 2);
+      traversal.replace([backfill, main, sibling], new Set([externalMemoryStorageId(sibling.source)]));
+      const selected: string[] = [];
+      // Two existing allowance rotations suffice for the three kinds of work;
+      // this bounds the test, not the production scheduler or native reader.
+      for (let turn = 0; turn < 8; turn++) {
+        traversal.changed('codex', 'local', ['sibling']);
+        const work = traversal.take(1);
+        selected.push(...work.map(entry => entry.source.nativeSessionId));
+        await syncExternalMemoryTranscriptsBatch({ candidates: work, db, settings, nowMs: Date.now(), signal: lifetime.signal,
+          onSourceResult: traversal.noteSyncResult });
+      }
+      expect(selected).toContain('main');
+      expect(db.getExternalSourceState({ sessionId: externalMemoryStorageId(main.source) })?.nextOrdinal).toBe(201);
+      expect(db.search({ query: 'r278main', scope: { type: 'global' }, maxResults: 200, includeExternal: true })).toHaveLength(200);
+      expect(db.search({ query: 'r278sibling', scope: { type: 'global' }, maxResults: 2, includeExternal: true })).toHaveLength(2);
+    } finally { lifetime.abort(); db.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+  it('shares a multi-page Codex backfill with unstarted history without queueing each continuation behind the whole backlog', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-memory-codex-backfill-'));
     const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
     const lifetime = new AbortController();
@@ -86,22 +228,104 @@ describe('external memory transcript ingestion', () => {
       }));
       traversal.replace([candidate, ...backlog]);
       const pages = Math.ceil(200 / (first.nextOrdinal - 1));
-      for (let page = 1; page < pages; page++) await sync();
+      await sync();
+      await sync();
+      expect(db.listExternalSourceStates().some(state => state.source.nativeSessionId !== id),
+        'pre-existing history must receive work while an admitted transcript is still backfilling').toBe(true);
+      // The existing alternating allowance admits new history without making
+      // a continuation wait for all 300 conversations to take their first page.
+      for (let turn = 3; turn < pages * 2; turn++) await sync();
       expect(db.getExternalSourceState({ sessionId })!.nextOrdinal).toBe(201);
       expect(db.getExternalSourceState({ sessionId })!.coverageComplete).toBe(true);
-      const indexed = db.search({ query: 'backfill', scope: { type: 'global' }, maxResults: 201, includeExternal: true });
+      const indexed = db.search({ query: 'coastal', scope: { type: 'session', sessionId }, maxResults: 201, includeExternal: true });
       expect(indexed).toHaveLength(200);
       expect(indexed.map(hit => Number(/r252ordinal(\d+)\b/.exec(hit.text)?.[1])).sort((a, b) => a - b))
         .toEqual(Array.from({ length: 200 }, (_, index) => index));
+      const pageBoundary = 200 - (first.nextOrdinal - 1) - 1;
+      for (const ordinal of [0, 100, pageBoundary, 199]) {
+        const hit = indexed.find(item => new RegExp(`r252ordinal${ordinal}\\b`).test(item.text))!;
+        const readWindow = async (useIndex: boolean, cursor?: string) => {
+          let reads = 0;
+          const started = performance.now();
+          const window = await getMemoryWindow({ source, sourceItemId: hit.sourceItemId!,
+            paddingMessages: 8, signal: lifetime.signal, db: useIndex ? db : undefined, ...(cursor ? { cursor } : {}),
+            fetchExternalTranscriptPage: async request => {
+              reads++;
+              const page = await reader.pageTranscript({ source: native.source, remoteSessionId: id, direction: 'older',
+                ...(request.cursor ? { cursor: request.cursor } : {}), observation: native.observation,
+                ...EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript, signal: lifetime.signal });
+              if (!page.ok) throw new Error(`${page.code}:${page.message}`);
+              return page.value;
+            },
+          });
+          return { window, reads, elapsedMs: performance.now() - started };
+        };
+        const baseline = ordinal === 0 ? await readWindow(false) : undefined;
+        const { window, reads, elapsedMs } = await readWindow(true);
+        expect(window.externalSnippets?.some(item => item.sourceItemId === hit.sourceItemId)).toBe(true);
+        // An indexed head hit already has a reader-owned page locator. Omitting
+        // the optional wire cursor must not decode the entire history again.
+        if (ordinal === 0) expect(reads).toBe(1);
+        if (baseline) expect(window.externalSnippets?.map(item => item.text)).toEqual(baseline.window.externalSnippets?.map(item => item.text));
+        expect(window.externalSnippets?.length).toBe(ordinal === 0 || ordinal === 199 ? 9 : 17);
+        if (ordinal === pageBoundary) {
+          expect(hit.sourceCursor).toBeTruthy();
+          const explicit = await readWindow(false, hit.sourceCursor!);
+          expect(explicit.window.externalSnippets?.map(item => item.sourceItemId))
+            .toEqual(window.externalSnippets?.map(item => item.sourceItemId));
+        }
+      }
       await appendFile(path, row(200));
       traversal.changed('codex', 'local', [id]);
       // One of each two selections serves requested refreshes.
       for (let turn = 0; turn < 2; turn++) await sync();
       expect(db.search({ query: 'r252ordinal200', scope: { type: 'global' }, maxResults: 1, includeExternal: true })).toHaveLength(1);
       expect(db.getExternalSourceState({ sessionId })!.nextOrdinal).toBe(202);
+      expect(db.search({ query: 'coastal', scope: { type: 'session', sessionId }, maxResults: 201, includeExternal: true })
+        .map(hit => Number(/r252ordinal(\d+)\b/.exec(hit.text)?.[1])).sort((a, b) => a - b))
+        .toEqual(Array.from({ length: 201 }, (_, index) => index));
     } finally { lifetime.abort(); db.close(); await rm(dir, { recursive: true, force: true }); }
   });
-  it('keeps a safe Codex reader failure class through bounded ingestion and source status', async () => {
+  it.each([2, 200])('retires an unlinked Codex rollout in every source partition after %i messages', async count => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-memory-codex-retire-'));
+    const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    const lifetime = new AbortController();
+    try {
+      const id = 'd4b84a10-0e52-44fa-8147-268000000002';
+      const project = join(dir, 'sessions', '2026', '10', '22');
+      await mkdir(project, { recursive: true });
+      const path = join(project, `rollout-2026-10-22T00-00-00-${id}.jsonl`);
+      const timestamp = new Date().toISOString();
+      await writeFile(path, JSON.stringify({ type: 'session_meta', timestamp, payload: { id, cwd: '/synthetic' } }) + '\n'
+        + Array.from({ length: count }, (_, ordinal) => JSON.stringify({ type: 'response_item', timestamp, payload: {
+          type: 'message', role: ordinal % 2 ? 'assistant' : 'user', content: [{ type: ordinal % 2 ? 'output_text' : 'input_text',
+            text: `r268retirement ordinal${ordinal} café 東京 ${'coastal walk '.repeat(count > 2 ? 600 : 1)}` }],
+        } }) + '\n').join(''));
+      const reader = createBoundedAgentExternalSessionsContribution({ contribution: createCodexExternalSessionsContribution({ env: { CODEX_HOME: dir } }),
+        identity: { pluginId: 'fixture.codex', agentId: 'codex', occurrenceId: 'current',
+          contributionQualifiedId: 'fixture.codex/agents/codex', sourceCustody: { kind: 'development', registeredRootId: 'fixture' } },
+        retirementSignal: lifetime.signal, isCurrent: () => true,
+        createInvocationExec: async () => createUnavailablePluginServices().exec });
+      const settings = normalizeMemorySettings({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' },
+        conversationSearch: { indexExternal: { enabled: true, agents: ['codex'], historyDays: 1 } } });
+      const candidates = ['user-home', 'linked-home'].map(sourceKey => ({
+        source: { type: 'external_transcript' as const, agentId: 'codex', sourceKey, nativeSessionId: id },
+        native: { agentId: 'codex', sourceKey, source: { kind: 'codexHome', home: 'user' }, reader },
+      }));
+      for (const candidate of candidates) {
+        await syncExternalMemoryTranscriptOnce({ ...candidate, db, settings, nowMs: Date.now(), signal: lifetime.signal });
+        expect(db.getExternalSourceState({ sessionId: externalMemoryStorageId(candidate.source) })?.nextOrdinal).toBeGreaterThan(1);
+      }
+      await rm(path);
+      for (const candidate of candidates) {
+        await expect(syncExternalMemoryTranscriptOnce({ ...candidate, db, settings, nowMs: Date.now(), signal: lifetime.signal })).resolves.toBe('removed');
+        expect(db.getExternalSourceState({ sessionId: externalMemoryStorageId(candidate.source) })).toBeNull();
+      }
+      expect(db.search({ query: 'r268retirement', scope: { type: 'global' }, maxResults: 400, includeExternal: true })).toEqual([]);
+    } finally { lifetime.abort(); db.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it.each(['malformed', 'oversized'] as const)('keeps a safe Codex %s failure through bounded ingestion and source status', async failure => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-memory-codex-failure-'));
     const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
     const diagnostic = vi.spyOn(logger, 'debug');
@@ -129,15 +353,30 @@ describe('external memory transcript ingestion', () => {
       const settings = normalizeMemorySettings({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
         coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: { enabled: true, agents: ['codex'] } } });
       const traversal = createMemoryExternalTranscriptTraversal();
-      traversal.replace([candidate]);
-      await expect(syncExternalMemoryTranscriptsBatch({ candidates: [candidate], db, settings, nowMs: Date.now(),
-        signal: new AbortController().signal, onSourceResult: traversal.noteSyncResult,
-      })).rejects.toMatchObject({ code: 'agent_error', reason });
-      expect(traversal.getIndexSources(db).map(row => MemoryIndexSourceStatusV1Schema.parse(row))).toMatchObject([{ state: 'error', errorCode: 'agent_error',
-        errorReason: reason }]);
+      const goodId = '22222222-2222-4222-8222-222222222222';
+      await writeFile(join(project, `rollout-2026-10-21T00-00-00-${goodId}.jsonl`),
+        JSON.stringify({ type: 'session_meta', payload: { id: goodId, cwd: '/synthetic' } }) + '\n'
+        + JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: 'r273goodsource continues indexing' }] } }) + '\n');
+      const good = { ...candidate, source: { ...source, nativeSessionId: goodId } };
+      traversal.replace([candidate, good]);
+      const signal = new AbortController().signal;
+      await expect(runMemoryWorkerSourcesTick({ sessionIds: [], externalSourceCount: 2, cursor: 0, maxSessions: 2, signal,
+        syncSessions: async () => {},
+        syncExternalSources: async maxSources => syncExternalMemoryTranscriptsBatch({ candidates: traversal.take(maxSources), db, settings,
+          nowMs: Date.now(), signal, onSourceResult: traversal.noteSyncResult }),
+      })).resolves.toBe(0);
+      expect(db.search({ query: 'r273goodsource', scope: { type: 'global' }, maxResults: 1, includeExternal: true })).toHaveLength(1);
+      expect(traversal.getIndexSources(db).map(row => MemoryIndexSourceStatusV1Schema.parse(row))).toMatchObject([{ state: 'error', errorCode: 'agent_error', errorReason: reason }]);
       expect(diagnostic).toHaveBeenCalledWith('[memoryWorker] Native source read failed', {
         agentId: 'codex', code: 'agent_error', reason,
       });
+      if (failure === 'malformed') {
+        expect(diagnostic).toHaveBeenCalledWith('[codex] Native transcript read failed', {
+          exceptionClass: 'Error', code: 'CODEX_TRANSCRIPT_MALFORMED_UTF8', phase: 'page_scan',
+          sourceItemId: id, fileBasename: `rollout-2026-10-21T00-00-00-${id}.jsonl`, byteOffset: expect.any(Number),
+        });
+      }
       expect(MemoryIndexSourceStatusV1Schema.safeParse({ source: { type: 'external_transcript', agentId: 'codex', sourceKey: 'local' },
         state: 'error', errorReason: `/private/${id}/transcript text` }).success).toBe(false);
       await writeFile(join(project, `rollout-2026-10-21T00-00-00-${id}.jsonl`),
@@ -337,7 +576,7 @@ describe('external memory transcript ingestion', () => {
       expect(traversal.getIndexSources?.(db).every(row => row.state === 'indexing')).toBe(true);
       await expect(syncExternalMemoryTranscriptsBatch({ ...operation,
         onSourceResult: (source, state) => traversal.noteSyncResult(source, state),
-      })).rejects.toThrow('unavailable');
+      })).resolves.toBeUndefined();
       expect(traversal.getIndexSources?.(db)).toEqual([{ source: { type: 'external_transcript', agentId: 'claude', sourceKey: 'local' }, state: 'error' }]);
       traversal.replace([healthy]);
       expect(traversal.getIndexSources?.(db)).toEqual([{ source: { type: 'external_transcript', agentId: 'claude', sourceKey: 'local' }, state: 'ready' }]);
@@ -370,7 +609,9 @@ describe('external memory transcript ingestion', () => {
       source: { type: 'external_transcript' as const, agentId: 'claude', sourceKey: 'local', nativeSessionId } }));
     const traversal = createMemoryExternalTranscriptTraversal();
     const nextId = () => traversal.take(1).map(candidate => candidate.source.nativeSessionId);
+    expect(traversal.hasPendingWork()).toBe(false);
     traversal.replace(candidates);
+    expect(traversal.hasPendingWork()).toBe(true);
     expect(nextId()).toEqual(['alpha']);
     traversal.replace(candidates);
     expect.soft(nextId()).toEqual(['beta']);
@@ -385,6 +626,15 @@ describe('external memory transcript ingestion', () => {
     expect(nextId()).toEqual([]);
     traversal.replace(candidates);
     expect(nextId()).toEqual(['alpha']);
+    for (const candidate of candidates) traversal.noteSyncResult(candidate.source, 'current');
+    expect(traversal.hasPendingWork()).toBe(false);
+    traversal.noteSyncResult(candidates[0]!.source, 'more');
+    expect(traversal.hasPendingWork()).toBe(true);
+    traversal.noteSyncResult(candidates[0]!.source, 'current');
+    traversal.changed('claude', 'local', ['beta']);
+    expect(traversal.hasPendingWork()).toBe(true);
+    traversal.noteSyncResult(candidates[1]!.source, 'error');
+    expect(traversal.hasPendingWork()).toBe(false);
   });
   it('rebuilds a rewritten Claude conversation while unrelated initial history continues', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-memory-rewrite-priority-'));

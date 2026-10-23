@@ -9,8 +9,8 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import { searchTier1Memory, searchTier2Memory } from '@/daemon/memory/searchMemory';
 import { getMemoryWindow } from '@/daemon/memory/getMemoryWindow';
-import { openDeepIndexDb } from '@/daemon/memory/deepIndex/deepIndexDb';
-import { openSummaryShardIndexDb } from '@/daemon/memory/summaryShardIndexDb';
+import { openDeepIndexReader } from '@/daemon/memory/deepIndex/deepIndexDb';
+import { openSummaryShardIndexReader } from '@/daemon/memory/summaryShardIndexDb';
 import { resolveOperationalMemoryEmbeddingsSettings } from '@/daemon/memory/resolveOperationalMemoryEmbeddingsSettings';
 
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
@@ -44,7 +44,7 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
     const tier1Stats = (() => {
       if (!tier1DbPath) return null;
       try {
-        const db = openSummaryShardIndexDb({ dbPath: tier1DbPath });
+        const db = openSummaryShardIndexReader({ dbPath: tier1DbPath });
         try {
           return {
             stats: db.getSummaryIndexStats(),
@@ -60,7 +60,7 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
     const deepStats = (() => {
       if (!deepDbPath) return null;
       try {
-        const db = openDeepIndexDb({ dbPath: deepDbPath });
+        const db = openDeepIndexReader({ dbPath: deepDbPath });
         try {
           return db.getDeepIndexStats();
         } finally {
@@ -88,7 +88,7 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
           if (admitted.state !== 'ready') documents = { state: admitted.state === 'partial' ? 'unavailable' : admitted.state };
           else if (admitted.eligibleMemoryDocuments) {
             admitted.assertCurrent();
-            const db = openDeepIndexDb({ dbPath: deepDbPath });
+            const db = openDeepIndexReader({ dbPath: deepDbPath });
             try {
               const counts = db.getDocumentFactCounts({ eligibleDocuments: admitted.eligibleMemoryDocuments });
               documents = { state: 'ready', facts: counts.map(document => {
@@ -262,11 +262,9 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
       const deepPath = memoryWorker.getDeepDbPath();
       if (!deepPath) return { v: 1, ok: false, errorCode: 'memory_index_missing', error: 'memory_index_missing' };
       const embeddings = resolveOperationalMemoryEmbeddingsSettings(settings.embeddings);
-      const embedQuery = await (async () => {
-        if (!embeddings?.enabled) return undefined;
-        const provider = await memoryWorker.resolveEmbeddingsProvider?.(context?.signal);
-        return provider?.provider?.embedQuery;
-      })();
+      const embedQuery = embeddings?.enabled && memoryWorker.embedQuery
+        ? async (text: string, signal?: AbortSignal) => await memoryWorker.embedQuery!(text, signal) ?? new Float32Array()
+        : undefined;
       return await searchTier2Memory({
         dbPath: deepPath,
         query,
@@ -305,7 +303,7 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
         return MemoryWindowV1Schema.parse({ v: 1, snippets: [], citations: [], externalSnippets: [] });
       }
       const deepDbPath = memoryWorker.getDeepDbPath();
-      const db = deepDbPath ? openDeepIndexDb({ dbPath: deepDbPath }) : undefined;
+      const db = deepDbPath ? openDeepIndexReader({ dbPath: deepDbPath }) : undefined;
       try {
         return MemoryWindowV1Schema.parse(await getMemoryWindow({
           source: parsed.data.source, sourceItemId: parsed.data.sourceItemId,

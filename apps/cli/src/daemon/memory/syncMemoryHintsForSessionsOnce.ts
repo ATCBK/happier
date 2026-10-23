@@ -66,6 +66,7 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
     synopsisPayload: SessionSynopsisV1 | null;
   }>, signal?: AbortSignal) => Promise<void>;
   signal?: AbortSignal;
+  onDeferred?: (atMs: number) => void;
 }>): Promise<void> {
   if (!params.settings.enabled) return;
   if (params.settings.indexMode !== 'hints') return;
@@ -188,14 +189,28 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
 
     const lastCreatedAtMs = newIndexableItems[newIndexableItems.length - 1]!.createdAtMs;
     const idleDelayMs = Math.max(0, Math.trunc(params.settings.hints.idleDelayMs));
-    if (params.settings.hints.updateMode === 'onIdle' && nowMs - lastCreatedAtMs < idleDelayMs) continue;
+    if (params.settings.hints.updateMode === 'onIdle' && nowMs - lastCreatedAtMs < idleDelayMs) {
+      params.onDeferred?.(lastCreatedAtMs + idleDelayMs);
+      continue;
+    }
+
+    const reportPermitDeferral = () => {
+      if (!params.onDeferred) return;
+      const nextRunAtMs = params.tier1.getNextHintRunAtMs({
+        sessionId, nowMs, maxRunsPerHour: params.settings.hints.maxRunsPerHour,
+      });
+      if (nextRunAtMs > nowMs) params.onDeferred(nextRunAtMs);
+    };
 
     const permitAcquired = params.tier1.tryAcquireHintRunPermit({
       sessionId,
       nowMs,
       maxRunsPerHour: params.settings.hints.maxRunsPerHour,
     });
-    if (!permitAcquired) continue;
+    if (!permitAcquired) {
+      reportPermitDeferral();
+      continue;
+    }
 
     const targetShardMessages = Math.max(1, Math.trunc(
       params.settings.hints.targetShardMessages ?? params.settings.hints.windowSizeMessages,
@@ -220,6 +235,7 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
     let indexedLightRows = 0;
     let lightShardCount = 0;
     let lastIndexedSeq = 0;
+    let hintRunFailed = false;
 
     for (const window of windows) {
       params.signal?.throwIfAborted();
@@ -255,6 +271,7 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
             backoffBaseMs: params.settings.hints.failureBackoffBaseMs,
             backoffMaxMs: params.settings.hints.failureBackoffMaxMs,
           });
+          hintRunFailed = true;
         }
         continue;
       }
@@ -283,6 +300,7 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
           backoffBaseMs: params.settings.hints.failureBackoffBaseMs,
           backoffMaxMs: params.settings.hints.failureBackoffMaxMs,
         });
+        hintRunFailed = true;
         continue;
       }
 
@@ -299,12 +317,15 @@ export async function syncMemoryHintsForSessionsOnce(params: Readonly<{
         policyKey,
       });
       params.tier1.markHintRunSuccess({ sessionId, seqTo: searchableShardPayload.seqTo, nowMs });
+      hintRunFailed = false;
       params.tier1.enforceMaxShardsPerSession({ sessionId, maxShardsPerSession: params.settings.hints.maxShardsPerSession });
       indexedLightRows += window.items.length;
       lightShardCount += 1;
       lastIndexedSeq = Math.max(lastIndexedSeq, searchableShardPayload.seqTo);
       run.lightShardsCreated += 1;
     }
+
+    if (hintRunFailed) reportPermitDeferral();
 
     if (lightShardCount > 0) {
       run.sessionsIndexed += 1;

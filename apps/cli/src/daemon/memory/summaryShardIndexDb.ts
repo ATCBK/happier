@@ -1,5 +1,6 @@
 import {
   openProtectedSqliteDatabaseSync,
+  openProtectedSqliteDatabaseReaderSync,
   protectSqliteDatabaseFilesSync,
   resolveSqliteSupportedValueBatchSize,
   type SqliteDatabaseSync,
@@ -9,7 +10,7 @@ import {
   ensureMemoryIndexQueueSchema,
 } from './queue/memoryIndexQueueDb';
 import type { MemoryIndexQueueDbHandle } from './queue/memoryIndexQueueTypes';
-import { createMemoryFtsIndex, type MemoryFtsSearchFilter } from './memoryFtsIndex';
+import { createMemoryFtsIndex, ensureMemoryFtsIndexSchema, type MemoryFtsSearchFilter } from './memoryFtsIndex';
 
 export type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
 import type { MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
@@ -86,6 +87,7 @@ export type SummaryShardIndexDbHandle = Readonly<{
     lastDeepIndexedSeq: number;
   }>) => boolean;
   tryAcquireHintRunPermit: (args: Readonly<{ sessionId: string; nowMs: number; maxRunsPerHour: number }>) => boolean;
+  getNextHintRunAtMs: (args: Readonly<{ sessionId: string; nowMs: number; maxRunsPerHour: number }>) => number;
   markHintRunSuccess: (args: Readonly<{ sessionId: string; seqTo: number; nowMs: number }>) => void;
   markHintRunFailure: (args: Readonly<{ sessionId: string; nowMs: number; backoffBaseMs: number; backoffMaxMs: number }>) => void;
   enforceMaxShardsPerSession: (args: Readonly<{ sessionId: string; maxShardsPerSession: number }>) => void;
@@ -103,6 +105,13 @@ export type SummaryShardIndexDbHandle = Readonly<{
   checkpointAndVacuum: () => void;
   close: () => void;
 }> & MemoryIndexQueueDbHandle;
+
+export type SummaryShardIndexReader = Pick<SummaryShardIndexDbHandle,
+  'getIndexPolicyKeys' | 'search' | 'getSummaryIndexStats' | 'getLatestShardSeqTo' |
+  'listIndexedSessionIds' | 'getMemorySessionIndexStatus' | 'getMemorySessionIndexErrorCode' |
+  'getMemoryIndexQueueTelemetry' | 'close'> & Readonly<{
+    getSessionCursors: (args: Readonly<{ sessionId: string; nowMs: number }>) => ReturnType<SummaryShardIndexDbHandle['getSessionCursors']>;
+  }>;
 
 function normalizeQuery(raw: string): string {
   return String(raw ?? '')
@@ -245,17 +254,49 @@ function ensureSchema(db: SqliteDatabaseSync): void {
     }
   }
   ensureMemoryIndexQueueSchema(db);
-  createMemoryFtsIndex(db, { table: 'summary_shards', id: 'shardId', fts: 'summary_fts' });
+  ensureMemoryFtsIndexSchema(db, { table: 'summary_shards', id: 'shardId', fts: 'summary_fts' });
   if (userVersion === SUMMARY_INDEX_SCHEMA_VERSION) return;
   rebuildSummaryFts(db);
   db.exec(`PRAGMA user_version=${SUMMARY_INDEX_SCHEMA_VERSION}`);
 }
 
+/** The daemon never creates, migrates, or changes permissions on the writer's database. */
+export function openSummaryShardIndexReader(args: Readonly<{ dbPath: string }>): SummaryShardIndexReader {
+  const db = openProtectedSqliteDatabaseReaderSync(args.dbPath);
+  try {
+    db.exec('PRAGMA busy_timeout=5000;');
+    const handle = createSummaryShardIndexDbHandle(db);
+    return {
+      getIndexPolicyKeys: handle.getIndexPolicyKeys,
+      search: handle.search,
+      getSummaryIndexStats: handle.getSummaryIndexStats,
+      getLatestShardSeqTo: handle.getLatestShardSeqTo,
+      listIndexedSessionIds: handle.listIndexedSessionIds,
+      getSessionCursors: args => handle.getSessionCursors({ ...args, readOnly: true }),
+      getMemorySessionIndexStatus: handle.getMemorySessionIndexStatus,
+      getMemorySessionIndexErrorCode: handle.getMemorySessionIndexErrorCode,
+      getMemoryIndexQueueTelemetry: handle.getMemoryIndexQueueTelemetry,
+      close: handle.close,
+    };
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
 export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): SummaryShardIndexDbHandle {
   const db = openProtectedSqliteDatabaseSync(args.dbPath);
-  ensureSchema(db);
-  protectSqliteDatabaseFilesSync(args.dbPath);
+  try {
+    ensureSchema(db);
+    protectSqliteDatabaseFilesSync(args.dbPath);
+    return createSummaryShardIndexDbHandle(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
 
+function createSummaryShardIndexDbHandle(db: SqliteDatabaseSync): SummaryShardIndexDbHandle {
   const insertStmt = db.prepare(`
     INSERT INTO summary_shards (
       shardId,
@@ -335,6 +376,30 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
     FROM session_cursors
     WHERE sessionId = ?;
   `);
+  const readHintRunAdmission = ({ sessionId, nowMs, maxRunsPerHour }: Readonly<{
+    sessionId: string; nowMs: number; maxRunsPerHour: number;
+  }>) => {
+    const now = Number.isFinite(nowMs) ? Math.max(0, Math.trunc(nowMs)) : 0;
+    const maxRuns = Number.isFinite(maxRunsPerHour) ? Math.max(1, Math.trunc(maxRunsPerHour)) : 1;
+    const row = getHintCursorStmt.get(String(sessionId ?? '').trim()) as Readonly<{
+      nextHintEligibleAtMs: number;
+      hintRunWindowStartMs: number;
+      hintRunWindowCount: number;
+    }> | undefined;
+    const nextEligibleAtMs = typeof row?.nextHintEligibleAtMs === 'number' && Number.isFinite(row.nextHintEligibleAtMs)
+      ? Math.trunc(row.nextHintEligibleAtMs) : 0;
+    let windowStart = typeof row?.hintRunWindowStartMs === 'number' && Number.isFinite(row.hintRunWindowStartMs)
+      ? Math.trunc(row.hintRunWindowStartMs) : 0;
+    let windowCount = typeof row?.hintRunWindowCount === 'number' && Number.isFinite(row.hintRunWindowCount)
+      ? Math.trunc(row.hintRunWindowCount) : 0;
+    if (windowStart <= 0 || now - windowStart >= HINT_RUN_WINDOW_MS) {
+      windowStart = now;
+      windowCount = 0;
+    }
+    const windowEligibleAtMs = windowCount >= maxRuns ? windowStart + HINT_RUN_WINDOW_MS : now;
+    return { windowStart, windowCount, nextEligibleAtMs,
+      nextRunAtMs: Math.max(now, nextEligibleAtMs, windowEligibleAtMs) };
+  };
   const updateHintPermitStmt = db.prepare(`
     UPDATE session_cursors
     SET
@@ -579,40 +644,19 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
       seedCursorStmt.run(observed, hinted, deepSeq, now, id);
       return true;
     },
+    getNextHintRunAtMs: args => readHintRunAdmission(args).nextRunAtMs,
     tryAcquireHintRunPermit: ({ sessionId, nowMs, maxRunsPerHour }) => {
       const id = String(sessionId ?? '').trim();
       if (!id) return false;
       const now = Number.isFinite(nowMs) ? Math.max(0, Math.trunc(nowMs)) : 0;
-      const maxRuns = Number.isFinite(maxRunsPerHour) ? Math.max(1, Math.trunc(maxRunsPerHour)) : 1;
-
       ensureCursorStmt.run(id, now);
-      const row = getHintCursorStmt.get(id) as any;
-      const nextEligibleAtMs =
-        typeof row?.nextHintEligibleAtMs === 'number' && Number.isFinite(row.nextHintEligibleAtMs)
-          ? Math.trunc(row.nextHintEligibleAtMs)
-          : 0;
-      if (nextEligibleAtMs > now) return false;
-
-      let windowStart =
-        typeof row?.hintRunWindowStartMs === 'number' && Number.isFinite(row.hintRunWindowStartMs)
-          ? Math.trunc(row.hintRunWindowStartMs)
-          : 0;
-      let windowCount =
-        typeof row?.hintRunWindowCount === 'number' && Number.isFinite(row.hintRunWindowCount)
-          ? Math.trunc(row.hintRunWindowCount)
-          : 0;
-
-      if (windowStart <= 0 || now - windowStart >= HINT_RUN_WINDOW_MS) {
-        windowStart = now;
-        windowCount = 0;
-      }
-
-      if (windowCount >= maxRuns) {
-        updateHintThrottleStmt.run(windowStart + HINT_RUN_WINDOW_MS, now, id);
+      const admission = readHintRunAdmission({ sessionId: id, nowMs: now, maxRunsPerHour });
+      if (admission.nextRunAtMs > now) {
+        if (admission.nextEligibleAtMs <= now) updateHintThrottleStmt.run(admission.nextRunAtMs, now, id);
         return false;
       }
 
-      updateHintPermitStmt.run(now, windowStart, windowCount + 1, now, id);
+      updateHintPermitStmt.run(now, admission.windowStart, admission.windowCount + 1, now, id);
       return true;
     },
     markHintRunSuccess: ({ sessionId, seqTo, nowMs }) => {

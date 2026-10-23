@@ -8,7 +8,7 @@ import type { Credentials } from '@/persistence';
 // Prepare the real worker graph before the operation deadline/fake clock.
 // Each case still reloads it after installing its own HTTP and disk fixtures.
 await import('@/api/api');
-await import('./memoryWorker');
+await import('./testkit/startMemoryWorker');
 
 type SessionsPageArgs = Readonly<{ activeOnly?: boolean; archivedOnly?: boolean; cursor?: string; limit?: number }>;
 
@@ -141,7 +141,7 @@ describe('memoryWorker archived eligibility and derived-index removal', () => {
       },
       ...settings,
     });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({
       credentials: CREDENTIALS,
       machineId: 'machine_1',
@@ -530,28 +530,39 @@ describe('memoryWorker archived eligibility and derived-index removal', () => {
       fetchSessionsPage,
       fetchSessionById,
     }));
-    const worker = await startWorker({ indexMode: 'deep', includeArchivedSessions: true });
-    const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
-    const deepDb = openDeepIndexDb({ dbPath: worker.getDeepDbPath()! });
-    for (const sessionId of ['deep-kept', 'deep-archived', 'deep-revoked']) {
-      deepDb.insertChunk({
-        sessionId,
-        seqFrom: 1,
-        seqTo: 1,
-        createdAtFromMs: 1,
-        createdAtToMs: 1,
-        text: `retained ${sessionId}`,
-      });
-    }
-    deepDb.close();
+    const { configuration } = await import('@/configuration');
+    const previousDaemonProcess = configuration.isDaemonProcess;
+    // Measure the access owner's reads without admitting startup inventory and
+    // its unrelated transcript/crypto work in the persistent test placement.
+    Reflect.set(configuration, 'isDaemonProcess', false);
+    let worker: Awaited<ReturnType<typeof startWorker>> | undefined;
+    try {
+      worker = await startWorker({ indexMode: 'deep', includeArchivedSessions: true });
+      const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
+      const deepDb = openDeepIndexDb({ dbPath: worker.getDeepDbPath()! });
+      try {
+        for (const sessionId of ['deep-kept', 'deep-archived', 'deep-revoked']) {
+          deepDb.insertChunk({
+            sessionId,
+            seqFrom: 1,
+            seqTo: 1,
+            createdAtFromMs: 1,
+            createdAtToMs: 1,
+            text: `retained ${sessionId}`,
+          });
+        }
+      } finally { deepDb.close(); }
 
-    expect([...worker.listIndexedSessionIds()].sort()).toEqual(['deep-archived', 'deep-kept', 'deep-revoked']);
-    await worker.reconcileRetainedSessionAccess();
-    expect([...worker.listIndexedSessionIds()].sort()).toEqual(['deep-archived', 'deep-kept']);
-    expect(fetchSessionById).not.toHaveBeenCalled();
-    expect(fetchSessionsPage).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'active-2' }));
-    expect(fetchSessionsPage).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'archived-2' }));
-    worker.stop();
+      expect([...worker.listIndexedSessionIds()].sort()).toEqual(['deep-archived', 'deep-kept', 'deep-revoked']);
+      await worker.reconcileRetainedSessionAccess();
+      expect([...worker.listIndexedSessionIds()].sort()).toEqual(['deep-archived', 'deep-kept']);
+      expect(fetchSessionById).not.toHaveBeenCalled();
+      expect(fetchSessionsPage).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'active-2' }));
+      expect(fetchSessionsPage).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'archived-2' }));
+    } finally {
+      try { await worker?.stop(); }
+      finally { Reflect.set(configuration, 'isDaemonProcess', previousDaemonProcess); }
+    }
   });
 
   it('removes archived retained Sessions during access reconciliation when archive indexing is disabled', async () => {

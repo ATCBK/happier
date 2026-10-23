@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { StatementSync } from 'node:sqlite';
+import { DatabaseSync, StatementSync } from 'node:sqlite';
 import { vi } from 'vitest';
 
 import { openSqliteDatabaseSync } from '../../persistence/sqliteSync';
-import { openDeepIndexDb } from './deepIndexDb';
+import { openDeepIndexDb, openDeepIndexReader } from './deepIndexDb';
 
 function countRows(dbPath: string, table: string): number {
   const db = openSqliteDatabaseSync(dbPath);
@@ -19,6 +19,58 @@ function countRows(dbPath: string, table: string): number {
 }
 
 describe('deepIndexDb', () => {
+  it('opens a real read-only reader without schema or file-protection writes and preserves native ordinals', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-deep-reader-'));
+    const dbPath = join(dir, 'deep.sqlite');
+    try {
+      const writer = openDeepIndexDb({ dbPath });
+      const source = { type: 'external_transcript' as const, agentId: 'pi', sourceKey: 'local', nativeSessionId: 'native' };
+      writer.insertChunk({ sessionId: 'native', seqFrom: 3, seqTo: 7, createdAtFromMs: 1, createdAtToMs: 2, text: 'quasar handoff', source, sourceItemId: 'item', sourceCursor: 'opaque', sourceOrder: -3 });
+      writer.setExternalSourceState({ sessionId: 'native', source, cursor: 'frontier', nextOrdinal: 8 });
+      const query = { query: 'quasra', scope: { type: 'global' as const }, includeExternal: true, maxResults: 10 };
+      const expected = writer.search(query);
+      const walReader = openDeepIndexReader({ dbPath });
+      try { expect(walReader.search(query)).toEqual(expected); }
+      finally { walReader.close(); }
+      writer.close();
+      if (process.platform !== 'win32') await chmod(dbPath, 0o400);
+      const exec = vi.spyOn(DatabaseSync.prototype, 'exec');
+      const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare');
+      try {
+        const reader = openDeepIndexReader({ dbPath });
+        try {
+          expect(reader.search(query)).toEqual(expected);
+          expect(reader.getExternalSourceState({ sessionId: 'native' })).toMatchObject({ nextOrdinal: 8, cursor: 'frontier' });
+          expect(reader.getExternalSourceItemCursor({ sessionId: 'native', sourceItemId: 'item', paddingMessages: 0 })).toBe('opaque');
+          expect('insertChunk' in reader).toBe(false);
+          expect(exec.mock.calls.flat().filter(sql => !/^PRAGMA busy_timeout=/i.test(sql))).toEqual([]);
+          const connection = prepare.mock.contexts[0];
+          expect(() => connection.exec('DELETE FROM message_chunks')).toThrow(/readonly|read-only/i);
+          if (process.platform !== 'win32') expect((await stat(dbPath)).mode & 0o777).toBe(0o400);
+        } finally { reader.close(); }
+      } finally { exec.mockRestore(); prepare.mockRestore(); }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('never creates a missing reader database or migrates an unprepared schema', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-deep-reader-schema-'));
+    const dbPath = join(dir, 'deep.sqlite');
+    try {
+      expect(() => openDeepIndexReader({ dbPath })).toThrow();
+      await expect(stat(dbPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      const legacy = openSqliteDatabaseSync(dbPath);
+      legacy.exec('CREATE TABLE legacy_marker (value TEXT); PRAGMA user_version=1;');
+      legacy.close();
+      if (process.platform !== 'win32') await chmod(dbPath, 0o600);
+      expect(() => openDeepIndexReader({ dbPath })).toThrow();
+      const inspect = openSqliteDatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(inspect.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 1 });
+        expect(inspect.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([{ name: 'legacy_marker' }]);
+      } finally { inspect.close(); }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('repairs typos only from postings visible to the complete search scope', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-deep-scoped-typos-'));
     try {

@@ -1,3 +1,6 @@
+// Prepare the real normal-command runtime during collection, as before lazy worker dispatch.
+import './daemonControl';
+
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 const sideEffectMock = vi.hoisted(() => vi.fn((name: string) => {

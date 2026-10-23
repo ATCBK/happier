@@ -23,6 +23,7 @@ import { matchSessionProjectFilterV1 } from '@happier-dev/protocol/sessions/list
 import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
+import type { MemoryDocumentIndexUpdate } from './memoryIndexerBoundary';
 
 export type MemoryDocumentSearchScope = Readonly<{
   state: 'ready' | 'partial';
@@ -46,7 +47,9 @@ export async function syncMemoryDocuments(params: Readonly<{
   machineId: string;
   scope: MemorySearchQueryV1['scope'];
   includeArchivedSessions: boolean;
-  db: DeepIndexDbHandle;
+  db?: DeepIndexDbHandle;
+  /** The daemon retains fresh admission; the indexer owns all FTS writes. */
+  writeIndex?: (update: MemoryDocumentIndexUpdate, signal?: AbortSignal) => Promise<void>;
   signal?: AbortSignal;
   assertCurrent: () => void;
   readProjectContext?: ReadMemoryProjectContext;
@@ -239,9 +242,15 @@ export async function syncMemoryDocuments(params: Readonly<{
       const eligibleDocuments = [...projections.values()].map(({ ref, revision }) => ({ ref, revision }));
       const eligibleMemoryDocuments = [...projections.values()].filter(document => document.memory)
         .map(({ ref, revision }) => ({ ref, revision }));
-      for (const projection of projections.values()) params.db.replaceDocumentIndexData(projection);
-      // A single Session cannot revoke another Session's attached document projection.
-      if (params.scope.type === 'global') params.db.pruneDocumentIndexData({ eligibleDocuments });
+      if (params.writeIndex) {
+        await params.writeIndex({ documents: [...projections.values()], prune: params.scope.type === 'global' }, params.signal);
+        assertCurrent();
+      } else {
+        if (!params.db) throw new Error('memory_document_index_unavailable');
+        for (const projection of projections.values()) params.db.replaceDocumentIndexData(projection);
+        // A single Session cannot revoke another Session's attached document projection.
+        if (params.scope.type === 'global') params.db.pruneDocumentIndexData({ eligibleDocuments });
+      }
       nextPhase('complete');
       return { state: partial ? 'partial' : 'ready', eligibleDocuments, eligibleMemoryDocuments, assertCurrent,
         ...(project ? { eligibleSessionIds } : {}),

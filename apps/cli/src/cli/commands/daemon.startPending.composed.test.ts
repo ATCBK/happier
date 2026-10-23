@@ -1,3 +1,6 @@
+// Prepare the real normal-command runtime during collection, as before lazy worker dispatch.
+import './daemonControl';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { once } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';

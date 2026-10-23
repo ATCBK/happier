@@ -10,8 +10,8 @@ type MemoryFtsIndexOptions = Readonly<{
 /** Search-owned predicates over the retained row alias `r`, shared with repair. */
 export type MemoryFtsSearchFilter = Readonly<{ where: string; params: readonly (string | number)[] }>;
 
-/** One FTS owner for retained daemon transcript rows. Original text stays in its existing table. */
-export function createMemoryFtsIndex(db: SqliteDatabaseSync, options: MemoryFtsIndexOptions) {
+/** Schema setup belongs exclusively to the index writer. */
+export function ensureMemoryFtsIndexSchema(db: SqliteDatabaseSync, options: MemoryFtsIndexOptions): void {
   const { table, id, fts } = options;
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS ${fts} USING fts5(body, identifiers, tokenize = '${MEMORY_SEARCH_FTS_TOKENIZER}');
@@ -20,6 +20,11 @@ export function createMemoryFtsIndex(db: SqliteDatabaseSync, options: MemoryFtsI
       DELETE FROM ${fts} WHERE rowid = old.${id};
     END;
   `);
+}
+
+/** One FTS owner for retained transcript rows, usable on an already prepared read-only database. */
+export function createMemoryFtsIndex(db: SqliteDatabaseSync, options: MemoryFtsIndexOptions) {
+  const { table, id, fts } = options;
   const insert = db.prepare(`INSERT INTO ${fts}(rowid, body, identifiers) VALUES (?, ?, ?);`);
   const remove = db.prepare(`DELETE FROM ${fts} WHERE rowid = ?;`);
   const vocabulary = db.prepare(`SELECT term FROM ${fts}_vocab WHERE length(term) BETWEEN ? AND ? ORDER BY term ASC;`);

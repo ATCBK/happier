@@ -1,79 +1,34 @@
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-
-import { INSTALLABLE_KEYS } from '@happier-dev/protocol/installables/codexAcp';
-import type { MemoryExternalTranscriptSourceV1 } from '@happier-dev/protocol/memory/memorySearch';
-import type { MemoryIndexSourceStatusV1, MemoryWorkerStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
 import type { AgentExternalSessionsTranscriptPage } from '@happier-dev/plugin-sdk/sessions/external';
-import { readRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
+import type { MemoryExternalTranscriptSourceV1, MemorySearchQueryV1 } from '@happier-dev/protocol/memory/memorySearch';
+import type { MemoryIndexSourceStatusV1, MemoryWorkerStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
+import { INSTALLABLE_KEYS } from '@happier-dev/protocol/installables/codexAcp';
 
-import type { StoredCredentials } from '@/persistence';
-import { DEFAULT_MEMORY_SETTINGS, readMemorySettingsFromDisk, type MemorySettingsV1 } from '@/settings/memorySettings';
 import { configuration } from '@/configuration';
+import type { StoredCredentials } from '@/persistence';
+import type { DecryptedTranscriptRow } from '@/session/replay/decryptTranscriptRows';
+import { DEFAULT_MEMORY_SETTINGS, readMemorySettingsFromDisk, type MemorySettingsV1 } from '@/settings/memorySettings';
+import { subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { subscribeOptionalRuntimeInstallSuccess } from '@/packagedRuntime/installables/optionalRuntimes';
-import {
-  subscribeActiveAccountSettingsSnapshot,
-} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { startSingleFlightIntervalLoop, type SingleFlightIntervalLoopHandle } from '@/daemon/lifecycle/singleFlightIntervalLoop';
+import { resolveSessionEncryptionContextFromCredentials, resolveSessionStoredContentEncryptionMode } from '@/session/transport/encryption/sessionEncryptionContext';
+import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
+import { AccountEncryptionMaterialUnavailableError } from '@/api/client/encryptionKey';
+import { commitMemorySystemRecords } from '@/session/systemRecords/memory/commitMemorySystemRecords';
+import { readCliProjectPromptStackContext } from '@/agent/prompting/coding/sessionProjectPromptStack';
+import { ensureProtectedLocalStateDirectory } from '@/utils/fs/protectedLocalState';
+import { logger } from '@/ui/logger';
 
 import { resolveMemoryIndexPaths } from './memoryIndexPaths';
-import { openSummaryShardIndexDb, type SummaryShardIndexDbHandle } from './summaryShardIndexDb';
-import { openDeepIndexDb, type DeepIndexDbHandle } from './deepIndex/deepIndexDb';
-import type { DecryptedTranscriptRow } from '@/session/replay/decryptTranscriptRows';
-import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
-import {
-  resolveSessionEncryptionContextFromCredentials,
-  resolveSessionStoredContentEncryptionMode,
-  type SessionStoredContentCryptoContext,
-} from '@/session/transport/encryption/sessionEncryptionContext';
-import { decryptTranscriptRows } from '@/session/replay/decryptTranscriptRows';
-import { fetchEncryptedTranscriptMessagesPage } from '@/session/replay/fetchEncryptedTranscriptMessages';
-import { logger } from '@/ui/logger';
-import { startSingleFlightIntervalLoop, type SingleFlightIntervalLoopHandle } from '@/daemon/lifecycle/singleFlightIntervalLoop';
-import {
-  collectRetainedSessionInventoryVisibility,
-  fetchSessionInventoryPage,
-} from '@/daemon/sessions/sessionInventoryVisibility';
-import { syncMemoryHintsForSessionsOnce } from './syncMemoryHintsForSessionsOnce';
-import { runMemoryHintsExecutionRun } from './hints/runMemoryHintsExecutionRun';
-import { commitMemorySystemRecords } from '@/session/systemRecords/memory/commitMemorySystemRecords';
-import { logServerEndpointFailure } from '@/api/client/serverEndpointFailureLog';
-import { syncDeepIndexForSessionsOnce } from './deepIndex/syncDeepIndexForSessionsOnce';
-import { createEmbeddingsProviderCache, resolveEmbeddingsProvider } from './deepIndex/embeddings/resolveEmbeddingsProvider';
-import { ensurePrivateInferenceDirectory, resolveInferenceCacheDir } from '@/daemon/inference/inferencePaths';
-import {
-  buildUnavailableMemoryEmbeddingsDiagnostics,
-  resolveOperationalMemoryEmbeddingsSettings,
-  type OperationalMemoryEmbeddingsDiagnostics,
-} from './resolveOperationalMemoryEmbeddingsSettings';
-import {
-  INITIAL_MEMORY_INVENTORY_STATE,
-  refreshMemoryInventoryOnce,
-  resolveMemoryInventorySessionEligibility,
-  createMemorySessionLocalityReader,
-  type MemoryInventoryRefresh,
-  type MemoryInventoryPage,
-  type MemoryInventoryScope,
-  type MemoryInventoryState,
-} from './inventory/refreshMemoryInventory';
-import { removeMemorySessionIndexes } from './removeMemorySessionIndexes';
-import { enforceMemoryDiskBudgets } from './enforceMemoryDiskBudgets';
+import { openSummaryShardIndexReader, type SummaryShardIndexReader } from './summaryShardIndexDb';
+import { openDeepIndexReader, type DeepIndexReader } from './deepIndex/deepIndexDb';
+import { createMemoryExternalTranscriptObservation, type MemoryExternalObservation } from './externalTranscriptObservation';
+import { isExternalMemoryStorageId } from './externalTranscriptIndex';
+import { buildUnavailableMemoryEmbeddingsDiagnostics, type OperationalMemoryEmbeddingsDiagnostics } from './resolveOperationalMemoryEmbeddingsSettings';
 import { syncMemoryDocuments, type MemoryDocumentSearchScope } from './syncMemoryDocuments';
-import type { MemorySearchQueryV1 } from '@happier-dev/protocol/memory/memorySearch';
-import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
-import type { EmbeddingsProviderResolution } from './deepIndex/embeddings/embeddingsProviderTypes';
-import { fetchMemorySemanticTranscriptPage } from './transcript/fetchSemanticPage';
-import { isLegacyUnclassifiedTranscriptRow } from './transcript/legacyUnclassifiedTranscriptRows';
-import { AccountEncryptionMaterialUnavailableError } from '@/api/client/encryptionKey';
-import { ensureProtectedLocalStateDirectory } from '@/utils/fs/protectedLocalState';
-import {
-  memoryIndexPolicyKey,
-  resolveMemoryCoverageCreatedAtCutoffMs,
-  resolveMemoryIndexPolicy,
-} from './transcript/coveragePolicy';
-import { createMemoryExternalTranscriptSources, type MemoryExternalObservation } from './externalTranscriptSources';
-import { isExternalMemoryStorageId, resolveExternalMemoryIndexPolicy, syncExternalMemoryTranscriptsBatch } from './externalTranscriptIndex';
-import { runMemoryWorkerSourcesTick } from './runMemoryWorkerSourcesTick';
-import { readCliProjectPromptStackContext } from '@/agent/prompting/coding/sessionProjectPromptStack';
+import { runMemoryHintsExecutionRun } from './hints/runMemoryHintsExecutionRun';
+import type { ConnectMemoryIndexer, MemoryIndexerConnection, MemoryIndexerHost, MemoryIndexerSnapshot } from './memoryIndexerBoundary';
 
 export type MemoryWorkerHandle = Readonly<{
   stop: () => void | Promise<void>;
@@ -110,7 +65,7 @@ export type MemoryWorkerHandle = Readonly<{
   ) => Promise<void>;
   getSettings: () => MemorySettingsV1;
   getEmbeddingsDiagnostics: () => OperationalMemoryEmbeddingsDiagnostics;
-  resolveEmbeddingsProvider?: (signal?: AbortSignal) => Promise<EmbeddingsProviderResolution | null>;
+  embedQuery?: (text: string, signal?: AbortSignal) => Promise<Float32Array | null>;
   getWorkerStatus: () => MemoryWorkerStatusV1;
   getTier1DbPath: () => string | null;
   getIndexSources?: () => readonly MemoryIndexSourceStatusV1[];
@@ -119,1466 +74,392 @@ export type MemoryWorkerHandle = Readonly<{
   getDeepDbPhysicalPath?: () => string;
 }>;
 
-function logMemoryWorkerServerEndpointFailure(operation: string, error: unknown): void {
-  logServerEndpointFailure({
-    logger,
-    operation: `memory worker ${operation}`,
-    error,
-  });
-}
 
-async function awaitEmbeddingsResolutionEpoch(
-  promise: Promise<EmbeddingsProviderResolution | null>,
-  signal?: AbortSignal,
-): Promise<EmbeddingsProviderResolution | null> {
-  if (!signal) return await promise;
-  signal.throwIfAborted();
-  return await new Promise<EmbeddingsProviderResolution | null>((resolve, reject) => {
-    const onAbort = () => reject(signal.reason);
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(resolve, reject).finally(() => {
-      signal.removeEventListener('abort', onAbort);
-    });
-  });
-}
-
+/** Daemon policy, wake sources and read projection. Index writes belong to the connection. */
 export async function startMemoryWorker(params: Readonly<{
   credentials: StoredCredentials;
   machineId: string;
   env?: NodeJS.ProcessEnv;
   deps?: Readonly<{
-    fetchDecryptedTranscriptPageAfterSeq: (args: Readonly<{ sessionId: string; afterSeq: number; limit: number; signal?: AbortSignal }>) => Promise<DecryptedTranscriptRow[]>;
+    fetchDecryptedTranscriptPageAfterSeq?: (args: Readonly<{ sessionId: string; afterSeq: number; limit: number; signal?: AbortSignal }>) => Promise<DecryptedTranscriptRow[]>;
+    connectIndexer?: ConnectMemoryIndexer;
   }>;
 }>): Promise<MemoryWorkerHandle> {
-  let stopped = false;
   const paths = resolveMemoryIndexPaths();
-  let settings: MemorySettingsV1 = DEFAULT_MEMORY_SETTINGS;
-  let effectiveSettings: MemorySettingsV1 = DEFAULT_MEMORY_SETTINGS;
-  let tier1: SummaryShardIndexDbHandle | null = null;
-  let deep: DeepIndexDbHandle | null = null;
-  let indexesQualified = false;
-  let inventoryLoop: SingleFlightIntervalLoopHandle | null = null;
-  let inventoryLoopIntervalMs: number | null = null;
-  let workLoop: SingleFlightIntervalLoopHandle | null = null;
-  let workLoopIntervalMs: number | null = null;
-  let candidateSessionIds: string[] = [];
-  let candidateCursor = 0;
-  const candidateAllowInitialBackfillSessionIds = new Set<string>();
-  let inventoryState: MemoryInventoryState = INITIAL_MEMORY_INVENTORY_STATE;
-  let inventoryBackfillPolicy: MemorySettingsV1['backfillPolicy'] = 'new_only';
-  let inventoryIncludeArchivedSessions = DEFAULT_MEMORY_SETTINGS.includeArchivedSessions;
-  /**
-   * True while archived eligibility is desired off but the exclusion has not
-   * been completed, so archived rows can still be searchable here.
-   */
-  let archivedExclusionPending = false;
-  const inventorySeenSessionIds = new Set<string>();
-  const candidateObservedSeqBySessionId = new Map<string, number>();
-  const observedSessionIds = new Set<string>();
-  const editedSessionIds = new Set<string>();
-  const externalSources = createMemoryExternalTranscriptSources({ credentials: params.credentials,
-    onChange: refreshSources => { externalSourcesNeedRefresh ||= refreshSources; workLoop?.trigger(); } });
-  let externalSourcesNeedRefresh = true;
-  let externalSyncPromise: Promise<void> | null = null;
-  const sessionCryptoContextCache = new Map<string, SessionStoredContentCryptoContext>();
-  const sessionLocality = createMemorySessionLocalityReader(params);
-  const settingsSecretsReadKeys = deriveSettingsSecretsReadKeysForCredentials(params.credentials);
-  const embeddingsProviderCache = createEmbeddingsProviderCache();
-  let embeddingsResolutionEpoch: Readonly<{
-    settings: MemorySettingsV1;
-    promise: Promise<EmbeddingsProviderResolution | null>;
-  }> | null = null;
-  let unsubscribeOptionalRuntimeInstallSuccess = () => {};
-  let unsubscribeAccountSettingsSnapshot = () => {};
-  let embeddingsDiagnostics: OperationalMemoryEmbeddingsDiagnostics =
-    buildUnavailableMemoryEmbeddingsDiagnostics(DEFAULT_MEMORY_SETTINGS.embeddings);
-  let workerStatus: ReturnType<MemoryWorkerHandle['getWorkerStatus']> = {
-    state: 'idle',
-    lastTickAtMs: null,
-    lastInventoryAtMs: null,
-    currentSessionId: null,
-    currentPhase: null,
+  let stopped = false;
+  let desired = DEFAULT_MEMORY_SETTINGS;
+  let snapshot: MemoryIndexerSnapshot = {
+    settings: desired, embeddings: buildUnavailableMemoryEmbeddingsDiagnostics(desired.embeddings),
+    worker: { state: 'disabled', lastTickAtMs: null, lastInventoryAtMs: null, currentSessionId: null, currentPhase: null },
+    indexesQualified: false, candidateSessionIds: [], observedSeqBySessionId: [], editedSessionIds: [], externalSources: [],
   };
-  const activeIndexOperations = new Set<Readonly<{
-    kind: 'transcript' | 'documents';
-    sessionIds: ReadonlySet<string>;
-    controller: AbortController;
-    promise: Promise<unknown>;
-  }>>();
-  const removingSessionIds = new Set<string>();
-  let stopPromise: Promise<void> | null = null;
-  let clearIndexPromise: Promise<void> | null = null;
+  let connection: MemoryIndexerConnection | null = null;
+  let connecting: Promise<MemoryIndexerConnection> | null = null;
+  let connectionLifetime = new AbortController();
+  let retirement: Promise<void> = Promise.resolve();
+  let inventoryLoop: SingleFlightIntervalLoopHandle | null = null;
+  let workLoop: SingleFlightIntervalLoopHandle | null = null;
+  let loopPolicy: string | null = null;
   let settingsOperation: Promise<void> = Promise.resolve();
-  const runSettingsOperation = (operation: () => Promise<void>): Promise<void> => {
-    const next = settingsOperation.then(operation);
-    // A failed operation remains observable to its caller but cannot strand
-    // later settings changes or a retry of clearing the index.
+  let clearPromise: Promise<void> | null = null;
+  let stopPromise: Promise<void> | null = null;
+  let externalNeedsRefresh = true;
+  let retireForPluginChange = false;
+  const observedSessionIds = new Set<string>();
+  const pendingRevisions = new Map<string, Readonly<{ sessionId: string; seq: number; messageId?: string }>>();
+  const observation = createMemoryExternalTranscriptObservation({ credentials: params.credentials,
+    onChange: (refresh, cause) => {
+      externalNeedsRefresh ||= refresh;
+      if (cause === 'registry') {
+        retireForPluginChange = true;
+        void reloadSettings().catch(markFailure);
+      }
+      workLoop?.trigger();
+    } });
+  const markFailure = (_error: unknown) => {
+    observedSessionIds.clear();
+    snapshot = { ...snapshot, worker: { ...snapshot.worker, state: 'error', currentSessionId: null, currentPhase: null } };
+  };
+  const host: MemoryIndexerHost = {
+    publish: next => { snapshot = { ...next,
+      ...(next.nextWorkAtMs === undefined ? { nextWorkAtMs: snapshot.nextWorkAtMs } : {}) }; },
+    failed: markFailure,
+    settled: () => {
+      if (snapshot.worker.state === 'error') return;
+      snapshot = { ...snapshot, worker: { ...snapshot.worker, state: desired.enabled ? 'idle' : 'disabled',
+        currentSessionId: null, currentPhase: null, activeOperations: [] },
+        embeddings: snapshot.embeddings.runtimeState === 'ready' || snapshot.embeddings.runtimeState === 'downloading'
+          ? { ...snapshot.embeddings, runtimeState: 'idle' } : snapshot.embeddings };
+    },
+    observeSessions: async ids => {
+      const unseen = ids.filter(id => !observedSessionIds.has(id));
+      for (const id of unseen) observedSessionIds.add(id);
+      return unseen;
+    },
+    wake: refresh => { externalNeedsRefresh ||= refresh; workLoop?.trigger(); },
+    readExternalSources: async (refresh, signal) => {
+      if (refresh || externalNeedsRefresh) {
+        await observation.refresh(desired, signal);
+        externalNeedsRefresh = false;
+      }
+      return observation.takeSnapshot();
+    },
+    runHint: (request, signal) => runMemoryHintsExecutionRun({ ...request,
+      cwd: configuration.activeServerDir, credentials: params.credentials, signal }),
+    commitHint: async (request, signal) => {
+      signal?.throwIfAborted();
+      const raw = await fetchSessionById({ token: params.credentials.token, sessionId: request.sessionId, signal });
+      signal?.throwIfAborted();
+      if (!raw) return;
+      const mode = resolveSessionStoredContentEncryptionMode(raw);
+      const ctx = mode === 'plain' ? null : resolveSessionEncryptionContextFromCredentials(params.credentials, raw);
+      if (mode !== 'plain' && !ctx) throw new AccountEncryptionMaterialUnavailableError();
+      await commitMemorySystemRecords({ credentials: params.credentials, sessionId: request.sessionId, mode,
+        ...(ctx ? { ctx } : {}), shard: { sessionId: request.sessionId, payload: request.shardPayload },
+        synopsis: request.synopsisPayload ? { sessionId: request.sessionId, payload: request.synopsisPayload } : null, signal });
+    },
+  };
+  const getIndexer = async (): Promise<MemoryIndexerConnection> => {
+    await retirement;
+    if (stopped) throw new Error('memory_worker_stopped');
+    if (connection) return connection;
+    if (connecting) return connecting;
+    connectionLifetime = new AbortController();
+    const pending = (async () => {
+      const next = params.deps?.connectIndexer
+        ? await params.deps.connectIndexer(host)
+        : await connectProcessIndexer();
+      connection = next;
+      // The production service applies current policy in its private bootstrap;
+      // only the source-test connection needs initialization at this boundary.
+      try {
+        if (params.deps?.connectIndexer) await next.applySettings(desired, connectionLifetime.signal);
+      }
+      catch (error) { connection = null; await next.retire(); throw error; }
+      return next;
+    })();
+    connecting = pending;
+    try { return await pending; }
+    catch (error) { if (!connectionLifetime.signal.aborted) markFailure(error); throw error; }
+    finally { if (connecting === pending) connecting = null; }
+  };
+  const connectProcessIndexer = async (): Promise<MemoryIndexerConnection> => {
+    const { connectProcessMemoryIndexer } = await import('./processMemoryIndexer');
+    const selected = desired.conversationSearch.indexExternal;
+    const lease = selected.enabled && selected.agents.length
+      ? await (await import('@/plugins/runtime/reload/runtimeLease')).acquireAuthoritativePluginRuntimeRegistryLease()
+      : null;
+    try {
+      const registry = lease?.registry;
+      const pluginIds = registry ? [...new Set(registry.contributes.agents
+        .filter(agent => selected.agents.includes(agent.id)).flatMap(agent => agent.identity ? [agent.identity.pluginId] : []))] : [];
+      if (pluginIds.length && (!registry?.readAdmittedBackgroundServicePlugins || !registry.prepareBackgroundServiceProcessAgentServices)) {
+        throw new Error('memory_indexer_admitted_readers_unavailable');
+      }
+      const indexer = await connectProcessMemoryIndexer({ credentials: params.credentials, machineId: params.machineId,
+        host, readSettings: () => desired,
+        plugins: registry?.readAdmittedBackgroundServicePlugins?.(pluginIds),
+        ...(registry?.prepareBackgroundServiceProcessAgentServices ? { pluginHost: {
+          prepareAgentInvocationServices: request => registry.prepareBackgroundServiceProcessAgentServices!(request),
+        } } : {}),
+      });
+      return { ...indexer, retire: async () => { try { await indexer.retire(); } finally { await lease?.release(); } } };
+    } catch (error) { await lease?.release(); throw error; }
+  };
+  const call = async <T>(run: (indexer: MemoryIndexerConnection, signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> => {
+    signal?.throwIfAborted();
+    const indexer = await getIndexer();
+    const operationSignal = signal ? AbortSignal.any([signal, connectionLifetime.signal]) : connectionLifetime.signal;
+    operationSignal.throwIfAborted();
+    try { return await run(indexer, operationSignal); }
+    catch (error) { if (!operationSignal.aborted) markFailure(error); throw error; }
+  };
+  const callWithRevisions = (run: (indexer: MemoryIndexerConnection, signal: AbortSignal) => Promise<void>, signal?: AbortSignal) => (
+    call(async (indexer, operationSignal) => {
+      const revisions = new Map(pendingRevisions);
+      await Promise.all([
+        ...[...revisions.values()].map(change => indexer.revise(change, operationSignal)),
+        run(indexer, operationSignal),
+      ]);
+      for (const change of revisions.values()) {
+        if (pendingRevisions.get(change.sessionId) === change && !snapshot.editedSessionIds.includes(change.sessionId)) pendingRevisions.delete(change.sessionId);
+      }
+      return revisions;
+    }, signal)
+  );
+  const stopLoops = async () => {
+    const priorInventory = inventoryLoop;
+    const priorWork = workLoop;
+    inventoryLoop = null; workLoop = null; loopPolicy = null;
+    await Promise.all([priorInventory?.stop(), priorWork?.stop()]);
+  };
+  const retireIndexer = async () => {
+    connectionLifetime.abort();
+    observedSessionIds.clear();
+    const prior = connection;
+    const priorConnecting = connecting;
+    connection = null;
+    retirement = (async () => {
+      await stopLoops();
+      const indexer = prior ?? await priorConnecting?.catch(() => null);
+      // A pending factory can publish its connection after retirement began.
+      // It belongs to this drain, never to the next settings occurrence.
+      if (connection === indexer) connection = null;
+      await indexer?.retire();
+    })();
+    await retirement;
+  };
+  const startLoops = async () => {
+    if (!configuration.isDaemonProcess || !desired.enabled || stopped) return;
+    const policy = JSON.stringify(desired.worker);
+    if (loopPolicy === policy && inventoryLoop && workLoop) return;
+    await stopLoops();
+    loopPolicy = policy;
+    inventoryLoop = startSingleFlightIntervalLoop({
+      intervalMs: Math.max(5_000, Math.trunc(desired.worker.inventoryRefreshIntervalMs)),
+      task: async signal => { await callWithRevisions((indexer, signal) => indexer.inventory(signal), signal); },
+      onError: error => { markFailure(error); logger.debug('[memoryWorker] Inventory refresh failed', { message: error instanceof Error ? error.message : String(error) }); },
+    });
+    workLoop = startSingleFlightIntervalLoop({
+      intervalMs: Math.max(500, Math.trunc(desired.worker.tickIntervalMs)),
+      task: async signal => {
+        await callWithRevisions((indexer, signal) => indexer.tick(signal), signal);
+        return { nextAutomaticRunAfterMs: snapshot.nextWorkAtMs == null ? null : Math.max(0, snapshot.nextWorkAtMs - Date.now()) };
+      },
+      onError: error => { markFailure(error); logger.debug('[memoryWorker] Tick failed', { message: error instanceof Error ? error.message : String(error) }); },
+    });
+    inventoryLoop.trigger(); workLoop.trigger();
+  };
+  const serializeSettings = (run: () => Promise<void>) => {
+    const next = settingsOperation.then(run);
     settingsOperation = next.catch(() => {});
     return next;
   };
-
+  const applySettings = async (next: MemorySettingsV1, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    const changed = JSON.stringify(next) !== JSON.stringify(desired);
+    if (changed || retireForPluginChange) {
+      // Prior-policy rows are not qualified for the replacement occurrence,
+      // including when its process fails before publishing its first facts.
+      snapshot = { ...snapshot, indexesQualified: false };
+      await retireIndexer();
+      retireForPluginChange = false;
+    }
+    desired = next;
+    externalNeedsRefresh ||= changed;
+    if (!next.enabled) {
+      await retireIndexer();
+      await observation.refresh(next, signal ?? new AbortController().signal);
+      if (next.deleteOnDisable) await rm(paths.memoryDir, { recursive: true, force: true });
+      snapshot = { ...snapshot, settings: next, indexesQualified: false,
+        embeddings: buildUnavailableMemoryEmbeddingsDiagnostics(next.embeddings),
+        worker: { ...snapshot.worker, state: 'disabled', currentSessionId: null, currentPhase: null, activeOperations: [] } };
+      return;
+    }
+    await ensureProtectedLocalStateDirectory(paths.memoryDir, { authority: 'owned' });
+    const existing = connection;
+    const indexer = await getIndexer();
+    if (existing || !params.deps?.connectIndexer) await indexer.applySettings(next, signal);
+    await startLoops();
+  };
+  const reloadSettings = (signal?: AbortSignal) => serializeSettings(async () => {
+    if (stopped) return;
+    signal?.throwIfAborted();
+    await applySettings(await readMemorySettingsFromDisk(), signal);
+  });
+  const withReaders = <T>(read: (tier1: SummaryShardIndexReader | null, deep: DeepIndexReader | null) => T): T => {
+    let tier1: SummaryShardIndexReader | null = null;
+    let deep: DeepIndexReader | null = null;
+    try {
+      if (existsSync(paths.tier1DbPath)) tier1 = openSummaryShardIndexReader({ dbPath: paths.tier1DbPath });
+      if (existsSync(paths.deepDbPath)) deep = openDeepIndexReader({ dbPath: paths.deepDbPath });
+      return read(tier1, deep);
+    } finally { deep?.close(); tier1?.close(); }
+  };
+  const retainedIds = (tier1: SummaryShardIndexReader | null, deep: DeepIndexReader | null) => {
+    const ids = new Set(tier1?.listIndexedSessionIds().filter(id => !isExternalMemoryStorageId(id)) ?? []);
+    const externalIds = new Set(deep?.listExternalSourceStates().map(state => state.sessionId) ?? []);
+    for (const id of deep?.listIndexedSessionIds() ?? []) if (!externalIds.has(id)) ids.add(id);
+    return [...ids];
+  };
   const resolveDocumentSearchScope = async (scope: MemorySearchQueryV1['scope'], signal?: AbortSignal): Promise<MemoryDocumentSearchScope> => {
     signal?.throwIfAborted();
-    const db = deep;
-    const basis = settings;
-    if (stopped || !basis.enabled || !db) return { state: 'unavailable', eligibleDocuments: [] };
-    const controller = new AbortController();
-    const operationSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-    const promise = syncMemoryDocuments({ credentials: params.credentials, machineId: params.machineId, scope,
-      db, includeArchivedSessions: basis.includeArchivedSessions, signal: operationSignal,
+    if (stopped || !desired.enabled || !snapshot.indexesQualified) return { state: 'unavailable', eligibleDocuments: [] };
+    const basis = desired;
+    return await syncMemoryDocuments({ credentials: params.credentials, machineId: params.machineId, scope,
+      includeArchivedSessions: basis.includeArchivedSessions, signal,
       readProjectContext: (projectRef, signal) => readCliProjectPromptStackContext({ credentials: params.credentials, projectRef, signal }),
-      assertCurrent: () => {
-        if (stopped || settings !== basis || deep !== db) throw new Error('memory_document_scope_changed');
-      } });
-    const operation = { kind: 'documents' as const,
-      sessionIds: new Set(scope.type === 'session' ? [scope.sessionId] : []), controller, promise };
-    activeIndexOperations.add(operation);
-    try { return await promise; }
-    finally { activeIndexOperations.delete(operation); }
+      writeIndex: (update, signal) => call((indexer, signal) => indexer.indexDocuments(update, signal), signal),
+      assertCurrent: () => { if (stopped || desired !== basis) throw new Error('memory_document_scope_changed'); } });
   };
-
-  const resolveSessionCryptoContext = async (
-    sessionId: string,
-    signal?: AbortSignal,
-  ): Promise<SessionStoredContentCryptoContext | null> => {
-    signal?.throwIfAborted();
-    const cached = sessionCryptoContextCache.get(sessionId);
-    if (cached) return cached;
-
-    const raw = await fetchSessionById({ token: params.credentials.token, sessionId, signal });
-    signal?.throwIfAborted();
-    if (!raw) return null;
-
-    const mode = resolveSessionStoredContentEncryptionMode(raw);
-    if (mode === 'plain') {
-      const resolved = { mode, ctx: null } as const;
-      sessionCryptoContextCache.set(sessionId, resolved);
-      return resolved;
-    }
-
-    const ctx = resolveSessionEncryptionContextFromCredentials(params.credentials, raw);
-    if (!ctx) {
-      throw new AccountEncryptionMaterialUnavailableError();
-    }
-    const resolved = { mode, ctx } as const;
-    sessionCryptoContextCache.set(sessionId, resolved);
-    return resolved;
-  };
-
-  const resolveEmbeddingsDiagnosticsForSettings = async (
-    requestedSettings: MemorySettingsV1,
-  ): Promise<EmbeddingsProviderResolution | null> => {
-    const embeddings = resolveOperationalMemoryEmbeddingsSettings(requestedSettings.embeddings);
-    if (!embeddings?.enabled || !embeddings.providerConfig || !embeddings.providerKind || !embeddings.modelId) {
-      embeddingsDiagnostics = buildUnavailableMemoryEmbeddingsDiagnostics(requestedSettings.embeddings);
-      return null;
-    }
-
-    if (embeddings.providerKind === 'local_transformers') {
-      embeddingsDiagnostics = {
-        mode: embeddings.mode,
-        presetId: embeddings.presetId,
-        providerKind: embeddings.providerKind,
-        modelId: embeddings.modelId,
-        runtimeState: 'downloading',
-        usingFallback: true,
-        lastError: null,
-      };
-    }
-
-    const cacheDir = resolveInferenceCacheDir({
-      modelsRootDir: paths.modelsDir,
-      runtimeId: 'transformers',
-    });
-    ensurePrivateInferenceDirectory(cacheDir);
-
-    const resolution = await resolveEmbeddingsProvider({
-      settings: embeddings,
-      cacheDir,
-      settingsSecretsReadKeys,
-      cache: embeddingsProviderCache,
-    });
-    if (stopped) return null;
-    if (settings !== requestedSettings) {
-      // Model initialization can finish writing after disable removed its cache.
-      // Reuse disabled-settings cleanup without restoring obsolete diagnostics.
-      if (!settings.enabled && settings.deleteOnDisable) await applySettings(settings);
-      return null;
-    }
-    embeddingsDiagnostics = {
-      mode: resolution.mode,
-      presetId: resolution.presetId,
-      providerKind: resolution.providerKind,
-      modelId: resolution.modelId,
-      runtimeState: resolution.runtimeState,
-      usingFallback: resolution.usingFallback,
-      lastError: resolution.lastError,
-    };
-    return resolution;
-  };
-
-  const refreshEmbeddingsDiagnostics = (
-    signal?: AbortSignal,
-  ): Promise<EmbeddingsProviderResolution | null> => {
-    const requestedSettings = settings;
-    // A loaded memory-settings object is one provider-resolution epoch. Periodic
-    // indexing reuses its settled failure; explicit use/reload and owner events
-    // below are the deliberate retry boundaries.
-    if (embeddingsResolutionEpoch?.settings !== requestedSettings) {
-      embeddingsResolutionEpoch = {
-        settings: requestedSettings,
-        promise: resolveEmbeddingsDiagnosticsForSettings(requestedSettings),
-      };
-    }
-    return awaitEmbeddingsResolutionEpoch(embeddingsResolutionEpoch.promise, signal);
-  };
-
-  const retryEmbeddingsAfterExternalStateChange = (failureMessage: string): void => {
-    if (stopped) return;
-    embeddingsResolutionEpoch = null;
-    void refreshEmbeddingsDiagnostics().catch((error: unknown) => {
-      if (stopped) return;
-      logger.warn(failureMessage, {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    });
-  };
-
-  unsubscribeAccountSettingsSnapshot = subscribeActiveAccountSettingsSnapshot((previous, next) => {
-    if (!settings.enabled) return;
-    if (previous?.source !== next?.source || previous?.settings !== next?.settings) {
-      externalSourcesNeedRefresh = true;
-      workLoop?.trigger();
-    }
-    if (resolveOperationalMemoryEmbeddingsSettings(settings.embeddings)?.providerKind !== 'local_transformers') return;
-    // Saved-secret catalog and Connected Services projection publications reuse
-    // the incumbent settings object. Only the actual settings/source cut forms
-    // a provider retry boundary.
-    if (previous?.source === next?.source && previous?.settings === next?.settings) return;
-    retryEmbeddingsAfterExternalStateChange('[memoryWorker] Embeddings initialization after account-settings refresh failed');
+  const unsubscribeAccount = subscribeActiveAccountSettingsSnapshot((previous, next) => {
+    if (!desired.enabled || (previous?.source === next?.source && previous?.settings === next?.settings)) return;
+    externalNeedsRefresh = true;
+    inventoryLoop?.trigger();
+    if (connection) void call((indexer, signal) => indexer.retryEmbeddings(signal)).catch(markFailure);
   });
-
-  unsubscribeOptionalRuntimeInstallSuccess = subscribeOptionalRuntimeInstallSuccess((key) => {
-    if (key !== INSTALLABLE_KEYS.LOCAL_EMBEDDINGS || stopped) return;
-    if (!settings.enabled) return;
-    if (resolveOperationalMemoryEmbeddingsSettings(settings.embeddings)?.providerKind !== 'local_transformers') return;
-    retryEmbeddingsAfterExternalStateChange('[memoryWorker] Embeddings initialization after runtime installation failed');
+  const unsubscribeInstall = subscribeOptionalRuntimeInstallSuccess(key => {
+    if (key !== INSTALLABLE_KEYS.LOCAL_EMBEDDINGS || !desired.enabled || !connection) return;
+    void call((indexer, signal) => indexer.retryEmbeddings(signal)).catch(markFailure);
   });
-
-  const deps: NonNullable<typeof params.deps> =
-    params.deps ??
-    ({
-      fetchDecryptedTranscriptPageAfterSeq: async (
-        args: Readonly<{ sessionId: string; afterSeq: number; limit: number; signal?: AbortSignal }>,
-      ): Promise<DecryptedTranscriptRow[]> => {
-        try {
-          args.signal?.throwIfAborted();
-          const cryptoContext = await resolveSessionCryptoContext(args.sessionId, args.signal);
-          if (!cryptoContext) return [];
-
-          const roleFiltered = await fetchEncryptedTranscriptMessagesPage({
-            token: params.credentials.token,
-            sessionId: args.sessionId,
-            afterSeq: args.afterSeq,
-            limit: args.limit,
-            roles: ['user', 'agent'],
-            scope: 'main',
-            ...(args.signal ? { signal: args.signal } : {}),
-          });
-          const legacy = await fetchEncryptedTranscriptMessagesPage({
-            token: params.credentials.token,
-            sessionId: args.sessionId,
-            afterSeq: args.afterSeq,
-            limit: args.limit,
-            scope: 'main',
-            ...(args.signal ? { signal: args.signal } : {}),
-          });
-          args.signal?.throwIfAborted();
-
-          return decryptTranscriptRows({
-            // The whole crypto context, not just the key: memory ingests only rows
-            // the Session's established mode can authenticate.
-            crypto: cryptoContext,
-            rows: [
-              ...roleFiltered.messages,
-              ...legacy.messages.filter(isLegacyUnclassifiedTranscriptRow),
-            ],
-          });
-        } catch (error) {
-          if (!(error instanceof AccountEncryptionMaterialUnavailableError)) {
-            logMemoryWorkerServerEndpointFailure('transcript page', error);
-          }
-          throw error;
-        }
-      },
-    } as const);
-
-  const stopLoop = async (): Promise<void> => {
-    const inventoryLoopToStop = inventoryLoop;
-    inventoryLoop = null;
-    inventoryLoopIntervalMs = null;
-    const workLoopToStop = workLoop;
-    workLoop = null;
-    workLoopIntervalMs = null;
-    candidateSessionIds = [];
-    candidateCursor = 0;
-    candidateAllowInitialBackfillSessionIds.clear();
-    candidateObservedSeqBySessionId.clear();
-    inventoryState = INITIAL_MEMORY_INVENTORY_STATE;
-    inventoryBackfillPolicy = 'new_only';
-    inventoryIncludeArchivedSessions = DEFAULT_MEMORY_SETTINGS.includeArchivedSessions;
-    inventorySeenSessionIds.clear();
-    await Promise.all([
-      inventoryLoopToStop?.stop(),
-      workLoopToStop?.stop(),
-    ]);
-    sessionLocality.clear();
-  };
-
-  const stop = (): Promise<void> => {
-    if (stopPromise) return stopPromise;
-    stopPromise = (async () => {
-      stopped = true;
-      // RPC settings acknowledgement may precede its queued reconciliation.
-      // Drain that existing owner before disposing its sources and indexes.
-      await settingsOperation;
-      await stopLoop();
-      await externalSources.dispose();
-      for (const operation of activeIndexOperations) operation.controller.abort();
-      await Promise.allSettled([...activeIndexOperations].map((operation) => operation.promise));
-      try {
-        tier1?.close();
-      } catch {
-        // best-effort
-      }
-      tier1 = null;
-      try {
-        deep?.close();
-      } catch {
-        // best-effort
-      }
-      deep = null;
-      embeddingsProviderCache.clear();
-      embeddingsResolutionEpoch = null;
-      unsubscribeOptionalRuntimeInstallSuccess();
-      unsubscribeAccountSettingsSnapshot();
-    })();
-    return stopPromise;
-  };
-
-  const fetchMemoryInventoryPage = async (args: Readonly<{
-    scope: MemoryInventoryScope;
-    cursor?: string;
-    limit: number;
-    signal?: AbortSignal;
-  }>): Promise<MemoryInventoryPage> => {
-    return await fetchSessionInventoryPage({
-      token: params.credentials.token,
-      ...(args.cursor === undefined ? {} : { cursor: args.cursor }),
-      scope: args.scope,
-      limit: args.limit,
-      ...(args.signal ? { signal: args.signal } : {}),
-    });
-  };
-
-  const resolveTier1IndexPolicy = (value: MemorySettingsV1) => resolveMemoryIndexPolicy(value);
-  const resolveDeepIndexPolicy = (value: MemorySettingsV1) => resolveMemoryIndexPolicy({
-    ...value,
-    contentPolicy: value.deep.includeToolOutput
-      ? { ...value.contentPolicy, includeToolOutputs: true }
-      : value.contentPolicy,
-  });
-
-  const observeSession = (sessionId: string): void => {
-    if (observedSessionIds.has(sessionId)) return;
-    // Revalidate retained content on first observation after startup. Subsequent
-    // edits come from the durable transcript-change feed, not Session updatedAt
-    // (which also changes for metadata without any transcript change).
-    const cursors = tier1?.getSessionCursors({ sessionId, nowMs: Date.now() });
-    if ((cursors?.lastHintedSeq ?? 0) > 0 || (cursors?.lastDeepIndexedSeq ?? 0) > 0) editedSessionIds.add(sessionId);
-    observedSessionIds.add(sessionId);
-  };
-
-  /**
-   * The one eligibility/inventory pass every policy and `ensureUpToDate` use.
-   * `apply` replaces the candidate set for the snapshot policy and extends it
-   * while paging, so no branch can inventory a scope the settings exclude.
-   */
-  const refreshInventory = async (options?: Readonly<{ apply?: boolean; signal?: AbortSignal }>): Promise<MemoryInventoryRefresh> => {
-    const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal: options?.signal })).mode;
-    const excludedScopeSessionIds = new Set<string>();
-    const refresh = await refreshMemoryInventoryOnce({
-      backfillPolicy: settings.backfillPolicy,
-      includeArchivedSessions: settings.includeArchivedSessions,
-      enabledAtMs: settings.enabledAtMs ?? 0,
-      pageLimit: settings.worker.sessionListPageLimit,
-      nowMs: Date.now(),
-      state: inventoryState,
-      seenSessionIds: inventorySeenSessionIds,
-      fetchSessionsPage: fetchMemoryInventoryPage,
-      isSessionEligible: session => {
-        const eligible = sessionLocality.isOnMachine(session, accountEncryptionMode);
-        if (!eligible && typeof session.id === 'string') excludedScopeSessionIds.add(session.id);
-        return eligible;
-      },
-      ...(options?.signal ? { signal: options.signal } : {}),
-    });
-    options?.signal?.throwIfAborted();
-    if (excludedScopeSessionIds.size) {
-      // An unrelated Account Session has no memory state to remove. Repeated
-      // removal would also discard its unchanged negative locality decision.
-      const retained = new Set(listIndexedSessionIds());
-      await removeSessions([...excludedScopeSessionIds].filter(id => retained.has(id)
-        || inventorySeenSessionIds.has(id) || candidateObservedSeqBySessionId.has(id)));
-    }
-    for (const sessionId of refresh.observedSeqBySessionId.keys()) observeSession(sessionId);
-
-    if (options?.apply === false) return refresh;
-
-    if (refresh.mode === 'snapshot') {
-      // Preserve the next selected identity across refreshed snapshots. Resetting
-      // to zero can starve the suffix (including native slots) indefinitely
-      // when the inventory cadence is shorter than one traversal.
-      const nextSessionId = candidateSessionIds[candidateCursor];
-      const externalOffset = candidateCursor >= candidateSessionIds.length
-        ? candidateCursor - candidateSessionIds.length : null;
-      candidateAllowInitialBackfillSessionIds.clear();
-      candidateObservedSeqBySessionId.clear();
-      inventorySeenSessionIds.clear();
-      candidateSessionIds = [...refresh.sessionIds];
-      candidateCursor = externalOffset !== null ? candidateSessionIds.length + externalOffset
-        : Math.max(0, nextSessionId ? candidateSessionIds.indexOf(nextSessionId) : 0);
-      for (const [sessionId, seq] of refresh.observedSeqBySessionId) {
-        candidateObservedSeqBySessionId.set(sessionId, seq);
-      }
-      for (const sessionId of refresh.allowInitialBackfillSessionIds) {
-        candidateAllowInitialBackfillSessionIds.add(sessionId);
-      }
-    } else {
-      candidateAllowInitialBackfillSessionIds.clear();
-      for (const sessionId of refresh.sessionIds) {
-        inventorySeenSessionIds.add(sessionId);
-        candidateObservedSeqBySessionId.set(sessionId, refresh.observedSeqBySessionId.get(sessionId) ?? 0);
-        candidateSessionIds.push(sessionId);
-      }
-    }
-
-    inventoryState = refresh.state;
-    inventoryBackfillPolicy = settings.backfillPolicy;
-    inventoryIncludeArchivedSessions = settings.includeArchivedSessions;
-    return refresh;
-  };
-
-  const forgetWorkerSessionState = (sessionIds: readonly string[]): void => {
-    const doomed = new Set(sessionIds);
-    if (doomed.size === 0) return;
-    sessionLocality.forget(sessionIds);
-    candidateSessionIds = candidateSessionIds.filter((id) => !doomed.has(id));
-    candidateCursor = candidateSessionIds.length === 0
-      ? 0
-      : candidateCursor % candidateSessionIds.length;
-    for (const sessionId of doomed) {
-      candidateAllowInitialBackfillSessionIds.delete(sessionId);
-      candidateObservedSeqBySessionId.delete(sessionId);
-      inventorySeenSessionIds.delete(sessionId);
-      sessionCryptoContextCache.delete(sessionId);
-      observedSessionIds.delete(sessionId);
-      editedSessionIds.delete(sessionId);
-    }
-  };
-
-  const withRetainedIndexHandles = <T>(
-    use: (handles: Readonly<{
-      tier1: SummaryShardIndexDbHandle | null;
-      deep: DeepIndexDbHandle | null;
-    }>) => T,
-  ): T => {
-    let retainedTier1: SummaryShardIndexDbHandle | null = tier1;
-    let retainedDeep: DeepIndexDbHandle | null = deep;
-    let closeTier1 = false;
-    let closeDeep = false;
-    try {
-      if (!retainedTier1 && existsSync(paths.tier1DbPath)) {
-        retainedTier1 = openSummaryShardIndexDb({ dbPath: paths.tier1DbPath });
-        closeTier1 = true;
-      }
-      if (!retainedDeep && existsSync(paths.deepDbPath)) {
-        retainedDeep = openDeepIndexDb({ dbPath: paths.deepDbPath });
-        closeDeep = true;
-      }
-      return use({ tier1: retainedTier1, deep: retainedDeep });
-    } finally {
-      if (closeDeep) retainedDeep?.close();
-      if (closeTier1) retainedTier1?.close();
-    }
-  };
-
-  const removeSessions = async (sessionIds: readonly string[]): Promise<void> => {
-    const normalized = [...new Set(sessionIds.map((id) => id.trim()).filter((id) => id.length > 0))];
-    if (normalized.length === 0) return;
-    const doomed = new Set(normalized);
-    for (const sessionId of doomed) removingSessionIds.add(sessionId);
-    forgetWorkerSessionState(normalized);
-    const loopToResume = workLoop;
-    loopToResume?.pause();
-    try {
-      const conflicting = [...activeIndexOperations]
-        .filter((operation) => [...operation.sessionIds].some((sessionId) => doomed.has(sessionId)));
-      for (const operation of conflicting) operation.controller.abort();
-      await Promise.allSettled(conflicting.map((operation) => operation.promise));
-      const removed = withRetainedIndexHandles((handles) => (
-        removeMemorySessionIndexes({ ...handles, sessionIds: normalized })
-      ));
-      forgetWorkerSessionState(removed);
-    } finally {
-      for (const sessionId of doomed) removingSessionIds.delete(sessionId);
-      if (!stopped && settings.enabled && workLoop === loopToResume) loopToResume?.resume();
-    }
-  };
-
-  const listIndexedSessionIds = (): readonly string[] => {
-    return withRetainedIndexHandles((handles) => {
-      const retained = new Set<string>();
-      for (const sessionId of handles.tier1?.listIndexedSessionIds() ?? []) if (!isExternalMemoryStorageId(sessionId)) retained.add(sessionId);
-      const external = new Set(handles.deep?.listExternalSourceStates().map(state => state.sessionId) ?? []);
-      for (const sessionId of handles.deep?.listIndexedSessionIds() ?? []) if (!external.has(sessionId)) retained.add(sessionId);
-      return [...retained];
-    });
-  };
-
-  const reconcileRetainedSessionAccess = async (signal?: AbortSignal): Promise<void> => {
-    const retained = new Set(listIndexedSessionIds());
-    if (retained.size === 0) return;
-    // Archived sessions are only eligible when the setting is enabled.  The
-    // retained-access reconciliation is also the recovery path for archive
-    // transitions missed while the worker was offline, so querying archived
-    // inventory while the policy is disabled would incorrectly preserve stale
-    // derived content.
-    const scopes = settings.includeArchivedSessions
-      ? (['active', 'archived'] as const)
-      : (['active'] as const);
-    const visible = await collectRetainedSessionInventoryVisibility({
-      retainedSessionIds: [...retained],
-      scopes,
-      fetchInventoryPage: async (args) => await fetchMemoryInventoryPage({
-        ...args,
-        limit: settings.worker.sessionListPageLimit,
-        ...(signal ? { signal } : {}),
-      }).then(async page => {
-        const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
-        return { ...page, sessions: page.sessions.filter(session => sessionLocality.isOnMachine(session, accountEncryptionMode)) };
-      }),
-    });
-    signal?.throwIfAborted();
-    await removeSessions([...retained].filter((sessionId) => !visible.has(sessionId)));
-  };
-
-  const applySessionArchivedState = async (
-    change: Readonly<{ sessionId: string; archived: boolean }>,
-  ): Promise<void> => {
-    if (!change.archived) return;
-    if (settings.includeArchivedSessions) return;
-    try {
-      await removeSessions([change.sessionId]);
-    } catch (error) {
-      archivedExclusionPending = true;
-      throw error;
-    }
-  };
-
-  /**
-   * Catch-up for archive transitions missed while the daemon was down or while
-   * archived eligibility was on. It reads the archived listing only when the
-   * derived index still retains Sessions that could be affected, and it covers
-   * that finite retained set completely: paging stops when nothing retained can
-   * still be archived or when the listing is exhausted. It rejects when the
-   * exclusion could not be completed, so the caller never advertises an
-   * eligibility this daemon is not applying.
-   */
-  const reconcileArchivedExclusion = async (signal?: AbortSignal): Promise<void> => {
-    if (!tier1) return;
-    if (settings.includeArchivedSessions) return;
-    const indexed = new Set(listIndexedSessionIds());
-    if (indexed.size === 0) return;
-
-    let cursor: string | undefined;
-    for (;;) {
-      signal?.throwIfAborted();
-      const result = await fetchMemoryInventoryPage({
-        scope: 'archived',
-        ...(cursor === undefined ? {} : { cursor }),
-        limit: settings.worker.sessionListPageLimit,
-        ...(signal ? { signal } : {}),
-      });
-      signal?.throwIfAborted();
-      const doomed = result.sessions
-        .map((session) => (typeof (session as { id?: unknown }).id === 'string'
-          ? String((session as { id?: unknown }).id).trim()
-          : ''))
-        .filter((sessionId) => sessionId.length > 0 && indexed.has(sessionId));
-      if (doomed.length > 0) {
-        await removeSessions(doomed);
-        for (const sessionId of doomed) indexed.delete(sessionId);
-      }
-      if (indexed.size === 0) return;
-      if (!result.hasNext || !result.nextCursor) return;
-      if (result.nextCursor === cursor) {
-        // A listing that cannot advance leaves the retained set undecided.
-        throw new Error('memory_archived_reconciliation_cursor_stalled');
-      }
-      cursor = result.nextCursor;
-    }
-  };
-
-  /**
-   * Applies the desired archived eligibility. Turning it off is only applied
-   * once the complete exclusion succeeded; until then this daemon still serves
-   * archived rows and keeps reporting archived-inclusive eligibility, and the
-   * next settings application retries.
-   */
-  const applyArchivedEligibility = async (signal?: AbortSignal): Promise<void> => {
-    if (settings.includeArchivedSessions) {
-      archivedExclusionPending = false;
-      return;
-    }
-    archivedExclusionPending = true;
-    try {
-      await reconcileArchivedExclusion(signal);
-      archivedExclusionPending = false;
-    } catch (error) {
-      signal?.throwIfAborted();
-      logger.debug('[memoryWorker] Archived exclusion reconciliation incomplete; retrying on the next settings application', {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  };
-
-  const fetchRecentDecryptedRows = async (sessionId: string, signal?: AbortSignal): Promise<DecryptedTranscriptRow[]> => {
-    const cryptoContext = await resolveSessionCryptoContext(sessionId, signal);
-    if (!cryptoContext) return [];
-    const rawPageLimit = Math.max(1, Math.trunc(configuration.memoryMaxTranscriptWindowMessages));
-    const rows: DecryptedTranscriptRow[] = [];
-    let beforeSeq: number | undefined;
-    const seenCursors = new Set<number>();
-    const coverageCutoffMs = resolveMemoryCoverageCreatedAtCutoffMs({
-      policy: settings.coveragePolicy,
-      nowMs: Date.now(),
-      enabledAtMs: settings.enabledAtMs,
-    });
-    const effectiveCutoffMs = settings.backfillPolicy === 'new_only'
-      ? Math.max(coverageCutoffMs ?? 0, settings.enabledAtMs)
-      : coverageCutoffMs;
-    for (;;) {
-      const page = await fetchMemorySemanticTranscriptPage({
-        token: params.credentials.token,
-        sessionId,
-        contentContext: cryptoContext,
-        limit: rawPageLimit,
-        rawPageLimit,
-        maxRawRowsToScan: rawPageLimit * 4,
-        direction: 'before',
-        ...(typeof beforeSeq === 'number' ? { beforeSeq } : {}),
-        contentPolicy: settings.contentPolicy,
-        ...(signal ? { signal } : {}),
-      }).catch((error: unknown) => {
-        signal?.throwIfAborted();
-        logMemoryWorkerServerEndpointFailure('selected transcript rows', error);
-        throw error;
-      });
-      for (const item of page.items) {
-        rows.push({
-          seq: item.seq,
-          createdAtMs: item.createdAtMs,
-          role: item.role === 'user' ? 'user' : 'agent',
-          content: { type: 'text', text: item.text },
-          meta: null,
-        });
-      }
-      if (
-        settings.coveragePolicy.type === 'latest_messages'
-        && rows.length >= settings.coveragePolicy.maxSemanticMessagesPerSession
-      ) break;
-      if (effectiveCutoffMs !== null && page.items.some((item) => item.createdAtMs < effectiveCutoffMs)) break;
-      if (!page.hasMore || !page.nextCursor) break;
-      const nextBeforeSeq = Number.parseInt(page.nextCursor, 10);
-      if (!Number.isFinite(nextBeforeSeq) || seenCursors.has(nextBeforeSeq)) break;
-      seenCursors.add(nextBeforeSeq);
-      beforeSeq = nextBeforeSeq;
-    }
-    return rows.sort((a, b) => a.seq - b.seq);
-  };
-
-  const syncHintsForSessions = async (
-    sessionIds: readonly string[],
-    options?: Readonly<{
-      allowInitialBackfillWhenUninitializedSessionIds?: readonly string[];
-      initialCursorSeqBySessionId?: ReadonlyMap<string, number>;
-      forceSnapshotSessionIds?: readonly string[];
-      signal?: AbortSignal;
-    }>,
-  ): Promise<void> => {
-    if (stopped) return;
-    if (!settings.enabled) return;
-    if (!tier1) return;
-    if (sessionIds.length === 0) return;
-
-    await syncMemoryHintsForSessionsOnce({
-      sessionIds,
-      forceSnapshotSessionIds: options?.forceSnapshotSessionIds,
-      ...(options?.allowInitialBackfillWhenUninitializedSessionIds
-        ? { allowInitialBackfillWhenUninitializedSessionIds: options.allowInitialBackfillWhenUninitializedSessionIds }
-        : {}),
-      initialCursorSeqBySessionId:
-        options?.initialCursorSeqBySessionId ?? candidateObservedSeqBySessionId,
-      tier1,
-      settings: {
-        enabled: settings.enabled,
-        enabledAtMs: settings.enabledAtMs,
-        indexMode: settings.indexMode,
-        backfillPolicy: settings.backfillPolicy,
-        hints: {
-          enabled: settings.hints.enabled,
-          updateMode: settings.hints.updateMode,
-          idleDelayMs: settings.hints.idleDelayMs,
-          windowSizeMessages: settings.hints.windowSizeMessages,
-          maxShardChars: settings.hints.maxShardChars,
-          maxSummaryChars: settings.hints.maxSummaryChars,
-          maxKeywords: settings.hints.maxKeywords,
-          maxEntities: settings.hints.maxEntities,
-          maxDecisions: settings.hints.maxDecisions,
-          maxRunsPerHour: settings.hints.maxRunsPerHour,
-          maxShardsPerSession: settings.hints.maxShardsPerSession,
-          failureBackoffBaseMs: settings.hints.failureBackoffBaseMs,
-          failureBackoffMaxMs: settings.hints.failureBackoffMaxMs,
-        },
-        coveragePolicy: settings.coveragePolicy,
-        contentPolicy: settings.contentPolicy,
-      },
-      now: () => Date.now(),
-      fetchRecentDecryptedRows,
-      runSummarizer: async (prompt, sessionId, signal) => {
-        return await runMemoryHintsExecutionRun({
-          cwd: configuration.activeServerDir,
-          sessionId,
-          backendId: settings.hints.summarizerBackendId,
-          modelId: settings.hints.summarizerModelId,
-          permissionMode: settings.hints.summarizerPermissionMode,
-          prompt,
-          credentials: params.credentials,
-          ...(signal ? { signal } : {}),
-        });
-      },
-      commitArtifacts: async ({ sessionId, shardPayload, synopsisPayload }, signal) => {
-        const cryptoContext = await resolveSessionCryptoContext(sessionId, signal);
-        if (!cryptoContext) return;
-        await commitMemorySystemRecords({
-          credentials: params.credentials,
-          sessionId,
-          mode: cryptoContext.mode,
-          ...(cryptoContext.ctx ? { ctx: cryptoContext.ctx } : {}),
-          shard: { sessionId, payload: shardPayload },
-          synopsis: synopsisPayload ? { sessionId, payload: synopsisPayload } : null,
-          ...(signal ? { signal } : {}),
-        });
-      },
-      ...(options?.signal ? { signal: options.signal } : {}),
-    });
-  };
-
-  const syncDeepForSessions = async (sessionIds: readonly string[], signal?: AbortSignal, forceSnapshot = false,
-    observedSnapshotSeqBySessionId?: ReadonlyMap<string, number>): Promise<ReadonlySet<string>> => {
-    if (stopped || !settings.enabled || settings.indexMode !== 'deep' || !tier1 || !deep || sessionIds.length === 0) return new Set();
-
-    const embeddings = resolveOperationalMemoryEmbeddingsSettings(settings.embeddings);
-    const embeddingsResolution = await refreshEmbeddingsDiagnostics(signal);
-
-    return await syncDeepIndexForSessionsOnce({
-      sessionIds,
-      tier1,
-      deep,
-      settings: {
-        enabled: settings.enabled,
-        enabledAtMs: settings.enabledAtMs,
-        indexMode: 'deep',
-        backfillPolicy: settings.backfillPolicy,
-        deep: {
-          maxChunkChars: settings.deep.maxChunkChars,
-        maxChunkMessages: settings.deep.maxChunkMessages,
-          minChunkMessages: settings.deep.minChunkMessages,
-          includeAssistantAcpMessage: settings.deep.includeAssistantAcpMessage,
-          failureBackoffBaseMs: settings.deep.failureBackoffBaseMs,
-          failureBackoffMaxMs: settings.deep.failureBackoffMaxMs,
-        },
-        coveragePolicy: settings.coveragePolicy,
-        contentPolicy: settings.deep.includeToolOutput
-          ? { ...settings.contentPolicy, includeToolOutputs: true }
-          : settings.contentPolicy,
-        forceSnapshot,
-        ...(embeddings ? { embeddings } : {}),
-      },
-      now: () => Date.now(),
-      fetchDecryptedTranscriptPageAfterSeq: deps.fetchDecryptedTranscriptPageAfterSeq,
-      fetchRecentDecryptedRows,
-      observedSnapshotSeqBySessionId,
-      ...(embeddingsResolution?.provider ? { embedDocuments: embeddingsResolution.provider.embedDocuments } : {}),
-      ...(signal ? { signal } : {}),
-    });
-  };
-
-  const syncEligibleSessions = async (input: Readonly<{
-    sessionIds: readonly string[];
-    indexingSessionIds: Set<string>;
-    observedSeqBySessionId: ReadonlyMap<string, number>;
-    allowInitialBackfillSessionIds: readonly string[];
-    forcePolicySnapshot?: boolean;
-    signal?: AbortSignal;
-  }>): Promise<void> => {
-    input.signal?.throwIfAborted();
-    if (!tier1 || input.sessionIds.length === 0) return;
-    const allowInitialBackfill = new Set(input.allowInitialBackfillSessionIds);
-    const admittedSessionIds: string[] = [];
-
-    const nowMs = Date.now();
-    for (const sessionId of input.sessionIds) {
-      if (settings.backfillPolicy === 'new_only' && !allowInitialBackfill.has(sessionId)) {
-        const observedSeq = input.observedSeqBySessionId.get(sessionId);
-        if (typeof observedSeq !== 'number' || !Number.isFinite(observedSeq)) continue;
-        tier1.trySeedSessionCursorsIfMissing({
-          sessionId,
-          nowMs,
-          lastHintedSeq: Math.max(0, Math.trunc(observedSeq)),
-          lastDeepIndexedSeq: Math.max(0, Math.trunc(observedSeq)),
-        });
-      } else {
-        // Establish the tier-1 retained identity before any deep chunk write.
-        // Zero keeps historical backfill eligible while closing the deep-only
-        // ordering window for newly admitted Sessions.
-        tier1.trySeedSessionCursorsIfMissing({
-          sessionId,
-          nowMs,
-          lastHintedSeq: 0,
-          lastDeepIndexedSeq: 0,
-        });
-      }
-      admittedSessionIds.push(sessionId);
-    }
-
-    if (admittedSessionIds.length === 0) return;
-    for (const sessionId of admittedSessionIds) {
-      const observed = input.observedSeqBySessionId.get(sessionId);
-      if (observed !== undefined) candidateObservedSeqBySessionId.set(sessionId, observed);
-    }
-
-    const edited = admittedSessionIds.filter(sessionId => editedSessionIds.has(sessionId));
-    const unchanged = admittedSessionIds.filter(sessionId => {
-      if (editedSessionIds.has(sessionId)) return false;
-      const observed = input.observedSeqBySessionId.get(sessionId);
-      const status = tier1!.getMemorySessionIndexStatus(sessionId);
-      // A completed full snapshot whose source has not advanced needs no body
-      // IO. Revisions still use the dirty set; moving windows still prune.
-      if (input.forcePolicySnapshot === true || settings.coveragePolicy.type !== 'full'
-        || observed === undefined || (status !== 'indexed' && status !== 'empty')) return true;
-      const cursors = tier1!.getSessionCursors({ sessionId, nowMs });
-      return Math.max(cursors.lastDeepIndexedSeq, cursors.lastObservedSeq) < observed;
-    });
-    if (edited.length) {
-      // The same admitted revision invalidates the inactive projection too;
-      // switching modes must not revive bytes from before that revision.
-      withRetainedIndexHandles(handles => {
-        for (const sessionId of edited) {
-          if (settings.indexMode === 'hints') {
-            handles.deep?.deleteSessionIndexData({ sessionId });
-            handles.tier1?.rewindSessionCursor({ sessionId, lane: 'deep', seq: 0 });
-          } else {
-            handles.tier1?.pruneSessionArtifacts({ sessionId,
-              policyKey: `${memoryIndexPolicyKey(resolveTier1IndexPolicy(settings))}:edited` });
-            handles.tier1?.rewindSessionCursor({ sessionId, lane: 'hints', seq: 0 });
-          }
-        }
-      });
-    }
-    const selected = new Set(settings.indexMode === 'deep' ? [...unchanged, ...edited] : admittedSessionIds);
-    // Admission alone is not transcript work. Remove checked snapshots before
-    // yielding, and retire each completed Session before reading the next one.
-    // A slow sibling must not reopen already established coverage.
-    for (const sessionId of input.indexingSessionIds) {
-      if (!selected.has(sessionId)) input.indexingSessionIds.delete(sessionId);
-    }
-    for (const sessionId of selected) {
-      const isEdited = edited.includes(sessionId);
-      // Consume only the revision this read owns. A later revision stays queued.
-      if (isEdited) editedSessionIds.delete(sessionId);
-      try {
-        await syncHintsForSessions([sessionId], {
-          forceSnapshotSessionIds: isEdited ? [sessionId] : [],
-          allowInitialBackfillWhenUninitializedSessionIds: input.allowInitialBackfillSessionIds,
-          initialCursorSeqBySessionId: input.observedSeqBySessionId,
-          ...(input.signal ? { signal: input.signal } : {}),
-        });
-        const completed = await syncDeepForSessions([sessionId], input.signal,
-          isEdited || input.forcePolicySnapshot === true, input.observedSeqBySessionId);
-        if (isEdited && (settings.indexMode === 'deep' ? !completed.has(sessionId)
-          : tier1.getSessionCursors({ sessionId, nowMs: Date.now() }).lastHintedSeq === 0)) editedSessionIds.add(sessionId);
-      } catch (error) {
-        if (isEdited) editedSessionIds.add(sessionId);
-        throw error;
-      } finally {
-        input.indexingSessionIds.delete(sessionId);
-      }
-    }
-  };
-
-  const runTrackedSyncEligibleSessions = (input: Readonly<{
-    sessionIds: readonly string[];
-    observedSeqBySessionId: ReadonlyMap<string, number>;
-    allowInitialBackfillSessionIds: readonly string[];
-    forcePolicySnapshot?: boolean;
-    signal?: AbortSignal;
-  }>): Promise<void> => {
-    const sessionIds = input.sessionIds.filter((sessionId) => !removingSessionIds.has(sessionId));
-    if (sessionIds.length === 0) return Promise.resolve();
-    const included = new Set(sessionIds);
-    const controller = new AbortController();
-    const signal = input.signal
-      ? AbortSignal.any([input.signal, controller.signal])
-      : controller.signal;
-    const operation: {
-      kind: 'transcript';
-      sessionIds: ReadonlySet<string>;
-      controller: AbortController;
-      promise: Promise<void>;
-    } = {
-      kind: 'transcript',
-      sessionIds: included,
-      controller,
-      promise: Promise.resolve(),
-    };
-    operation.promise = syncEligibleSessions({
-      ...input,
-      sessionIds,
-      indexingSessionIds: included,
-      signal,
-      allowInitialBackfillSessionIds: input.allowInitialBackfillSessionIds.filter((id) => included.has(id)),
-      ...(input.forcePolicySnapshot === true ? { forcePolicySnapshot: true } : {}),
-    }).catch((error) => {
-      // Session removal owns this child cancellation. It is a successful
-      // supersession, not a worker failure; lifecycle/transport cancellation
-      // from the parent signal remains observable to its caller.
-      if (controller.signal.aborted && input.signal?.aborted !== true) return;
-      throw error;
-    }).finally(() => {
-      activeIndexOperations.delete(operation);
-    });
-    activeIndexOperations.add(operation);
-    return operation.promise;
-  };
-
-  const applySettings = async (next: MemorySettingsV1, signal?: AbortSignal): Promise<void> => {
-    signal?.throwIfAborted();
-    const previousSettings = settings;
-    let tier1PolicyChanged = memoryIndexPolicyKey(resolveTier1IndexPolicy(previousSettings))
-      !== memoryIndexPolicyKey(resolveTier1IndexPolicy(next));
-    let deepPolicyChanged = memoryIndexPolicyKey(resolveDeepIndexPolicy(previousSettings))
-      !== memoryIndexPolicyKey(resolveDeepIndexPolicy(next));
-    let externalPolicyChanged = JSON.stringify(previousSettings.conversationSearch.indexExternal)
-      !== JSON.stringify(next.conversationSearch.indexExternal);
-    if (tier1PolicyChanged || deepPolicyChanged || externalPolicyChanged) {
-      for (const operation of activeIndexOperations) operation.controller.abort();
-      await Promise.allSettled([...activeIndexOperations].map((operation) => operation.promise));
-      signal?.throwIfAborted();
-    }
-    if (JSON.stringify(settings.embeddings) !== JSON.stringify(next.embeddings)) {
-      embeddingsProviderCache.clear();
-    }
-    settings = next;
-    if (externalPolicyChanged) externalSourcesNeedRefresh = true;
-    if (stopped) return;
-
-    if (!settings.enabled) {
-      indexesQualified = false;
-      embeddingsProviderCache.clear();
-      embeddingsDiagnostics = buildUnavailableMemoryEmbeddingsDiagnostics(settings.embeddings);
-      // Nothing is searchable while memory is disabled, so no exclusion is
-      // outstanding.
-      archivedExclusionPending = false;
-      await stopLoop();
-      await externalSources.refresh(settings, signal ?? new AbortController().signal);
-      for (const operation of activeIndexOperations) operation.controller.abort();
-      await Promise.allSettled([...activeIndexOperations].map((operation) => operation.promise));
-      if (tier1) {
-        try {
-          tier1.close();
-        } catch {
-          // best-effort
-        }
-        tier1 = null;
-      }
-      if (deep) {
-        try {
-          deep.close();
-        } catch {
-          // best-effort
-        }
-        deep = null;
-      }
-      if (settings.deleteOnDisable) {
-        try {
-          await rm(paths.memoryDir, { recursive: true, force: true });
-        } catch (error) {
-          workerStatus = {
-            ...workerStatus,
-            state: 'error',
-            currentSessionId: null,
-            currentPhase: null,
-          };
-          throw error;
-        }
-      }
-      workerStatus = {
-        ...workerStatus,
-        state: 'disabled',
-        currentSessionId: null,
-        currentPhase: null,
-      };
-      effectiveSettings = settings;
-      return;
-    }
-
-    embeddingsDiagnostics = buildUnavailableMemoryEmbeddingsDiagnostics(settings.embeddings);
-    workerStatus = { ...workerStatus, state: 'idle' };
-
-    await ensureProtectedLocalStateDirectory(paths.memoryDir, { authority: 'owned' });
-    ensurePrivateInferenceDirectory(paths.modelsDir);
-
-    if (
-      inventoryBackfillPolicy !== settings.backfillPolicy
-      || inventoryIncludeArchivedSessions !== settings.includeArchivedSessions
-    ) {
-      inventoryBackfillPolicy = settings.backfillPolicy;
-      inventoryIncludeArchivedSessions = settings.includeArchivedSessions;
-      inventoryState = INITIAL_MEMORY_INVENTORY_STATE;
-      inventorySeenSessionIds.clear();
-      candidateSessionIds = [];
-      candidateCursor = 0;
-      candidateAllowInitialBackfillSessionIds.clear();
-      candidateObservedSeqBySessionId.clear();
-    }
-
-    if (!tier1) {
-      indexesQualified = false;
-      tier1 = openSummaryShardIndexDb({ dbPath: paths.tier1DbPath });
-      tier1.init();
-    }
-
-    // Attached documents share this index even when Session transcripts use hints.
-    if (!deep) {
-      indexesQualified = false;
-      deep = openDeepIndexDb({ dbPath: paths.deepDbPath });
-      deep.init();
-    }
-    if (!settings.conversationSearch.indexExternal.enabled
-      || settings.conversationSearch.indexExternal.agents.length === 0) {
-      // This is source release only. Discovery/backfill remains on the loop,
-      // but opting out must drain observation demands before it completes.
-      await externalSources.refresh(settings, signal ?? new AbortController().signal);
-    }
-    const policyKeys = {
-      tier1: memoryIndexPolicyKey(resolveTier1IndexPolicy(settings)),
-      deep: memoryIndexPolicyKey(resolveDeepIndexPolicy(settings)),
-      external: JSON.stringify(settings.conversationSearch.indexExternal),
-    };
-    const retainedPolicyKeys = tier1.getIndexPolicyKeys();
-    // Row provenance preserves matching older indexes. Only cursor-only
-    // progress lacks a previous policy; rewind it once when adopting the index.
-    tier1PolicyChanged = retainedPolicyKeys !== null && retainedPolicyKeys.tier1 !== policyKeys.tier1;
-    deepPolicyChanged = retainedPolicyKeys !== null && retainedPolicyKeys.deep !== policyKeys.deep;
-    externalPolicyChanged = retainedPolicyKeys !== null && retainedPolicyKeys.external !== policyKeys.external;
-    if (!retainedPolicyKeys) {
-      const externalPolicy = resolveExternalMemoryIndexPolicy(settings).key;
-      const externalIds = new Set<string>();
-      for (const retained of deep.listExternalSourceStates()) {
-        externalIds.add(retained.sessionId);
-        if (!settings.conversationSearch.indexExternal.enabled
-          || !settings.conversationSearch.indexExternal.agents.includes(retained.source.agentId)
-          || deep.hasSessionArtifactsOutsidePolicy({ sessionId: retained.sessionId, policyKey: externalPolicy })) {
-          deep.deleteSessionIndexData({ sessionId: retained.sessionId });
-        }
-      }
-      const deepSessionIds = new Set(deep.listIndexedSessionIds());
-      for (const sessionId of new Set([...tier1.listIndexedSessionIds(), ...deepSessionIds])) {
-        if (externalIds.has(sessionId)) continue;
-        const hintsPruned = tier1.pruneSessionArtifacts({ sessionId, policyKey: policyKeys.tier1 });
-        const deepPruned = deep.pruneSessionArtifacts({ sessionId, policyKey: policyKeys.deep });
-        // With no rows, progress cannot prove that newly admitted historical
-        // content was searched. Matching rows themselves remain in place.
-        if (hintsPruned || tier1.getLatestShardSeqTo({ sessionId }) === 0) {
-          tier1.rewindSessionCursor({ sessionId, lane: 'hints', seq: 0 });
-        }
-        if (deepPruned || !deepSessionIds.has(sessionId)) {
-          tier1.rewindSessionCursor({ sessionId, lane: 'deep', seq: 0 });
-        }
-      }
-    }
-    if (previousSettings.indexMode !== settings.indexMode) indexesQualified = false;
-    if ((externalPolicyChanged || tier1PolicyChanged || deepPolicyChanged) && deep) {
-      for (const retained of deep.listExternalSourceStates()) deep.deleteSessionIndexData({ sessionId: retained.sessionId });
-      externalSourcesNeedRefresh = true;
-    }
-    if (tier1PolicyChanged || deepPolicyChanged) {
-      const retainedSessionIds = [...new Set([
-        ...tier1.listIndexedSessionIds(),
-        ...(deepPolicyChanged ? deep.listIndexedSessionIds() : []),
-      ])];
-      for (const sessionId of retainedSessionIds) {
-        // Invalidate before any fallible source IO. Rebuild through the existing
-        // inventory/work loop (or explicit ensureUpToDate), never settings RPCs.
-        if (tier1PolicyChanged) tier1.deleteSessionIndexData({ sessionId });
-        else tier1.rewindSessionCursor({ sessionId, lane: 'deep', seq: 0 });
-        if (deepPolicyChanged) deep.deleteSessionIndexData({ sessionId });
-        tier1.trySeedSessionCursorsIfMissing({ sessionId, nowMs: Date.now(), lastHintedSeq: 0, lastDeepIndexedSeq: 0 });
-      }
-    }
-    if (!retainedPolicyKeys || tier1PolicyChanged || deepPolicyChanged || externalPolicyChanged) {
-      tier1.setIndexPolicyKeys(policyKeys);
-    }
-    if (!indexesQualified) {
-      try {
-        // Existing rows must be requalified before the daemon exposes its
-        // opened index, including after an offline handoff or an older cache.
-        await reconcileRetainedSessionAccess(signal);
-        indexesQualified = true;
-      } catch (error) {
-        signal?.throwIfAborted();
-        // Keep the worker/RPCs alive, but do not expose unqualified content.
-        // The existing inventory cadence retries this same access owner.
-        workerStatus = { ...workerStatus, state: 'error' };
-        logger.debug('[memoryWorker] Retained access qualification failed; retrying on inventory refresh', {
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    // Provider resolution shares initialization through the worker-owned cache.
-    // Daemon RPC registration and settings responses must not wait for downloads.
-    void refreshEmbeddingsDiagnostics().catch((error: unknown) => {
-      if (stopped || settings !== next) return;
-      const message = error instanceof Error ? error.message : String(error);
-      embeddingsDiagnostics = { ...embeddingsDiagnostics, runtimeState: 'error', usingFallback: true, lastError: message };
-      logger.warn('[memoryWorker] Embeddings initialization failed; using keyword-search fallback', { message });
-    });
-    await applyArchivedEligibility(signal);
-
-    effectiveSettings = settings;
-
-    // Background indexing runs only in daemon mode.
-    if (configuration.isDaemonProcess) {
-      const inventoryIntervalMs = Math.max(5_000, Math.trunc(settings.worker.inventoryRefreshIntervalMs));
-      if (!inventoryLoop || inventoryLoopIntervalMs !== inventoryIntervalMs) {
-        await inventoryLoop?.stop();
-        inventoryLoopIntervalMs = inventoryIntervalMs;
-        inventoryLoop = startSingleFlightIntervalLoop({
-          intervalMs: inventoryIntervalMs,
-          task: async (signal) => {
-            if (stopped) return;
-            if (!settings.enabled) return;
-            signal.throwIfAborted();
-            if (!indexesQualified) {
-              await reconcileRetainedSessionAccess(signal);
-              indexesQualified = true;
-            }
-            externalSourcesNeedRefresh = true;
-            externalSources.invalidate();
-            workLoop?.trigger();
-            const reportsInventory = workerStatus.state !== 'indexing';
-            if (reportsInventory) {
-              workerStatus = { ...workerStatus, state: 'inventorying', lastInventoryAtMs: Date.now(), currentPhase: 'inventory' };
-            }
-            if (archivedExclusionPending) await applyArchivedEligibility(signal);
-            await refreshInventory({ signal });
-            // Document search/status and explicit refresh already admit current
-            // attachments on demand. Transcript inventory must not prepare every
-            // Session's prompts again when no document consumer is waiting.
-            signal.throwIfAborted();
-            if (reportsInventory && workerStatus.currentPhase === 'inventory') {
-              workerStatus = { ...workerStatus, state: 'idle', currentPhase: null };
-            }
-          },
-          onError: (error) => {
-            if (!indexesQualified || workerStatus.currentPhase === 'inventory') {
-              workerStatus = { ...workerStatus, state: 'error', currentSessionId: null, currentPhase: null };
-            }
-            logger.debug('[memoryWorker] Inventory refresh failed (best-effort)', {
-              message: error instanceof Error ? error.message : String(error),
-            });
-          },
-        });
-        inventoryLoop.trigger();
-      }
-
-      const tickIntervalMs = Math.max(500, Math.trunc(settings.worker.tickIntervalMs));
-      if (!workLoop || workLoopIntervalMs !== tickIntervalMs) {
-        await workLoop?.stop();
-        workLoopIntervalMs = tickIntervalMs;
-        workLoop = startSingleFlightIntervalLoop({
-          intervalMs: tickIntervalMs,
-          task: async (signal) => {
-            if (stopped) return;
-            if (!settings.enabled) return;
-            if (!tier1) return;
-            if (!indexesQualified) return;
-            signal.throwIfAborted();
-            if (candidateSessionIds.length > 0 || settings.conversationSearch.indexExternal.enabled) {
-              workerStatus = { ...workerStatus, state: 'indexing', lastTickAtMs: Date.now(), currentPhase: 'tick' };
-            }
-            const maxSessions = Math.max(1, Math.trunc(settings.worker.maxSessionsPerTick));
-            await runMemoryWorkerSourcesTick({ sessionIds: candidateSessionIds,
-              externalSourceCount: externalSources.getReadySourceCount(), cursor: candidateCursor, maxSessions,
-              signal, advanceCursor: next => { candidateCursor = next; },
-              prepareExternalSources: async () => {
-                // Native readiness consumes no transcript allowance and a
-                // failure must not suppress selected Happier source work.
-                await syncExternalSources(signal, 0);
-                return externalSources.getReadySourceCount();
-              },
-              syncExternalSources: maxSources => syncExternalSources(signal, maxSources),
-              syncSessions: async sessionIds => {
-                workerStatus = { ...workerStatus, currentSessionId: sessionIds[0] ?? null };
-                const observedSeqBySessionId = new Map<string, number>();
-                for (const sessionId of sessionIds) {
-                  const observedSeq = candidateObservedSeqBySessionId.get(sessionId);
-                  if (observedSeq !== undefined) observedSeqBySessionId.set(sessionId, observedSeq);
-                }
-                await runTrackedSyncEligibleSessions({
-                  sessionIds,
-                  observedSeqBySessionId,
-                  allowInitialBackfillSessionIds: sessionIds.filter(id => candidateAllowInitialBackfillSessionIds.has(id)),
-                  signal,
-                });
-              },
-              finishTick: async () => {
-                if (!tier1) return;
-                workerStatus = { ...workerStatus, state: 'indexing', currentSessionId: null, currentPhase: 'budget' };
-                const mbToBytes = (mb: number): number => Math.max(0, Math.trunc(mb)) * 1024 * 1024;
-                await enforceMemoryDiskBudgets({
-                  tier1,
-                  deep,
-                  tier1DbPath: paths.tier1DbPath,
-                  deepDbPath: paths.deepDbPath,
-                  budgets: {
-                    tier1Bytes: mbToBytes(settings.budgets.maxDiskMbLight),
-                    deepBytes: mbToBytes(settings.budgets.maxDiskMbDeep),
-                  },
-                });
-                signal.throwIfAborted();
-              },
-            });
-            workerStatus = { ...workerStatus, state: 'idle', currentSessionId: null, currentPhase: null };
-          },
-          onError: (error) => {
-            workerStatus = { ...workerStatus, state: 'error', currentSessionId: null, currentPhase: null };
-            logger.debug('[memoryWorker] Tick failed (best-effort)', {
-              message: error instanceof Error ? error.message : String(error),
-            });
-          },
-        });
-        workLoop.trigger();
-      }
-    }
-  };
-
-  const syncExternalSourcesOnce = async (signal: AbortSignal, maxSources: number): Promise<void> => {
-    if (externalSourcesNeedRefresh) {
-      await externalSources.refresh(settings, signal);
-      externalSourcesNeedRefresh = false;
-    }
-    if (!settings.enabled || !settings.conversationSearch.indexExternal.enabled || !deep || !tier1) return;
-    const inventory = await externalSources.inventory(signal);
-    if (inventory) {
-      for (const retained of deep.listExternalSourceStates()) {
-        const key = JSON.stringify([retained.source.agentId, retained.source.sourceKey]);
-        if (!inventory.configuredSourceKeys.has(key)
-          || (inventory.completeSources.has(key) && !inventory.current.has(retained.sessionId))) deep.deleteSessionIndexData({ sessionId: retained.sessionId });
-      }
-    }
-    if (maxSources === 0) return;
-    const embeddings = resolveOperationalMemoryEmbeddingsSettings(settings.embeddings);
-    const resolution = embeddings?.enabled ? await refreshEmbeddingsDiagnostics(signal) : null;
-    await syncExternalMemoryTranscriptsBatch({ candidates: externalSources.take(maxSources), db: deep, tier1, settings, nowMs: Date.now(), signal,
-        onSourceResult: externalSources.noteSyncResult,
-        ...(resolution?.provider ? { embedDocuments: resolution.provider.embedDocuments } : {}),
-        ...(embeddings?.enabled && embeddings.providerKind && embeddings.modelId
-          ? { embeddings: { providerKind: embeddings.providerKind, modelId: embeddings.modelId } } : {}) });
-  };
-
-  const syncExternalSources = async (signal: AbortSignal, maxSources = Math.max(1, Math.trunc(settings.worker.maxSessionsPerTick))): Promise<void> => {
-    if (stopped || !settings.enabled || !deep) return;
-    if (externalSyncPromise) return await externalSyncPromise;
-    const controller = new AbortController();
-    const operationSignal = AbortSignal.any([signal, controller.signal]);
-    const promise = Promise.resolve().then(() => {
-      operationSignal.throwIfAborted();
-      return syncExternalSourcesOnce(operationSignal, maxSources);
-    });
-    const operation = { kind: 'transcript' as const, sessionIds: new Set<string>(), controller, promise };
-    activeIndexOperations.add(operation);
-    externalSyncPromise = promise;
-    try { await promise; }
-    finally { activeIndexOperations.delete(operation); externalSyncPromise = null; }
-  };
-
-  const clearIndex = (signal?: AbortSignal): Promise<void> => {
-    signal?.throwIfAborted();
-    if (stopped) return Promise.reject(new Error('memory_worker_stopped'));
-    if (clearIndexPromise) return clearIndexPromise;
-    clearIndexPromise = runSettingsOperation(async () => {
-      const prior = settings;
-      // Reuse the disabled lifecycle to stop loops, abort/drain all index
-      // writers and close SQLite handles before removing their derived files.
-      // Never persist this transient setting or remove the inference cache.
-      await applySettings({ ...prior, enabled: false, deleteOnDisable: false });
-      try {
-        signal?.throwIfAborted();
-        for (const dbPath of [paths.tier1DbPath, paths.deepDbPath]) {
-          for (const suffix of ['', '-wal', '-shm']) await rm(`${dbPath}${suffix}`, { force: true });
-        }
-        sessionCryptoContextCache.clear();
-        observedSessionIds.clear();
-        editedSessionIds.clear();
-      } finally {
-        externalSourcesNeedRefresh = true;
-        await applySettings(prior);
-      }
-    }).finally(() => { clearIndexPromise = null; });
-    return clearIndexPromise;
-  };
-
-  const reloadSettings = (signal?: AbortSignal): Promise<void> => runSettingsOperation(async () => {
-    signal?.throwIfAborted();
-    if (stopped) return;
-    const next = await readMemorySettingsFromDisk();
-    if (JSON.stringify(next.conversationSearch.indexExternal) !== JSON.stringify(settings.conversationSearch.indexExternal)) externalSourcesNeedRefresh = true;
-    signal?.throwIfAborted();
-    await applySettings(next, signal);
-  });
-
-  const ensureUpToDate = async (_sessionId?: string, signal?: AbortSignal): Promise<void> => {
-    signal?.throwIfAborted();
-    if (stopped) return;
-    await reloadSettings(signal);
-    signal?.throwIfAborted();
-    if (!settings.enabled) return;
-    if (!tier1) return;
-    if (!_sessionId) await syncExternalSources(signal ?? new AbortController().signal);
-    await resolveDocumentSearchScope(_sessionId ? { type: 'session', sessionId: _sessionId } : { type: 'global' }, signal);
-    if (!_sessionId) {
-      // Same eligibility/inventory owner as the background loop, so an
-      // explicit refresh can never inventory a scope the settings exclude.
-      const refresh = await refreshInventory({ apply: false, ...(signal ? { signal } : {}) });
-      if (refresh.sessionIds.length === 0) return;
-      await runTrackedSyncEligibleSessions({
-        sessionIds: refresh.sessionIds,
-        observedSeqBySessionId: refresh.observedSeqBySessionId,
-        allowInitialBackfillSessionIds: refresh.allowInitialBackfillSessionIds,
-        ...(signal ? { signal } : {}),
-      });
-      return;
-    }
-
-    const session = await fetchSessionById({
-      token: params.credentials.token,
-      sessionId: _sessionId,
-      ...(signal ? { signal } : {}),
-    });
-    const accountEncryptionMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal })).mode;
-    const eligibility = session && sessionLocality.isOnMachine(session, accountEncryptionMode)
-      ? resolveMemoryInventorySessionEligibility({
-          session,
-          backfillPolicy: settings.backfillPolicy,
-          includeArchivedSessions: settings.includeArchivedSessions,
-          enabledAtMs: settings.enabledAtMs ?? 0,
-          nowMs: Date.now(),
-        })
-      : null;
-    if (!eligibility) {
-      await removeSessions([_sessionId]);
-      return;
-    }
-
-    observeSession(_sessionId);
-
-    await runTrackedSyncEligibleSessions({
-      sessionIds: [eligibility.sessionId],
-      observedSeqBySessionId: new Map([[eligibility.sessionId, eligibility.observedSeq]]),
-      allowInitialBackfillSessionIds: eligibility.allowInitialBackfill
-        ? [eligibility.sessionId]
-        : [],
-      ...(signal ? { signal } : {}),
-    });
-  };
-
   await reloadSettings();
-
   return {
-    stop,
     reloadSettings,
-    clearIndex,
-    ensureUpToDate,
-    noteSessionTranscriptRevised: async ({ sessionId }) => {
+    stop: () => {
+      if (stopPromise) return stopPromise;
+      stopped = true;
+      connectionLifetime.abort();
+      unsubscribeAccount(); unsubscribeInstall();
+      stopPromise = (async () => { await settingsOperation; await retireIndexer(); await observation.dispose(); })();
+      return stopPromise;
+    },
+    clearIndex: signal => {
+      signal?.throwIfAborted();
+      if (stopped) return Promise.reject(new Error('memory_worker_stopped'));
+      if (clearPromise) return clearPromise;
+      clearPromise = serializeSettings(async () => {
+        const prior = desired;
+        await retireIndexer();
+        try {
+          signal?.throwIfAborted();
+          for (const path of [paths.tier1DbPath, paths.deepDbPath]) {
+            for (const suffix of ['', '-wal', '-shm']) await rm(path + suffix, { force: true });
+          }
+          snapshot = { ...snapshot, indexesQualified: false, candidateSessionIds: [], observedSeqBySessionId: [], editedSessionIds: [], externalSources: [] };
+          observedSessionIds.clear();
+          pendingRevisions.clear();
+        } finally { externalNeedsRefresh = true; await applySettings(prior); }
+      }).finally(() => { clearPromise = null; });
+      return clearPromise;
+    },
+    ensureUpToDate: async (sessionId, signal) => {
+      signal?.throwIfAborted();
       if (stopped) return;
-      // Inventory/access admission remains the scope authority. Unindexed
-      // Sessions read their current source when first admitted normally.
-      if (!candidateSessionIds.includes(sessionId) && !listIndexedSessionIds().includes(sessionId)) return;
-      editedSessionIds.add(sessionId);
+      await reloadSettings(signal);
+      if (!desired.enabled) return;
+      try {
+        const admittedRevisions = await callWithRevisions((indexer, signal) => indexer.refresh(sessionId, signal), signal);
+        // A real revision can arrive while a source read is in flight. Keep
+        // that newer fact until its own command and scheduler turn settle.
+        if ([...pendingRevisions].some(([id, change]) => admittedRevisions.get(id) !== change)) await callWithRevisions(async () => {}, signal);
+        await resolveDocumentSearchScope(sessionId ? { type: 'session', sessionId } : { type: 'global' }, signal);
+      } catch (error) {
+        // First observation can precede a cancelled retained-snapshot read.
+        // The next child must still validate that snapshot's same-seq edits.
+        if (signal?.aborted) {
+          if (sessionId) observedSessionIds.delete(sessionId);
+          else observedSessionIds.clear();
+        }
+        throw error;
+      }
+    },
+    noteSessionTranscriptRevised: async change => {
+      if (stopped) return;
+      if (!snapshot.candidateSessionIds.includes(change.sessionId)
+        && !snapshot.observedSeqBySessionId.some(([id]) => id === change.sessionId)
+        && (!snapshot.indexesQualified || !withReaders(retainedIds).includes(change.sessionId))) return;
+      pendingRevisions.set(change.sessionId, change);
+      // Receipt must not hold the Account change stream behind transcript IO.
+      // The incumbent single-flight work pump carries this fact to the child.
       workLoop?.trigger();
     },
-    attachExternalObservation: externalSources.attach,
-    readExternalTranscriptPage: async (request, signal) => await externalSources.readPage(request, settings, signal ?? new AbortController().signal),
+    attachExternalObservation: next => {
+      const detach = observation.attach(next);
+      externalNeedsRefresh = true; workLoop?.trigger();
+      return detach;
+    },
+    readExternalTranscriptPage: (request, signal) => call((indexer, signal) => indexer.readExternalPage(request, signal), signal),
+    embedQuery: async (text, signal) => {
+      const vector = await call((indexer, signal) => indexer.embedQuery(text, signal), signal);
+      return vector ? Float32Array.from(vector) : null;
+    },
     resolveDocumentSearchScope,
-    removeSessions,
-    reconcileRetainedSessionAccess,
-    applySessionArchivedState,
-    listIndexedSessionIds: () => indexesQualified ? listIndexedSessionIds() : [],
-    // The archived eligibility this daemon actually applies: an exclusion that
-    // has not completed still leaves archived rows searchable here.
-    getSettings: () => (
-      archivedExclusionPending
-        ? { ...effectiveSettings, includeArchivedSessions: true }
-        : effectiveSettings
-    ),
-    getEmbeddingsDiagnostics: () => embeddingsDiagnostics,
-    resolveEmbeddingsProvider: refreshEmbeddingsDiagnostics,
-    getWorkerStatus: () => ({ ...workerStatus,
-      activeOperations: [...activeIndexOperations].map(operation => ({ kind: operation.kind, sessionIds: [...operation.sessionIds] })),
-      sessionProgress: indexesQualified && tier1
-        ? [...new Set([...candidateSessionIds, ...candidateObservedSeqBySessionId.keys(), ...listIndexedSessionIds()])].map(sessionId => {
-          // Status must not acquire the SQLite writer or create a cursor.
-          const cursors = tier1!.getSessionCursors({ sessionId, nowMs: Date.now(), readOnly: true });
-          return { sessionId, observedSeq: candidateObservedSeqBySessionId.get(sessionId) ?? null,
-            checkedSeq: settings.indexMode === 'deep' ? cursors.lastObservedSeq : null,
-            indexedSeq: settings.indexMode === 'deep' ? cursors.lastDeepIndexedSeq : cursors.lastHintedSeq };
-        }) : [],
-    }),
+    removeSessions: async ids => {
+      const selected = [...new Set(ids.map(id => id.trim()).filter(Boolean))];
+      if (!selected.length) return;
+      for (const id of selected) { observedSessionIds.delete(id); pendingRevisions.delete(id); }
+      const loop = workLoop; loop?.pause();
+      try { await call((indexer, signal) => indexer.removeSessions(selected, signal)); }
+      finally { if (!stopped && desired.enabled && workLoop === loop) loop?.resume(); }
+    },
+    reconcileRetainedSessionAccess: () => call((indexer, signal) => indexer.reconcileAccess(signal)),
+    applySessionArchivedState: change => call((indexer, signal) => indexer.archive(change, signal)),
+    listIndexedSessionIds: () => snapshot.indexesQualified ? withReaders(retainedIds) : [],
+    getSettings: () => snapshot.settings,
+    getEmbeddingsDiagnostics: () => snapshot.embeddings,
+    getWorkerStatus: () => {
+      if (!snapshot.indexesQualified) return snapshot.worker;
+      const observed = new Map(snapshot.observedSeqBySessionId);
+      for (const change of pendingRevisions.values()) observed.set(change.sessionId,
+        Math.max(observed.get(change.sessionId) ?? 0, change.seq));
+      return withReaders((tier1, deep) => ({ ...snapshot.worker,
+        sessionProgress: [...new Set([...snapshot.candidateSessionIds, ...snapshot.observedSeqBySessionId.map(([id]) => id), ...retainedIds(tier1, deep)])].map(sessionId => {
+          const cursors = tier1?.getSessionCursors({ sessionId, nowMs: Date.now() });
+          return { sessionId, observedSeq: observed.get(sessionId) ?? null,
+            checkedSeq: desired.indexMode === 'deep' ? cursors?.lastObservedSeq ?? 0 : null,
+            indexedSeq: desired.indexMode === 'deep' ? cursors?.lastDeepIndexedSeq ?? 0 : cursors?.lastHintedSeq ?? 0 };
+        }) }));
+    },
     getIndexSources: () => {
-      const sessions: MemoryIndexSourceStatusV1[] = [...new Set([...candidateSessionIds, ...candidateObservedSeqBySessionId.keys(), ...listIndexedSessionIds()])].map(sessionId => {
+      const project = (tier1: SummaryShardIndexReader | null, deep: DeepIndexReader | null) => {
+      const sessionIds = [...new Set([...snapshot.candidateSessionIds, ...snapshot.observedSeqBySessionId.map(([id]) => id), ...retainedIds(tier1, deep)])];
+      const sessions: MemoryIndexSourceStatusV1[] = sessionIds.map(sessionId => {
         const source = { type: 'happier_session' as const, sessionId };
-        if (!settings.enabled || (settings.indexMode === 'hints' && !settings.hints.enabled)) return { source, state: 'disabled' };
-        if (!indexesQualified || !tier1 || (settings.indexMode === 'deep' && !deep)) return { source, state: 'indexing' };
-        const pending = editedSessionIds.has(sessionId) || [...activeIndexOperations].some(operation =>
-          operation.kind === 'transcript' && operation.sessionIds.has(sessionId));
-        const queueStatus = tier1.getMemorySessionIndexStatus(sessionId);
-        const errorCode = queueStatus === 'failed' ? tier1.getMemorySessionIndexErrorCode(sessionId) : null;
-        // The completed queue outcome owns coverage. Inventory sequences also
-        // include non-message events and cannot be compared with a transcript
-        // frontier to reopen an exhausted scan. This projection is read-only.
-        return { source, state: queueStatus === 'failed' ? 'error' : pending ? 'indexing'
-          : queueStatus === 'indexed' || queueStatus === 'empty' ? 'ready' : 'indexing',
+        if (!desired.enabled || (desired.indexMode === 'hints' && !desired.hints.enabled)) return { source, state: 'disabled' };
+        const status = tier1?.getMemorySessionIndexStatus(sessionId);
+        const pending = pendingRevisions.has(sessionId) || snapshot.editedSessionIds.includes(sessionId) || snapshot.worker.activeOperations?.some(operation => operation.kind === 'transcript' && operation.sessionIds.includes(sessionId));
+        const errorCode = status === 'failed' ? tier1?.getMemorySessionIndexErrorCode(sessionId) : null;
+        return { source, state: snapshot.worker.state === 'error' || status === 'failed' ? 'error'
+          : !snapshot.indexesQualified || pending ? 'indexing' : status === 'indexed' || status === 'empty' ? 'ready' : 'indexing',
           ...(errorCode ? { errorCode } : {}) };
       });
-      return [...sessions, ...externalSources.getIndexSources(indexesQualified ? deep : null).map(row =>
-        !settings.enabled || !settings.conversationSearch.indexExternal.enabled ? { ...row, state: 'disabled' as const } : row)];
+      return [...sessions, ...snapshot.externalSources.map(row => !desired.enabled || !desired.conversationSearch.indexExternal.enabled
+        ? { ...row, state: 'disabled' as const } : snapshot.worker.state === 'error' ? { ...row, state: 'error' as const } : row)];
+      };
+      return snapshot.indexesQualified ? withReaders(project) : project(null, null);
     },
-    getTier1DbPath: () => (indexesQualified && tier1 ? paths.tier1DbPath : null),
-    getDeepDbPath: () => (indexesQualified && deep ? paths.deepDbPath : null),
+    getTier1DbPath: () => !stopped && desired.enabled && snapshot.indexesQualified && existsSync(paths.tier1DbPath) ? paths.tier1DbPath : null,
+    getDeepDbPath: () => !stopped && desired.enabled && snapshot.indexesQualified && existsSync(paths.deepDbPath) ? paths.deepDbPath : null,
     getTier1DbPhysicalPath: () => paths.tier1DbPath,
     getDeepDbPhysicalPath: () => paths.deepDbPath,
   };

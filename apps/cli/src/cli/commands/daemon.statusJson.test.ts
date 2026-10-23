@@ -1,3 +1,6 @@
+// Prepare the real normal-command runtime during collection, as before lazy worker dispatch.
+import './daemonControl';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';

@@ -9,9 +9,13 @@ import { encodeBase64, encryptLegacy } from '@/api/encryption';
 
 // Transform the shared API graph outside the per-operation workload deadline.
 await import('@/api/api');
+await import('./testkit/inProcessMemoryIndexer');
 
 describe('memoryWorker', () => {
   it.each(['new_only', 'all_history'] as const)('keeps idle 6/6/5 readiness stable when only Session metadata changes (%s)', async backfillPolicy => {
+    // The process logger's delayed file flush is not owned by worker.stop().
+    // This fake-timer fixture deletes its home immediately after worker shutdown.
+    applyEnvValues({ HAPPIER_LOG_LEVEL: 'silent' });
     const session = { id: 'metadata-tail', machineId: 'machine_1', seq: 6, createdAt: 2000, updatedAt: 3000,
       active: true, activeAt: 3000, archivedAt: null, encryptionMode: 'plain' };
     let inventoryGate: Promise<void> | null = null;
@@ -39,7 +43,7 @@ describe('memoryWorker', () => {
     await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy,
       coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 },
       worker: { inventoryRefreshIntervalMs: 5000, tickIntervalMs: 60_000 } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
     const { configuration } = await import('@/configuration');
     const previousDaemon = configuration.isDaemonProcess;
@@ -84,6 +88,10 @@ describe('memoryWorker', () => {
       const result = await searchTier2Memory({ dbPath: worker.getDeepDbPath()!,
         query: { v: 1, query: 'sapphire', scope: { type: 'session', sessionId: session.id }, mode: 'deep' }, previewChars: 240 });
       expect(result.ok && result.hits).toHaveLength(1);
+      const stale = await searchTier2Memory({ dbPath: worker.getDeepDbPath()!,
+        query: { v: 1, query: 'quartz', scope: { type: 'session', sessionId: session.id }, mode: 'deep' }, previewChars: 240 });
+      expect(stale.ok && stale.hits).toEqual([]);
+      expect(worker.getWorkerStatus().sessionProgress).toEqual(initial.sessionProgress);
       expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
     } finally { releaseInventory(); await worker.stop(); configuration.isDaemonProcess = previousDaemon; vi.useRealTimers(); }
   });
@@ -116,7 +124,7 @@ describe('memoryWorker', () => {
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy,
       coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
     let refresh: Promise<void> | undefined;
     try {
@@ -166,7 +174,7 @@ describe('memoryWorker', () => {
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy,
       coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1', deps: {
       fetchDecryptedTranscriptPageAfterSeq: async ({ afterSeq }) => {
         return afterSeq < indexed ? [{ seq: indexed, createdAtMs: 2000, role: 'user',
@@ -215,7 +223,7 @@ describe('memoryWorker', () => {
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy: 'new_only',
       coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
     try {
       await worker.ensureUpToDate('snapshot');
@@ -260,7 +268,8 @@ describe('memoryWorker', () => {
   });
   it('finishes retained snapshot revisions across inventory refreshes instead of restarting the scheduling cursor', async () => {
     let inventoryReads = 0;
-    const sessions = Array.from({ length: 15 }, (_, index) => ({ id: `retained-${index}`, machineId: 'machine_1',
+    const transcriptReads = new Map<string, { selected: number; legacy: number }>();
+    const sessions = Array.from({ length: 16 }, (_, index) => ({ id: `retained-${index}`, machineId: 'machine_1',
       seq: 4, createdAt: 2000, updatedAt: 3000, active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain' }));
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
       fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => {
@@ -272,36 +281,73 @@ describe('memoryWorker', () => {
       fetchSessionById: async ({ sessionId }: { sessionId: string }) => sessions.find(row => row.id === sessionId),
     }));
     vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
-      fetchEncryptedTranscriptMessagesPage: async () => ({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null }),
+      fetchEncryptedTranscriptMessagesPage: async ({ sessionId, roles }: { sessionId: string; roles?: readonly string[] }) => {
+        const reads = transcriptReads.get(sessionId) ?? { selected: 0, legacy: 0 };
+        if (roles) reads.selected += 1;
+        else reads.legacy += 1;
+        transcriptReads.set(sessionId, reads);
+        return { messages: [{ id: `message-${sessionId}`, seq: 4, createdAt: 2000, messageRole: 'user',
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: `garnet revised ${sessionId}` } } } }],
+          hasMore: false, nextBeforeSeq: null, nextAfterSeq: null };
+      },
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     const settings = await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy: 'new_only',
-      coveragePolicy: { type: 'full' }, worker: { tickIntervalMs: 500, inventoryRefreshIntervalMs: 5000, maxSessionsPerTick: 1 } });
+      coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 },
+      worker: { tickIntervalMs: 500, inventoryRefreshIntervalMs: 5000, maxSessionsPerTick: 1 } });
     const { configuration } = await import('@/configuration');
     const { resolveMemoryIndexPaths } = await import('./memoryIndexPaths');
     const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+    const { openDeepIndexDb, openDeepIndexReader } = await import('./deepIndex/deepIndexDb');
     const db = openSummaryShardIndexDb({ dbPath: resolveMemoryIndexPaths().tier1DbPath });
+    const deep = openDeepIndexDb({ dbPath: resolveMemoryIndexPaths().deepDbPath });
     const { memoryIndexPolicyKey, resolveMemoryIndexPolicy } = await import('./transcript/coveragePolicy');
     const key = memoryIndexPolicyKey(resolveMemoryIndexPolicy(settings));
     db.setIndexPolicyKeys({ tier1: key, deep: key, external: JSON.stringify(settings.conversationSearch.indexExternal) });
     for (const session of sessions) {
       db.markDeepIndexSuccess({ sessionId: session.id, seqTo: 4, nowMs: Date.now() });
       db.recordMemorySessionIndexState({ sessionId: session.id, status: 'indexed', lastScannedSeq: 4, updatedAtMs: Date.now() });
+      deep.insertChunk({ sessionId: session.id, seqFrom: 4, seqTo: 4,
+        createdAtFromMs: 2000, createdAtToMs: 2000, text: 'quartz stale retained projection', policyKey: key });
     }
-    db.close();
+    db.close(); deep.close();
     const previousDaemon = configuration.isDaemonProcess;
     configuration.isDaemonProcess = true;
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
     try {
       expect(worker.getSettings().worker.tickIntervalMs).toBe(500);
       expect(worker.getSettings().worker.inventoryRefreshIntervalMs).toBe(5000);
       expect(worker.getSettings().worker.maxSessionsPerTick).toBe(1);
-      await vi.waitFor(() => expect(worker.getIndexSources?.().some(row => row.state === 'indexing')).toBe(true));
+      expect(worker.getSettings().deep.minChunkMessages).toBe(1);
+      // A demand now drains admitted revisions before settling; an intermediate
+      // indexing snapshot need not remain observable after startup returns.
       await vi.waitFor(() => {
+        expect(transcriptReads.size).toBe(sessions.length);
         expect(worker.getIndexSources?.()).toHaveLength(sessions.length);
         expect(worker.getIndexSources?.().filter(row => row.state !== 'ready')).toEqual([]);
       }, { timeout: 15_000 });
+      const current = openDeepIndexReader({ dbPath: resolveMemoryIndexPaths().deepDbPath });
+      try {
+        for (const session of sessions) {
+          const scope = { type: 'session' as const, sessionId: session.id };
+          const fresh = current.search({ query: 'garnet', scope, maxResults: 1 });
+          expect(fresh, JSON.stringify({ sessionId: session.id, reads: transcriptReads.get(session.id),
+            stats: current.getDeepIndexStats(), enabledAtMs: worker.getSettings().enabledAtMs,
+            contentPolicy: worker.getSettings().contentPolicy,
+            progress: worker.getWorkerStatus().sessionProgress?.find(row => row.sessionId === session.id),
+            stale: current.search({ query: 'quartz', scope, maxResults: 1 }) })).toHaveLength(1);
+          expect(current.search({ query: 'quartz', scope: { type: 'session', sessionId: session.id }, maxResults: 1 })).toEqual([]);
+          // The canonical semantic reader performs one selected-role query and
+          // one legacy-unclassified fallback query for each source snapshot.
+          expect(transcriptReads.get(session.id)).toEqual({ selected: 1, legacy: 1 });
+        }
+      } finally { current.close(); }
+      const completedInventoryReads = inventoryReads;
+      await vi.waitFor(() => expect(inventoryReads).toBeGreaterThan(completedInventoryReads), { timeout: 15_000 });
+      await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', activeOperations: [] }));
+      expect(worker.getIndexSources?.().filter(row => row.state !== 'ready')).toEqual([]);
+      expect([...transcriptReads.values()]).toEqual(sessions.map(() => ({ selected: 1, legacy: 1 })));
     } finally { await worker.stop(); configuration.isDaemonProcess = previousDaemon; }
   });
   it('publishes a retained queue failure code without exposing its private message', async () => {
@@ -310,7 +356,7 @@ describe('memoryWorker', () => {
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep' });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
     try {
       const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
@@ -318,9 +364,14 @@ describe('memoryWorker', () => {
       db.markDeepIndexFailure({ sessionId: 'failed', nowMs: Date.now(), backoffBaseMs: 1000, backoffMaxMs: 1000 });
       db.recordMemorySessionIndexState({ sessionId: 'failed', status: 'failed', lastErrorCode: 'deep_index_failed',
         lastErrorMessage: 'private transcript /path', updatedAtMs: Date.now() });
+      const { externalMemoryStorageId } = await import('./externalTranscriptIndex');
+      const nativeId = externalMemoryStorageId({ type: 'external_transcript', agentId: 'codex', sourceKey: 'local', nativeSessionId: 'native' });
+      db.markDeepIndexFailure({ sessionId: nativeId, nowMs: Date.now(), backoffBaseMs: 1000, backoffMaxMs: 1000 });
       db.close();
       expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: 'failed' },
         state: 'error', errorCode: 'deep_index_failed' });
+      expect(worker.listIndexedSessionIds()).not.toContain(nativeId);
+      expect(worker.getIndexSources?.()).not.toContainEqual(expect.objectContaining({ source: { type: 'happier_session', sessionId: nativeId } }));
     } finally { await worker.stop(); }
   });
   it('reads status without joining an index writer or mutating its cursor', async () => {
@@ -329,7 +380,7 @@ describe('memoryWorker', () => {
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
     const { openSqliteDatabaseSync } = await import('../persistence/sqliteSync');
     const { registerMachineMemoryRpcHandlers } = await import('@/api/machine/rpcHandlers.memory');
@@ -362,15 +413,35 @@ describe('memoryWorker', () => {
     } finally { writer.exec('ROLLBACK'); deepWriter.exec('ROLLBACK'); writer.close(); deepWriter.close(); await worker.stop(); }
   });
   it.each(['empty', 'indexed'] as const)('publishes completed %s queue coverage when the inventory sequence includes non-message events', async status => {
+    let transcriptReads = 0;
+    let releaseRead = () => {};
+    let readStarted = () => {};
+    const held = new Promise<void>(resolve => { releaseRead = resolve; });
+    const entered = new Promise<void>(resolve => { readStarted = resolve; });
+    const session = { id: 'covered', machineId: 'machine_1', seq: 7, createdAt: 1000, updatedAt: 2000,
+      active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain' };
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
       fetchSessionsPage: async () => ({ sessions: [], nextCursor: null, hasNext: false }),
+      fetchSessionById: async () => { readStarted(); await held; return session; },
+    }));
+    vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
+      fetchEncryptedTranscriptMessagesPage: async () => {
+        transcriptReads += 1;
+        return { messages: status === 'indexed' ? [{ id: 'covered-message',
+        seq: 1, createdAt: 1000, messageRole: 'user', content: { t: 'plain',
+          v: { role: 'user', content: { type: 'text', text: 'quartz completed coverage' } } } }] : [],
+        hasMore: false, nextBeforeSeq: null, nextAfterSeq: null };
+      },
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
-    await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
       coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
+    let revision: Promise<void> | undefined;
+    let refresh: Promise<void> | undefined;
     try {
+      expect(worker.getSettings()).toMatchObject({ backfillPolicy: 'all_history', coveragePolicy: { type: 'full' } });
       const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
       const db = openSummaryShardIndexDb({ dbPath: worker.getTier1DbPath()! });
       // Retained qa-r232 shape: source metadata observed a later sequence,
@@ -383,14 +454,32 @@ describe('memoryWorker', () => {
       fixture.exec("UPDATE session_cursors SET lastObservedSeq=7 WHERE sessionId='covered'");
       fixture.close();
       expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: 'covered' }, state: 'ready' });
-      await worker.noteSessionTranscriptRevised?.({ sessionId: 'covered', seq: 7 });
+      revision = worker.noteSessionTranscriptRevised?.({ sessionId: 'covered', seq: 7 });
+      await revision;
       expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: 'covered' }, state: 'indexing' });
-    } finally { await worker.stop(); }
+      refresh = worker.ensureUpToDate('covered');
+      await entered;
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: 'covered' }, state: 'indexing' });
+      releaseRead(); await refresh;
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: 'covered' }, state: 'ready' });
+      expect(worker.getWorkerStatus().sessionProgress).toMatchObject([{ sessionId: 'covered', observedSeq: 7, checkedSeq: 7 }]);
+      const { openDeepIndexReader } = await import('./deepIndex/deepIndexDb');
+      const current = openDeepIndexReader({ dbPath: worker.getDeepDbPath()! });
+      try {
+        expect(current.search({ query: 'quartz', scope: { type: 'session', sessionId: 'covered' }, maxResults: 1 }),
+          JSON.stringify({ transcriptReads, stats: current.getDeepIndexStats(),
+            progress: worker.getWorkerStatus().sessionProgress, enabledAtMs: worker.getSettings().enabledAtMs }))
+          .toHaveLength(status === 'indexed' ? 1 : 0);
+      } finally { current.close(); }
+    } finally { releaseRead(); await Promise.allSettled([revision, refresh]); await worker.stop(); }
   });
   it('publishes Session readiness only after the latest observed cursor and revisions are indexed', async () => {
     let resume = () => {};
     let started = () => {};
     let deferred: Promise<void> | null = null;
+    let text = 'quartz';
+    let snapshotReads = 0;
+    let incrementalReads = 0;
     const session = { id: 'local', machineId: 'machine_1', seq: 1, createdAt: 1000, updatedAt: 2000,
       active: false, activeAt: 0, archivedAt: null, encryptionMode: 'plain' };
     vi.doMock('@/session/transport/http/sessionsHttp', () => ({
@@ -399,46 +488,73 @@ describe('memoryWorker', () => {
     }));
     vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
       fetchEncryptedTranscriptMessagesPage: async () => {
+        snapshotReads += 1;
+        const snapshotText = text;
         if (deferred) { started(); await deferred; }
         return { messages: [{ id: 'message', seq: 1, createdAt: 1000,
-        messageRole: 'user', content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'quartz' } } } }],
+        messageRole: 'user', content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: snapshotText } } } }],
         hasMore: false, nextBeforeSeq: null, nextAfterSeq: null };
       },
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
-    await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
       coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({ credentials: { token: 't', encryption: null }, machineId: 'machine_1', deps: {
       fetchDecryptedTranscriptPageAfterSeq: async ({ afterSeq }) => {
+        incrementalReads += 1;
+        const snapshotText = text;
         if (deferred) { started(); await deferred; }
-        return afterSeq < 1 ? [{ seq: 1, createdAtMs: 1000, role: 'user', content: { type: 'text', text: 'quartz' } }] : [];
+        return afterSeq < 1 ? [{ seq: 1, createdAtMs: 1000, role: 'user', content: { type: 'text', text: snapshotText } }] : [];
       },
     } });
+    let revision: Promise<void> | undefined;
+    let syncing: Promise<void> | undefined;
     try {
+      expect(worker.getSettings()).toMatchObject({ backfillPolicy: 'all_history', coveragePolicy: { type: 'full' } });
       await worker.ensureUpToDate('local');
       const source = { type: 'happier_session', sessionId: 'local' };
       expect(worker.getIndexSources?.()).toEqual([{ source, state: 'ready' }]);
-      await worker.noteSessionTranscriptRevised?.({ sessionId: 'local', seq: 1 });
+      text = 'garnet revised';
+      deferred = new Promise(resolve => { resume = resolve; });
+      const revisionEntered = new Promise<void>(resolve => { started = resolve; });
+      revision = worker.noteSessionTranscriptRevised?.({ sessionId: 'local', seq: 1 });
+      await revision;
       expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'indexing' });
-      await worker.ensureUpToDate('local');
+      syncing = worker.ensureUpToDate('local');
+      await revisionEntered;
+      expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'indexing' });
+      resume(); await syncing; deferred = null;
       expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'ready' });
       session.seq = 2;
       deferred = new Promise(resolve => { resume = resolve; });
       const entered = new Promise<void>(resolve => { started = resolve; });
-      const syncing = worker.ensureUpToDate('local');
+      syncing = worker.ensureUpToDate('local');
       await entered;
       expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'indexing' });
-      await worker.noteSessionTranscriptRevised?.({ sessionId: 'local', seq: 1 });
-      resume(); await syncing; deferred = null;
+      text = 'sapphire revised while reading';
+      revision = worker.noteSessionTranscriptRevised?.({ sessionId: 'local', seq: 1 });
+      await revision;
       expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'indexing' });
+      resume(); await syncing; deferred = null;
       await worker.ensureUpToDate('local');
       expect(worker.getIndexSources?.()).toContainEqual({ source, state: 'ready' });
+      expect(worker.getWorkerStatus().sessionProgress).toMatchObject([{ sessionId: 'local', observedSeq: 2, checkedSeq: 2 }]);
+      const { openDeepIndexReader } = await import('./deepIndex/deepIndexDb');
+      const current = openDeepIndexReader({ dbPath: worker.getDeepDbPath()! });
+      try {
+        expect(current.search({ query: 'sapphire', scope: { type: 'session', sessionId: 'local' }, maxResults: 1 }),
+          JSON.stringify({ snapshotReads, incrementalReads, stats: current.getDeepIndexStats(),
+            progress: worker.getWorkerStatus().sessionProgress, enabledAtMs: worker.getSettings().enabledAtMs,
+            stale: current.search({ query: 'garnet', scope: { type: 'session', sessionId: 'local' }, maxResults: 1 }) }))
+          .toMatchObject([{ seqFrom: 1, seqTo: 1 }]);
+        expect(current.search({ query: 'garnet', scope: { type: 'session', sessionId: 'local' }, maxResults: 1 })).toEqual([]);
+      } finally { current.close(); }
       await worker.clearIndex();
       expect(worker.getIndexSources?.().some(row => row.state === 'ready')).toBe(false);
-    } finally { resume(); await worker.stop(); }
+    } finally { resume(); await Promise.allSettled([syncing, revision]); await worker.stop(); }
   });
-  const envBackup = snapshotEnvValues(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
+  const envBackup = snapshotEnvValues(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_LOG_LEVEL']);
   let homeDir: string | undefined;
 
   beforeEach(async () => {
@@ -499,7 +615,7 @@ describe('memoryWorker', () => {
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { configuration } = await import('@/configuration');
     const daemonBefore = configuration.isDaemonProcess;
     configuration.isDaemonProcess = true;
@@ -544,7 +660,7 @@ describe('memoryWorker', () => {
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
     const credentials: StoredCredentials = { token: 't', encryption: null };
     const first = await startMemoryWorker({ credentials, machineId: 'machine_1' });
@@ -677,7 +793,7 @@ describe('memoryWorker', () => {
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode, backfillPolicy: 'all_history' });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { registerMachineMemoryRpcHandlers } = await import('@/api/machine/rpcHandlers.memory');
     const { RPC_METHODS } = await import('@happier-dev/protocol/rpc/methods');
     const worker = await startMemoryWorker({ credentials, machineId: 'machine_1', deps: { fetchDecryptedTranscriptPageAfterSeq: async () => [] } });
@@ -852,7 +968,7 @@ describe('memoryWorker', () => {
     await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'new_only', worker: {
       inventoryRefreshIntervalMs: 5_000, tickIntervalMs: 500, maxSessionsPerTick: 1, sessionListPageLimit: 10,
     } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { logger } = await import('@/ui/logger');
     const diagnostics = vi.spyOn(logger, 'infoFile');
     const worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
@@ -904,7 +1020,7 @@ describe('memoryWorker', () => {
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', embeddings: { mode: 'preset', presetId: 'balanced' } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const starting = startMemoryWorker({ credentials: { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } }, machineId: 'machine_1' });
     const worker = await Promise.race([
       starting,
@@ -915,7 +1031,12 @@ describe('memoryWorker', () => {
       expect(worker?.getEmbeddingsDiagnostics()).toMatchObject({ runtimeState: 'downloading' });
       if (disableWhilePending) {
         await writeMemorySettingsToDisk({ v: 1, enabled: false, indexMode: 'deep', deleteOnDisable: true });
-        await worker?.reloadSettings();
+        const disabling = worker?.reloadSettings();
+        // The process boundary now joins terminal writer acknowledgement before
+        // deleting the cache. The in-process OS substitute drains the model write.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        finishInitialization();
+        await disabling;
       }
       finishInitialization();
       if (disableWhilePending) {
@@ -939,7 +1060,7 @@ describe('memoryWorker', () => {
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'hints' });
 
     const { configuration } = await import('@/configuration');
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
 
     const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } };
     const worker = await startMemoryWorker({
@@ -964,7 +1085,7 @@ describe('memoryWorker', () => {
     await mkdir(configuration.activeServerDir, { recursive: true });
     await symlink(outside, join(configuration.activeServerDir, 'memory'));
 
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const credentials: Credentials = {
       token: 't',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
@@ -979,7 +1100,7 @@ describe('memoryWorker', () => {
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'hints' });
 
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
 
     const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } };
     const worker = await startMemoryWorker({
@@ -998,7 +1119,7 @@ describe('memoryWorker', () => {
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep' });
 
     const { configuration } = await import('@/configuration');
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
 
     const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } };
     const worker = await startMemoryWorker({
@@ -1031,7 +1152,7 @@ describe('memoryWorker', () => {
       },
     });
 
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
 
     const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } };
     const worker = await startMemoryWorker({
@@ -1107,7 +1228,7 @@ describe('memoryWorker', () => {
         embeddings: { mode: 'preset', presetId: 'balanced' },
       });
 
-      const { startMemoryWorker } = await import('./memoryWorker');
+      const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
       const worker = await startMemoryWorker({
         credentials: { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
         machineId: 'machine_1',
@@ -1157,7 +1278,7 @@ describe('memoryWorker', () => {
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'hints' });
 
     const { configuration } = await import('@/configuration');
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
 
     const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } };
     const worker = await startMemoryWorker({
@@ -1192,7 +1313,7 @@ describe('memoryWorker', () => {
 
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'hints' });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } };
     const worker = await startMemoryWorker({ credentials, machineId: 'machine_1' });
 
@@ -1240,7 +1361,7 @@ describe('memoryWorker', () => {
         createdAt: '2026-10-09T00:00:00.000Z', updatedAt: '2026-10-09T00:00:00.000Z' }], nextCursor: null, hasNext: false }),
     }));
 
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { searchTier1Memory } = await import('./searchMemory');
 
     const credentials: StoredCredentials = { token: 't', encryption: null };
@@ -1286,7 +1407,7 @@ describe('memoryWorker', () => {
       backfillPolicy: 'all_history',
     });
 
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { searchTier2Memory } = await import('./searchMemory');
 
     const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } };
@@ -1358,7 +1479,7 @@ describe('memoryWorker', () => {
       contentPolicy: { includeUserMessages: true, includeAssistantMessages: false },
     });
 
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { searchTier2Memory } = await import('./searchMemory');
     const credentials: StoredCredentials = { token: 't', encryption: null };
     const worker = await startMemoryWorker({
@@ -1408,7 +1529,7 @@ describe('memoryWorker', () => {
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
       coveragePolicy: { type: 'full' }, contentPolicy: { includeAssistantMessages: false },
       conversationSearch: { indexExternal: { enabled: true, agents: ['claude'] } } });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
     const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
     const { memoryIndexPolicyKey, resolveMemoryIndexPolicy } = await import('./transcript/coveragePolicy');
@@ -1485,7 +1606,7 @@ describe('memoryWorker', () => {
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep' });
     const { configuration } = await import('@/configuration');
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
     const { RpcHandlerManager } = await import('@/api/rpc/RpcHandlerManager');
     const { registerMachineMemoryRpcHandlers } = await import('@/api/machine/rpcHandlers.memory');
@@ -1522,7 +1643,7 @@ describe('memoryWorker', () => {
     }));
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     await writeMemorySettingsToDisk({ v: 1, enabled: true, indexMode: 'deep', backfillPolicy: 'all_history' });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
     const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
     const worker = await startMemoryWorker({ credentials: { token: 't', encryption: null }, machineId: 'machine_1' });
@@ -1560,7 +1681,7 @@ describe('memoryWorker', () => {
       indexMode: 'deep',
       deep: { includeToolOutput: true },
     });
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
     const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
     const { searchTier2Memory } = await import('./searchMemory');
@@ -1709,7 +1830,7 @@ describe('memoryWorker', () => {
       coveragePolicy: { type: 'full' },
     });
 
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const { searchTier2Memory } = await import('./searchMemory');
 
     const credentials: StoredCredentials = { token: 't', encryption: null };
@@ -1749,6 +1870,7 @@ describe('memoryWorker', () => {
     };
     await worker.ensureUpToDate('sess-role-filter');
     await worker.ensureUpToDate('sess-role-filter');
+    expect(transcriptText).toBe('latest topaz conversation');
     const newest = await searchTier2Memory({ dbPath: deepPath!,
       query: { v: 1, query: 'topaz', scope: { type: 'global' }, mode: 'deep' }, previewChars: 240 });
     expect(newest.ok && newest.hits).toHaveLength(1);
@@ -1860,7 +1982,7 @@ describe('memoryWorker', () => {
       },
     });
 
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
 
     const credentials: Credentials = { token: 't', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } };
     const worker = await startMemoryWorker({
@@ -1962,7 +2084,7 @@ describe('memoryWorker', () => {
         },
       });
 
-      const { startMemoryWorker } = await import('./memoryWorker');
+      const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
       const credentials: StoredCredentials = { token: 't', encryption: null };
       const worker = await startMemoryWorker({
         credentials,

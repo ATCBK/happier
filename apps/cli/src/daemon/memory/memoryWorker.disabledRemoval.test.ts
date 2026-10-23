@@ -11,6 +11,8 @@ import { openSqliteDatabaseSync } from '../persistence/sqliteSync';
 
 type RemovalEvent = 'deleted' | 'revoked' | 'reset';
 
+await import('./testkit/inProcessMemoryIndexer');
+
 const CREDENTIALS: StoredCredentials = {
   token: 't',
   encryption: null,
@@ -122,7 +124,7 @@ describe('memoryWorker retained removal while disabled', () => {
       deleteOnDisable: false,
     });
 
-    const { startMemoryWorker } = await import('./memoryWorker');
+    const { startMemoryWorker } = await import('./testkit/startMemoryWorker');
     const worker = await startMemoryWorker({
       credentials: CREDENTIALS,
       machineId: 'machine_1',

@@ -22,9 +22,8 @@ async function enforceSqliteBudget(params: Readonly<{
   // WAL growth is often fully reclaimable without evicting useful rows. Ask
   // the incumbent DB owner to checkpoint first, then charge the remaining
   // physical main/WAL/SHM footprint to the configured budget.
-  if (await getSqliteFootprintBytes(params.dbPath) > budget) {
-    params.vacuum();
-  }
+  if (await getSqliteFootprintBytes(params.dbPath) <= budget) return;
+  params.vacuum();
 
   for (;;) {
     const size = await getSqliteFootprintBytes(params.dbPath);

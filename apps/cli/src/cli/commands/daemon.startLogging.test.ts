@@ -1,3 +1,6 @@
+// Prepare the real normal-command runtime during collection, as before lazy worker dispatch.
+import './daemonControl';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 
