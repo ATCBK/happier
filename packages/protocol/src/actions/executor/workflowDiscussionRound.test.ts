@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createActionExecutor } from '../actionExecutor.js';
 import { createWorkflowAccountRunActionOwner, type WorkflowAccountRunActionDeps } from './workflowRunActions.js';
-import { WorkflowInvocationListRequestV1Schema } from '../../workflows/actionsV1.js';
+import { WorkflowInvocationGetResultV1Schema, WorkflowInvocationListRequestV1Schema, WorkflowInvocationRetryResultV1Schema } from '../../workflows/actionsV1.js';
 import { DEBATE_WORKFLOW_V1 } from '../../workflows/builtins/debate.js';
 import { materializeWorkflowAcceptedSnapshotV1 } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
 import { WorkflowProgressEnvelopeV1Schema, WorkflowRunInvocationIndexV1Schema, WorkflowRunSummaryV1Schema } from '../../workflows/workflowProgressV1.js';
-import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
+import { openWorkflowProgressStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
 import { WorkflowRunRecipientCensusResponseV1Schema } from '../../workflows/workflowRunKeyV1.js';
 import { WorkflowDiscussionRoundProjectResultV1Schema } from '../../workflows/workflowDiscussionRoundV1.js';
 import type { ActionExecutorContext } from './types.js';
@@ -128,7 +128,7 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
     availability: { pause: true, resumeBoundary: false, restoreWorkspace: false, cancel: true, inspectExecution: false, disabledReasons: [] },
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
   const snapshot = { run, acceptedEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
-    binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId }, acceptedSnapshot: accepted.snapshot })), checkpointEnvelope: null, resultEnvelope: null,
+    binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId }, acceptedSnapshot: accepted.snapshot })), checkpointEnvelope: null as string | null, resultEnvelope: null,
     keyCensus: WorkflowRunRecipientCensusResponseV1Schema.parse({ runId, ownerAccountId: 'account-1', visibleTeamId: null, encryptionMode: 'plain', access: 'owner',
       ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null }, dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [] }) };
   const cost = { requests: 0, pages: 0, historyPages: 0, envelopes: 0, bytes: 0 };
@@ -141,7 +141,30 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
     storage: { execute: async operation => {
       cost.requests += 1;
       if (operation.operation === 'get') return snapshot;
-      if (operation.operation !== 'invocations.list') throw new Error('Unexpected detail/recovery read');
+      if (operation.operation === 'invocations.get') return { invocation: { ...row(String(operation.invocationId)), parentRevision: run.revision } };
+      if (operation.operation === 'invocations.recover') {
+        // Substitute only persistence: all replacement identities, progress and
+        // envelopes are produced by the real retry Action above this boundary.
+        const replacements = operation.recoveries as Array<{ invocationId: string; newInvocationId: string; contentEnvelope: string }>;
+        const replacementIds = new Map(replacements.map(item => [item.invocationId, item.newInvocationId]));
+        for (const item of replacements) {
+          const previous = row(item.invocationId);
+          const index = WorkflowRunInvocationIndexV1Schema.parse({ ...previous.index, id: item.newInvocationId,
+            parentRecordId: replacementIds.get(previous.index.parentRecordId!) ?? previous.index.parentRecordId,
+            sequence: String(rows.length), attempt: String(BigInt(previous.index.attempt) + 1n), lifecycle: 'pending' });
+          const opened = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', envelope: parseWorkflowStoredContentEnvelopeV1(item.contentEnvelope)!,
+            binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId, recordId: index.id,
+              sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt } });
+          if (opened.kind !== 'available') throw new Error('retry_producer_envelope_invalid');
+          previous.index.lifecycle = 'superseded';
+          rows.push({ index, progress: WorkflowProgressEnvelopeV1Schema.parse(opened.content), contentEnvelope: item.contentEnvelope });
+        }
+        run.revision += 1;
+        run.state = 'queued';
+        snapshot.checkpointEnvelope = String(operation.checkpointEnvelope);
+        return { run, invocations: replacements.map(item => row(item.newInvocationId).index), disposition: 'accepted' };
+      }
+      if (operation.operation !== 'invocations.list') throw new Error('Unexpected storage operation');
       cost.pages += 1;
       const input = WorkflowInvocationListRequestV1Schema.parse({ runId, ...(operation.invocationId === undefined ? {} : { invocationId: operation.invocationId }),
         ...(operation.parentRecordIds === undefined ? {} : { parentRecordIds: operation.parentRecordIds }),
@@ -161,7 +184,7 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
         cost.envelopes += page.length;
         cost.bytes += page.reduce((sum, row) => sum + Buffer.byteLength(row.contentEnvelope), 0);
       }
-      return { invocations: page.map(row => row.index), parentRevision: 0, keyCensus: snapshot.keyCensus,
+      return { invocations: page.map(row => row.index), parentRevision: run.revision, keyCensus: snapshot.keyCensus,
         ...(start + page.length < selected.length ? { nextCursor: String(start + page.length) } : {}),
         ...(operation.progressEnvelopes === true ? { progressEnvelopesByInvocationId: Object.fromEntries(page.map(row => [row.index.id, row.contentEnvelope])) } : {}) };
     } },
@@ -170,12 +193,81 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
   const context = (id: string): ActionExecutorContext => ({ surface: 'agent', serverId: 'home',
     actionRequestId: `${runId}/${row(id).progress.logicalInvocationRecordId}/${row(id).index.attempt}`,
     actionCaller: { kind: 'workflowRun', runId, authorization: accepted.snapshot.authorization } });
-  return { cost, executor, context, rounds, recover, move, row, seal,
+  const retry = async (id: string, recoverParent: boolean) => {
+    const failed = row(id);
+    failed.index.lifecycle = 'failed';
+    if (recoverParent) {
+      const parent = row(failed.index.parentRecordId!);
+      parent.index.lifecycle = 'failed';
+      failed.progress.reason = { code: `container_fail_stop:${parent.index.id}` };
+      seal(parent);
+    }
+    seal(failed);
+    run.state = 'interrupted';
+    snapshot.checkpointEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'checkpoint', accountId: 'account-1', runId }, checkpoint: {
+        kind: 'happier.workflow-checkpoint.v1', rootRecordId: root, nextSequence: String(rows.length),
+        frontier: { nextBlockOrdinal: 0, paused: false } } }));
+    const context: ActionExecutorContext = { surface: 'ui', authority: 'present_user', callerPermissionMode: 'yolo' };
+    const detail = WorkflowInvocationGetResultV1Schema.parse(await owner.execute({ actionId: 'workflow.run.invocations.get',
+      input: { runId, invocationId: id }, context }));
+    const availability = detail.invocation.recoveryAvailability?.retry;
+    if (availability?.kind !== 'available') throw new Error(`retry_unavailable:${JSON.stringify(availability)}`);
+    const result = WorkflowInvocationRetryResultV1Schema.parse(await owner.execute({ actionId: 'workflow.run.invocations.retry',
+      input: { runId, invocation: { recordId: id }, expectedRevision: run.revision,
+        causalInvocationIds: availability.causalInvocationIds, conversation: 'fresh_conversation', input: { kind: 'original' } }, context }));
+    expect(result.disposition).toBe('accepted');
+    Object.assign(cost, { requests: 0, pages: 0, historyPages: 0, envelopes: 0, bytes: 0 });
+    return result.invocation.id;
+  };
+  return { cost, executor, context, rounds, recover, retry, move, row, seal,
     omit: (id: string) => { rows.splice(rows.indexOf(row(id)), 1); }, miswire: () => { miswire = true; },
     miswireChildren: () => { miswireChildren = true; } };
 }
 
 describe('Discussion round projection demand', () => {
+  it.each([false, true])('binds a projector retry with recovered parent=%s', async recoverParent => {
+    const f = await fixture();
+    const round = f.rounds[2]!;
+    let action = round.complete;
+    for (let depth = 0; depth < 2; depth += 1) {
+      action = recoverParent ? await f.retry(action, true) : f.recover(action);
+      const result = await f.executor.execute('workflow.discussion.round.project',
+        { collections: ['speakers'], preparationBlockId: 'context' }, f.context(action));
+      expect(result).toMatchObject({ ok: true, result: { allPassed: false, hasNext: true,
+        throughSeq: 3, outcomeReferences: round.replies } });
+      expect(f.cost.historyPages).toBe(0);
+    }
+    if (recoverParent) {
+      // A later parent-only recovery inherits the still-current Action attempt.
+      // Binding must use the same predecessor-slot walk as projection/scheduling.
+      f.recover(f.row(action).index.parentRecordId!);
+      await expect(f.executor.execute('workflow.discussion.round.project',
+        { collections: ['speakers'], preparationBlockId: 'context' }, f.context(action)))
+        .resolves.toMatchObject({ ok: true, result: { outcomeReferences: round.replies } });
+      expect(f.cost.historyPages).toBe(0);
+    }
+    // A transport returning a different slot must not turn successful binding
+    // into permission to use unrelated progress.
+    f.miswire();
+    await expect(f.executor.execute('workflow.discussion.round.project', { collections: ['speakers'] }, f.context(action)))
+      .resolves.toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+  });
+
+  it.each(['logical', 'attempt', 'run', 'envelope'] as const)('refuses a recovered projector with wrong %s binding', async field => {
+    const f = await fixture();
+    const round = f.rounds[2]!;
+    const action = await f.retry(round.complete, true);
+    const context = f.context(action);
+    if (field === 'logical') context.actionRequestId = `${runId}/${round.prepare}/1`;
+    if (field === 'attempt') context.actionRequestId = `${runId}/${round.complete}/2`;
+    if (field === 'run' && context.actionCaller?.kind === 'workflowRun') context.actionCaller = {
+      ...context.actionCaller, runId: '99999999-9999-4999-8999-999999999999' };
+    if (field === 'envelope') f.row(action).contentEnvelope = f.row(round.prepare).contentEnvelope;
+    await expect(f.executor.execute('workflow.discussion.round.project', { collections: ['speakers'] }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+    expect(f.cost.historyPages).toBe(0);
+  });
   it('inherits committed collection and preparation from a recovered round frame', async () => {
     const f = await fixture();
     const round = f.rounds[2]!;
