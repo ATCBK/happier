@@ -179,6 +179,7 @@ export async function resolveServerAccountRequestContext(params: Readonly<{
   timeoutMs?: number;
   preferScoped?: boolean;
   signal?: AbortSignal;
+  networkMode?: 'background-task';
 }>): Promise<ResolvedServerAccountRequestContext> {
   throwIfAborted(params.signal);
   const targetServerId = normalizeId(params.serverId);
@@ -204,7 +205,7 @@ export async function resolveServerAccountRequestContext(params: Readonly<{
       serverUrl: activeSnapshot.serverUrl,
       timeoutMs,
       profile: getServerProfileById(activeServerId) ?? { serverUrl: activeSnapshot.serverUrl },
-    }), { watchActiveHome: true, signal: params.signal });
+    }), { watchActiveHome: params.networkMode !== 'background-task', signal: params.signal });
   }
 
   const resolvedTargetServerId = resolveServerProfileScopeIdForIdentifier(targetServerId);

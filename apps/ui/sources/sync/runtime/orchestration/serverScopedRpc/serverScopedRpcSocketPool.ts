@@ -1,4 +1,4 @@
-import { createHappierSocket, createSocketTransportAdapter } from '@happier-dev/sync-client';
+import { createHappierSocket, createSocketTransportAdapter, createSocketRpcAbortError } from '@happier-dev/sync-client';
 import { createRpcCallError, MACHINE_RPC_TIMEOUT_ERROR_CODE, readRpcErrorCode, type ScopedRpcSocketConnectionPhase } from '@happier-dev/protocol/rpcErrors';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
 import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
@@ -93,6 +93,7 @@ type PoolEntry = {
      * the socket built on it is gone — never when one logical client disconnects.
      */
     carrierRelease: (() => Promise<void>) | null;
+    backgroundTask: boolean;
     teardownRequested: boolean;
     teardownInFlight: Promise<void> | null;
 };
@@ -288,6 +289,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
         carrier: 'https' | 'iroh',
         homeCarrier: HomeCarrier | null,
         carrierRelease: (() => Promise<void>) | null,
+        backgroundTask = false,
     ): PoolEntry => {
         const key = buildEntryKey(serverUrl, reachabilityServerUrl, homeIdentityId, token, carrier, homeCarrier);
         const { socket, transport } = createSocket({ serverUrl, token, carrier, homeCarrier });
@@ -307,6 +309,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
             idleDisconnectTimer: null,
             reachabilityRelease: null,
             carrierRelease,
+            backgroundTask,
             teardownRequested: false,
             teardownInFlight: null,
         };
@@ -316,51 +319,54 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 entry.intentionalDisconnect = false;
                 return;
             }
-            deps.reachability.reportUnreachable(reachabilityServerUrl, new Error(typeof reason === 'string' ? reason : 'socket disconnect'), token);
+            if (!entry.backgroundTask) deps.reachability.reportUnreachable(reachabilityServerUrl, new Error(typeof reason === 'string' ? reason : 'socket disconnect'), token);
         });
         socket.on('connect_error', (error: unknown) => {
-            deps.reachability.reportUnreachable(reachabilityServerUrl, error, token);
+            if (!entry.backgroundTask) deps.reachability.reportUnreachable(reachabilityServerUrl, error, token);
         });
         socket.on('error', (error: unknown) => {
-            deps.reachability.reportUnreachable(reachabilityServerUrl, error, token);
+            if (!entry.backgroundTask) deps.reachability.reportUnreachable(reachabilityServerUrl, error, token);
         });
 
-        entriesByKey.set(key, entry);
+        if (!backgroundTask) entriesByKey.set(key, entry);
         return entry;
     };
 
-    const ensureConnected = async (entry: PoolEntry, deadlineAt: number): Promise<void> => {
+    const ensureConnected = async (entry: PoolEntry, deadlineAt: number, callerSignal?: AbortSignal): Promise<void> => {
         if (deadlineAt <= deps.now()) throw new ScopedRpcSocketConnectionTimeoutError('reachability-start');
         if (entry.socket.connected) return;
         if (!entry.connectInFlight) {
             const controller = new AbortController();
             const progress: { phase: ScopedRpcSocketConnectionPhase } = { phase: 'reachability-start' };
             const run = (async () => {
-                if (!entry.reachabilityRelease && deps.reachability.acquireReachability) {
-                    const lease = await deps.reachability.acquireReachability({
-                        serverUrl: entry.reachabilityServerUrl,
-                        runtimeOrigin: entry.serverUrl,
-                        token: entry.token,
-                        homeCarrier: entry.homeCarrier,
-                        signal: controller.signal,
-                    });
-                    if (controller.signal.aborted) {
-                        await lease.release();
-                        throw controller.signal.reason;
+                if (!entry.backgroundTask) {
+                    if (!entry.reachabilityRelease && deps.reachability.acquireReachability) {
+                        const lease = await deps.reachability.acquireReachability({
+                            serverUrl: entry.reachabilityServerUrl,
+                            runtimeOrigin: entry.serverUrl,
+                            token: entry.token,
+                            homeCarrier: entry.homeCarrier,
+                            signal: controller.signal,
+                        });
+                        if (controller.signal.aborted) {
+                            await lease.release();
+                            throw controller.signal.reason;
+                        }
+                        entry.reachabilityRelease = lease.release;
+                    } else if (!entry.reachabilityRelease) {
+                        await deps.reachability.startReachability({ serverUrl: entry.reachabilityServerUrl, token: entry.token });
                     }
-                    entry.reachabilityRelease = lease.release;
-                } else if (!entry.reachabilityRelease) {
-                    await deps.reachability.startReachability({ serverUrl: entry.reachabilityServerUrl, token: entry.token });
+                    if (controller.signal.aborted) throw controller.signal.reason;
+                    progress.phase = 'reachability-wait';
+                    await deps.reachability.waitForReachable({
+                        serverUrl: entry.reachabilityServerUrl,
+                        token: entry.token,
+                        signal: controller.signal,
+                        ...(entry.homeIdentityId ? { homeIdentityId: entry.homeIdentityId } : {}),
+                        homeCarrier: entry.homeCarrier,
+                    });
                 }
                 if (controller.signal.aborted) throw controller.signal.reason;
-                progress.phase = 'reachability-wait';
-                await deps.reachability.waitForReachable({
-                    serverUrl: entry.reachabilityServerUrl,
-                    token: entry.token,
-                    signal: controller.signal,
-                    ...(entry.homeIdentityId ? { homeIdentityId: entry.homeIdentityId } : {}),
-                    homeCarrier: entry.homeCarrier,
-                });
                 progress.phase = 'socket-connect';
                 await connectSocket(entry.transport, controller.signal);
             })();
@@ -384,14 +390,18 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                     settled = true;
                     cancelTimer();
                     signal.removeEventListener('abort', onAbort);
+                    callerSignal?.removeEventListener('abort', onCallerAbort);
                     if (error !== undefined) reject(error);
                     else resolve();
                 };
                 const onAbort = () => settle(signal.reason);
+                const onCallerAbort = () => settle(createSocketRpcAbortError());
                 const cancelTimer = armDeadlineTimer(Date.now() + Math.max(0, deadlineAt - deps.now()),
                     () => settle(new ScopedRpcSocketConnectionTimeoutError(connection.progress.phase)));
                 signal.addEventListener('abort', onAbort, { once: true });
+                callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
                 if (signal.aborted) onAbort();
+                if (callerSignal?.aborted) onCallerAbort();
                 void connection.result.then(() => settle(), (error: unknown) => settle(error));
             });
         } finally {
@@ -439,6 +449,8 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
         onCarrierReleaseTaken: (releaseCarrier: (() => Promise<void>) | null) => void,
         onEntryRetainsCarrierRelease: () => void,
     ): Promise<ScopedSocketClient> => {
+        if (params.signal?.aborted) throw createSocketRpcAbortError();
+        const backgroundTask = params.networkMode === 'background-task';
         const serverUrl = normalizeServerUrl(params.serverUrl);
         const reachabilityServerUrl = normalizeServerUrl(params.reachabilityServerUrl ?? params.serverUrl);
         const token = String(params.token ?? '');
@@ -455,7 +467,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
         }
 
         const key = buildEntryKey(serverUrl, reachabilityServerUrl, params.homeIdentityId ?? null, token, carrier, homeCarrier);
-        let entry = entriesByKey.get(key);
+        let entry = backgroundTask ? undefined : entriesByKey.get(key);
         while (entry?.teardownRequested) {
             // A retiring socket cannot be revived: join (or retry) its canonical teardown,
             // then resolve the key again in case another waiter already installed its successor.
@@ -479,6 +491,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 carrier,
                 homeCarrier,
                 takenCarrierRelease,
+                backgroundTask,
             );
             onEntryRetainsCarrierRelease();
         }
@@ -503,13 +516,21 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
             if (released) return;
             released = true;
             entry.inUseCount = Math.max(0, entry.inUseCount - 1);
-            scheduleIdleDisconnect(entry);
+            params.signal?.removeEventListener('abort', releaseOnce);
+            if (backgroundTask) {
+                fireAndForget(stopEntrySocket(entry, true), { tag: 'scoped-rpc-background-disconnect' });
+            } else {
+                scheduleIdleDisconnect(entry);
+            }
         };
 
+        params.signal?.addEventListener('abort', releaseOnce, { once: true });
         try {
-            await ensureConnected(entry, deadlineAt);
+            await ensureConnected(entry, deadlineAt, params.signal);
+            if (params.signal?.aborted) throw createSocketRpcAbortError();
         } catch (error) {
             releaseOnce();
+            if (params.signal?.aborted) throw createSocketRpcAbortError();
             throw error;
         }
 

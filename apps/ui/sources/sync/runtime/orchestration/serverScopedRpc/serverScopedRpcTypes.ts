@@ -151,6 +151,9 @@ export type ScopedSocketConnectParams = Readonly<{
     takeCarrierRelease?: () => (() => Promise<void>) | undefined;
     token: string;
     timeoutMs: number;
+    /** Caller-owned one-shot transport; does not resume foreground networking. */
+    networkMode?: 'background-task';
+    signal?: AbortSignal;
 }>;
 
 export type ScopedSocketClient = Readonly<{

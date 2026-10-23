@@ -59,11 +59,14 @@ async function callScopedSessionRpc<R, A>(params: Readonly<{
   payload: A;
   context: Extract<ResolvedServerAccountRequestContext, { scope: 'scoped' }>;
   operationTimeoutMs: number | null;
+  networkMode?: 'background-task';
   onIssued?: () => void;
   signal?: AbortSignal;
   transferRouting?: SessionTransferRoutingV1;
 }>): Promise<R> {
-  const releaseRequestLease = userRequestLeaseOwner.acquire();
+  const releaseRequestLease = params.networkMode === 'background-task'
+    ? () => {}
+    : userRequestLeaseOwner.acquire();
   let carrierCustodyTransferred = false;
   let socketForCleanup: Awaited<ReturnType<typeof createEphemeralServerSocketClient>> | null = null;
   try {
@@ -81,6 +84,7 @@ async function callScopedSessionRpc<R, A>(params: Readonly<{
       sessionId: params.sessionId,
       timeoutMs: params.context.timeoutMs,
       readTransport: params.context.readTransport,
+      ...(params.networkMode === 'background-task' ? { explicitRetry: true } : {}),
       signal: params.signal,
       ...(params.context.encryption
         ? {
@@ -92,10 +96,14 @@ async function callScopedSessionRpc<R, A>(params: Readonly<{
     if (params.signal?.aborted) throw createSocketRpcAbortError();
 
     const socket = await createEphemeralServerSocketClient(
-      createScopedSocketConnectParams(params.context, () => {
-        carrierCustodyTransferred = true;
-        return params.context.release;
-      }),
+      {
+        ...createScopedSocketConnectParams(params.context, () => {
+          carrierCustodyTransferred = true;
+          return params.context.release;
+        }),
+        ...(params.networkMode ? { networkMode: params.networkMode } : {}),
+        signal: params.signal,
+      },
     );
     socketForCleanup = socket;
     if (params.signal?.aborted) throw createSocketRpcAbortError();
@@ -245,6 +253,7 @@ export async function sessionRpcWithServerAccountScope<R, A>(params: Readonly<{
   timeoutMs?: number | null;
   onIssued?: () => void;
   signal?: AbortSignal;
+  networkMode?: 'background-task';
   transferRouting?: SessionTransferRoutingV1;
 }>): Promise<R> {
   if (params.signal?.aborted) throw markRpcRequestDisposition(createSocketRpcAbortError(), 'notSent');
@@ -252,6 +261,8 @@ export async function sessionRpcWithServerAccountScope<R, A>(params: Readonly<{
     serverId: params.scope.serverId,
     ...(typeof params.timeoutMs === 'number' ? { timeoutMs: params.timeoutMs } : {}),
     preferScoped: true,
+    signal: params.signal,
+    networkMode: params.networkMode,
   }).catch((error: unknown) => { throw markRpcRequestDisposition(error, 'notSent'); });
   if (context.scope !== 'scoped') {
     throw markRpcRequestDisposition(new Error('Exact pending dispatch scope did not resolve to scoped credentials'), 'notSent');
@@ -273,6 +284,7 @@ export async function sessionRpcWithServerAccountScope<R, A>(params: Readonly<{
     operationTimeoutMs: typeof params.timeoutMs === 'number' ? context.timeoutMs : null,
     onIssued: params.onIssued,
     signal: params.signal,
+    networkMode: params.networkMode,
     transferRouting: params.transferRouting,
   });
 }

@@ -50,6 +50,81 @@ function createFakeSocket(options: Readonly<{
 }
 
 describe('serverScopedRpcSocketPool', () => {
+
+    it('keeps one-shot background sockets outside foreground pause and socket reuse', async () => {
+        vi.useFakeTimers();
+        const { setServerReachabilityNetworkAllowed, isServerReachabilityNetworkAllowed } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+        const sockets: ReturnType<typeof createFakeSocket>[] = [];
+        // Substitute only the external socket. Foreground reachability stays real.
+        const pool = createServerScopedRpcSocketPool({ createSocket: () => {
+            const boundary = createFakeSocket();
+            sockets.push(boundary);
+            return boundary.socket;
+        } });
+        const clients: ScopedSocketClient[] = [];
+        try {
+            setServerReachabilityNetworkAllowed(false);
+            const params = { serverUrl: 'https://background.example.test', token: 'background-token', timeoutMs: 1_000,
+                networkMode: 'background-task' as const };
+            const first = pool.acquire(params).then(client => { clients.push(client); return client; }, error => error);
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(await first).toHaveProperty('connected', true);
+            const second = pool.acquire(params).then(client => { clients.push(client); return client; }, error => error);
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(await second).toHaveProperty('connected', true);
+            expect(sockets).toHaveLength(2);
+            setServerReachabilityNetworkAllowed(true);
+            setServerReachabilityNetworkAllowed(false);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(sockets.every(({ socket }) => socket.connected)).toBe(true);
+            clients[0]!.disconnect();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(sockets[0]!.socket.active).toBe(false);
+            expect(sockets[1]!.socket.connected).toBe(true);
+            expect(isServerReachabilityNetworkAllowed()).toBe(false);
+            // An ordinary acquisition still observes the foreground pause.
+            const foreground = pool.acquire({ serverUrl: params.serverUrl, token: params.token, timeoutMs: 1_000 })
+                .catch(error => error);
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(await foreground).toMatchObject({ connectionPhase: expect.stringMatching(/^reachability-/) });
+        } finally {
+            clients.forEach(client => client.disconnect());
+            await pool.stopAll();
+            pool.resetForTests();
+            setServerReachabilityNetworkAllowed(true);
+        }
+    });
+
+    it('aborts a stalled background handshake and releases its Home carrier without a late RPC', async () => {
+        vi.useFakeTimers();
+        const { setServerReachabilityNetworkAllowed } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+        const boundary = createSocketIoBoundaryStub({ autoConnect: false });
+        const controller = new AbortController();
+        const releaseCarrier = vi.fn(async () => {});
+        const pool = createServerScopedRpcSocketPool({ createSocket: () => boundary.socket });
+        try {
+            setServerReachabilityNetworkAllowed(false);
+            const result = pool.acquire({ serverUrl: 'https://background.example.test', token: 'background-token',
+                carrier: 'iroh', homeCarrier: createFakeHomeCarrier('background-endpoint'),
+                takeCarrierRelease: () => releaseCarrier, timeoutMs: 1_000,
+                networkMode: 'background-task', signal: controller.signal }).catch(error => error);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(boundary.socket.active).toBe(true);
+            controller.abort();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(await result).toMatchObject({ code: 'SOCKET_RPC_ABORTED' });
+            expect(boundary.socket.active).toBe(false);
+            expect(releaseCarrier).toHaveBeenCalledTimes(1);
+            boundary.trigger('connect');
+            await vi.advanceTimersByTimeAsync(0);
+            expect(boundary.socket.emitWithAck).not.toHaveBeenCalled();
+        } finally {
+            await pool.stopAll();
+            pool.resetForTests();
+            setServerReachabilityNetworkAllowed(true);
+        }
+    });
+
     afterEach(() => {
         vi.useRealTimers();
     });
