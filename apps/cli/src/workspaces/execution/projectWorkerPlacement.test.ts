@@ -1,4 +1,5 @@
 import axios from 'axios';
+import nacl from 'tweetnacl';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,8 +23,12 @@ import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { createProjectWorkerAdmission } from './projectWorkerAdmission';
 import { createProjectWorkerAction } from './projectWorkerAction';
 
+// Home publishes the receiving installation key so original CLI invocation custody can be sealed.
+const installationKey = nacl.sign.keyPair();
+
 function publishedMachineFixture(id: string) {
   return MachinePublishedRowV1Schema.parse({ id, kind: 'persistent', installationId: `${id}-installation`, active: true,
+    installationPublicKey: Buffer.from(installationKey.publicKey).toString('base64'),
     metadata: encodePlainMachineStoredContent(MachinePublishedMetadataV1Schema.parse({ host: id, platform: process.platform,
       happyCliVersion: '1.0.0', homeDir: '/home/owner', happyHomeDir: '/home/owner/.happier' })),
     metadataVersion: 1, daemonState: null, daemonStateVersion: 1, storageMode: 'plain',
@@ -96,7 +101,11 @@ describe('worker pool placement through the real target admission', () => {
     });
     vi.spyOn(axios, 'post').mockImplementation(async (url, body, config) => {
       if (url === 'https://home.invalid/v1/actions/projects.worker.status') {
-        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+        const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
+        expect(request.executionAuthorization?.binding).toMatchObject({ actionId: 'projects.worker.status',
+          serverIdentityId, machineId: 'target', installationId: 'target-installation',
+          requestId: envelope.requestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) });
         statusInputs.push(envelope.input);
         if (scenario.destination === 'unknown-status') throw new Error('Worker status transport unavailable');
         const result = await worker({ actionId: 'projects.worker.status',
@@ -105,7 +114,7 @@ describe('worker pool placement through the real target admission', () => {
         return { status: 200, data: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.worker.status',
           requestId: envelope.requestId, execution: { ok: true, result } }) };
       }
-      const authorizedAction = (['projects.inspect', 'projects.script.run'] as const)
+      const authorizedAction = (['projects.worker.status', 'projects.inspect', 'projects.script.run'] as const)
         .find(actionId => url === `https://home.invalid${bindExternalActionExecutionAuthorizationHttpPathV1(actionId)}`);
       if (authorizedAction) {
         expect(config?.headers).toMatchObject({ Authorization: `Bearer ${credentials.token}` });
@@ -271,6 +280,7 @@ describe('worker pool placement through the real target admission', () => {
     // Only Home HTTP and the Machine metadata carrier are substituted; the
     // Action, row opener, filesystem, queue, policy and selector remain real.
     const poolId = '99d55938-f860-4af8-8023-01fecec86f35';
+    const serverIdentityId = 'home-identity';
     const poolView = {
       pool: { id: poolId, name: 'Full worker', description: null, revision: 0, createdAt: 1, updatedAt: 1,
         members: [{ machineId: 'target', priorityTier: 0, enabled: true, state: 'connected' }] },
@@ -285,8 +295,20 @@ describe('worker pool placement through the real target admission', () => {
       throw new Error(`Unexpected worker-placement GET: ${url}`);
     });
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      if (url === `https://home.invalid${bindExternalActionExecutionAuthorizationHttpPathV1('projects.worker.status')}`) {
+        const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+        return { status: 200, data: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-status-authorization',
+          binding: { accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 1 }, serverIdentityId,
+            machineId: 'target', custodianAccountId: 'owner', installationId: 'target-installation',
+            accountEncryptionMode: 'plain', actionId: 'projects.worker.status', requestId: request.envelope.requestId,
+            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), target: request.envelope.target } }) };
+      }
       if (url === 'https://home.invalid/v1/actions/projects.worker.status') {
-        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(body);
+        const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
+        expect(request.executionAuthorization?.binding).toMatchObject({ actionId: 'projects.worker.status',
+          serverIdentityId, machineId: 'target', installationId: 'target-installation',
+          requestId: envelope.requestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) });
         const result = await worker({ actionId: 'projects.worker.status',
           input: ProjectWorkerActionInputSchemasV1['projects.worker.status'].parse(envelope.input),
           context: { surface: 'rpc', serverId: 'home', runtimeAccountId: 'owner', authority: 'account_automation' } });
@@ -331,7 +353,7 @@ describe('worker pool placement through the real target admission', () => {
       return result;
     });
     const params = { credentials, token: credentials.token, mode: 'plain' as const, ctx: null, sessionId: 'worker-placement',
-      serverId: 'home', serverHttpBaseUrl: 'https://home.invalid' };
+      serverId: 'home', serverIdentityId, serverHttpBaseUrl: 'https://home.invalid' };
     const executor = createCliActionExecutor({ ...params, pluginActionExecutionOwner: 'current_process',
       accountServerActionDeps: createAccountServerActionDeps(params) });
     const context = { surface: 'cli' as const, serverId: 'home', authority: 'account_automation' as const };
