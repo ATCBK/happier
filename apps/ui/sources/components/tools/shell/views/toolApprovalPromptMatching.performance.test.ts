@@ -70,10 +70,9 @@ describe('transcript approval matching cost', () => {
                 requests: listTranscriptApprovalArtifactsForSession([...artifacts, incoming], fixtureSession),
             }));
             expect(renders).toBe(1);
-            // Admission/membership also serialize their own data now that this fixture uses the
-            // real producer. Count input signatures (the canonicalizing replacer), not that work;
-            // unchanged-body admission has its own real-producer cost contract.
-            expect(stringify.mock.calls.filter(([, replacer]) => typeof replacer === 'function')).toHaveLength(1);
+            // TOTAL work: one new Session reference fact plus one new input signature.
+            // The producer's separate two-scale contract also includes every serialization.
+            expect(stringify.mock.calls.length).toBe(2);
             renders = 0;
             await screen.update(React.createElement(Transcript, {
                 requests: listTranscriptApprovalArtifactsForSession([...artifacts.slice(1), incoming], fixtureSession),

@@ -104,6 +104,7 @@ describe('useOpenApprovalSessionReferences', () => {
         const admit = vi.spyOn(approvalAdmission, 'approvalArtifactBodyMatchesHeaderV1');
         try {
             const hook = await renderHook(() => ({ open: useOpenApprovalArtifactsForSession(target),
+                references: useOpenApprovalSessionReferences(),
                 transcript: useTranscriptApprovalArtifactsForSession(target, presentations) }));
             const initial = hook.getCurrent();
             expect(initial.open).toHaveLength(139);
@@ -115,6 +116,16 @@ describe('useOpenApprovalSessionReferences', () => {
             expect(added.open.slice(0, 139).every((entry, index) => entry === initial.open[index])).toBe(true);
             expect(added.transcript.every((entry, index) => entry === added.open[index])).toBe(true);
             expect(added.transcript.slice(0, 139).every((entry, index) => entry === initial.transcript[index])).toBe(true);
+            expect(added.references).toBe(initial.references);
+            // Removing the first carrier of a still-present Session fact is not a badge change.
+            await act(async () => storage.setState(state => {
+                const artifacts = { ...state.artifacts };
+                delete artifacts[retained[0]!.id];
+                return { artifacts };
+            }));
+            expect(hook.getCurrent().references).toBe(initial.references);
+            expect(hook.getCurrent().open).toHaveLength(139);
+            expect(admit).toHaveBeenCalledTimes(1);
             await hook.unmount();
         } finally {
             admit.mockRestore();

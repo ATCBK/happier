@@ -22,57 +22,94 @@ function readString(value: unknown): string | null {
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+type SessionReferenceFact = Readonly<{
+    reference: OpenApprovalSessionReference;
+    sortKey: string;
+}> & { addressKey?: string };
+type SessionReferenceIndex = Map<string | null, Map<string, SessionReferenceFact>>;
+
 function addSessionReference(
-    referencesByKey: Map<string, OpenApprovalSessionReference>,
+    references: SessionReferenceIndex,
     value: unknown,
     serverId?: unknown,
 ): void {
     const sessionId = readString(value);
     if (!sessionId) return;
     const normalizedServerId = readString(serverId);
+    const sessions = references.get(normalizedServerId) ?? new Map<string, SessionReferenceFact>();
+    if (sessions.has(sessionId)) return;
     const reference: OpenApprovalSessionReference = normalizedServerId
         ? { kind: 'exact', address: { serverId: normalizedServerId, sessionId } }
         : { kind: 'legacy_unscoped', sessionId };
-    referencesByKey.set(JSON.stringify(reference), reference);
+    // Preserve the incumbent reference ordering/key only once, at immutable-fact derivation.
+    sessions.set(sessionId, { reference, sortKey: JSON.stringify(reference) });
+    references.set(normalizedServerId, sessions);
 }
 
 function collectSessionReferencesFromUnknownArray(
-    referencesByKey: Map<string, OpenApprovalSessionReference>,
+    references: SessionReferenceIndex,
     value: unknown,
     serverId?: unknown,
 ): void {
     if (!Array.isArray(value)) return;
     for (const entry of value) {
-        addSessionReference(referencesByKey, entry, serverId);
+        addSessionReference(references, entry, serverId);
     }
 }
 
-type ApprovalArtifactSnapshot = Readonly<{
-    header: NonNullable<DecryptedArtifact['header']>;
-    body: string | null;
+type AdmittedApprovalArtifactSnapshot = Readonly<{
     parsed: ParsedApprovalArtifactBodyV1 | null;
     sessionEntry: OpenApprovalArtifactForSession | null;
+    references: readonly SessionReferenceFact[];
 }>;
+
+type ApprovalArtifactSnapshot = {
+    header: NonNullable<DecryptedArtifact['header']>;
+    sessions: DecryptedArtifact['sessions'];
+    body: string | null;
+    headerReferences: readonly SessionReferenceFact[];
+    admitted?: AdmittedApprovalArtifactSnapshot;
+};
 
 // The Artifact producer retains unchanged header/body slices. Admit that immutable input once,
 // including refusals; metadata-only snapshots reuse admission, not membership or presentation.
 // Each header retains only its current body. Weak keys release removed snapshots with their owner.
-const admittedApprovalBodies = new WeakMap<ApprovalArtifactSnapshot['header'], Pick<ApprovalArtifactSnapshot, 'body' | 'parsed'>>();
+const admittedApprovalBodies = new WeakMap<ApprovalArtifactSnapshot['header'], Readonly<{
+    body: string | null;
+    parsed: ParsedApprovalArtifactBodyV1 | null;
+}>>();
 const approvalArtifactSnapshots = new WeakMap<DecryptedArtifact, ApprovalArtifactSnapshot>();
 
-function readApprovalArtifactSnapshot(artifact: DecryptedArtifact): ApprovalArtifactSnapshot | null {
+function readApprovalArtifactProjection(artifact: DecryptedArtifact): ApprovalArtifactSnapshot | null {
     const header = artifact.header;
     if (!header) return null;
     const body = typeof artifact.body === 'string' ? artifact.body : null;
     const previous = approvalArtifactSnapshots.get(artifact);
-    if (previous?.header === header && previous.body === body) return previous;
-    const admitted = admittedApprovalBodies.get(header);
-    const parsed = admitted?.body === body ? admitted.parsed : approvalArtifactBodyMatchesHeaderV1(header, body);
-    if (!admitted || admitted.body !== body) admittedApprovalBodies.set(header, { body, parsed });
-    const snapshot: ApprovalArtifactSnapshot = { header, body, parsed,
-        sessionEntry: parsed?.family === 'built_in' ? { artifact, approval: parsed.request } : null };
+    if (previous?.header === header && previous.sessions === artifact.sessions && previous.body === body) return previous;
+    const references: SessionReferenceIndex = new Map();
+    // These are facts, not authorization: portable Home aliases/membership stay in the live matcher.
+    const serverId = readString(header.serverIdentityId) ?? readString(header.serverId);
+    addSessionReference(references, header.sessionId, serverId);
+    collectSessionReferencesFromUnknownArray(references, artifact.sessions, serverId);
+    collectSessionReferencesFromUnknownArray(references, header.sessions, serverId);
+    const snapshot: ApprovalArtifactSnapshot = { header, sessions: artifact.sessions, body,
+        headerReferences: [...references.values()].flatMap(sessions => [...sessions.values()]) };
     approvalArtifactSnapshots.set(artifact, snapshot);
     return snapshot;
+}
+
+function readApprovalArtifactSnapshot(artifact: DecryptedArtifact): AdmittedApprovalArtifactSnapshot | null {
+    const snapshot = readApprovalArtifactProjection(artifact);
+    if (!snapshot) return null;
+    if (snapshot.admitted) return snapshot.admitted;
+    const admitted = admittedApprovalBodies.get(snapshot.header);
+    const parsed = admitted?.body === snapshot.body ? admitted.parsed
+        : approvalArtifactBodyMatchesHeaderV1(snapshot.header, snapshot.body);
+    if (!admitted || admitted.body !== snapshot.body) admittedApprovalBodies.set(snapshot.header, { body: snapshot.body, parsed });
+    const sessionEntry = parsed?.family === 'built_in' ? { artifact, approval: parsed.request } : null;
+    snapshot.admitted = { parsed, sessionEntry,
+        references: collectApprovalLinkedSessionReferences(snapshot, sessionEntry?.approval) };
+    return snapshot.admitted;
 }
 
 function readOpenApprovalInboxArtifact(artifact: DecryptedArtifact) {
@@ -187,37 +224,40 @@ export function listOpenApprovalInboxArtifactHydrationRequests(
 }
 
 function collectApprovalLinkedSessionReferences(
-    artifact: DecryptedArtifact,
+    snapshot: ApprovalArtifactSnapshot,
     approval?: ApprovalRequest | null,
-): readonly OpenApprovalSessionReference[] {
-    const referencesByKey = new Map<string, OpenApprovalSessionReference>();
-    // A producer's profile id is device-local. Its portable Home identity is
-    // the cross-device link; profile aliases are resolved only when matching.
-    const serverId = readString(artifact.header?.serverIdentityId) ?? readString(artifact.header?.serverId);
-    addSessionReference(referencesByKey, artifact.header?.sessionId, serverId);
-    collectSessionReferencesFromUnknownArray(referencesByKey, artifact.sessions, serverId);
-    collectSessionReferencesFromUnknownArray(referencesByKey, artifact.header?.sessions, serverId);
+): readonly SessionReferenceFact[] {
+    const references: SessionReferenceIndex = new Map();
+    for (const fact of snapshot.headerReferences) {
+        const reference = fact.reference;
+        const serverId = reference.kind === 'exact' ? reference.address.serverId : null;
+        const sessionId = reference.kind === 'exact' ? reference.address.sessionId : reference.sessionId;
+        const sessions = references.get(serverId) ?? new Map<string, SessionReferenceFact>();
+        sessions.set(sessionId, fact);
+        references.set(serverId, sessions);
+    }
     if (approval?.v === 2) {
         addSessionReference(
-            referencesByKey,
+            references,
             approval.executionOriginV1.sessionId ?? approval.createdBy.sessionId,
             approval.executionOriginV1.serverIdentityId ?? approval.executionOriginV1.serverId,
         );
     } else {
-        addSessionReference(referencesByKey, approval?.createdBy.sessionId, serverId);
+        addSessionReference(references, approval?.createdBy.sessionId,
+            readString(snapshot.header.serverIdentityId) ?? readString(snapshot.header.serverId));
     }
-    return [...referencesByKey.values()];
+    return [...references.values()].flatMap(sessions => [...sessions.values()]);
 }
 
 function referenceMatchesTarget(
-    reference: OpenApprovalSessionReference,
+    fact: SessionReferenceFact,
     target: SessionAddress | string,
     knownSessionAddresses: readonly SessionAddress[],
 ): boolean {
+    const reference = fact.reference;
     if (reference.kind === 'exact') {
-        const key = sessionAddressKey(reference.address);
         return typeof target === 'string'
-            ? key === target.trim()
+            ? (fact.addressKey ??= sessionAddressKey(reference.address)) === target.trim()
             : reference.address.sessionId === target.sessionId
                 && areServerProfileIdentifiersEquivalent(reference.address.serverId, target.serverId);
     }
@@ -238,7 +278,7 @@ export function listApprovalArtifactIdsNeedingHydrationForSession(
 ): string[] {
     return artifacts.filter(artifact => artifact.draft !== true && artifact.isDecrypted
         && artifact.header?.kind === 'approval_request.v1' && artifact.body === undefined
-        && collectApprovalLinkedSessionReferences(artifact).some(reference => referenceMatchesTarget(reference, target, knownSessionAddresses)))
+        && readApprovalArtifactProjection(artifact)?.headerReferences.some(reference => referenceMatchesTarget(reference, target, knownSessionAddresses)))
         .map(artifact => artifact.id);
 }
 
@@ -288,14 +328,16 @@ function listSessionApprovalArtifacts(
         // The strict reader requires the body's Session binding to match this
         // index. Unrelated headers cannot admit a body for this Session; avoid
         // reparsing every Account approval when its inventory changes.
-        if (!collectApprovalLinkedSessionReferences(artifact).some(reference => (
+        const snapshot = readApprovalArtifactProjection(artifact);
+        if (!snapshot?.headerReferences.some(reference => (
             referenceMatchesTarget(reference, target, knownSessionAddresses)
         ))) return [];
-        const entry = readApprovalArtifactSnapshot(artifact)?.sessionEntry;
-        if (!entry) return [];
+        const admitted = readApprovalArtifactSnapshot(artifact);
+        if (!admitted?.sessionEntry) return [];
+        const entry = admitted.sessionEntry;
         const { approval } = entry;
         if (approval.status === 'open' ? artifact.header?.approvalStatus !== 'open' : !keepsSettled?.(approval)) return [];
-        if (!collectApprovalLinkedSessionReferences(artifact, approval).some((reference) => (
+        if (!admitted.references.some((reference) => (
             referenceMatchesTarget(reference, target, knownSessionAddresses)
         ))) return [];
 
@@ -305,27 +347,43 @@ function listSessionApprovalArtifacts(
 
 export function collectOpenApprovalSessionReferences(
     artifacts: readonly DecryptedArtifact[],
+    previousReferences: readonly OpenApprovalSessionReference[] = [],
 ): readonly OpenApprovalSessionReference[] {
-    const referencesByKey = new Map<string, OpenApprovalSessionReference>();
+    const referencesByKey = new Map<string, SessionReferenceFact>();
+    // Reconcile the output facts at their producer, including removal of the first of several
+    // approvals for one Session. This baseline contains references only, never Artifact inventory
+    // or resolved Home authorization. It replaces the hook's whole-output signature comparison.
+    const previousByHome = new Map<string | null, Map<string, OpenApprovalSessionReference>>();
+    for (const reference of previousReferences) {
+        const home = reference.kind === 'exact' ? reference.address.serverId : null;
+        const sessionId = reference.kind === 'exact' ? reference.address.sessionId : reference.sessionId;
+        const sessions = previousByHome.get(home) ?? new Map<string, OpenApprovalSessionReference>();
+        sessions.set(sessionId, reference);
+        previousByHome.set(home, sessions);
+    }
 
     for (const artifact of artifacts) {
         if (artifact.header?.kind !== 'approval_request.v1') continue;
         if (artifact.header?.approvalStatus !== 'open') continue;
 
-        const approval = readApprovalArtifactSnapshot(artifact)?.sessionEntry?.approval;
+        const admitted = readApprovalArtifactSnapshot(artifact);
+        const approval = admitted?.sessionEntry?.approval;
         // The list badge is an index projection and must survive the normal
         // header-before-body hydration window. Once a body is present it must
         // validate and remain open; malformed or closed bodies fail closed.
         if (artifact.body != null && approval?.status !== 'open') continue;
 
-        for (const reference of collectApprovalLinkedSessionReferences(artifact, approval)) {
-            referencesByKey.set(JSON.stringify(reference), reference);
+        for (const fact of admitted?.references ?? []) {
+            if (!referencesByKey.has(fact.sortKey)) referencesByKey.set(fact.sortKey, fact);
         }
     }
 
-    return [...referencesByKey.values()].sort((left, right) => (
-        JSON.stringify(left).localeCompare(JSON.stringify(right))
-    ));
+    return [...referencesByKey.values()].sort((left, right) => left.sortKey.localeCompare(right.sortKey))
+        .map(({ reference }) => {
+            const home = reference.kind === 'exact' ? reference.address.serverId : null;
+            const sessionId = reference.kind === 'exact' ? reference.address.sessionId : reference.sessionId;
+            return previousByHome.get(home)?.get(sessionId) ?? reference;
+        });
 }
 
 export function resolveOpenApprovalSessionKeys(

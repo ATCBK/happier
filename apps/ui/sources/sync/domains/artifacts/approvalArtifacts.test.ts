@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as approvalAdmission from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import * as serverProfiles from '@/sync/domains/server/serverProfiles';
 import { ApprovalRequestV1Schema, ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
 
 import type { DecryptedArtifact } from './artifactTypes';
@@ -22,6 +23,7 @@ import { describeApprovalRequestFields } from '@happier-dev/protocol/actions/act
 import { COMPOSER_SETTLED_APPROVAL_PRESENTATIONS, TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '@/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
 import { doesApprovalMatchToolCall } from '@/components/tools/shell/views/toolApprovalPromptMatching';
 import type { ToolCall } from '@happier-dev/session-core/messages';
+import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 
 function artifact(
     id: string,
@@ -108,6 +110,63 @@ function durableApprovalBody(sessionId: string) {
 }
 
 describe('listOpenApprovalArtifactsForSession', () => {
+    it.each([12, 139])('checks Home membership once per candidate on arrival among %i retained approvals', (retainedCount) => {
+        const target = { serverId: 'server-a', sessionId: 'membership-cost-session' };
+        const stored = (id: string) => {
+            const body = ApprovalRequestV1Schema.parse(approvalBody(target.sessionId));
+            return artifact(id, buildApprovalRequestArtifactHeaderV1(body, { legacyServerId: target.serverId }), body);
+        };
+        const retained = Array.from({ length: retainedCount }, (_, index) => stored(`membership-${index}`));
+        const incoming = stored('membership-incoming');
+        const initial = listTranscriptApprovalArtifactsForSession(retained, target);
+        // Call-through observation only: Home equivalence and strict admission remain real.
+        const comparisons = vi.spyOn(serverProfiles, 'areServerProfileIdentifiersEquivalent');
+        try {
+            const added = listTranscriptApprovalArtifactsForSession([...retained, incoming], target);
+            expect(added).toHaveLength(retainedCount + 1);
+            expect(added.slice(0, retainedCount).every((entry, index) => entry === initial[index])).toBe(true);
+            expect(comparisons).toHaveBeenCalledTimes(retainedCount + 1);
+        } finally { comparisons.mockRestore(); }
+    });
+
+    it.each([12, 139])('bounds TOTAL reference-producer serialization for one arrival among %i retained approvals', (retainedCount) => {
+        const target = { serverId: 'server-a', sessionId: 'reference-cost-session' };
+        const opaqueTarget = sessionAddressKey(target);
+        const stored = (id: string) => {
+            const body = ApprovalRequestV1Schema.parse(approvalBody(id.startsWith('distinct-open-reference-') ? id : target.sessionId));
+            return artifact(id, buildApprovalRequestArtifactHeaderV1(body, { legacyServerId: target.serverId }), body);
+        };
+        const unrelated = Array.from({ length: retainedCount === 139 ? 861 : 0 }, (_, index) => artifact(`note-${index}`,
+            { title: 'Note', kind: 'prompt_doc.v2' }, { markdown: 'Unrelated' }));
+        const measurements: { producer: string; retained: number; single: number; arrival: number; repeat: number }[] = [];
+        for (const producer of ['transcript', 'opaque-transcript', 'open-reference', 'distinct-open-reference'] as const) {
+            const retained = Array.from({ length: retainedCount }, (_, index) => stored(`${producer}-${index}`));
+            const incoming = stored(`${producer}-incoming`);
+            const single = stored(`${producer}-single`);
+            const project = (rows: readonly DecryptedArtifact[]) => producer === 'transcript' || producer === 'opaque-transcript'
+                ? listTranscriptApprovalArtifactsForSession(rows, producer === 'opaque-transcript' ? opaqueTarget : target)
+                : collectOpenApprovalSessionReferences(rows);
+            // Count every producer serialization, including admission and membership. All fixtures
+            // are constructed before observation; no signature-only or call-site filtering.
+            const stringify = vi.spyOn(JSON, 'stringify');
+            try {
+                project([single]);
+                const singleCount = stringify.mock.calls.length;
+                project([...retained, ...unrelated]);
+                stringify.mockClear();
+                project([...retained, ...unrelated, incoming]);
+                const arrival = stringify.mock.calls.length;
+                stringify.mockClear();
+                project([...retained, ...unrelated, incoming]);
+                const repeat = stringify.mock.calls.length;
+                measurements.push({ producer, retained: retainedCount, single: singleCount, arrival, repeat });
+                // One new approval may do its own cold work, never repeat retained approvals' work.
+                expect.soft(arrival, `${producer}: arrival versus one cold approval`).toBeLessThanOrEqual(singleCount);
+                expect.soft(repeat, `${producer}: unchanged snapshots`).toBe(0);
+            } finally { stringify.mockRestore(); }
+        }
+    });
+
     it('admits only replaced header/body snapshots and retains unaffected entries across a scale-shaped publication', () => {
         const target = { serverId: 'server-a', sessionId: 'retained-session' };
         const stored = (index: number) => {
@@ -176,6 +235,29 @@ describe('listOpenApprovalArtifactsForSession', () => {
             expect(other[0]?.approval).not.toBe(refreshed[42]?.approval);
             expect(admit).toHaveBeenCalledTimes(1);
         } finally { admit.mockRestore(); }
+    });
+
+    it('retains reference facts across duplicate carriers without caching replaced Session links', () => {
+        const body = ApprovalRequestV1Schema.parse(approvalBody('same'));
+        const header = buildApprovalRequestArtifactHeaderV1(body, { legacyServerId: 'home-a' });
+        const first = artifact('first', header, body);
+        const second = artifact('second', header, body);
+        const initial = collectOpenApprovalSessionReferences([first, second]);
+        const remaining = collectOpenApprovalSessionReferences([second], initial);
+        expect(remaining[0]).toBe(initial[0]);
+        // Outer Session links are an independently retained slice, not part of the header identity.
+        const extended = { ...second, sessions: ['same', 'additional'] };
+        const linked = collectOpenApprovalSessionReferences([extended], remaining);
+        expect(linked).toEqual(expect.arrayContaining([
+            { kind: 'exact', address: { serverId: 'home-a', sessionId: 'same' } },
+            { kind: 'exact', address: { serverId: 'home-a', sessionId: 'additional' } },
+        ]));
+        const replacedBody = ApprovalRequestV1Schema.parse(approvalBody('replacement'));
+        const replaced = artifact('second', buildApprovalRequestArtifactHeaderV1(replacedBody, { legacyServerId: 'home-b' }), replacedBody);
+        expect(collectOpenApprovalSessionReferences([replaced], linked)).toEqual([
+            { kind: 'exact', address: { serverId: 'home-b', sessionId: 'replacement' } },
+        ]);
+        expect(collectOpenApprovalSessionReferences([{ ...replaced, body: '{}' }], linked)).toEqual([]);
     });
 
     it('does not re-admit unchanged unrelated approvals for a Session or closed Inbox entries', () => {

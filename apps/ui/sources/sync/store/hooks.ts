@@ -3346,13 +3346,14 @@ export function useArtifactsLoaded(): boolean {
 
 function collectOpenApprovalSessionReferenceListFromArtifacts(
   artifacts: Readonly<Record<string, DecryptedArtifact>>,
+  previousReferences: ReadonlyArray<OpenApprovalSessionReference>,
 ): ReadonlyArray<OpenApprovalSessionReference> {
   const visibleArtifacts: DecryptedArtifact[] = [];
   for (const artifact of Object.values(artifacts)) {
     if (artifact.draft === true) continue;
     visibleArtifacts.push(artifact);
   }
-  const references = collectOpenApprovalSessionReferences(visibleArtifacts);
+  const references = collectOpenApprovalSessionReferences(visibleArtifacts, previousReferences);
   return references.length === 0 ? emptyOpenApprovalSessionReferences : references;
 }
 
@@ -3362,7 +3363,6 @@ export function useOpenApprovalSessionReferences(): ReadonlyArray<OpenApprovalSe
     let previousIsDataReady: boolean | null = null;
     let previousArtifacts: StorageState['artifacts'] | null = null;
     let previousReferences: ReadonlyArray<OpenApprovalSessionReference> = emptyOpenApprovalSessionReferences;
-    let previousReferenceSignature = JSON.stringify(previousReferences);
 
     selectorRef.current = (state) => {
       if (state.isDataReady === previousIsDataReady && state.artifacts === previousArtifacts) {
@@ -3371,14 +3371,9 @@ export function useOpenApprovalSessionReferences(): ReadonlyArray<OpenApprovalSe
 
       previousIsDataReady = state.isDataReady;
       previousArtifacts = state.artifacts;
-      const nextReferences = state.isDataReady
-        ? collectOpenApprovalSessionReferenceListFromArtifacts(state.artifacts)
+      previousReferences = state.isDataReady
+        ? collectOpenApprovalSessionReferenceListFromArtifacts(state.artifacts, previousReferences)
         : emptyOpenApprovalSessionReferences;
-      const nextReferenceSignature = JSON.stringify(nextReferences);
-      if (nextReferenceSignature !== previousReferenceSignature) {
-        previousReferences = nextReferences;
-        previousReferenceSignature = nextReferenceSignature;
-      }
       return previousReferences;
     };
   }
