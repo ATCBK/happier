@@ -5,6 +5,9 @@ import {
 } from '../../src/protocol/index.js';
 import type { AgentRuntimeFactory } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SpeechProviderRuntime } from '@happier-dev/plugin-sdk/voice/speech';
+import { PluginRightSidebarCountV1Schema, type PluginRightSidebarCountV1 } from '@happier-dev/plugin-sdk/ui';
+
+const sidebarCount: PluginRightSidebarCountV1 = PluginRightSidebarCountV1Schema.parse({ count: 2 });
 
 
 const executionRuntime: AgentRuntimeFactory = () => Object.freeze({
@@ -50,6 +53,8 @@ export const { manifest, activate } = definePlugin({
   },
   resources: {
     readme: { kind: 'asset', path: 'README.md', contentType: 'text/markdown' },
+    'summary-count': { source: 'dynamic', kind: 'config', scope: 'session', contentType: 'application/json',
+      runtime: { read: () => JSON.stringify(sidebarCount), observe: () => ({ dispose() {} }) } },
   },
   agents: {
     reviewer: {
@@ -110,6 +115,9 @@ export const { manifest, activate } = definePlugin({
       target: { kind: 'session' },
       renderer: 'summary-renderer',
       title: 'Summary',
+    }, {
+      id: 'counted-summary', container: 'rightSidebarTab', target: { kind: 'session' }, renderer: 'summary-renderer',
+      defaultPlacement: 'auto', countResourceId: 'summary-count',
     }],
     translations: [],
   },
