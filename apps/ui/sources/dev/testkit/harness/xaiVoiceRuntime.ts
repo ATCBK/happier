@@ -6,12 +6,21 @@ export class XaiVoiceWebSocket {
     static readonly CLOSING = 2;
     static readonly CLOSED = 3;
     static readonly instances: XaiVoiceWebSocket[] = [];
+    private static readonly observers = new Set<() => void>();
+    static subscribe(notify: () => void): () => void {
+        XaiVoiceWebSocket.observers.add(notify);
+        return () => { XaiVoiceWebSocket.observers.delete(notify); };
+    }
+    private static notify(): void {
+        for (const observer of XaiVoiceWebSocket.observers) observer();
+    }
     readyState: number = XaiVoiceWebSocket.CONNECTING;
     bufferedAmount = 0;
     readonly sent: string[] = [];
     readonly listeners = new Map<string, Set<(event: unknown) => void>>();
     constructor(readonly url: string, readonly protocols?: string | string[]) {
         XaiVoiceWebSocket.instances.push(this);
+        XaiVoiceWebSocket.notify();
         this.emit('open');
     }
     addEventListener(type: string, listener: (event: unknown) => void): void {
@@ -37,6 +46,7 @@ export class XaiVoiceWebSocket {
                 this.readyState = XaiVoiceWebSocket.CLOSED;
             for (const listener of this.listeners.get(type) ?? [])
                 listener(event);
+            XaiVoiceWebSocket.notify();
         }, 0);
     }
     send(value: string): void {
@@ -49,6 +59,7 @@ export class XaiVoiceWebSocket {
         if (this.readyState !== XaiVoiceWebSocket.OPEN)
             return;
         this.sent.push(value);
+        XaiVoiceWebSocket.notify();
         setTimeout(() => {
             if (this.readyState !== XaiVoiceWebSocket.CLOSED)
                 this.bufferedAmount = Math.max(0, this.bufferedAmount - byteLength);
@@ -73,6 +84,8 @@ export class XaiVoiceWebSocket {
 export async function createXaiVoiceRuntimeEnvironment(options: Readonly<{
     historySessionId?: string;
 }> = {}) {
+    const networkEvents = new EventTarget();
+    const notifyNetwork = () => networkEvents.dispatchEvent(new Event('network'));
     const { answerVoiceRealtimePreparationHttpRequest } = await import('@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary');
     const { createConnectedPurposeCatalogHttpBoundary } = await import('@/dev/testkit/harness/connectedAccountCatalogBoundary');
     const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
@@ -471,9 +484,17 @@ export async function createXaiVoiceRuntimeEnvironment(options: Readonly<{
             headers: { 'content-type': 'application/json' },
         });
     });
-    xaiAccountConnection = await restoreServerAccountForTest({ serverUrl: 'https://xai-composed.example.test', accountId: 'xai-composed-account', credentialScope: 'restored-home', request: accountRequest });
+    xaiAccountConnection = await restoreServerAccountForTest({ serverUrl: 'https://xai-composed.example.test', accountId: 'xai-composed-account', credentialScope: 'restored-home', request: async (input, init) => {
+        const responding = accountRequest(input, init);
+        notifyNetwork();
+        try { return await responding; } finally { notifyNetwork(); }
+    } });
     await xaiPurposes.hydrate({ serverId: xaiAccountConnection.home.id, accountId: 'xai-composed-account' });
     return {
+        subscribeNetwork(notify: () => void) {
+            networkEvents.addEventListener('network', notify);
+            return () => networkEvents.removeEventListener('network', notify);
+        },
         historySessionId: XAI_HISTORY_SESSION_ID,
         browser, audioContexts,
         physicalSockets: XaiVoiceWebSocket.instances,

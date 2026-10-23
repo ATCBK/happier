@@ -3,6 +3,7 @@ import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { installSessionOpsNetworkBoundary } from './sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from './syncSingletonLoader';
+import { createDeferred } from '../hooks/createDeferred';
 
 // Keep cold app initialization out of the individual transport assertions.
 const initialNetwork = await installSessionOpsNetworkBoundary();
@@ -20,12 +21,21 @@ afterEach(async () => {
 it('keeps the scoped RPC owner real above the saved-Home HTTP and Socket ports', async () => {
     network = await installSessionOpsNetworkBoundary();
     const home = await network.addHome('https://session-ops-network.test', 'account-a');
-    network.setRpcResponder(async request => ({ accepted: request.payload }));
+    const reply = createDeferred<void>();
+    network.setRpcResponder(async request => {
+        await reply.promise;
+        return { accepted: request.payload };
+    });
     const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
-    await expect(machineRpcWithServerScope({
+    const pending = machineRpcWithServerScope({
         serverId: home.id, machineId: 'machine-a', method: 'fixture-operation',
         payload: { value: 'captured' }, preferScoped: true,
-    })).resolves.toEqual({ accepted: { value: 'captured' } });
+    });
+    try {
+        await expect(network.waitForRpcRequest(request => request.method === 'fixture-operation'))
+            .resolves.toMatchObject({ targetId: 'machine-a', payload: { value: 'captured' } });
+    } finally { reply.resolve(); }
+    await expect(pending).resolves.toEqual({ accepted: { value: 'captured' } });
     expect(network.requests).toMatchObject([{
         serverUrl: home.serverUrl, token: home.token, targetId: 'machine-a',
         method: 'fixture-operation', payload: { value: 'captured' },

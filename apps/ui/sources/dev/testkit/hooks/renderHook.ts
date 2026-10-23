@@ -14,6 +14,7 @@ export type RenderHookOptions<Props> = Readonly<{
 export type RenderHookResult<Value, Props> = Readonly<{
     tree: renderer.ReactTestRenderer;
     getCurrent: () => Value;
+    subscribe: (notify: () => void) => () => void;
     rerender: (nextProps?: Props) => Promise<Value>;
     unmount: () => Promise<void>;
 }>;
@@ -33,9 +34,13 @@ export async function renderHook<Value, Props = void>(
     let latestValue!: Value;
     let latestProps = (options?.initialProps ?? (undefined as Props)) as Props;
     let tree!: renderer.ReactTestRenderer;
+    const listeners = new Set<() => void>();
 
     function HookHarness(props: Readonly<{ hookProps: Props }>) {
         latestValue = useValue(props.hookProps);
+        React.useLayoutEffect(() => {
+            for (const notify of listeners) notify();
+        });
         return null;
     }
 
@@ -53,6 +58,10 @@ export async function renderHook<Value, Props = void>(
     return {
         tree,
         getCurrent: () => latestValue,
+        subscribe: notify => {
+            listeners.add(notify);
+            return () => { listeners.delete(notify); };
+        },
         rerender: async (nextProps = latestProps) => {
             latestProps = nextProps;
             await act(async () => {
@@ -62,6 +71,7 @@ export async function renderHook<Value, Props = void>(
             return latestValue;
         },
         unmount: async () => {
+            listeners.clear();
             unregisterStandardCleanupTarget(tree);
             await act(async () => {
                 tree.unmount();

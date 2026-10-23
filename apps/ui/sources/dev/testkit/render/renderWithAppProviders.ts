@@ -13,6 +13,7 @@ export type RenderWithAppProvidersOptions = Readonly<{
 
 export type RenderWithAppProvidersResult = Readonly<{
     tree: renderer.ReactTestRenderer;
+    subscribe: (notify: () => void) => () => void;
     update: (element: React.ReactElement) => Promise<void>;
     unmount: () => Promise<void>;
 }>;
@@ -47,13 +48,17 @@ export async function renderWithAppProviders(
     options: RenderWithAppProvidersOptions = {},
 ): Promise<RenderWithAppProvidersResult> {
     let tree!: renderer.ReactTestRenderer;
+    const listeners = new Set<() => void>();
+    const onCommit = () => { for (const notify of listeners) notify(); };
+    const renderElement = (value: React.ReactElement) => React.createElement(React.Profiler,
+        { id: 'testkit.screen', onRender: onCommit }, applyWrapper(value, options.wrapper));
     const rendererOptions = options.createNodeMock
         // React supplies an object props bag; the SDK erases it to unknown in React 19.
         ? { createNodeMock: options.createNodeMock as renderer.TestRendererOptions['createNodeMock'] }
         : undefined;
 
     await act(async () => {
-        tree = renderer.create(applyWrapper(element, options.wrapper), rendererOptions);
+        tree = renderer.create(renderElement(element), rendererOptions);
         // Creation establishes cleanup ownership even if the SDK's initial
         // async flush later rejects or the containing test reaches its deadline.
         registerStandardCleanupTarget(tree);
@@ -62,13 +67,18 @@ export async function renderWithAppProviders(
 
     return {
         tree,
+        subscribe: notify => {
+            listeners.add(notify);
+            return () => { listeners.delete(notify); };
+        },
         update: async (nextElement) => {
             await act(async () => {
-                tree.update(applyWrapper(nextElement, options.wrapper));
+                tree.update(renderElement(nextElement));
             });
             await flushHookEffects(options.flushOptions);
         },
         unmount: async () => {
+            listeners.clear();
             unregisterStandardCleanupTarget(tree);
             await act(async () => {
                 tree.unmount();

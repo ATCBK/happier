@@ -55,6 +55,7 @@ export * from './harness/toolCallsGroupHarness';
 export * from './harness/toolViewHarness';
 export * from './harness/toolViewTestHelpers';
 export * from './hooks/createDeferred';
+export * from './hooks/waitForTestEvent';
 export * from './hooks/flushHookEffects';
 export * from './hooks/renderHook';
 export * from './performance/counts';

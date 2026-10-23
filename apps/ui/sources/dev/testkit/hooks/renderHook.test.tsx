@@ -61,6 +61,20 @@ describe('UI testkit hook helpers', () => {
         expect(hook.getCurrent()).toBe(10);
     });
 
+    it('notifies observers after a committed hook update and supports unsubscribing', async () => {
+        const { renderHook } = await import('./renderHook');
+        const hook = await renderHook(({ value }: { value: number }) => value, {
+            initialProps: { value: 1 },
+        });
+        const values: number[] = [];
+        const unsubscribe = hook.subscribe(() => values.push(hook.getCurrent()));
+        await hook.rerender({ value: 2 });
+        expect(values).toEqual([2]);
+        unsubscribe();
+        await hook.rerender({ value: 3 });
+        expect(values).toEqual([2]);
+    });
+
     it('flushes fake timers and microtasks when requested', async () => {
         const { renderHook } = await import('./renderHook');
         const { flushHookEffects } = await import('./flushHookEffects');

@@ -16,6 +16,28 @@ afterEach(() => {
 });
 
 describe('UI testkit render helpers', () => {
+    it('notifies screen and tree subscribers when a descendant commits after asynchronous work', async () => {
+        const { renderScreen } = await import('./renderScreen');
+        const { waitForTestEvent } = await import('../hooks/waitForTestEvent');
+        const response = createDeferred<string>();
+        function AsyncLeaf() {
+            const [value, setValue] = React.useState('pending');
+            React.useEffect(() => { void response.promise.then(setValue); }, []);
+            return React.createElement('Text', { testID: 'async.value' }, value);
+        }
+        const screen = await renderScreen(React.createElement(AsyncLeaf));
+        const commits = vi.fn();
+        const unsubscribe = screen.subscribe(commits);
+        const completed = waitForTestEvent(screen.tree.subscribe,
+            () => screen.findByTestId('async.value')?.children, value => value?.[0] === 'completed');
+        await act(async () => { response.resolve('completed'); });
+        expect(await completed).toEqual(['completed']);
+        expect(commits).toHaveBeenCalledOnce();
+        unsubscribe();
+        await screen.update(React.createElement('Text', null, 'replacement'));
+        expect(commits).toHaveBeenCalledOnce();
+    });
+
     it('retires a created renderer when the SDK initial act rejects after mounting', async () => {
         const sdk = await import('react-test-renderer');
         const { renderWithAppProviders } = await import('./renderWithAppProviders');

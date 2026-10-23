@@ -31,6 +31,7 @@ type OpenAiVoiceRuntime = Readonly<{
 }>;
 
 export type OpenAiVoiceRuntimeEnvironment = {
+  subscribeNetwork(notify: () => void): () => void;
   entry: BundledConversationRuntimeEntry;
   historySessionId: string;
   credentialMachineId: string;
@@ -72,6 +73,8 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
   credentialSource?: 'savedSecret' | 'connectedAccount';
   voice?: unknown;
 }> = {}): Promise<OpenAiVoiceRuntimeEnvironment> {
+  const networkEvents = new EventTarget();
+  const notifyNetwork = () => networkEvents.dispatchEvent(new Event('network'));
   await import('@/sync/syncEngine');
   const { createRecipientContractDigestV1, createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } = await import('@happier-dev/protocol');
   const { DaemonVoiceClientAccountOperationRequestV1Schema, DaemonVoiceClientAccountOperationResponseV1Schema } = await import('@happier-dev/protocol/daemon/voiceCredentials');
@@ -157,7 +160,10 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
           return { ok: false, error: 'RPC_METHOD_NOT_AVAILABLE' };
         }
         const parsed = DaemonVoiceClientAccountOperationRequestV1Schema.parse(request.params);
-        const response = await daemonAccountOperationTransport(parsed);
+        const responding = daemonAccountOperationTransport(parsed);
+        notifyNetwork();
+        let response: Awaited<ReturnType<OpenAiMintTransport>>;
+        try { response = await responding; } finally { notifyNetwork(); }
         // The daemon contract carries only 2xx provider responses; a refused credential is a typed failure.
         if (response.status < 200 || response.status > 299) {
           return { ok: true, result: DaemonVoiceClientAccountOperationResponseV1Schema.parse({
@@ -573,13 +579,15 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
       // Account transport after its prior content lifetime has been retired.
       activation: apiSocket.getMachineRequestScope() ? 'switch' : undefined,
       configureSocket: configureOpenAiDaemonSocket,
-      request: (input, init) => {
+      request: async (input, init) => {
         // Keep domain bootstrap/refresh traffic outside the replaceable
         // transcript writer. The shared Home boundary owns unclaimed HTTP 404s.
         const path = new URL(String(input)).pathname;
-        return init?.method === 'POST' && /^\/v2\/sessions\/[^/]+\/messages$/.test(path)
+        const responding = init?.method === 'POST' && /^\/v2\/sessions\/[^/]+\/messages$/.test(path)
           ? transcriptRequest(input, init)
           : homeRequest(input, init);
+        notifyNetwork();
+        try { return await responding; } finally { notifyNetwork(); }
       },
     });
     await sync.refreshAccountSettingsFromServer(accountSettingsVersion, storage.getState().settingsScope);
@@ -616,6 +624,10 @@ export async function createOpenAiVoiceRuntimeEnvironment(options: Readonly<{
     await publishAccountSettings(buildOpenAiConnectedAccountSettings());
   };
   return {
+    subscribeNetwork(notify) {
+      networkEvents.addEventListener('network', notify);
+      return () => networkEvents.removeEventListener('network', notify);
+    },
     entry: openAiEntry(), historySessionId: OPENAI_HISTORY_SESSION_ID, credentialMachineId: OPENAI_CREDENTIAL_MACHINE_ID,
     providerFetch, transcriptMessageUrl, createClientAuthProviderResponse: createOpenAiClientAuthProviderResponse,
     accountConnection: accountConnection!, sessionHttp, purposes, transcriptRequest, homeRequest, allowedTranscriptMessageUrls,

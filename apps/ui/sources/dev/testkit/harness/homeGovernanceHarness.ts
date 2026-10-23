@@ -287,6 +287,8 @@ export type HomeGovernanceHarness = Readonly<{
     requireActionApproval(serverId: string, actionId: string | readonly string[], surface: ActionSurfaceKey): Promise<void>;
     /** Requests recorded for one path, for asserting what was asked and where. */
     requestsFor(path: string): RecordedHomeRequest[];
+    /** Observe physical Home request admission and response settlement. */
+    subscribe(listener: () => void): () => void;
     /**
      * The Artifact rows this Home persists for its Account. Every Home serves
      * its Artifact routes statefully, with the Home's versioned
@@ -332,6 +334,7 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
     const homesByServerId = new Map<string, HomeRecord>();
     const homesByServerUrl = new Map<string, HomeRecord>();
     const requests: RecordedHomeRequest[] = [];
+    const requestListeners = new Set<() => void>();
     /** Whether this harness wrote an explicit approval requirement to undo. */
     let seededApprovalRequirement: Readonly<{ serverId: string; accountId: string; policy: Settings['actionsSettingsV1'] }> | null = null;
     const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
@@ -342,6 +345,10 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
     let harness: HomeGovernanceHarness;
     harness = Object.freeze({
         requests,
+        subscribe(listener: () => void) {
+            requestListeners.add(listener);
+            return () => { requestListeners.delete(listener); };
+        },
         request: async (input: Parameters<RuntimeFetch>[0], init: Parameters<RuntimeFetch>[1]) => {
             const url = input instanceof Request ? input.url : String(input);
             const authorization = new Headers(init?.headers).get('Authorization');
@@ -622,7 +629,13 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             requests.length = 0;
         },
     });
+    homeRequestListeners.set(harness, requestListeners);
     return harness;
+}
+
+const homeRequestListeners = new WeakMap<HomeGovernanceHarness, Set<() => void>>();
+function notifyHomeRequests(harness: HomeGovernanceHarness) {
+    for (const listener of homeRequestListeners.get(harness) ?? []) listener();
 }
 
 function requireHarness(): HomeGovernanceHarness {
@@ -670,6 +683,17 @@ async function answerForEndpoint(
     init: RequestInit | undefined,
     token: string | null,
 ): Promise<Response> {
+    try { return await answerForEndpointBody(current, serverUrl, url, init, token); }
+    finally { notifyHomeRequests(current); }
+}
+
+async function answerForEndpointBody(
+    current: HomeGovernanceHarness,
+    serverUrl: string,
+    url: string,
+    init: RequestInit | undefined,
+    token: string | null,
+): Promise<Response> {
     const body = init?.body;
     const record = current.findByServerUrl(serverUrl);
     const path = url.startsWith(serverUrl) ? url.slice(serverUrl.length) : url;
@@ -687,6 +711,7 @@ async function answerForEndpoint(
         input,
         token,
     }));
+    notifyHomeRequests(current);
 
     const method = (init?.method ?? 'GET').toUpperCase();
     const route = new URL(path, serverUrl).pathname;
@@ -716,6 +741,7 @@ async function answerForEndpoint(
         const parts = createSessionReadBatchHttpBoundary(async component => {
             const partPath = `${component.url.pathname}${component.url.search}`;
             current.requests.push(Object.freeze({ serverId: record.serverId, serverUrl, path: partPath, input: null, token }));
+            notifyHomeRequests(current);
             const selected = await selectHomeDomainAnswer(record, partPath, 'GET', null, component.url.href, { ...init, method: 'GET', body: undefined });
             return selected ? await renderHomeDomainAnswer(selected, partPath, 'GET', null, init?.signal) : undefined;
         });

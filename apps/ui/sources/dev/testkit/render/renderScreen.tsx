@@ -13,6 +13,7 @@ import {
 
 declare module 'react-test-renderer' {
     interface ReactTestRenderer {
+        subscribe(notify: () => void): () => void;
         findByType(type: unknown): ReactTestInstance;
         findAllByType(type: unknown): ReactTestInstance[];
         findByProps(props: Record<string, unknown>): ReactTestInstance;
@@ -344,6 +345,7 @@ export async function renderScreen(
         },
     };
     const treeHelpers = {
+        subscribe: rendered.subscribe,
         findByType: helpers.findByType,
         findAllByType: helpers.findAllByType,
         findByProps: helpers.findByProps,
@@ -359,6 +361,7 @@ export async function renderScreen(
         changeTextByTestId: helpers.changeTextByTestId,
     } satisfies Pick<
         ReactTestRenderer,
+        | 'subscribe'
         | 'findByType'
         | 'findAllByType'
         | 'findByProps'

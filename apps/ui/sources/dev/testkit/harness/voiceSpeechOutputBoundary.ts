@@ -31,6 +31,7 @@ const fileRecording = vi.hoisted(() => ({
   setMuted: vi.fn<NonNullable<HappierAudioStreamNativeModule['setFileRecordingMuted']>>(async () => {}),
   stop: vi.fn<(params: Readonly<{ recordingId: string }>) => Promise<unknown>>(async () => ({ uri: 'file:///recording.m4a' })),
 }));
+const fileRecordingListeners = new Set<(event: 'start' | 'stop') => void>();
 const machineRpc = vi.hoisted(() => vi.fn());
 vi.mock('socket.io-client', async (importOriginal) => (
   await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -73,12 +74,18 @@ vi.mock('react-native', async () => {
 // stable across behaviors; reset only its OS observations, not internal owners.
 const audioSession = createNativeVoicePcmCaptureHarness();
 const nativeAudioModule = encodedAudio.nativeModule({ ...audioSession.nativeModule,
-  startFileRecording: fileRecording.start,
+  startFileRecording: (...args) => {
+    const starting = fileRecording.start(...args);
+    for (const listener of fileRecordingListeners) listener('start');
+    return starting;
+  },
   setFileRecordingMuted: fileRecording.setMuted,
   stopFileRecording: async params => {
     // The untyped OS bridge also supplies malformed replies in failure tests;
     // preserve them for the actual file-recorder's validation, not this fixture.
-    return await fileRecording.stop(params) as VoiceFileRecordingStopResult;
+    const stopping = fileRecording.stop(params);
+    for (const listener of fileRecordingListeners) listener('stop');
+    return await stopping as VoiceFileRecordingStopResult;
   },
 });
 vi.mock('expo-modules-core', async (importOriginal) => {
@@ -88,9 +95,18 @@ vi.mock('expo-modules-core', async (importOriginal) => {
 });
 const expoSpeechSpeak = vi.fn<(text: string, options: SpeechOptions) => void>();
 const expoSpeechStop = vi.fn();
+const speechListeners = new Set<(event: 'speak' | 'stop') => void>();
 vi.mock('expo-speech', () => ({
-  speak: (text: string, options: SpeechOptions) => expoSpeechSpeak(text, options),
-  stop: () => expoSpeechStop(),
+  speak: (text: string, options: SpeechOptions) => {
+    const result = expoSpeechSpeak(text, options);
+    for (const listener of [...speechListeners]) listener('speak');
+    return result;
+  },
+  stop: () => {
+    const result = expoSpeechStop();
+    for (const listener of [...speechListeners]) listener('stop');
+    return result;
+  },
 }));
 
 let filesystem: ReturnType<typeof createMemFs>;
@@ -132,6 +148,14 @@ export function createVoiceSpeechOutputBoundary(input: Readonly<{ getAccount: ()
   currentAccount = input.getAccount;
   return {
     platform: platformOsMock, encodedAudio, fileRecording, machineRpc, expoSpeechSpeak, expoSpeechStop,
+    subscribeSpeech(listener: (event: 'speak' | 'stop') => void) {
+      speechListeners.add(listener);
+      return () => { speechListeners.delete(listener); };
+    },
+    subscribeFileRecording(listener: (event: 'start' | 'stop') => void) {
+      fileRecordingListeners.add(listener);
+      return () => { fileRecordingListeners.delete(listener); };
+    },
     nativeInitialize, nativeSynthesize, nativeCancelInitialization, nativeCancel, nativeListVoices,
     native: sherpaNative,
     getAudioSessionCoordinator() {

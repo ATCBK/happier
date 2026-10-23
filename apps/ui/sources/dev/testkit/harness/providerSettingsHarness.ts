@@ -418,9 +418,16 @@ export function createProviderSettingsHarness(options: Readonly<{
         acknowledgementTransformers: new Map<string, ProviderRpcAcknowledgementTransformer>(),
         requests: [] as ProviderRpcRequest[],
     };
+    const listeners = new Set<() => void>();
+    const notify = () => { for (const listener of listeners) listener(); };
 
     const harness = {
         state,
+        /** Physical daemon RPC admission and response settlement. */
+        subscribe(listener: () => void) {
+            listeners.add(listener);
+            return () => { listeners.delete(listener); };
+        },
         setResponse(method: string, response: ProviderRpcResponse) {
             state.responses[method] = parseResponse(method, response);
         },
@@ -447,22 +454,25 @@ export function createProviderSettingsHarness(options: Readonly<{
         },
         async machineRpc(input: ProviderRpcRequest): Promise<ProviderRpcResponse> {
             state.requests.push(input);
-            const next = async (): Promise<ProviderRpcResponse> => {
-                const queued = state.queues.get(input.method)?.shift();
-                if (queued) return queued;
-                if (input.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTION_MUTATE) {
-                    return connectionMutationResponse(input.payload);
-                }
-                if (input.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_SETTINGS_MUTATE) {
-                    return modelSettingsMutationResponse(input.payload);
-                }
-                const response = state.responses[input.method];
-                if (!response) throw new Error(`No Provider test response for ${input.method}`);
-                return response;
-            };
-            const interceptor = state.interceptors.get(input.method);
-            const response = interceptor ? await interceptor(input, next) : await next();
-            return parseResponse(input.method, response);
+            notify();
+            try {
+                const next = async (): Promise<ProviderRpcResponse> => {
+                    const queued = state.queues.get(input.method)?.shift();
+                    if (queued) return queued;
+                    if (input.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTION_MUTATE) {
+                        return connectionMutationResponse(input.payload);
+                    }
+                    if (input.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_SETTINGS_MUTATE) {
+                        return modelSettingsMutationResponse(input.payload);
+                    }
+                    const response = state.responses[input.method];
+                    if (!response) throw new Error(`No Provider test response for ${input.method}`);
+                    return response;
+                };
+                const interceptor = state.interceptors.get(input.method);
+                const response = interceptor ? await interceptor(input, next) : await next();
+                return parseResponse(input.method, response);
+            } finally { notify(); }
         },
     };
     return harness;

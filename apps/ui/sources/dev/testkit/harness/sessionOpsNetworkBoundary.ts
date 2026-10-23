@@ -3,6 +3,7 @@ import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
 import { createSessionReadBatchFetchBoundary } from './sessionReadBatchHttpBoundary';
+import { waitForTestEvent } from '../hooks/waitForTestEvent';
 
 export type SessionOpsRpcRequest = Readonly<{
     serverUrl: string;
@@ -42,6 +43,7 @@ export type SessionOpsNetworkBoundary = Awaited<ReturnType<typeof installSession
 /** Scoped operations use real Home/Account admission and custody; only network and device locking are replaced. */
 export async function installSessionOpsNetworkBoundary() {
     const requests: SessionOpsRpcRequest[] = [];
+    const rpcListeners = new Set<() => void>();
     const responses = new Map<string, unknown>();
     let rpcResponder: ((request: SessionOpsRpcRequest) => Promise<unknown>) | null = null;
     let rpcAckResponder: ((request: SessionOpsRpcRequest) => Promise<SessionOpsRpcAck>) | null = null;
@@ -81,6 +83,7 @@ export async function installSessionOpsNetworkBoundary() {
             const request: SessionOpsRpcRequest = { serverUrl, token: options.auth?.token,
                 targetId: payload.method.slice(0, separator), method, payload: payload.params, timeoutMs };
             requests.push(request);
+            for (const notify of rpcListeners) notify();
             if (rpcAckResponder) return await rpcAckResponder(request);
             if (rpcResponder) return { ok: true, result: await rpcResponder(request) };
             if (!responses.has(method)) {
@@ -168,6 +171,17 @@ export async function installSessionOpsNetworkBoundary() {
         requests,
         httpRequests,
         request: runtimeFetchBoundary,
+        subscribeRpcRequests(notify: () => void) {
+            rpcListeners.add(notify);
+            return () => { rpcListeners.delete(notify); };
+        },
+        async waitForRpcRequest(predicate: (request: SessionOpsRpcRequest, all: readonly SessionOpsRpcRequest[]) => boolean) {
+            const request = await waitForTestEvent(notify => {
+                rpcListeners.add(notify);
+                return () => { rpcListeners.delete(notify); };
+            }, () => requests.find(value => predicate(value, requests)), value => value !== undefined);
+            return request!;
+        },
         get credentialRequests() {
             return credentialRequests;
         },
@@ -251,6 +265,7 @@ export async function installSessionOpsNetworkBoundary() {
                 // custody before clearing this fixture's transport responders.
                 await serverScopedRpcSocketPool.stopAll();
             } finally {
+                rpcListeners.clear();
                 rpcResponder = null;
                 rpcAckResponder = null;
                 httpResponder = null;
