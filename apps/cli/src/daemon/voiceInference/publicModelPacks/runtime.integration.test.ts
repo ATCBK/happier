@@ -20,12 +20,13 @@ import {
   ZIPFORMER_VOICE_MODEL_PACK_FIXTURE_PLUGIN_ID,
 } from '@/plugins/testkit/voiceModelPackPackage';
 import { startVoiceInferenceWorker } from '../voiceInferenceWorker';
-import { deriveVoiceModelPackLicenseTextDigestV1 } from '@happier-dev/voice-modelpacks';
+import { deriveVoiceModelPackLicenseTextDigestV1, deriveVoiceModelPackManifestDigestV1 } from '@happier-dev/voice-modelpacks';
 import { resolveVoiceInferencePaths } from '../voiceInferencePaths';
 import { createStorageCategoryCatalog } from '@/storage/categoryCatalog';
 import { readResidentVoiceModelPackPaths } from './storagePaths';
 import { readInstalledVoiceModelPackManifest } from '../voiceModelPackInstaller';
 import { createNodeInstalledModelPackIntegrityHost } from '../nodeModelPackIntegrityHost';
+import { createDaemonPublicVoiceModelPackStateStore } from './state';
 import { createNodeModelPackInstallerHost } from '../nodeModelPackInstallerHost';
 import type { PinnedHttpStreamTransport } from '@/network/pinnedHttp';
 import {
@@ -228,11 +229,32 @@ describe('daemon public Voice model-pack consumed vertical', () => {
     const installer = createDaemonPublicVoiceModelPackRuntime(params);
     const declared = await installer.list();
     expect(declared).toHaveLength(32);
-    for (const entry of declared) {
-      await installer.install({ key: entry.key, signal: new AbortController().signal });
-    }
-    const runtime = createDaemonPublicVoiceModelPackRuntime(params);
     const selected = declared[0]!;
+    const installed = await installer.install({ key: selected.key, signal: new AbortController().signal });
+    if (!installed.installedMetadata || !installed.installedManifest) throw new Error('fixture_install_missing');
+    const installedMetadata = installed.installedMetadata;
+    const installedManifest = installed.installedManifest;
+    const state = createDaemonPublicVoiceModelPackStateStore(params);
+    // One real install supplies verified bytes and provenance. Seed the other
+    // declared packs through the strict state writer; repeated installer flows
+    // are covered below and are not part of this read-cost workload.
+    await Promise.all(declared.slice(1).map(async (entry) => {
+      const descriptor = entry.descriptor;
+      if (!descriptor?.contribution || !descriptor.artifactBinding) throw new Error('fixture_descriptor_missing');
+      const directory = join(paths.packsRootDir, entry.directoryKey);
+      await cp(join(paths.packsRootDir, installed.directoryKey), directory, { recursive: true });
+      await writeFile(join(directory, 'pack.json'), JSON.stringify({ ...installedManifest, packId: entry.directoryKey }));
+      await state.recordInstalled({
+        ...installedMetadata,
+        identity: entry.identity,
+        directoryKey: entry.directoryKey,
+        artifactBinding: descriptor.artifactBinding,
+        pluginVersion: descriptor.pluginVersion,
+        packVersion: descriptor.contribution.manifest.version,
+        manifestDigest: deriveVoiceModelPackManifestDigestV1(descriptor.contribution.manifest),
+      });
+    }));
+    const runtime = createDaemonPublicVoiceModelPackRuntime(params);
     fingerprinted.length = 0;
     expect(await runtime.resolve(selected.key)).toMatchObject({ key: selected.key, installedManifest: expect.any(Object) });
     expect(fingerprinted).toEqual([selected.directoryKey]);
