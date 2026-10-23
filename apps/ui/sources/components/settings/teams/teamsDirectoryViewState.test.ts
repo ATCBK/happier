@@ -69,6 +69,35 @@ function snapshot(
 const HOME_NAMES: Readonly<Record<string, string>> = { alpha: 'Alpha', beta: 'Beta' };
 
 describe('resolveTeamsDirectoryViewState', () => {
+    it('rebuilds only changed row projections in a 400-Team directory', () => {
+        const teams = Array.from({ length: 400 }, (_, i) => team(`team-${i}`, `Team ${i}`));
+        const input = {
+            homes: [{ serverId: 'alpha', state: 'capable' as const }],
+            homeNamesByServerId: HOME_NAMES,
+            snapshotsByServerId: { alpha: snapshot('alpha', teams) },
+        };
+        const initial = resolveTeamsDirectoryViewState(input);
+        const changed = teams.map((row, i) => i === 200 ? { ...row, name: 'Renamed' } : row);
+        const next = resolveTeamsDirectoryViewState({ ...input,
+            snapshotsByServerId: { alpha: snapshot('alpha', changed) },
+        }, initial);
+        expect(next.rows.filter((row, i) => row !== initial.rows[i])).toHaveLength(1);
+        expect(next.rows[200]?.team.name).toBe('Renamed');
+        const refreshed = resolveTeamsDirectoryViewState({ ...input,
+            snapshotsByServerId: { alpha: snapshot('alpha', changed, { lastObservedAt: 20 }) },
+        }, next);
+        expect(refreshed.rows).toBe(next.rows);
+        const reordered = resolveTeamsDirectoryViewState({ ...input,
+            snapshotsByServerId: { alpha: snapshot('alpha', [...changed].reverse()) },
+        }, next);
+        expect(reordered.rows[0]).toBe(next.rows[399]);
+        const renamedHome = resolveTeamsDirectoryViewState({ ...input,
+            homeNamesByServerId: { alpha: 'Renamed Home' },
+            snapshotsByServerId: { alpha: snapshot('alpha', changed) },
+        }, next);
+        expect(renamedHome.rows.every((row) => row.homeName === 'Renamed Home')).toBe(true);
+    });
+
     it('renders an offline Home with the shared unavailable glyph and working recovery', async () => {
         const state = resolveTeamsDirectoryViewState({
             homes: [{ serverId: 'alpha', state: 'capable' }],
@@ -326,14 +355,4 @@ describe('resolveTeamsDirectoryViewState', () => {
         expect(state.partial).toBe(true);
     });
 
-    it('preserves row identity across an unchanged re-resolution', () => {
-        const input = {
-            homes: [{ serverId: 'alpha', state: 'capable' as const }],
-            homeNamesByServerId: HOME_NAMES,
-            snapshotsByServerId: { alpha: snapshot('alpha', [team('t1', 'Acme')]) },
-        };
-        const first = resolveTeamsDirectoryViewState(input);
-        const second = resolveTeamsDirectoryViewState(input);
-        expect(second.rows[0]?.team).toBe(first.rows[0]?.team);
-    });
 });

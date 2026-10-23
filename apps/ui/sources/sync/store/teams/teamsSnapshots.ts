@@ -7,6 +7,7 @@ import {
     type TeamSummaryV1,
 } from '@happier-dev/protocol/teams';
 import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import { snapshotReferenceSelectionKey } from '@/sync/domains/scope/snapshotReferenceSelectionKey';
 
 import {
     serverAccountScopeKeySuffix,
@@ -230,6 +231,19 @@ export function getTeamsDirectorySnapshot(
     return directories.get(directoryKey(scope, queryKey)) ?? null;
 }
 
+/** Directory presentation facts, including cursor/currentness changes, independent of observation time. */
+export function getTeamsDirectorySnapshotsSelectionKey(
+    scopes: readonly ServerAccountScope[],
+    queryKeys: readonly string[],
+): string {
+    return JSON.stringify(scopes.flatMap(scope => queryKeys.map(queryKey => {
+        const snapshot = getTeamsDirectorySnapshot(scope, queryKey);
+        return [snapshotReferenceSelectionKey([snapshot?.data]), snapshot?.nextCursor ?? null,
+            snapshot?.status ?? 'none', snapshot?.stale === true, snapshot?.reachability ?? 'unknown',
+            snapshot?.error?.kind ?? null, snapshot?.error?.retryable ?? null, snapshot?.error?.code ?? null];
+    })));
+}
+
 export function getTeamSnapshot(
     scope: ServerAccountScope | null | undefined,
     address: TeamAddress | null | undefined,
@@ -272,6 +286,19 @@ export function getTeamCredentialResourceCatalogSnapshot(
 ): TeamCredentialResourceCatalogSnapshot | null {
     if (!scope || !address) return null;
     return credentialCatalogs.get(teamCredentialResourceCatalogKey(scope, address, application)) ?? null;
+}
+
+/** Picker facts exclude observation time; data identities are reconciled on admission below. */
+export function getTeamCredentialResourceCatalogsSelectionKey(
+    scope: ServerAccountScope | null | undefined,
+    demands: readonly Readonly<{ address: TeamAddress; application?: ProviderBrokerApplicationBindingV1 }>[],
+): string {
+    return JSON.stringify(demands.map(({ address, application }) => {
+        const snapshot = getTeamCredentialResourceCatalogSnapshot(scope, address, application);
+        return [snapshotReferenceSelectionKey([snapshot?.data]), snapshot?.status ?? 'none',
+            snapshot?.stale === true, snapshot?.selectionCurrent === true,
+            snapshot?.error?.kind ?? null, snapshot?.error?.retryable ?? null, snapshot?.error?.code ?? null];
+    }));
 }
 
 /** One identity shared by the retained snapshot and its in-flight loader. */
@@ -470,16 +497,20 @@ function areTeamSummariesEquivalent(a: TeamSummaryV1, b: TeamSummaryV1): boolean
  * Reuses the object already on screen whenever a Team's content is unchanged, so
  * an unrelated Team's mutation cannot re-render every row in a long directory.
  */
-function preserveUnchangedTeams(
-    previous: readonly TeamSummaryV1[] | null,
-    incoming: readonly TeamSummaryV1[],
-): readonly TeamSummaryV1[] {
-    if (!previous || previous.length === 0) return Object.freeze([...incoming]);
-    const previousById = new Map(previous.map((team) => [team.id, team]));
-    return Object.freeze(incoming.map((team) => {
-        const existing = previousById.get(team.id);
-        return existing && areTeamSummariesEquivalent(existing, team) ? existing : team;
-    }));
+function preserveUnchangedRows<TRow extends Readonly<{ id: string }>>(
+    previous: readonly TRow[] | null,
+    incoming: readonly TRow[],
+): readonly TRow[] {
+    if (!previous) return Object.freeze([...incoming]);
+    const previousById = new Map(previous.map((row) => [row.id, row]));
+    let changed = previous.length !== incoming.length;
+    const rows = incoming.map((row, index) => {
+        const existing = previousById.get(row.id);
+        const next = existing && areProjectionsEquivalent(existing, row) ? existing : row;
+        if (next !== previous[index]) changed = true;
+        return next;
+    });
+    return changed ? Object.freeze(rows) : previous;
 }
 
 export function beginTeamsDirectoryLoad(scope: ServerAccountScope, queryKey: string): void {
@@ -521,7 +552,7 @@ export function applyTeamsDirectoryPage(params: Readonly<{
         scope: params.scope,
         queryKey: params.queryKey,
         status: 'ready',
-        data: preserveUnchangedTeams(current?.data ?? null, incoming),
+        data: preserveUnchangedRows(current?.data ?? null, incoming),
         nextCursor: params.nextCursor ?? null,
         lastObservedAt: params.observedAt,
         stale: params.current === false,
@@ -552,23 +583,6 @@ export function applyTeamsDirectoryFailure(params: Readonly<{
         error: params.error,
     }));
     notify();
-}
-
-/**
- * Reuses the object already on screen whenever a Group is unchanged, so a rename
- * of one Group cannot re-render every row, and so a Group label a surface is
- * already holding stays referentially stable across a refresh.
- */
-function preserveUnchangedGroups(
-    previous: readonly TeamGroupV1[] | null,
-    incoming: readonly TeamGroupV1[],
-): readonly TeamGroupV1[] {
-    if (!previous || previous.length === 0) return Object.freeze([...incoming]);
-    const previousById = new Map(previous.map((row) => [row.id, row]));
-    return Object.freeze(incoming.map((row) => {
-        const existing = previousById.get(row.id);
-        return existing && areProjectionsEquivalent(existing, row) ? existing : row;
-    }));
 }
 
 export function beginTeamGroupsLoad(
@@ -613,7 +627,7 @@ export function applyTeamGroupsPage(params: Readonly<{
         address: params.address,
         queryKey: params.queryKey,
         status: 'ready',
-        data: preserveUnchangedGroups(current?.data ?? null, incoming),
+        data: preserveUnchangedRows(current?.data ?? null, incoming),
         nextCursor: params.nextCursor ?? null,
         lastObservedAt: params.observedAt,
         stale: params.current === false,
@@ -646,30 +660,6 @@ export function applyTeamGroupsFailure(params: Readonly<{
         error: params.error,
     }));
     notify();
-}
-
-function preserveUnchangedCredentialResources(
-    previous: readonly TeamCredentialResourceSummaryV1[] | null,
-    incoming: readonly TeamCredentialResourceSummaryV1[],
-): readonly TeamCredentialResourceSummaryV1[] {
-    if (!previous || previous.length === 0) return Object.freeze([...incoming]);
-    const previousById = new Map(previous.map((row) => [row.id, row]));
-    return Object.freeze(incoming.map((row) => {
-        const existing = previousById.get(row.id);
-        return existing && areProjectionsEquivalent(existing, row) ? existing : row;
-    }));
-}
-
-function preserveUnchangedCredentialCatalog(
-    previous: readonly TeamCredentialResourceCatalogEntryV1[] | null,
-    incoming: readonly TeamCredentialResourceCatalogEntryV1[],
-): readonly TeamCredentialResourceCatalogEntryV1[] {
-    if (!previous || previous.length === 0) return Object.freeze([...incoming]);
-    const previousById = new Map(previous.map((row) => [row.id, row]));
-    return Object.freeze(incoming.map((row) => {
-        const existing = previousById.get(row.id);
-        return existing && areProjectionsEquivalent(existing, row) ? existing : row;
-    }));
 }
 
 export function beginTeamCredentialResourcesLoad(
@@ -719,7 +709,7 @@ export function applyTeamCredentialResourcesPage(params: Readonly<{
         address: params.address,
         queryKey,
         status: 'ready',
-        data: preserveUnchangedCredentialResources(current?.data ?? null, resources),
+        data: preserveUnchangedRows(current?.data ?? null, resources),
         nextCursor: params.nextCursor ?? null,
         viewer: current?.viewer && areProjectionsEquivalent(current.viewer, params.viewer)
             ? current.viewer
@@ -817,7 +807,7 @@ export function applyTeamCredentialResourceCatalog(params: Readonly<{
         address: params.address,
         ...(params.application ? { application: params.application } : {}),
         status: 'ready',
-        data: preserveUnchangedCredentialCatalog(current?.data ?? null, params.resources),
+        data: preserveUnchangedRows(current?.data ?? null, params.resources),
         lastObservedAt: params.observedAt,
         stale: params.current === false,
         selectionCurrent: params.current !== false,

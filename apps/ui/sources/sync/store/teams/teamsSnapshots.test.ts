@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
+import { createRenderCommitCounter, renderHook, useRenderCommitCounter } from '@/dev/testkit';
 import {
     NO_TEAM_CAPABILITIES_V1,
     NO_TEAM_GROUP_CAPABILITIES_V1,
@@ -31,11 +34,13 @@ import {
     clearTeamsSnapshotsForServer,
     getTeamSnapshot,
     getTeamCredentialResourceCatalogSnapshot,
+    getTeamCredentialResourceCatalogsSelectionKey,
     getTeamCredentialResourceSnapshot,
     getTeamCredentialResourcesSnapshot,
     getTeamGroupSnapshot,
     getTeamGroupsSnapshot,
     getTeamsDirectorySnapshot,
+    getTeamsDirectorySnapshotsSelectionKey,
     invalidateTeamGroupsForTeam,
     invalidateTeamCredentialResources,
     invalidateTeamsSnapshotsForServer,
@@ -106,7 +111,44 @@ afterEach(() => {
 });
 
 describe('teamsSnapshots', () => {
-    it('retains the recipient-safe credential catalog beside administration rows', () => {
+    it('does not render unchanged list data on repeated admissions, but publishes changed rows and order', async () => {
+        const rows = Array.from({ length: 400 }, (_, i) => team(`team-${i}`));
+        const publish = (items: readonly TeamSummaryV1[], observedAt: number) => applyTeamsDirectoryPage({
+            scope: scopeA, queryKey, items, observedAt,
+        });
+        publish(rows, 1);
+        const getData = () => getTeamsDirectorySnapshot(scopeA, queryKey)?.data;
+        const counter = createRenderCommitCounter();
+        const rendered = await renderHook(() => {
+            useRenderCommitCounter(counter);
+            React.useSyncExternalStore(subscribeTeamsSnapshots,
+                () => getTeamsDirectorySnapshotsSelectionKey([scopeA], [queryKey]));
+            return getData();
+        });
+        counter.reset();
+        const baseline = rendered.getCurrent();
+        for (let i = 0; i < 5; i += 1) {
+            await act(async () => publish(structuredClone(rows), i + 2));
+        }
+        expect(counter.read()).toEqual({ renders: 0, commits: 0 });
+        expect(rendered.getCurrent()).toBe(baseline);
+        const renamed = rows.map((row, i) => i === 200 ? { ...row, name: 'Renamed' } : row);
+        await act(async () => publish(renamed, 7));
+        expect(counter.read()).toEqual({ renders: 1, commits: 1 });
+        expect(rendered.getCurrent()?.[200]?.name).toBe('Renamed');
+        expect(rendered.getCurrent()?.[199]).toBe(baseline?.[199]);
+        await act(async () => publish([...renamed].reverse(), 8));
+        expect(rendered.getCurrent()?.[0]?.id).toBe('team-399');
+        await act(async () => publish([], 9));
+        counter.reset();
+        await act(async () => publish([], 10));
+        expect(counter.read()).toEqual({ renders: 0, commits: 0 });
+        // Metadata is a distinct freshness fact, even when the admitted rows are equal.
+        expect(getTeamsDirectorySnapshot(scopeA, queryKey)?.lastObservedAt).toBe(10);
+        await rendered.unmount();
+    });
+
+    it('retains the recipient-safe credential catalog beside administration rows', async () => {
         const catalogEntry: TeamCredentialResourceCatalogEntryV1 = {
             id: 'shared-1',
             teamId: 'team_1',
@@ -183,6 +225,24 @@ describe('teamsSnapshots', () => {
         const catalogSnapshot = getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA);
         expect(snapshot?.data).toEqual([resource]);
         expect(catalogSnapshot?.data).toEqual([catalogEntry]);
+        const demands = [{ address: groupAddressA }];
+        const counter = createRenderCommitCounter();
+        const picker = await renderHook(() => {
+            useRenderCommitCounter(counter);
+            return React.useSyncExternalStore(subscribeTeamsSnapshots,
+                () => getTeamCredentialResourceCatalogsSelectionKey(scopeA, demands));
+        });
+        counter.reset();
+        for (let observedAt = 81; observedAt <= 102; observedAt += 1) {
+            await act(async () => applyTeamCredentialResourceCatalog({ scope: scopeA, address: groupAddressA,
+                resources: [structuredClone(catalogEntry)], observedAt }));
+        }
+        expect(counter.read()).toEqual({ renders: 0, commits: 0 });
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA)?.lastObservedAt).toBe(102);
+        await act(async () => applyTeamCredentialResourceCatalog({ scope: scopeA, address: groupAddressA,
+            resources: [{ ...catalogEntry, displayName: 'Renamed without clock advance' }], observedAt: 102 }));
+        expect(counter.read()).toEqual({ renders: 1, commits: 1 });
+        await picker.unmount();
         expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA, application)?.data?.[0]?.displayName)
             .toBe('Application catalog');
         expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA,

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import * as React from 'react';
-import { NO_TEAM_CAPABILITIES_V1, TeamCredentialResourceEntitledPageV1Schema, TeamCredentialResourceReadInputV1Schema, TeamsListInputV1Schema, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
+import { NO_TEAM_CAPABILITIES_V1, TeamCredentialResourceEntitledPageV1Schema, TeamCredentialResourceReadInputV1Schema, TeamsListInputV1Schema, teamDirectoryQueryKeyV1, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { HomeGovernanceEligibilityV1Schema, HomeGovernanceProjectionV1Schema } from '@happier-dev/protocol/home/governance';
 
@@ -32,7 +32,7 @@ import { readAccountAgentProviderRequirements, readAccountProviderDeclarations }
 import { act } from 'react-test-renderer';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { createDeferred, createRootLayoutFeaturesResponse, homeGovernanceProjectionFixture, renderHook, renderScreen } from '@/dev/testkit';
+import { createDeferred, createRenderCommitCounter, createRootLayoutFeaturesResponse, homeGovernanceProjectionFixture, renderHook, renderScreen, useRenderCommitCounter } from '@/dev/testkit';
 import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
     primeServerFeaturesSnapshot,
@@ -43,7 +43,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
 import { resetTeamsDirectoryEngineForTests } from '@/sync/engine/teams/teamsDirectoryEngine';
-import { invalidateTeamCredentialResourceCatalog, resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
+import { applyTeamCredentialResourceCatalog, applyTeamProjection, applyTeamsDirectoryPage, getTeamCredentialResourceCatalogSnapshot, getTeamsDirectorySnapshot, invalidateTeamCredentialResourceCatalog, resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { resetHomeGovernanceEngineForTests } from '@/sync/engine/home/governance/homeGovernanceEngine';
 import { resetHomeGovernanceEligibilityEngineForTests } from '@/sync/engine/home/governance/homeGovernanceEligibilityEngine';
@@ -125,6 +125,44 @@ afterEach(() => {
 });
 
 describe('useTeamsDirectory', () => {
+    it('renders only addressed directory changes, including equal-time same-sized pages and cursor changes', async () => {
+        const home = await addHome('Home A', 'https://home-a.example', true);
+        await setActiveServerId(home, { scope: 'device' });
+        const items = Array.from({ length: 400 }, (_, i) => team(`t${i}`));
+        runtimeFetchMock.mockImplementation(async () => new Response(
+            JSON.stringify({ items, nextCursor: null }), { status: 200 },
+        ));
+        const counter = createRenderCommitCounter();
+        const rendered = await renderHook(() => {
+            useRenderCommitCounter(counter);
+            return useTeamsDirectory();
+        });
+        await vi.waitFor(() => expect(rendered.getCurrent().rows).toHaveLength(400));
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home), accountId: 'account' };
+        const queryKey = teamDirectoryQueryKeyV1({ v: 1, scope: 'member', archived: 'active' });
+        const snapshot = getTeamsDirectorySnapshot(scope, queryKey);
+        if (!snapshot) throw new Error('Expected admitted directory');
+        counter.reset();
+        for (let i = 0; i < 100; i += 1) {
+            await act(async () => applyTeamProjection({ scope,
+                address: { serverId: scope.serverId, teamId: `other-${i}` },
+                team: team(`other-${i}`), observedAt: i,
+            }));
+        }
+        expect(counter.read()).toEqual({ renders: 0, commits: 0 });
+        const changed = items.map((row, i) => i === 200 ? { ...row, name: 'Renamed' } : row);
+        await act(async () => applyTeamsDirectoryPage({ scope, queryKey,
+            items: changed, observedAt: snapshot.lastObservedAt ?? 0,
+        }));
+        expect(counter.read()).toEqual({ renders: 1, commits: 1 });
+        expect(rendered.getCurrent().rows[200]?.team.name).toBe('Renamed');
+        await act(async () => applyTeamsDirectoryPage({ scope, queryKey,
+            items: changed, nextCursor: 'next-page', observedAt: snapshot.lastObservedAt ?? 0,
+        }));
+        expect(rendered.getCurrent().hasMore).toBe(true);
+        await rendered.unmount();
+    });
+
     it('combines all directory sequences and continues each cursor independently', async () => {
         const home = await addHome('Home A', 'https://home-a.example', true);
         await setActiveServerId(home, { scope: 'device' });
@@ -333,8 +371,10 @@ describe('useTeamsDirectory', () => {
         const { SessionModelPicker } = await import('@/components/sessions/modelPicker/SessionModelPicker');
         const { sessionModelSelectionKey } = await import('@/components/sessions/modelPicker/sessionModelSelectionKey');
         const onSelect = vi.fn();
+        const catalogCounter = createRenderCommitCounter();
         let current!: { selected: ReturnType<typeof useHomeTeamCredentialModelCatalog>; generic: ReturnType<typeof useHomeTeamCredentialModelCatalog> };
         function CatalogPicker({ agentTargetKey }: { agentTargetKey: string }) {
+            useRenderCommitCounter(catalogCounter);
             current = {
                 selected: useHomeTeamCredentialModelCatalog({ serverId, enabled: true, agentTargetKey, declarationProjection,
                     machineId: source === 'installed' ? 'installed-machine' : null }),
@@ -363,6 +403,29 @@ describe('useTeamsDirectory', () => {
                 { source: 'team_resource', resourceId: 'generic-only', deliveryMode: 'brokered' },
             ]);
             expect(rendered.getCurrent().generic.resources.flatMap(row => row.providerModels)).toEqual([]);
+            const catalogScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account' };
+            const catalogAddress = { serverId: catalogScope.serverId, teamId: 'team-1' };
+            const catalogSnapshot = getTeamCredentialResourceCatalogSnapshot(catalogScope, catalogAddress);
+            if (!catalogSnapshot?.data) throw new Error('Expected admitted generic catalog');
+            const equalProjection = rendered.getCurrent().generic;
+            catalogCounter.reset();
+            await act(async () => applyTeamCredentialResourceCatalog({
+                scope: catalogScope, address: catalogAddress,
+                resources: structuredClone(catalogSnapshot.data!),
+                observedAt: (catalogSnapshot.lastObservedAt ?? 0) + 1,
+            }));
+            expect(catalogCounter.read()).toEqual({ renders: 0, commits: 0 });
+            expect(rendered.getCurrent().generic).toBe(equalProjection);
+            catalogCounter.reset();
+            await act(async () => applyTeamCredentialResourceCatalog({
+                scope: catalogScope, address: catalogAddress,
+                resources: catalogSnapshot.data!.map((row) => row.id === 'generic-only'
+                    ? { ...row, displayName: 'Same-time renamed credential' } : row),
+                observedAt: catalogSnapshot.lastObservedAt ?? 0,
+            }));
+            expect(catalogCounter.read()).toEqual({ renders: 1, commits: 1 });
+            expect(rendered.getCurrent().generic.resources.find((row) => row.id === 'generic-only')?.displayName)
+                .toBe('Same-time renamed credential');
             await rendered.rerender({ agentTargetKey: claude });
             expect(models().some(id => id.startsWith('openai-responses'))).toBe(false);
             await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));

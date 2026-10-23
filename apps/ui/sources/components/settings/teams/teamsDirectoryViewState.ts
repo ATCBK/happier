@@ -3,7 +3,7 @@ import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import type { TeamSummaryV1 } from '@happier-dev/protocol/teams';
 
 import type { TeamsHomeAdmissionEntry } from '@/sync/domains/teams/teamsSettingsAdmission';
-import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
+import { teamAddressKey, type TeamAddress } from '@/sync/domains/teams/teamAddress';
 import type { TeamsDirectorySnapshot } from '@/sync/store/teams/teamsSnapshots';
 import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { t } from '@/text';
@@ -98,10 +98,13 @@ export function teamsUnavailableHomeStateKind(home: Pick<TeamsDirectoryUnavailab
 
 export function resolveTeamsDirectoryViewState(
     input: TeamsDirectoryViewStateInput,
+    previous?: TeamsDirectoryViewState | null,
 ): TeamsDirectoryViewState {
     const rows: TeamsDirectoryRow[] = [];
     const archivedRows: TeamsDirectoryRow[] = [];
     const unavailableHomes: TeamsDirectoryUnavailableHome[] = [];
+    const previousRows = new Map([...previous?.rows ?? [], ...previous?.archivedRows ?? []]
+        .map((row) => [teamAddressKey(row.address), row]));
 
     let admittedHomes = 0;
     let answeredHomes = 0;
@@ -160,7 +163,10 @@ export function resolveTeamsDirectoryViewState(
             const teams = snapshot.data;
             if (snapshot.stale || snapshot.error !== null) stale = true;
             for (const team of teams) {
-                const row: TeamsDirectoryRow = Object.freeze({
+                const address = { serverId: home.serverId, teamId: team.id };
+                const retained = previousRows.get(teamAddressKey(address));
+                const row: TeamsDirectoryRow = retained?.team === team && retained.homeName === homeName
+                    ? retained : Object.freeze({
                     address: Object.freeze({ serverId: home.serverId, teamId: team.id }),
                     team,
                     homeName,
@@ -178,10 +184,15 @@ export function resolveTeamsDirectoryViewState(
             ? 'empty'
             : 'ready';
 
+    const retainRows = (next: readonly TeamsDirectoryRow[], baseline: readonly TeamsDirectoryRow[] | undefined) => (
+        baseline && next.length === baseline.length && next.every((row, i) => row === baseline[i])
+            ? baseline : next.length > 0 ? Object.freeze(next) : EMPTY_ROWS
+    );
+
     return Object.freeze({
         kind,
-        rows: rows.length > 0 ? Object.freeze(rows) : EMPTY_ROWS,
-        archivedRows: archivedRows.length > 0 ? Object.freeze(archivedRows) : EMPTY_ROWS,
+        rows: retainRows(rows, previous?.rows),
+        archivedRows: retainRows(archivedRows, previous?.archivedRows),
         unavailableHomes: unavailableHomes.length > 0 ? Object.freeze(unavailableHomes) : EMPTY_UNAVAILABLE,
         partial,
         stale,

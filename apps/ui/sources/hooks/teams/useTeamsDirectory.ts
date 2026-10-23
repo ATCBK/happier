@@ -14,7 +14,6 @@ import { useServerCredentialAccountScopeResolutions } from '@/sync/domains/scope
 import { retryServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 import { useTeamsSettingsAdmission } from '@/hooks/teams/useTeamsSettingsAdmission';
 import {
-    serverAccountScopeKeySuffix,
     serverAccountScopeListKey,
     type ServerAccountScope,
 } from '@/sync/domains/scope/serverAccountScope';
@@ -27,6 +26,7 @@ import {
 } from '@/sync/engine/teams/teamsDirectoryEngine';
 import {
     getTeamsDirectorySnapshot,
+    getTeamsDirectorySnapshotsSelectionKey,
     subscribeTeamsSnapshots,
     type TeamsDirectorySnapshot,
 } from '@/sync/store/teams/teamsSnapshots';
@@ -140,26 +140,14 @@ export function useTeamsDirectory(options?: Readonly<{
         return byServerId;
     }, [capableServerIds, queryKeys, scopeResolutions]);
 
-    // The store publishes an immutable snapshot per key, so a serialized
-    // identity of the observed keys is a sound change signal without
-    // re-rendering on an unrelated Home's mutation.
+    const readSelectionKey = React.useCallback(
+        () => getTeamsDirectorySnapshotsSelectionKey(scopes, queryKeys),
+        [scopes, queryKeys],
+    );
     const snapshotsVersion = React.useSyncExternalStore(
         subscribeTeamsSnapshots,
-        () => {
-            return JSON.stringify(scopes.flatMap((scope) => queryKeys.map((queryKey) => {
-                const snapshot = getTeamsDirectorySnapshot(scope, queryKey);
-                return [
-                    serverAccountScopeKeySuffix(scope),
-                    queryKey,
-                    snapshot?.status ?? 'none',
-                    snapshot?.lastObservedAt ?? null,
-                    snapshot?.stale === true,
-                    snapshot?.error?.kind ?? null,
-                    snapshot?.data?.length ?? -1,
-                ];
-            })));
-        },
-        () => '',
+        readSelectionKey,
+        readSelectionKey,
     );
 
     const homeNamesByServerId = React.useMemo(() => {
@@ -186,12 +174,17 @@ export function useTeamsDirectory(options?: Readonly<{
             : { serverId: home.serverId, state: 'unresolved' as const, reason: 'loading' as const };
     }), [admittedHomes, scopeResolutions]);
 
+    const previousState = React.useRef<TeamsDirectoryViewState | null>(null);
     const state = React.useMemo(
-        () => resolveTeamsDirectoryViewState({
+        () => {
+            const next = resolveTeamsDirectoryViewState({
             homes,
             homeNamesByServerId,
             snapshotsByServerId: getSnapshots(),
-        }),
+            }, previousState.current);
+            previousState.current = next;
+            return next;
+        },
         // `snapshotsVersion` is the store's change signal for the observed keys.
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [homes, homeNamesByServerId, getSnapshots, snapshotsVersion],
