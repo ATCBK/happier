@@ -283,24 +283,19 @@ export function createProcessActionExecutor(input: ProcessActionExecutorInput) {
             const outcomes: Outcome[] = [];
             for (const target of request.targets) {
                 if (!await isCurrent(execution)) { outcomes.push(refused(target.ref, 'access_denied')); continue; }
-                const view = await input.ownership.readOwners({ freshness: 'fresh' });
-                if (view.status !== 'ok') { outcomes.push(refused(target.ref, 'ownership_unavailable')); continue; }
-                const checked = validate(target, view, requester, false, request.targets.length, false);
-                if ('outcome' in checked) { outcomes.push(checked.outcome); continue; }
-                const root = view.roots.find(root => root.pid === checked.native.pid && equalProcessStart(root.start, checked.native.start)
-                    && checked.ownership.owner && processOwnerKey(root.owner) === processOwnerKey(checked.ownership.owner));
-                if (!root || !['session', 'service', 'browser_sidecar'].includes(root.owner.kind) || !root.stop && !input.stopOwner) {
-                    outcomes.push(refused(target.ref, 'use_kill')); continue;
-                }
                 try {
                     if (!await isCurrent(execution)) { outcomes.push(refused(target.ref, 'access_denied')); continue; }
+                    // This fresh observation owns both admission facts and pre-stop
+                    // member accounting; a preliminary inventory adds no evidence.
                     const before = await input.ownership.readOwners({ freshness: 'fresh' });
                     if (before.status !== 'ok') { outcomes.push(refused(target.ref, 'ownership_unavailable')); continue; }
                     const fresh = validate(target, before, requester, false, request.targets.length, false);
                     if ('outcome' in fresh) { outcomes.push(fresh.outcome); continue; }
-                    const activeRoot = before.roots.find(candidate => candidate.pid === root.pid && equalProcessStart(candidate.start, root.start)
-                        && processOwnerKey(candidate.owner) === processOwnerKey(root.owner));
-                    if (!activeRoot) { outcomes.push(refused(target.ref, 'expectation_changed')); continue; }
+                    const activeRoot = before.roots.find(root => root.pid === fresh.native.pid && equalProcessStart(root.start, fresh.native.start)
+                        && fresh.ownership.owner && processOwnerKey(root.owner) === processOwnerKey(fresh.ownership.owner));
+                    if (!activeRoot || !['session', 'service', 'browser_sidecar'].includes(activeRoot.owner.kind) || !activeRoot.stop && !input.stopOwner) {
+                        outcomes.push(refused(target.ref, 'use_kill')); continue;
+                    }
                     const ownerKey = processOwnerKey(activeRoot.owner);
                     const admitted = new Map(before.rows.filter(row => row.owner && processOwnerKey(row.owner) === ownerKey
                         && (row.level === 'proven' || row.level === 'likely')).map(row => [row.pid, row]));

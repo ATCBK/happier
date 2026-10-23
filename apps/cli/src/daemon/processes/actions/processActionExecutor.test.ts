@@ -21,11 +21,12 @@ const custodian = { accountId: 'custodian', isCustodian: true };
 const machineTarget = { serverId: 'server', machineId: 'machine', installationId: 'install' };
 
 function fixture(ports: Partial<Pick<ProcessActionExecutorInput, 'stopOwner' | 'prepareKill' | 'terminateDetected' | 'closeTerminal' | 'onRootEnded'>> = {},
-    native?: Readonly<{ beforeVerification(): Promise<void> }>) {
+    native?: Readonly<{ beforeVerification(): Promise<void>; onCensusRead?(): void }>) {
     let now = 100_000;
     let available = true;
     let visible = false;
     const partial: { pid: number; missing: string[] }[] = [];
+    const censusRows: number[] = [];
     const owner = { kind: 'session', sessionId: 'guest-session' } as const;
     const row = (pid: number, ppid: number, ownerTag?: string): ProcessCensusRow => ({
         pid, ppid, pgid: pid, start: { startTimeMs: pid * 10, native: `darwin-proc:${pid}:0:${pid}` },
@@ -48,6 +49,8 @@ function fixture(ports: Partial<Pick<ProcessActionExecutorInput, 'stopOwner' | '
         helperExecutablePath: '/fixture/helper', now: () => now,
         async execFile() {
             if (!available) throw new Error('native read unavailable');
+            censusRows.push(rows.size);
+            native?.onCensusRead?.();
             return { stdout: JSON.stringify({ v: 1, capturedAtMs: now, logicalCpus: 4, rows: [...rows.values()], partial }) };
         },
     };
@@ -63,7 +66,7 @@ function fixture(ports: Partial<Pick<ProcessActionExecutorInput, 'stopOwner' | '
             async wait() { if (native) { await native.beforeVerification(); for (const pid of signals) rows.delete(pid); } } }, ...ports,
     });
     const target = (pid: number) => ({ ref: processRef(pid, rows.get(pid)!.start), expect: { level: 'proven' as const, owner } });
-    return { executor, rows, roots, ownership, tracker, signals, target, row, owner, partial,
+    return { executor, rows, roots, ownership, tracker, signals, target, row, owner, partial, censusRows,
         advance: (ms: number) => { now += ms; }, setVisible: (value: boolean) => { visible = value; },
         setAvailable: (value: boolean) => { available = value; } };
 }
@@ -292,11 +295,31 @@ describe('process Actions through the canonical ownership and tree owners', () =
         expect(f.signals).toEqual([]);
     });
 
-    it('reports a successful exact owner Stop after the fresh census confirms its generation ended', async () => {
+    it('uses only a fresh pre-effect and post-effect census for Stop on a 3,000-process host', async () => {
         const f = fixture({ stopOwner: async () => { f.rows.delete(30); return true; } });
+        for (let offset = 0; offset < 3000; offset++) {
+            const pid = process.pid + 1_000_000 + offset;
+            f.rows.set(pid, f.row(pid, 1));
+        }
+        const processCount = f.rows.size;
         expect(await f.executor.executeStop({ machineId: 'machine', targets: [f.target(30)] }, guest))
             .toMatchObject({ status: 'ended', outcomes: [{ outcome: 'ended', freedBytes: 3000 }] });
         expect(f.signals).toEqual([]);
+        const cost = { inventoryPasses: f.censusRows.length, cumulativeRows: f.censusRows.reduce((sum, count) => sum + count, 0) };
+        expect(cost).toEqual({ inventoryPasses: 2, cumulativeRows: processCount * 2 - 1 });
+    });
+
+    it('refuses Stop when requester admission is withdrawn during its fresh census', async () => {
+        let current = true;
+        let stopped = false;
+        const f = fixture(createProcessActionOwnerAdapters({}), {
+            beforeVerification: async () => {}, onCensusRead: () => { current = false; },
+        });
+        f.roots[1] = { ...f.roots[1]!, stop: async () => { stopped = true; f.rows.delete(30); return true; } };
+        expect(await f.executor.executeStop({ machineId: 'machine', targets: [f.target(30)] }, guest,
+            { verifyCurrent: async () => current })).toMatchObject({ status: 'refused' });
+        expect(stopped).toBe(false);
+        expect(f.rows.has(30)).toBe(true);
     });
 
     it('counts ended owned members in a Stop receipt while excluding a surviving child', async () => {
