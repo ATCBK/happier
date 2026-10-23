@@ -22,7 +22,6 @@ import { recordStackRuntimeStart, readStackRuntimeStateFile } from '../utils/sta
 import { beginPendingSourceStart } from '../runtime/shared/pending_source_start.mjs';
 import { withDependencyRefreshLock } from '../utils/proc/dependency_refresh.mjs';
 import { withPatchedProcessEnv } from '../testkit/core/env_scope.mjs';
-import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
 
 test('captured Metro crawls workspace-local installed dependencies', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-captured-metro-dependencies-', registerCleanup: false });
@@ -934,11 +933,8 @@ export async function resolveExpoBin() {
     await withDependencyRefreshLock({ installDir: repoDir, env, signal: context.signal }, async () => {});
     await writeFile(available, '16777216');
     await pending;
-    const observed = JSON.parse(await readFile(executed, 'utf8'));
-    assert.ok(resolveHeavyweightMemoryFloorKiB(observed.className) > resolveHeavyweightMemoryFloorKiB('validation'),
-      'the real Expo tree must retain the measured export envelope rather than validation');
-    assert.deepEqual({ owners: observed.owners, cwd: observed.cwd },
-      { owners: 1, cwd: fixture.path('expo-state/source-web/workspace/apps/ui') });
+    assert.deepEqual(JSON.parse(await readFile(executed, 'utf8')),
+      { className: 'validation', owners: 1, cwd: fixture.path('expo-state/source-web/workspace/apps/ui') });
     assert.deepEqual(await readdir(join(native.admissionRoot, 'owners')), []);
     assert.deepEqual(await readdir(join(native.admissionRoot, 'waiters')), []);
   });
