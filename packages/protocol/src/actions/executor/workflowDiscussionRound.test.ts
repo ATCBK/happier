@@ -10,6 +10,7 @@ import { WorkflowRunRecipientCensusResponseV1Schema } from '../../workflows/work
 import { WorkflowDiscussionRoundProjectResultV1Schema } from '../../workflows/workflowDiscussionRoundV1.js';
 import type { ActionExecutorContext } from './types.js';
 import type { WorkflowBlock, WorkflowDefinitionV1 } from '../../workflows/workflowV1.js';
+import { resolveActionCurrentSessionScopeFailure } from './sessionListAccess.js';
 
 const runId = '11111111-1111-4111-8111-111111111111';
 
@@ -17,11 +18,11 @@ type ConditionalShape = 'collection-in-if' | 'projector-in-if';
 
 const participantCount = process.env.HAPPIER_WORKFLOW_SCALE_MEASUREMENT === '1' ? 500 : 24;
 
-async function fixture(conditionalShape?: ConditionalShape, participantCount = 2) {
+async function fixture(conditionalShape?: ConditionalShape, participantCount = 2, consumer: 'round' | 'review' = 'round', framePath?: 'item' | 'parallel' | 'workflow') {
   const conditional = (id: string, blocks: WorkflowBlock[]): WorkflowBlock => ({ kind: 'if', id,
     when: { kind: 'compare', operator: 'eq', left: { kind: 'literal', value: true }, right: { kind: 'literal', value: true } },
     then: blocks, otherwise: [] });
-  const definition: WorkflowDefinitionV1 = conditionalShape ? { ...DEBATE_WORKFLOW_V1,
+  let definition: WorkflowDefinitionV1 = conditionalShape ? { ...DEBATE_WORKFLOW_V1,
     blocks: DEBATE_WORKFLOW_V1.blocks.map(block => block.kind === 'loop' ? { ...block,
       body: block.body.flatMap(child => conditionalShape === 'collection-in-if' && child.kind === 'loop'
         && child.id === 'speakers' && child.repetition.kind === 'items' && child.repetition.items.kind === 'result'
@@ -37,14 +38,40 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
           : [child]),
     } : block),
   } : DEBATE_WORKFLOW_V1;
+  const address = { serverId: 'home', sessionId: 'review-target' };
+  if (consumer === 'review') {
+    const replace = (blocks: WorkflowBlock[]): WorkflowBlock[] => blocks.map(block => {
+      if (block.kind === 'action' && (block.id === 'outcomes' || block.id === 'nested-outcomes')) return {
+        ...block, actionId: 'reviews.comments.list', input: { sessionId: { kind: 'input', name: 'reviewSession', path: ['sessionId'] } },
+      };
+      if (block.kind === 'if') return { ...block, then: replace(block.then), otherwise: replace(block.otherwise) };
+      if (block.kind === 'loop') return { ...block, body: replace(block.body) };
+      return block;
+    });
+    definition = { ...definition, inputs: [...definition.inputs, { name: 'reviewSession', valueType: 'json', required: true,
+      inputType: { hostType: 'session' } }], blocks: replace(definition.blocks) };
+  }
+  const childDefinition = definition;
+  if (framePath === 'item') definition = { ...definition, blocks: [{ kind: 'loop', id: 'panels',
+    repetition: { kind: 'items', items: { kind: 'literal', value: ['panel'] }, execution: 'sequential', failurePolicy: 'fail_stop' }, body: definition.blocks }],
+    finalOutput: { kind: 'result', producer: { blockId: 'panels', scope: { kind: 'current' } }, path: [] } };
+  if (framePath === 'parallel') definition = { ...definition, blocks: [{ kind: 'parallel', id: 'panels', failurePolicy: 'fail_stop',
+    branches: [{ id: 'panel', blocks: definition.blocks }] }],
+    finalOutput: { kind: 'result', producer: { blockId: 'panels', scope: { kind: 'current' } }, path: [] } };
+  if (framePath === 'workflow') definition = { ...definition, blocks: [{ kind: 'workflow', id: 'panel', workflowRef: 'builtin:debate',
+    input: Object.fromEntries(definition.inputs.filter(input => input.required).map(input => [input.name, { kind: 'input' as const, name: input.name }])) }],
+    finalOutput: { kind: 'result', producer: { blockId: 'panel', scope: { kind: 'current' } }, path: [] } };
   const participants = Array.from({ length: participantCount }, (_, index) => ({ kind: 'session' as const,
     session: { serverId: 'home', sessionId: `participant-${index}` } }));
   const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition,
-    context: { source: { kind: 'inline' }, inputs: { question: 'Review this change', participants, rounds: 3 }, machineId: 'machine-a',
+    context: { source: { kind: 'inline' }, inputs: { question: 'Review this change', participants, rounds: 3,
+      ...(consumer === 'review' ? { reviewSession: address } : {}) }, machineId: 'machine-a',
       executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } },
       origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } }, admission: { kind: 'user' },
     effects: { resolveTargetAvailability: async () => true,
+      readWorkflowDefinition: async () => ({ definition: childDefinition, sourceKey: 'builtin:debate' }),
       resolveSessionTarget: async value => {
+        if ((value as { sessionId?: string }).sessionId === address.sessionId) return { address, machineId: 'machine-a' };
         const participant = participants.find(participant => participant.session.sessionId === (value as { sessionId?: string }).sessionId);
         return participant ? { address: participant.session, machineId: 'machine-a' } : null;
       }, readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: { type: 'object' } }) } });
@@ -89,11 +116,26 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
     seal(moved);
   };
   const root = add(null, 0, { blockKind: 'root', invocationPath: { blockId: '$root', scope: [] } });
-  const loop = add(root, 0, { blockKind: 'loop', invocationPath: { blockId: 'rounds', scope: [] },
+  const outerScope = framePath === 'item' ? [{ kind: 'iteration' as const, blockId: 'panels', index: 0 }]
+    : framePath === 'parallel' ? [{ kind: 'branch' as const, blockId: 'panels', branchId: 'panel' }]
+      : framePath === 'workflow' ? [{ kind: 'workflow' as const, blockId: 'panel' }] : [];
+  const outerLoop = framePath === 'item' ? add(root, 0, { blockKind: 'loop', invocationPath: { blockId: 'panels', scope: [] },
+    container: { kind: 'loop', mode: 'items', source: { kind: 'definition', reference: { kind: 'literal', value: ['panel'] } },
+      itemCount: '1', nextMemberIndex: '1', nextBodyBlockOrdinal: '0' } })
+    : framePath === 'parallel' ? add(root, 0, { blockKind: 'parallel', invocationPath: { blockId: 'panels', scope: [] },
+      container: { kind: 'parallel', nextBranchOrdinal: '1' } }) : root;
+  const outerFrame = framePath === 'item' ? add(outerLoop, 0, { blockKind: 'loop', invocationPath: { blockId: 'panels', scope: outerScope },
+    frame: { ownerBlockId: 'panels', source: { kind: 'item', index: '0' } } })
+    : framePath === 'parallel' ? add(outerLoop, 0, { blockKind: 'parallel', invocationPath: { blockId: 'panels', scope: outerScope },
+      frame: { ownerBlockId: 'panels', source: { kind: 'branch', branchId: 'panel' } } })
+      : framePath === 'workflow' ? add(root, 0, { blockKind: 'workflow', invocationPath: { blockId: 'panel', scope: [] },
+        container: { kind: 'body', nextBlockOrdinal: '1', frameInputs: { question: 'Review this change', participants, rounds: 3,
+          ...(consumer === 'review' ? { reviewSession: address } : {}) } } }) : root;
+  const loop = add(outerFrame, 0, { blockKind: 'loop', invocationPath: { blockId: 'rounds', scope: outerScope },
     container: { kind: 'loop', mode: 'until', nextMemberIndex: '3', nextBodyBlockOrdinal: '0' } });
   const rounds = [];
   for (let round = 0; round < 3; round += 1) {
-    const scope = [{ kind: 'iteration' as const, blockId: 'rounds', index: round }];
+    const scope = [...outerScope, { kind: 'iteration' as const, blockId: 'rounds', index: round }];
     const frame = add(loop, round, { blockKind: 'loop', invocationPath: { blockId: 'rounds', scope },
       frame: { ownerBlockId: 'rounds', source: { kind: 'iteration', index: String(round) } } });
     const result = WorkflowDiscussionRoundProjectResultV1Schema.parse({ allPassed: false, hasNext: true,
@@ -170,9 +212,9 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
         ...(operation.parentRecordIds === undefined ? {} : { parentRecordIds: operation.parentRecordIds }),
         ...(operation.parentRecordId === undefined ? {} : { parentRecordId: operation.parentRecordId }),
         ...(operation.memberOrdinal === undefined ? {} : { memberOrdinal: operation.memberOrdinal }) });
-      if (!input.invocationId && !input.parentRecordId && !input.parentRecordIds) cost.historyPages += 1;
+      if (input.invocationId === undefined && input.parentRecordId === undefined && input.parentRecordIds === undefined) cost.historyPages += 1;
       let selected = miswire || (miswireChildren && input.parentRecordIds) ? rows.slice(0, 1) : rows.filter(row => (!input.invocationId || row.index.id === input.invocationId)
-        && (!input.parentRecordId || row.index.parentRecordId === input.parentRecordId)
+        && (input.parentRecordId === undefined || row.index.parentRecordId === input.parentRecordId)
         && (!input.parentRecordIds || row.index.parentRecordId !== null && input.parentRecordIds.includes(row.index.parentRecordId))
         && (input.memberOrdinal === undefined || row.index.memberOrdinal === input.memberOrdinal));
       if (!miswire && input.memberOrdinal !== undefined) selected = selected.sort((left, right) =>
@@ -189,24 +231,40 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
         ...(operation.progressEnvelopes === true ? { progressEnvelopesByInvocationId: Object.fromEntries(page.map(row => [row.index.id, row.contentEnvelope])) } : {}) };
     } },
   } satisfies WorkflowAccountRunActionDeps);
-  const executor = createActionExecutor({ workflowAction: args => owner.execute(args) });
+  const deps = { workflowAction: (args: Parameters<typeof owner.execute>[0]) => owner.execute(args),
+    resolveSessionReference: async () => ({ kind: 'unique' as const, address }) };
+  const executor = createActionExecutor(deps);
   const context = (id: string): ActionExecutorContext => ({ surface: 'agent', serverId: 'home',
     actionRequestId: `${runId}/${row(id).progress.logicalInvocationRecordId}/${row(id).index.attempt}`,
     actionCaller: { kind: 'workflowRun', runId, authorization: accepted.snapshot.authorization } });
-  const retry = async (id: string, recoverParent: boolean) => {
+  let currentRoot = root;
+  const retry = async (id: string, recoverParent: boolean | 'ancestors' | 'root' = false) => {
     const failed = row(id);
-    failed.index.lifecycle = 'failed';
-    if (recoverParent) {
+    failed.index.lifecycle = failed.index.parentRecordId === null ? 'needs_attention' : 'failed';
+    if (recoverParent === true) {
       const parent = row(failed.index.parentRecordId!);
       parent.index.lifecycle = 'failed';
-      failed.progress.reason = { code: `container_fail_stop:${parent.index.id}` };
+      if (parent.progress.blockKind === 'loop' || parent.progress.blockKind === 'parallel') {
+        failed.progress.reason = { code: `container_fail_stop:${parent.index.id}` };
+      }
       seal(parent);
+    }
+    if (recoverParent === 'ancestors' || recoverParent === 'root') {
+      let parentId = failed.index.parentRecordId;
+      while (parentId !== null) {
+        const parent = row(parentId);
+        if (parent.index.parentRecordId !== null || recoverParent === 'root') {
+          parent.index.lifecycle = parent.index.parentRecordId === null ? 'needs_attention' : 'failed';
+          seal(parent);
+        }
+        parentId = parent.index.parentRecordId;
+      }
     }
     seal(failed);
     run.state = 'interrupted';
     snapshot.checkpointEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain',
       binding: { v: 1, purpose: 'checkpoint', accountId: 'account-1', runId }, checkpoint: {
-        kind: 'happier.workflow-checkpoint.v1', rootRecordId: root, nextSequence: String(rows.length),
+        kind: 'happier.workflow-checkpoint.v1', rootRecordId: currentRoot, nextSequence: String(rows.length),
         frontier: { nextBlockOrdinal: 0, paused: false } } }));
     const context: ActionExecutorContext = { surface: 'ui', authority: 'present_user', callerPermissionMode: 'yolo' };
     const detail = WorkflowInvocationGetResultV1Schema.parse(await owner.execute({ actionId: 'workflow.run.invocations.get',
@@ -217,41 +275,90 @@ async function fixture(conditionalShape?: ConditionalShape, participantCount = 2
       input: { runId, invocation: { recordId: id }, expectedRevision: run.revision,
         causalInvocationIds: availability.causalInvocationIds, conversation: 'fresh_conversation', input: { kind: 'original' } }, context }));
     expect(result.disposition).toBe('accepted');
+    currentRoot = rows.find(item => item.index.parentRecordId === null && item.index.lifecycle !== 'superseded')!.index.id;
     Object.assign(cost, { requests: 0, pages: 0, historyPages: 0, envelopes: 0, bytes: 0 });
     return result.invocation.id;
   };
-  return { cost, executor, context, rounds, recover, retry, move, row, seal,
+  return { cost, executor, context, rounds, recover, retry, move, row, seal, root, deps, address,
+    currentRoot: () => currentRoot,
+    retainOriginalCheckpointRoot: () => {
+      snapshot.checkpointEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'checkpoint', accountId: 'account-1', runId }, checkpoint: {
+          kind: 'happier.workflow-checkpoint.v1', rootRecordId: root, nextSequence: String(rows.length),
+          frontier: { nextBlockOrdinal: 0, paused: false } } }));
+    },
     omit: (id: string) => { rows.splice(rows.indexOf(row(id)), 1); }, miswire: () => { miswire = true; },
     miswireChildren: () => { miswireChildren = true; } };
 }
 
 describe('Discussion round projection demand', () => {
-  it.each([false, true])('binds a projector retry with recovered parent=%s', async recoverParent => {
-    const f = await fixture();
+  const retryShapes = [
+    { name: 'leaf only', shape: false },
+    { name: 'one intermediate', shape: true },
+    { name: 'all intermediates', shape: 'ancestors' },
+    { name: 'root and intermediates', shape: 'root' },
+    { name: 'root only', shape: 'root-only' },
+    { name: 'selected IF and loop/item frames', shape: 'root', framePath: 'item' },
+    { name: 'parallel branch frames', shape: 'root', framePath: 'parallel' },
+    { name: 'inline Workflow frames', shape: 'root', framePath: 'workflow' },
+    { name: 'root only after Action retry', shape: 'root-only', afterAction: true },
+    { name: 'persisted original checkpoint root', shape: 'root', legacyCheckpoint: true },
+    { name: 'persisted original checkpoint root only', shape: 'root-only', legacyCheckpoint: true },
+  ] as const;
+  it.each(retryShapes.flatMap(shape => (['round', 'review'] as const).map(consumer => ({ ...shape, consumer }))))
+  ('binds producer retries: $name / $consumer', async ({ shape, consumer, ...options }) => {
+    const f = await fixture('projector-in-if', 2, consumer, 'framePath' in options ? options.framePath : undefined);
     const round = f.rounds[2]!;
     let action = round.complete;
+    if ('afterAction' in options) action = await f.retry(action);
+    const check = async () => {
+      if (consumer === 'round') {
+        await expect(f.executor.execute('workflow.discussion.round.project',
+          { collections: ['speakers'], preparationBlockId: 'context' }, f.context(action)))
+          .resolves.toMatchObject({ ok: true, result: { allPassed: false, hasNext: true,
+            throughSeq: 3, outcomeReferences: round.replies } });
+      } else {
+        await expect(resolveActionCurrentSessionScopeFailure('reviews.comments.list', { sessionId: f.address.sessionId },
+          f.context(action), { sessionId: 'current_session' }, f.deps)).resolves.toBeNull();
+      }
+      expect(f.cost.historyPages).toBe(0);
+    };
     for (let depth = 0; depth < 2; depth += 1) {
-      action = recoverParent ? await f.retry(action, true) : f.recover(action);
-      const result = await f.executor.execute('workflow.discussion.round.project',
-        { collections: ['speakers'], preparationBlockId: 'context' }, f.context(action));
-      expect(result).toMatchObject({ ok: true, result: { allPassed: false, hasNext: true,
-        throughSeq: 3, outcomeReferences: round.replies } });
-      expect(f.cost.historyPages).toBe(0);
+      if (shape === 'root-only') await f.retry(f.currentRoot());
+      else action = await f.retry(action, shape);
+      if ('legacyCheckpoint' in options) f.retainOriginalCheckpointRoot();
+      await check();
     }
-    if (recoverParent) {
-      // A later parent-only recovery inherits the still-current Action attempt.
-      // Binding must use the same predecessor-slot walk as projection/scheduling.
-      f.recover(f.row(action).index.parentRecordId!);
-      await expect(f.executor.execute('workflow.discussion.round.project',
-        { collections: ['speakers'], preparationBlockId: 'context' }, f.context(action)))
-        .resolves.toMatchObject({ ok: true, result: { outcomeReferences: round.replies } });
-      expect(f.cost.historyPages).toBe(0);
+    // A later producer-created parent-only recovery must inherit the Action.
+    if (shape !== 'root-only') {
+      await f.retry(f.row(action).index.parentRecordId!);
+      await check();
     }
     // A transport returning a different slot must not turn successful binding
     // into permission to use unrelated progress.
     f.miswire();
-    await expect(f.executor.execute('workflow.discussion.round.project', { collections: ['speakers'] }, f.context(action)))
+    if (consumer === 'round') await expect(f.executor.execute('workflow.discussion.round.project', { collections: ['speakers'] }, f.context(action)))
       .resolves.toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+    else await expect(resolveActionCurrentSessionScopeFailure('reviews.comments.list', { sessionId: f.address.sessionId },
+      f.context(action), { sessionId: 'current_session' }, f.deps)).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+  });
+
+  it.each((['root', 'root-predecessor', 'run'] as const).flatMap(field => (['round', 'review'] as const).map(consumer => ({ field, consumer }))))
+  ('refuses producer-created root replacement with misbound $field / $consumer', async ({ field, consumer }) => {
+    const f = await fixture(undefined, 2, consumer);
+    const action = await f.retry(f.rounds[2]!.complete, 'root');
+    const context = f.context(action);
+    if (field === 'root' || field === 'root-predecessor') {
+      if (field === 'root') f.row(f.currentRoot()).progress.logicalInvocationRecordId = f.rounds[0]!.frame;
+      else f.row(f.currentRoot()).progress.previousAttemptRecordId = f.rounds[0]!.frame;
+      f.seal(f.row(f.currentRoot()));
+    } else if (context.actionCaller?.kind === 'workflowRun') context.actionCaller = { ...context.actionCaller,
+      runId: '99999999-9999-4999-8999-999999999999' };
+    if (consumer === 'round') await expect(f.executor.execute('workflow.discussion.round.project', { collections: ['speakers'] }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+    else await expect(resolveActionCurrentSessionScopeFailure('reviews.comments.list', { sessionId: f.address.sessionId },
+      context, { sessionId: 'current_session' }, f.deps)).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    expect(f.cost.historyPages).toBe(0);
   });
 
   it.each(['logical', 'attempt', 'run', 'envelope'] as const)('refuses a recovered projector with wrong %s binding', async field => {

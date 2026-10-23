@@ -1266,6 +1266,12 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     for (const seedId of [...selected]) {
       let current = graph.get(seedId);
       while (current) {
+        // An independent failure replaces only its interrupted ancestry. A
+        // healthy ancestor still owns the slot; replaying it is not causal.
+        // Fail-stop groups retain their complete closure and eligibility check.
+        if (groupIds.size === 0 && current.index.id !== seedId
+          && !EXACT_RECOVERY_RETRY_LIFECYCLES.has(current.index.lifecycle)
+          && !(current.index.lifecycle === 'needs_attention' && isStructuralRecoveryFrame(current.progress.blockKind))) break;
         selected.add(current.index.id);
         if (groupIds.has(current.index.id) || current.index.parentRecordId === null) break;
         current = graph.get(current.index.parentRecordId);
@@ -1653,7 +1659,9 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     }));
     const checkpointEnvelope = await sealCheckpoint({
       runId: args.input.runId,
-      checkpoint: bumpCheckpointForNewSequences(checkpoint, BigInt(checkpoint.nextSequence) + BigInt(prepared.length - 1)),
+      checkpoint: bumpCheckpointForNewSequences({ ...checkpoint,
+        rootRecordId: prepared.find(item => item.parentRecordId === null && item.progress.blockKind === 'root')?.newId ?? checkpoint.rootRecordId,
+      }, BigInt(checkpoint.nextSequence) + BigInt(prepared.length - 1)),
       ...resolvedEncryption,
       ...(signal ? { signal } : {}),
     });

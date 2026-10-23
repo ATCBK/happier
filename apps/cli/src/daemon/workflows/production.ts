@@ -12,7 +12,7 @@ import { openAutomationTemplateStoredV1 } from '@happier-dev/protocol/automation
 import { convertLegacyAutomationRecipeToInlineWorkflowV1 } from '@happier-dev/protocol/automations/automationLegacyWorkflowV1';
 import { WorkflowAcceptedSnapshotV1Schema, WorkflowResolvedInputsV1Schema, type WorkflowDefinitionMetadataV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 import { materializeWorkflowAcceptedSnapshotV1, workflowRequiresMachineStartCapacityV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
-import { readWorkflowInvocationMembersV1 } from '@happier-dev/protocol/workflows';
+import { readWorkflowInvocationMembersV1, readWorkflowInvocationRootV1 } from '@happier-dev/protocol/workflows';
 import { resolveWorkflowDefinitionRefV1 } from '@happier-dev/protocol/workflows/workflowDefinitionResolverV1';
 import { collectWorkflowLeavesV1, deriveWorkflowDestinationsV1 } from '@happier-dev/protocol/workflows/workflowDestinationsV1';
 import { countWorkflowStepsV1 } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
@@ -233,6 +233,24 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
   static async load(params: ConstructorParameters<typeof DurableWorkflowCoordinatorStore>[0]): Promise<DurableWorkflowCoordinatorStore> {
     const store = new DurableWorkflowCoordinatorStore(params);
     await store.loadInvocation(params.rootRecordId);
+    const original = await store.readInvocationBindingRow(params.rootRecordId);
+    if (!original) throw new Error('workflow_root_invocation_missing');
+    const root = await readWorkflowInvocationRootV1({ root: original, readInvocation: store.readInvocationBindingRow,
+      readCurrentRoot: async () => {
+        const page = asRecord(await params.storage.execute({ operation: 'invocations.list', runId: params.runId,
+          parentRecordId: null, memberOrdinal: '0', progressEnvelopes: true, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES }));
+        if (!Array.isArray(page.invocations) || page.invocations.length !== 1 || page.nextCursor !== undefined) {
+          throw new Error('workflow_storage_response_invalid');
+        }
+        const index = WorkflowRunInvocationIndexV1Schema.parse(page.invocations[0]);
+        if (index.parentRecordId !== null || index.memberOrdinal !== '0') throw new Error('workflow_storage_response_invalid');
+        await store.loadInvocation(index.id, { index, parentRevision: page.parentRevision,
+          contentEnvelope: asRecord(page.progressEnvelopesByInvocationId)[index.id] });
+        return store.readInvocationBindingRow(index.id);
+      } });
+    if (!root) throw new Error('workflow_root_invocation_missing');
+    params.rootRecordId = root.index.id;
+    params.checkpoint = { ...params.checkpoint, rootRecordId: root.index.id };
     return store;
   }
 
@@ -1106,9 +1124,17 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
   readControl = async () => {
     const snapshot = parseRunSnapshot(await this.params.storage.execute({ operation: 'get', runId: this.params.runId }));
     this.params.revision = Math.max(this.params.revision, snapshot.run.revision);
-    if (snapshot.rootProgress !== undefined && snapshot.rootProgress !== null) {
+    // The Run snapshot projects the original root for list progress. Recovery
+    // selects its current physical root through the authenticated checkpoint.
+    const projectedRootId = snapshot.rootProgress === undefined || snapshot.rootProgress === null
+      ? undefined : asRecord(asRecord(snapshot.rootProgress).index).id;
+    if (projectedRootId === this.params.rootRecordId) {
       await this.loadInvocation(this.params.rootRecordId, snapshot.rootProgress);
     } else {
+      const root = this.recordsById.get(this.params.rootRecordId);
+      if (projectedRootId !== undefined && projectedRootId !== root?.logicalInvocationRecordId) {
+        throw new Error('workflow_storage_response_invalid');
+      }
       // A snapshot without the root projection still uses the exact row
       // reader; a prior in-memory root is never fresh control evidence.
       await this.refreshRootIndex();
@@ -1734,6 +1760,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
     claim.registerControlCheck?.(async () => await durableStore.readControl());
     const rootAtStart = durableStore.rootIndex;
     if (!rootAtStart) throw new Error('workflow_root_invocation_missing');
+    rootRecordId = rootAtStart.id;
     if (controllerFailure) {
       const root = await durableStore.readByLogicalInvocation(rootRecordId);
       if (!root) throw new Error('workflow_root_invocation_missing');

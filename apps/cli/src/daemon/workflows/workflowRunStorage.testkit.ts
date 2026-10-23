@@ -153,7 +153,7 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
     .sort((left, right) => (BigInt(left.index.sequence) < BigInt(right.index.sequence) ? -1 : 1));
 
   /** Newest attempt per member slot, exactly as the server resolves a parent page. */
-  const newestPerMemberSlot = (parentRecordId: string): StoredRow[] => {
+  const newestPerMemberSlot = (parentRecordId: string | null): StoredRow[] => {
     const newest = new Map<string, StoredRow>();
     for (const row of rows.values()) {
       if (row.index.runId !== params.runId || row.index.parentRecordId !== parentRecordId) continue;
@@ -348,7 +348,8 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
         const lifecycles = Array.isArray(operation.lifecycles)
           ? (operation.lifecycles as readonly WorkflowInvocationLifecycleV1[])
           : undefined;
-        const parentRecordId = operation.parentRecordId === undefined ? undefined : String(operation.parentRecordId);
+        const parentRecordId = operation.parentRecordId === undefined ? undefined
+          : operation.parentRecordId === null ? null : String(operation.parentRecordId);
         const parentRecordIds = Array.isArray(operation.parentRecordIds) ? new Set(operation.parentRecordIds.map(String)) : undefined;
         const scanned = (parentRecordId === undefined ? ordered() : newestPerMemberSlot(parentRecordId))
           .filter(row => (operation.invocationId === undefined || row.index.id === operation.invocationId)

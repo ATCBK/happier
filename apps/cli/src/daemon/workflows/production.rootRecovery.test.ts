@@ -66,7 +66,7 @@ async function interruptedRoot(lifecycle: 'pending' | 'running' | 'needs_attenti
   const readRoot = async () => WorkflowActionOutputSchemasV1['workflow.run.invocations.get'].parse(await reader.execute({
     actionId: 'workflow.run.invocations.get', input: { runId, invocationId: rootId }, context: {},
   })).invocation;
-  return { acceptedEnvelope, storage, store, rootKey, readRoot };
+  return { acceptedEnvelope, storage, store, rootKey, readRoot, reader };
 }
 
 function recoveredCoordinator(storage: ReturnType<typeof createWorkflowRunStorageTestkit>, isAcceptedAuthorizationCurrent = async () => true) {
@@ -149,6 +149,59 @@ function heartbeatHttpFailure(status?: number) {
 }
 
 describe('Workflow root recovery', () => {
+  it.each([false, true])('rejoins producer-replaced roots and inherits current members through repeated recovery (legacy checkpoint=%s)', async legacyCheckpoint => {
+    const h = await interruptedRoot('pending');
+    const child = await h.store.ensureIntent({ key: workflowInvocationKey({ runId, blockId: 'check', scope: [], attempt: 0 }),
+      recordId: 'inherited-check', runId, blockId: 'check', path: { blockId: 'check', scope: [] },
+      attempt: 0, acceptedAtMs: Date.now(), lifecycle: 'pending', blockKind: 'wait', parentKey: h.rootKey, memberOrdinal: '0' });
+    await h.store.commitFact({ key: child.key, lifecycle: 'skipped' });
+    let store = h.store;
+    let currentRootId = rootId;
+    const context = { surface: 'ui' as const, authority: 'present_user' as const, callerPermissionMode: 'yolo' as const };
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const root = await store.readByLogicalInvocation(currentRootId);
+      if (!root) throw new Error('missing_root');
+      await store.commitFact({ key: root.key, lifecycle: 'needs_attention', reason: 'storage_unavailable' });
+      await h.storage.execute({ operation: 'transition', runId, expectedRevision: h.storage.run().revision,
+        state: 'interrupted', checkpointEnvelope: h.storage.checkpointEnvelope() });
+      const detail = WorkflowActionOutputSchemasV1['workflow.run.invocations.get'].parse(await h.reader.execute({
+        actionId: 'workflow.run.invocations.get', input: { runId, invocationId: currentRootId }, context }));
+      const retry = detail.invocation.recoveryAvailability?.retry;
+      if (retry?.kind !== 'available') throw new Error('root_retry_unavailable');
+      const result = WorkflowActionOutputSchemasV1['workflow.run.invocations.retry'].parse(await h.reader.execute({
+        actionId: 'workflow.run.invocations.retry', input: { runId, invocation: { recordId: currentRootId },
+          expectedRevision: h.storage.run().revision, causalInvocationIds: retry.causalInvocationIds,
+          conversation: 'fresh_conversation', input: { kind: 'original' } }, context }));
+      currentRootId = result.invocation.id;
+      if (legacyCheckpoint) {
+        const current = WorkflowActionOutputSchemasV1['workflow.run.get'].parse(await h.reader.execute({
+          actionId: 'workflow.run.get', input: { runId, includeUsage: false }, context }));
+        if (!current.checkpoint) throw new Error('missing_checkpoint');
+        await h.storage.execute({ operation: 'transition', runId, expectedRevision: h.storage.run().revision, state: 'queued',
+          checkpointEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain',
+            binding: { v: 1, purpose: 'checkpoint', accountId, runId }, checkpoint: { ...current.checkpoint, rootRecordId: rootId } })) });
+      }
+      const opened = WorkflowActionOutputSchemasV1['workflow.run.get'].parse(await h.reader.execute({
+        actionId: 'workflow.run.get', input: { runId, includeUsage: false }, context }));
+      expect(opened.checkpoint?.rootRecordId).toBe(legacyCheckpoint ? rootId : currentRootId);
+      if (!opened.checkpoint) throw new Error('missing_checkpoint');
+      store = await DurableWorkflowCoordinatorStore.load({ accountId, runId, parentAttempt: 0,
+        rootRecordId: opened.checkpoint.rootRecordId, checkpoint: opened.checkpoint, encryption,
+        storage: h.storage, revision: opened.run.revision });
+      expect(store.rootIndex?.id).toBe(currentRootId);
+      const currentRoot = await store.readByLogicalInvocation(currentRootId);
+      expect(currentRoot).toMatchObject({ attempt, previousAttemptRecordId: root.recordId });
+      await expect(store.readControl()).resolves.toBe('running');
+      await expect(store.readCurrent({ runId, blockId: 'check', scope: [], parentKey: currentRoot!.key, memberOrdinal: '0' }))
+        .resolves.toMatchObject({ recordId: child.recordId, lifecycle: 'skipped' });
+      await expect(store.listCurrentMembers(currentRoot!.key)).resolves.toMatchObject([{ id: child.recordId, lifecycle: 'skipped' }]);
+    }
+    await expect(recoveredCoordinator(h.storage)({ runId, attempt: 0, expectedRevision: h.storage.run().revision,
+      acceptedEnvelope: h.acceptedEnvelope, accountCurrentness: encryption.witness })).resolves.toMatchObject({ state: 'succeeded' });
+    expect(h.storage.rowById(currentRootId)?.index.lifecycle).toBe('completed');
+    expect(h.storage.rows().filter(row => row.index.parentRecordId !== null).map(row => row.index.id)).toEqual([child.recordId]);
+  });
+
   it.each(['direct', 'automation'] as const)('preserves the server expiry after a delayed %s claim and failed, pending or successful renewal', async origin => {
     for (const mode of ['failed', 'pending', 'renewed'] as const) {
       vi.useFakeTimers(); vi.setSystemTime(0);

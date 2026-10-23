@@ -445,7 +445,8 @@ export const WorkflowRunControlResultV1Schema = lazyZodSchema(() => z.strictObje
 
 export const WorkflowInvocationListRequestV1Schema = lazyZodSchema(() => z.strictObject({
   runId: WorkflowRunIdV1Schema, cursor: zMini.optional(CursorSchema), limit: z.optional(PositivePagePreferenceSchema),
-  parentRecordId: zMini.optional(WorkflowInvocationRecordIdSchema),
+  /** Null selects root slots; omission selects Run history. */
+  parentRecordId: zMini.optional(zMini.nullable(WorkflowInvocationRecordIdSchema)),
   /** Direct-child history of the requested parents, including superseded attempts. */
   parentRecordIds: z.optional(z.array(WorkflowInvocationRecordIdSchema).check(z.minLength(1))),
   /** Exact history record, including a superseded logical attempt. */

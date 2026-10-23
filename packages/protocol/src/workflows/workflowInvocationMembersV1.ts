@@ -1,5 +1,40 @@
 import type { WorkflowInvocationBindingRowV1 } from './workflowInvocationStructureV1.js';
 import type { WorkflowRunInvocationIndexV1 } from './workflowProgressV1.js';
+import { sameStrictJsonValue } from '../json/strictJsonValue.js';
+
+/** Resolve the root slot, including checkpoints retained before root replacement. */
+export async function readWorkflowInvocationRootV1(params: Readonly<{
+  root: WorkflowInvocationBindingRowV1;
+  currentRootRecordId?: string;
+  readInvocation: (id: string) => Promise<WorkflowInvocationBindingRowV1 | undefined>;
+  readCurrentRoot: () => Promise<WorkflowInvocationBindingRowV1 | undefined>;
+}>): Promise<WorkflowInvocationBindingRowV1 | undefined> {
+  const original = params.root;
+  let root = params.currentRootRecordId && params.currentRootRecordId !== original.index.id
+    ? await params.readInvocation(params.currentRootRecordId) : original;
+  if (root?.index.lifecycle === 'superseded') root = await params.readCurrentRoot();
+  if (!root || root.index.lifecycle === 'superseded') return undefined;
+  let ancestor = root;
+  const seen = new Set<string>();
+  let containsOriginal = false;
+  for (;;) {
+    if (seen.has(ancestor.index.id) || ancestor.index.runId !== original.index.runId
+      || ancestor.index.parentRecordId !== null || ancestor.index.memberOrdinal !== '0'
+      || ancestor.progress.blockKind !== 'root' || ancestor.progress.attempt !== ancestor.index.attempt
+      || ancestor.progress.logicalInvocationRecordId !== original.progress.logicalInvocationRecordId
+      || !sameStrictJsonValue(ancestor.progress.invocationPath, { blockId: '$root', scope: [] })) return undefined;
+    if (ancestor.index.id === original.index.id) containsOriginal = true;
+    if (ancestor.index.attempt === '0') return containsOriginal
+      && ancestor.index.id === original.progress.logicalInvocationRecordId
+      && ancestor.progress.previousAttemptRecordId === undefined ? root : undefined;
+    seen.add(ancestor.index.id);
+    const previousId = ancestor.progress.previousAttemptRecordId;
+    const previous = previousId ? await params.readInvocation(previousId) : undefined;
+    if (!previous || previous.index.id !== previousId || previous.index.lifecycle !== 'superseded'
+      || BigInt(previous.index.attempt) + 1n !== BigInt(ancestor.index.attempt)) return undefined;
+    ancestor = previous;
+  }
+}
 
 /**
  * A recovered structural parent inherits its nearest unreplaced member slots.

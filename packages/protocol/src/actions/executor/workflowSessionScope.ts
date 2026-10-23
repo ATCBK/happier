@@ -6,7 +6,7 @@ import { areServerProfileIdentifiersEquivalent } from '../../features/payload/ca
 import type { ActionExecutorContext, ActionExecutorDeps } from './types.js';
 import type { ActionId } from '../actionIds.js';
 import type { WorkflowMaterializedLeafV1 } from '../../workflows/workflowDefinitionV1.js';
-import { readWorkflowInvocationMembersV1 } from '../../workflows/workflowInvocationMembersV1.js';
+import { readWorkflowInvocationMembersV1, readWorkflowInvocationRootV1 } from '../../workflows/workflowInvocationMembersV1.js';
 
 type WorkflowActionInvocationContextV1 = Readonly<{
   opened: ReturnType<typeof WorkflowRunGetResultV1Schema.parse>;
@@ -84,8 +84,9 @@ export async function readActionWorkflowInvocationContextV1(
     const readChildHistory = (parentRecordIds: string[]) => parentRecordIds.length ? readSelected({ parentRecordIds }) : Promise.resolve([]);
     const logical = await read(identity.logicalInvocationId);
     if (!logical) return null;
-    let invocation = logical.index.attempt === identity.attempt ? logical : undefined;
-    if (!invocation && logical.index.parentRecordId !== null) {
+    const ancestryParents = new Map<string, string>();
+    let invocation: WorkflowInvocationBindingRowV1 | undefined;
+    {
       // Retry preserves logical identity while replacing physical ancestors.
       // Resolve those ancestors first, then use the shared inherited-slot owner
       // for the leaf. Only this Action's ancestry and selected slots are opened.
@@ -93,20 +94,31 @@ export async function readActionWorkflowInvocationContextV1(
       const current = async (row: WorkflowInvocationBindingRowV1): Promise<WorkflowInvocationBindingRowV1 | undefined> => {
         if (seen.has(row.index.id)) return undefined;
         seen.add(row.index.id);
-        if (row.index.lifecycle !== 'superseded') return row;
-        const originalParent = row.index.parentRecordId === null ? undefined : await read(row.index.parentRecordId);
+        if (row.index.parentRecordId === null) {
+          return readWorkflowInvocationRootV1({ root: row, currentRootRecordId: opened.checkpoint?.rootRecordId,
+            readInvocation: read, readCurrentRoot: async () => {
+              const roots = await readSelected({ parentRecordId: null, memberOrdinal: '0' });
+              return roots.length === 1 ? roots[0] : undefined;
+            } });
+        }
+        const originalParent = await read(row.index.parentRecordId);
         const parent = originalParent ? await current(originalParent) : undefined;
         if (!parent) return undefined;
+        if (parent.index.id === row.index.parentRecordId && row.index.lifecycle !== 'superseded') return row;
         const members = await readWorkflowInvocationMembersV1({ parentRecordIds: [parent.index.id],
           memberOrdinal: row.index.memberOrdinal, readParent: read,
           readChildren: parents => Promise.all(parents.map(id => readMembers(id, row.index.memberOrdinal))).then(pages => pages.flat()),
           indexOf: (member: WorkflowInvocationBindingRowV1) => member.index });
         const selected = members.get(parent.index.id);
         const candidate = selected?.length === 1 ? selected[0] : undefined;
-        return candidate && candidate.index.lifecycle !== 'superseded'
+        if (candidate && candidate.index.lifecycle !== 'superseded'
           && candidate.progress.logicalInvocationRecordId === row.progress.logicalInvocationRecordId
           && candidate.progress.blockKind === row.progress.blockKind
-          && sameStrictJsonValue(candidate.progress.invocationPath, row.progress.invocationPath) ? candidate : undefined;
+          && sameStrictJsonValue(candidate.progress.invocationPath, row.progress.invocationPath)) {
+          ancestryParents.set(candidate.index.id, parent.index.id);
+          return candidate;
+        }
+        return undefined;
       };
       invocation = await current(logical);
     }
@@ -114,9 +126,18 @@ export async function readActionWorkflowInvocationContextV1(
       || invocation.progress.attempt !== identity.attempt || invocation.progress.logicalInvocationRecordId !== identity.logicalInvocationId
       || (invocation.progress.execution && (invocation.progress.execution.kind !== 'action'
         || invocation.progress.execution.actionId !== actionId || invocation.progress.execution.actionRequestId !== context.actionRequestId))) return null;
+    // Inherited rows retain their authenticated physical parent. Only the
+    // reconstructed interpreter ancestry uses the selected current parent.
+    const structureRow = (row: WorkflowInvocationBindingRowV1): WorkflowInvocationBindingRowV1 => {
+      const parentRecordId = ancestryParents.get(row.index.id);
+      return parentRecordId === undefined ? row : { ...row, index: { ...row.index, parentRecordId } };
+    };
     const structure = await resolveWorkflowInvocationStructureV1({ definition: opened.definition,
       frozenChildren: opened.acceptedContext.frozenChildren, inputs: opened.acceptedContext.inputs,
-      invocation, readInvocation: read, keyOfInvocation: row => row.index.id });
+      invocation: structureRow(invocation), readInvocation: async id => {
+        const row = await read(id);
+        return row ? structureRow(row) : undefined;
+      }, keyOfInvocation: row => row.index.id });
     if (structure?.leaf.kind !== 'action' || structure.leaf.actionId !== actionId) return null;
     const leaf = opened.acceptedContext.materializedLeaves.find(leaf => leaf.sourceKey === structure.sourceKey
       && leaf.blockId === structure.leaf.id && leaf.kind === 'action' && leaf.actionId === actionId);
