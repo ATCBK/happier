@@ -71,7 +71,7 @@ export function useAttachmentDraftManager(params: Readonly<{
     eagerUploadRef.current = params.eagerUpload;
     const eagerUploadsRef = React.useRef(new Map<string, AbortController>());
 
-    const webPreviewUrlsRef = React.useRef<Map<string, string>>(new Map());
+    const webPreviewUrlsRef = React.useRef(new Map<string, Readonly<{ file: File; url: string }>>());
     const [webPreviewUrlsVersion, setWebPreviewUrlsVersion] = React.useState(0);
 
     const getDraftsSnapshot = React.useCallback(() => draftsRef.current, []);
@@ -97,8 +97,8 @@ export function useAttachmentDraftManager(params: Readonly<{
         return () => {
             const map = webPreviewUrlsRef.current;
             const urlApi = globalThis.URL;
-            for (const url of map.values()) {
-                try { urlApi?.revokeObjectURL?.(url); } catch { }
+            for (const preview of map.values()) {
+                try { urlApi?.revokeObjectURL?.(preview.url); } catch { }
             }
             map.clear();
         };
@@ -200,22 +200,23 @@ export function useAttachmentDraftManager(params: Readonly<{
         const urlApi = globalThis.URL;
         let changed = false;
 
-        const activeIds = new Set(drafts.map((d) => d.id));
-        for (const [id, url] of map) {
-            if (activeIds.has(id)) continue;
-            try { urlApi?.revokeObjectURL?.(url); } catch { }
+        const activeFiles = new Map(drafts.flatMap(draft => draft.source.kind === 'web' && resolveImageSourcePresentation(draft.source)
+            ? [[draft.id, draft.source.file] as const] : []));
+        for (const [id, preview] of map) {
+            // A draft can replace its source without changing identity. Only
+            // the current File owns a preview, including across upload patches.
+            if (activeFiles.get(id) === preview.file) continue;
+            try { urlApi?.revokeObjectURL?.(preview.url); } catch { }
             map.delete(id);
             changed = true;
         }
 
-        for (const draft of drafts) {
-            if (draft.source.kind !== 'web') continue;
-            if (!resolveImageSourcePresentation(draft.source)) continue;
-            if (map.has(draft.id)) continue;
+        for (const [id, file] of activeFiles) {
+            if (map.has(id)) continue;
             if (typeof urlApi?.createObjectURL !== 'function') continue;
             try {
-                const url = urlApi.createObjectURL(draft.source.file);
-                map.set(draft.id, url);
+                const url = urlApi.createObjectURL(file);
+                map.set(id, { file, url });
                 changed = true;
             } catch {
                 // ignore
@@ -240,7 +241,7 @@ export function useAttachmentDraftManager(params: Readonly<{
                         ? d.source.uri
                         : d.source.kind === 'memory'
                             ? d.source.previewUri ?? null
-                            : (webUrls.get(d.id) ?? null)
+                            : (webUrls.get(d.id)?.url ?? null)
                 )
                 : null;
 

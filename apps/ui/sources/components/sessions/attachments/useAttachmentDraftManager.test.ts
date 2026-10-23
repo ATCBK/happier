@@ -3,13 +3,78 @@ import { act } from 'react-test-renderer';
 
 import { renderHook } from '@/dev/testkit';
 
-vi.mock('@/modal', () => ({ Modal: { alert: vi.fn() } }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock().module;
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
+});
 
 import { useAttachmentDraftManager } from './useAttachmentDraftManager';
 import type { AttachmentDraft } from './attachmentDraftModel';
 
 describe('useAttachmentDraftManager', () => {
+    it('owns one preview URL per current web image and releases replaced, removed and unmounted images', async () => {
+        const liveUrls = new Set<string>();
+        let created = 0;
+        let revoked = 0;
+        const originalUrl = globalThis.URL;
+        class PreviewUrl extends originalUrl {
+            static createObjectURL() {
+                const url = `blob:preview-${++created}`;
+                liveUrls.add(url);
+                return url;
+            }
+            static revokeObjectURL(url: string) {
+                expect(liveUrls.delete(url)).toBe(true);
+                revoked += 1;
+            }
+        }
+        vi.stubGlobal('URL', PreviewUrl);
+        const image = (index: number): AttachmentDraft => ({
+            id: 'picture', status: 'pending',
+            source: { kind: 'web', file: new File([String(index)], `picture-${index}.png`, { type: 'image/png' }) },
+        });
+        const initialDrafts = [image(0)];
+        const hook = await renderHook(() => useAttachmentDraftManager({
+            enabled: true, maxFileBytes: 1024, initialDrafts,
+        }));
+        try {
+            expect(created).toBe(1);
+            for (let index = 1; index <= 20; index += 1) {
+                await act(async () => { hook.getCurrent().replaceDrafts([image(index)]); });
+                expect(created).toBe(index + 1);
+                expect(revoked).toBe(index);
+                expect(liveUrls.size).toBe(1);
+                expect(hook.getCurrent().agentInputAttachments[0]?.preview?.uri).toBe(`blob:preview-${index + 1}`);
+                await act(async () => { hook.getCurrent().applyDraftPatch('picture', { status: 'uploading' }); });
+                await act(async () => {
+                    const draft = hook.getCurrent().getDraftsSnapshot()[0]!;
+                    hook.getCurrent().replaceDrafts([{ ...draft, source: { ...draft.source } }]);
+                });
+                expect(created).toBe(index + 1);
+                expect(revoked).toBe(index);
+            }
+            await act(async () => { hook.getCurrent().replaceDrafts([{
+                id: 'picture', status: 'pending', source: { kind: 'memory', name: 'notes.txt', bytes: new Uint8Array([1]) },
+            }]); });
+            expect(liveUrls.size).toBe(0);
+            expect(hook.getCurrent().agentInputAttachments[0]?.preview).toBeUndefined();
+            await act(async () => { hook.getCurrent().replaceDrafts([image(21)]); });
+            await act(async () => { hook.getCurrent().removeDraft('picture'); });
+            expect(liveUrls.size).toBe(0);
+            await act(async () => { hook.getCurrent().replaceDrafts([image(22)]); });
+            expect(liveUrls.size).toBe(1);
+        } finally {
+            await hook.unmount();
+            vi.unstubAllGlobals();
+        }
+        expect(liveUrls.size).toBe(0);
+        expect(revoked).toBe(created);
+    });
+
     it('keeps the manager object and its callbacks referentially stable across parent re-renders', async () => {
         // The manager is consumed by memoized composer/transcript surfaces; a fresh object per
         // render cascades into per-commit re-renders of every visible transcript row.
