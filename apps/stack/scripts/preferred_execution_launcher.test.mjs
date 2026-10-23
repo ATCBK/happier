@@ -417,6 +417,66 @@ createInterface({input:process.stdin}).once('line', line => { console.log('BODY:
   return { ...fixture, workers };
 }
 
+for (const cancel of [false, true]) {
+  test(`AUTO busy-pool sweep retains one native waiter and ${cancel ? 'cancellation removes only that waiter' : 'runs the payload once after capacity recovers'}`, { skip: process.platform !== 'linux', timeout: 60_000 }, async t => {
+    const fixture = await runtimeAdmissionTransportFixture(t);
+    delete fixture.invocation.env.NODE_TEST_CONTEXT;
+    for (const worker of Object.values(fixture.workers)) {
+      await writeFile(worker.sample, '8 0.1 0.2 22000000 20 0 5242880 28311552 0 0 0 0 0 0 0 linux\n');
+    }
+    // Equal memory pressure, distinct load: use the existing selection order.
+    await writeFile(fixture.workers.roomy.sample, '8 12 0.2 22000000 20 0 5242880 28311552 0 0 0 0 0 0 0 linux\n');
+    for (const target of fixture.config.targets) {
+      await writeFile(join(target.repoDir, 'focused.test.mjs'), 'import test from "node:test"; import { appendFileSync } from "node:fs"; test("admitted payload", () => appendFileSync("payload-runs", "once\\n"));\n');
+    }
+    const child = spawn('/bin/sh', [launcher, '--', 'node', '--test', 'focused.test.mjs'], fixture.invocation);
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const exited = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
+    t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); await exited; });
+    const waiters = join(fixture.workers.starved.admissionRoot, 'waiters');
+    await waitForRuntime(async () => stderr.includes('waiting for heavyweight admission')
+      && (await readdir(waiters).catch(() => [])).length === 1, () => `full busy sweep never retained its native queue position:\n${stderr}`);
+    const [waiter] = await readdir(waiters);
+    const costs = async () => {
+      const trace = await readFile(fixture.invocation.env.FIXTURE_TRACE, 'utf8');
+      return {
+        dispatches: (await readFile(fixture.invocation.env.DISPATCHES, 'utf8')).trim().split('\n'),
+        selections: (stderr.match(/\[preferred-execution\] selected /g) ?? []).length,
+        sync: trace.split('\n').filter(line => line.startsWith('mutagen:')).length,
+        bootstrap: trace.split('\n').filter(line => line.startsWith('ssh:') && line.includes('remote_dependency_bootstrap.mjs')).length,
+      };
+    };
+    const initialCosts = await costs();
+    assert.deepEqual(initialCosts.dispatches, ['starved', 'roomy', 'starved'], 'one full capacity sweep, then the best eligible native queue');
+    assert.equal((stderr.match(/admission busy before dispatch/g) ?? []).length, 2);
+    assert.equal(payloadOutput(stdout), '');
+    // Let a real pressure retry elapse. Waiting must not re-sync or bootstrap.
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    assert.deepEqual(await costs(), initialCosts, 'routing, sync and bootstrap work grew while queued');
+    assert.deepEqual(await readdir(waiters), [waiter], 'native waiter identity changed');
+    if (cancel) {
+      // An unrelated live incarnation must survive this controller's cancel.
+      const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+      const identity = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+      const neighbor = `${process.pid}-${identity}`;
+      await writeFile(join(waiters, neighbor), `${process.pid} ${identity} 0 runtime-build 0\n`);
+      child.kill('SIGTERM');
+      assert.deepEqual(await exited, { code: 130, signal: null }, stderr);
+      await waitForRuntime(async () => !(await readdir(waiters)).includes(waiter), () => 'cancelled native waiter remained');
+      assert.deepEqual(await readdir(waiters), [neighbor]);
+      await assert.rejects(access(join(fixture.config.targets[0].repoDir, 'payload-runs')), { code: 'ENOENT' });
+    } else {
+      await writeFile(fixture.workers.starved.sample, '8 0.1 0.9 22000000 20 0 28000000 28311552 0 0 0 0 0 0 0 linux\n');
+      assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
+      assert.equal(await readFile(join(fixture.config.targets[0].repoDir, 'payload-runs'), 'utf8'), 'once\n');
+      assert.deepEqual(await readdir(waiters), []);
+      assert.deepEqual(await costs(), initialCosts);
+    }
+  });
+}
+
 test('AUTO dispatch retains its selected worker through real decision-mutex contention', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
   const fixture = await runtimeAdmissionTransportFixture(t);
   // This is a separate worker test runner, not a child of this node:test run.
@@ -1077,15 +1137,26 @@ test('automatic admission reroutes busy workers without an unavailable TTL while
   assert.doesNotMatch(commands.at(-1), /--no-wait/);
 });
 
-test('automatic admission re-evaluates the pool after every worker is busy without local fallback', async (t) => {
-  const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, roomyLoad: 12, fallback: 'local' });
+test('AUTO busy-pool queue selection excludes a worker whose final sync flush fails', async t => {
+  const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, roomyLoad: 12 });
   await installBusyAdmissionTransport(fixture);
+  await executable(join(fixture.binDir, 'mutagen'), [
+    '#!/bin/sh',
+    'if [ "$2" = list ]; then printf "%s|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|7|ok|0|0\\n" "$3"; exit 0; fi',
+    'if [ "$2" = flush ] && [ "$3" = happier-starved ]; then',
+    '  if [ -f "$FINAL_SYNC_ATTEMPT" ]; then exit 73; fi',
+    '  : > "$FINAL_SYNC_ATTEMPT"',
+    'fi',
+    'exit 0', '',
+  ].join('\n'));
   const result = spawnSync('/bin/sh', [launcher, '--', 'node', '--test', 'focused.test.mjs'], {
-    ...fixture.invocation, env: { ...fixture.invocation.env, BUSY_ATTEMPTS: '2' }, timeout: 25_000,
+    ...fixture.invocation, timeout: 15_000,
+    env: { ...fixture.invocation.env, BUSY_ATTEMPTS: '2', FINAL_SYNC_ATTEMPT: join(fixture.root, 'first-flush') },
   });
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, 'a formerly busy worker stayed eligible after its sync failure');
   assert.equal(result.stdout, 'payload:roomy\n');
-  assert.deepEqual((await readFile(fixture.invocation.env.DISPATCHES, 'utf8')).trim().split('\n'), ['starved', 'roomy', 'starved', 'roomy']);
+  assert.deepEqual((await readFile(fixture.invocation.env.DISPATCHES, 'utf8')).trim().split('\n'), ['starved', 'roomy', 'roomy']);
+  assert.match(result.stderr, /selected target sync flush failed: starved/);
   assert.doesNotMatch(result.stderr, /running locally/);
 });
 
