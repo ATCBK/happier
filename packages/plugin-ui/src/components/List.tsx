@@ -2,7 +2,9 @@ import {
   Children,
   Fragment,
   PureComponent,
+  cloneElement,
   createContext,
+  isValidElement,
   useCallback,
   useContext,
   useEffect,
@@ -31,6 +33,8 @@ import { useHappierColumnEdgeRemainder } from '../presentation/layout/columnEdge
 import {
   HappierPageSectionHeader,
   HappierPageSheet,
+  useHappierPageSection,
+  withHappierPageSectionDividers,
 } from '../presentation/layout/PageSection.js';
 import { useHappierPageChrome } from '../presentation/layout/pageChrome.js';
 import type {
@@ -672,6 +676,8 @@ type VirtualizedListRowProps<Item> = Readonly<{
   registerTarget: (key: string, target: HappierFocusable | null) => void;
   accessibilityPattern: ListRowAccessibilityPattern;
   unavailableReason?: string | null;
+  /** The list sits on a framed page sheet: its rows are the sheet's rows, divided by its hairline. */
+  onSheet: boolean;
 }>;
 
 /**
@@ -710,11 +716,18 @@ class VirtualizedListRow<Item> extends PureComponent<
                 : props.setSize,
           }
         : null;
-    const renderedItem = props.renderItem(
+    const authoredItem = props.renderItem(
       props.item,
       props.index,
       props.sectionKey,
     );
+    // On a sheet a row draws the sheet's hairline below it (never after the last), as an ItemGroup's
+    // rows do; a row that states its own divider keeps it.
+    const renderedItem = props.onSheet
+      && isValidElement<{ showDivider?: boolean }>(authoredItem)
+      && authoredItem.props.showDivider === undefined
+      ? cloneElement(authoredItem, { showDivider: props.index < props.setSize - 1 })
+      : authoredItem;
     // A primitive item has no React Native text host or row semantics. Route it
     // through the selectable List.Item owner when selection is active; authored
     // semantic rows already consume that context and must not be wrapped again.
@@ -834,8 +847,12 @@ function VirtualizedList<Item>(
   // Density changes only the spacing between authored rows. It does not select
   // a separate item implementation or carry core row policy into the public
   // component surface.
-  const densityStyle: HappierPortableStyle =
-    props.density === 'compact' ? { gap: 4 } : { gap: 8 };
+  // Rows on a framed page sheet sit flush and divided, like the sheet's own rows; the density gap
+  // separates rows only where nothing else does.
+  const onSheet = useHappierPageSection()?.framed === true;
+  const densityStyle: HappierPortableStyle = onSheet
+    ? { gap: 0 }
+    : props.density === 'compact' ? { gap: 4 } : { gap: 8 };
   const { query, control: searchControl } = useListCollectionSearch(
     props.search,
     listRootRef,
@@ -1559,6 +1576,7 @@ function VirtualizedList<Item>(
           setSize={input.setSize}
           collectionSize={input.collectionSize}
           renderItem={renderItem}
+          onSheet={onSheet}
           selectionEnabled={selectionEnabled}
           multiSelectable={
             multiStore !== null &&
@@ -1995,6 +2013,7 @@ function ListRoot<Item>(props: ListProps<Item>): ReactElement {
     accessibilityLabel,
     accessibilityLabelKey,
   );
+  const onSheet = useHappierPageSection()?.framed === true;
   if (isVirtualizedList(props)) {
     if (
       props.selection !== undefined &&
@@ -2009,15 +2028,16 @@ function ListRoot<Item>(props: ListProps<Item>): ReactElement {
     } as ListBaseProps & VirtualizedListProps<Item>;
     return <VirtualizedList {...resolvedProps} />;
   }
-  const densityStyle: HappierPortableStyle =
-    props.density === 'compact' ? { gap: 4 } : { gap: 8 };
+  const densityStyle: HappierPortableStyle = onSheet
+    ? { gap: 0 }
+    : props.density === 'compact' ? { gap: 4 } : { gap: 8 };
   return (
     <HappierList
       accessibilityLabel={resolvedAccessibilityLabel}
       testID={props.testID}
       style={[densityStyle, props.style]}
     >
-      {props.children}
+      {onSheet ? withHappierPageSectionDividers(props.children) : props.children}
     </HappierList>
   );
 }
