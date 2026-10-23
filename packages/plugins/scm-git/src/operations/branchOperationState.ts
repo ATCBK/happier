@@ -1,5 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import type { ScmOperationRepositoryState, ScmOperationState } from '@happier-dev/plugin-sdk/scm';
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/plugin-sdk/scm';
@@ -8,18 +8,31 @@ import { runScmCommand } from '../runtime.js';
 import type { ScmBackendContext } from '../types.js';
 import { buildScmNonInteractiveEnv } from '../providers/shared/nonInteractiveEnv.js';
 
-export async function resolveGitStatePath(context: ScmBackendContext, statePath: string): Promise<string | null> {
+type GitStatePaths = ReadonlyMap<string, string | null>;
+
+async function resolveGitStatePaths(context: ScmBackendContext, statePaths: readonly string[]): Promise<GitStatePaths> {
     const result = await runScmCommand({
         bin: 'git',
         cwd: context.cwd,
-        args: ['rev-parse', '--git-path', statePath],
+        args: ['rev-parse', ...statePaths.flatMap(statePath => ['--git-path', statePath])],
         timeoutMs: 10_000,
         env: buildScmNonInteractiveEnv(),
     });
     if (!result.success) throw Object.assign(new Error(result.stderr || 'Failed to inspect Git operation state'), { errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED });
-    const rawPath = result.stdout.trim();
-    if (!rawPath) return null;
-    return isAbsolute(rawPath) ? rawPath : resolve(context.cwd, rawPath);
+    const rawPaths = statePaths.length === 1 ? [result.stdout.trim()] : result.stdout.trim().split(/\r?\n/);
+    // rev-parse has no NUL-delimited path output. Resolve separately only when
+    // a checkout name contains a newline and makes the batch ambiguous.
+    if (rawPaths.length !== statePaths.length) {
+        return new Map(await Promise.all(statePaths.map(async statePath => [statePath, await resolveGitStatePath(context, statePath)] as const)));
+    }
+    return new Map(statePaths.map((statePath, index) => {
+        const rawPath = rawPaths[index].trim();
+        return [statePath, rawPath ? (isAbsolute(rawPath) ? rawPath : resolve(context.cwd, rawPath)) : null];
+    }));
+}
+
+export async function resolveGitStatePath(context: ScmBackendContext, statePath: string): Promise<string | null> {
+    return (await resolveGitStatePaths(context, [statePath])).get(statePath) ?? null;
 }
 
 async function directoryExists(path: string): Promise<boolean> {
@@ -51,15 +64,18 @@ function parseMergeSourceRef(message: string | null): string | null {
     return firstLine || null;
 }
 
-async function readMergeOperationState(context: ScmBackendContext): Promise<ScmOperationState | null> {
-    const mergeHeadPath = await resolveGitStatePath(context, 'MERGE_HEAD');
-    const mergeHead = mergeHeadPath ? await readTrimmedFile(mergeHeadPath) : null;
+async function readResolvedStateFile(paths: GitStatePaths, name: string, format: 'trimmed' | 'raw' = 'trimmed'): Promise<string | null> {
+    const path = paths.get(name);
+    return path ? readTrimmedFile(path, format) : null;
+}
+
+async function readMergeOperationState(context: ScmBackendContext, paths: GitStatePaths): Promise<ScmOperationState | null> {
+    const mergeHead = await readResolvedStateFile(paths, 'MERGE_HEAD');
     if (!mergeHead) {
         return null;
     }
 
-    const mergeMessagePath = await resolveGitStatePath(context, 'MERGE_MSG');
-    const sourceRef = (mergeMessagePath ? parseMergeSourceRef(await readTrimmedFile(mergeMessagePath)) : null) ?? mergeHead;
+    const sourceRef = parseMergeSourceRef(await readResolvedStateFile(paths, 'MERGE_MSG')) ?? mergeHead;
     const mergeHeads = mergeHead.split(/\s+/);
     const bases = mergeHeads.length === 1 ? await runScmCommand({ bin: 'git', cwd: context.cwd, args: ['merge-base', '--all', 'HEAD', mergeHeads[0]], timeoutMs: 10_000, env: buildScmNonInteractiveEnv() }) : null;
     const baseOids = bases?.success ? bases.stdout.trim().split(/\s+/).filter(Boolean) : [];
@@ -72,27 +88,25 @@ async function readMergeOperationState(context: ScmBackendContext): Promise<ScmO
     };
 }
 
-async function readRebaseSourceRef(context: ScmBackendContext, rebaseDirName: 'rebase-merge' | 'rebase-apply'): Promise<string | null> {
-    const ontoNamePath = await resolveGitStatePath(context, `${rebaseDirName}/onto_name`);
-    const ontoName = ontoNamePath ? await readTrimmedFile(ontoNamePath) : null;
+async function readRebaseSourceRef(rebasePath: string): Promise<string | null> {
+    const ontoName = await readTrimmedFile(join(rebasePath, 'onto_name'));
     if (ontoName && ontoName !== 'onto') return ontoName.replace(/^refs\/heads\//, '');
 
-    const headNamePath = await resolveGitStatePath(context, `${rebaseDirName}/head-name`);
-    const headName = headNamePath ? await readTrimmedFile(headNamePath) : null;
+    const headName = await readTrimmedFile(join(rebasePath, 'head-name'));
     return headName ? headName.replace(/^refs\/heads\//, '') : null;
 }
 
-async function readRebaseOperationState(context: ScmBackendContext): Promise<ScmOperationState | null> {
+async function readRebaseOperationState(paths: GitStatePaths): Promise<ScmOperationState | null> {
     for (const rebaseDirName of ['rebase-merge', 'rebase-apply'] as const) {
-        const rebasePath = await resolveGitStatePath(context, rebaseDirName);
+        const rebasePath = paths.get(rebaseDirName);
         if (!rebasePath || !(await directoryExists(rebasePath))) {
             continue;
         }
         return {
             kind: 'rebase',
-            sourceRef: await readRebaseSourceRef(context, rebaseDirName),
-            replayCommit: await readGitStateFile(context, 'REBASE_HEAD') ?? await readGitStateFile(context, `${rebaseDirName}/stopped-sha`) ?? await readGitStateFile(context, `${rebaseDirName}/original-commit`) ?? undefined,
-            baseOid: await readGitStateFile(context, `${rebaseDirName}/onto`) ?? undefined,
+            sourceRef: await readRebaseSourceRef(rebasePath),
+            replayCommit: await readResolvedStateFile(paths, 'REBASE_HEAD') ?? await readTrimmedFile(join(rebasePath, 'stopped-sha')) ?? await readTrimmedFile(join(rebasePath, 'original-commit')) ?? undefined,
+            baseOid: await readTrimmedFile(join(rebasePath, 'onto')) ?? undefined,
             canContinue: false,
             canAbort: true,
         };
@@ -101,17 +115,17 @@ async function readRebaseOperationState(context: ScmBackendContext): Promise<Scm
     return null;
 }
 
-export async function readGitBranchOperationState(context: ScmBackendContext): Promise<ScmOperationState | null> {
+export async function readGitBranchOperationState(context: ScmBackendContext, knownHeadOid?: string): Promise<ScmOperationState | null> {
+    const paths = await resolveGitStatePaths(context, ['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'MERGE_MSG', 'REBASE_HEAD', 'REVERT_HEAD', 'CHERRY_PICK_HEAD', 'sequencer/todo']);
     // A rebase directory controls its replay even when another head marker remains.
-    const state = (await readRebaseOperationState(context)) ?? (await readMergeOperationState(context)) ?? (await readReplayOperationState(context));
+    const state = (await readRebaseOperationState(paths)) ?? (await readMergeOperationState(context, paths)) ?? (await readReplayOperationState(context, paths));
     if (!state) return null;
     const conflicts = await readGitConflictEntries(context);
-    return { ...state, headOid: await readHeadOid(context), conflicts, unresolvedCount: conflicts.length, canContinue: conflicts.length === 0, canSkip: state.kind !== 'merge' && Boolean(state.replayCommit) };
+    return { ...state, headOid: knownHeadOid ?? await readHeadOid(context), conflicts, unresolvedCount: conflicts.length, canContinue: conflicts.length === 0, canSkip: state.kind !== 'merge' && Boolean(state.replayCommit) };
 }
 
 export async function readGitStateFile(context: ScmBackendContext, name: string, format: 'trimmed' | 'raw' = 'trimmed') {
-    const path = await resolveGitStatePath(context, name);
-    return path ? readTrimmedFile(path, format) : null;
+    return readResolvedStateFile(await resolveGitStatePaths(context, [name]), name, format);
 }
 
 async function readHeadOid(context: ScmBackendContext) {
@@ -119,11 +133,11 @@ async function readHeadOid(context: ScmBackendContext) {
     return result.success ? result.stdout.trim() || undefined : undefined;
 }
 
-async function readReplayOperationState(context: ScmBackendContext): Promise<ScmOperationState | null> {
-    const revertHead = await readGitStateFile(context, 'REVERT_HEAD');
-    const pickHead = revertHead ? null : await readGitStateFile(context, 'CHERRY_PICK_HEAD');
+async function readReplayOperationState(context: ScmBackendContext, paths: GitStatePaths): Promise<ScmOperationState | null> {
+    const revertHead = await readResolvedStateFile(paths, 'REVERT_HEAD');
+    const pickHead = revertHead ? null : await readResolvedStateFile(paths, 'CHERRY_PICK_HEAD');
     if (revertHead || pickHead) return { kind: revertHead ? 'revert' : 'cherry_pick', replayCommit: revertHead ?? pickHead ?? undefined, canContinue: false, canAbort: true };
-    const todo = await readGitStateFile(context, 'sequencer/todo');
+    const todo = await readResolvedStateFile(paths, 'sequencer/todo');
     const step = todo?.split(/\r?\n/).find((line) => /^(pick|revert)\s/.test(line));
     if (!step) return null;
     const commit = await runScmCommand({ bin: 'git', cwd: context.cwd, args: ['rev-parse', '--verify', `${step.split(/\s+/)[1]}^{commit}`], timeoutMs: 10_000, env: buildScmNonInteractiveEnv() });

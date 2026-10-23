@@ -50,6 +50,10 @@ async function readGitAbsolutePathValue(input: Readonly<{
     return isAbsolute(fallbackValue) ? fallbackValue : resolve(input.cwd, fallbackValue);
 }
 
+export async function readGitCommonDirPath(params: Readonly<{ cwd: string }>): Promise<string | null> {
+    return readGitAbsolutePathValue({ cwd: params.cwd, pathArgs: ['--git-common-dir'] });
+}
+
 async function readRegisteredWorktreePath(input: Readonly<{
     gitDirPath: string;
     commonDirPath: string;
@@ -135,7 +139,7 @@ export async function inspectGitCheckoutIdentity(params: Readonly<{
         readGitValue(params.cwd, ['rev-parse', '--verify', 'HEAD']),
         readGitValue(params.cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
         readGitAbsolutePathValue({ cwd: params.cwd, pathArgs: ['--git-dir'] }),
-        readGitAbsolutePathValue({ cwd: params.cwd, pathArgs: ['--git-common-dir'] }),
+        readGitCommonDirPath(params),
         readGitAbsolutePathValue({ cwd: params.cwd, pathArgs: ['--show-toplevel'] }),
     ]);
 

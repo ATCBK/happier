@@ -10,7 +10,7 @@ import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/plugin-sdk/scm';
 
 import { runScmCommand, type ScmExecResult } from './runtime.js';
 import { buildGitSnapshot } from './statusSnapshot.js';
-import { inspectGitCheckoutIdentity } from './checkoutIdentity.js';
+import { inspectGitCheckoutIdentity, readGitCommonDirPath } from './checkoutIdentity.js';
 import { enrichGitWorktreesWithStatus, readWorktreeStatusEnrichmentForPaths } from './worktreeStatusEnricher.js';
 import { realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -20,16 +20,6 @@ import { parseGitStatusPorcelainV2Z } from './statusParser.js';
 import { parseGitWorktreeListPorcelain } from './worktreeListParser.js';
 import { inspectGitOrphanWorktree, readGitRetentionFacts, resolveGitRetainedWorktreeRepository } from './operations/worktreeRetentionFacts.js';
 import { projectPullRequestStatus, resolveDefaultPullRequestStatusProjectionRegistry, type PullRequestStatusProjectionRegistry } from './operations/pullRequestStatusProjection.js';
-
-function resolveMainWorktreePathFromCheckoutIdentity(
-    checkoutIdentity: Awaited<ReturnType<typeof inspectGitCheckoutIdentity>>,
-): string | null {
-    if (!checkoutIdentity) {
-        return null;
-    }
-
-    return dirname(checkoutIdentity.commonDirPath);
-}
 
 const NOT_A_REPOSITORY: ScmRepoDetection = { isRepo: false, rootPath: null, mode: null };
 
@@ -172,10 +162,10 @@ export async function getGitSnapshot(input: {
         args: ['for-each-ref', '--format=%(refname:short)%09%(symref:short)', 'refs/remotes/*/HEAD'],
         timeoutMs: 10_000,
     });
-    const checkoutIdentity = await inspectGitCheckoutIdentity({ cwd: context.cwd });
-    const operationState = await readGitBranchOperationState(context);
+    const commonDirPath = await readGitCommonDirPath({ cwd: context.cwd });
     const statusRaw = statusResult.stdout ?? '';
     const parsedStatus = parseGitStatusPorcelainV2Z(statusRaw);
+    const operationState = await readGitBranchOperationState(context, parsedStatus.branch.oid);
     const upstreamOidResult = parsedStatus.branch.upstream ? await runScmCommand({
         bin: 'git', cwd: context.cwd, args: ['rev-parse', '--verify', '@{upstream}^{commit}'],
     }) : null;
@@ -187,7 +177,7 @@ export async function getGitSnapshot(input: {
         fetchedAt: Date.now(),
         rootPath: context.detection.rootPath,
         currentWorktreePath: context.cwd,
-        mainWorktreePath: resolveMainWorktreePathFromCheckoutIdentity(checkoutIdentity),
+        mainWorktreePath: commonDirPath ? dirname(commonDirPath) : null,
         statusOutput: statusResult.stdout ?? '',
         ...(upstreamOidResult?.success ? { upstreamOid: upstreamOidResult.stdout.trim() } : {}),
         includedNumStatOutput: includedResult.success ? (includedResult.stdout ?? '') : '',
