@@ -87,7 +87,9 @@ export async function runObservedWorkflowSessionStartup(
       signal.throwIfAborted();
     }
     if (!address) {
-      const response = await host.observeExecution({ actionId: 'session.spawn_new',
+      let retained!: () => void;
+      const admission = new Promise<void>(resolve => { retained = resolve; });
+      const launch = host.observeExecution({ actionId: 'session.spawn_new',
         input: { creationKey: input.creationKey, directory: input.request.directory,
           machineId: host.machineId, agentTarget: input.request.agentTarget ?? null },
         actionRequestId: input.creationKey, rpcContext: host.rpcContext,
@@ -115,6 +117,7 @@ export async function runObservedWorkflowSessionStartup(
               signal.throwIfAborted();
             }
             operation.signal.throwIfAborted();
+            retained();
             // The original operation controls execution. A lost Workflow claim
             // ends observation but cannot cancel or replace admitted startup.
             const created = await createSpawnedSession({ ...input.request, signal: operation.signal,
@@ -125,8 +128,12 @@ export async function runObservedWorkflowSessionStartup(
             if (operation.signal.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
             throw error;
           }
-        } }).catch(rejectFromOriginalOperation);
-      if (!response.ok) await rejectFromOriginalOperation(Object.assign(new Error(response.error), { code: response.errorCode }));
+        } });
+      // Start observing as soon as correspondence is retained, even when the
+      // keyed launch caller waits for native completion. The race also handles
+      // a later launch rejection after this observer has left its claim.
+      const response = await Promise.race([admission, launch]).catch(rejectFromOriginalOperation);
+      if (response && !response.ok) await rejectFromOriginalOperation(Object.assign(new Error(response.error), { code: response.errorCode }));
     }
     if (!address || address.serverId !== host.serverId || address.machineId !== host.machineId) {
       throw new Error('workflow_invocation_fact_conflict');

@@ -33,9 +33,9 @@ const CANCELLABLE_LIFECYCLES = [
 ] as const satisfies readonly WorkflowInvocationLifecycleV1[];
 
 /**
- * The server refuses to move a settled row back to an active lifecycle and
- * only reconciles its sealed bytes. Reproducing that here is what makes a
- * fresh-process reconstruction test honest.
+ * The server keeps settled lifecycle and sealed bytes immutable: only an
+ * identical terminal fact is acknowledged, apart from observed uncertainty
+ * resolution. Reconstruction tests must retain that same storage contract.
  */
 const TERMINAL_INVOCATION_LIFECYCLES = [
   'completed', 'failed', 'skipped', 'cancelled', 'outcome_uncertain', 'superseded',
@@ -398,7 +398,6 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
               || ((operation.lifecycle === 'failed' || operation.lifecycle === 'cancelled')
                 && TERMINAL_RUN_STATES.some(candidate => candidate === state)));
         if (TERMINAL_INVOCATION_LIFECYCLES.some((candidate) => candidate === row.index.lifecycle)
-          && operation.lifecycle !== row.index.lifecycle
           && !(row.index.lifecycle === 'outcome_uncertain' && resolvesObservedTerminal)) {
           throw storageError('currentness_conflict');
         }

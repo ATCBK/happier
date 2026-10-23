@@ -681,6 +681,7 @@ export class DurableWorkflowCoordinatorStore implements WorkflowCoordinatorStore
       if (refreshed?.lifecycle === fact.lifecycle
         && (effectiveFact.result === undefined || sameStrictJsonValue(refreshed.result, effectiveFact.result))
         && (fact.resultContract === undefined || sameStrictJsonValue(refreshed.resultContract, fact.resultContract))
+        && (fact.replyOutcome === undefined || sameStrictJsonValue(refreshed.replyOutcome, fact.replyOutcome))
         && (fact.usage === undefined || sameStrictJsonValue(refreshed.usage, fact.usage))
         && (fact.reason === undefined || refreshed.reason === fact.reason)
         && (fact.reasonMessage === undefined || refreshed.reasonMessage === fact.reasonMessage)
@@ -1851,6 +1852,18 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
       && (rootInvocation.lifecycle === 'running' || rootInvocation.lifecycle === 'needs_attention')) {
       await durableStore.commitFact({ key: rootInvocation.key, lifecycle: 'running' });
     }
+    const publishDiscussionResult = accepted.resultDelivery?.kind === 'originating_discussion'
+      ? createWorkflowDiscussionResultPublisher({
+        credentials: params.execution.credentials, origin: accepted.resultDelivery,
+        isCurrent: isOpenedAuthorizationCurrent,
+        publish: createDiscussionReplyReturnPublisher({ credentials: params.execution.credentials,
+          machineId: params.machineId, serverId: params.execution.serverId,
+          workflowAuthorization: accepted.authorization,
+          serverHttpBaseUrl: resolveServerHttpBaseUrl(), signal: claim.signal ?? new AbortController().signal,
+          ...(params.execution.postWorkflowMessage ? { postWorkflowMessage: params.execution.postWorkflowMessage } : {}),
+          isCurrent: isOpenedAuthorizationCurrent }),
+        ...(claim.signal ? { signal: claim.signal } : {}),
+      }) : null;
     const coordinator = createWorkflowCoordinator({
       store: durableStore,
       ...(params.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: params.requesterWorkAttributionV1 } : {}),
@@ -1868,17 +1881,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
           discussionAction, replyTo: { credentials: params.execution.credentials, runId, invocation,
             ...(params.execution.serverIdentityId ? { serverIdentityId: params.execution.serverIdentityId } : {}) } });
       } } : {}),
-      ...(accepted.resultDelivery?.kind === 'originating_discussion' ? { onInvocationSettled: createWorkflowDiscussionResultPublisher({
-        credentials: params.execution.credentials, origin: accepted.resultDelivery,
-        isCurrent: isOpenedAuthorizationCurrent,
-        publish: createDiscussionReplyReturnPublisher({ credentials: params.execution.credentials,
-          machineId: params.machineId, serverId: params.execution.serverId,
-          workflowAuthorization: accepted.authorization,
-          serverHttpBaseUrl: resolveServerHttpBaseUrl(), signal: claim.signal ?? new AbortController().signal,
-          ...(params.execution.postWorkflowMessage ? { postWorkflowMessage: params.execution.postWorkflowMessage } : {}),
-          isCurrent: isOpenedAuthorizationCurrent }),
-        ...(claim.signal ? { signal: claim.signal } : {}),
-      }) } : {}),
+      ...(publishDiscussionResult ? { onInvocationSettled: publishDiscussionResult } : {}),
       sessionContext: { ...createProductionWorkflowSessionContextReader({
         credentials: params.execution.credentials,
         machineId: params.machineId,

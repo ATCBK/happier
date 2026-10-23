@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
+import Fastify from 'fastify';
+import { registerPlainArtifactRoutes } from './widgetApproval.testkit';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
@@ -76,7 +78,7 @@ import { logger } from '@/ui/logger';
 import { createDeferred } from '@/testkit/async/deferred';
 import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import { DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1, DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
-import { createWorkflowCoordinator } from '@/daemon/workflows/coordinator';
+import { createWorkflowCoordinator, type WorkflowStepExecutor } from '@/daemon/workflows/coordinator';
 import { createInMemoryWorkflowCoordinatorStore } from '@/daemon/workflows/workflowCoordinator.testkit';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
@@ -85,6 +87,28 @@ afterAll(async () => {
 });
 
 describe('createCliActionDeps workflow boundary', () => {
+  it('refuses a missing daemon runtime before Workflow materialization or storage', async () => {
+    expect(pluginReloadController.getState().activeRegistry).toBeNull();
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
+    const deps = createCliActionDeps({ token, credentials: { token, encryption: null,
+      credentialProvenance: 'stored_session' }, sessionId: 'cli-global', mode: 'plain', ctx: null,
+      resolveServerFeaturesSnapshot: () => enabledFeatures });
+    const beforeHttp = http.get.mock.calls.length + http.post.mock.calls.length + machineRpc.mock.calls.length;
+    const result = await createActionExecutor(deps).execute('workflow.run.start', {
+      runId: '77777777-7777-4777-8777-777777777778',
+      source: { kind: 'catalog', workflow: 'builtin:fresh-opinions' },
+      inputs: { question: 'Review this', participants: [
+        { kind: 'session', session: { serverId: 'home', sessionId: 'a' } },
+        { kind: 'session', session: { serverId: 'home', sessionId: 'b' } },
+      ] },
+    }, { surface: 'cli', authority: 'present_user', externalActionTarget: { kind: 'machine', machineId: 'machine-1',
+      project: { machineId: 'machine-1', directory: tmpdir() } } });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false,
+      errorCode: 'target_unavailable', details: { code: 'target_unavailable',
+        reason: 'requester_runtime_unavailable', errorCode: 'PLUGIN_DAEMON_RUNTIME_UNAVAILABLE' } });
+    expect(http.get.mock.calls.length + http.post.mock.calls.length + machineRpc.mock.calls.length).toBe(beforeHttp);
+  });
+
   it.each([401, 403, 400])('keeps permanent feature HTTP %s refusal out of storage retry', async httpStatus => {
     const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`;
     const deps = createCliActionDeps({ token, credentials: { token, encryption: null,
@@ -168,10 +192,16 @@ describe('createCliActionDeps workflow boundary', () => {
     });
     const executor = createActionExecutor(deps);
     signedRootAction.mockImplementation(async request => executor.execute(request.actionId, request.input, { surface: 'cli' }));
+    const engines = ['agent:happier.agent.codex/codex', 'agent:happier.agent.opencode/opencode'];
+    const plannerTargets = [
+      { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      { kind: 'agent', identity: { pluginId: 'happier.agent.opencode', localId: 'opencode' } },
+    ];
+    const previousRoundContext = { document: 'Previous round evidence' };
     const result = await executor.execute('workflow.run.start', {
       runId: '77777777-7777-4777-8777-777777777778', source: { kind: 'catalog', workflow: 'builtin:plan-with-a-panel' },
-      inputs: { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex', 'agent:happier.agent.opencode/opencode'] },
-      roleOverrides: originless ? [{ roleId: 'planner', engine: { agentTargetKey: 'agent:happier.agent.codex/codex' } }] : [],
+      inputs: { request: 'Plan the change', engines, previousRoundContext },
+      roleOverrides: originless ? [{ roleId: 'planner', engine: { agentTargetKey: 'agent:happier.agent.opencode/opencode' } }] : [],
     }, { surface, authority, serverId: 'profile', ...(originless ? {} : { defaultSessionId: sessionId }),
       externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: tmpdir() } } });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { admission: 'created' } });
@@ -183,9 +213,13 @@ describe('createCliActionDeps workflow boundary', () => {
     });
     expect(accepted.kind).toBe('available');
     if (accepted.kind !== 'available') throw new Error('accepted_snapshot_unavailable');
-    expect(accepted.content.materializedLeaves.find(leaf => leaf.actionId === 'subagents.plan.start')?.actionContract)
-      .toMatchObject({ completion: { awaits: 'execution_runs' },
-        outputSchema: expect.objectContaining({ required: expect.arrayContaining(['plans', 'perEngineOutcome']) }) });
+    const planner = accepted.content.materializedLeaves.find(leaf => leaf.blockId === 'plan');
+    expect(planner).toMatchObject({ kind: 'step', executionTarget: { kind: 'detached_run' },
+      engineBindings: { reference: { kind: 'item', field: 'value' }, selections: plannerTargets.map(agentTarget => ({
+        value: { agentTarget }, executionTarget: { kind: 'detached_run' }, selection: {
+          agentTarget, permissionMode: 'read-only',
+        },
+      })) } });
     const synthesis = accepted.content.materializedLeaves.find(leaf => leaf.blockId === 'synthesis');
     expect(synthesis?.kind).toBe('step');
     if (synthesis?.kind !== 'step') throw new Error('synthesis_step_unavailable');
@@ -194,72 +228,66 @@ describe('createCliActionDeps workflow boundary', () => {
       modelSelection: { ref: { modelId: 'parent-model' } }, connectedServices,
     });
     if (!originless) return;
-    expect(accepted.content.origin).toEqual({ kind: 'direct' });
+    expect(accepted.content.origin).toEqual({ kind: 'direct', actionPolicy: { surface, authority } });
+    expect(synthesis.selection).toMatchObject({
+      agentTarget: plannerTargets[1],
+      permissionMode: 'read-only',
+    });
     // Native start/terminal observation and Agent execution are process boundaries.
     // CLI admission, discovery, materialization, completion and input binding stay real.
-    for (const missingCompletion of [false, true]) {
-      const store = createInMemoryWorkflowCoordinatorStore();
-      const terminal = createDeferred<void>();
-      const observing = createDeferred<void>();
-      const synthesisInputs: unknown[] = [];
-      let nativeStarts = 0;
-      const nativeExecutor = createActionExecutor({
-        executionRunCheckProtocolV2: async () => ({ ok: true }),
-        executionRunStart: async () => ({ runId: `native-${++nativeStarts}`, callId: 'native-call', sidechainId: 'native-call' }),
-      });
-      const coordinator = createWorkflowCoordinator({ store,
-        isAcceptedAuthorizationCurrent: async () => true,
-        resolveWorkspace: async () => ({ ok: true, workspace: accepted.content.workspaceTarget.project }),
-        executeStep: async step => {
-          synthesisInputs.push(step.input);
-          return { kind: 'completed', result: { document: 'Synthesized terminal evidence' } };
-        },
-        action: { executor: nativeExecutor,
-          buildContext: async () => ({ surface: 'cli', authority: 'account_automation', bypassApprovals: true,
-            externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: tmpdir() } } }),
-          observeRun: async run => {
-            observing.resolve();
-            await terminal.promise;
-            return run.runId === 'native-1' ? { kind: 'failed', code: 'native_plan_failed' }
-              : { kind: 'completed', result: { plan: 'terminal plan' } };
-          } },
-      });
-      const materializedLeaves = accepted.content.materializedLeaves.map(leaf => {
-        if (!missingCompletion || !leaf.actionContract) return leaf;
-        const { completion: _completion, ...contract } = leaf.actionContract;
-        // The old projection paired the missing declaration with the immediate
-        // Start schema (unconstrained JSON), rather than the terminal schema.
-        return { ...leaf, actionContract: { ...contract, outputSchema: {} } };
-      });
-      const running = coordinator.run({ ...accepted.content, materializedLeaves, runId: admission.runId });
-      try {
-        if (missingCompletion) {
-          // Removing only the frozen completion wiring admits Start replies as
-          // results. The positive assertion below distinguishes that regression.
-          await vi.waitFor(() => expect(synthesisInputs).toHaveLength(1));
-          expect(JSON.stringify(synthesisInputs)).not.toContain('perEngineOutcome');
-        } else {
-          await Promise.race([observing.promise, running.then(outcome => {
-            throw new Error(`Panel settled before observing native completion: ${JSON.stringify({ outcome,
-              leaves: store.list().filter(row => row.blockId === 'plan') })}`);
-          })]);
-          expect(synthesisInputs).toEqual([]);
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const terminals = engines.map(() => createDeferred<void>());
+    const plannerSteps: Parameters<WorkflowStepExecutor>[0][] = [];
+    const synthesisSteps: Parameters<WorkflowStepExecutor>[0][] = [];
+    const coordinator = createWorkflowCoordinator({ store,
+      isAcceptedAuthorizationCurrent: async () => true,
+      resolveWorkspace: async () => ({ ok: true, workspace: accepted.content.workspaceTarget.project }),
+      executeStep: async step => {
+        if (step.step.id === 'synthesis') {
+          synthesisSteps.push(step);
+          return { kind: 'completed', result: { document: 'Synthesized terminal evidence' }, resultEncoding: 'typed' };
         }
-      } finally { terminal.resolve(); }
-      expect(await running).toMatchObject({ state: 'waiting_for_review' });
-      if (!missingCompletion) {
-        expect(JSON.stringify(synthesisInputs)).toContain('terminal plan');
-        expect(JSON.stringify(synthesisInputs)).toContain('native_plan_failed');
-        expect(store.list().filter(row => row.blockId === 'plan').map(row => row.result))
-          .toEqual(expect.arrayContaining([
-            expect.objectContaining({ plans: [], perEngineOutcome: [expect.objectContaining({ outcome: 'failed', errorCode: 'native_plan_failed' })] }),
-            expect.objectContaining({ plans: [expect.objectContaining({ value: { plan: 'terminal plan' } })],
-              perEngineOutcome: [expect.objectContaining({ outcome: 'completed' })] }),
-          ]));
-      }
-    }
+        if (step.step.id !== 'plan') throw new Error(`Unexpected Panel step ${step.step.id}`);
+        plannerSteps.push(step);
+        const index = step.item!.index;
+        await terminals[index]!.promise;
+        return index === 0 ? { kind: 'failed', code: 'native_plan_failed' }
+          : { kind: 'completed', result: 'terminal plan' };
+      },
+    });
+    const running = coordinator.run({ ...accepted.content, runId: admission.runId });
+    try {
+      await vi.waitFor(() => expect(plannerSteps).toHaveLength(2));
+      expect(plannerSteps.map(step => ({ engine: step.item?.value, target: step.execution.agentTarget,
+        executionTarget: step.executionTarget, permissionMode: step.execution.permissionMode, values: step.input.values })))
+        .toEqual(expect.arrayContaining(engines.map((engine, index) => ({ engine, target: plannerTargets[index],
+          executionTarget: { kind: 'detached_run' }, permissionMode: 'read-only', values: ['Plan the change', previousRoundContext] }))));
+      expect(synthesisSteps).toEqual([]);
+      terminals[0]!.resolve();
+      await vi.waitFor(() => expect(store.list().find(row => row.blockId === 'plan' && row.lifecycle === 'failed'))
+        .toMatchObject({ reason: 'native_plan_failed' }));
+      // One terminal failure cannot release synthesis while its peer is still observing.
+      expect(synthesisSteps).toEqual([]);
+    } finally { terminals.forEach(terminal => terminal.resolve()); await running; }
+    expect(await running).toMatchObject({ state: 'waiting_for_review' });
+    expect(synthesisSteps).toHaveLength(1);
+    expect(synthesisSteps[0]!.execution).toMatchObject(synthesis.selection);
+    expect(synthesisSteps[0]!.input.values).toEqual(['Plan the change', previousRoundContext, [
+      { index: 0, status: 'failed', reason: 'native_plan_failed' },
+      { index: 1, status: 'completed', results: { plan: 'terminal plan' } },
+    ]]);
+    expect(store.list().filter(row => row.blockId === 'plan')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ lifecycle: 'failed', reason: 'native_plan_failed' }),
+      expect.objectContaining({ lifecycle: 'completed', result: 'terminal plan' }),
+    ]));
+    expect(store.list().find(row => row.blockId === 'synthesis')).toMatchObject({ lifecycle: 'waiting_for_review',
+      result: { document: 'Synthesized terminal evidence' }, resultContract: { kind: 'json' } });
   });
-  it.each([false, true])('keeps fresh Workflow materialization in the admitted Account holder (maintenance pending: %s)', async pendingMaintenance => {
+  it.each([
+    { pendingMaintenance: false, discussionOrigin: false },
+    { pendingMaintenance: true, discussionOrigin: false },
+    { pendingMaintenance: false, discussionOrigin: true },
+  ])('keeps fresh Workflow materialization in the admitted Account holder (maintenance pending: $pendingMaintenance, Discussion: $discussionOrigin)', async ({ pendingMaintenance, discussionOrigin }) => {
     // Real daemon publication with no SCM plugin: a plain directory is valid.
     const lease = await pluginReloadController.acquireRuntimeRegistry({
       resolveRuntimeRegistry: () => resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}) }),
@@ -307,14 +335,47 @@ describe('createCliActionDeps workflow boundary', () => {
       }
       return get(url);
     });
+    if (discussionOrigin) {
+      // Real Discussion metadata/key/message codecs; only Home HTTP is supplied.
+      http.request.mockImplementation(async (request: { url: string }) => {
+        const content = { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'Review this answer' }] } };
+        const message = { id: 'question-1', discussionId: 'discussion-1', localId: 'question-local', seq: 2,
+          authorAccountId: 'account-1', accountActor: { v: 1, accountId: 'account-1', profile: null },
+          producerV1: null, content, mentionedAccountIds: [], createdAt: 1 };
+        if (new URL(request.url).pathname === '/v1/discussions/discussion-1') return { status: 200, data: { discussion: {
+          id: 'discussion-1', ownerAccountId: 'account-1', encryptionMode: 'plain', anchor: null,
+          access: 'owner', keyReadiness: true, dataEncryptionKey: null, creationLocalId: 'create-local',
+          titleContent: { t: 'plain', v: { v: 1, title: 'Review' } }, latestMessage: {
+            id: message.id, localId: message.localId, seq: message.seq, authorAccountId: message.authorAccountId,
+            accountActor: message.accountActor, producerV1: message.producerV1, createdAt: message.createdAt,
+          },
+          messageSeq: 2, lastReadSeq: 0, unreadCount: 1, unreadMentionCount: 0, recentAuthorAccountIds: ['account-1'],
+          archivedAt: null, capabilities: { postMessages: true, rename: true, archive: true, restore: false,
+            askAgent: true, sendToSession: true, manageAccess: true, leave: false },
+        } } };
+        if (new URL(request.url).pathname === '/v1/discussions/discussion-1/messages') return { status: 200,
+          data: { messages: [message], hasMoreOlder: false, messageSeq: 2 } };
+        throw new Error('unexpected_discussion_http');
+      });
+    }
+    const features = discussionOrigin ? { ...enabledFeatures, features: FeaturesResponseSchema.parse({
+      ...enabledFeatures.features, features: { ...enabledFeatures.features.features,
+        sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
+    }) } : enabledFeatures;
     const deps = createCliActionDeps({ token, credentials, savedSecretOperationContext: operationContext,
-      serverId: 'profile', serverHttpBaseUrl: operationContext.serverHttpBaseUrl, resolveServerFeaturesSnapshot: () => enabledFeatures as never,
+      serverId: 'profile', serverHttpBaseUrl: operationContext.serverHttpBaseUrl, resolveServerFeaturesSnapshot: () => features as never,
+      ...(discussionOrigin ? { serverIdentityId: 'srv_fresh_home' } : {}),
       sessionId: 'cli-global', mode: 'plain', ctx: null });
     let admissionCompleted = false;
     const admission = deps.workflowAction!({ actionId: 'workflow.run.start', input: {
-      runId: '77777777-7777-4777-8777-777777777777', source: { kind: 'inline', definition: { version: 1, defaults: {},
+      runId: '77777777-7777-4777-8777-777777777777', source: { kind: 'inline', definition: { version: 1,
+        defaults: { engine: { role: 'scout' } }, roles: [{ roleId: 'scout', runsAs: { kind: 'session' },
+          engine: { agentTargetKey: 'agent:happier.agent.codex/codex' } }],
         blocks: [{ kind: 'wait', id: 'review', document: { text: 'Review', references: [], attachments: [] } }] } },
-    }, context: { surface: 'ui', authority: 'present_user', callerPermissionMode: 'default', externalActionTarget: { kind: 'machine', machineId: 'machine-1',
+      ...(discussionOrigin ? { origin: { kind: 'discussion' as const,
+        discussion: { serverId: 'srv_fresh_home', discussionId: 'discussion-1' }, addressingMessageId: 'question-1' },
+        onComplete: { kind: 'originating_discussion' as const } } : {}),
+    }, context: { serverId: 'profile', surface: 'ui', authority: 'present_user', callerPermissionMode: 'default', externalActionTarget: { kind: 'machine', machineId: 'machine-1',
       project: { machineId: 'machine-1', directory: tmpdir() } } } })
       .then(result => { admissionCompleted = true; return result; });
     try {
@@ -322,7 +383,9 @@ describe('createCliActionDeps workflow boundary', () => {
         await maintenanceIssued.promise;
         await vi.waitFor(() => expect(admissionCompleted).toBe(true));
       }
-      expect(await admission).toMatchObject({ admission: 'created' });
+      expect(await admission, JSON.stringify({ result: await admission, requests: http.request.mock.calls.map(([request]) =>
+        ({ method: request.method, path: new URL(request.url).pathname })),
+        gets: http.get.mock.calls.map(([url]) => url) })).toMatchObject({ admission: 'created' });
     } finally { maintenance.resolve(); await admission; }
     expect(getActiveAccountSettingsSnapshot()).toBe(ambient);
     const captured = operationContext.readSnapshot();
@@ -331,13 +394,32 @@ describe('createCliActionDeps workflow boundary', () => {
     expect(readAccountRoleOverridesFromSnapshot(captured)).toMatchObject({ status: 'ready', overrides: {
       scout: { roleId: 'scout', instructionsOverride: 'Use the admitted Workflow Account.' },
     } });
+    const admitted = http.post.mock.calls.find(([, body]) => body.operation === 'admit')?.[1];
+    expect(admitted).toBeDefined();
+    const accepted = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId: admitted.runId },
+      envelope: parseWorkflowStoredContentEnvelopeV1(admitted.acceptedEnvelope),
+    });
+    expect(accepted.kind).toBe('available');
+    if (accepted.kind !== 'available') throw new Error('accepted_snapshot_unavailable');
+    expect(accepted.content.materializedLeaves).toMatchObject([{ role: { roleId: 'scout',
+      instructions: 'Use the admitted Workflow Account.', engine: { agentTargetKey: 'agent:happier.agent.codex/codex' } } }]);
     // An originless Account start has no bound Session. Resolving cli-global
     // as a tag scans the Account's Session history and cannot supply defaults.
     expect(http.post.mock.calls.filter(([url]) => String(url).includes('/v2/sessions/'))).toEqual([]);
     expect(http.get.mock.calls.filter(([url]) => String(url).includes('/v2/sessions'))).toEqual([]);
     WorkflowActionOutputSchemasV1['workflow.run.start'].parse(await admission);
+    if (discussionOrigin) {
+      expect(admitted).toMatchObject({ origin: { kind: 'direct', discussion: {
+        discussion: { serverId: 'srv_fresh_home', discussionId: 'discussion-1' }, messageId: 'question-1', throughSeq: 2,
+      } } });
+    }
   });
-  it('reports unreadable Account role overrides before Start admission through the real Action wiring', async () => {
+  it.each([true, false])('requires readable Account role overrides only when Start consumes a Role (consumed: %s)', async (consumed) => {
+    const lease = await pluginReloadController.acquireRuntimeRegistry({
+      resolveRuntimeRegistry: () => resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}) }),
+    });
+    await lease.release();
     const diagnostic = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     const get = http.get.getMockImplementation()!;
     let catalogRead = false;
@@ -355,12 +437,20 @@ describe('createCliActionDeps workflow boundary', () => {
     const actions = createActionExecutor({ ...deps, isActionApprovalRequired: () => false });
     const result = await actions.execute('workflow.run.start', {
       runId: '11111111-1111-4111-8111-111111111111', source: { kind: 'inline', definition: {
-        version: 1, defaults: {}, blocks: [{ kind: 'wait', id: 'wait',
+        version: 1, defaults: consumed ? { engine: { role: 'scout' } } : {},
+        ...(consumed ? { roles: [{ roleId: 'scout', runsAs: { kind: 'session' },
+          engine: { agentTargetKey: 'agent:happier.agent.codex/codex' } }] } : {}), blocks: [{ kind: 'wait', id: 'wait',
           document: { text: 'Continue', references: [], attachments: [] } }],
       } },
     }, { surface: 'ui', authority: 'present_user', externalActionTarget: { kind: 'machine', machineId: 'machine-1',
-      project: { machineId: 'machine-1', directory: '/repo' } } });
-    expect(catalogRead).toBe(true);
+      project: { machineId: 'machine-1', directory: tmpdir() } } });
+    expect(catalogRead, JSON.stringify(result)).toBe(consumed);
+    if (!consumed) {
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { admission: 'created' } });
+      expect(http.post.mock.calls.some(([, body]) => body.operation === 'admit')).toBe(true);
+      expect(diagnostic.mock.calls.some(([message]) => String(message).includes('workflow_action_failure'))).toBe(false);
+      return;
+    }
     expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'content_unavailable',
       details: { reason: 'account_role_overrides_unavailable' } });
     expect(http.post.mock.calls.some(([, body]) => body.operation === 'admit')).toBe(false);
@@ -627,7 +717,15 @@ describe('createCliActionDeps workflow boundary', () => {
         return { status: 200, data: { ...DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1,
           ...DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1, runReportPolicy: { preset: 'quiet' } } };
       }
-      if (viaSession && url.includes('/v1/artifacts?')) return { status: 200, data: [] };
+      if (viaSession && url.includes('/v1/artifacts?')) {
+        const artifacts = Fastify();
+        registerPlainArtifactRoutes(artifacts, 'account-1');
+        try {
+          const requestUrl = new URL(url);
+          const response = await artifacts.inject({ method: 'GET', url: requestUrl.pathname + requestUrl.search });
+          return { status: response.statusCode, data: response.json() };
+        } finally { await artifacts.close(); }
+      }
       if (url.includes(`/v2/sessions/${sessionId}`)) return { status: 200,
         data: { session: createSessionRecordFixture({ id: sessionId, share: null, encryptionMode: 'plain',
           metadata: JSON.stringify({ path: directory, machineId: 'machine-1', ...(missingBackend ? {} : { flavor: 'claude' }) }) }) } };

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createWorkflowDiscussionResultPublisher } from './workflowDiscussionPublication';
 import type { WorkflowCoordinatorInvocation } from './coordinator';
 import type { StoredCredentials } from '@/persistence';
@@ -13,6 +13,7 @@ const invocation = (extra: Partial<WorkflowCoordinatorInvocation> = {}): Workflo
   acceptedAtMs: 0, blockKind: 'action', lifecycle: 'completed',
   execution: { kind: 'action', actionId: 'plugin:external/check', actionRequestId: 'action-request', localInputId: 'input', input: {} }, result: { checked: true }, ...extra,
 });
+afterEach(() => vi.restoreAllMocks());
 describe('Workflow Discussion accepted-result publication', () => {
   it('projects an accepted tagged result destination into the strict Machine publication origin', async () => {
     const destination = WorkflowResultDeliveryV1Schema.parse({ kind: 'originating_discussion', ...origin });
