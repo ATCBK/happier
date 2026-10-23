@@ -217,6 +217,22 @@ describe('ActivityRemoteAlertV1', () => {
       .toBeUndefined();
   });
 
+  it('retains captured request turns in the current Home wire reference and presentation identity', () => {
+    for (const [kind, type] of [['permission_required', 'permission_request'], ['user_action_required', 'user_action_request']] as const) {
+      const event = resolveActivityRemoteAlertEventForPersonalEventV2(kind, undefined, 'turn-a', 'req:😀');
+      expect(event).toEqual({ type, requestId: 'req:😀', turnId: 'turn-a' });
+      const alert = ActivityRemoteAlertV2Schema.parse({ type: 'activity_alert', v: 2, serverId: 'home-a',
+        sessionId: 'session-a', accountId: 'account-a', previewBehavior: 'title_only', event });
+      expect(resolveActivityRemoteAlertEventIdentity(alert)).toBe('request-turn:6:req:😀:6:turn-a');
+      expect(resolveActivityRemoteAlertEventIdentity({ ...alert,
+        event: ActivityRemoteAlertEventV2Schema.parse({ type, requestId: 'req:😀', turnId: 'turn-b' }),
+      })).not.toBe(resolveActivityRemoteAlertEventIdentity(alert));
+      expect(resolveActivityRemoteAlertEventIdentity({ ...alert, event: { type, requestId: 'req:😀' } }))
+        .toBe('request:req:😀');
+      expect(ActivityRemoteAlertEventV2Schema.safeParse({ type, requestId: 'req:😀', turnId: ' ' }).success).toBe(false);
+    }
+  });
+
   it('retains the released v1 reader shape as an explicitly ambiguous compatibility input', () => {
     const legacy = {
       type: 'activity_alert', v: 1,

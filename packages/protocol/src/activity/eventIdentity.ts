@@ -50,12 +50,14 @@ export function resolveActivityStalledEventIdentityV1(occurrence: Readonly<{ tur
 /**
  * Stable identity for a committed Agent request (permission or user action).
  *
- * The request id is allocated by the Agent runtime before commit, so both legs
- * that can observe the same request — this device's own local notification and
- * the Home's remote alert — name it identically and one of them suppresses.
+ * A producer-bound turn distinguishes requests whose Agent reuses the request
+ * id. Legs carrying the same committed request and turn suppress each other;
+ * an older leg without a bound turn keeps its existing request-only identity.
  */
-export function resolveActivityRequestEventIdentityV1(requestId: string): string {
-  return `request:${requestId}`;
+export function resolveActivityRequestEventIdentityV1(requestId: string, turnId?: string): string {
+  return turnId
+    ? `request-turn:${requestId.length}:${requestId}:${turnId.length}:${turnId}`
+    : `request:${requestId}`;
 }
 
 /** The existing transcript transport correlation, available before its server ACK. */

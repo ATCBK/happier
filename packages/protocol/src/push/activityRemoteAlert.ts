@@ -17,6 +17,7 @@ import {
 } from '../activity/eventIdentity.js';
 import {
   DiscussionIdSchema,
+  TurnIdSchema,
   type DiscussionId,
 } from '../sessions/idsV1.js';
 
@@ -91,8 +92,8 @@ export const ActivityRemoteAlertEventV2Schema = lazyZodSchema(() => z.union([
   // The Agent-allocated request id is the cross-leg identity of one committed
   // request. It is optional only because a producer without a committed request
   // in hand must still be able to describe the category.
-  z.strictObject({ type: z.literal('permission_request'), requestId: z.optional(ActivityRequestIdSchema) }),
-  z.strictObject({ type: z.literal('user_action_request'), requestId: z.optional(ActivityRequestIdSchema) }),
+  z.strictObject({ type: z.literal('permission_request'), requestId: z.optional(ActivityRequestIdSchema), turnId: z.optional(asProtocolZod(TurnIdSchema)) }),
+  z.strictObject({ type: z.literal('user_action_request'), requestId: z.optional(ActivityRequestIdSchema), turnId: z.optional(asProtocolZod(TurnIdSchema)) }),
   z.strictObject({ type: z.literal('assigned') }),
   z.strictObject({ type: z.literal('failed'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
   z.strictObject({ type: z.literal('cancelled'), turnId: z.string().check(z.trim(), z.minLength(1)) }),
@@ -195,7 +196,7 @@ export function resolveActivityEventIdentityV2(event: ActivityRemoteAlertEventV2
     && 'requestId' in event
     && event.requestId !== undefined
   ) {
-    return resolveActivityRequestEventIdentityV1(event.requestId);
+    return resolveActivityRequestEventIdentityV1(event.requestId, event.turnId);
   }
   return undefined;
 }
@@ -255,6 +256,7 @@ export function resolveActivityRemoteAlertEventForPersonalEventV2(
     const parsed = ActivityRemoteAlertEventV2Schema.safeParse({
       type: kind === 'permission_required' ? 'permission_request' : 'user_action_request',
       ...(committedRequestId === undefined ? {} : { requestId: committedRequestId }),
+      ...(committedTurnId === undefined ? {} : { turnId: committedTurnId }),
     });
     return parsed.success ? parsed.data : null;
   }
