@@ -57,6 +57,31 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('projectRuntimeTranscriptEvent', () => {
+  it.each(['direct', 'stateful'] as const)('admits each delta once through the %s projector at transcript scale', async (mode) => {
+    const { createRuntimeTranscriptProjector, projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
+    const capture = createCommittedAgentMessageCapture();
+    const session = { sessionId: `admission-cost-${mode}`, enqueueAgentMessageCommitted: capture.enqueueAgentMessageCommitted,
+      sendAgentMessageEphemeral: () => ({ accepted: true as const, epoch: 0 }) };
+    const bridge = createKeyedStreamedTranscriptBridge({ provider: 'codex', createSessionForStream: () => session,
+      initialCheckpointDelayMs: null, checkpointIntervalMs: null, checkpointMinChars: null,
+      liveSnapshotIntervalMs: null, liveSnapshotMinChars: null });
+    const project = mode === 'direct' ? projectRuntimeTranscriptEvent : createRuntimeTranscriptProjector();
+    let sourceTextReads = 0;
+    try {
+      for (let sequence = 0; sequence < 1_000; sequence += 1) {
+        // Observe the raw ingress field without replacing the schema, projector or writer.
+        const event = { kind: 'message-delta', sessionId: session.sessionId, turnId: 'turn-cost',
+          messageId: 'message-cost', channel: 'assistant', sequence, emittedAtMs: sequence,
+          get text() { sourceTextReads += 1; return 'a'; } };
+        expect(await project({ session, provider: 'codex', runtimeMessageDeltaBridge: bridge, event }))
+          .toMatchObject({ projected: true, kind: 'message-delta' });
+      }
+      expect(sourceTextReads).toBe(1_000);
+      await bridge.flushAll({ reason: 'turn-end' });
+      expect(capture.bodies).toContainEqual(expect.objectContaining({ type: 'message', message: 'a'.repeat(1_000) }));
+    } finally { bridge.clear(); }
+  });
+
   it('replaces an unfinished Codex answer on native retry without replaying input or removing completed messages', async () => {
     const { createRuntimeTranscriptProjector } = await import('./projectRuntimeTranscriptEvent');
     const stored = new Map<string, CommittedAgentMessageBody>();
