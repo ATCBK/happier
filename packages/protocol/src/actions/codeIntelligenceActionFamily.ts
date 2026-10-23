@@ -68,21 +68,22 @@ function mutationRpcBinding(kind: 'rename' | 'fileRename' | 'codeAction'): NonNu
 }
 const shared = {
   approval: { result: 'required' }, safety: 'safe', sideEffectClass: 'read', placements: [],
+  contextualDefaults: { machineId: 'current_session_machine', rootPath: 'current_session_root' },
   surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
   inputSchema: CodeIntelligenceActionInputSchema,
   inputHints: { fields: [
-    { path: 'machineId', title: 'Machine id', widget: 'text', required: true },
-    { path: 'rootPath', title: 'Workspace root', widget: 'text', required: true },
+    { path: 'machineId', title: 'Machine id', widget: 'text', description: 'Defaults to the calling session Machine; required outside a session.' },
+    { path: 'rootPath', title: 'Workspace root', widget: 'text', description: 'Defaults to the calling session workspace on that Machine; required for another Machine or outside a session.' },
     { path: 'path', title: 'Current file', widget: 'text', required: true },
     { path: 'line', title: 'Line (one-based)', widget: 'text', required: true },
-    { path: 'symbol', title: 'Symbol name', widget: 'text', required: true },
+    { path: 'symbol', title: 'Symbol name', widget: 'text', description: 'Symbol text, or supply an explicit zero-based UTF-16 character instead.' },
   ] },
 } as const;
 const fileFields = [...shared.inputHints.fields.slice(0, 3),
   { path: 'languageId', title: 'Language id', widget: 'text' as const }];
 const editApplyInputHints = { fields: [...fileFields,
   { path: 'files', title: 'Reviewed file edits', widget: 'json' as const, required: true }] };
-export const CODE_INTELLIGENCE_ACTION_SPECS = [
+const codeIntelligenceActionSpecs = [
   { ...shared, id: 'code.hover.get', title: 'Get symbol information', bindings: { mcpToolName: 'code_hover_get' }, outputSchema: lazyZodSchema(() => queryOutput('hover')),
     description: 'Read type and documentation for the symbol at a one-based line plus symbol text, or an explicit zero-based UTF-16 character. Answers concern disk text and include its content hash. Unsaved editor edits are refused; a loading project never becomes an empty answer.' },
   { ...shared, id: 'code.definition.get', title: 'Go to definition', bindings: { mcpToolName: 'code_definition_get' }, outputSchema: lazyZodSchema(() => queryOutput('definition')),
@@ -126,3 +127,8 @@ export const CODE_INTELLIGENCE_ACTION_SPECS = [
     outputSchema: DaemonLspApplyResponseSchema,
     description: 'Apply one reviewed server code action, including a declared server command. Server edit requests share the guarded multi-file writer and retain partial results and Undo.' },
 ] as const satisfies readonly PreNormalizedActionSpec[];
+
+export const CODE_INTELLIGENCE_ACTION_SPECS = codeIntelligenceActionSpecs.map(spec => ({
+  ...spec,
+  description: `${spec.description} Machine and root default to the calling session; supply both for another Machine or outside a session.`,
+}));

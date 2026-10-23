@@ -320,6 +320,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
   /** Map from the same admitted inventory used by tool registration. */
   actionToolNameToId?: ReadonlyMap<string, string>;
   defaultSessionMachineId?: string | null;
+  defaultSessionRootPath?: string | null;
   /** Exact host-owned Session corpus available to non-Agent tool surfaces. */
   resolveSessionListAccess?: (defaultSessionId: string) => 'current_session' | 'led_subtree' | undefined;
 }>): Readonly<{
@@ -400,7 +401,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
           input: argsRecord && Object.prototype.hasOwnProperty.call(argsRecord, 'input')
             ? normalizeActionExecuteInput(argsRecord.input)
             : {},
-          context: { defaultSessionId, defaultSessionMachineId: params.defaultSessionMachineId },
+          context: { defaultSessionId, defaultSessionMachineId: params.defaultSessionMachineId, defaultSessionRootPath: params.defaultSessionRootPath },
           registry: params.registry,
           pluginToolCatalog: params.pluginToolCatalog,
         });
@@ -429,7 +430,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
       if (tool) {
         const schema = projectSessionBoundActionToolInputSchema({ actionId, inputSchema: tool.inputSchema,
           contextualDefaults: tool.contextualDefaults, registry: params.registry, pluginToolCatalog: params.pluginToolCatalog,
-          context: { defaultSessionId, defaultSessionMachineId: params.defaultSessionMachineId } });
+          context: { defaultSessionId, defaultSessionMachineId: params.defaultSessionMachineId, defaultSessionRootPath: params.defaultSessionRootPath } });
         if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
           return { ok: false, errorCode: 'action_schema_invalid', error: 'action_schema_invalid' };
         }
@@ -469,7 +470,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
       const actionInput = bindContextualActionToolInput({
         actionId,
         input: toolArgs,
-        context: { defaultSessionId, defaultSessionMachineId: params.defaultSessionMachineId },
+        context: { defaultSessionId, defaultSessionMachineId: params.defaultSessionMachineId, defaultSessionRootPath: params.defaultSessionRootPath },
         registry: params.registry,
         pluginToolCatalog: params.pluginToolCatalog,
       });

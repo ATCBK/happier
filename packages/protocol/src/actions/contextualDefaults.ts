@@ -5,6 +5,7 @@ import { z } from 'zod/mini';
 export const ActionContextualDefaultsSchema = lazyZodSchema(() => z.strictObject({
   sessionId: z.optional(z.literal('current_session')),
   machineId: z.optional(z.literal('current_session_machine')),
+  rootPath: z.optional(z.literal('current_session_root')),
 }));
 
 export type ActionContextualDefaults = z.infer<typeof ActionContextualDefaultsSchema>;

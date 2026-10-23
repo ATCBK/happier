@@ -16,6 +16,36 @@ import { LocalServicePreviewResourceV1Schema } from '@happier-dev/protocol/local
 import { DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, LocalServicePublicPreviewSnapshotV1Schema } from '@happier-dev/protocol/local/services/public/v1';
 
 describe('session-bound Action tool context', () => {
+  it('projects only session-owned Machine and workspace fields, keeping file operands and explicit scopes strict', () => {
+    const context = { defaultSessionId: 'session', defaultSessionMachineId: 'session-machine', defaultSessionRootPath: '/repo' };
+    for (const [actionId, input] of [
+      ['code.definition.get', { path: 'a.ts', line: 1, symbol: 'example' }],
+      ['code.codeAction.apply', { path: 'a.ts', operation: { kind: 'codeAction', expectedHash: 'a'.repeat(64),
+        action: { serverId: 'server', title: 'Fix', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, files: [], hasCommand: false } } }],
+      ['workspace.files.search', { query: 'example' }],
+      ['workspace.files.replace.preview', { query: 'example', replacement: 'next' }],
+      ['machines.processes.list', {}], ['machines.processes.check', { refs: ['process'] }],
+      ['machines.processes.stop', { targets: [{ ref: 'process', expect: { level: 'proven' } }] }],
+      ['machines.processes.kill', { targets: [{ ref: 'process', expect: { level: 'proven' } }], tree: true }],
+      ['machines.processes.startAgain', { ref: 'process' }], ['machines.processes.leftBehind.cleanUp', { refs: ['process'] }],
+    ] as const) {
+      const schema = getActionSpec(actionId).inputSchema;
+      const projected = projectSessionBoundActionToolInputSchema({ actionId, inputSchema: schema, context }) as z.ZodMiniType;
+      expect(projected.safeParse(input).success, actionId).toBe(true);
+      expect(schema.safeParse(bindContextualActionToolInput({ actionId, input, context })).success, actionId).toBe(true);
+      expect(schema.safeParse(input).success, actionId).toBe(false);
+      expect(projected.safeParse({ ...input, machineId: 42 }).success, actionId).toBe(false);
+    }
+    const input = { path: 'a.ts', line: 1, symbol: 'example' };
+    expect(bindContextualActionToolInput({ actionId: 'code.definition.get', input: { ...input, machineId: 'other' }, context }))
+      .toEqual({ ...input, machineId: 'other' });
+    expect(bindContextualActionToolInput({ actionId: 'code.definition.get', input: { ...input, rootPath: '/explicit' }, context }))
+      .toEqual({ ...input, rootPath: '/explicit', machineId: 'session-machine' });
+    const schema = getActionSpec('code.definition.get').inputSchema;
+    const projected = projectSessionBoundActionToolInputSchema({ actionId: 'code.definition.get', inputSchema: schema, context }) as z.ZodMiniType;
+    expect(projected.safeParse({ line: 1, symbol: 'example' }).success).toBe(false);
+    expect(projectSessionBoundActionToolInputSchema({ actionId: 'code.definition.get', inputSchema: schema, context: {} })).toBe(schema);
+  });
   it.each([
     ['session.capabilities.get', {}],
     ['session.capabilities.set', { kind: 'mcp_server', id: 'catalog-server', state: 'on' }],

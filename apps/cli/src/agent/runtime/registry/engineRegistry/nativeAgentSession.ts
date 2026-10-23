@@ -1284,6 +1284,7 @@ export function createNativeAgentSessionHostServices(params: Readonly<{
                         : params.readCodingPromptBehavior?.(),
                     sessionId: params.sessionId,
                     sessionMachineId: params.sessionMachineId ?? null,
+                    sessionRootPath: params.directory,
                     memoryRecallGuidanceEnabled: params.memoryRecallGuidanceEnabled === true,
                     sessionMemoryEnabled: readSessionMemoryEnabledV1(params.session.getMetadataSnapshot?.()),
                     isServerFeatureEnabled: params.owners.features.isEnabled,

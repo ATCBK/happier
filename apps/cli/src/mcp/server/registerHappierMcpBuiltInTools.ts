@@ -119,6 +119,7 @@ function toMcpToolInputSchema(params: Readonly<{
     inputSchema: unknown;
     sessionId: string;
     sessionMachineId?: string | null;
+    sessionRootPath?: string | null;
     contextualDefaults: HappierBuiltInToolDefinition['contextualDefaults'];
 }>): z.ZodMiniType {
     const contextualInputSchema = params.actionId
@@ -128,6 +129,7 @@ function toMcpToolInputSchema(params: Readonly<{
             context: {
                 defaultSessionId: params.sessionId,
                 defaultSessionMachineId: params.sessionMachineId,
+                defaultSessionRootPath: params.sessionRootPath,
             },
             // Plugin defaults travel with the admitted tool; first-party
             // defaults still resolve through the canonical Action owner.
@@ -240,6 +242,7 @@ export function prepareHappierMcpToolInventory(params: Readonly<{
     inventory: HappierToolInventory;
     sessionId: string;
     sessionMachineId?: string | null;
+    sessionRootPath?: string | null;
 }>): HappierMcpToolInventory {
     const registrations = params.inventory.tools.flatMap(tool => {
         try {
@@ -254,7 +257,7 @@ export function prepareHappierMcpToolInventory(params: Readonly<{
                 title: tool.title,
                 inputSchema: toMcpToolInputSchema({
                     actionId, inputSchema: tool.inputSchema, sessionId: params.sessionId,
-                    sessionMachineId: params.sessionMachineId, contextualDefaults: tool.contextualDefaults,
+                    sessionMachineId: params.sessionMachineId, sessionRootPath: params.sessionRootPath, contextualDefaults: tool.contextualDefaults,
                 }),
                 ...(outputSchema === undefined ? {} : { outputSchema }),
                 ...(annotations === undefined ? {} : { annotations }),
@@ -313,6 +316,7 @@ export function registerHappierMcpBuiltInTools(
     const inventory = params.toolInventory ?? prepareHappierMcpToolInventory({
         sessionId: params.sessionId,
         sessionMachineId: params.sessionMachineId,
+        sessionRootPath: params.workingDirectory,
         inventory: createHappierToolInventory({
             surface: params.surface,
             isActionEnabled,
@@ -350,6 +354,7 @@ export function registerHappierMcpBuiltInTools(
                         args,
                         sessionId,
                         sessionMachineId: params.sessionMachineId,
+                        sessionRootPath: params.workingDirectory,
                         surface: params.surface,
                         actionsSettings: currentActionsSettings,
                         getActionsSettings: readActionsSettings,

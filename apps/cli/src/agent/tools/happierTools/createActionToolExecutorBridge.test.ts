@@ -39,8 +39,112 @@ import { createResolvedContributionRegistry } from '@/plugins/projection/registr
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 
 import { createActionToolExecutorBridge } from './createActionToolExecutorBridge';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { dispatchBuiltInHappierTool } from './dispatchBuiltInHappierTool';
 
 describe('createActionToolExecutorBridge', () => {
+  it('dispatches session code Actions with the host Machine and root, while preserving explicit targets and approval', async () => {
+    const queries: unknown[] = [];
+    const approvals: unknown[] = [];
+    const executor = createActionExecutor({
+      // Machine RPC and approval Artifact persistence are system boundaries.
+      languageIntelligenceQuery: async args => { queries.push(args); return { status: 'loading' }; },
+      languageIntelligenceRestart: async args => { queries.push(args); return { status: 'unavailable', reason: 'session_unavailable' }; },
+      approvalsCreate: async ({ request }) => { approvals.push(ApprovalRequestSchema.parse(request)); return { artifactId: 'scoped-edit' }; },
+      approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request }),
+      approvalsUpdate: async () => ({ ok: true }),
+    });
+    const bridge = createActionToolExecutorBridge({ executor: {
+      execute: (id, input, context) => executor.execute(id, input, { ...context, serverId: 'home', runtimeAccountId: 'account' }),
+    }, surface: 'agent', requiredDirectActionIds: ['code.definition.get'],
+      defaultSessionMachineId: 'session-machine', defaultSessionRootPath: '/session/repo' });
+    const dispatch = (actionId: string, input: unknown) => dispatchBuiltInHappierTool({
+      toolName: 'action_execute', args: { actionId, input }, sessionId: 'session', sessionMachineId: 'session-machine',
+      sessionRootPath: '/session/repo', surface: 'agent', actionRequestId: `${actionId}-request`, deps: {
+        executeActionByToolName: bridge.executeActionByToolName,
+        resolveActionOptions: args => bridge.resolveActionOptions(args, 'session'),
+        changeTitle: async () => ({ success: true }),
+      },
+    });
+    const target = { path: 'src/example.ts' };
+    for (const [actionId, input] of [
+      ['code.definition.get', { ...target, line: 2, symbol: 'example' }],
+      ['code.hover.get', { ...target, line: 2, symbol: 'example' }],
+      ['code.references.list', { ...target, line: 2, character: 0 }],
+      ['code.symbols.list', target], ['code.diagnostics.list', target],
+      ['code.rename.preview', { ...target, line: 2, symbol: 'example', newName: 'renamed' }],
+      ['code.file.rename.preview', { ...target, newPath: 'src/renamed.ts' }],
+      ['code.codeActions.list', { ...target, line: 2, symbol: 'example' }],
+    ] as const) {
+      expect(await dispatch(actionId, input), actionId).toMatchObject({ ok: true, result: { status: 'loading' } });
+    }
+    expect(await dispatch('code.restart', {})).toMatchObject({ ok: true, result: { status: 'unavailable' } });
+    expect(queries).toHaveLength(9);
+    for (const query of queries) expect(query).toMatchObject({ machineId: 'session-machine', request: { rootPath: '/session/repo' } });
+    expect(queries[0]).toMatchObject({ request: { kind: 'definition', path: target.path, text: 'disk', position: { line: 1, symbol: 'example' } } });
+    expect(await bridge.executeActionByToolName('code_definition_get', { ...target, line: 2, symbol: 'example' }, 'session'))
+      .toMatchObject({ ok: true, result: { status: 'loading' } });
+    expect(queries.at(-1)).toMatchObject({ machineId: 'session-machine', request: { rootPath: '/session/repo' } });
+    expect(await dispatch('code.definition.get', { ...target, machineId: 'explicit-machine', rootPath: '/explicit/repo', line: 2, symbol: 'example' }))
+      .toMatchObject({ ok: true });
+    expect(queries.at(-1)).toMatchObject({ machineId: 'explicit-machine', request: { rootPath: '/explicit/repo' } });
+    expect(await dispatch('code.definition.get', { ...target, machineId: 'another-machine', line: 2, symbol: 'example' }))
+      .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    const files = [{ path: target.path, expectedHash: 'a'.repeat(64), edits: [] }];
+    for (const actionId of ['code.rename.apply', 'code.file.rename.apply'] as const) {
+      expect(await dispatch(actionId, { ...target, files })).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+    }
+    const operation = { kind: 'codeAction', expectedHash: 'a'.repeat(64), action: { serverId: 'server', title: 'Fix',
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, files, hasCommand: false } };
+    expect(await dispatch('code.codeAction.apply', { ...target, operation })).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+    expect(approvals).toMatchObject([
+      { actionId: 'code.rename.apply', actionArgs: { machineId: 'session-machine', rootPath: '/session/repo', ...target, files } },
+      { actionId: 'code.file.rename.apply', actionArgs: { machineId: 'session-machine', rootPath: '/session/repo', ...target, files } },
+      { actionId: 'code.codeAction.apply', actionArgs: { machineId: 'session-machine', rootPath: '/session/repo', ...target, operation } },
+    ]);
+    const discovery = await dispatchBuiltInHappierTool({ toolName: 'action_spec_get', args: { id: 'code.definition.get' },
+      sessionId: 'session', sessionMachineId: 'session-machine', sessionRootPath: '/session/repo', surface: 'agent',
+      deps: { executeActionByToolName: bridge.executeActionByToolName, changeTitle: async () => ({ success: true }) },
+    });
+    expect(discovery).toMatchObject({ ok: true, result: { actionSpec: { inputSchema: { required: ['path', 'line'] } } } });
+    // Sessionless callers retain the strict Machine/root/file contract.
+    expect(getActionSpec('code.definition.get').inputSchema.safeParse({ ...target, line: 2, symbol: 'example' }).success).toBe(false);
+  });
+  it('dispatches session workspace reads and Processes and captures replacement scope before approval', async () => {
+    const requests: unknown[] = [];
+    let approval: unknown;
+    const executor = createActionExecutor({
+      workspaceFilesSearch: async input => { requests.push(input); return { ok: true, files: [], hasMore: false, coverage: 'complete' }; },
+      workspaceFilesReplacePreview: async input => { requests.push(input); return { ok: true, files: [], skipped: { notText: 0 }, hasMore: false, coverage: 'complete' }; },
+      machineProcessesAction: async ({ input }) => { requests.push(input); return { row: null }; },
+      approvalsCreate: async ({ request }) => { approval = ApprovalRequestSchema.parse(request); return { artifactId: 'replace-approval' }; },
+      approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request }),
+      approvalsUpdate: async () => ({ ok: true }),
+    });
+    const bridge = createActionToolExecutorBridge({ surface: 'agent', defaultSessionMachineId: 'session-machine',
+      defaultSessionRootPath: '/session/repo', executor: {
+        execute: (id, input, context) => executor.execute(id, input, { ...context, serverId: 'home', runtimeAccountId: 'account' }),
+      },
+    });
+    for (const [actionId, input] of [
+      ['workspace.files.search', { query: 'before' }],
+      ['workspace.files.replace.preview', { query: 'before', replacement: 'after' }],
+      ['machines.processes.get', { ref: 'opaque-process' }],
+    ] as const) {
+      expect(await bridge.executeActionByToolName('action_execute', { actionId, input }, 'session'), actionId).toMatchObject({ ok: true });
+    }
+    expect(requests).toMatchObject([
+      { machineId: 'session-machine', rootPath: '/session/repo', query: 'before' },
+      { machineId: 'session-machine', rootPath: '/session/repo', query: 'before', replacement: 'after' },
+      { machineId: 'session-machine', ref: 'opaque-process' },
+    ]);
+    const operation = { kind: 'replace', matcher: { query: 'before', replacement: 'after' }, files: [{ path: 'a.ts', expectedHash: 'a'.repeat(64) }] };
+    const result = await bridge.executeActionByToolName('action_execute', { actionId: 'workspace.files.replace', input: { operation } }, 'session',
+      { actionRequestId: 'scoped-replace' });
+    expect(result, result.ok ? 'unexpected effect' : result.errorCode).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+    expect(approval).toMatchObject({ actionId: 'workspace.files.replace', actionArgs: { machineId: 'session-machine', rootPath: '/session/repo', operation } });
+  });
+
   it('binds an in-session capability change before creating its real approval request', async () => {
     const approvals: unknown[] = [];
     const executor = createActionExecutor({

@@ -65,6 +65,7 @@ export function resolveSessionNativeToolDescriptors(params: Readonly<{
   codingPromptBehavior?: CodingPromptBehaviorV1 | null;
   sessionId: string;
   sessionMachineId?: string | null;
+  sessionRootPath?: string | null;
   memoryRecallGuidanceEnabled: boolean;
   /** Resolved from current host Session metadata, never Agent arguments. */
   sessionMemoryEnabled?: boolean;
@@ -107,6 +108,7 @@ export function resolveSessionNativeToolDescriptors(params: Readonly<{
           context: {
             defaultSessionId: params.sessionId,
             defaultSessionMachineId: params.sessionMachineId ?? null,
+            defaultSessionRootPath: params.sessionRootPath ?? null,
           },
         })
       : tool.inputSchema;

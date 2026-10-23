@@ -59,7 +59,9 @@ type MachineProcessesActionSpec<Id extends MachineProcessesActionId> =
 function processSpec<const Id extends MachineProcessesActionId>([id, title, description, rpcMethod, command, sideEffectClass, safety]:
   readonly [Id, string, string, string, string, 'read' | 'write' | 'danger', 'safe' | 'danger']): MachineProcessesActionSpec<Id> {
   return {
-  id, approval: safety === 'danger' ? { result: 'required' } : { result: 'none' }, title, description, safety, sideEffectClass, placements: [], executionPlacement: 'machine',
+  id, approval: safety === 'danger' ? { result: 'required' } : { result: 'none' }, title,
+  description: `${description} In a session, machineId defaults to the session's Machine; explicit input wins.`,
+  contextualDefaults: { machineId: 'current_session_machine' }, safety, sideEffectClass, placements: [], executionPlacement: 'machine',
   ...(id === 'machines.processes.stop' ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
   toolExposure: { agent: id === 'machines.processes.list' ? 'direct' : 'discoverable_only' },
   prompting: { agentGuidance: sideEffectClass === 'read'
@@ -73,7 +75,7 @@ function processSpec<const Id extends MachineProcessesActionId>([id, title, desc
     cli: { acceptsServerId: true, commands: [{ path: ['machines', 'processes', command], visibility: 'canonical' }] },
     inputHints: { fields: [
       { path: 'serverId', title: 'Home ID', widget: 'text', required: false },
-      { path: 'machineId', title: 'Machine ID', widget: 'text', required: true },
+      { path: 'machineId', title: 'Machine ID', widget: 'text', description: 'Defaults to the calling session Machine; required outside a session.' },
     ] },
     ...(id === 'machines.processes.stop' || id === 'machines.processes.kill' ? {
       approvalNarrowing: subsetNarrowing({ path: 'targets', key: item => typeof item.ref === 'string' ? item.ref : '',

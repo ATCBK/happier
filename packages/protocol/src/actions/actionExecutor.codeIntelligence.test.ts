@@ -7,8 +7,22 @@ import { isPluginSurfaceExcludedActionId } from './pluginActionSurface.js';
 import { resolveApprovalRequestApproveAdmission } from './actionApprovalPresentation.js';
 import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { DaemonWorkspaceFileSearchRequestSchema, DaemonWorkspaceFileSearchResponseSchema } from '../machines/workspaceFiles.js';
+import { bindContextualActionToolInput } from './actionToolContext.js';
 
 describe('search-backed code Actions', () => {
+  it('resolves a session code query through the shared tool-scope owner before Action dispatch', async () => {
+    const requests: unknown[] = [];
+    const executor = createActionExecutor({ languageIntelligenceQuery: async args => {
+      requests.push(args);
+      return { status: 'loading' };
+    } });
+    const context = { surface: 'agent' as const, defaultSessionId: 'session', defaultSessionMachineId: 'session-machine',
+      defaultSessionRootPath: '/session/repo' };
+    const input = bindContextualActionToolInput({ actionId: 'code.definition.get', input: { path: 'example.ts', line: 1, symbol: 'example' }, context });
+    expect(await executor.execute('code.definition.get', input, context)).toEqual({ ok: true, result: { status: 'loading' } });
+    expect(requests).toEqual([{ machineId: 'session-machine', request: { rootPath: '/session/repo', path: 'example.ts',
+      kind: 'definition', text: 'disk', position: { line: 0, symbol: 'example' } } }]);
+  });
   it('presents real semantic approvals using fields from each operation rather than positional-query operands', async () => {
     const target = { machineId: 'machine', rootPath: '/repo', path: 'a.ts' };
     const files = [{ path: 'a.ts', expectedHash: 'a'.repeat(64), edits: [] }];

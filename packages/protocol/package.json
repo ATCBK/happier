@@ -7654,6 +7654,11 @@
       "types": "./dist/actions/permissionPrivilege.d.ts",
       "default": "./dist/actions/permissionPrivilege.js"
     },
+    "./actions/actionToolContext": {
+      "happier-source": "./src/actions/actionToolContext.ts",
+      "types": "./dist/actions/actionToolContext.d.ts",
+      "default": "./dist/actions/actionToolContext.js"
+    },
     "./actions/actionSpecs": {
       "happier-source": "./src/actions/actionSpecs.ts",
       "types": "./dist/actions/actionSpecs.d.ts",

@@ -109,15 +109,19 @@ export function createSessionMcpToolInventory(params: Readonly<{
         if (!catalog) throw new DaemonPluginToolCatalogUnavailableError();
         return catalog.tools;
     };
-    const readInputs = (pluginToolCatalog: readonly ProjectedPluginToolCatalogEntry[]) => ({
-        actionsSettings: params.actionSettingsProvider.getActionsSettings(),
-        serverFeatures: params.client.getServerFeaturesSnapshot?.(),
-        sessionMemoryEnabled: readSessionMemoryEnabledV1(params.client.getMetadataSnapshot?.()),
-        sessionMachineId: params.client.getCurrentSessionLocation?.()?.machineId ?? null,
-        buildPolicy: readCliFeatureBuildPolicyInputs(process.env),
-        localPolicy: readCliLocalFeaturePolicySnapshot(process.env),
-        pluginToolCatalog,
-    });
+    const readInputs = (pluginToolCatalog: readonly ProjectedPluginToolCatalogEntry[]) => {
+        const location = params.client.getCurrentSessionLocation?.();
+        return {
+            actionsSettings: params.actionSettingsProvider.getActionsSettings(),
+            serverFeatures: params.client.getServerFeaturesSnapshot?.(),
+            sessionMemoryEnabled: readSessionMemoryEnabledV1(params.client.getMetadataSnapshot?.()),
+            sessionMachineId: location?.machineId ?? null,
+            sessionRootPath: location?.path ?? null,
+            buildPolicy: readCliFeatureBuildPolicyInputs(process.env),
+            localPolicy: readCliLocalFeaturePolicySnapshot(process.env),
+            pluginToolCatalog,
+        };
+    };
     let previous: ReturnType<typeof readInputs> | undefined;
     let inventory: ReturnType<typeof prepareHappierMcpToolInventory> | undefined;
     const readInventory = (pluginToolCatalog: readonly ProjectedPluginToolCatalogEntry[]) => {
@@ -138,6 +142,7 @@ export function createSessionMcpToolInventory(params: Readonly<{
             inventory = prepareHappierMcpToolInventory({
                 sessionId: params.client.sessionId,
                 sessionMachineId: inputs.sessionMachineId,
+                sessionRootPath: inputs.sessionRootPath,
                 inventory: createHappierToolInventory({
                     surface: 'agent', isActionEnabled, actionsSettings: inputs.actionsSettings,
                     pluginToolCatalog, requiredDirectActionIds: params.requiredDirectActionIds,

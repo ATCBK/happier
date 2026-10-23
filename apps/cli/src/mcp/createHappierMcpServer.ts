@@ -671,6 +671,7 @@ export function createHappierMcpServer(
     requiredDirectActionIds: opts?.requiredDirectActionIds,
     actionToolNameToId: opts?.toolInventory?.actionToolNameToId,
     defaultSessionMachineId: sessionLocation?.machineId ?? null,
+    defaultSessionRootPath: sessionLocation?.path ?? null,
   });
 
   registerHappierMcpResources(mcp, {
@@ -712,6 +713,7 @@ export function createHappierMcpServer(
       args: request.args,
       sessionId: client.sessionId,
       sessionMachineId: sessionLocation?.machineId ?? null,
+      sessionRootPath: sessionLocation?.path ?? null,
       surface: toolSurface,
       actionsSettings: readActionsSettings(),
       getActionsSettings: readActionsSettings,

@@ -114,6 +114,7 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
   args: unknown;
   sessionId: string;
   sessionMachineId?: string | null;
+  sessionRootPath?: string | null;
   surface?: 'mcp' | 'cli' | 'agent';
   actionsSettings?: ActionsSettingsV1 | null;
   getActionsSettings?: (() => ActionsSettingsV1 | null) | null;
@@ -234,6 +235,7 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
           context: {
             defaultSessionId: params.sessionId,
             defaultSessionMachineId: params.sessionMachineId,
+            defaultSessionRootPath: params.sessionRootPath,
           },
           registry: params.registry,
           pluginToolCatalog: params.pluginToolCatalog,
