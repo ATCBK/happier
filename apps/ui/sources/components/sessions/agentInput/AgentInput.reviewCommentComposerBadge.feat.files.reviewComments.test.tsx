@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
@@ -157,9 +157,16 @@ vi.mock('@/agents/catalog/catalog', () => ({
 }));
 
 describe('AgentInput review comment composer badge', () => {
+    let AgentInput: typeof import('./AgentInput')['AgentInput'];
+    let createReviewCommentsActionChip: typeof import('./definitions/createReviewCommentsActionChip')['createReviewCommentsActionChip'];
+    // The composer's module graph loads once, after the module mocks above, in its own hook budget: a cold
+    // load must not eat the first case's budget and leave that case rendering on into the next one.
+    beforeAll(async () => {
+        ({ AgentInput } = await import('./AgentInput'));
+        ({ createReviewCommentsActionChip } = await import('./definitions/createReviewCommentsActionChip'));
+    });
+
     it('renders review drafts as an attachment-style badge that opens the review action', async () => {
-        const { AgentInput } = await import('./AgentInput');
-        const { createReviewCommentsActionChip } = await import('./definitions/createReviewCommentsActionChip');
 
         const draft = {
             id: 'draft-1',
@@ -226,8 +233,6 @@ describe('AgentInput review comment composer badge', () => {
     });
 
     it('names the file and its lines when one selection rides with the message, and counts several', async () => {
-        const { AgentInput } = await import('./AgentInput');
-        const { createReviewCommentsActionChip } = await import('./definitions/createReviewCommentsActionChip');
 
         const rangeDraft = {
             id: 'draft-range',
@@ -288,8 +293,6 @@ describe('AgentInput review comment composer badge', () => {
     });
 
     it('lets the user detach or discard review comments from the composer badge remove button', async () => {
-        const { AgentInput } = await import('./AgentInput');
-        const { createReviewCommentsActionChip } = await import('./definitions/createReviewCommentsActionChip');
 
         const draft = {
             id: 'draft-1',
