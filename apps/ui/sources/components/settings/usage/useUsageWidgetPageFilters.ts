@@ -49,14 +49,15 @@ function sourceOptionDetail(slices: readonly UsageQueryResultSlice[], source: st
 /** One choice/toggle owner consumed by both the toolbar and mounted current-context commands. */
 export function useUsageWidgetPageFilters(page: UsageWidgetPageContextState, slices: readonly UsageQueryResultSlice[], sessionScoped: boolean) {
     const { scope, setScope } = page;
-    const referencedMachineIds = React.useMemo(() => [...readUsageScopeOptions(slices, 'machines', scope.machines).keys()], [slices, scope.machines]);
+    const referencedMachineIds = React.useMemo(() => sessionScoped ? [] : [...readUsageScopeOptions(slices, 'machines', scope.machines).keys()], [sessionScoped, slices, scope.machines]);
     // Filters consume names, not Machine runtime/presence. Select the canonical
     // display strings so those publications cannot invalidate every chart's drill.
     const machineNames = useAllMachines(React.useCallback(machines => {
+        if (sessionScoped) return {};
         const listed = new Set(machines.map(machine => machine.id));
         return Object.fromEntries(resolveMachineDisplayNames([...machines,
             ...referencedMachineIds.filter(id => !listed.has(id)).map(id => ({ id, absence: 'unlisted' as const }))]));
-    }, [referencedMachineIds]));
+    }, [referencedMachineIds, sessionScoped]));
     return React.useMemo((): readonly UsageWidgetPageFilter[] => sessionScoped ? [] :
         (['sources', 'agents', 'machines', 'projects'] as const).map(field => {
             const selected = scope[field];
