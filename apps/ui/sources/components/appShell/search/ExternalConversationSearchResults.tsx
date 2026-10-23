@@ -20,6 +20,8 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { VirtualizedList } from '@/components/ui/lists/virtualized/VirtualizedList';
+import type { VirtualizedListRef } from '@/components/ui/lists/virtualized/virtualizedListTypes';
 import { SelectionListSearchHeader } from '@/components/ui/selectionList/SelectionListSearchHeader';
 import { SelectionListSectionHeader } from '@/components/ui/selectionList/SelectionListSectionHeader';
 import { SelectionListFooter } from '@/components/ui/selectionList/SelectionListFooter';
@@ -131,51 +133,92 @@ function ActivatedResults(props: ExternalConversationSearchResultsProps) {
     const [browseScope, setBrowseScope] = React.useState<ExternalSessionsBrowseScopeLock | null>(null);
     const [width, setWidth] = React.useState(0);
     const [highlight, setHighlight] = React.useState<SelectedConversationHighlight | null>(null);
+    const [askedAtRows, setAskedAtRows] = React.useState<ReadonlyMap<string, number>>(new Map());
     const wide = width >= PREVIEW_MIN_WIDTH;
+    const listRef = React.useRef<VirtualizedListRef>(null);
+    const current = React.useRef(true);
+    React.useEffect(() => {
+        current.current = true;
+        return () => { current.current = false; };
+    }, []);
+    const sourceModelsRef = React.useRef<readonly ContentSourceModel[]>([]);
+    const listRowsRef = React.useRef<readonly ConversationResultRow[]>([]);
+    const showingResults = React.useRef(true);
+    showingResults.current = browseScope === null;
     React.useEffect(() => {
         setLinkingKey(null);
         return () => { cancelExternalSessionCandidateOpen(openState.current); };
     }, [presentationActive, props.query, props.accountLifetime, props.target.machineId, props.target.serverId]);
     // ↑↓ move the highlight over every source's hits in drawn order and ↵ opens it (the footer's promise).
-    const rowGetters = React.useRef(new Map<string, () => readonly SelectedConversationHighlight[]>());
-    const drawnSourceKeys = React.useRef<readonly string[]>([]);
     const highlightRef = React.useRef(highlight);
     highlightRef.current = highlight;
-    const registerRows = React.useCallback((key: string, rows: (() => readonly SelectedConversationHighlight[]) | null) => {
-        if (rows) rowGetters.current.set(key, rows); else rowGetters.current.delete(key);
-    }, []);
     React.useEffect(() => {
         if (Platform.OS !== 'web' || typeof document === 'undefined') return undefined;
         const onKeyDown = (event: KeyboardEvent) => {
+            if (!showingResults.current) return;
             if (event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return;
             // A focused control (a row, a link, a button, an editable field) keeps its own keys; the sheet's
             // read-only query field is display, not an editor.
             if (typeof Element !== 'undefined' && event.target instanceof Element && event.target.closest('button, a, textarea, input:not([readonly]), [role="button"], [role="link"]')) return;
-            const rows = drawnSourceKeys.current.flatMap(key => rowGetters.current.get(key)?.() ?? []);
-            const index = rows.findIndex(row => row.key === highlightRef.current?.key);
+            const rows = listRowsRef.current.flatMap((row, listIndex) => row.kind === 'candidate' && row.candidate.match ? [{ row, listIndex }] : []);
+            const index = rows.findIndex(({ row }) => readExternalSessionBrowseCandidateKey(row.candidate) === highlightRef.current?.key);
             if (event.key === 'Enter') {
                 const target = rows[index];
                 if (!target) return;
                 event.preventDefault();
-                target.open();
+                target.row.source.openCandidate(target.row.candidate);
                 return;
             }
             if (rows.length === 0) return;
             event.preventDefault();
             const next = rows[Math.min(rows.length - 1, Math.max(0, index + (event.key === 'ArrowDown' ? 1 : -1)))];
-            if (next) setHighlight(next);
+            if (next) {
+                setHighlight(next.row.source.describe(next.row.candidate));
+                void listRef.current?.scrollToIndex({ index: next.listIndex, animated: false });
+            }
         };
         document.addEventListener('keydown', onKeyDown);
         return () => document.removeEventListener('keydown', onKeyDown);
     }, []);
-    if (browseScope) return <ExternalSessionsBrowseScreen lockScope={browseScope} accountLifetime={props.accountLifetime} initialSearchTarget="content" initialSearchQuery={props.query} onRequestClose={props.onRequestClose} closeButton />;
     const hitCount = search.result?.hits.length ?? 0;
     // Groups with rows come first; a source with only a next page closes the list as one line naming its source.
     const orderedSources = orderConversationSourceGroups(search.result, sources, props.query);
-    drawnSourceKeys.current = orderedSources.map(source => source.key);
     // With several groups on screen each one names its source, so their link rows do not read as repeated controls.
     const namesSources = sources.filter(source => source.supported && conversationSourceHasGroup(search.result, source, props.query)).length > 1;
+    const sourceModels = orderedSources.filter(source => source.supported).map(source => buildContentSourceModel({
+        ...props, target: { ...props.target, machineId: source.machineId }, source, search,
+        offline: search.result?.machines.find(machine => machine.machineId === source.machineId)?.status === 'offline',
+        openState: openState.current, linkingKey, onLinkingChange: setLinkingKey,
+        onShow: () => setBrowseScope({ ...props.target, machineId: source.machineId, providerId: source.agentId, source: source.source }),
+        machineLabel: machineName(source.machineId), namesSource: namesSources,
+        homeDir: machineList?.find(machine => machine.id === source.machineId)?.metadata?.homeDir ?? null,
+        showMachine: allMachines, wide, statusInMeta: isConversationHitStatusInMeta(width),
+        highlightedKey: highlight?.key ?? null, onHighlight: setHighlight,
+        isCurrent: () => current.current && showingResults.current && props.accountLifetime.isCurrent()
+            && sourceModelsRef.current.some(model => model.props.source.key === source.key),
+        openCurrent: candidate => sourceModelsRef.current.find(model => model.props.source.key === source.key)?.openCandidate(candidate),
+        candidateCurrent: candidate => sourceModelsRef.current.find(model => model.props.source.key === source.key)?.results.candidates.some(row =>
+            readExternalSessionBrowseCandidateKey(row) === readExternalSessionBrowseCandidateKey(candidate)
+            && row.match?.sourceItemId === candidate.match?.sourceItemId) === true,
+        askedAtRows: askedAtRows.get(source.key),
+        onAsk: count => setAskedAtRows(previous => new Map(previous).set(source.key, count)),
+    }));
+    sourceModelsRef.current = sourceModels;
+    const listRows: ConversationResultRow[] = orderedSources.flatMap<ConversationResultRow>(source => {
+        if (!source.supported) return [{ kind: 'unsupported', key: source.key, source }];
+        const model = sourceModels.find(model => model.props.source.key === source.key)!;
+        return [
+            ...model.results.candidates.map(candidate => ({ kind: 'candidate' as const, key: JSON.stringify([source.key, readExternalSessionBrowseCandidateKey(candidate)]), candidate, source: model })),
+            ...(model.results.candidates.length > 0 || model.results.nextCursor ? [{ kind: 'source-footer' as const, key: `${source.key}:footer`, source: model }] : []),
+        ];
+    });
+    listRowsRef.current = listRows;
+    const firstMatchedRow = listRows.find((row): row is Extract<ConversationResultRow, { kind: 'candidate' }> => row.kind === 'candidate' && Boolean(row.candidate.match));
+    React.useEffect(() => {
+        if (wide && highlight === null && firstMatchedRow) setHighlight(firstMatchedRow.source.describe(firstMatchedRow.candidate));
+    }, [wide, highlight, firstMatchedRow]);
+    if (browseScope) return <ExternalSessionsBrowseScreen lockScope={browseScope} accountLifetime={props.accountLifetime} initialSearchTarget="content" initialSearchQuery={props.query} onRequestClose={props.onRequestClose} closeButton />;
     // Lab H1r: the palette keeps its band (the query, and the way back to Search), one group named for where
     // the scan ran, the hits as palette rows, and the preview beside them when the card is wide enough.
     return <View testID="external-conversation-results" style={[styles.root, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
@@ -185,22 +228,24 @@ function ActivatedResults(props: ExternalConversationSearchResultsProps) {
         <PoliteAccessibilityStatus announcement={announcement} transitionKey={`${search.loading}:${search.cancelled}:${search.result?.hits.length}`} statusTestID="external-conversation-status" />
         {search.loading ? <ExternalSessionSearchProgress label={t('conversationSearch.searching')} onStop={search.cancel} testID="external-conversation-progress" stopTestID="external-conversation-stop" /> : null}
         <View style={styles.body}>
-            <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+            <VirtualizedList ref={listRef} testID="external-conversation-list" style={styles.list} contentContainerStyle={styles.listContent}
+                data={listRows} keyExtractor={row => row.key} getItemType={row => row.kind} keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => item.kind === 'candidate' ? <ConversationResultCandidate candidate={item.candidate} source={item.source} />
+                    : item.kind === 'source-footer' ? <ContentSourceFooter source={item.source} />
+                        : <Text testID={`external-conversation-unsupported:${item.source.key}`} style={styles.status}>{[item.source.label, item.source.capability === false ? t('externalSessions.browseContentNotSearchable') : t('externalSessions.browseContentUpdateRequired', { machine: props.machineLabel })].join(' · ')}</Text>}
+                ListHeaderComponent={<>
                 <SelectionListSectionHeader title={allMachines ? t('conversationSearch.scopeAllMachinesSubtitle') : t('externalSessions.browseContentOnMachine', { machine: props.machineLabel })}
                     count={hitCount > 0 ? hitCount : undefined} />
                 {noneFound ? <Text testID="external-conversation-none" style={styles.status}>{noneFound}</Text> : null}
                 {search.cancelled ? <Text style={styles.status}>{t('externalSessions.browseContentStopped')}</Text> : null}
                 {search.error ? <View style={styles.statusRow}><Text style={styles.statusInline}>{t('externalSessions.browseFailedToLoad')}</Text><TextLinkButton size="meta" tone="strong" label={t('common.retry')} onPress={search.reload} /></View> : null}
-                {orderedSources.map((source) => source.supported
-                    ? <ContentSource key={source.key} {...props} target={{ ...props.target, machineId: source.machineId }} source={source} search={search} offline={search.result?.machines.find(machine => machine.machineId === source.machineId)?.status === 'offline'} openState={openState.current} linkingKey={linkingKey} onLinkingChange={setLinkingKey} onShow={() => setBrowseScope({ ...props.target, machineId: source.machineId, providerId: source.agentId, source: source.source })}
-                        machineLabel={machineName(source.machineId)} namesSource={namesSources} homeDir={machineList?.find(machine => machine.id === source.machineId)?.metadata?.homeDir ?? null} showMachine={allMachines} wide={wide} statusInMeta={isConversationHitStatusInMeta(width)}
-                        highlightedKey={highlight?.key ?? null} registerRows={registerRows} wantsFirstHighlight={wide && highlight === null} onHighlight={setHighlight} />
-                    : <Text key={source.key} testID={`external-conversation-unsupported:${source.key}`} style={styles.status}>{[source.label, source.capability === false ? t('externalSessions.browseContentNotSearchable') : t('externalSessions.browseContentUpdateRequired', { machine: props.machineLabel })].join(' · ')}</Text>)}
+                </>}
+                ListFooterComponent={<>
                 {/* How much was covered closes the list (lab H1r "Searched 3,102 conversations"): hits first. */}
                 {coverage ? <Text testID="external-conversation-coverage" style={styles.status}>{coverage}</Text> : null}
                 {failures.length > 0 ? <CoverageFailures failures={failures} sources={sources} machineName={machineName} showMachine={allMachines} defaultExpanded={hitCount === 0}
                     disabled={search.loading} onRetry={failure => { void search.loadMore(failure); }} /> : null}
-            </ScrollView>
+                </>} />
             {/* The preview column opens with the first hit; an empty half-card would only say nothing is there yet. */}
             {wide && hitCount > 0 ? <SelectedConversationPreview highlight={highlight} query={props.query} disabled={linkingKey !== null} /> : null}
         </View>
@@ -323,7 +368,7 @@ export function ConversationPreview(props: Readonly<{
     </View>;
 }
 
-function ContentSource(props: ExternalConversationSearchResultsProps & Readonly<{
+type ContentSourceProps = ExternalConversationSearchResultsProps & Readonly<{
     search: ReturnType<typeof useConversationSearch>;
     source: Source; offline: boolean;
     /** With several machines in scope, each source's header says whose conversations these are. */
@@ -336,33 +381,36 @@ function ContentSource(props: ExternalConversationSearchResultsProps & Readonly<
     statusInMeta: boolean; openState: ExternalSessionCandidateOpenState; linkingKey: string | null;
     onLinkingChange(key: string | null): void; onShow(): void;
     /** Wide layouts preview one hit: which one, whether none is chosen yet, and how a row claims it. */
-    highlightedKey: string | null; wantsFirstHighlight: boolean; onHighlight(highlight: SelectedConversationHighlight): void;
-    /** The keyboard reads this source's openable hits through the parent's ordered registry. */
-    registerRows(key: string, rows: (() => readonly SelectedConversationHighlight[]) | null): void;
-}>) {
-    const { source } = props;
+    highlightedKey: string | null; onHighlight(highlight: SelectedConversationHighlight): void;
+    /** The surface owns lifetime and paging state; recycled cells own neither. */
+    isCurrent(): boolean;
+    openCurrent(candidate: ExternalSessionBrowseCandidate): void;
+    candidateCurrent(candidate: ExternalSessionBrowseCandidate): boolean;
+    askedAtRows: number | undefined;
+    onAsk(count: number): void;
+}>;
+
+type ContentSourceModel = ReturnType<typeof buildContentSourceModel>;
+type ConversationResultRow =
+    | Readonly<{ kind: 'candidate'; key: string; candidate: ExternalSessionBrowseCandidate; source: ContentSourceModel }>
+    | Readonly<{ kind: 'source-footer'; key: string; source: ContentSourceModel }>
+    | Readonly<{ kind: 'unsupported'; key: string; source: Source }>;
+
+/** Source projection and selection stay mounted with the surface, independent of its visible cells. */
+function buildContentSourceModel(props: ContentSourceProps) {
+    const { source, openCurrent, candidateCurrent, onShow } = props;
     const group = readConversationSourceGroup(props.search.result, source, props.query);
     const continuation = group.continuation;
     // Rows the index answered, as opposed to ones this scan read from the Agent's files.
     const results = {
         candidates: group.candidates,
-        publishedSearchTerm: props.query, loading: props.search.loading, loadingMore: false, preparation: null,
-        cancelled: props.search.cancelled === true, preparationStopped: false, error: props.search.error ? t('externalSessions.browseFailedToLoad') : null,
-        contentCoverage: props.search.result?.machines.find(machine => machine.machineId === source.machineId)?.status === 'partial' ? 'partial' : 'complete',
-        nextCursor: continuation?.cursor, cancelPreparation: props.search.cancel, reload: props.search.reload,
+        loading: props.search.loading, cancelled: props.search.cancelled === true,
+        nextCursor: continuation?.cursor,
         loadMore: () => continuation && props.search.loadMore(continuation),
     };
-    const current = React.useRef(true);
-    React.useEffect(() => {
-        current.current = true;
-        return () => { current.current = false; };
-    }, []);
     // Found hits stay at full strength and openable while another page loads; only a surface that went away or
     // a retired Account makes a selection stale.
-    const selectionCurrent = () => current.current && props.accountLifetime.isCurrent()
-        && results.publishedSearchTerm === props.query;
-    const latestSelection = React.useRef({ current: selectionCurrent, candidates: results.candidates });
-    latestSelection.current = { current: selectionCurrent, candidates: results.candidates };
+    const selectionCurrent = props.isCurrent;
     const openCandidate = (candidate: ExternalSessionBrowseCandidate) => {
         const match = candidate.match;
         if (!match) return;
@@ -376,77 +424,69 @@ function ContentSource(props: ExternalConversationSearchResultsProps & Readonly<
         });
     };
     // The preview opens through the latest render's guards, never a closure from when it was highlighted.
-    const openRef = React.useRef(openCandidate);
-    openRef.current = openCandidate;
     const describe = (candidate: ExternalSessionBrowseCandidate): SelectedConversationHighlight => {
         const identity = resolveExternalSessionBrowseCandidateIdentityPresentation({ remoteSessionId: candidate.remoteSessionId, title: candidate.title,
             path: readExternalSessionBrowseCandidatePath(candidate.details), homeDir: props.homeDir, agentLabel: source.label, machineLabel: props.machineLabel, thread: candidate.thread });
         const relativeTime = candidate.updatedAtMs > 0 ? formatShortRelativeTime(candidate.updatedAtMs) : '';
         return { key: readExternalSessionBrowseCandidateKey(candidate), candidate, title: stripMarkdown(identity.title),
             meta: [identity.secondaryLabel, relativeTime].filter(Boolean).join(' · '),
-            open: () => openRef.current(candidate), show: props.onShow, agentId: source.agentId,
-            isCurrent: () => latestSelection.current.current() && latestSelection.current.candidates.some(row => readExternalSessionBrowseCandidateKey(row) === readExternalSessionBrowseCandidateKey(candidate)
-                && row.match?.sourceItemId === candidate.match?.sourceItemId),
+            open: () => openCurrent(candidate), show: onShow, agentId: source.agentId,
+            isCurrent: () => selectionCurrent() && candidateCurrent(candidate),
             exchange: { request: { machineId: props.target.machineId, agentId: source.agentId, source: source.source, remoteSessionId: candidate.remoteSessionId },
                 accountLifetime: props.accountLifetime, sourceItemId: candidate.match!.sourceItemId } };
     };
-    const firstMatched = results.candidates.find((candidate) => candidate.match);
-    const { wantsFirstHighlight, onHighlight, registerRows } = props;
-    const latestRows = React.useRef<() => readonly SelectedConversationHighlight[]>(() => []);
-    latestRows.current = () => results.candidates.filter((candidate) => candidate.match).map(describe);
-    React.useEffect(() => {
-        registerRows(source.key, () => latestRows.current());
-        return () => registerRows(source.key, null);
-    }, [registerRows, source.key]);
-    React.useEffect(() => {
-        if (wantsFirstHighlight && firstMatched) onHighlight(describe(firstMatched));
-        // `describe` reads this render's labels; the first matched hit is what changes.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [wantsFirstHighlight, firstMatched, onHighlight]);
-    const busy = results.loading || results.loadingMore || Boolean(results.preparation);
+    return { props, results, selectionCurrent, openCandidate, describe };
+}
+
+function ConversationResultCandidate({ candidate, source: model }: Readonly<{ candidate: ExternalSessionBrowseCandidate; source: ContentSourceModel }>) {
+    const { props, selectionCurrent, openCandidate, describe } = model;
+    const { source } = props;
+    // The row's mark names the Agent and the group names the machine; the line keeps the project.
+    const identity = resolveExternalSessionBrowseCandidateIdentityPresentation({ remoteSessionId: candidate.remoteSessionId, title: candidate.title,
+        path: readExternalSessionBrowseCandidatePath(candidate.details), homeDir: props.homeDir, machineLabel: props.showMachine ? props.machineLabel : null, thread: candidate.thread });
+    const key = readExternalSessionBrowseCandidateKey(candidate);
+    const match = candidate.match;
+    const linking = props.linkingKey === key;
+    const open = match ? () => openCandidate(candidate) : undefined;
+    const highlightThis = match && props.highlightedKey !== null ? () => props.onHighlight(describe(candidate)) : undefined;
+    return <View style={styles.menuRow}><Item rowRole="menu"
+        testID={match ? `external-conversation-open:${candidate.remoteSessionId}` : undefined}
+        title={stripMarkdown(identity.title)}
+        titleHighlightQuery={props.query.trim() || undefined}
+        contentAlign="start"
+        icon={<AgentIcon agentId={source.agentId} size={ICON_SIZE.md} />}
+        accessibilityLabel={match ? `${t('externalSessions.browseContentOpen')}: ${stripMarkdown(identity.title)}` : stripMarkdown(identity.title)}
+        showChevron={false}
+        onPress={open}
+        onHoverIn={highlightThis}
+        onFocus={highlightThis}
+        selected={props.highlightedKey === key}
+        disabled={!match || !selectionCurrent() || props.linkingKey !== null || (props.offline && !candidate.linkedSessionId)}
+        rightElement={linking ? <ActivitySpinner size={ICON_SIZE.sm} />
+            : props.statusInMeta ? undefined : <ConversationHitStatus candidate={candidate} />}
+        bottomElementInset="text"
+        bottomElement={<ConversationHitSummary
+            snippet={resolveConversationHitSnippet({ title: identity.title, snippet: candidate.match?.snippet ?? t('externalSessions.browseContentNotSearchable'), query: props.query })}
+            query={props.query} where={identity.secondaryLabel} atMs={candidate.updatedAtMs} messageCount={candidate.messageCount}
+            status={props.statusInMeta ? resolveConversationHitStatusLabel(candidate) : null} testID={`external-session-candidate-match:${candidate.remoteSessionId}`} />} /></View>;
+}
+
+function ContentSourceFooter({ source: model }: Readonly<{ source: ContentSourceModel }>) {
+    const { props, results } = model;
+    const { source } = props;
+    const busy = results.loading;
     // "Search more" that adds no conversation changes nothing on screen, so the line says what happened. The row
     // count at the press is the reference: a page that failed is reported by the failures and the error line instead.
-    const [askedAtRows, setAskedAtRows] = React.useState<number | null>(null);
     const sourceFailed = props.search.error !== null || (props.search.result?.failures ?? []).some(failure =>
         failure.machineId === source.machineId && failure.sourceKey === source.sourceKey);
-    const nothingNew = askedAtRows !== null && !busy && !results.cancelled && !sourceFailed && results.candidates.length <= askedAtRows;
-    const searchMore = () => { setAskedAtRows(results.candidates.length); void results.loadMore(); };
+    const nothingNew = props.askedAtRows !== undefined && !busy && !results.cancelled && !sourceFailed && results.candidates.length <= props.askedAtRows;
+    const searchMore = () => { props.onAsk(results.candidates.length); void results.loadMore(); };
     const mixed = results.candidates.some(candidate => candidate.searchMode === 'indexed')
         && results.candidates.some(candidate => candidate.searchMode === 'standard');
     // Rows only: the agent's mark on each row says whose conversation it is, so a source draws no heading,
     // and a source with nothing to show draws nothing.
     if (results.candidates.length === 0 && !results.nextCursor) return null;
     return <View testID={`external-conversation-source:${source.key}`}>
-        {results.candidates.map((candidate) => {
-            // The row's mark names the Agent and the group names the machine; the line keeps the project.
-            const identity = resolveExternalSessionBrowseCandidateIdentityPresentation({ remoteSessionId: candidate.remoteSessionId, title: candidate.title,
-                path: readExternalSessionBrowseCandidatePath(candidate.details), homeDir: props.homeDir, machineLabel: props.showMachine ? props.machineLabel : null, thread: candidate.thread });
-            const key = readExternalSessionBrowseCandidateKey(candidate);
-            const match = candidate.match;
-            const linking = props.linkingKey === key;
-            const open = match ? () => openCandidate(candidate) : undefined;
-            const highlightThis = match && props.highlightedKey !== null ? () => props.onHighlight(describe(candidate)) : undefined;
-            return <View key={key} style={styles.menuRow}><Item rowRole="menu"
-                testID={match ? `external-conversation-open:${candidate.remoteSessionId}` : undefined}
-                title={stripMarkdown(identity.title)}
-                titleHighlightQuery={props.query.trim() || undefined}
-                contentAlign="start"
-                icon={<AgentIcon agentId={source.agentId} size={ICON_SIZE.md} />}
-                accessibilityLabel={match ? `${t('externalSessions.browseContentOpen')}: ${stripMarkdown(identity.title)}` : stripMarkdown(identity.title)}
-                showChevron={false}
-                onPress={open}
-                onHoverIn={highlightThis}
-                onFocus={highlightThis}
-                selected={props.highlightedKey === key}
-                disabled={!match || !selectionCurrent() || props.linkingKey !== null || (props.offline && !candidate.linkedSessionId)}
-                rightElement={linking ? <ActivitySpinner size={ICON_SIZE.sm} />
-                    : props.statusInMeta ? undefined : <ConversationHitStatus candidate={candidate} />}
-                bottomElementInset="text"
-                bottomElement={<ConversationHitSummary
-                    snippet={resolveConversationHitSnippet({ title: identity.title, snippet: candidate.match?.snippet ?? t('externalSessions.browseContentNotSearchable'), query: props.query })}
-                    query={props.query} where={identity.secondaryLabel} atMs={candidate.updatedAtMs} messageCount={candidate.messageCount}
-                    status={props.statusInMeta ? resolveConversationHitStatusLabel(candidate) : null} testID={`external-session-candidate-match:${candidate.remoteSessionId}`} />} /></View>;
-        })}
         {mixed ? <Text style={styles.status}>{t('conversationSearch.mixedResults')}</Text> : null}
         {(results.nextCursor && !busy && !results.cancelled) || nothingNew || !props.wide ? <View style={styles.statusRow}>
             {/* A source with no rows has no hit to explain it, so its line always says whose "Search more" this is. */}

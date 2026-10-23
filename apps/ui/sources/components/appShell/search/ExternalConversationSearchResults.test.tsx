@@ -11,8 +11,11 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 import { buildHappierBaseSystemPromptV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
 import { buildPromptPlanV1, renderSessionInputPromptPlanV1 } from '@happier-dev/protocol/prompts/promptPlanV1';
+import type { CapturingLegendListMockState } from '@/dev/testkit/mocks/legendList';
+import type { ExternalSessionBrowseCandidate } from '@/components/sessions/external/browse/useExternalSessionBrowseCandidates';
 
 const boundary = vi.hoisted(() => ({ list: vi.fn(), ensure: vi.fn(), page: vi.fn(), projection: vi.fn(), routerPush: vi.fn(), serverId: '' }));
+const viewport = vi.hoisted(() => ({ limit: undefined as number | undefined, list: null as CapturingLegendListMockState | null }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'web' } });
@@ -24,7 +27,9 @@ vi.mock('react-native-unistyles', async () => {
 // Legend's native scrolling is a platform boundary; the browser and paging owner remain real.
 vi.mock('@legendapp/list/react-native', async () => {
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-    return createCapturingLegendListMock({ renderItems: true }).module;
+    const mock = createCapturingLegendListMock({ renderItems: true, get renderItemLimit() { return viewport.limit; } });
+    viewport.list = mock.state;
+    return mock.module;
 });
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -123,6 +128,8 @@ function sourceKey() {
 
 describe('activated external conversation results', () => {
     beforeEach(async () => {
+        viewport.limit = undefined;
+        viewport.list?.reset();
         for (const boundary of socketBoundaries()) {
             boundary.socket.emitWithAck.mockClear();
             boundary.socket.emit.mockClear();
@@ -196,15 +203,49 @@ describe('activated external conversation results', () => {
             machineListByServerId: { [home.id]: [createMachineFixture({ activeAt: Date.now() })] },
             machineListStatusByServerId: { [home.id]: 'idle' },
         });
+        // A prior case can withdraw this retained Home's transport. Publishing its
+        // fresh fixture inventory must also pass through the presence ingress owner.
+        const { observeMachinePresenceForTest } = await import('@/dev/testkit/harness/machinePresence');
+        observeMachinePresenceForTest({ serverId: home.id, accountId: 'account-a' }, ['machine-1']);
         clearDaemonMergedProjectionCacheForTests();
     });
     afterEach(async () => {
         standardCleanup();
+        vi.unstubAllGlobals();
         await connection?.dispose();
         connection = undefined;
         scopeOwner?.retireActiveServerAccountScopeLifetime();
     });
     afterAll(() => network.dispose());
+
+    it('mounts only the viewport of a thousand conversation hits while retaining every result', async () => {
+        // The native recycler is a system boundary. Its twelve-row viewport is fixed here;
+        // the production screen, search pipeline, row rendering and paging stay real.
+        viewport.limit = 12;
+        let keydown: ((event: unknown) => void) | undefined;
+        vi.stubGlobal('document', { getElementById: () => ({}), addEventListener: (_type: string, handler: (event: unknown) => void) => { keydown = handler; }, removeEventListener: vi.fn() });
+        boundary.list.mockResolvedValue({ ...page, nextCursor: undefined, candidates: Array.from({ length: 1_000 }, (_, index) => ({
+            ...hit, remoteSessionId: `conversation-${index}`, title: `Project discussion ${index}`,
+        })) });
+        const input = props();
+        const screen = await renderScreen(<ExternalConversationSearchResults {...input} />);
+        await flushHookEffects({ cycles: 4, turns: 2 });
+        const mountedRows = findAllHostTestInstances(screen.root, node => typeof node.props.testID === 'string'
+            && node.props.testID.startsWith('external-conversation-open:')).length;
+        expect(mountedRows).toBeGreaterThan(0);
+        expect(mountedRows).toBeLessThanOrEqual(viewport.limit);
+        expect(viewport.list?.props?.data.filter((row: { kind: string }) => row.kind === 'candidate')).toHaveLength(1_000);
+        expect(boundary.list).toHaveBeenCalledTimes(1);
+        const offscreen: ExternalSessionBrowseCandidate = viewport.list?.props?.data[14].candidate;
+        expect(screen.findHostByTestId(`external-conversation-open:${offscreen.remoteSessionId}`)).toBeNull();
+        // Keyboard navigation uses the complete result model, including unmounted rows, and reveals it.
+        for (let index = 0; index < 15; index++) await act(async () => keydown?.({ key: 'ArrowDown', preventDefault: vi.fn(), target: null }));
+        expect(viewport.list?.refHandle.scrollToIndex).toHaveBeenLastCalledWith({ index: 14, animated: false });
+        await act(async () => keydown?.({ key: 'Enter', preventDefault: vi.fn(), target: null }));
+        await flushHookEffects();
+        expect(boundary.ensure).toHaveBeenCalledWith(expect.objectContaining({ remoteSessionId: offscreen.remoteSessionId }), expect.anything());
+        expect(input.onOpenSession).toHaveBeenCalledTimes(1);
+    });
 
     it('searches only the selected source after activation, pages explicitly, and opens the decoded hit with a mapped Find seed', async () => {
         const input = props();
@@ -286,12 +327,16 @@ describe('activated external conversation results', () => {
     it('moves the highlight with the arrow keys and opens it with Return, as the footer says', async () => {
         const keydown: { handler?: (event: unknown) => void } = {};
         // The DOM is a platform boundary: capture the sheet's keydown subscription (the spinner finds its sheet by id).
-        vi.stubGlobal('document', { getElementById: () => ({}), addEventListener: (_type: string, handler: (event: unknown) => void) => { keydown.handler = handler; }, removeEventListener: vi.fn() });
+        vi.stubGlobal('document', {
+            getElementById: () => ({}), addEventListener: (_type: string, handler: (event: unknown) => void) => { keydown.handler = handler; }, removeEventListener: vi.fn(),
+            // Show mounts Browse's screen-local native portal; this is its DOM host boundary.
+            createElement: () => ({ style: {}, setAttribute: vi.fn(), remove: vi.fn() }), body: { appendChild: vi.fn() },
+        });
         try {
             const input = props();
             boundary.list.mockResolvedValue({ ...page, nextCursor: null, candidates: [hit,
                 { ...hit, remoteSessionId: 'second', match: { ...hit.match, sourceItemId: 'second-item' } }] });
-            await renderScreen(<ExternalConversationSearchResults {...input} />);
+            const screen = await renderScreen(<ExternalConversationSearchResults {...input} />);
             await flushHookEffects({ cycles: 4, turns: 2 });
             const press = async (key: string) => {
                 const preventDefault = vi.fn();
@@ -310,6 +355,15 @@ describe('activated external conversation results', () => {
             expect(input.onOpenSession).toHaveBeenCalledWith('linked', { machineId: 'machine-1', serverId: boundary.serverId }, expect.objectContaining({
                 target: { kind: 'route-message-id', routeMessageId: `server:${makeExternalSessionHistoricalImportLocalId({ agentId: 'codex', remoteSessionId: 'second', directItemId: 'second-item' })}` },
             }));
+            const resultsKeyDown = keydown.handler;
+            const show = findAllHostTestInstances(screen.root, node => typeof (node.props.onPress ?? node.props.onClick) === 'function'
+                && node.findAll(child => typeof child.type === 'string' && child.children.includes('externalSessions.browseContentShow')).length > 0)[0];
+            await pressTestInstanceAsync(show);
+            const preventDefault = vi.fn();
+            await act(async () => resultsKeyDown?.({ key: 'ArrowDown', preventDefault, target: null }));
+            await act(async () => resultsKeyDown?.({ key: 'Enter', preventDefault, target: null }));
+            expect(preventDefault).not.toHaveBeenCalled();
+            expect(input.onOpenSession).toHaveBeenCalledTimes(1);
         } finally { vi.unstubAllGlobals(); }
     });
 
