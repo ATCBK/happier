@@ -8,9 +8,6 @@ import { existsSync } from 'node:fs';
 import { chmod, copyFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { resolveHappyHomeDirFromEnvironment } from '@happier-dev/cli-common/agents';
-import { observeServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
-import { resolveAuthenticatedExactHomeConnectionDescriptorObservation } from '@/auth/terminalAuthEnrollmentClient';
 import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 function normalizeServerUrlForEnvId(url: string): string {
@@ -61,6 +58,7 @@ async function maybeAdoptDerivedServerProfileState(params: Readonly<{
   // This is only the released env/profile-id compatibility migration. Once a
   // Home identity is observed, URL equality has no credential-transfer power.
   if (params.hasObservedHomeIdentity) return;
+  const { resolveHappyHomeDirFromEnvironment } = await import('@happier-dev/cli-common/agents');
   const serversDir = join(resolveHappyHomeDirFromEnvironment(process.env), 'servers');
   const targetDir = join(serversDir, params.targetServerId);
   const targetKeyPath = join(targetDir, 'access.key');
@@ -309,6 +307,10 @@ export async function refreshServerProfileHomeConnectionDescriptor(params: Reado
   signal?: AbortSignal;
 }>): Promise<'unavailable' | 'updated' | 'unchanged' | 'stale'> {
   const profile = await getServerProfile(params.profileId);
+  const [{ observeServerFeaturesSnapshot }, { resolveAuthenticatedExactHomeConnectionDescriptorObservation }] = await Promise.all([
+    import('@/features/serverFeaturesClient'),
+    import('@/auth/terminalAuthEnrollmentClient'),
+  ]);
   const snapshot = await observeServerFeaturesSnapshot({
     serverUrl: params.serverUrl, token: params.token, signal: params.signal,
   });
@@ -818,6 +820,10 @@ export async function setServerProfileEndpointsById(opts: Readonly<{
     );
     const credentials = await readStoredCredentialsForServerId(id);
     if (!credentials?.token) throw new Error('Home endpoint refresh requires the profile credential');
+    const [{ observeServerFeaturesSnapshot }, { resolveAuthenticatedExactHomeConnectionDescriptorObservation }] = await Promise.all([
+      import('@/features/serverFeaturesClient'),
+      import('@/auth/terminalAuthEnrollmentClient'),
+    ]);
     const snapshot = await observeServerFeaturesSnapshot({ serverUrl: probeUrl, token: credentials.token });
     const observation = resolveAuthenticatedExactHomeConnectionDescriptorObservation({
       snapshot, expectedHomeServerIdentityId: previousDescriptor.homeServerIdentityId,
