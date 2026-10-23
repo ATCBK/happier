@@ -4102,6 +4102,7 @@ describe('agent-initiated dangerous-action approval default (FINALIZATION-PLAN Â
   });
 
   it('floors the egress-bearing annotation captures but not the non-egress annotation edits', () => {
+    expect(isAgentInitiatedApprovalRequiredByDefault('browser.context.annotation.attachDraft')).toBe(true);
     expect(
       isAgentInitiatedApprovalRequiredByDefault(
         'browser.context.annotation.captureRegion' as any,
