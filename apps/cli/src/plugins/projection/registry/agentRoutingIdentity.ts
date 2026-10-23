@@ -1,4 +1,4 @@
-import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-key';
 
 import type {
     ResolvedAgentContribution,

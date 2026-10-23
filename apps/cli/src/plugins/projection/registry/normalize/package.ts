@@ -1,5 +1,8 @@
 import type { PluginWorkItemsContributionV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
 import { projectTargetedContributionActionDefinition } from '@happier-dev/plugin-sdk/host/registration';
+import { toCommandDefinition } from './commandDefinition';
+import { projectPluginActionInputDefinition } from './actionInput';
+import { assertUniquePluginIdentities } from './pluginIdentities';
 import type { PluginLanguageServerContributionV1 } from '@happier-dev/protocol/plugins/contributions/languageServers';
 import type {
   ActionDefinitionV1,
@@ -62,7 +65,7 @@ import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/
 import { isDynamicPluginResourceContributionV2 } from '@happier-dev/protocol/plugins/contributions/v2';
 import { PLUGIN_CONTRIBUTION_CATALOG_V2 } from '@happier-dev/protocol/plugins/contributions/catalog';
 import type { MachineProvisionerContributionV1 } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
-import { pluginActionRequiresConfirmationPresentation, normalizePluginActionInputHintsV2, normalizePluginActionSlashV2 } from '@happier-dev/protocol/plugins/actions/v2';
+import { pluginActionRequiresConfirmationPresentation, normalizePluginActionSlashV2 } from '@happier-dev/protocol/plugins/actions/v2';
 import { normalizePluginAccountCollectionContractsV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { qualifyPluginEventIdV1 } from '@happier-dev/protocol/plugins/events/v1';
 import { resolvePluginManifestSetReferencesV2 } from '@happier-dev/protocol/plugins/manifest/ingest';
@@ -264,6 +267,7 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
   const safety: ActionDefinitionV1['safety'] = definition.dangerLevel === 'safe' ? 'safe' : 'danger';
   const normalized = {
     ...projectTargetedContributionActionDefinition(definition),
+    ...projectPluginActionInputDefinition(definition),
     kindVersion,
     id: definition.id,
     title: displayText(definition.title),
@@ -291,7 +295,6 @@ function toActionDefinition(definition: PluginActionContributionV2): ResolvedAct
       api: true,
       plugin: definition.surfaces.includes('plugin'),
     },
-    inputHints: normalizePluginActionInputHintsV2(definition.inputHints) ?? null,
     ...(definition.contextualDefaults ? { contextualDefaults: definition.contextualDefaults } : {}),
     ...(definition.sessionTarget ? { sessionTarget: definition.sessionTarget } : {}),
     ...(definition.confirmationWhen === undefined ? {} : { confirmationWhen: definition.confirmationWhen }),
@@ -331,14 +334,6 @@ function toActionLocalizedPresentation(
 }
 
 function toToolDefinition(pluginId: string, definition: PluginToolContributionV2): ResolvedToolDefinition {
-  return Object.freeze({
-    ...definition,
-    kindVersion: 1,
-    actionId: resolveReferenceKey(pluginId, definition.action),
-  });
-}
-
-function toCommandDefinition(pluginId: string, definition: PluginCommandContributionV2): ResolvedCommandDefinition {
   return Object.freeze({
     ...definition,
     kindVersion: 1,
@@ -386,13 +381,7 @@ export function buildPluginContributionRegistry(params: Readonly<{
 }>): PluginContributionRegistry {
   const referencePlugins = params.referencePlugins ?? [];
   const validationPlugins = [...referencePlugins, ...params.loadedPlugins];
-  const seenPluginIds = new Set<string>();
-  for (const plugin of validationPlugins) {
-    if (seenPluginIds.has(plugin.pluginId)) {
-      throw new Error(`Duplicate plugin identity '${plugin.pluginId}' in contribution reference universe`);
-    }
-    seenPluginIds.add(plugin.pluginId);
-  }
+  assertUniquePluginIdentities(validationPlugins);
   const referenceUniverseResolution = resolvePluginManifestSetReferencesV2(
     referencePlugins.map((plugin) => plugin.manifest),
   );

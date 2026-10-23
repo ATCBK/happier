@@ -7,10 +7,9 @@ import type {
 
 import {
     createManifestAgentCatalogEntry,
-    projectNativeAgentCliRuntimeDescriptor,
 } from './agentCliMetadata';
 import { projectAgentCliSessionCommandCatalogEntry } from './agentCatalogEntryHooks';
-import { resolveContributedAgentRoutingId } from './agentRoutingIdentity';
+import { projectManifestAgentFields } from './projectManifestAgentFields';
 import type {
     ResolvedAgentContribution,
     ResolvedCatalogEntry,
@@ -121,44 +120,11 @@ export function projectManifestAgentContribution(params: Readonly<{
     daemonEntryPath?: string | null;
     devDaemonEntryPath?: string | null;
 }>): ResolvedAgentContribution {
-    const localId = params.definition.id;
-    const agentId = resolveContributedAgentRoutingId({
-        pluginId: params.pluginId,
-        localId,
-        provenance: params.provenance,
-    });
+    const fields = projectManifestAgentFields(params);
+    const agentId = fields.id;
     const cliMetadata = params.definition.cli ?? null;
     return Object.freeze({
-        id: agentId,
-        identity: Object.freeze({
-            pluginId: params.pluginId,
-            localId,
-        }),
-        provenance: params.provenance,
-        source: params.source,
-        definition: Object.freeze({
-            kindVersion: 1,
-            id: agentId,
-            ownedBackendIds: Object.freeze([]),
-            ...(params.definition.providerRequirements
-                ? {
-                    providerRequirements:
-                        params.definition.providerRequirements,
-                }
-                : {}),
-        }),
-        richDefinition: Object.freeze({
-            provenance: params.provenance,
-            definition: params.definition,
-        }),
-        runtimeSpec: cliMetadata
-            ? projectNativeAgentCliRuntimeDescriptor({
-                agentId,
-                title: params.definition.title,
-                cli: cliMetadata,
-            })
-            : null,
-        cliMetadata,
+        ...fields,
         catalogEntry: projectManifestAgentCatalogEntry({
             agentId,
             pluginId: params.pluginId,

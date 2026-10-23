@@ -4,7 +4,9 @@ import { join } from 'node:path';
 
 import { formatPluginManifestIngestionDiagnostics } from '@happier-dev/protocol/plugins/manifest/ingest';
 import type { PluginSourceSpecV1 } from '@happier-dev/protocol';
-import { assertHostCanExcludeBundledPlugin, BUNDLED_PLUGIN_PUBLICATION_FAILURES_RELATIVE_PATH, parseBundledPluginPublicationFailures } from '@happier-dev/cli-common/bundledPluginPublicationPolicy';
+import { assertHostCanExcludeBundledPlugin } from '@happier-dev/cli-common/bundledPluginPublicationPolicy';
+import { readCurrentBundledPluginPublicationFailures } from './publication';
+export { readCurrentBundledPluginPublicationFailures, readAdmittedBundledPluginPublicationFailures } from './publication';
 
 import type { LoadedPlugin } from '@/plugins/discovery/load/installed';
 import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliRuntimeAssetPath';
@@ -14,6 +16,8 @@ import { ingestCanonicalPluginManifest } from '../../../manifest/ingest';
 import { pluginSourceProvenanceForKind } from '../../../manifest/sourceProvenance';
 import type { BundledPluginPublicationFailure } from '@/plugins/validation/diagnostics/types';
 import * as generatedBundledPluginManifests from '../sources/generatedBundledPluginManifests';
+import { readBundledPluginManifest } from './manifestFile';
+export { readBundledPluginManifest } from './manifestFile';
 
 export type BundledPluginLocator = Readonly<{
     pluginId: string;
@@ -23,18 +27,6 @@ export type BundledPluginLocator = Readonly<{
     sourceSpec: PluginSourceSpecV1;
 }> & (Readonly<{ manifestRelativePath: string }> | Readonly<{ manifest: unknown }>);
 
-/** Read declarations only when the catalog needs them, never on locator import. */
-export function readBundledPluginManifest(
-    locator: Readonly<{ manifestRelativePath: string }> | Readonly<{ manifest: unknown }>,
-    runtimeRoot?: string,
-): unknown {
-    if ('manifest' in locator) return locator.manifest;
-    const manifestPath = runtimeRoot
-        ? join(runtimeRoot, locator.manifestRelativePath)
-        : resolveCliRuntimeAssetPath(locator.manifestRelativePath);
-    return JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown;
-}
-
 function readBundledPluginRootPath(locator: BundledPluginLocator): string {
     if (locator.sourceSpec.kind !== 'bundled' || !locator.sourceSpec.locator.trim()) {
         throw new Error(`Invalid bundled source locator for plugin '${locator.pluginId}'`);
@@ -43,42 +35,6 @@ function readBundledPluginRootPath(locator: BundledPluginLocator): string {
 }
 
 const requireFromCli = createRequire(import.meta.url);
-let admittedPublication: Readonly<{
-    bytes: string;
-    failures: readonly BundledPluginPublicationFailure[];
-}> | null = null;
-
-/** Runner staging consumes the publication admitted by this process, not later live writes. */
-export function readAdmittedBundledPluginPublicationFailures(): string | null {
-    return admittedPublication?.bytes ?? null;
-}
-
-export function readCurrentBundledPluginPublicationFailures(): readonly BundledPluginPublicationFailure[] {
-    if (admittedPublication) return admittedPublication.failures;
-    let raw: string;
-    try {
-        raw = readFileSync(resolveCliRuntimeAssetPath(
-            BUNDLED_PLUGIN_PUBLICATION_FAILURES_RELATIVE_PATH,
-        ), 'utf8');
-    } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            throw new Error('Bundled plugin publication state is unknown: the publication failure file is missing', { cause: error });
-        }
-        throw error;
-    }
-    const failures = parseBundledPluginPublicationFailures(raw);
-    for (const failure of failures) {
-        assertHostCanExcludeBundledPlugin('', failure.packageName, new Error(failure.diagnostic.message));
-    }
-    admittedPublication = Object.freeze({
-        bytes: raw,
-        failures: Object.freeze(failures.map((failure) => Object.freeze({
-            ...failure, diagnostic: Object.freeze({ ...failure.diagnostic }),
-        }))),
-    });
-    return admittedPublication.failures;
-}
-
 function managedProviderKey(pluginId: string, providerId: string): string {
     return `${pluginId}\u0000${providerId}`;
 }

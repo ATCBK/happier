@@ -7,8 +7,8 @@ import type {
 } from '@happier-dev/protocol';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { isPluginAgentCliAuthBackgroundCheckSafe } from '@happier-dev/protocol/plugins/contributions/agentCliMetadata';
-import type { AgentCliRuntimeDescriptor } from '@happier-dev/cli-common/agents';
 import { readDeclaredAgentTitle } from '@happier-dev/agents/declaredAgentTitle';
+export { projectNativeAgentCliRuntimeDescriptor } from './agentCliRuntimeDescriptor';
 export { readDeclaredAgentTitle } from '@happier-dev/agents/declaredAgentTitle';
 
 import type { CliAuthSpec, CliAuthStatusDraft } from '@/capabilities/cliAuth/types';
@@ -20,60 +20,6 @@ import type { ResolvedCatalogEntry, ResolvedContributionProvenance } from './typ
 
 export function readAgentDisplayTitle(title: unknown, fallback: string): string {
     return readDeclaredAgentTitle(title) ?? fallback;
-}
-
-export function projectNativeAgentCliRuntimeDescriptor(params: Readonly<{
-    agentId: string;
-    title: unknown;
-    cli: PluginAgentCliMetadata;
-}>): AgentCliRuntimeDescriptor {
-    const { executable, install } = params.cli;
-    const manualInstallRecipes = install.manual.kind === 'none'
-        ? null
-        : (install.manual.recipes ?? null);
-    return Object.freeze({
-        id: params.agentId,
-        title: params.cli.displayName ?? readAgentDisplayTitle(params.title, params.agentId),
-        binaryName: executable.binaryName,
-        ...(executable.alternativeBinaryNames
-            ? { alternativeBinaryNames: Object.freeze([...executable.alternativeBinaryNames]) }
-            : {}),
-        ...(executable.alternativeBinaryFallbackEnabledEnvVar
-            ? { alternativeBinaryFallbackEnabledEnvVar: executable.alternativeBinaryFallbackEnabledEnvVar }
-            : {}),
-        ...(executable.knownUserBinDirSuffixes === null
-            ? { knownUserBinDirSuffixes: null }
-            : executable.knownUserBinDirSuffixes
-                ? { knownUserBinDirSuffixes: Object.freeze([...executable.knownUserBinDirSuffixes]) }
-                : {}),
-        ...(executable.knownEnvironmentBinDirs
-            ? { knownEnvironmentBinDirs: Object.freeze(executable.knownEnvironmentBinDirs.map((directory) => Object.freeze({ ...directory }))) }
-            : {}),
-        ...(executable.systemCommandResolutionStrategy
-            ? { systemCommandResolutionStrategy: executable.systemCommandResolutionStrategy }
-            : {}),
-        sourcePreferenceDefault: executable.sourcePreference,
-        managedInstall: install.managed ?? null,
-        manualInstallKind: install.manual.kind,
-        manualInstallRecipes,
-        acceptsJavaScriptFileOverride: executable.acceptsJavaScriptFileOverride ?? false,
-        ...(install.recommendationOrder !== undefined
-            ? { setupRecommendation: Object.freeze({ order: install.recommendationOrder }) }
-            : {}),
-        ...(install.guideUrl !== undefined ? { installGuideUrl: install.guideUrl } : {}),
-        ...(install.docsUrl !== undefined ? { docsUrl: install.docsUrl } : {}),
-        ...(install.npmPackageName !== undefined ? { npmPackageName: install.npmPackageName } : {}),
-        ...(install.nativeUpdate !== undefined
-            ? {
-                nativeUpdate: install.nativeUpdate === null
-                    ? null
-                    : Object.freeze({
-                        args: Object.freeze([...install.nativeUpdate.args]),
-                        installPaths: Object.freeze([...install.nativeUpdate.installPaths]),
-                    }),
-            }
-            : {}),
-    });
 }
 
 export type NativeAgentCliAuthStaticProbe = Readonly<{
