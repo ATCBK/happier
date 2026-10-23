@@ -107,7 +107,11 @@ export type HappierFieldBoxLabel = Readonly<{
   text: string;
   /** True when no choice is made and the box asks for one. */
   placeholder: boolean;
-  style: Readonly<{ flex: 1; color: string; fontSize: number; lineHeight: number }>;
+  /**
+   * The value grows to fill its box and shrinks (cut with an ellipsis) when the box is full; its basis is
+   * its own text, so a box sized to its content (`column`, `content`) is as wide as the value needs.
+   */
+  style: Readonly<{ flexGrow: 1; flexShrink: 1; flexBasis: 'auto'; color: string; fontSize: number; lineHeight: number }>;
 }>;
 
 /**
@@ -125,7 +129,9 @@ export function resolveHappierFieldBoxLabel(input: Readonly<{
     text: chosen ?? input.placeholder,
     placeholder: chosen === null,
     style: {
-      flex: 1,
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 'auto',
       color: chosen === null ? input.colors.placeholderColor : input.colors.valueColor,
       fontSize: HAPPIER_FIELD_BOX_METRICS.fontSizePx,
       lineHeight: HAPPIER_FIELD_BOX_METRICS.lineHeightPx,
@@ -152,7 +158,8 @@ export type HappierFieldBoxTriggerProps = Readonly<{
   trailing?: ReactNode;
   /**
    * `content` (default): sized to its choice, within the trigger bounds. `column`: the shared
-   * page-field width beside a label. `row`: stacked under its label, the field spans the row.
+   * page-field width beside a label: at least that width, growing with a longer choice up to the
+   * trigger's widest, so an ordinary option label is not cut. `row`: stacked under its label, the field spans the row.
    * `intrinsic`: toolbar choices omit the configuration-field width floor.
    */
   span?: 'content' | 'column' | 'row' | 'intrinsic';
@@ -196,7 +203,7 @@ export function HappierFieldBoxTrigger({ colors, leading, children, trailing, sp
         alignItems: 'center',
         gap: chip ? HAPPIER_FIELD_BOX_METRICS.chipGapPx : HAPPIER_FIELD_BOX_METRICS.triggerGapPx,
         minWidth: resolvedSpan === 'intrinsic' ? 0 : HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx,
-        ...(resolvedSpan === 'column' ? { width: HAPPIER_FIELD_BOX_METRICS.inlineMinWidthPx } : {}),
+        ...(resolvedSpan === 'column' ? { minWidth: HAPPIER_FIELD_BOX_METRICS.inlineMinWidthPx } : {}),
         ...(resolvedSpan === 'row' ? { alignSelf: 'stretch' as const } : { maxWidth: maxWidthPx ?? HAPPIER_FIELD_BOX_METRICS.triggerMaxWidthPx }),
         borderColor: colors.borderColor,
         backgroundColor: paintColor(colors.backgroundColor),
