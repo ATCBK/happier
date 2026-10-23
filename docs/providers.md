@@ -849,6 +849,11 @@ fingerprint requires its own confirmation.
 In development source, Team runtime admission demand-loads the recipient's
 Provider catalog in the captured Account context and rereads that same authority
 after broker/tunnel work. The daemon Account cannot supply recipient consent.
+The daemon's shared Session/Run binding composition also uses that captured
+Account's bearer and Home for the entitled-resource catalog and broker-open
+requests, and its Account identity for the signed machine-carrier tunnel.
+Changing only the Home URL would leave the daemon Account's bearer in use and
+can hide a Team resource available to the requester on a shared Machine.
 Home catalog reads and broker-open revalidation both request the source-only
 projection, so the offered source revision is not recomputed with the custodian's
 Agent adapter or consent. Closed broker-open refusal codes remain typed through
@@ -899,6 +904,12 @@ facts and the Agent's admitted authentication-isolation declaration, as Account
 Provider selections do. When that binding replaces native authentication, native
 sign-in is not a launch prerequisite; installation, worker compatibility and
 experimental-model confirmation remain required.
+The picker retains the last successfully admitted Team catalog choices during a
+background refresh, including a matching Home wake. Refresh freshness is separate
+from picker eligibility: an explicit invalidation, observer gap, failed read or
+refusal withdraws eligibility until a successful reread. Retained choices do not
+authorize credential use; launch, broker open and each request still recheck the
+current grant, resource and source through their existing owners.
 The runtime's entitled-catalog read derives its applications from the worker's
 leased Agent requirements and uses the same paginated Session catalog transport
 as launch normalization. The composed recipient Pool → Action/CLI spawn →
@@ -1156,8 +1167,18 @@ cannot relabel an earlier response. Without proof the contribution remains
 unknown; a null Provider connection alone never proves native routing. Coach
 and Plans consume these response-bound contributions, not current selections.
 
-Codex supplies its immutable identity at native `turn/start` and qualifies a
-delta only against that exact native attempt. An in-turn auth application,
+Codex supplies its immutable identity at native `turn/start` and qualifies exact
+`rawResponse/completed` usage only against that native attempt. The pinned
+`rust-v0.160.0` and `rust-v0.162.1` app-server contracts emit this internal native
+notification with the same response id persisted for collector deduplication.
+Its numeric usage becomes a `codex-app-server-response-usage` request delta with
+partial history; cumulative
+`thread/tokenUsage/updated` counters and context remain readable but never
+certify a native request/account, including last-only compatibility inputs.
+Natives without the exact completion event retain unknown native-account
+attribution. Older scalar servers receive only the unchanged cumulative stream;
+its legacy projection excludes the supplemental exact stream because scalar
+replacement cannot reconcile it. An in-turn auth application,
 refresh or contradictory native account read withdraws that attempt's proof,
 including an A → B → A transition. Combined counters remain unknown. Claude's
 current usage stream does not expose request-auth evidence, so a selected
@@ -1169,6 +1190,31 @@ that dispatch. Missing or unrecognized plans stay unknown; a later plan read
 cannot classify historical Usage. Refresh must not attach the failed Account's
 plan hint to replacement tokens. This extends the same request attribution,
 not a separate subscription collector or provider-independent attestation.
+
+Runtime accounting carries the existing host runtime incarnation and event
+sequence as optional ordering evidence. Equal-clock response deltas and counter
+snapshots from that same incarnation reconcile in native event order even when
+HTTP writes arrive backwards. Other runtime streams and rows without a witness
+keep their existing chronological slots. A duplicate may restore its earlier
+witnessed position and actual source instant, but cannot change stored counters
+or upgrade its native-account proof.
+
+Session admission also carries the exact admitted Connected Account references
+beside its materialized launch environment. Foreground admission uses the daemon
+claim; daemon-started Sessions use the protected runner bootstrap, written after
+successful exact-purpose Account materialization. For that protected daemon
+transport, the CLI scoped-environment consumer preserves the materializer's
+selection controls alongside the native home; the explicit-key marker alone
+does not authorize them. Profile/provider overlays and launches without the
+validated bootstrap still cannot supply those controls. Their startup readers forward
+the references to the same private late native-open input; the Codex plugin
+consumes them as the attribution service identity. A declared target, an
+unresolved group or a native home alone does not produce a daemon launch reference.
+A credential environment alone does not replace the missing reference or establish personal
+scope. Startup attribution still requires the materialized native auth identity
+and the exact request's native account-scope read, just as hot-auth application
+does. Missing bindings remain unknown rather than being inferred from a current
+subscription or used to relabel history.
 
 Provider tests are distributed by owner:
 

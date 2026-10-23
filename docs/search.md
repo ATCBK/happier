@@ -99,6 +99,13 @@ loaded-surface validation.
    Failures surface through the canonical error owner — no fire-and-forget at
    the surface seam, no retargeting to the currently focused Home/machine.
 
+The workspace UI Action owner distinguishes accepted, refused and intentionally
+cancelled navigation. File and project openers preserve cancellation as `null`
+rather than collapsing it into refusal. Search dismisses before awaiting the
+navigation decision; declining an unsaved-changes or approval decision leaves
+the current file/draft alone and does not present a Search error. Actual refusal
+or an unexpected activation exception still follows the existing error path.
+
 Built-in adapters map results to `SelectionListOption` immediately. The
 UI-internal `UniversalSearchResult` shape exists to keep target identity and
 activation separate from presentation; it is not a wire protocol, a row
@@ -652,6 +659,12 @@ unified conversation-search owner above, adapting native hit identities into the
 existing candidate Open/Find path. Standard content scans use
 `searchTarget: 'content'` only after explicit activation and require a positive
 advertised `contentSearch` capability.
+
+An explicit Search or Return records its intent while a typed-query indexed
+lookup is pending; current settings still authorize the eventual native scan.
+Home metadata publications keep the credential binding and mounted Browse
+query, mode and results. A changed credential lookup URL, removed Home or real
+credential mutation retires authority through the shared credential-scope owner.
 
 ### Native Agent coverage (0.3 development)
 

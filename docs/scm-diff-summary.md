@@ -55,7 +55,19 @@ for the same Machine, Session directory and head/base comparison. The admitted
 request observes the existing captured Account lifetime, surviving a form remount
 while still rejecting publication after Account retirement. Late request updates read the
 current draft before writing, preserving text entered in another placement. The
-saved result identity and revision distinguish new output from an older summary.
+request retains the exact result identity from its Action acknowledgement; only
+that result can settle the request or supply its description. A different saved
+summary for the same branch cannot fill the form.
+
+Unknown Start admission keeps the request pending and withholds another Write or
+Retry. The hook exposes the shared binding's `admission` and `checkAdmission`:
+the latter rereads this request's exact result without starting another Run, and
+a later completed description still arrives once. Its `runId` and `cancel`
+handoff use the existing `execution.run.stop` Action and Session Run stop owner,
+including the Action's availability policy. A confirmed stop clears the
+matching pending attempt while preserving the person's body and any candidate;
+an unconfirmed stop keeps the attempt pending. Rendering the uncertain notice
+and Cancel control is a separate UI integration step.
 
 After capture, draft and ordinary generation failures use the same strict result
 builder: requested outputs, failed progress with a typed `reasonCode`, and explicit
@@ -334,8 +346,10 @@ reclassified as an unavailable model or retried. It leaves the saved output and
 revision unchanged: the original request may still be preparing, and must remain
 able to bind its captured revision and publish. Reconciliation reads that same
 saved result through the existing generation admission receipt. Those
-receipts retain `admission: 'outcomeUnknown'` across ordinary generation
-reuse and saved-result reads, without changing the pending output or revision.
+receipts retain Run/input identity and `admission: 'outcomeUnknown'` across
+ordinary generation reuse, PR drafting and saved-result reads, without changing
+the pending output or revision. Draft evidence still excludes that result from
+ordinary analysis-cache reuse; it does not exclude its admission receipt.
 A known original Run binding supersedes that observation. The UI state projection
 reports `unknown` with retry withheld; its `admission` and `onCheckAdmission` props
 are the handoff for an uncertain-reading notice. That callback rereads the exact

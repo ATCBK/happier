@@ -628,6 +628,10 @@ private `preview` defaults **on** (authenticated access to a Machine loopback se
 `publicPreview` defaults **off** under the real Home policy setting. There is no separate
 "until review" activation condition in the current 0.3 development contract (AMD-2026-09-30).
 Signing, isolated-origin DNS/TLS, audit and abuse-control prerequisites remain fail-closed.
+In 0.3 development source, creation reports unavailable prerequisites as HTTP 503 with
+`public_preview_unavailable` and a bounded `reasonCode`; policy and authorization refusals
+remain HTTP 403. A JSONL audit path must be writable by the serving process on the server's
+actual host. Forwarding a controller-local path to a remote server does not provision it.
 
 The server preview runtime (`apps/server/sources/app/local/services/preview/runtime.ts`) is the
 private access-URL authority. The daemon registers the resource through
@@ -694,6 +698,11 @@ Same-preview redirects retain the navigation identity; external redirects never 
 The injected loader tag is root-relative: it is requested from the document it is injected into, so it carries no scheme
 that a TLS terminator could get wrong, and the CSP admission compares against that document's own https preview origin.
 The loader and UI/native/desktop injection share one collector generator rather than copies.
+The relay loader executes during parsing, before the upstream response ends, so the same
+collector can receive Stop while a streamed document is still loading.
+The navigation reporter also observes title-only document changes. In 0.3 development source,
+the browser workspace renderer projects that canonical view title into the existing tab label
+without replacing its view identity or reloading the frame.
 Later admitted iframe HTML documents carry only the navigation reporter. It requests its identity
 from its actual embedding pane; the host checks the exact iframe window and preview origin before
 returning the current collector identity. No origin-wide cookie selects a pane. Retired development
@@ -713,6 +722,8 @@ cwd. Those caller fields are not authority: the protected
 starter, exact service instance and current Machine installation through the
 same supervisor. Only a proof-attested current daemon can register that method;
 ordinary clients and an older installation cannot supply its witness.
+The retirement wait explicitly follows the registration's cancellation lifetime;
+the Home's ordinary RPC deadline must not unregister a still-current Service.
 
 Private open/revoke and public-preview Actions keep an explicitly supplied,
 strict `serviceTarget` instead of inheriting the invoking Session's scope.
@@ -809,6 +820,13 @@ fallback requests retain the captured requester Account scope; a switched creden
 silently admit another Account. Active web viewers acquire fresh server-preview access through
 that same captured Account/Home owner; they do not acquire the native carrier.
 Without either route, the existing typed runs-elsewhere state remains available.
+
+In current development source, Browser workspace tabs retain the committed location alongside
+their target identity. Preview locations contain only path, query and hash, with `previewToken`
+removed; reopening acquires fresh access and resolves that location against its current origin.
+The iframe's identity-bound navigation report feeds the control reducer and the existing tab
+persistence owner. Saving an observed location does not navigate the live iframe again. Older
+tabs without a saved location still open at their target's initial page.
 These are current development-source contracts, not iOS/Android device or release certification.
 The current guest listener has no allocated-Origin admission check. Foreign WebSocket Origins
 remain visible to the upstream application rather than being rewritten as trusted; upstream
@@ -975,6 +993,35 @@ admitted target reports success to the shared service-action runner; an unmappab
 target reports refusal without navigating. Admission is not a claim that the
 preview page has loaded. Null or missing action results still fail in the shared
 classifier.
+The Project Services page opens into the Project's details pane on desktop and
+its dedicated Browser workspace on phones. The Project details renderer consumes
+the same live preview snapshot and Home as its opener.
+
+### Cross-replica TCP relay ownership (0.3 development)
+
+`machineSocketOwnershipRegistry.ts#readOwner` resolves the current Machine socket
+before `relayCoordinator.ts` discovers its authenticated Account/type/installation
+through `socketRoomDiscovery.ts#readSocketRoomSnapshot`. Only positive evidence for
+that exact socket can admit a partial snapshot. A missing owner or an unanswered
+target refuses OPEN; an unrelated silent replica cannot choose or veto the owner.
+Viewer grants use the same snapshot owner to verify an exact user-scoped socket
+and Account. Partial absence never proves viewer ownership.
+
+The relay coordinator reserves the existing single-use Redis grant provisionally,
+attaches that exact socket, rechecks ownership and commits the grant before OPEN.
+Ownership is checked again after commit returns, so withdrawal during the Redis
+command refuses OPEN and detaches the socket while retaining the spent grant.
+The relay handler retains its current-installation checks before and after admission
+and for subsequent frames. Attachment and shutdown settlement use correlated
+server-only V2 control messages, matched to the attachment and owning coordinator;
+they do not await a cluster-wide acknowledgement census. The existing five-second
+peer-operation boundary is retained. Failed or late attachment unwinds through the
+same detach owner. There is no discovery retry or additional ownership store.
+
+These control messages require current participating API servers; older servers
+without the V2 handler fail unavailable for this operation. Client tunnel envelopes,
+grant signatures and stored data are unchanged. This does not change the native
+Iroh Machine carrier or claim availability during a Redis outage.
 
 ## 5. Team Provider broker application path (development only)
 

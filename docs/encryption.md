@@ -66,8 +66,9 @@ Readers outside a subscribed lifetime retain fresh HTTP reads. A disconnected
 or invalidated observation grants no currentness; canceling one reader leaves
 other subscription holders active.
 
-Ordinary socket loss withdraws that settled observation, but does not retire a
-captured finite operation. Its exact-witness owner discards the withdrawn HTTP
+Ordinary socket loss and resume refreshes (reconnect, foreground, reachable and
+manual) withdraw that settled observation, but do not retire a captured finite
+operation. Its exact-witness owner discards the withdrawn HTTP
 witness and shares one fresh read with the original explicit credential before
 publishing hydrated content. An unchanged encryption identity may continue;
 changed mode, key fingerprints or encryption identity timestamp, an actual or
@@ -555,6 +556,31 @@ checks. An admitted update whose complete normalized stored metadata is unchange
 is a no-op: it preserves the existing response and does not advance the row or
 Account profile currentness. Changed health, health timestamps or metadata
 normalization still write and publish through the same Server repository owner.
+
+In 0.3 development source, qualified credential health and quota automation share
+the existing quota loop when both are enabled. The established runtime owner
+prepares one credential/configuration pair for a Connected Account's due status and quota
+operations, keeps their results independent, and discards that pair when the
+invocation ends. Each operation retains its fresh currentness and effect checks;
+the preparation is not a credential cache or reusable authority. Health-only
+automation and released legacy transports retain their existing loop owners.
+Unchanged qualified Accounts wait for their credential refresh window, quota
+reset deadline or existing failure backoff. Known notification opt-out with no
+active group consumer does not turn persistence freshness into background demand.
+Opted-in usage notifications, active group consumers and unavailable Settings
+retain the existing freshness cadence (60 seconds by default); changing that
+notification sampling policy remains a separate decision. Actual Account Settings
+publications and target registrations wake the existing loop. Credential/configuration
+replacements rearm health work, but metadata-only health changes and notification
+preference changes do not discard an existing failure deadline.
+
+Manual quota Refresh commits its existing record marker and an exact,
+credential-free `provider-account-usage-refresh:<recordId>` Account change in the
+same transaction. Daemon and requester Account observers consume that strict hint
+through the existing paginated Account feed before acknowledging its cursor;
+unrelated hints do not reset parked quota deadlines. Reconnect and cursor recovery
+rearm quota discovery. The hint wakes work but grants no access, credential or
+write authority, and does not replace the fresh checks at the resulting use.
 
 The Protocol row contracts live in `providers/connections/connectionRowsV1.ts`,
 `connect/connectedAccountConfigurationRowsV1.ts`,

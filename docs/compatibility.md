@@ -33,6 +33,31 @@ scalar `/v2/usage-reports` and does not advertise the event-ingest capability.
 Its scalar transport remains the existing fallback, without request-source
 proof. This is not a second accounting ledger or an inferred attribution shim.
 
+Current event metadata may carry optional `usageAccounting.runtimeEventOrder`
+with the host's existing `runtimeIncarnationId` and event `sequence`. It resolves
+equal-source-clock ordering within that incarnation, not across runtimes or
+missing witnesses. Event metadata is additive; stored accounting readers drop
+unknown fields, and older scalar transport never receives this supplemental
+request stream. Existing rows without the witness retain chronological fallback.
+Duplicate ingestion preserves the stored fact and proof while retaining an
+earlier valid same-runtime position; it does not synthesize a later source clock.
+
+The 0.3 foreground daemon claim returns optional, credential-free
+`sessionConnectedAccounts` through the same schema as native Session open. The
+foreground startup reader consumes the canonical claim-response schema rather
+than a second local response shape. Daemon-started Sessions carry the same bounded
+optional field in their protected runner bootstrap after successful exact-purpose
+materialization. Existing bootstraps without it remain readable and provide no
+Account-reference proof. The bootstrap is private to the selected daemon/runner
+source bundle, not a cross-version public SDK contract. The CLI retains the
+materializer's selection controls from its explicit scope only for daemon
+launches with a validated matching private bootstrap; the marker or caller
+environment alone is insufficient. This changes no wire shape or stored data.
+These correct
+current-development launch projections; they add no persisted binding format or
+historical attribution. The moving 0.2 predecessor has no foreground claim seam and retains its direct
+Connected Service launch path.
+
 - `dev`/`*-dev.*` builds, untagged history outside the live predecessor frontier, abandoned experiments, and undeployed internal module paths are not lasting compatibility contracts.
 - Do not keep aliases or adapters solely for an atomic internal rename/move whose old path never shipped.
 - The predecessor rule preserves observable wire/data/state behavior, not `../0.2`'s internal architecture.
@@ -199,9 +224,30 @@ its room remains `RPC_METHOD_NOT_AVAILABLE`;
 an absent daemon retains `target_unavailable`. Session-owned routes keep their
 own current-publisher availability decision.
 
+Current cluster peers also answer room discovery through the server-only
+`happier:socket-room:query:v1` event. This supplements the existing adapter
+census because its timeout discards partial replies. One authenticated room
+member is positive routing or Machine-presence evidence; an incomplete census
+cannot establish absence, unsupported methods, or global client uniqueness.
+Account Machine inventories retain observed identities as `partial`, and
+unobserved Machines remain unknown. Broker admission keeps its existing
+identity, lifecycle, capability, entitlement and currentness checks. Older
+servers continue answering the original `fetchSockets` census; a silent older
+target still yields the existing transient failure rather than inferred presence.
+The adapter's existing fetch deadline owns the operation; no additional timer,
+retry, cache or cluster membership policy is introduced.
+
+Session runtime Action placement uses that same snapshot, accepting a carrier
+only after the Session publisher owner validates its committed generation,
+current fence and Machine access. It revalidates the projection after discovery;
+a stale publisher or revoked binding cannot select placement. Committed Pending
+input placement remains independent of live publisher discovery. Daemon reconnect
+hydration publishes REGISTERED hints from positively observed Account-room members
+even when the census is incomplete; UNREGISTERED still requires complete absence.
+
 Resource clients classify only affirmative `RPC_METHOD_NOT_FOUND` as unsupported.
 The existing unsupported latch and daemon-state recovery remain unchanged;
-temporary failures retain the ordinary retry/recovery path. No wire field,
+temporary failures retain the ordinary retry/recovery path. No client RPC field,
 registration protocol, timer or retry policy is added. The registration shape
 is pinned to CLI `cli-v0.2.16` / `cli-v0.2.16-preview.1` at
 `b8d1c449c46ab4dfa8637db36b66f643d149e66d`, whose Machine socket sends
@@ -2306,6 +2352,15 @@ resume path. No reuse eligibility or lifecycle decision changes.
 Historical progress and refusals without details remain valid. The Workflow
 feature is an undeployed direct cut: these strict V1 diagnostic additions move with
 its current readers and coordinator, without a released-reader or rollback shim.
+
+Workflow cancellation in current development targets the same Run across claim
+and progress writes. Its existing `expectedRevision` field is an observed lower
+bound: a newer revision may be stopped, while a future revision or terminal Run
+still refuses. The server applies cancellation against the current revision under
+the existing publication locks. Pause, resume, replacement and recovery retain
+their exact currentness checks. Terminal cancellation and settled execution or
+publication custody remain separate facts; accepting Stop does not invent proof
+that an admitted operation stopped or a Discussion reply was delivered.
 
 Current development Workflow definitions accept declared decisions beyond
 `continue | stop`, including strict `{decision, reason?}` results, and input-bound

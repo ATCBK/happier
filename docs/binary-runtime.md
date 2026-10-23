@@ -27,9 +27,11 @@ In current development source, `scripts/pipeline/release/bun-standalone.entitlem
 owns the macOS hardened-runtime permissions for shipped Bun executables. Standalone
 signing consumes it directly. Desktop sidecar preparation derives
 `apps/ui/src-tauri/Entitlements.plist` from this policy plus the desktop's
-microphone permission; the committed projection also serves bundle-only
+camera and microphone permissions; the committed projection also serves bundle-only
 finalization. Tauri applies that file when signing the app and external binaries,
 including `hsetup`.
+The desktop's shared `apps/ui/src-tauri/Info.plist` also declares camera,
+microphone, and speech-recognition usage descriptions for macOS privacy prompts.
 Signature validity and notarization alone do not prove startup: release validation
 must inspect the bundled helper's JIT entitlement and execute `hsetup --help` on
 the native target without disabling JIT.
@@ -612,8 +614,20 @@ Stack dispatches dev/mobile to their component preparation owners before any
 global workspace publication. Explicit package artifact preparation retains its
 dist and declaration prerequisites.
 
-In 0.3 development, dependency refresh inventories every recorded Expo consumer
-of the installed tree before changing dependencies. It may stop only consumers
+In 0.3 development, dependency refresh inventories recorded pending source starts,
+Stack runtimes, retained server/daemon processes, and Expo consumers of the
+installed tree before changing dependencies. Pending/runtime registration uses
+the existing dependency reader lease; the writer cannot miss a newly registered
+consumer. A live pending start refuses mutation with
+`HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS` before dependency admission is withdrawn;
+retry after its service readiness check completes. Runtime-state publication
+keeps that same pending marker until readiness or failure cleanup. Running
+runtimes and retained server/daemon processes do not block refresh or retain an
+indefinite reader lease. After a successful refresh, output and dependency
+readiness record their Stack names as `stacksNeedingRestart`; owners restart
+those Stacks at their next boundary.
+The consumer barrier lives in `apps/stack/scripts/utils/proc/dependency_consumers.mjs`.
+It may stop only Expo consumers
 owned by the calling Stack, using that caller's identity. A serving consumer
 owned by another Stack rejects the refresh with
 `HAPPIER_DEPENDENCY_METRO_RESTART_REQUIRED` before any consumer is stopped or
@@ -623,10 +637,10 @@ before retrying; discovering its PID state does not grant termination authority.
 In 0.3 development, startup automatically refreshes stale dependency inputs
 through `ensureDepsInstalled`. The existing dev reload coordinator also admits
 dependency refresh before component builds when manifests, the lockfile, patches
-or declared install inputs change. Only the calling Stack's Expo consumers pause
-during mutation; their existing supervisor resumes them when mutation completes.
-Server and daemon last-green processes continue serving. A foreign Stack's live
-Expo consumer blocks mutation: development warns and continues with installed
+or declared install inputs change. When no pending start uses that installation,
+only the calling Stack's Expo consumers pause during
+mutation; their existing supervisor resumes them when mutation completes.
+A pending start or foreign Stack's Expo consumer blocks mutation: development warns and continues with installed
 bytes, retrying on the next input change or startup. Explicit skip/disable refresh
 flags and service-mode refresh permission retain their existing semantics.
 In 0.3 development, `hstack dev` admits each component's runnable last-green
@@ -698,8 +712,15 @@ it. Unchanged proven installations stay warm, and adoption cannot certify an
 unproven worker tree: worker adoption only rechecks readiness under shared read
 custody. Actual worker installations also run the existing server-generated
 client producer before publishing readiness, because root replacement removes
-Prisma output that source reload does not regenerate. Producer failure withholds
-admission. On workers, schema synchronization is check-only and generation does
+Prisma output. Source server preparation also calls that producer before capture
+or compiler read custody, including after schema-only changes. The server's
+`generateClients.ts` owns schema stamps, required outputs and patched private
+runtime freshness; Stack delegates checks and repairs to it. Healthy checks share
+read custody; stale clients regenerate under the dependency writer without
+retiring loaded servers. Primary validation checks freshness and refuses stale
+clients without generating them; explicit preparation performs the repair.
+Producer failure withholds readiness. On workers, schema synchronization is
+check-only and generation does
 not access the database. This does not add a continuous inventory of manually
 copied packages or change primary checkout validation's read-only policy.
 
@@ -741,8 +762,10 @@ dist imports. Public default exports still select package outputs.
 
 First-party JavaScript, JavaScript sidecars, plugin resources and UI package files
 belong to code. Target-specific external/native dependencies, tools and Go payloads
-remain support, with its publication metadata under `.project`. Support contains
-`node_modules`, `tools` and `.project`; it no longer owns `scripts`.
+remain support. Support contains `node_modules` and `tools`; JavaScript sidecars
+and source-derived plugin failure diagnostics remain code-owned. Stale checkout
+publication failures neither select static support nor replace the code build's
+private diagnostics during support linking.
 Native construction does not require a prepared workspace-publication signature
 or a copied CLI source generation. Source-resolution, syntax and bundler/process
 failures abort construction; typechecking remains separate validation. Release
@@ -1042,11 +1065,13 @@ projects preparation: `queued` while waiting for capacity or preparation custody
 `building` only once the finite producer is admitted, and `checking` during reload
 smoke validation. `stack info --json` exposes `runtime.sourcePreparation`, including
 independent remote-host phases during a reload; remote starts carry the same facts
-over their existing worker stdout transport into `remoteTargets`. Publication or
-disposal retires the marker; a dead requester supplies no active preparation.
+over their existing worker stdout transport into `remoteTargets`. Final publication
+after service readiness, or failure/cleanup disposal, retires the marker;
+runtime-state publication alone does not. A dead requester supplies no active preparation.
 An incumbent serving HTTP 200 remains degraded while its replacement prepares,
 and selected/loaded identity agreement plus actual readiness is still required.
-These fields are diagnostics, not admission or lifecycle authority.
+Preparation phases and selected/loaded identities do not replace service readiness
+or runtime lifecycle ownership.
 Controller CLI/auth uses its own retained
 source bundle without replacing the remote role identities. Built QA uses `--runtime=built` and the
 existing target-compatible selection instead. New `--qa`/`agent-qa-*` stacks request linux3, linux2 and linux1 through
@@ -1261,6 +1286,13 @@ Bundled workspaces are copied into the host package and are not installed by npm
 If a bundled workspace imports another internal workspace at runtime, the host package must also bundle that internal dependency. For example, a host that bundles `@happier-dev/cli-common` may also need `@happier-dev/agents` and `@happier-dev/protocol` if they are in the runtime import closure.
 
 ### One module instance for the plugin-shared runtime
+
+Development source bundles resolve external support from the authored importer
+before relocating code into shared chunks. The source resolver retains that
+installed package version and its import/require export conditions, including
+lazy imports; a root-hoisted package cannot replace a plugin-local dependency.
+Native payloads retain their explicit support closure, while external installed
+plugins bundle dependencies through the existing plugin authoring owner.
 
 For public npm publication, the CLI's pkgroll build inlines its bundled internal workspaces into `package-dist`, except `PLUGIN_HOST_SHARED_RUNTIME_PACKAGES` (`apps/cli/scripts/pluginHostSharedRuntimePackages.mjs`: `@happier-dev/plugin-sdk` and `@happier-dev/protocol`). First-party plugin daemon bundles leave the same packages external, and the bundled-plugin generator reads the same list. Host and plugins therefore resolve one module instance of each from the shipped `node_modules` closure. An inlined host copy is a second instance: it duplicates the Protocol schema graph actually admitted by that runtime and gives host and plugin code different schema identities. Owner-level schema deferral reduces unused construction; it does not make duplicate identities safe.
 

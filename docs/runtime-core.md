@@ -1187,6 +1187,9 @@ The runner retains the per-Session `settledAt` anchor; reconstructing the daemon
 inventory does not restart it. Retained PTYs expose their own last-activity time.
 Inventory subscribers receive owner invalidations even when another owner keeps
 the aggregate busy, through the existing change-or-deadline wait primitive.
+Healthy-process heartbeat checks re-observe that same live Session work with an
+observation invalidation: unchanged health does not restart the aggregate idle
+interval. Discovered active/unknown work and material lifecycle edges still do.
 
 Guard eligibility reads drafts through the Session's current requester-qualified
 Home credentials, scanning the canonical V2 Account draft listing for all of that
@@ -1298,7 +1301,7 @@ controller Manage or retirement of the retained control closes it.
 Reopening releases only an actually retained drain target and does not authorize
 fresh activity reads or drain admission after retirement.
 
-The daemon's managed-policy runtime rereads the current installation-signed controller census on existing Account, accepted Pending/Run and reconnect edges. Daemon startup mounts that single subscription owner with the current Machine transport and retires it on replacement or shutdown. Replacing the retained native resource or enrollment retires the old held policy lifetime; the driver's own intent/submission progress does not. Selected idle/deadline waits remain with the native driver, not a polling loop. Automatic policy effects still pass through current Actions policy and its existing approval Artifact lifetime; installation signatures do not substitute for human Ask approval. Approval retains the same host operation and approved execution context. These development-source paths still require composed and loaded-runtime validation.
+The daemon's managed-policy runtime rereads the current installation-signed controller census on controller-specific managed-row Account hints, its own Machine changes, targeted accepted Pending/Run work, Team admission changes and reconnect/recovery edges. The existing Account-feed reader classifies these wakes; unrelated Account, Pending and Run traffic does not schedule a census. Changes to an origin already held by a driver still reconcile that work. Managed controller replacement also invalidates the former Machine, so coalescing the managed Account row cannot hide retirement from its old controller. Daemon startup mounts that single subscription owner with the current Machine transport and retires it on replacement or shutdown. Replacing the retained native resource or enrollment retires the old held policy lifetime; the driver's own intent/submission progress does not. Selected idle/deadline waits remain with the native driver, not a polling loop. Automatic policy effects still pass through current Actions policy and its existing approval Artifact lifetime; installation signatures do not substitute for human Ask approval. Approval retains the same host operation and approved execution context. These development-source paths still require composed and loaded-runtime validation.
 
 Policy preparation reviews the native effect without admitting a new desired
 intent. The approved callback rechecks the retained row and then commits that
@@ -1734,6 +1737,11 @@ as startup recovery. Only a known primary Session failure observed at or after
 that runner's birth supplies its existing `launch_error` code and fixed preview;
 stale, unknown or unreadable evidence retains `SPAWN_FAILED`. This diagnostic
 projection does not change admission, Stop, retry policy or native-open authority.
+
+The same mapping retains `team_credential_provider_selection_not_current` from
+Team binding preparation through runner exit, the primary Session issue and
+the original launch result. Its fixed preview asks the requester to review the
+Team model selection before retrying; raw Home responses remain private.
 
 System-tool grants pin the selected absolute executable and captured arguments;
 they do not clear the inherited host `PATH` used by an Agent's descendants.
@@ -2381,6 +2389,17 @@ before durable admission, and retains unresolved custody for retry. Durable admi
 preserves the caller's cancellation and deadline. A matching named writer takes precedence
 over the unnamed foreground handoff; Session-scoped output does not acquire that unnamed handoff. Loaded native retry
 recovery still requires a fresh runner after the CLI host reload.
+Named message identity is shared across foreground and Session-scoped observations of
+the same channel and sidechain. An authoritative final therefore uses the existing
+writer's source timestamp instead of starting a second write under the same localId.
+Live runtime events and terminal file-follow facts enter the same ordered Session
+projector and share its active writer and acknowledged native-identity receipts.
+If file-follow observes the final first, a delayed delta for that same native
+message, channel and sidechain reuses the final receipt instead of reopening a
+partial write. Only an explicitly foreground-scoped event can attach that receipt
+to a turn.
+An already foreground-owned segment retains its acknowledged final receipt until that
+turn's next flush consumes it; the Session-scoped observation itself gains no turn scope.
 The host's metadata reader recognizes the recorded source identity for both follow/replay
 and cold reconciliation. Follow opens metadata through the existing Session-mode decoder
 and retains both row and source identities in its paged baseline; plugins receive the

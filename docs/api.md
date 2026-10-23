@@ -99,6 +99,15 @@ Pause retains the owner's edition; unpublish removes it and preserves only an
 independent restriction when present. These disclosures do not change Account
 encryption mode or keys.
 
+In 0.3 development, Publish's host-private review callback receives the canonical
+prepared effect and its captured publication context before approval. The editor
+shows that effect in F2, and the existing live approval continuation retains it
+through Ask and dispatch without another Usage read. Ask's durable preview omits
+the facts and is not a replacement for F2. Cancellation or Account retirement
+cannot approve or dispatch the effect. The callback is neither Action input nor
+execution authority. An unchanged private-layout reread preserves its reviewed
+copy; changed layout, source context or referenced definitions require re-review.
+
 Whole-Account erasure withdraws the edition in its terminal retirement
 transaction, before retryable physical object deletion. Failed object cleanup
 therefore cannot retain public disclosure. An erasure refused before retirement,
@@ -130,7 +139,11 @@ complete safe result after materialization. A changed edition discards the
 painted bytes (or rendering failure) and returns the generic unavailable edition
 without a validator. Cold HTML consumes the shared responsive hero band at its
 wide/phone geometry, with 1×/2× Brand or admitted A1 picture pixels and frozen
-credit; it does not introduce another atmosphere or layout owner.
+credit. The HTML references `GET /@:handle/background` with the complete
+`theme=light|dark`, `viewport=wide|phone`, `density=1|2` selector rather than
+inlining those PNGs. The route paints the selected edition through the same
+hero adapter and rechecks current admission before ETag/304. Without selectors,
+the route continues to serve only the current admitted raw picture copy.
 
 Reviewed picture Apply uses the existing Account private-file custody owner:
 normalize/write before the winning publication transaction, then settle and bind
@@ -1702,13 +1715,18 @@ or completed runtime delivery validation.
   can carry `policy`, `once`, `onceAfterAgentStateVersion`, `onceDelivery`, and `persistent`.
   `persistent: false` identifies one-shot-only custody, not an explicit Unfollow.
   `includeInVoice` projects effective Voice selection from the explicit policy through
-  Protocol's `resolveAccountFollowVoiceSelectionV1`; only policy-absent legacy rows use
-  the stored boolean. An event set to off remains off even when its Voice flag is true.
+  Protocol's `resolveAccountFollowVoiceSelectionV1`. Voice is additive: an event whose
+  delivery is off can reach Voice while remaining absent from Inbox and Session wakes.
+  Important and Quiet also keep message delivery off when Voice is selected.
 - `PUT /v2/sessions/:sessionId/follow` accepts a nonempty mutation: the legacy pair
   `{ notificationLevel, includeInVoice }`, `policy`, `once`, or a combination, and returns
   `{ changed, follow }`. Legacy notification levels remain `none`, `important`, and
   `all_messages`. `policy` selects Everything, Important, Quiet, or per-event Custom delivery;
   its closed schema and receiver projections belong to `sessionFollowPolicyV1`.
+  The scalar pair normalizes immediately into that policy; `notificationLevel` is a
+  derived response field, not a persisted decision. The one-way 0.3 migration converts
+  retained scalar choices before dropping the column and preserves one-shot custody,
+  explicit suppression, and private Voice frontiers. Existing explicit policies win.
   A new Follow starts personal tracking at the current readable publication
   ceiling; updates to an already tracked owner or follower preserve that reader's progress.
 - `DELETE /v2/sessions/:sessionId/follow` returns `{ changed }` and records explicit Unfollow.
@@ -2430,7 +2448,10 @@ Artifact bytes and grants. See the
   stable `updatedAt`, `id` order. The optional opaque cursor resumes after the
   last observed row, allowing typed clients to continue through sparse pages
   without loading Artifact bodies or assuming the first page is complete.
-  In 0.3 development source, each header includes its current `bodyVersion`;
+  In 0.3 development source, each header includes its current `bodyVersion`
+  and the same authenticated `publicAudience` fact as an exact read, captured
+  in the authorized list snapshot; refreshing an unchanged header does not
+  replace known exposure with `unknown` merely because it came from a list.
   `includeBody=true` additionally returns the stored `body` for that same authorized
   batch. The Artifact access and Account-mode
   owner applies the same content checks as an exact read; E2EE bodies remain
@@ -2455,8 +2476,8 @@ Artifact bytes and grants. See the
   preparation refusals retain their existing access-API retry behavior.
   Current 0.3 client and server update together;
   this is not a released or mixed-component availability claim.
-- `GET /v1/artifacts/:id` returns the authenticated `publicAudience` fact in
-  0.3 development source: `retained` when the Artifact has an unexpired,
+- `GET /v1/artifacts/:id`, authenticated lists and selected-detail reads return the same
+  `publicAudience` fact in 0.3 development source: `retained` when the Artifact has an unexpired,
   undeleted public publication, otherwise `none`. This fact is independent of
   `sharing.public` availability; disabling public-share routes does not make a
   retained publication private. Exhausting its viewer-admission use limit does

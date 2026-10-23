@@ -46,6 +46,23 @@ switch; the File page does not override that policy. Document eligibility may
 disable Rich with a reason while Raw remains available. Raw Find is owned by
 `CodeEditorWithFind`, not a separate Markdown search implementation.
 
+## Syntax highlighting
+
+In 0.3 development, `filesDiffSyntaxHighlightingMode` defaults to `advanced`
+at the Protocol Account catalog in
+`packages/protocol/src/account/settings/accountSettings.ts`. The UI Settings
+parser and Source Control settings screen consume that owner. Missing values
+use the default; explicit `off`, `simple` and `advanced` values retain their
+meaning, including 0.2-written preferences. No stored Account value is migrated.
+
+`resolveCodeLinesSyntaxHighlightingMode` keeps advanced tokenization web-only
+and falls back to simple on native or when the advanced feature is disabled.
+The existing `filesDiffTokenizationMaxBytes`, `filesDiffTokenizationMaxLines`
+and `filesDiffTokenizationMaxLineLength` preferences still govern highlighting;
+`evaluateCodeHighlightingBudget` protects code blocks and
+`resolveEffectiveSyntaxHighlighting` protects code-line views. Over-budget
+content remains readable without adding another size limit.
+
 ## State and rendering locality
 
 The edit session holds the base text/hash, its BOM fact, the draft, a

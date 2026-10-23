@@ -215,6 +215,14 @@ rule matches do not create enrollment rows. Other Accounts' identities, rules, p
 delivery receipts are never part of that census.
 Revoking source access refuses the read; revoking receiver access withdraws that receiver.
 
+Generic Follow source references in 0.3 development use the strict `sourceRef` JSON query
+on the shared Account/Session get, set and remove transports and reverse follower read.
+The Action transport owns encoding and exact signed-purpose matching; source identity
+is parsed once after query decoding. A full Execution Run id therefore reaches the same
+source admission as a short id, without expanding the HTTP router's parameter limit.
+These undeployed source URLs replace the earlier JSON-in-path projection in place;
+Session-source routes and receiver mute bodies keep their existing contracts.
+
 Follow list inspection in 0.3 development accepts an optional `limit` and a source-owned
 `cursor`. With no limit, the owner returns the complete admitted list. A limited read
 returns `continuation` while more source relations remain, and the Action reports partial
@@ -317,6 +325,12 @@ Discussion activity, failed/cancelled turns, and unavailable Follow sources into
 local Activity notification runtime. Mutation owners classify the committed event; clients do
 not infer a new event from ciphertext, a historical list refresh or an `active: false` transition.
 Publication occurs after commit, and socket delivery rechecks the recipient's current authority.
+In development source, API publishers and headless workers use the same protected
+Session delivery envelope. Each receiving API node qualifies its own local sockets,
+including the publishing node, without awaiting a cluster-wide socket census.
+An unrelated late peer therefore cannot suppress delivery on responsive nodes.
+The envelope carries routing intent; each receiver rechecks current per-credential
+access, applies client projection and excludes the sender before delivery.
 The local notification owner then applies the recipient's Follow level and shared delivery,
 privacy and quiet-hours policy. A committed event is candidacy, not permission to display an
 alert. This adds no durable notification feed or reconnect replay, and does not turn a

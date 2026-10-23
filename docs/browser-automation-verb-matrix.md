@@ -75,6 +75,14 @@ reported if the OS refuses. The Action is client-placed, dangerous and Ask-first
 Agents; no mounted Browser view is fabricated to dispatch it. This is unreleased development
 source, not composed-live or native-platform certification.
 
+Workspace opening resolves a known device-local Home profile through the canonical Home identity
+before selecting the captured Account owner. Approval replay keeps the same Account and lifetime
+checks. Local-service previews use this workspace path; daemon `browser.view.open` opens external
+URLs in managed Chromium without a UI pane. If no daemon adapter supports the requested target,
+it returns `adapter_unavailable` with `browser.workspace.open` as recovery for workspace targets.
+The shared Browser Action adapter projects failed control results into Action failures, so a
+refused command also records a failed approval execution rather than `ok: true`.
+
 Mounted Browser navigation, open/retarget/close and presence commands enter through the canonical
 Action front door before the existing runtime adapter dispatches them. The UI and Agent use the
 same exact mounted-view registration and captured Home/Account lifetime. Continuous human input
