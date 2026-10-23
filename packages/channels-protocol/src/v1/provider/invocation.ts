@@ -1,4 +1,5 @@
-import { isPluginError, PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { isPluginError, PluginError } from '@happier-dev/plugin-sdk/errors';
 
 import { CONVERSATION_CORE_PLUGIN_ID_V1 } from '../bounds.js';
 import type { ConversationProviderFailureV1 } from '../diagnostics.js';

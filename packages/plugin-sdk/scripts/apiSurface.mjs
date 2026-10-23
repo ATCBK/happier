@@ -393,7 +393,19 @@ export function validateApiSurfaceInventory(input) {
         diagnostics.push(`${location} author symbol cannot project a src/host/** source owner`);
       }
       const existingOwner = authorOwnerByName.get(symbol.exportName);
-      if (existingOwner && existingOwner !== symbol.specifier) {
+      // Coordination's approved lightweight errors entry keeps the existing
+      // root API, but must expose the identical implementation, not an alias
+      // to another constructor or recognizer with the same public name.
+      const sharedRootError = (symbol.exportName === 'PluginError' || symbol.exportName === 'isPluginError')
+        && symbol.kind === 'value' && symbol.realm === 'any'
+        && symbol.sourceModule === 'src/errors.ts' && symbol.sourceExport === symbol.exportName
+        && (symbol.specifier === '.' || symbol.specifier === './errors')
+        && existingOwner === (symbol.specifier === '.' ? './errors' : '.')
+        && symbols.some(candidate => candidate.specifier === (symbol.specifier === '.' ? './errors' : '.')
+          && candidate.exportName === symbol.exportName && candidate.kind === symbol.kind
+          && candidate.realm === symbol.realm && candidate.sourceModule === symbol.sourceModule
+          && candidate.sourceExport === symbol.sourceExport);
+      if (existingOwner && existingOwner !== symbol.specifier && !sharedRootError) {
         diagnostics.push(
           `author-visible name ${symbol.exportName} appears on both ${existingOwner} and ${symbol.specifier}`,
         );

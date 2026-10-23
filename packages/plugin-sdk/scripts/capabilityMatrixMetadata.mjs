@@ -169,6 +169,7 @@ export const CAPABILITY_MATRIX_DECLARATIONS_V1 = Object.freeze({
     './first-party/claude': available('packages/plugins/claude/src/agent/transcripts/rawJsonLines.ts'),
     './first-party/connected-accounts': available('packages/plugins/codex/src/connectedAccounts/openAiCodexProfile.ts'),
     './collections': available('packages/plugins/channels/src/collections.ts'),
+    './errors': available(null),
     './events': available('packages/plugins/scm-github/src/githubAutomationEventActions.ts'),
     './exec': available('packages/plugins/claude/src/agent/sdk/nativeExec.ts'),
     './exec/protocol-clients': available('packages/plugins/codex/src/agent/runtime/appServer/client.ts'),

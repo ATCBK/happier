@@ -84,6 +84,11 @@
       },
       "default": "./dist/contributions/index.js"
     },
+    "./errors": {
+      "happier-source": "./src/errors/index.ts",
+      "types": "./dist/errors/index.d.ts",
+      "default": "./dist/errors/index.js"
+    },
     "./events": {
       "happier-source": "./src/events/index.ts",
       "types": "./dist/events/index.d.ts",

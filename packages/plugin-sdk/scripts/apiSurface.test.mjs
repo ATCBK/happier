@@ -730,6 +730,26 @@ test('client inventory entrypoints require browser, React Native, and default ou
   }
 });
 
+test('the approved errors subpath republishes only the two canonical root error values', () => {
+  const entrypoint = (specifier, sourceModule, directory) => ({
+    ...AUTHOR_ENTRYPOINT, specifier, sourceModule,
+    conditions: { types: `./dist/${directory}index.d.ts`, default: `./dist/${directory}index.js` },
+  });
+  const symbols = ['PluginError', 'isPluginError'].flatMap(exportName => ['.', './errors'].map(specifier => ({
+    specifier, exportName, sourceExport: exportName, sourceModule: 'src/errors.ts', kind: 'value', realm: 'any',
+  })));
+  const inventory = validInventory({
+    entrypoints: [entrypoint('.', 'src/index.ts', ''), entrypoint('./errors', 'src/errors/index.ts', 'errors/'), ...HOST_ENTRYPOINTS],
+    symbols: [...symbols, ...HOST_SYMBOLS],
+  });
+  assert.doesNotThrow(() => validateApiSurfaceInventory(inventory));
+  for (const replacement of [{ sourceModule: 'src/otherErrors.ts' }, { sourceExport: 'OtherPluginError' }, { kind: 'type' }]) {
+    assert.throws(() => validateApiSurfaceInventory({ ...inventory, symbols: inventory.symbols.map(symbol => (
+      symbol.specifier === './errors' && symbol.exportName === 'PluginError' ? { ...symbol, ...replacement } : symbol
+    )) }), ApiSurfaceValidationError, 'a duplicate name must retain the exact existing implementation');
+  }
+});
+
 test('inventory validation owns uniqueness, audience, deprecation, and canonical source rules', () => {
   assert.throws(
     () => validateApiSurfaceInventory(validInventory({
