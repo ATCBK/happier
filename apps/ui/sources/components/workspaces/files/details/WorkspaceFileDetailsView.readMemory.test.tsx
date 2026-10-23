@@ -7,12 +7,17 @@ import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/e
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import type { FileFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
+import { ScmComparisonSchema, ScmWorkingEntrySchema } from '@happier-dev/protocol/scm';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
 
 installSessionFilesViewBoundaries({ platformOS: 'android' });
 await prepareSessionFilesViewTestkit();
 const { WorkspaceFileDetailsView } = await import('./WorkspaceFileDetailsView');
 const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
 const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
+const { createSessionPaneDetailsTab } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+const { FileChangesSection } = await import('../file/changes/FileChangesRegions');
 const { KeyboardShortcutProvider } = await import('@/keyboard/KeyboardShortcutProvider');
 const { FilePageHeader } = await import('../file/FilePageHeader');
 const { CodeLinesViewCore } = await import('@/components/ui/code/view/CodeLinesViewCore');
@@ -26,15 +31,21 @@ const filePath = 'source.txt';
 const tabKey = `file:${filePath}`;
 const scopeId = 'project:read-memory';
 const text = Array.from({ length: 24 }, (_, index) => `line ${index + 1} needle`).join('\n');
+const turnDiff = 'diff --git a/source.txt b/source.txt\n--- a/source.txt\n+++ b/source.txt\n@@ -1 +1 @@\n-before turn\n+after turn\n';
 let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 let pane: AppPaneScopeApi;
 const scrollToIndex = vi.fn();
 
-function FilePane(props: Readonly<{ shown: boolean; seed?: FileFindSeed; anchorLine?: number }>) {
-    pane = useAppPaneScope(scopeId);
-    React.useEffect(() => { pane.openDetailsTab(createWorkspaceFileDetailsTab(filePath), { intent: 'pinned' }); }, []);
+function FilePane(props: Readonly<{ shown: boolean; seed?: FileFindSeed; anchorLine?: number; changes?: SessionScmReviewComparison }>) {
+    // Pane view state is persisted across mounts; the turn journey must not alter the reading-memory fixture.
+    const paneScopeId = props.changes ? 'session:original-turn-file' : scopeId;
+    pane = useAppPaneScope(paneScopeId);
+    React.useEffect(() => { pane.openDetailsTab(props.changes
+        ? createSessionPaneDetailsTab({ kind: 'file', path: filePath, changes: props.changes, view: 'changes' })!
+        : createWorkspaceFileDetailsTab(filePath), { intent: 'pinned' }); }, []);
     return <KeyboardShortcutProvider handlers={{}}><PluginSurfaceFocusEligibilityProvider active>{props.shown && pane.scopeState?.details.tabs.some(tab => tab.key === tabKey)
-        ? <WorkspaceFileDetailsView scopeId={scopeId} scope={fixture.scope} filePath={filePath} sessionIdForAugmentation={null}
+        ? <WorkspaceFileDetailsView scopeId={paneScopeId} scope={fixture.scope} filePath={filePath} sessionIdForAugmentation={props.changes ? fixture.session.id : null}
+            initialView={props.changes ? { view: 'changes' } : undefined}
             findSeed={props.seed} deepLinkAnchor={props.anchorLine ? { source: 'file', anchor: { kind: 'fileLine', startLine: props.anchorLine } } : null} />
         : null}</PluginSurfaceFocusEligibilityProvider></KeyboardShortcutProvider>;
 }
@@ -65,10 +76,63 @@ beforeEach(async () => {
             if (parsed.pathname === '/v1/machines/m1') return Response.json({ machine: read.machine });
             return await read.handle(parsed, init) ?? new Response('{}', { status: 404 });
         },
-        rpc: () => ({ success: true, exists: true, kind: 'file', sizeBytes: Buffer.byteLength(text) }) });
+        rpc: (request) => {
+            if (request.method === RPC_METHODS.SCM_DIFF_FILE) return { success: true, diff: turnDiff };
+            if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE) {
+                const input = request.payload as { source: import('@happier-dev/protocol/scm').ScmComparisonSource };
+                const selected = input.source.kind === 'turnCheckpoint' && input.source.turnId === 'turn-original';
+                const comparison = ScmComparisonSchema.parse({ id: 'a'.repeat(64), source: input.source,
+                    repository: { rootPath: '/workspace' }, endpoints: {}, inventory: { state: 'complete', reasons: [],
+                        files: selected ? [{ path: filePath, changeKind: 'modified', binary: false, generated: false, lockfile: false,
+                            evidence: { state: 'available', unifiedDiff: turnDiff }, occurrences: [{
+                                id: 'capture:source', alias: 'source', path: filePath, position: 0,
+                                before: { startLine: 1, lineCount: 1 }, after: { startLine: 1, lineCount: 1 },
+                            }] }] : [] } });
+                return { success: true, comparison, metadata: { sourceKey: comparison.id, source: comparison.source } };
+            }
+            return { success: true, exists: true, kind: 'file', sizeBytes: Buffer.byteLength(text) };
+        } });
     fixture.storage.getState().updateWorkspaceScmSnapshot(fixture.scope, fileViewSnapshot());
 });
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
+
+it('opens the original turn evidence and restore menu from the real file tab instead of the latest turn', async () => {
+    fixture.storage.getState().applySessions([{ ...fixture.session, latestTurnId: 'turn-latest' }]);
+    fixture.storage.getState().updateWorkspaceScmSnapshot(fixture.scope, fileViewSnapshot({ entries: [ScmWorkingEntrySchema.parse({
+        path: filePath, kind: 'modified', includeStatus: ' ', pendingStatus: 'M', hasIncludedDelta: false, hasPendingDelta: true,
+        stats: { pendingAdded: 1, pendingRemoved: 1 },
+    })] }));
+    const changes = { kind: 'turnCheckpoint' as const, turnId: 'turn-original', checkpointReceiptId: 'receipt-original',
+        evidence: 'checkpoint' as const, comparisonId: 'a'.repeat(64) };
+    const screen = await fixture.render(<FilePane shown changes={changes} />);
+    try {
+        await vi.waitFor(() => expect(screen.findByType(FileChangesSection).props.review.status).toBe('ready'));
+        const review = screen.findByType(FileChangesSection).props.review;
+        expect(review.changesScope).toEqual({ kind: 'turn', turnId: 'turn-original' });
+        expect(review.unifiedDiff).toBe(turnDiff);
+        expect(review.menuChanges.restoreBeforeTurn).toBeTypeOf('function');
+        expect(screen.findByType(FilePageHeader).props.menuActions).toEqual(expect.arrayContaining([
+            expect.objectContaining({ id: 'restoreBeforeTurn' }),
+        ]));
+        const captures = fixture.requests.filter(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE);
+        expect(captures.map(request => request.payload)).toEqual([expect.objectContaining({
+            comparisonId: changes.comparisonId,
+            source: { kind: 'turnCheckpoint', turnId: 'turn-original', checkpointReceiptId: 'receipt-original', evidenceMode: 'checkpoint' },
+        })]);
+        await screen.update(fixture.wrap(<FilePane shown changes={changes} />));
+        expect(fixture.requests.filter(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE)).toHaveLength(1);
+        await act(async () => { pane.patchDetailsTabState(tabKey, { view: { mode: 'diff', changesScope: { kind: 'workingTree' } } }); });
+        expect(screen.findByType(FileChangesSection).props.review.changesScope).toEqual({ kind: 'workingTree' });
+        expect(screen.findByType(FileChangesSection).props.review.menuChanges.restoreBeforeTurn).toBeUndefined();
+        // The explicit scope change does not replay the opener or create another capture.
+        expect(fixture.requests.filter(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE)).toHaveLength(1);
+        await act(async () => { screen.findByType(FileChangesSection).props.review.selectScope('turn'); });
+        await vi.waitFor(() => expect(screen.findByType(FileChangesSection).props.review.status).toBe('ready'));
+        expect(screen.findByType(FileChangesSection).props.review.changesScope).toEqual({ kind: 'turn', turnId: 'turn-original' });
+        expect(screen.findByType(FileChangesSection).props.review.unifiedDiff).toBe(turnDiff);
+        expect(fixture.requests.filter(request => request.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE)).toHaveLength(2);
+    } finally { await screen.unmount(); }
+});
 
 it('publishes only the presented File when another project retains an open File, including definition navigation', async () => {
     const screen = await fixture.render(<RetainedProjectFiles focused="first" />);
