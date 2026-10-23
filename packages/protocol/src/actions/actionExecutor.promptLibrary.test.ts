@@ -124,6 +124,50 @@ function fetchedRegistrySkill() {
 }
 
 describe('createActionExecutor (prompt library actions)', () => {
+  it.each(['account', 'project', 'session-account', 'session-project'] as const)(
+    'reads one Memory body per %s preparation and still rejects a later revision', async destination => {
+      const { store, artifacts } = createStoredLibrary([{ id: 'memory', revision: { headerVersion: 2, bodyVersion: 7 },
+        header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' },
+        body: JSON.stringify({ v: 1, index: [], topics: [{ title: 'Payments', summary: 'Settlement policy', facts: [
+          { id: 'settlement', text: 'Settlement retries reuse the original idempotency key', createdAtMs: 1, sourceSessionRef: null },
+        ] }] }),
+      }]);
+      const reads: string[] = [];
+      const entry = { id: 'memory', ref: { kind: 'doc' as const, artifactId: 'memory', serverId: 'home' },
+        enabled: true, placement: 'system_append' as const };
+      const executor = createExecutor({ memoryLibrary: { serverId: 'home', randomId: () => 'new-fact', nowMs: () => 10,
+        store: { ...store, read: async (id, options) => { reads.push(id); return store.read(id, options); } },
+        readArtifactHeaders: async refs => refs.map(ref => artifacts.get(ref.artifactId)?.header ?? null),
+        readScopeContext: async () => ({ entries: [entry], safety: 'safe', attachMemory: async () => false }),
+        readSession: async () => ({ metadata: { work: { memoryEnabled: true, promptStack: [] } }, revision: 3 }),
+        readInheritedContext: async () => ({ projectEntries: destination === 'session-project' ? [entry] : [],
+          readAccountContext: async () => ({ accountEntries: [entry], attachAccountMemory: async () => false }) }),
+        readExposure: async artifactId => ({ grants: { artifactId, ownerAccountId: 'person', access: 'owner', grants: [] },
+          publicShares: { publicShares: [] } }),
+      } });
+      const context = { surface: 'ui' as const, serverId: 'home', authority: 'present_user' as const, runtimeAccountId: 'person' };
+      const target = destination === 'account' ? { scope: 'account' as const }
+        : destination === 'project' ? { scope: 'project' as const, projectRef: { serverId: 'home', projectKey: 'payments' } }
+        : { sessionRef: { serverId: 'home', sessionId: 'ordinary' }, expectedMetadataRevision: 3 };
+      // A topic candidate must be found from that same read, not only the projected index.
+      const duplicate = await executor.prepare('memory.remember', { ...target, text: 'Settlement retries reuse the idempotency key' }, context);
+      expect(duplicate).toMatchObject({ kind: 'settled', result: { ok: true, result: {
+        errorCode: 'memory_duplicate_choice_required', candidates: [{ factId: 'settlement', topic: 'Payments' }],
+      } } });
+      expect(reads).toEqual(['memory']);
+      reads.length = 0;
+      const prepared = await executor.prepare('memory.remember', { ...target, text: 'Prefer green tea' }, context);
+      expect(prepared.kind).toBe('ready');
+      expect(reads).toEqual(['memory']);
+      if (prepared.kind !== 'ready') throw new Error('Expected private Memory preparation');
+      const current = artifacts.get('memory')!;
+      artifacts.set('memory', { ...current, revision: { headerVersion: 3, bodyVersion: 8 } });
+      reads.length = 0;
+      expect(await prepared.invocation.run()).toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+      expect(reads).not.toHaveLength(0);
+      expect(artifacts.get('memory')?.body).toBe(current.body);
+    },
+  );
   it.each(['update', 'replace'] as const)('keeps edit A and candidate B distinct through the real Memory Action (%s)', async kind => {
     const edited = { id: 'A', text: 'Prefer green tea', createdAtMs: 1, sourceSessionRef: null, expiresAtMs: 500 };
     const candidate = { id: 'B', text: 'Use PostgreSQL for storage', createdAtMs: 2, sourceSessionRef: null, expiresAtMs: 900 };

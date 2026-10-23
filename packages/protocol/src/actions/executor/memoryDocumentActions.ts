@@ -10,8 +10,8 @@ import type { PromptStackEntryV1 } from '../../prompts/library/promptStacksV1.js
 import { readSessionBotV1 } from '../../sessions/identity/sessionBotV1.js';
 import { MemoryRememberInputV1Schema, MemoryDecisionSaveInputV1Schema, MemoryUpdateInputV1Schema, MemoryForgetInputV1Schema, type MemoryScopeTargetV1,
   type MemoryDuplicateChoiceRequiredV1, MemoryAttachmentFailureV1Schema, type MemoryAttachmentFailureV1 } from '../../prompts/library/memoryActionsV1.js';
-import { readMemoryDocInLibrary, readReviewedMemoryDocInLibrary, readRestorableMemoryFactV1, createMemoryDocInLibrary, rememberMemoryFactInLibrary, updateMemoryFactInLibrary, forgetMemoryFactInLibrary,
-  type PromptLibraryArtifactStore, type MemoryDocMutationTargetV1 } from '../../prompts/library/promptLibraryActionOperations.js';
+import { readMemoryDocVersionInLibrary, readReviewedMemoryDocInLibrary, readRestorableMemoryFactV1, createMemoryDocInLibrary, rememberMemoryFactInLibrary, updateMemoryFactInLibrary, forgetMemoryFactInLibrary,
+  type PromptLibraryArtifactStore, type MemoryDocMutationTargetV1, type MemoryDocVersionV1 } from '../../prompts/library/promptLibraryActionOperations.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './types.js';
 
 export type MemorySessionSnapshotV1 = Readonly<{
@@ -102,6 +102,7 @@ export async function readMemoryWriteAdmissionV1(port: MemoryLibraryActionPortV1
     ? decisionRequest.sourceMessageRef.session.serverId : decisionRequest.sourceMessageRef.discussion.serverId);
   if ('duplicateChoice' in request && request.duplicateChoice && !('ref' in request) && request.reviewedTarget == null) refuse('approval_stale');
   let target: MemoryDocMutationTargetV1;
+  let currentRead: MemoryDocVersionV1 | undefined;
   let scopeSafety: 'safe' | 'danger' = 'safe';
   if ('scope' in request) {
     if (request.scope === 'project') assertMemoryHomeV1(port, request.projectRef.serverId);
@@ -120,8 +121,8 @@ export async function readMemoryWriteAdmissionV1(port: MemoryLibraryActionPortV1
       assertMemoryHomeV1(port, request.reviewedTarget.ref.serverId);
       target = request.reviewedTarget;
     } else {
-      const read = await readMemoryDocInLibrary({ store: port.store, artifactId: attached.ref.artifactId, signal: context.signal });
-      target = { ref: { ...attached.ref, kind: 'doc' }, expectedRevision: read.revision };
+      currentRead = await readMemoryDocVersionInLibrary({ store: port.store, artifactId: attached.ref.artifactId, signal: context.signal });
+      target = { ref: { ...attached.ref, kind: 'doc' }, expectedRevision: currentRead.revision };
     }
   } else if ('sessionRef' in request) {
     assertMemoryHomeV1(port, request.sessionRef.serverId);
@@ -169,14 +170,16 @@ export async function readMemoryWriteAdmissionV1(port: MemoryLibraryActionPortV1
       assertMemoryHomeV1(port, request.reviewedTarget.ref.serverId);
       target = request.reviewedTarget;
     } else {
-      const read = await readMemoryDocInLibrary({ store: port.store, artifactId: selectedRef.artifactId, signal: context.signal });
-      target = { ref: selectedRef, expectedRevision: read.revision };
+      currentRead = await readMemoryDocVersionInLibrary({ store: port.store, artifactId: selectedRef.artifactId, signal: context.signal });
+      target = { ref: selectedRef, expectedRevision: currentRead.revision };
     }
   } else {
     assertMemoryHomeV1(port, request.ref.serverId);
     target = request;
   }
-  const read = await readReviewedMemoryDocInLibrary({ store: port.store, request: target, signal: context.signal });
+  // The revision and candidates of a newly resolved target belong to the same admitted read.
+  // Reviewed replays and the final pre-CAS admission still perform their own fresh read.
+  const read = currentRead ?? await readReviewedMemoryDocInLibrary({ store: port.store, request: target, signal: context.signal });
   const safety = await readSafety(port, target.ref.artifactId, context);
   const restored = updateRequest && 'restore' in updateRequest ? readRestorableMemoryFactV1(read.body, updateRequest.factId) : undefined;
   const text = 'text' in request ? request.text : restored?.text;

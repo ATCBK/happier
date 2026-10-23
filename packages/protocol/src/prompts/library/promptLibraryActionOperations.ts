@@ -210,6 +210,13 @@ function memoryVersion(read: Awaited<ReturnType<typeof readMemoryArtifact>>): Me
   return { ok: true, artifactId: read.artifact.id, revision: read.artifact.revision, header: read.header, body: read.body };
 }
 
+/** One current full read supplies both a newly resolved write basis and its candidate review. */
+export async function readMemoryDocVersionInLibrary(params: Readonly<{
+  store: Pick<PromptLibraryArtifactStore, 'read'>; artifactId: string; signal?: AbortSignal;
+}>): Promise<MemoryDocVersionV1> {
+  return memoryVersion(await readMemoryArtifact(params));
+}
+
 /** Approval and mutation share the same reviewed-version comparison and full admitted body. */
 export async function readReviewedMemoryDocInLibrary(params: MemoryMutationParams): Promise<MemoryDocVersionV1> {
   return memoryVersion(await readReviewedMemory(params));
