@@ -1145,6 +1145,14 @@ Summary volumes can additionally report optional verified-Safe `canGoBytes`.
 Readers accept its absence as unreported rather than zero; older presentation
 readers drop this additive field. It conveys no cleanup authority and is omitted
 from recipient summaries.
+Summary volumes also accept optional `pileFreesBytes` and `trashFreesBytes` for
+exclusive cleanup forecasts, independently of allocated `pileBytes`/`trashBytes`.
+These are additive-open/drop presentation facts within Storage V1, with no authority
+meaning. New UI readers omit a forecast when absent; older readers can discard the
+fields. Temporary-directory Trash entries retain the existing owner-marker bytes
+beside the payload; manifests and owner data keep their existing schemas. Entries
+without a retained marker remain readable, but cannot recover a witness already
+deleted by the former retirement path.
 Development scan inputs remove client-supplied `drawableNodes` in place. Every
 interactive, direct-folder relist and scheduled native scan consumes the protocol's
 `STORAGE_CHART_MAX_DRAWABLE_NODES` export, also prescribed by the approved Map/Rings
