@@ -19,6 +19,7 @@ import { logger } from '@/ui/logger';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { Credentials, StoredCredentials, TokenOnlyCredentials } from '@/persistence';
 import * as persistence from '@/persistence';
+import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
 
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from './bootstrapAccountSettingsContext';
 import { beginActivePromptLibraryCatalogRefresh, getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, setActiveAccountSettingsSnapshot } from './activeAccountSettingsSnapshot';
@@ -773,7 +774,7 @@ describe('bootstrapAccountSettingsContext', () => {
       settings: accountSettingsParse({ sessionPendingQueueDeliveryTiming: 'after_runtime_idle' }),
       settingsVersion: 5,
       loadedAtMs: 200,
-      settingsSecretsReadKeys: [],
+      settingsSecretsReadKeys: deriveSettingsSecretsReadKeysForCredentials(credentials),
       scopeKey: createAccountSettingsScopeKey({ cachePath, token: credentials.token }),
     };
     setActiveAccountSettingsSnapshot(winner);
@@ -843,7 +844,7 @@ describe('bootstrapAccountSettingsContext', () => {
       settings: accountSettingsParse({ sessionPendingQueueDeliveryTiming: 'after_runtime_idle' }),
       settingsVersion: 4,
       loadedAtMs: 200,
-      settingsSecretsReadKeys: [],
+      settingsSecretsReadKeys: deriveSettingsSecretsReadKeysForCredentials(credentials),
       scopeKey: createAccountSettingsScopeKey({ cachePath, token: credentials.token }),
     };
     setActiveAccountSettingsSnapshot(newer);
@@ -865,7 +866,7 @@ describe('bootstrapAccountSettingsContext', () => {
       settings: accountSettingsParse({ sessionPendingQueueDeliveryTiming: 'after_runtime_idle' }),
       settingsVersion: 3,
       loadedAtMs: 900,
-      settingsSecretsReadKeys: [],
+      settingsSecretsReadKeys: deriveSettingsSecretsReadKeysForCredentials(credentials),
       scopeKey,
     });
 

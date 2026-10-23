@@ -2,6 +2,7 @@ import { accountSettingsParse } from '@happier-dev/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Credentials } from '@/persistence';
+import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
 import type { AccountSettingsContext } from './bootstrapAccountSettingsContext';
 import {
   resetActiveAccountSettingsSnapshotForTests,
@@ -22,7 +23,7 @@ function createContext(settingsVersion: number, scopeKey = 'scope:token'): Accou
     settings: accountSettingsParse({ schemaVersion: 6 }),
     settingsVersion,
     loadedAtMs: 1,
-    settingsSecretsReadKeys: [],
+    settingsSecretsReadKeys: deriveSettingsSecretsReadKeysForCredentials(createCredentialsStub()),
     whenRefreshed: null,
     scopeKey,
   };

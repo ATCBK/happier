@@ -11,6 +11,20 @@ vi.mock('@/configuration', async (importOriginal) => {
 import { initializeTerminalPresentUserPolicy, refreshTerminalPresentUserPolicy, resolveEffectiveTerminalPresentUserPolicy } from './resolveEffectiveTerminalPresentUserPolicy';
 
 describe('effective terminal present-user policy', () => {
+  it('authenticates a refreshed same-Account bearer after the older credential failed initialization', async () => {
+    const token = (issuance: number) => `test.${Buffer.from(JSON.stringify({ sub: 'rotated-security-account', iat: issuance })).toString('base64url')}.test`;
+    const scope = { token: token(1), serverHttpBaseUrl: 'https://rotated-policy.example.com' };
+    const get = vi.spyOn(axios, 'get').mockRejectedValueOnce(new Error('Old credential unavailable'))
+      .mockResolvedValueOnce({ status: 200, data: {
+        v: 1, encryptionMode: 'plain', nativeEmail: null,
+        password: { status: 'not_enrolled', revision: null }, terminalPresentUserPolicy: 'disallowed',
+      } });
+    try {
+      expect(await initializeTerminalPresentUserPolicy(scope)).toBe('allowed');
+      expect(await initializeTerminalPresentUserPolicy({ ...scope, token: token(2) })).toBe('disallowed');
+    } finally { get.mockRestore(); }
+  });
+
   it('initializes once per credential and Home but explicitly refreshes for reconnect', async () => {
     const scope = { token: 'initialize-policy-test', serverHttpBaseUrl: 'https://initialize-policy.example.com/' };
     const get = vi.spyOn(axios, 'get').mockRejectedValueOnce(new Error('initially offline'))

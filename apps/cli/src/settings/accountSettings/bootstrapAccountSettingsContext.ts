@@ -107,6 +107,18 @@ function createAccountSettingsLiveApplyError(
   return Object.assign(new Error(message), { code });
 }
 
+function createAccountSettingsScopeChangedError(
+  branch: 'live_lifetime_before_commit' | 'live_scope_before_commit' | 'live_unscoped_before_commit'
+    | 'live_side_effects_before' | 'live_side_effects_after'
+    | 'bootstrap_side_effects_before' | 'bootstrap_side_effects_after'
+    | 'bootstrap_lifetime_before_commit' | 'bootstrap_scope_before_commit'
+    | 'bootstrap_reuse' | 'bootstrap_cache_write',
+  message: string,
+) {
+  logger.infoFile('[accountSettings] Scope refused', { branch });
+  return Object.assign(createAccountSettingsLiveApplyError('ACCOUNT_SETTINGS_SCOPE_CHANGED', message), { branch });
+}
+
 function isAccountSettingsContentUnavailableError(error: unknown): boolean {
   if (isAccountSettingsEncryptionMaterialUnavailableError(error) || isAccountSettingsContentInvalidError(error)) return true;
   if (!error || typeof error !== 'object' || !('code' in error)) return false;
@@ -178,6 +190,32 @@ async function requestAccountSettingsV2(
   }
 }
 
+function settingsKeyMaterialChangedDuringRead(
+  activeAtStart: ActiveAccountSettingsSnapshot | null,
+  active: ActiveAccountSettingsSnapshot | null,
+  settingsSecretsReadKeys: readonly Uint8Array[],
+): boolean {
+  return active !== null && active !== activeAtStart
+    && (!activeAtStart || !isDeepStrictEqual(activeAtStart.settingsSecretsReadKeys, active.settingsSecretsReadKeys))
+    && !isDeepStrictEqual(active.settingsSecretsReadKeys, settingsSecretsReadKeys);
+}
+
+function isFirstSameScopePublication(params: Readonly<{
+  activeAtStart: ActiveAccountSettingsSnapshot | null;
+  active: ActiveAccountSettingsSnapshot | null;
+  activeLifetimeTokenAtStart: number;
+  activeLifetimeToken: number;
+  scopeKey: string;
+  settingsSecretsReadKeys: readonly Uint8Array[];
+}>): boolean {
+  // One entry from an empty incumbent is not retirement. A clear, different
+  // Account entry or key retirement advances the existing token further.
+  return params.activeAtStart === null
+    && params.activeLifetimeToken === params.activeLifetimeTokenAtStart + 1
+    && params.active?.scopeKey === params.scopeKey
+    && isDeepStrictEqual(params.active.settingsSecretsReadKeys, params.settingsSecretsReadKeys);
+}
+
 function resolveLiveApplyDisposition(params: Readonly<{
   active: ReturnType<typeof getActiveAccountSettingsSnapshot>;
   activeAtStart: ReturnType<typeof getActiveAccountSettingsSnapshot>;
@@ -185,6 +223,7 @@ function resolveLiveApplyDisposition(params: Readonly<{
   activeLifetimeTokenAtStart: number;
   scopeKey: string;
   settingsVersion: number;
+  settingsSecretsReadKeys: readonly Uint8Array[];
 }>): AccountSettingsContext | null {
   const {
     active,
@@ -194,22 +233,26 @@ function resolveLiveApplyDisposition(params: Readonly<{
     scopeKey,
     settingsVersion,
   } = params;
-  if (activeLifetimeToken !== activeLifetimeTokenAtStart) {
-    throw createAccountSettingsLiveApplyError(
-      'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+  if (activeLifetimeToken !== activeLifetimeTokenAtStart && !isFirstSameScopePublication(params)) {
+    throw createAccountSettingsScopeChangedError(
+      'live_lifetime_before_commit',
       'The active account lifetime changed before the live settings update could be applied.',
     );
   }
   if (!active) return null;
-  if (active.scopeKey && active.scopeKey !== scopeKey) {
-    throw createAccountSettingsLiveApplyError(
-      'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+  const incompatibleIncumbent = active.scopeKey === scopeKey && active.settingsVersion >= settingsVersion
+    && !isDeepStrictEqual(active.settingsSecretsReadKeys, params.settingsSecretsReadKeys);
+  if ((active.scopeKey && active.scopeKey !== scopeKey)
+    || settingsKeyMaterialChangedDuringRead(activeAtStart, active, params.settingsSecretsReadKeys)
+    || incompatibleIncumbent) {
+    throw createAccountSettingsScopeChangedError(
+      'live_scope_before_commit',
       'The active account changed before the live settings update could be applied.',
     );
   }
   if (!active.scopeKey && active !== activeAtStart) {
-    throw createAccountSettingsLiveApplyError(
-      'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+    throw createAccountSettingsScopeChangedError(
+      'live_unscoped_before_commit',
       'The unscoped active account settings snapshot changed before the live update could be applied.',
     );
   }
@@ -241,6 +284,7 @@ export async function applyAccountSettingsV2Update(params: Readonly<{
   const scopeKey = createAccountSettingsScopeKey({ cachePath, token: params.credentials.token });
   const activeAtStart = getActiveAccountSettingsSnapshot();
   const activeLifetimeTokenAtStart = getActiveAccountSettingsSnapshotLifetimeToken();
+  const settingsSecretsReadKeys = deriveSettingsSecretsReadKeysForCredentials(params.credentials);
   const reusableAtStart = params.publication === 'invocation' ? null : resolveLiveApplyDisposition({
     active: activeAtStart,
     activeAtStart,
@@ -248,6 +292,7 @@ export async function applyAccountSettingsV2Update(params: Readonly<{
     activeLifetimeTokenAtStart,
     scopeKey,
     settingsVersion: params.update.version,
+    settingsSecretsReadKeys,
   });
   if (reusableAtStart) return reusableAtStart;
 
@@ -286,7 +331,7 @@ export async function applyAccountSettingsV2Update(params: Readonly<{
   if (params.publication === 'invocation') {
     return { source: 'network', settings, rawSettings: readRawAccountSettingsObject(rawSettings),
       settingsVersion: params.update.version, loadedAtMs: nowMs, scopeKey,
-      settingsSecretsReadKeys: deriveSettingsSecretsReadKeysForCredentials(params.credentials), whenRefreshed: null };
+      settingsSecretsReadKeys, whenRefreshed: null };
   }
   const reusableBeforeCommit = resolveLiveApplyDisposition({
     active: getActiveAccountSettingsSnapshot(),
@@ -295,10 +340,10 @@ export async function applyAccountSettingsV2Update(params: Readonly<{
     activeLifetimeTokenAtStart,
     scopeKey,
     settingsVersion: params.update.version,
+    settingsSecretsReadKeys,
   });
   if (reusableBeforeCommit) return reusableBeforeCommit;
 
-  const settingsSecretsReadKeys = deriveSettingsSecretsReadKeysForCredentials(params.credentials);
   const committed = commitActiveAccountSettingsSnapshot({
     source: 'network',
     settings,
@@ -312,34 +357,30 @@ export async function applyAccountSettingsV2Update(params: Readonly<{
   if (!committed.didCommit) return committedContext;
 
   const committedLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
-  if (
-    getActiveAccountSettingsSnapshot() !== committed.snapshot
-    || getActiveAccountSettingsSnapshotLifetimeToken() !== committedLifetimeToken
-  ) {
+  const publication = { snapshot: committed.snapshot, lifetimeToken: committedLifetimeToken };
+  if (!activeSnapshotPublicationIsCurrent(publication)) {
     const active = getActiveAccountSettingsSnapshot();
     if (active?.scopeKey === scopeKey) return contextFromActiveSnapshot(active);
-    throw createAccountSettingsLiveApplyError(
-      'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+    throw createAccountSettingsScopeChangedError(
+      'live_side_effects_before',
       'The active account changed before the live settings update side effects could be applied.',
     );
   }
   applyAccountSettingsToProcessEnv({ settings: committed.snapshot.settings });
-  if (
-    getActiveAccountSettingsSnapshot() === committed.snapshot
-    && getActiveAccountSettingsSnapshotLifetimeToken() === committedLifetimeToken
-  ) {
+  const active = getActiveAccountSettingsSnapshot();
+  if (active && activeSnapshotPublicationIsCurrent(publication)) {
+    const context = contextFromActiveSnapshot(active);
     rememberInMemoryAccountSettingsContext(
       scopeKey,
-      committedContext,
+      context,
       committedLifetimeToken,
-      committed.snapshot,
+      active,
     );
-    return committedContext;
+    return context;
   }
-  const active = getActiveAccountSettingsSnapshot();
   if (active?.scopeKey === scopeKey) return contextFromActiveSnapshot(active);
-  throw createAccountSettingsLiveApplyError(
-    'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+  throw createAccountSettingsScopeChangedError(
+    'live_side_effects_after',
     'The active account changed while the live settings update side effects were applied.',
   );
 }
@@ -583,7 +624,8 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   }>;
   const currentPublicationForScope = (): PublishedAccountSettingsContext | null => {
     const active = getActiveAccountSettingsSnapshot();
-    if (!active || active.scopeKey !== scopeKey) return null;
+    if (!active || active.scopeKey !== scopeKey
+      || settingsKeyMaterialChangedDuringRead(activeAtBootstrapStart, active, settingsSecretsReadKeys)) return null;
     return {
       context: contextFromActiveSnapshot(active),
       didCommit: false,
@@ -595,8 +637,8 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     publication: PublishedAccountSettingsContext,
   ): PublishedAccountSettingsContext => {
     if (!activeSnapshotPublicationIsCurrent(publication)) {
-      throw createAccountSettingsLiveApplyError(
-        'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+      throw createAccountSettingsScopeChangedError(
+        'bootstrap_side_effects_before',
         'The active account changed before Settings bootstrap side effects could be applied.',
       );
     }
@@ -609,8 +651,8 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
       loadedAtMs: publication.context.loadedAtMs,
     });
     if (!activeSnapshotPublicationIsCurrent(publication)) {
-      throw createAccountSettingsLiveApplyError(
-        'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+      throw createAccountSettingsScopeChangedError(
+        'bootstrap_side_effects_after',
         'The active account changed while Settings bootstrap side effects were applied.',
       );
     }
@@ -642,11 +684,18 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
         'The Account Settings publication lifetime ended before Settings bootstrap could be committed.',
       );
     }
-    if (getActiveAccountSettingsSnapshotLifetimeToken() !== activeLifetimeTokenAtBootstrapStart) {
+    const activeBeforeCommit = getActiveAccountSettingsSnapshot();
+    const lifetimeBeforeCommit = getActiveAccountSettingsSnapshotLifetimeToken();
+    const firstSameScopePublication = isFirstSameScopePublication({
+      activeAtStart: activeAtBootstrapStart, active: activeBeforeCommit,
+      activeLifetimeTokenAtStart: activeLifetimeTokenAtBootstrapStart, activeLifetimeToken: lifetimeBeforeCommit,
+      scopeKey, settingsSecretsReadKeys,
+    });
+    if (lifetimeBeforeCommit !== activeLifetimeTokenAtBootstrapStart && !firstSameScopePublication) {
       const currentPublication = currentPublicationForScope();
       if (!currentPublication) {
-        throw createAccountSettingsLiveApplyError(
-          'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+        throw createAccountSettingsScopeChangedError(
+          'bootstrap_lifetime_before_commit',
           'The active account lifetime changed before Settings bootstrap could be committed.',
         );
       }
@@ -655,13 +704,16 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
       }
       return applyPublicationSideEffects(currentPublication);
     }
-    const activeBeforeCommit = getActiveAccountSettingsSnapshot();
+    // Refreshing the captured incumbent's preferences does not change its
+    // Account and cannot veto an explicit bootstrap into the requested scope.
     if (
       activeBeforeCommit !== activeAtBootstrapStart
-      && activeBeforeCommit?.scopeKey !== scopeKey
+      && ((activeBeforeCommit?.scopeKey !== scopeKey
+          && (!activeBeforeCommit?.scopeKey || activeBeforeCommit.scopeKey !== activeAtBootstrapStart?.scopeKey))
+        || settingsKeyMaterialChangedDuringRead(activeAtBootstrapStart, activeBeforeCommit, settingsSecretsReadKeys))
     ) {
-      throw createAccountSettingsLiveApplyError(
-        'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+      throw createAccountSettingsScopeChangedError(
+        'bootstrap_scope_before_commit',
         'The active account changed before Settings bootstrap could be committed.',
       );
     }
@@ -716,14 +768,15 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   if (
     refresh === 'auto'
     && existing
+    && isDeepStrictEqual(existing.settingsSecretsReadKeys, settingsSecretsReadKeys)
     && shouldTreatCacheAsFresh({ version: 2, cachedAt: inMemoryIsCurrent ? inMemory.validatedAtMs : existing.loadedAtMs,
       settingsContent: null, settingsVersion: existing.settingsVersion }, nowMs, ttlMs)
     && shouldTreatVersionAsFresh(existing.settingsVersion, minSettingsVersion)
   ) {
     const currentPublication = currentPublicationForScope();
     if (!currentPublication) {
-      throw createAccountSettingsLiveApplyError(
-        'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+      throw createAccountSettingsScopeChangedError(
+        'bootstrap_reuse',
         'The active account changed before fresh Settings could be reused.',
       );
     }
@@ -874,8 +927,8 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
       }
       return context;
     }
-    throw createAccountSettingsLiveApplyError(
-      'ACCOUNT_SETTINGS_SCOPE_CHANGED',
+    throw createAccountSettingsScopeChangedError(
+      'bootstrap_cache_write',
       'The active account changed while Settings bootstrap was writing its cache.',
     );
   };

@@ -62,10 +62,12 @@ describe('active account settings snapshot publication', () => {
         const base = snapshot({ scopeKey: 'scope-provider-keys', version: 4, timing: 'after_runtime_idle' });
         const providerConnectionsCatalog = { status: 'ready' as const, revision: 7, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
         setActiveAccountSettingsSnapshot({ ...base, settingsSecretsReadKeys: [new Uint8Array([1])], providerConnectionsCatalog });
+        const lifetime = { scopeKey: base.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
         expect(readProviderSettingsForCli(getActiveAccountSettingsSnapshot()!).settings).toMatchObject({ connections: [] });
         setActiveAccountSettingsSnapshot({ ...base, settingsVersion: 5, settingsSecretsReadKeys: [] });
         expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toEqual({ status: 'loading' });
         expect(() => readProviderSettingsForCli(getActiveAccountSettingsSnapshot()!)).toThrow();
+        expect(activeAccountSettingsSnapshot.isActiveAccountSettingsSnapshotLifetimeCurrent(lifetime)).toBe(false);
     });
     it('retains admitted MCP authority with Provider neighbors across preferences but retires both on Account replacement', () => {
         const mcpServerCatalog = { status: 'ready' as const, revision: 7, authority: 'active' as const,

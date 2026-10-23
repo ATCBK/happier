@@ -5,6 +5,7 @@ import { NotificationChannelRecordV1Schema } from '@happier-dev/protocol/account
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot } from './activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from './accountSettingsScopeKey';
+import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
 
 import type { Credentials } from '@/persistence';
 import type { AccountSettingsContext } from './bootstrapAccountSettingsContext';
@@ -23,7 +24,7 @@ function createContext(settingsVersion: number): AccountSettingsContext {
     settings: accountSettingsParse({ schemaVersion: 6 }),
     settingsVersion,
     loadedAtMs: 1,
-    settingsSecretsReadKeys: [],
+    settingsSecretsReadKeys: deriveSettingsSecretsReadKeysForCredentials(createCredentialsStub()),
     whenRefreshed: null,
   };
 }

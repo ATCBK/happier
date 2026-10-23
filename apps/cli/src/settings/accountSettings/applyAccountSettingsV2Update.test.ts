@@ -2,6 +2,7 @@ import { accountSettingsParse } from '@happier-dev/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Credentials, TokenOnlyCredentials } from '@/persistence';
+import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
 
 const { applyProcessEnv } = vi.hoisted(() => ({
   applyProcessEnv: vi.fn(),
@@ -43,7 +44,7 @@ function snapshot(params: Readonly<{
     settings: accountSettingsParse({ sessionPendingQueueDeliveryTiming: params.timing }),
     settingsVersion: params.version,
     loadedAtMs: params.version,
-    settingsSecretsReadKeys: [],
+    settingsSecretsReadKeys: deriveSettingsSecretsReadKeysForCredentials(params.credentials),
     scopeKey: resolveAccountSettingsScopeKey(params.credentials),
   };
 }

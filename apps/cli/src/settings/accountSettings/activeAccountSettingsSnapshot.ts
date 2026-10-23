@@ -73,8 +73,8 @@ let active: ActiveAccountSettingsSnapshot | null = null;
 // Secret catalog refresh has withdrawn material without publishing, and after
 // a refresh that observed a logically unchanged catalog.
 let published: ActiveAccountSettingsSnapshot | null = null;
-// This token is intentionally owner-local: it advances at Account lifetime
-// boundaries, not when the active Account receives a newer settings revision.
+// This token is intentionally owner-local: Account scope or key-material
+// retirement advances it; a newer preference revision alone does not.
 let activeLifetimeToken = 0;
 // Connected Services projections can change the configured External Session
 // source set without changing Account Settings themselves.
@@ -209,7 +209,8 @@ export function commitActiveAccountSettingsSnapshot(
   const accepted = preserveAccountCatalogsInSnapshot(previous, next);
   zeroRetiredSavedSecretResourceDataKeys(previous?.savedSecretResources, accepted.savedSecretResources);
   active = accepted;
-  if (!previous || !belongsToSameAccount(previous, accepted)) {
+  if (!previous || !belongsToSameAccount(previous, accepted)
+    || !isDeepStrictEqual(previous.settingsSecretsReadKeys, accepted.settingsSecretsReadKeys)) {
     activeLifetimeToken += 1;
   }
   emitActiveAccountSettingsSnapshot(accepted);

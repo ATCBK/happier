@@ -1,23 +1,28 @@
 import { createHash } from 'node:crypto';
 
 import type { StoredCredentials } from '@/persistence';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { resolveAccountSettingsCachePath } from './accountSettingsCache';
 
-function tokenScopeKey(token: string): string {
-  // Avoid keeping raw access tokens in memory map keys.
-  return createHash('sha256').update(token).digest('hex').slice(0, 16);
+function accountScopeKey(token: string): string {
+  const accountId = readAccountIdFromToken(token);
+  // Bearer rotation does not retire an Account. Opaque credentials cannot
+  // establish that continuity, so keep their existing credential isolation.
+  const identity = accountId ? `account:${accountId}` : `token:${token}`;
+  return createHash('sha256').update(identity).digest('hex').slice(0, 16);
 }
 
 export function createAccountSettingsScopeKey(params: Readonly<{
   cachePath: string;
   token: string;
 }>): string {
-  return `${params.cachePath}::${tokenScopeKey(params.token)}`;
+  return `${params.cachePath}::${accountScopeKey(params.token)}`;
 }
 
 /**
- * The one process-local Account lifetime identity shared by settings-backed
- * host consumers that only have the authenticated token available.
+ * Shared Account/Home publication scope for settings-backed host consumers
+ * that only have the authenticated token available. The active snapshot owner
+ * separately fences lifetime and key-material retirement.
  */
 export function resolveAccountSettingsScopeKeyForToken(token: string): string {
   return createAccountSettingsScopeKey({

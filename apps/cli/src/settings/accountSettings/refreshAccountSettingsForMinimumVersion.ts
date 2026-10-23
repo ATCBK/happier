@@ -1,7 +1,9 @@
 import type { AgentId } from '@happier-dev/agents';
+import { isDeepStrictEqual } from 'node:util';
 import type { BackendTargetRefV1, BackendTargetRefV2 } from '@happier-dev/protocol';
 
 import type { StoredCredentials } from '@/persistence';
+import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
 import {
   getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken,
@@ -40,6 +42,7 @@ type RefreshParams = Readonly<{
 type InFlightRefresh = Readonly<{
   minimum: number | null;
   forceRefresh: boolean;
+  settingsSecretsReadKeys: readonly Uint8Array[];
   promise: Promise<AccountSettingsContext>;
 }>;
 
@@ -69,12 +72,14 @@ export async function refreshAccountSettingsForMinimumVersion(params: RefreshPar
   const minSettingsVersion = normalizeAccountSettingsVersionHint(params.minSettingsVersion);
   const forceRefresh = params.forceRefresh === true;
   const scopeKey = deps.resolveScopeKey(params.credentials);
+  const settingsSecretsReadKeys = deriveSettingsSecretsReadKeysForCredentials(params.credentials);
 
   const active = deps.getActiveSnapshot();
   if (
     !forceRefresh
     && active
     && active.scopeKey === scopeKey
+    && isDeepStrictEqual(active.settingsSecretsReadKeys, settingsSecretsReadKeys)
     && isAccountSettingsVersionAtLeast(active.settingsVersion, minSettingsVersion)
   ) {
     return contextFromActiveSnapshot(active);
@@ -85,6 +90,7 @@ export async function refreshAccountSettingsForMinimumVersion(params: RefreshPar
   if (
     !params.shouldCommit
     && inFlight
+    && isDeepStrictEqual(inFlight.settingsSecretsReadKeys, settingsSecretsReadKeys)
     // A forced refresh must not be satisfied by an older opportunistic one,
     // while an opportunistic caller may safely join the stronger forced work.
     && (!forceRefresh || inFlight.forceRefresh)
@@ -111,6 +117,7 @@ export async function refreshAccountSettingsForMinimumVersion(params: RefreshPar
     inFlightByScope.set(refreshKey, {
       minimum: minSettingsVersion,
       forceRefresh,
+      settingsSecretsReadKeys,
       promise,
     });
   }

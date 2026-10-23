@@ -1,10 +1,10 @@
 import axios from 'axios';
+import { createHash } from 'node:crypto';
 import { ACCOUNT_SECURITY_PATH_V1, AccountSecurityGetResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 import { combineTerminalPresentUserPolicies, AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import type { TerminalPresentUserPolicy } from '@happier-dev/protocol/actions/invocationAuthority';
 import { configuration } from '@/configuration';
 import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { createAccountSettingsScopeKey } from './accountSettingsScopeKey';
 import { ACCOUNT_SETTINGS_REQUEST_TIMEOUT_MS } from './accountSettingsRequestTimeout';
 
 export type TerminalPresentUserPolicyScope = Readonly<{ token: string; serverHttpBaseUrl?: string }>;
@@ -15,10 +15,10 @@ const pendingRefreshes = new Map<string, Promise<TerminalPresentUserPolicy>>();
 const initializedScopes = new Set<string>();
 
 function scopeKey(scope: TerminalPresentUserPolicyScope): string {
-  return createAccountSettingsScopeKey({
-    cachePath: normalizeServerHttpBaseUrl(scope.serverHttpBaseUrl ?? resolveServerHttpBaseUrl()),
-    token: scope.token,
-  });
+  // Initialization belongs to a credential: a replacement bearer must make
+  // its own security read, including after a failed prior initialization.
+  const bearerDigest = createHash('sha256').update(scope.token).digest('hex').slice(0, 16);
+  return `${normalizeServerHttpBaseUrl(scope.serverHttpBaseUrl ?? resolveServerHttpBaseUrl())}::${bearerDigest}`;
 }
 
 export function resolveEffectiveTerminalPresentUserPolicy(
