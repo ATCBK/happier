@@ -14,6 +14,7 @@ import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { teamCapabilitiesFixture, teamPolicyFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol';
+import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { buildSettingHref } from '@/components/settings/catalog/settingDeclarations';
 import { TEAM_AUTHENTICATION_SETTINGS } from '../../teams/identity/teamAuthenticationSettings';
@@ -62,6 +63,11 @@ const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamAct
 const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
 const { resetHomeGovernanceSnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
 const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { resetRemoteHostCatalogEngineForTests } = await import('@/sync/engine/settings/remoteHostCatalogEngine');
+const { resetRemoteHostCatalogSnapshotsForTests } = await import('@/sync/store/settings/remoteHostCatalogSnapshot');
+const { storage } = await import('@/sync/domains/state/storage');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 let restorePopoverGlobals: (() => void) | undefined;
 
 beforeEach(async () => {
@@ -75,12 +81,20 @@ beforeEach(async () => {
     resetHomeGovernanceEngineForTests();
     resetHomeGovernanceSnapshotsForTests();
     resetServerFeaturesClientForTests();
+    resetRemoteHostCatalogEngineForTests();
+    resetRemoteHostCatalogSnapshotsForTests();
     await harness.reset();
     // The real menu needs the browser frame/window boundary; leave selection,
     // availability and the scoped Action path running inside the process.
     restorePopoverGlobals = withPopoverWebGlobals();
 });
-afterEach(() => { standardCleanup(); restorePopoverGlobals?.(); restorePopoverGlobals = undefined; });
+afterEach(() => {
+    standardCleanup();
+    storage.getState().clearProfileScope();
+    publishAppliedActiveServerRuntimeAvailability(false);
+    restorePopoverGlobals?.();
+    restorePopoverGlobals = undefined;
+});
 
 describe('Sign-in providers page', () => {
     const companyConnection = (teamId: string | null) => ({
@@ -272,6 +286,13 @@ describe('Sign-in providers page', () => {
 
     it('edits WorkOS in place: nothing is written until Save, then one write carries the field and the secret', async () => {
         const serverId = await harness.addHome({ name: 'Acme Home', serverUrl: 'https://acme-home-workos.example', accountId: 'owner-1' });
+        // The executor consumes the real active Account and applied-runtime owners. With no
+        // pending change it must not demand that Account's remote-host catalog at all.
+        storage.getState().activateProfileScope({ serverId, accountId: 'owner-1' });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        harness.answer(serverId, REMOTE_HOST_ROWS_ROUTE_V1, { body: {
+            status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, hosts: [] } },
+        } });
         harness.answer(serverId, '/v1/home/governance/get', { body: homeGovernanceProjectionFixture() });
         harness.answer(serverId, '/v1/home/settings/get', {
             body: homeSettingsProjectionFixture({ revision: 4, entries: [workosApiKey(), workosClientId()] }),
@@ -305,6 +326,7 @@ describe('Sign-in providers page', () => {
         });
         // Leaving a field never writes; only the row's Save does.
         expect(harness.requestsFor('/v1/home/settings/set')).toHaveLength(0);
+        expect(harness.requestsFor(REMOTE_HOST_ROWS_ROUTE_V1)).toHaveLength(0);
         expect(screen.findByTestId('home-sign-in-platform-setting:WORKOS_API_KEY-save')).toBeNull();
 
         await act(async () => { screen.pressByTestId('home-sign-in-platform:workos.save'); });
@@ -318,6 +340,7 @@ describe('Sign-in providers page', () => {
             expect(screen.getTextContent()).toContain('homeGovernance.signInProviders.pendingSummaryWorkos');
             expect(screen.findByTestId('home-runtime-pending-restart')).not.toBeNull();
         });
+        await waitForHomeGovernance(() => expect(harness.requestsFor(REMOTE_HOST_ROWS_ROUTE_V1)).toHaveLength(1));
     });
 
     it('says at the top of the page that the last start ignored a sign-in setting, and leads to its row', async () => {

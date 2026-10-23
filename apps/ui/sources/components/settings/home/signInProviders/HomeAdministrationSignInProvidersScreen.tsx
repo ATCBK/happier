@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { HomeIdentityDeploymentServicesV1 } from '@happier-dev/protocol/home/governance';
+import type { HomeIdentityDeploymentServicesV1, HomeSettingEntryV1 } from '@happier-dev/protocol/home/governance';
 
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -69,12 +69,21 @@ const SignInProvidersRestartBanner = React.memo(function SignInProvidersRestartB
     context: HomeAdministrationContext;
     home: HomeSettingsRead;
 }>) {
-    const { context, home } = props;
+    const pending = React.useMemo(() => props.home.settings?.entries.filter((entry) => entry.applied?.pending === true) ?? [], [props.home.settings]);
+    return pending.length > 0 ? <SignInProvidersPendingRestartBanner {...props} pending={pending} /> : null;
+});
+
+/** Executor/catalog observation belongs only to the pending-restart surface, as on Overview. */
+const SignInProvidersPendingRestartBanner = React.memo(function SignInProvidersPendingRestartBanner(props: Readonly<{
+    context: HomeAdministrationContext;
+    home: HomeSettingsRead;
+    pending: readonly HomeSettingEntryV1[];
+}>) {
+    const { context, home, pending } = props;
     const release = useHomeServerRelease(context.scope.serverId, context.projection.capabilities.viewAdministration);
     const executor = useHomeRuntimeExecutor(context.scope.serverId, release.flavor);
     const [discarding, setDiscarding] = React.useState(false);
     const { write } = useHomeSettingsWrite({ context, home, onFieldError: IGNORE_FIELD_ERROR });
-    const pending = React.useMemo(() => home.settings?.entries.filter((entry) => entry.applied?.pending === true) ?? [], [home.settings]);
     const discard = React.useCallback(async () => {
         setDiscarding(true);
         try {
