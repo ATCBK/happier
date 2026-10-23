@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./workflows/workflowDiscussionPublicationV1": {
+      "happier-source": "./src/workflows/workflowDiscussionPublicationV1.ts",
+      "types": "./dist/workflows/workflowDiscussionPublicationV1.d.ts",
+      "default": "./dist/workflows/workflowDiscussionPublicationV1.js"
+    },
     "./providers/catalog/brokerApplicationProjectionV1": {
       "happier-source": "./src/providers/catalog/brokerApplicationProjectionV1.ts",
       "types": "./dist/providers/catalog/brokerApplicationProjectionV1.d.ts",
@@ -3520,10 +3525,10 @@
       "types": "./dist/sessions/follow/sessionFollowSourcesApi.d.ts",
       "default": "./dist/sessions/follow/sessionFollowSourcesApi.js"
     },
-    "./sessions/follow/followSourceRefPathV1": {
-      "happier-source": "./src/sessions/follow/followSourceRefPathV1.ts",
-      "types": "./dist/sessions/follow/followSourceRefPathV1.d.ts",
-      "default": "./dist/sessions/follow/followSourceRefPathV1.js"
+    "./sessions/follow/followSourceRefTransportV1": {
+      "happier-source": "./src/sessions/follow/followSourceRefTransportV1.ts",
+      "types": "./dist/sessions/follow/followSourceRefTransportV1.d.ts",
+      "default": "./dist/sessions/follow/followSourceRefTransportV1.js"
     },
     "./sessions/follow/api": {
       "happier-source": "./src/sessions/follow/api.ts",

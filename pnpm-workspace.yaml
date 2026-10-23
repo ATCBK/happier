@@ -43,6 +43,14 @@ verifyDepsBeforeRun: false
 linkWorkspacePackages: true
 autoInstallPeers: false
 strictDepBuilds: true
+supportedArchitectures:
+  os:
+    - current
+  cpu:
+    - current
+  libc:
+    - glibc
+    - musl
 overrides:
   "@react-navigation/core": 7.21.5
   "@react-navigation/native": 7.3.8
@@ -58,11 +66,7 @@ overrides:
   lodash: 4.18.1
   "@prisma/config>deepmerge-ts": 8.0.2
   "@prisma/config>effect": 3.22.2
-  minimatch>brace-expansion: 5.0.12
-  fast-xml-parser>fast-xml-builder: 1.1.7
-  whatwg-url: 14.2.0
-  parse-path: 7.0.3
-  "@types/parse-path": 7.0.3
+  fast-xml-parser@5.7.0>fast-xml-builder: 1.1.7
   "@socket.io/redis-streams-adapter": 0.3.1
   libmime: 5.4.7
   socket.io: 4.8.3
@@ -88,6 +92,9 @@ overrides:
   react-native-reanimated: 4.3.0
   react-native-unistyles: 3.5.3
   react-native-worklets: 0.8.1
+  vitest@3.2.4>vite: 7.3.1
+  vite-node@3.2.4>vite: 7.3.1
+  "@prisma/client": 6.19.2
 packageExtensions:
   "@pierre/theming@1.0.1":
     dependencies:

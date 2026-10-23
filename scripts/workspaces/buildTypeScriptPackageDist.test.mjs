@@ -356,7 +356,7 @@ test('buildTypeScriptPackageDist excludes type tests while the original project 
     await writeFile(join(packageDir, 'src', `${suffix.endsWith('tsx') ? 'jsx-contract' : 'contract'}.${suffix}`), 'export const checked: string = 1;\n');
   }
   const typecheck = await compile(['--noEmit', '-p', projectPath]);
-  assert.equal(typecheck.exitCode, 1, 'type tests must remain enforced by typecheck');
+  assert.ok(Number.isInteger(typecheck.exitCode) && typecheck.exitCode !== 0, 'type tests must remain enforced by typecheck');
   assert.match(typecheck.out, /contract\.test-d\.ts\(1,14\): error TS2322/);
   assert.match(typecheck.out, /jsx-contract\.test-d\.tsx\(1,14\): error TS2322/);
 

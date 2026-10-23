@@ -119,6 +119,36 @@ test('release installs materialize foreign optional packages and both Linux libc
   }
 });
 
+test('ordinary installs materialize both Linux libc variants of the host platform and nothing foreign', (t) => {
+  // Linux CLI payloads keep glibc and musl optionals (finalizeRuntimeArtifactPayload), so a
+  // source-built guest payload needs both from an ordinary worker install, as Yarn 1 gave it.
+  const { root } = fixture(t);
+  const { supportedArchitectures } = yaml.load(fs.readFileSync(path.join(repoRoot, 'pnpm-workspace.yaml'), 'utf8'));
+  const foreignCpu = process.arch === 'arm64' ? 'x64' : 'arm64';
+  const packages = [
+    ['host-glibc', process.platform, process.arch, 'glibc'],
+    ['host-musl', process.platform, process.arch, 'musl'],
+    ['foreign-cpu', process.platform, foreignCpu],
+  ];
+  const optionalDependencies = {};
+  for (const [name, os, cpu, libc] of packages) {
+    const directory = path.join(root, name);
+    write(directory, 'package/package.json', JSON.stringify({ name, version: '1.0.0', os: [os], cpu: [cpu], ...(libc ? { libc: [libc] } : {}) }));
+    execFileSync('tar', ['-czf', path.join(root, `${name}.tgz`), '-C', directory, 'package']);
+    optionalDependencies[name] = `file:${path.join(root, `${name}.tgz`)}`;
+  }
+  const directory = path.join(root, 'install');
+  write(directory, 'package.json', JSON.stringify({ private: true, optionalDependencies }));
+  write(directory, 'pnpm-workspace.yaml', yaml.dump({ packages: ['.'], nodeLinker: 'hoisted', autoInstallPeers: false, supportedArchitectures }));
+  execFileSync('pnpm', ['install', '--ignore-scripts', '--offline', '--store-dir', path.join(root, 'store')], { cwd: directory, env: { ...process.env, CI: 'true' }, stdio: 'pipe' });
+  const installed = (name) => fs.existsSync(path.join(directory, 'node_modules', name, 'package.json'));
+  if (process.platform === 'linux') {
+    assert.ok(installed('host-glibc'), 'ordinary Linux installs must include the glibc variant');
+    assert.ok(installed('host-musl'), 'ordinary Linux installs must include the musl variant');
+  }
+  assert.equal(installed('foreign-cpu'), false);
+});
+
 test('the current-run preparation archive restores prepared outputs and readiness without collecting source changes', (t) => {
   const { root, workspace, runnerTemp } = fixture(t);
   const workflow = yaml.load(fs.readFileSync(path.join(workflowsDir, 'tests.yml'), 'utf8'));

@@ -92,8 +92,9 @@ export function resolveTypeScriptCliInvocation(params) {
   // workers, explicit local overrides and admitted descendants retain guards.
   if (requiresTypeScriptAdmission({ env, platform: params.platform ?? process.platform })) {
     const admissionClass = params.admissionClass ?? resolveRemoteCommandPolicy(
-      ['node', 'scripts/workspaces/runTypeScriptCli.mjs', ...(params.args ?? [])],
-      { cwd: relative(REPO_ROOT, params.workspaceDir ?? process.cwd()) || '.' },
+      ['node', 'scripts/workspaces/runTypeScriptCli.mjs', ...(params.admissionArgs ?? params.args ?? [])],
+      { cwd: relative(params.repoRoot ?? REPO_ROOT, params.workspaceDir ?? process.cwd()) || '.',
+        repoRoot: params.repoRoot ?? REPO_ROOT },
     ).heavyClass;
     // Routing markers select transport; only the native admission owner can
     // validate/reuse an admitted ancestor or wait for compilation headroom.

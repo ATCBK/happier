@@ -252,8 +252,7 @@ function withOutputCompilerArgs(args, outputDir, tsBuildInfoFile) {
   ];
 }
 
-export async function withDistProjectCompilerArgs(args, compilerWorkTree) {
-  const { projectPath, workDir, compilerOptions = {} } = compilerWorkTree;
+export function createDistTypeScriptProjectConfig({ projectPath, compilerOptions = {} }) {
   const projectDir = dirname(projectPath);
   // The retained TypeScript API owns config parsing and effective type roots.
   // Compilation and option validation use resolveTypeScriptCliInvocation.
@@ -296,6 +295,12 @@ export async function withDistProjectCompilerArgs(args, compilerWorkTree) {
         .map((path) => resolve(projectDir, path)),
     } : {}),
   };
+  return distConfig;
+}
+
+export async function withDistProjectCompilerArgs(args, compilerWorkTree) {
+  const { workDir } = compilerWorkTree;
+  const distConfig = createDistTypeScriptProjectConfig(compilerWorkTree);
   const distProjectPath = join(workDir, 'tsconfig.dist.json');
   const contents = `${JSON.stringify(distConfig, null, 2)}\n`;
   if (!existsSync(distProjectPath) || readFileSync(distProjectPath, 'utf8') !== contents) {
@@ -431,6 +436,12 @@ function isTypeScriptSourcePath(path) {
   return /\.(?:cts|mts|tsx?|json)$/u.test(path);
 }
 
+export function readTypeScriptBuildInputFileNames(tsBuildInfoFile) {
+  const buildInfo = JSON.parse(readFileSync(tsBuildInfoFile, 'utf8'));
+  if (!Array.isArray(buildInfo?.fileNames)) throw new Error('Invalid TypeScript compiler input inventory');
+  return buildInfo.fileNames;
+}
+
 function compilerCacheNeedsReset({
   packageDir,
   packageJson,
@@ -468,20 +479,19 @@ function compilerCacheNeedsReset({
     return true;
   }
 
-  let buildInfo;
+  let fileNames;
   try {
-    buildInfo = JSON.parse(readFileSync(tsBuildInfoFile, 'utf8'));
+    fileNames = readTypeScriptBuildInputFileNames(tsBuildInfoFile);
   } catch {
     return true;
   }
-  if (!Array.isArray(buildInfo?.fileNames)) return true;
 
   const sourcePathBases = [
     dirname(tsBuildInfoFile),
     dirname(projectPath),
     packageDir,
   ];
-  for (const fileName of buildInfo.fileNames) {
+  for (const fileName of fileNames) {
     if (typeof fileName !== 'string' || !isTypeScriptSourcePath(fileName)) continue;
     const localCandidates = [...new Set(sourcePathBases
       .map((basePath) => resolve(basePath, fileName))

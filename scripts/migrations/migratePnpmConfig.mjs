@@ -24,13 +24,31 @@ workspace.autoInstallPeers = false;
 workspace.strictDepBuilds = true;
 // Stack owns dependency preparation; script dispatch must not retry workspace installs.
 workspace.verifyDepsBeforeRun = false;
-if (manifest.resolutions || cli.resolutions) workspace.overrides = {};
+// Linux CLI payloads retain both libc variants of the host OS/CPU. Foreign
+// release targets are still selected explicitly by the CI install action.
+workspace.supportedArchitectures = { os: ['current'], cpu: ['current'], libc: ['glibc', 'musl'] };
+if (manifest.resolutions) workspace.overrides = {};
 workspace.overrides ??= {};
-for (const [selector, resolution] of Object.entries({ ...manifest.resolutions, ...cli.resolutions })) {
-  // pnpm supports one parent. These two broadenings are explicitly approved in the lane brief.
-  const translated = selector === '**/@fastify/otel/minimatch/brace-expansion' ? 'minimatch>brace-expansion'
-    : selector === '**/minio/fast-xml-parser/fast-xml-builder' ? 'fast-xml-parser>fast-xml-builder'
-    : selector.startsWith('**/') ? selector.slice(3).replace(/\/(?=[^/]+$)/, '>') : selector;
+// Yarn 1.22.22 reads resolutions only from the workspace root. Promoting a
+// dormant workspace pin changes the graph, including unrelated consumers.
+for (const [selector, resolution] of Object.entries(manifest.resolutions ?? {})) {
+  const unrooted = selector.startsWith('**/');
+  const packages = (unrooted ? selector.slice(3) : selector).match(/@[^/]+\/[^/]+|[^/]+/g) ?? [];
+  let translated;
+  if (selector === '**/minio/fast-xml-parser/fast-xml-builder') {
+    // Audited retained Yarn graph (7cb748d766): minio@8.0.7 is the only
+    // fast-xml-parser consumer, resolving 5.7.0. pnpm supports one parent.
+    translated = 'fast-xml-parser@5.7.0>fast-xml-builder';
+  } else {
+    // @fastify/otel is absent from the retained graph, so its dormant nested
+    // resolution has no parent version we can qualify. Reject it, and any
+    // other ancestry/glob we cannot represent, rather than widening scope.
+    if (!packages.length || packages.length > 2 || (!unrooted && packages.length > 1)
+      || packages.some(name => /[*?\[\]{}!]/.test(name))) {
+      throw new Error(`Cannot preserve Yarn resolution scope: ${selector}`);
+    }
+    translated = packages.join('>');
+  }
   workspace.overrides[translated] = resolution;
 }
 // Preserve the retained Yarn graph: Pierre imports themes introduced in Shiki 4,
@@ -38,6 +56,10 @@ for (const [selector, resolution] of Object.entries({ ...manifest.resolutions, .
 // broader than the theme subpaths its published code actually imports.
 workspace.overrides['@pierre/diffs>shiki'] = '4.5.0';
 workspace.overrides['@pierre/diffs>@shikijs/transformers'] = '4.5.0';
+// Yarn resolved these broad ranges to the root's Vite 7.3.1. Shared CLI/UI
+// Vitest configs require that identity; unrelated Vite 6 consumers keep theirs.
+workspace.overrides['vitest@3.2.4>vite'] = '7.3.1';
+workspace.overrides['vite-node@3.2.4>vite'] = '7.3.1';
 workspace.packageExtensions ??= {};
 workspace.packageExtensions['@pierre/theming@1.0.1'] = {
   ...workspace.packageExtensions['@pierre/theming@1.0.1'],
@@ -72,7 +94,6 @@ manifest.scripts.postinstall = manifest.scripts.postinstall?.replace(/^patch-pac
 manifest.dependencies['@happier-dev/cli'] = 'workspace:^';
 delete manifest.workspaces;
 delete manifest.resolutions;
-delete cli.resolutions;
 delete cli.packageManager;
 write('package.json', manifest);
 write('apps/cli/package.json', cli);
@@ -110,8 +131,17 @@ if (fs.existsSync(uiPath)) {
 fs.writeFileSync(workspacePath, stringify(workspace));
 for (const full of await collectWorkspacePackageJsonPaths(root)) {
   const value = JSON.parse(fs.readFileSync(full, 'utf8'));
+  let changed = false;
+  if (value.resolutions) {
+    console.warn(`Ignored non-root Yarn resolutions in ${path.relative(root, full)}; only root resolutions were active.`);
+    delete value.resolutions;
+    changed = true;
+  }
   if (value.packageManager) {
     delete value.packageManager;
+    changed = true;
+  }
+  if (changed) {
     fs.writeFileSync(full, `${JSON.stringify(value, null, 2)}\n`);
   }
 }
