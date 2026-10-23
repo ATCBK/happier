@@ -457,7 +457,7 @@ describe('createKeyboardShortcutDispatcher', () => {
                 'session.new': vi.fn(),
                 'shortcutsHelp.open': vi.fn(),
                 'settings.open': vi.fn(),
-                'transcript.message.next': vi.fn(),
+                'code.showInfo': vi.fn(),
             },
         });
 
@@ -467,7 +467,7 @@ describe('createKeyboardShortcutDispatcher', () => {
         // The platform's preferences shortcut opens Settings in the desktop app.
         expect(labels['settings.open']).toBe('Cmd+,');
         // A command with a handler but no binding has no label.
-        expect(labels['transcript.message.next']).toBeUndefined();
+        expect(labels['code.showInfo']).toBeUndefined();
     });
 
     it('keeps editable-safe commands editable when their shortcut is overridden', () => {

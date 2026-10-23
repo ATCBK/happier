@@ -1517,8 +1517,7 @@ export const de: TranslationStructure = {
             splitCanvasSplitDown: "Nach unten teilen",
             splitCanvasSplitRight: "Nach rechts teilen",
             splitCanvasToggleMaximize: "Split maximieren ein/aus",
-            transcriptMessageNext: "Nächste Nachricht",
-            transcriptMessagePrevious: "Vorherige Nachricht",},
+        },
     },
 
     tabs: {

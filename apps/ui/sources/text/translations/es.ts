@@ -1897,8 +1897,7 @@ export const es: TranslationStructure = {
             splitCanvasSplitDown: "Dividir hacia abajo",
             splitCanvasSplitRight: "Dividir hacia la derecha",
             splitCanvasToggleMaximize: "Alternar maximización del panel",
-            transcriptMessageNext: "Mensaje siguiente",
-            transcriptMessagePrevious: "Mensaje anterior",},
+        },
     },
 
   tabs: {

@@ -1474,8 +1474,6 @@ const enSettingsKeyboard = {
     splitCanvasSplitDown: 'Split down',
     splitCanvasSplitRight: 'Split right',
     splitCanvasToggleMaximize: 'Toggle split maximize',
-    transcriptMessageNext: 'Next message',
-    transcriptMessagePrevious: 'Previous message',
   },
 };
 

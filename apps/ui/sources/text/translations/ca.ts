@@ -1731,8 +1731,7 @@ export const ca: TranslationStructure = {
             splitCanvasSplitDown: "Divideix cap avall",
             splitCanvasSplitRight: "Divideix cap a la dreta",
             splitCanvasToggleMaximize: "Commuta la maximització de la divisió",
-            transcriptMessageNext: "Missatge següent",
-            transcriptMessagePrevious: "Missatge anterior",},
+        },
     },
 
     tabs: {

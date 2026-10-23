@@ -1725,8 +1725,7 @@ export const ru: TranslationStructure = {
             splitCanvasSplitDown: "Разделить вниз",
             splitCanvasSplitRight: "Разделить вправо",
             splitCanvasToggleMaximize: "Переключить разворачивание раздела",
-            transcriptMessageNext: "Следующее сообщение",
-            transcriptMessagePrevious: "Предыдущее сообщение",},
+        },
     },
 
   tabs: {

@@ -1709,8 +1709,7 @@ export const zhHans: TranslationStructure = {
             splitCanvasSplitDown: "向下拆分",
             splitCanvasSplitRight: "向右拆分",
             splitCanvasToggleMaximize: "切换分屏最大化",
-            transcriptMessageNext: "下一条消息",
-            transcriptMessagePrevious: "上一条消息",},
+        },
     },
 
   tabs: {

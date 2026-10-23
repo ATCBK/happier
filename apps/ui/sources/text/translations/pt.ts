@@ -1933,8 +1933,7 @@ export const pt: TranslationStructure = {
             splitCanvasSplitDown: "Dividir para baixo",
             splitCanvasSplitRight: "Dividir para a direita",
             splitCanvasToggleMaximize: "Alternar maximização da divisão",
-            transcriptMessageNext: "Próxima mensagem",
-            transcriptMessagePrevious: "Mensagem anterior",},
+        },
     },
 
   tabs: {

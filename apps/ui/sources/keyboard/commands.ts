@@ -569,14 +569,6 @@ export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
         defaultBindings: [{ binding: 'Mod+,', blockedSurfaces: ['web'] }],
     },
     {
-        id: 'transcript.message.next',
-        settingsTitleKey: 'settingsKeyboard.commands.transcriptMessageNext',
-    },
-    {
-        id: 'transcript.message.previous',
-        settingsTitleKey: 'settingsKeyboard.commands.transcriptMessagePrevious',
-    },
-    {
         id: 'transcript.selection.cancel',
         settingsTitleKey: 'settingsKeyboard.commands.transcriptSelectionCancel',
         defaultBinding: { binding: 'Escape' },

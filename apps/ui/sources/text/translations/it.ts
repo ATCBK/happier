@@ -1710,8 +1710,7 @@ export const it: TranslationStructure = {
             splitCanvasSplitDown: "Dividi verso il basso",
             splitCanvasSplitRight: "Dividi verso destra",
             splitCanvasToggleMaximize: "Attiva/disattiva massimizzazione riquadro",
-            transcriptMessageNext: "Messaggio successivo",
-            transcriptMessagePrevious: "Messaggio precedente",},
+        },
     },
 
   tabs: {

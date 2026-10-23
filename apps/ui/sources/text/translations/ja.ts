@@ -1878,8 +1878,7 @@ export const ja: TranslationStructure = {
             splitCanvasSplitDown: "下に分割",
             splitCanvasSplitRight: "右に分割",
             splitCanvasToggleMaximize: "分割の最大化を切り替え",
-            transcriptMessageNext: "次のメッセージ",
-            transcriptMessagePrevious: "前のメッセージ",},
+        },
     },
 
   tabs: {

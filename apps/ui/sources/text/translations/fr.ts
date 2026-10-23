@@ -1732,8 +1732,7 @@ export const fr: TranslationStructure = {
             splitCanvasSplitDown: "Diviser vers le bas",
             splitCanvasSplitRight: "Diviser vers la droite",
             splitCanvasToggleMaximize: "Basculer la maximisation du split",
-            transcriptMessageNext: "Message suivant",
-            transcriptMessagePrevious: "Message précédent",},
+        },
     },
 
   tabs: {
