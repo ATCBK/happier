@@ -777,6 +777,22 @@ Machines and endpoints. Coinciding identities return `resource_unavailable`
 before signing (and before Team model projection); strict signing schemas remain
 unchanged.
 
+For Machine-placed Provider Actions in 0.3 development, Machine admission resolves
+the same native RPC route as the Provider executor. A public Action name is not a
+second RPC policy. Raw operations that use the daemon's private Account catalog,
+credentials or legacy profiles remain custodian-only, including model listing,
+probing, binding status, loading, model-settings mutation, and raw Team-source
+request-policy support, resource-test candidate and broker eligibility reads.
+Raw connected-service quota-credit consumption also remains custodian-only: it
+uses the custodian's recovery state and returns its private quota snapshot. Requester
+Account-owned catalog writes keep their separate Account authority.
+Foreign Machine Use admits only the existing Team-model worker compatibility
+projection; it does not admit generic or competing-source projection of the
+custodian catalog. That Team slice neither reads custodian settings nor borrows
+custodian compatibility consent; the requesting Account supplies its own consent.
+The CLI preserves a typed Home target refusal instead of reporting unavailable
+authentication.
+
 The consumer's published loopback base path comes from the admitted hub runtime
 endpoint, through the same signed application's private metadata operation. It
 does not infer `/v1` from the protocol or disclose the hub origin or credentials.
