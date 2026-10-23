@@ -47,10 +47,11 @@ export async function parseEmail(raw: Uint8Array, options: EmailContentOptions =
 }
 
 async function parseEmailParts(raw: Uint8Array, options: EmailContentOptions, parentParts: readonly string[], inlinePartPrefix = ''): Promise<ParsedEmail> {
-  const [{ simpleParser }, { shapeEmailBody }] = await Promise.all([
+  const [mailparser, { shapeEmailBody }] = await Promise.all([
     import('mailparser'),
     import('./shape.js'),
   ]);
+  const { simpleParser } = { ...mailparser.default, ...mailparser };
   // Mailparser forwards ignoreEmbedded to its MIME splitter. Keep original
   // message bytes here; this owner already shapes forwarded content recursively.
   const parserOptions = { skipImageLinks: true, skipHtmlToText: true, skipTextToHtml: true, ignoreEmbedded: true };
