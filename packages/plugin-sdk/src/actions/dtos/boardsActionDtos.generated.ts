@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { BoardItemRefV1, InputPredicate, PluginJsonSchemaV2, QualifiedAudienceSelection, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
+import type { BoardItemRefV1, InputPredicate, PluginDeclarativeNodeV2, PluginJsonSchemaV2, QualifiedAudienceSelection, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type BoardsActionInputById = {
     readonly "boards.list": Record<string, never>;
@@ -95,6 +95,10 @@ export type BoardsActionInputById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: unknown;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -295,6 +299,10 @@ export type BoardsActionInputById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: unknown;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -916,6 +924,13 @@ export type BoardsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -1124,6 +1139,13 @@ export type BoardsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;

@@ -229,6 +229,11 @@ export type AppShellActionResultById = {
                 id: string;
                 invocationId?: string | undefined;
             } | {
+                kind: 'execution_run';
+                serverId: string;
+                id: string;
+                sessionId: string;
+            } | {
                 kind: 'automation_run';
                 serverId: string;
                 id: string;

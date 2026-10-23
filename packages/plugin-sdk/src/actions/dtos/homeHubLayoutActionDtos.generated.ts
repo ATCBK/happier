@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { InputPredicate, PluginJsonSchemaV2, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
+import type { InputPredicate, PluginDeclarativeNodeV2, PluginJsonSchemaV2, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type HomeHubLayoutActionInputById = {
     readonly "home.reachNudge.dismiss": {
@@ -130,6 +130,10 @@ export type HomeHubLayoutActionInputById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: unknown;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -260,6 +264,10 @@ export type HomeHubLayoutActionInputById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: unknown;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -434,6 +442,10 @@ export type HomeHubLayoutActionInputById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: unknown;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -597,6 +609,10 @@ export type HomeHubLayoutActionInputById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: unknown;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -785,6 +801,13 @@ export type HomeHubLayoutActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -911,6 +934,13 @@ export type HomeHubLayoutActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -1065,6 +1095,13 @@ export type HomeHubLayoutActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -1196,6 +1233,13 @@ export type HomeHubLayoutActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -1340,6 +1384,13 @@ export type HomeHubLayoutActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -1472,6 +1523,13 @@ export type HomeHubLayoutActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -1598,6 +1656,13 @@ export type HomeHubLayoutActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -1752,6 +1817,13 @@ export type HomeHubLayoutActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -1883,6 +1955,13 @@ export type HomeHubLayoutActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -2027,6 +2106,13 @@ export type HomeHubLayoutActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;

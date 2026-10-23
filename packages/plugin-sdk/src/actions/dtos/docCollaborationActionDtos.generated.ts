@@ -208,6 +208,15 @@ export type DocCollaborationActionResultById = {
                     };
                 })[];
             } | {
+                kind: 'workflow_result';
+                value: JsonValue;
+                summary: string;
+                source: {
+                    runId: string;
+                    invocationRecordId: string;
+                    invocationAttempt: string;
+                };
+            } | {
                 kind: 'doc_passage_comment';
                 passage: {
                     ref: {
@@ -344,6 +353,23 @@ export type DocCollaborationActionResultById = {
                         invocationAttempt: string;
                     } | undefined;
                 } | undefined;
+            } | {
+                v: 1;
+                kind: 'workflow';
+                runId: string;
+                invocationRecordId: string;
+                invocationAttempt: string;
+                execution: {
+                    kind: 'action';
+                    actionId: string;
+                } | {
+                    kind: 'detached_run';
+                    executionRunId: string;
+                } | {
+                    kind: 'not_started';
+                    blockKind: 'action' | 'step';
+                };
+                outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
             } | null;
             mentionedAccountIds: string[];
             createdAt: number;
@@ -446,6 +472,15 @@ export type DocCollaborationActionResultById = {
                     };
                 })[];
             } | {
+                kind: 'workflow_result';
+                value: JsonValue;
+                summary: string;
+                source: {
+                    runId: string;
+                    invocationRecordId: string;
+                    invocationAttempt: string;
+                };
+            } | {
                 kind: 'doc_passage_comment';
                 passage: {
                     ref: {
@@ -582,6 +617,23 @@ export type DocCollaborationActionResultById = {
                         invocationAttempt: string;
                     } | undefined;
                 } | undefined;
+            } | {
+                v: 1;
+                kind: 'workflow';
+                runId: string;
+                invocationRecordId: string;
+                invocationAttempt: string;
+                execution: {
+                    kind: 'action';
+                    actionId: string;
+                } | {
+                    kind: 'detached_run';
+                    executionRunId: string;
+                } | {
+                    kind: 'not_started';
+                    blockKind: 'action' | 'step';
+                };
+                outcome: 'answer' | 'pass' | 'failed' | 'cancelled' | 'terminal_no_result';
             } | null;
             mentionedAccountIds: string[];
             createdAt: number;

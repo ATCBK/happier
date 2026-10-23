@@ -21,6 +21,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -74,6 +75,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -133,6 +135,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -182,6 +185,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -231,6 +235,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -270,6 +275,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -311,6 +317,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -351,6 +358,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -537,6 +545,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -578,6 +587,7 @@ export type UsageActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -3246,6 +3256,7 @@ export type UsageActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                    relative?: undefined;
                 } | {
                     relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                     startMs?: undefined;
@@ -3283,6 +3294,7 @@ export type UsageActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                    relative?: undefined;
                 } | {
                     relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                     startMs?: undefined;
@@ -5270,6 +5282,7 @@ export type UsageActionResultById = {
                     period: {
                         startMs?: number | undefined;
                         endMs?: number | undefined;
+                        relative?: undefined;
                     } | {
                         relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                         startMs?: undefined;
@@ -8065,6 +8078,7 @@ export type UsageActionResultById = {
                         period: {
                             startMs?: number | undefined;
                             endMs?: number | undefined;
+                            relative?: undefined;
                         } | {
                             relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                             startMs?: undefined;

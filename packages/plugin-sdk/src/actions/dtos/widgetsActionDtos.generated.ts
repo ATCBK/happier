@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { InputPredicate, PluginJsonSchemaV2, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
+import type { InputPredicate, PluginDeclarativeNodeV2, PluginJsonSchemaV2, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input } from './pluginActionDtoSupport.generated.js';
 
 export type WidgetsActionInputById = {
     readonly "widgets.catalog.list": {
@@ -196,6 +196,10 @@ export type WidgetsActionInputById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: unknown;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -965,6 +969,10 @@ export type WidgetsActionInputById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: unknown;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -1371,6 +1379,10 @@ export type WidgetsActionInputById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: unknown;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -1497,6 +1509,10 @@ export type WidgetsActionInputById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: unknown;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -1850,6 +1866,10 @@ export type WidgetsActionInputById = {
             };
             inputSchema: unknown;
             description?: string | undefined;
+            publicPresentation?: {
+                kind: 'declarative';
+                document: unknown;
+            } | undefined;
             sessionInputPath?: string | undefined;
             connectedAccountPurposeBindings?: {
                 path: string;
@@ -1887,6 +1907,10 @@ export type WidgetsActionInputById = {
             networkOverride?: {
                 networkOrigins?: string[] | undefined;
                 network?: 'none' | 'open' | undefined;
+            } | null | undefined;
+            publicPresentation?: {
+                kind: 'declarative';
+                document: unknown;
             } | null | undefined;
             sizeDeclaration?: {
                 sizes: ('small' | 'medium' | 'wide' | 'full' | 'tall' | 'large')[];
@@ -2122,6 +2146,10 @@ export type WidgetsActionInputById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: unknown;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -2321,6 +2349,10 @@ export type WidgetsActionInputById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: unknown;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -2577,6 +2609,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -2634,6 +2673,13 @@ export type WidgetsActionResultById = {
             }[];
             availability: 'available' | 'unavailable' | 'denied';
             instanceCount: number;
+            publicPresentation?: {
+                kind: 'declarative';
+                document: Readonly<{
+                    version: 1;
+                    root: PluginDeclarativeNodeV2;
+                }>;
+            } | undefined;
             inputSchema?: PluginJsonSchemaV2 | undefined;
         }[];
         presentation: {
@@ -2761,6 +2807,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -2886,6 +2939,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -3012,6 +3072,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -3161,6 +3228,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -3287,6 +3361,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -3430,6 +3511,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -3556,6 +3644,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -3699,6 +3794,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -3825,6 +3927,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -3969,6 +4078,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -4095,6 +4211,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -4284,6 +4407,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -4404,6 +4534,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -4530,6 +4667,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -4707,6 +4851,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -4827,6 +4978,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -4953,6 +5111,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -5130,6 +5295,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -5250,6 +5422,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -5376,6 +5555,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -5589,6 +5775,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -5709,6 +5902,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -5835,6 +6035,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -6012,6 +6219,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -6132,6 +6346,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -6258,6 +6479,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -6435,6 +6663,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -6555,6 +6790,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -6681,6 +6923,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -6858,6 +7107,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -6978,6 +7234,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -7104,6 +7367,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -7339,6 +7609,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -7459,6 +7736,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -7585,6 +7869,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -7762,6 +8053,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -7882,6 +8180,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -8008,6 +8313,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -8223,6 +8535,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -8343,6 +8662,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -8469,6 +8795,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -8646,6 +8979,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -8766,6 +9106,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -8892,6 +9239,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -9069,6 +9423,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -9189,6 +9550,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -9315,6 +9683,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -9492,6 +9867,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -9612,6 +9994,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -9738,6 +10127,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -9915,6 +10311,13 @@ export type WidgetsActionResultById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: Readonly<{
+                            version: 1;
+                            root: PluginDeclarativeNodeV2;
+                        }>;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
@@ -10035,6 +10438,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -10161,6 +10571,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -10336,6 +10753,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -10461,6 +10885,13 @@ export type WidgetsActionResultById = {
                         v: 1;
                         id: string;
                         description?: string | undefined;
+                        publicPresentation?: {
+                            kind: 'declarative';
+                            document: Readonly<{
+                                version: 1;
+                                root: PluginDeclarativeNodeV2;
+                            }>;
+                        } | undefined;
                         sessionInputPath?: string | undefined;
                         connectedAccountPurposeBindings?: {
                             path: string;
@@ -10587,6 +11018,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -10736,6 +11174,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -10862,6 +11307,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -11005,6 +11457,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -11131,6 +11590,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -11274,6 +11740,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -11400,6 +11873,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -11544,6 +12024,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -11670,6 +12157,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -11892,6 +12386,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -12018,6 +12519,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -12228,6 +12736,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -12354,6 +12869,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -12570,6 +13092,13 @@ export type WidgetsActionResultById = {
                             v: 1;
                             id: string;
                             description?: string | undefined;
+                            publicPresentation?: {
+                                kind: 'declarative';
+                                document: Readonly<{
+                                    version: 1;
+                                    root: PluginDeclarativeNodeV2;
+                                }>;
+                            } | undefined;
                             sessionInputPath?: string | undefined;
                             connectedAccountPurposeBindings?: {
                                 path: string;
@@ -12696,6 +13225,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -12906,6 +13442,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -13032,6 +13575,13 @@ export type WidgetsActionResultById = {
                                     v: 1;
                                     id: string;
                                     description?: string | undefined;
+                                    publicPresentation?: {
+                                        kind: 'declarative';
+                                        document: Readonly<{
+                                            version: 1;
+                                            root: PluginDeclarativeNodeV2;
+                                        }>;
+                                    } | undefined;
                                     sessionInputPath?: string | undefined;
                                     connectedAccountPurposeBindings?: {
                                         path: string;
@@ -13396,6 +13946,13 @@ export type WidgetsActionResultById = {
                 localId: string;
             }[];
             description?: string | undefined;
+            publicPresentation?: {
+                kind: 'declarative';
+                document: Readonly<{
+                    version: 1;
+                    root: PluginDeclarativeNodeV2;
+                }>;
+            } | undefined;
             sessionInputPath?: string | undefined;
             connectedAccountPurposeBindings?: {
                 path: string;
@@ -13493,6 +14050,13 @@ export type WidgetsActionResultById = {
             v: 1;
             id: string;
             description?: string | undefined;
+            publicPresentation?: {
+                kind: 'declarative';
+                document: Readonly<{
+                    version: 1;
+                    root: PluginDeclarativeNodeV2;
+                }>;
+            } | undefined;
             sessionInputPath?: string | undefined;
             connectedAccountPurposeBindings?: {
                 path: string;
@@ -13617,6 +14181,13 @@ export type WidgetsActionResultById = {
             v: 1;
             id: string;
             description?: string | undefined;
+            publicPresentation?: {
+                kind: 'declarative';
+                document: Readonly<{
+                    version: 1;
+                    root: PluginDeclarativeNodeV2;
+                }>;
+            } | undefined;
             sessionInputPath?: string | undefined;
             connectedAccountPurposeBindings?: {
                 path: string;
@@ -13703,6 +14274,13 @@ export type WidgetsActionResultById = {
             v: 1;
             id: string;
             description?: string | undefined;
+            publicPresentation?: {
+                kind: 'declarative';
+                document: Readonly<{
+                    version: 1;
+                    root: PluginDeclarativeNodeV2;
+                }>;
+            } | undefined;
             sessionInputPath?: string | undefined;
             connectedAccountPurposeBindings?: {
                 path: string;
@@ -13789,6 +14367,13 @@ export type WidgetsActionResultById = {
             v: 1;
             id: string;
             description?: string | undefined;
+            publicPresentation?: {
+                kind: 'declarative';
+                document: Readonly<{
+                    version: 1;
+                    root: PluginDeclarativeNodeV2;
+                }>;
+            } | undefined;
             sessionInputPath?: string | undefined;
             connectedAccountPurposeBindings?: {
                 path: string;
@@ -13879,6 +14464,13 @@ export type WidgetsActionResultById = {
             v: 1;
             id: string;
             description?: string | undefined;
+            publicPresentation?: {
+                kind: 'declarative';
+                document: Readonly<{
+                    version: 1;
+                    root: PluginDeclarativeNodeV2;
+                }>;
+            } | undefined;
             sessionInputPath?: string | undefined;
             connectedAccountPurposeBindings?: {
                 path: string;
@@ -14043,6 +14635,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -14257,6 +14856,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -14467,6 +15073,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -14677,6 +15290,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;
@@ -14887,6 +15507,13 @@ export type WidgetsActionResultById = {
                                 v: 1;
                                 id: string;
                                 description?: string | undefined;
+                                publicPresentation?: {
+                                    kind: 'declarative';
+                                    document: Readonly<{
+                                        version: 1;
+                                        root: PluginDeclarativeNodeV2;
+                                    }>;
+                                } | undefined;
                                 sessionInputPath?: string | undefined;
                                 connectedAccountPurposeBindings?: {
                                     path: string;

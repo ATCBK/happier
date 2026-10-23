@@ -191,6 +191,7 @@ export type MachineProcessesActionResultById = {
                 }[] | undefined;
                 principalName?: string | undefined;
             }[];
+            canStartAgain?: boolean | undefined;
             requester?: {
                 accountId: string;
                 displayName: string;

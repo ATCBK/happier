@@ -83,6 +83,38 @@ export type WorkflowsActionInputById = {
         metadata?: {
             title: string;
             description?: string | undefined;
+            captureProvenance?: {
+                discussion: {
+                    serverId: string;
+                    discussionId: string;
+                };
+                messages: {
+                    source: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                    authorAccountId: string | null;
+                    participantSessionId?: string | undefined;
+                }[];
+                workflow?: {
+                    runId: string;
+                    source: {
+                        kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                        definitionId?: string | undefined;
+                        ref?: string | undefined;
+                        revision?: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        } | undefined;
+                        version?: string | number | undefined;
+                        automationId?: string | undefined;
+                    };
+                } | undefined;
+            } | undefined;
         } | undefined;
         inputs?: Record<string, unknown> | undefined;
         executionTarget?: {
@@ -377,6 +409,38 @@ export type WorkflowsActionInputById = {
         metadata: {
             title: string;
             description?: string | undefined;
+            captureProvenance?: {
+                discussion: {
+                    serverId: string;
+                    discussionId: string;
+                };
+                messages: {
+                    source: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                    authorAccountId: string | null;
+                    participantSessionId?: string | undefined;
+                }[];
+                workflow?: {
+                    runId: string;
+                    source: {
+                        kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                        definitionId?: string | undefined;
+                        ref?: string | undefined;
+                        revision?: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        } | undefined;
+                        version?: string | number | undefined;
+                        automationId?: string | undefined;
+                    };
+                } | undefined;
+            } | undefined;
         };
     };
     readonly "workflow.definition.update": {
@@ -396,6 +460,38 @@ export type WorkflowsActionInputById = {
         metadata: {
             title: string;
             description?: string | undefined;
+            captureProvenance?: {
+                discussion: {
+                    serverId: string;
+                    discussionId: string;
+                };
+                messages: {
+                    source: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                    authorAccountId: string | null;
+                    participantSessionId?: string | undefined;
+                }[];
+                workflow?: {
+                    runId: string;
+                    source: {
+                        kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                        definitionId?: string | undefined;
+                        ref?: string | undefined;
+                        revision?: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        } | undefined;
+                        version?: string | number | undefined;
+                        automationId?: string | undefined;
+                    };
+                } | undefined;
+            } | undefined;
         };
     };
     readonly "workflow.definition.edit": {
@@ -946,6 +1042,218 @@ export type WorkflowsActionInputById = {
     };
     readonly "workflow.definition.export": {
         definitionId: string;
+    };
+    readonly "workflow.definition.capture": {
+        discussion: {
+            serverId: string;
+            discussionId: string;
+        };
+        messageIds: string[];
+        name?: string | undefined;
+        choices?: {
+            messageId: string;
+            role: 'input' | 'step' | 'exclude';
+            dependsOnMessageIds?: string[] | undefined;
+            instruction?: string | undefined;
+            perRun?: boolean | undefined;
+            participant?: {
+                kind: 'session';
+                session: {
+                    serverId: string;
+                    sessionId: string;
+                };
+            } | {
+                kind: 'model';
+                launch: {
+                    executionTarget: {
+                        serverId: string;
+                        machineId: string;
+                    };
+                    directory: {
+                        kind: 'path';
+                        path: string;
+                    } | {
+                        kind: 'managed';
+                    };
+                    agentTarget: {
+                        kind: 'agent';
+                        identity: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        definitionId?: string | undefined;
+                    };
+                    placementOrigin?: {
+                        kind: 'machine_pool';
+                        poolId: string;
+                    } | undefined;
+                    organizationPlacement?: {
+                        folderId: string | null;
+                        tagIds: string[];
+                    } | undefined;
+                    roleId?: string | undefined;
+                    modelSelection?: {
+                        v: 1;
+                        ref: {
+                            agentTargetKey: string;
+                            providerConnectionId: null;
+                            modelId: string;
+                        } | {
+                            agentTargetKey: string;
+                            providerConnectionId: string;
+                            modelId: string;
+                        };
+                        updatedAt: number;
+                    } | undefined;
+                    profileId?: string | undefined;
+                    secretReferenceOverlay?: {
+                        v: 1;
+                        bindings: Record<string, {
+                            ref: string;
+                            revision?: number | undefined;
+                        }>;
+                    } | undefined;
+                    permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
+                    agentModeId?: string | undefined;
+                    configuration?: unknown;
+                    connectedServices?: {
+                        v: 1;
+                        bindingsByServiceId: Record<string, {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            profileId: string;
+                            selection?: 'profile' | undefined;
+                        }>;
+                    } | {
+                        v: 1;
+                        bindingsByServiceId: Record<string, {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            profileId: string;
+                            selection?: 'profile' | undefined;
+                        }>;
+                    } | {
+                        v: 2;
+                        bindingsByServiceId?: Record<string, {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            profileId: string;
+                            selection?: 'profile' | undefined;
+                        } | {
+                            source: 'team_resource';
+                            resourceId: string;
+                            deliveryMode: 'direct';
+                            disclosedMember: {
+                                service: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                accountId: string;
+                            };
+                        } | {
+                            source: 'team_resource';
+                            resourceId: string;
+                            deliveryMode: 'brokered';
+                            disclosedMember?: undefined;
+                        }> | undefined;
+                    } | undefined;
+                    capabilitySelection?: {
+                        mcp?: {
+                            v?: 1 | undefined;
+                            managedServersEnabled?: boolean | undefined;
+                            forceIncludeServerIds?: string[] | undefined;
+                            forceExcludeServerIds?: string[] | undefined;
+                        } | undefined;
+                        skills?: {
+                            v?: 1 | undefined;
+                            forceIncludeSkillIds?: string[] | undefined;
+                            forceExcludeSkillIds?: string[] | undefined;
+                            excludeNativeSkillNames?: string[] | undefined;
+                        } | undefined;
+                    } | undefined;
+                    transcriptStorage?: 'direct' | 'persisted' | undefined;
+                    terminal?: {
+                        mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                        tmux?: {
+                            sessionName?: string | undefined;
+                            isolated?: boolean | undefined;
+                            tmpDir?: string | null | undefined;
+                        } | undefined;
+                        herdr?: {
+                            sessionName?: string | undefined;
+                        } | undefined;
+                        windows?: {
+                            launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                            console?: 'hidden' | 'visible' | undefined;
+                            windowName?: string | undefined;
+                        } | undefined;
+                    } | undefined;
+                    checkoutCreationDraft?: {
+                        kind: 'git_worktree';
+                        displayName: string;
+                        baseRef: string | null;
+                        branchMode?: 'new' | 'existing' | undefined;
+                    } | null | undefined;
+                    title?: string | undefined;
+                    memoryEnabled?: boolean | undefined;
+                    primaryTeamId?: string | null | undefined;
+                    teamCredentialBindings?: ({
+                        v: 1;
+                        slot: {
+                            kind: 'provider_model';
+                        } | {
+                            kind: 'connected_service_purpose';
+                            purpose: {
+                                consumer: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                purpose: string;
+                            };
+                        };
+                        resourceId: string;
+                        expectedResourceRevision: number;
+                        deliveryMode: 'direct' | 'brokered';
+                        teamId?: string | undefined;
+                    } | {
+                        v: 1;
+                        slot: {
+                            kind: 'provider_model';
+                        } | {
+                            kind: 'connected_service_purpose';
+                            purpose: {
+                                consumer: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                purpose: string;
+                            };
+                        };
+                        resourceId: null;
+                    })[] | undefined;
+                    allowedTools?: string[] | undefined;
+                    unlistedTools?: 'deny' | 'ask' | undefined;
+                };
+            } | undefined;
+        }[] | undefined;
     };
     readonly "workflow.trigger.list": {
         workflow: string;
@@ -3669,7 +3977,7 @@ export type WorkflowsActionResultById = {
             automationScopeSessionId?: string | null | undefined;
             finishedAt?: string | null | undefined;
         };
-        admission: 'created' | 'existing';
+        admission: 'existing' | 'created';
     };
     readonly "workflow.run.list": {
         runs: {
@@ -3891,6 +4199,38 @@ export type WorkflowsActionResultById = {
             value: {
                 title: string;
                 description?: string | undefined;
+                captureProvenance?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messages: {
+                        source: {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        };
+                        authorAccountId: string | null;
+                        participantSessionId?: string | undefined;
+                    }[];
+                    workflow?: {
+                        runId: string;
+                        source: {
+                            kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                            definitionId?: string | undefined;
+                            ref?: string | undefined;
+                            revision?: {
+                                headerVersion: number;
+                                bodyVersion: number;
+                            } | undefined;
+                            version?: string | number | undefined;
+                            automationId?: string | undefined;
+                        };
+                    } | undefined;
+                } | undefined;
             };
         } | {
             kind: 'unavailable';
@@ -6243,6 +6583,38 @@ export type WorkflowsActionResultById = {
             metadata?: {
                 title: string;
                 description?: string | undefined;
+                captureProvenance?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messages: {
+                        source: {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        };
+                        authorAccountId: string | null;
+                        participantSessionId?: string | undefined;
+                    }[];
+                    workflow?: {
+                        runId: string;
+                        source: {
+                            kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                            definitionId?: string | undefined;
+                            ref?: string | undefined;
+                            revision?: {
+                                headerVersion: number;
+                                bodyVersion: number;
+                            } | undefined;
+                            version?: string | number | undefined;
+                            automationId?: string | undefined;
+                        };
+                    } | undefined;
+                } | undefined;
             } | undefined;
             roleOverrides?: {
                 roleId: string;
@@ -8049,6 +8421,38 @@ export type WorkflowsActionResultById = {
             metadata?: {
                 title: string;
                 description?: string | undefined;
+                captureProvenance?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messages: {
+                        source: {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        };
+                        authorAccountId: string | null;
+                        participantSessionId?: string | undefined;
+                    }[];
+                    workflow?: {
+                        runId: string;
+                        source: {
+                            kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                            definitionId?: string | undefined;
+                            ref?: string | undefined;
+                            revision?: {
+                                headerVersion: number;
+                                bodyVersion: number;
+                            } | undefined;
+                            version?: string | number | undefined;
+                            automationId?: string | undefined;
+                        };
+                    } | undefined;
+                } | undefined;
             } | undefined;
             roleOverrides?: {
                 roleId: string;
@@ -10451,6 +10855,14 @@ export type WorkflowsActionResultById = {
                     total: number;
                 } | undefined;
                 input?: JsonValue | undefined;
+                discussionReplyTo?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
                 validationIssues?: {
                     pointer: string;
                     message: string;
@@ -10465,17 +10877,17 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'answer';
                     publicationRef: {
-                        kind: 'session';
-                        session: {
-                            serverId: string;
-                            sessionId: string;
-                        };
-                        messageId: string;
-                    } | {
                         kind: 'discussion';
                         discussion: {
                             serverId: string;
                             discussionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
                         };
                         messageId: string;
                     };
@@ -11212,6 +11624,14 @@ export type WorkflowsActionResultById = {
                     total: number;
                 } | undefined;
                 input?: JsonValue | undefined;
+                discussionReplyTo?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
                 validationIssues?: {
                     pointer: string;
                     message: string;
@@ -11226,17 +11646,17 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'answer';
                     publicationRef: {
-                        kind: 'session';
-                        session: {
-                            serverId: string;
-                            sessionId: string;
-                        };
-                        messageId: string;
-                    } | {
                         kind: 'discussion';
                         discussion: {
                             serverId: string;
                             discussionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
                         };
                         messageId: string;
                     };
@@ -12215,6 +12635,14 @@ export type WorkflowsActionResultById = {
                     total: number;
                 } | undefined;
                 input?: JsonValue | undefined;
+                discussionReplyTo?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                    throughSeq: number;
+                } | undefined;
                 validationIssues?: {
                     pointer: string;
                     message: string;
@@ -12229,17 +12657,17 @@ export type WorkflowsActionResultById = {
                 } | {
                     kind: 'answer';
                     publicationRef: {
-                        kind: 'session';
-                        session: {
-                            serverId: string;
-                            sessionId: string;
-                        };
-                        messageId: string;
-                    } | {
                         kind: 'discussion';
                         discussion: {
                             serverId: string;
                             discussionId: string;
+                        };
+                        messageId: string;
+                    } | {
+                        kind: 'session';
+                        session: {
+                            serverId: string;
+                            sessionId: string;
                         };
                         messageId: string;
                     };
@@ -12939,6 +13367,38 @@ export type WorkflowsActionResultById = {
             metadata: {
                 title: string;
                 description?: string | undefined;
+                captureProvenance?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messages: {
+                        source: {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        };
+                        authorAccountId: string | null;
+                        participantSessionId?: string | undefined;
+                    }[];
+                    workflow?: {
+                        runId: string;
+                        source: {
+                            kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                            definitionId?: string | undefined;
+                            ref?: string | undefined;
+                            revision?: {
+                                headerVersion: number;
+                                bodyVersion: number;
+                            } | undefined;
+                            version?: string | number | undefined;
+                            automationId?: string | undefined;
+                        };
+                    } | undefined;
+                } | undefined;
             };
             triggers: ({
                 kind: 'schedule';
@@ -13040,6 +13500,38 @@ export type WorkflowsActionResultById = {
             metadata: {
                 title: string;
                 description?: string | undefined;
+                captureProvenance?: {
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messages: {
+                        source: {
+                            kind: 'discussion';
+                            discussion: {
+                                serverId: string;
+                                discussionId: string;
+                            };
+                            messageId: string;
+                        };
+                        authorAccountId: string | null;
+                        participantSessionId?: string | undefined;
+                    }[];
+                    workflow?: {
+                        runId: string;
+                        source: {
+                            kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                            definitionId?: string | undefined;
+                            ref?: string | undefined;
+                            revision?: {
+                                headerVersion: number;
+                                bodyVersion: number;
+                            } | undefined;
+                            version?: string | number | undefined;
+                            automationId?: string | undefined;
+                        };
+                    } | undefined;
+                } | undefined;
             } | null;
             contentUnavailableReason: 'invalid_header' | 'revision_mismatch' | 'missing_body' | 'invalid_body' | 'not_found';
             previewSteps?: string[] | undefined;
@@ -13719,6 +14211,38 @@ export type WorkflowsActionResultById = {
         metadata: {
             title: string;
             description?: string | undefined;
+            captureProvenance?: {
+                discussion: {
+                    serverId: string;
+                    discussionId: string;
+                };
+                messages: {
+                    source: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                    authorAccountId: string | null;
+                    participantSessionId?: string | undefined;
+                }[];
+                workflow?: {
+                    runId: string;
+                    source: {
+                        kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                        definitionId?: string | undefined;
+                        ref?: string | undefined;
+                        revision?: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        } | undefined;
+                        version?: string | number | undefined;
+                        automationId?: string | undefined;
+                    };
+                } | undefined;
+            } | undefined;
         };
         access: 'owner' | 'view' | 'edit' | 'admin';
         destinations?: {
@@ -14074,6 +14598,38 @@ export type WorkflowsActionResultById = {
         metadata: {
             title: string;
             description?: string | undefined;
+            captureProvenance?: {
+                discussion: {
+                    serverId: string;
+                    discussionId: string;
+                };
+                messages: {
+                    source: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                    authorAccountId: string | null;
+                    participantSessionId?: string | undefined;
+                }[];
+                workflow?: {
+                    runId: string;
+                    source: {
+                        kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                        definitionId?: string | undefined;
+                        ref?: string | undefined;
+                        revision?: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        } | undefined;
+                        version?: string | number | undefined;
+                        automationId?: string | undefined;
+                    };
+                } | undefined;
+            } | undefined;
         };
         access: 'owner' | 'view' | 'edit' | 'admin';
         destinations?: {
@@ -14429,6 +14985,38 @@ export type WorkflowsActionResultById = {
         metadata: {
             title: string;
             description?: string | undefined;
+            captureProvenance?: {
+                discussion: {
+                    serverId: string;
+                    discussionId: string;
+                };
+                messages: {
+                    source: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                    authorAccountId: string | null;
+                    participantSessionId?: string | undefined;
+                }[];
+                workflow?: {
+                    runId: string;
+                    source: {
+                        kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                        definitionId?: string | undefined;
+                        ref?: string | undefined;
+                        revision?: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        } | undefined;
+                        version?: string | number | undefined;
+                        automationId?: string | undefined;
+                    };
+                } | undefined;
+            } | undefined;
         };
         access: 'owner' | 'view' | 'edit' | 'admin';
         destinations?: {
@@ -14783,6 +15371,38 @@ export type WorkflowsActionResultById = {
         metadata: {
             title: string;
             description?: string | undefined;
+            captureProvenance?: {
+                discussion: {
+                    serverId: string;
+                    discussionId: string;
+                };
+                messages: {
+                    source: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                    authorAccountId: string | null;
+                    participantSessionId?: string | undefined;
+                }[];
+                workflow?: {
+                    runId: string;
+                    source: {
+                        kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                        definitionId?: string | undefined;
+                        ref?: string | undefined;
+                        revision?: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        } | undefined;
+                        version?: string | number | undefined;
+                        automationId?: string | undefined;
+                    };
+                } | undefined;
+            } | undefined;
         };
         changedBlockIds: string[];
     };
@@ -15464,6 +16084,38 @@ export type WorkflowsActionResultById = {
         metadata: {
             title: string;
             description?: string | undefined;
+            captureProvenance?: {
+                discussion: {
+                    serverId: string;
+                    discussionId: string;
+                };
+                messages: {
+                    source: {
+                        kind: 'discussion';
+                        discussion: {
+                            serverId: string;
+                            discussionId: string;
+                        };
+                        messageId: string;
+                    };
+                    authorAccountId: string | null;
+                    participantSessionId?: string | undefined;
+                }[];
+                workflow?: {
+                    runId: string;
+                    source: {
+                        kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                        definitionId?: string | undefined;
+                        ref?: string | undefined;
+                        revision?: {
+                            headerVersion: number;
+                            bodyVersion: number;
+                        } | undefined;
+                        version?: string | number | undefined;
+                        automationId?: string | undefined;
+                    };
+                } | undefined;
+            } | undefined;
         };
         document: {
             kind: 'happier.workflow';
@@ -15794,6 +16446,581 @@ export type WorkflowsActionResultById = {
         };
         json: string;
     };
+    readonly "workflow.definition.capture": {
+        status: 'ready' | 'needs_review';
+        name: string;
+        definition: Readonly<{
+            version: 1;
+            inputs: readonly {
+                name: string;
+                valueType: 'string' | 'number' | 'boolean' | 'json';
+                required: boolean;
+                multiple?: boolean | undefined;
+                minItems?: number | undefined;
+                uniqueItems?: boolean | undefined;
+                conflictsWith?: string[] | undefined;
+                enum?: string[] | undefined;
+                default?: JsonValue | undefined;
+                defaultFrom?: 'origin_session' | undefined;
+                description?: string | undefined;
+                optionsSourceId?: string | undefined;
+                inputType?: {
+                    pluginId: string;
+                    localId: string;
+                } | {
+                    hostType: 'usageQuery';
+                    field?: 'session' | 'period' | undefined;
+                } | {
+                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
+                } | undefined;
+            }[];
+            defaults: {
+                allowedTools?: string[] | undefined;
+                unlistedTools?: 'deny' | 'ask' | undefined;
+                agentTarget?: {
+                    kind: 'agent';
+                    identity: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    definitionId?: string | undefined;
+                } | null | undefined;
+                modelSelection?: {
+                    v: 1;
+                    ref: {
+                        agentTargetKey: string;
+                        providerConnectionId: null;
+                        modelId: string;
+                    } | {
+                        agentTargetKey: string;
+                        providerConnectionId: string;
+                        modelId: string;
+                    };
+                    updatedAt: number;
+                } | null | undefined;
+                profileId?: string | null | undefined;
+                permissionMode?: string | null | undefined;
+                acpSessionModeId?: string | null | undefined;
+                sessionConfigOptionOverrides?: {
+                    [x: string]: unknown;
+                    v: 1;
+                    updatedAt: number;
+                    overrides: Record<string, {
+                        [x: string]: unknown;
+                        updatedAt: number;
+                        value: string | number | boolean | null;
+                    }>;
+                } | null | undefined;
+                capabilitySelection?: {
+                    mcp?: {
+                        forceIncludeServerIds: string[];
+                        forceExcludeServerIds: string[];
+                        v: 1;
+                        managedServersEnabled: boolean;
+                    } | undefined;
+                    skills?: {
+                        forceIncludeSkillIds: string[];
+                        forceExcludeSkillIds: string[];
+                        excludeNativeSkillNames: string[];
+                        v: 1;
+                    } | undefined;
+                } | null | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
+                transcriptStorage?: 'direct' | 'persisted' | null | undefined;
+                terminal?: {
+                    mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                    tmux?: {
+                        sessionName?: string | undefined;
+                        isolated?: boolean | undefined;
+                        tmpDir?: string | null | undefined;
+                    } | undefined;
+                    herdr?: {
+                        sessionName?: string | undefined;
+                    } | undefined;
+                    windows?: {
+                        launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                        console?: 'hidden' | 'visible' | undefined;
+                        windowName?: string | undefined;
+                    } | undefined;
+                } | null | undefined;
+                windowsRemoteSessionLaunchMode?: 'windows_terminal' | 'hidden' | 'console' | null | undefined;
+                windowsRemoteSessionConsole?: 'hidden' | 'visible' | null | undefined;
+                windowsTerminalWindowName?: string | null | undefined;
+                runtimeDescriptorV1?: {
+                    v: 1;
+                    agentId: string;
+                    agent: {
+                        backendMode: string;
+                        home?: 'user' | 'connectedService' | undefined;
+                        connectedServiceId?: string | undefined;
+                        connectedServiceProfileId?: string | undefined;
+                        connectedServiceGroupId?: string | undefined;
+                    };
+                } | null | undefined;
+                permissionModeUpdatedAt?: number | undefined;
+                launchEnvironment?: {
+                    values: Record<string, string>;
+                    unset: string[];
+                } | undefined;
+                providerSessionResume?: {
+                    kind: 'provider_session.v1';
+                    providerSessionId: string;
+                } | undefined;
+                conversation?: {
+                    kind: 'shared_run';
+                } | {
+                    kind: 'fresh';
+                } | {
+                    kind: 'origin_session';
+                } | {
+                    kind: 'input';
+                    name: string;
+                } | {
+                    kind: 'from_step';
+                    producer: {
+                        blockId: string;
+                        scope: {
+                            kind: 'current';
+                        } | {
+                            kind: 'previous_iteration';
+                            loopBlockId: string;
+                        } | {
+                            kind: 'outer';
+                            levels: number;
+                        };
+                    };
+                } | {
+                    kind: 'existing_session';
+                    sessionId: string;
+                    machineId: string;
+                } | undefined;
+                workspace?: {
+                    kind: 'inherit';
+                } | {
+                    kind: 'project_checkout';
+                } | {
+                    kind: 'from_step';
+                    producer: {
+                        blockId: string;
+                        scope: {
+                            kind: 'current';
+                        } | {
+                            kind: 'previous_iteration';
+                            loopBlockId: string;
+                        } | {
+                            kind: 'outer';
+                            levels: number;
+                        };
+                    };
+                } | {
+                    kind: 'new_worktree';
+                    source: {
+                        kind: 'original';
+                    } | {
+                        kind: 'workflow';
+                    } | {
+                        kind: 'step';
+                        producer: {
+                            blockId: string;
+                            scope: {
+                                kind: 'current';
+                            } | {
+                                kind: 'previous_iteration';
+                                loopBlockId: string;
+                            } | {
+                                kind: 'outer';
+                                levels: number;
+                            };
+                        };
+                    };
+                    displayName?: string | undefined;
+                    baseRef?: string | null | undefined;
+                } | undefined;
+                engine?: {
+                    role: string;
+                } | {
+                    agentTarget: {
+                        kind: 'agent';
+                        identity: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        definitionId?: string | undefined;
+                    };
+                    modelSelection?: {
+                        v: 1;
+                        ref: {
+                            agentTargetKey: string;
+                            providerConnectionId: null;
+                            modelId: string;
+                        } | {
+                            agentTargetKey: string;
+                            providerConnectionId: string;
+                            modelId: string;
+                        };
+                        updatedAt: number;
+                    } | null | undefined;
+                    effort?: string | undefined;
+                } | {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                } | undefined;
+                participant?: {
+                    kind: 'input';
+                    name: string;
+                    path?: (string | number)[] | undefined;
+                } | {
+                    kind: 'item';
+                    field: 'value';
+                    path?: (string | number)[] | undefined;
+                    roster?: string | undefined;
+                } | undefined;
+                executionTarget?: {
+                    kind: 'session';
+                } | {
+                    kind: 'detached_run';
+                } | undefined;
+            };
+            roles?: readonly ({
+                roleId: string;
+                engine?: {
+                    agentTargetKey: string;
+                    modelId?: string | undefined;
+                    effort?: string | undefined;
+                } | undefined;
+                runsAs?: {
+                    kind: 'session';
+                } | {
+                    kind: 'background_run';
+                    intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                } | undefined;
+                profileId?: string | undefined;
+                workspaceWrites?: 'allow' | 'deny' | undefined;
+                secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
+            } | {
+                roleId: string;
+                name: string;
+                instructions: string;
+                runsAs: {
+                    kind: 'session';
+                } | {
+                    kind: 'background_run';
+                    intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                };
+                engine?: {
+                    agentTargetKey: string;
+                    modelId?: string | undefined;
+                    effort?: string | undefined;
+                } | undefined;
+                profileId?: string | undefined;
+                workspaceWrites?: 'allow' | 'deny' | undefined;
+                secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
+            })[] | undefined;
+            blocks: readonly PluginActionWorkflowBlockV1[];
+            finalOutput?: {
+                kind: 'result';
+                producer: {
+                    blockId: string;
+                    scope: {
+                        kind: 'current';
+                    } | {
+                        kind: 'previous_iteration';
+                        loopBlockId: string;
+                    } | {
+                        kind: 'outer';
+                        levels: number;
+                    };
+                };
+                path: (string | number)[];
+                optional?: true | undefined;
+            } | undefined;
+        }> | null;
+        steps: {
+            messageId: string;
+            source: {
+                kind: 'discussion';
+                discussion: {
+                    serverId: string;
+                    discussionId: string;
+                };
+                messageId: string;
+            };
+            role: 'input' | 'step' | 'exclude';
+            text: string;
+            dependsOnMessageIds: string[];
+            perRun: boolean;
+            inputName?: string | undefined;
+            instruction?: string | undefined;
+            participantInputName?: string | undefined;
+            participant?: {
+                kind: 'session';
+                session: {
+                    serverId: string;
+                    sessionId: string;
+                };
+            } | {
+                kind: 'model';
+                launch: {
+                    executionTarget: {
+                        serverId: string;
+                        machineId: string;
+                    };
+                    directory: {
+                        kind: 'path';
+                        path: string;
+                    } | {
+                        kind: 'managed';
+                    };
+                    agentTarget: {
+                        kind: 'agent';
+                        identity: {
+                            pluginId: string;
+                            localId: string;
+                        };
+                        definitionId?: string | undefined;
+                    };
+                    placementOrigin?: {
+                        kind: 'machine_pool';
+                        poolId: string;
+                    } | undefined;
+                    organizationPlacement?: {
+                        folderId: string | null;
+                        tagIds: string[];
+                    } | undefined;
+                    roleId?: string | undefined;
+                    modelSelection?: {
+                        v: 1;
+                        ref: {
+                            agentTargetKey: string;
+                            providerConnectionId: null;
+                            modelId: string;
+                        } | {
+                            agentTargetKey: string;
+                            providerConnectionId: string;
+                            modelId: string;
+                        };
+                        updatedAt: number;
+                    } | undefined;
+                    profileId?: string | undefined;
+                    secretReferenceOverlay?: {
+                        v: 1;
+                        bindings: Record<string, {
+                            ref: string;
+                            revision?: number | undefined;
+                        }>;
+                    } | undefined;
+                    permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
+                    agentModeId?: string | undefined;
+                    configuration?: {
+                        mode: {
+                            value: string | null;
+                            updatedAtMs: number;
+                        };
+                        model: {
+                            value: string | null;
+                            updatedAtMs: number;
+                        };
+                        permissionIntent: {
+                            value: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | null;
+                            updatedAtMs: number;
+                        };
+                        options: Record<string, {
+                            value: string | number | boolean | null;
+                            updatedAtMs: number;
+                        }>;
+                        workspaceWrites?: 'allow' | 'deny' | undefined;
+                        providerSessionResume?: {
+                            kind: 'provider_session.v1';
+                            providerSessionId: string;
+                        } | undefined;
+                        allowedTools?: string[] | undefined;
+                        unlistedTools?: 'deny' | 'ask' | undefined;
+                    } | undefined;
+                    connectedServices?: {
+                        v: 2;
+                        bindingsByServiceId: Record<string, {
+                            source: 'native';
+                        } | {
+                            source: 'connected';
+                            selection: 'group';
+                            groupId: string;
+                            profileId?: string | undefined;
+                        } | {
+                            source: 'connected';
+                            selection: 'profile';
+                            profileId: string;
+                        } | {
+                            source: 'team_resource';
+                            resourceId: string;
+                            deliveryMode: 'direct';
+                            disclosedMember: {
+                                service: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                accountId: string;
+                            };
+                        } | {
+                            source: 'team_resource';
+                            resourceId: string;
+                            deliveryMode: 'brokered';
+                            disclosedMember?: undefined;
+                        }>;
+                    } | undefined;
+                    capabilitySelection?: {
+                        mcp?: {
+                            forceIncludeServerIds: string[];
+                            forceExcludeServerIds: string[];
+                            v: 1;
+                            managedServersEnabled: boolean;
+                        } | undefined;
+                        skills?: {
+                            forceIncludeSkillIds: string[];
+                            forceExcludeSkillIds: string[];
+                            excludeNativeSkillNames: string[];
+                            v: 1;
+                        } | undefined;
+                    } | undefined;
+                    transcriptStorage?: 'direct' | 'persisted' | undefined;
+                    terminal?: {
+                        mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                        tmux?: {
+                            sessionName?: string | undefined;
+                            isolated?: boolean | undefined;
+                            tmpDir?: string | null | undefined;
+                        } | undefined;
+                        herdr?: {
+                            sessionName?: string | undefined;
+                        } | undefined;
+                        windows?: {
+                            launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                            console?: 'hidden' | 'visible' | undefined;
+                            windowName?: string | undefined;
+                        } | undefined;
+                    } | undefined;
+                    checkoutCreationDraft?: {
+                        kind: 'git_worktree';
+                        displayName: string;
+                        baseRef: string | null;
+                        branchMode?: 'new' | 'existing' | undefined;
+                    } | null | undefined;
+                    title?: string | undefined;
+                    memoryEnabled?: boolean | undefined;
+                    primaryTeamId?: string | null | undefined;
+                    teamCredentialBindings?: ({
+                        v: 1;
+                        slot: {
+                            kind: 'provider_model';
+                        } | {
+                            kind: 'connected_service_purpose';
+                            purpose: {
+                                consumer: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                purpose: string;
+                            };
+                        };
+                        resourceId: string;
+                        expectedResourceRevision: number;
+                        deliveryMode: 'direct' | 'brokered';
+                        teamId?: string | undefined;
+                    } | {
+                        v: 1;
+                        slot: {
+                            kind: 'provider_model';
+                        } | {
+                            kind: 'connected_service_purpose';
+                            purpose: {
+                                consumer: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                purpose: string;
+                            };
+                        };
+                        resourceId: null;
+                    })[] | undefined;
+                    allowedTools?: string[] | undefined;
+                    unlistedTools?: 'deny' | 'ask' | undefined;
+                };
+            } | undefined;
+        }[];
+        inputs: Record<string, JsonValue>;
+        unresolved: {
+            messageId: string;
+            reason: 'unlinked_message' | 'missing_dependency' | 'participant_required' | 'no_steps' | 'unsupported_content' | 'ambiguous_workflow';
+        }[];
+        provenance: {
+            discussion: {
+                serverId: string;
+                discussionId: string;
+            };
+            messages: {
+                source: {
+                    kind: 'discussion';
+                    discussion: {
+                        serverId: string;
+                        discussionId: string;
+                    };
+                    messageId: string;
+                };
+                authorAccountId: string | null;
+                participantSessionId?: string | undefined;
+            }[];
+            workflow?: {
+                runId: string;
+                source: {
+                    kind: 'inline' | 'saved' | 'catalog' | 'automation';
+                    definitionId?: string | undefined;
+                    ref?: string | undefined;
+                    revision?: {
+                        headerVersion: number;
+                        bodyVersion: number;
+                    } | undefined;
+                    version?: string | number | undefined;
+                    automationId?: string | undefined;
+                };
+            } | undefined;
+        };
+    };
     readonly "workflow.trigger.list": {
         sets: {
             automationId: string;
@@ -15853,12 +17080,8 @@ export type WorkflowsActionResultById = {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
                         } | {
-                            kind: 'app_bundle';
-                            bundleId: string;
-                        } | {
                             kind: 'source_declaration';
                             packageName: string;
-                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
@@ -16785,12 +18008,8 @@ export type WorkflowsActionResultById = {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
                         } | {
-                            kind: 'app_bundle';
-                            bundleId: string;
-                        } | {
                             kind: 'source_declaration';
                             packageName: string;
-                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
@@ -17719,12 +18938,8 @@ export type WorkflowsActionResultById = {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
                         } | {
-                            kind: 'app_bundle';
-                            bundleId: string;
-                        } | {
                             kind: 'source_declaration';
                             packageName: string;
-                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
@@ -18653,12 +19868,8 @@ export type WorkflowsActionResultById = {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
                         } | {
-                            kind: 'app_bundle';
-                            bundleId: string;
-                        } | {
                             kind: 'source_declaration';
                             packageName: string;
-                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
@@ -19682,7 +20893,7 @@ export type WorkflowsActionResultById = {
             producedSessionId: string | null;
             executionDispatchState: 'settled' | 'notStarted' | 'dispatchPermitted' | 'retryWaiting' | 'started' | 'outcomeUnknown' | null;
             executionAttempt: number;
-            replyHandoffState: 'none' | 'suppressed' | 'accepted' | 'awaitingResult' | 'ready' | 'handingOff' | 'blocked';
+            replyHandoffState: 'none' | 'suppressed' | 'accepted' | 'ready' | 'awaitingResult' | 'handingOff' | 'blocked';
             replyHandoffAttempt: number;
             replyHandoffDueAt: number | null;
             createdAt: number;
@@ -19752,12 +20963,8 @@ export type WorkflowsActionResultById = {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
                         } | {
-                            kind: 'app_bundle';
-                            bundleId: string;
-                        } | {
                             kind: 'source_declaration';
                             packageName: string;
-                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
@@ -20696,12 +21903,8 @@ export type WorkflowsActionResultById = {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
                         } | {
-                            kind: 'app_bundle';
-                            bundleId: string;
-                        } | {
                             kind: 'source_declaration';
                             packageName: string;
-                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
@@ -21630,12 +22833,8 @@ export type WorkflowsActionResultById = {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
                         } | {
-                            kind: 'app_bundle';
-                            bundleId: string;
-                        } | {
                             kind: 'source_declaration';
                             packageName: string;
-                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';
@@ -22564,12 +23763,8 @@ export type WorkflowsActionResultById = {
                             kind: 'pinned_runner_snapshot';
                             snapshotId: string;
                         } | {
-                            kind: 'app_bundle';
-                            bundleId: string;
-                        } | {
                             kind: 'source_declaration';
                             packageName: string;
-                            declarationDigest: string;
                         };
                     } | {
                         kind: 'development';

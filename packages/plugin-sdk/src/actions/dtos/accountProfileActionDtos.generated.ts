@@ -63,6 +63,7 @@ export type AccountProfileActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -99,7 +100,7 @@ export type AccountProfileActionInputById = {
                     kind: 'usage';
                     widgetId: 'usage_rhythm';
                     inputs: {
-                        style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                        style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod' | undefined;
                         colourBy?: 'intensity' | undefined;
                     };
                 } | {
@@ -140,7 +141,19 @@ export type AccountProfileActionInputById = {
                     };
                 } | {
                     kind: 'usage';
-                    widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                    widgetId: 'usage_orbit';
+                    inputs: {
+                        style?: 'orbit' | 'moons' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_run_length';
+                    inputs: {
+                        style?: 'runLength' | 'galaxy' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                     inputs: Record<string, never>;
                 };
                 title?: string | undefined;
@@ -149,7 +162,7 @@ export type AccountProfileActionInputById = {
                 id: string;
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'none' | 'hairline';
+                dividers: 'hairline' | 'none';
                 children: {
                     kind: 'widget';
                     id: string;
@@ -162,7 +175,7 @@ export type AccountProfileActionInputById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                            style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod' | undefined;
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -203,7 +216,19 @@ export type AccountProfileActionInputById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -327,6 +352,7 @@ export type AccountProfileActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -363,7 +389,7 @@ export type AccountProfileActionInputById = {
                     kind: 'usage';
                     widgetId: 'usage_rhythm';
                     inputs: {
-                        style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                        style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod' | undefined;
                         colourBy?: 'intensity' | undefined;
                     };
                 } | {
@@ -404,7 +430,19 @@ export type AccountProfileActionInputById = {
                     };
                 } | {
                     kind: 'usage';
-                    widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                    widgetId: 'usage_orbit';
+                    inputs: {
+                        style?: 'orbit' | 'moons' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_run_length';
+                    inputs: {
+                        style?: 'runLength' | 'galaxy' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                     inputs: Record<string, never>;
                 };
                 title?: string | undefined;
@@ -413,7 +451,7 @@ export type AccountProfileActionInputById = {
                 id: string;
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'none' | 'hairline';
+                dividers: 'hairline' | 'none';
                 children: {
                     kind: 'widget';
                     id: string;
@@ -426,7 +464,7 @@ export type AccountProfileActionInputById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                            style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod' | undefined;
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -467,7 +505,19 @@ export type AccountProfileActionInputById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -591,6 +641,7 @@ export type AccountProfileActionInputById = {
             period?: {
                 startMs?: number | undefined;
                 endMs?: number | undefined;
+                relative?: undefined;
             } | {
                 relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                 startMs?: undefined;
@@ -627,7 +678,7 @@ export type AccountProfileActionInputById = {
                     kind: 'usage';
                     widgetId: 'usage_rhythm';
                     inputs: {
-                        style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                        style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod' | undefined;
                         colourBy?: 'intensity' | undefined;
                     };
                 } | {
@@ -668,7 +719,19 @@ export type AccountProfileActionInputById = {
                     };
                 } | {
                     kind: 'usage';
-                    widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                    widgetId: 'usage_orbit';
+                    inputs: {
+                        style?: 'orbit' | 'moons' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_run_length';
+                    inputs: {
+                        style?: 'runLength' | 'galaxy' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                     inputs: Record<string, never>;
                 };
                 title?: string | undefined;
@@ -677,7 +740,7 @@ export type AccountProfileActionInputById = {
                 id: string;
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'none' | 'hairline';
+                dividers: 'hairline' | 'none';
                 children: {
                     kind: 'widget';
                     id: string;
@@ -690,7 +753,7 @@ export type AccountProfileActionInputById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                            style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod' | undefined;
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -731,7 +794,19 @@ export type AccountProfileActionInputById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -815,15 +890,15 @@ export type AccountProfileActionInputById = {
     };
     readonly "account.public_profile.embed.get": {
         theme: 'auto' | 'light' | 'dark';
-        syntax: 'url' | 'html' | 'picture' | 'markdown';
+        syntax: 'url' | 'picture' | 'markdown' | 'html';
         kind: 'profile_link';
     } | {
         theme: 'auto' | 'light' | 'dark';
-        syntax: 'url' | 'html' | 'picture' | 'markdown';
+        syntax: 'url' | 'picture' | 'markdown' | 'html';
         kind: 'card';
     } | {
         theme: 'auto' | 'light' | 'dark';
-        syntax: 'url' | 'html' | 'picture' | 'markdown';
+        syntax: 'url' | 'picture' | 'markdown' | 'html';
         kind: 'badge';
         metric: 'tokens' | 'agent-time' | 'merged-prs' | 'streak' | 'peak-parallel';
     };
@@ -932,6 +1007,7 @@ export type AccountProfileActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                    relative?: undefined;
                 } | {
                     relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                     startMs?: undefined;
@@ -1186,7 +1262,7 @@ export type AccountProfileActionResultById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -1227,7 +1303,19 @@ export type AccountProfileActionResultById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -1236,7 +1324,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'none' | 'hairline';
+                    dividers: 'hairline' | 'none';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -1252,7 +1340,7 @@ export type AccountProfileActionResultById = {
                             kind: 'usage';
                             widgetId: 'usage_rhythm';
                             inputs: {
-                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                                 colourBy?: 'intensity' | undefined;
                             };
                         } | {
@@ -1293,7 +1381,19 @@ export type AccountProfileActionResultById = {
                             };
                         } | {
                             kind: 'usage';
-                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            widgetId: 'usage_orbit';
+                            inputs: {
+                                style?: 'orbit' | 'moons' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_run_length';
+                            inputs: {
+                                style?: 'runLength' | 'galaxy' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                             inputs: Record<string, never>;
                         };
                         title?: string | undefined;
@@ -1713,7 +1813,7 @@ export type AccountProfileActionResultById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -1754,7 +1854,19 @@ export type AccountProfileActionResultById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     } | {
                         kind: 'declarative';
@@ -1769,7 +1881,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'none' | 'hairline';
+                    dividers: 'hairline' | 'none';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -1779,7 +1891,7 @@ export type AccountProfileActionResultById = {
                             kind: 'usage';
                             widgetId: 'usage_rhythm';
                             inputs: {
-                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                                 colourBy?: 'intensity' | undefined;
                             };
                         } | {
@@ -1820,7 +1932,19 @@ export type AccountProfileActionResultById = {
                             };
                         } | {
                             kind: 'usage';
-                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            widgetId: 'usage_orbit';
+                            inputs: {
+                                style?: 'orbit' | 'moons' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_run_length';
+                            inputs: {
+                                style?: 'runLength' | 'galaxy' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                             inputs: Record<string, never>;
                         } | {
                             kind: 'declarative';
@@ -1844,7 +1968,7 @@ export type AccountProfileActionResultById = {
         };
     } | {
         kind: 'unavailable';
-        reason: 'feature_disabled' | 'username_required' | 'report_contact_unconfigured' | 'public_ingress_unconfigured' | 'not_published' | 'restricted' | 'query_mismatch' | 'invalid_stored_content' | 'asset_unavailable' | 'usage_unavailable' | 'usage_query_result_invalid' | 'project_visibility_unavailable' | 'preparation_unavailable';
+        reason: 'feature_disabled' | 'username_required' | 'report_contact_unconfigured' | 'public_ingress_unconfigured' | 'not_published' | 'restricted' | 'query_mismatch' | 'invalid_stored_content' | 'asset_unavailable' | 'usage_unavailable' | 'period_unavailable' | 'source_time_unavailable' | 'no_eligible_personal_usage' | 'invalid_snapshot' | 'usage_query_result_invalid' | 'project_visibility_unavailable' | 'preparation_unavailable';
     };
     readonly "account.public_profile.publish": {
         kind: 'updated';
@@ -1893,6 +2017,7 @@ export type AccountProfileActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                    relative?: undefined;
                 } | {
                     relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                     startMs?: undefined;
@@ -2147,7 +2272,7 @@ export type AccountProfileActionResultById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -2188,7 +2313,19 @@ export type AccountProfileActionResultById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -2197,7 +2334,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'none' | 'hairline';
+                    dividers: 'hairline' | 'none';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -2213,7 +2350,7 @@ export type AccountProfileActionResultById = {
                             kind: 'usage';
                             widgetId: 'usage_rhythm';
                             inputs: {
-                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                                 colourBy?: 'intensity' | undefined;
                             };
                         } | {
@@ -2254,7 +2391,19 @@ export type AccountProfileActionResultById = {
                             };
                         } | {
                             kind: 'usage';
-                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            widgetId: 'usage_orbit';
+                            inputs: {
+                                style?: 'orbit' | 'moons' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_run_length';
+                            inputs: {
+                                style?: 'runLength' | 'galaxy' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                             inputs: Record<string, never>;
                         };
                         title?: string | undefined;
@@ -2387,6 +2536,7 @@ export type AccountProfileActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                    relative?: undefined;
                 } | {
                     relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                     startMs?: undefined;
@@ -2641,7 +2791,7 @@ export type AccountProfileActionResultById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -2682,7 +2832,19 @@ export type AccountProfileActionResultById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -2691,7 +2853,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'none' | 'hairline';
+                    dividers: 'hairline' | 'none';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -2707,7 +2869,7 @@ export type AccountProfileActionResultById = {
                             kind: 'usage';
                             widgetId: 'usage_rhythm';
                             inputs: {
-                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                                 colourBy?: 'intensity' | undefined;
                             };
                         } | {
@@ -2748,7 +2910,19 @@ export type AccountProfileActionResultById = {
                             };
                         } | {
                             kind: 'usage';
-                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            widgetId: 'usage_orbit';
+                            inputs: {
+                                style?: 'orbit' | 'moons' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_run_length';
+                            inputs: {
+                                style?: 'runLength' | 'galaxy' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                             inputs: Record<string, never>;
                         };
                         title?: string | undefined;
@@ -2881,6 +3055,7 @@ export type AccountProfileActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                    relative?: undefined;
                 } | {
                     relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                     startMs?: undefined;
@@ -3135,7 +3310,7 @@ export type AccountProfileActionResultById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -3176,7 +3351,19 @@ export type AccountProfileActionResultById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -3185,7 +3372,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'none' | 'hairline';
+                    dividers: 'hairline' | 'none';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -3201,7 +3388,7 @@ export type AccountProfileActionResultById = {
                             kind: 'usage';
                             widgetId: 'usage_rhythm';
                             inputs: {
-                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                                 colourBy?: 'intensity' | undefined;
                             };
                         } | {
@@ -3242,7 +3429,19 @@ export type AccountProfileActionResultById = {
                             };
                         } | {
                             kind: 'usage';
-                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            widgetId: 'usage_orbit';
+                            inputs: {
+                                style?: 'orbit' | 'moons' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_run_length';
+                            inputs: {
+                                style?: 'runLength' | 'galaxy' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                             inputs: Record<string, never>;
                         };
                         title?: string | undefined;
@@ -3328,7 +3527,7 @@ export type AccountProfileActionResultById = {
         refreshReason?: string | undefined;
     } | {
         kind: 'unavailable';
-        reason: 'feature_disabled' | 'username_required' | 'report_contact_unconfigured' | 'public_ingress_unconfigured' | 'not_published' | 'restricted' | 'query_mismatch' | 'invalid_stored_content' | 'asset_unavailable' | 'usage_unavailable' | 'usage_query_result_invalid' | 'project_visibility_unavailable' | 'preparation_unavailable';
+        reason: 'feature_disabled' | 'username_required' | 'report_contact_unconfigured' | 'public_ingress_unconfigured' | 'not_published' | 'restricted' | 'query_mismatch' | 'invalid_stored_content' | 'asset_unavailable' | 'usage_unavailable' | 'period_unavailable' | 'source_time_unavailable' | 'no_eligible_personal_usage' | 'invalid_snapshot' | 'usage_query_result_invalid' | 'project_visibility_unavailable' | 'preparation_unavailable';
     };
     readonly "account.public_profile.refresh": {
         kind: 'updated';
@@ -3377,6 +3576,7 @@ export type AccountProfileActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                    relative?: undefined;
                 } | {
                     relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                     startMs?: undefined;
@@ -3631,7 +3831,7 @@ export type AccountProfileActionResultById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -3672,7 +3872,19 @@ export type AccountProfileActionResultById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -3681,7 +3893,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'none' | 'hairline';
+                    dividers: 'hairline' | 'none';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -3697,7 +3909,7 @@ export type AccountProfileActionResultById = {
                             kind: 'usage';
                             widgetId: 'usage_rhythm';
                             inputs: {
-                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                                 colourBy?: 'intensity' | undefined;
                             };
                         } | {
@@ -3738,7 +3950,19 @@ export type AccountProfileActionResultById = {
                             };
                         } | {
                             kind: 'usage';
-                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            widgetId: 'usage_orbit';
+                            inputs: {
+                                style?: 'orbit' | 'moons' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_run_length';
+                            inputs: {
+                                style?: 'runLength' | 'galaxy' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                             inputs: Record<string, never>;
                         };
                         title?: string | undefined;
@@ -3871,6 +4095,7 @@ export type AccountProfileActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                    relative?: undefined;
                 } | {
                     relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                     startMs?: undefined;
@@ -4125,7 +4350,7 @@ export type AccountProfileActionResultById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -4166,7 +4391,19 @@ export type AccountProfileActionResultById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -4175,7 +4412,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'none' | 'hairline';
+                    dividers: 'hairline' | 'none';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -4191,7 +4428,7 @@ export type AccountProfileActionResultById = {
                             kind: 'usage';
                             widgetId: 'usage_rhythm';
                             inputs: {
-                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                                 colourBy?: 'intensity' | undefined;
                             };
                         } | {
@@ -4232,7 +4469,19 @@ export type AccountProfileActionResultById = {
                             };
                         } | {
                             kind: 'usage';
-                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            widgetId: 'usage_orbit';
+                            inputs: {
+                                style?: 'orbit' | 'moons' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_run_length';
+                            inputs: {
+                                style?: 'runLength' | 'galaxy' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                             inputs: Record<string, never>;
                         };
                         title?: string | undefined;
@@ -4365,6 +4614,7 @@ export type AccountProfileActionResultById = {
                 period: {
                     startMs?: number | undefined;
                     endMs?: number | undefined;
+                    relative?: undefined;
                 } | {
                     relative: 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
                     startMs?: undefined;
@@ -4619,7 +4869,7 @@ export type AccountProfileActionResultById = {
                         kind: 'usage';
                         widgetId: 'usage_rhythm';
                         inputs: {
-                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                             colourBy?: 'intensity' | undefined;
                         };
                     } | {
@@ -4660,7 +4910,19 @@ export type AccountProfileActionResultById = {
                         };
                     } | {
                         kind: 'usage';
-                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        widgetId: 'usage_orbit';
+                        inputs: {
+                            style?: 'orbit' | 'moons' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_run_length';
+                        inputs: {
+                            style?: 'runLength' | 'galaxy' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                         inputs: Record<string, never>;
                     };
                     title?: string | undefined;
@@ -4669,7 +4931,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'none' | 'hairline';
+                    dividers: 'hairline' | 'none';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -4685,7 +4947,7 @@ export type AccountProfileActionResultById = {
                             kind: 'usage';
                             widgetId: 'usage_rhythm';
                             inputs: {
-                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | 'ninetyPlanets' | 'streakThread' | 'weeksSkyline' | 'daysOnSurface' | 'ringedStreaks' | 'aroundPeriod';
                                 colourBy?: 'intensity' | undefined;
                             };
                         } | {
@@ -4726,7 +4988,19 @@ export type AccountProfileActionResultById = {
                             };
                         } | {
                             kind: 'usage';
-                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            widgetId: 'usage_orbit';
+                            inputs: {
+                                style?: 'orbit' | 'moons' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_run_length';
+                            inputs: {
+                                style?: 'runLength' | 'galaxy' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_planet' | 'usage_machines' | 'usage_projects' | 'usage_atmosphere';
                             inputs: Record<string, never>;
                         };
                         title?: string | undefined;

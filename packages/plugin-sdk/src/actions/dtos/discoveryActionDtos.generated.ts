@@ -140,6 +140,10 @@ export type DiscoveryActionInputById = {
                     v: 1;
                     id: string;
                     description?: string | undefined;
+                    publicPresentation?: {
+                        kind: 'declarative';
+                        document: unknown;
+                    } | undefined;
                     sessionInputPath?: string | undefined;
                     connectedAccountPurposeBindings?: {
                         path: string;
