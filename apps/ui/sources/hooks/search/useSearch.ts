@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 export type UseSearchError = 'searchFailed';
-export type SearchRequestContext = Readonly<{ isCurrent: () => boolean }>;
+export type SearchRequestContext = Readonly<{
+    isCurrent: () => boolean;
+    /** Withdraw cached answers for this source when it authoritatively refuses access. */
+    invalidateCache: () => void;
+}>;
 
 type SearchState<T> = {
     scopeKey: string;
@@ -23,12 +27,14 @@ type SearchState<T> = {
  * @param query - The search query string
  * @param searchFn - The async function to perform the search
  * @param scopeKey - The identity of the source whose query answers may be reused
+ * @param enabled - Whether this source currently authorizes search and retained answers
  * @returns Object with results array, isSearching boolean, and a stable error code (if any)
  */
 export function useSearch<T>(
     query: string,
     searchFn: (query: string, context: SearchRequestContext) => Promise<T[]>,
     scopeKey = '',
+    enabled = true,
 ): { results: T[]; isSearching: boolean; error: UseSearchError | null; retry: () => void } {
     const [state, setState] = useState<SearchState<T>>({ scopeKey, results: [], isSearching: false, error: null });
     
@@ -38,9 +44,17 @@ export function useSearch<T>(
     
     // Timeout ref for debouncing
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const clearScopeCache = useCallback(() => {
+        const prefix = JSON.stringify([scopeKey]).slice(0, -1) + ',';
+        for (const key of cacheRef.current.keys()) {
+            if (key.startsWith(prefix)) cacheRef.current.delete(key);
+        }
+    }, [scopeKey]);
     
     // Perform the search with retry logic
     const performSearch = useCallback(async (searchQuery: string) => {
+        if (!enabled) return;
         // Check cache first
         const cacheKey = JSON.stringify([scopeKey, searchQuery]);
         const cached = cacheRef.current.get(cacheKey);
@@ -71,7 +85,10 @@ export function useSearch<T>(
                 }
                 attempt++;
             try {
-                const searchResults = await searchFn(searchQuery, { isCurrent });
+                const searchResults = await searchFn(searchQuery, {
+                    isCurrent,
+                    invalidateCache: () => { if (isCurrent()) clearScopeCache(); },
+                });
                 if (!isCurrent()) return;
                 
                 // Cache the results
@@ -84,7 +101,9 @@ export function useSearch<T>(
             } catch (error) {
                 if (!isCurrent()) return;
                 if (attempt >= maxAttempts) {
-                    setState({ scopeKey, results: [], isSearching: true, error: 'searchFailed' });
+                    setState(previous => ({ scopeKey,
+                        results: previous.scopeKey === scopeKey ? previous.results : [],
+                        isSearching: true, error: 'searchFailed' }));
                     return;
                 }
                 // Wait before retrying (bounded)
@@ -97,7 +116,7 @@ export function useSearch<T>(
                 setState(previous => ({ ...previous, isSearching: false }));
             }
         }
-    }, [searchFn, scopeKey]);
+    }, [searchFn, scopeKey, enabled, clearScopeCache]);
     
     // Effect to handle debounced search
     useEffect(() => {
@@ -109,6 +128,12 @@ export function useSearch<T>(
             clearTimeout(timeoutRef.current);
         }
         
+        if (!enabled) {
+            clearScopeCache();
+            setState({ scopeKey, results: [], isSearching: false, error: null });
+            return;
+        }
+
         // If query is empty, clear results immediately
         if (!query.trim()) {
             setState({ scopeKey, results: [], isSearching: false, error: null });
@@ -142,20 +167,20 @@ export function useSearch<T>(
                 clearTimeout(timeoutRef.current);
             }
         };
-    }, [query, performSearch, scopeKey]);
+    }, [query, performSearch, scopeKey, enabled, clearScopeCache]);
     
     const retry = useCallback(() => {
-        if (!query.trim()) return;
+        if (!enabled || !query.trim()) return;
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         cacheRef.current.delete(JSON.stringify([scopeKey, query]));
         void performSearch(query);
-    }, [performSearch, query, scopeKey]);
+    }, [performSearch, query, scopeKey, enabled]);
 
     // A changed source must never render the previous source's answer before the effect runs.
-    const currentScope = state.scopeKey === scopeKey;
+    const currentScope = enabled && state.scopeKey === scopeKey;
     return {
         results: currentScope ? state.results : [],
-        isSearching: currentScope ? state.isSearching : query.trim().length > 0,
+        isSearching: currentScope ? state.isSearching : enabled && query.trim().length > 0,
         error: currentScope ? state.error : null,
         retry,
     };

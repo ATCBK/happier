@@ -4,6 +4,7 @@ import type { HomeAccountPickerRowV1 } from '@happier-dev/protocol/home/governan
 import { useSearch, type SearchRequestContext } from '@/hooks/search/useSearch';
 import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { isAuthoritativeScopedSnapshotRefusalKind } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { searchHomeAccounts } from '@/sync/ops/home/homeGovernanceOperations';
 
 export type HomeAccountSearchState = Readonly<{
@@ -42,6 +43,9 @@ export function useHomeAccountSearch(
     const serverId = scope?.serverId ?? '';
     const accountId = scope?.accountId ?? '';
     const scopeKey = JSON.stringify([serverId, accountId]);
+    React.useEffect(() => {
+        if (!enabled) setRetryFailure(null);
+    }, [enabled]);
 
     const search = React.useCallback(async (raw: string, request: SearchRequestContext): Promise<HomeAccountSearchAnswer[]> => {
         const trimmed = raw.trim();
@@ -61,21 +65,22 @@ export function useHomeAccountSearch(
                 throw new Error('home_account_search_failed');
             }
             setRetryFailure(null);
+            if (isAuthoritativeScopedSnapshotRefusalKind(outcome.failure.kind)) request.invalidateCache();
             return [{ rows: NO_ROWS, failure: outcome.failure }];
         }
         setRetryFailure(null);
         return [{ rows: [...outcome.value.accounts], failure: null }];
     }, [enabled, serverId, accountId, scopeKey]);
 
-    const { results, isSearching, retry } = useSearch(query, search, scopeKey);
+    const { results, isSearching, retry } = useSearch(query, search, scopeKey, enabled);
     const answer = results[0];
 
     return React.useMemo(() => Object.freeze({
         rows: answer?.rows.length ? answer.rows : NO_ROWS,
         searching: isSearching,
-        failure: retryFailure?.scopeKey === scopeKey && retryFailure.query === query
+        failure: enabled && retryFailure?.scopeKey === scopeKey && retryFailure.query === query
             ? retryFailure.value
             : answer?.failure ?? null,
         retry,
-    }), [answer, isSearching, retryFailure, retry, scopeKey, query]);
+    }), [answer, isSearching, retryFailure, retry, scopeKey, query, enabled]);
 }
