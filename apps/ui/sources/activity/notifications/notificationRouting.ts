@@ -101,6 +101,11 @@ export type ParsedNotificationTap = Readonly<{
     permissionAction: Readonly<{ action: 'allow' | 'deny'; sessionId: string; requestId: string; occurrenceId?: string }> | null;
 }>;
 
+export function isNotificationPermissionAction(parsed: ParsedNotificationTap): boolean {
+    return parsed.actionIdentifier === PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1
+        || parsed.actionIdentifier === PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1;
+}
+
 export function parseNotificationTap(params: Readonly<{
     response: unknown;
     defaultActionIdentifier: string;

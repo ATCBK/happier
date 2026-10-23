@@ -14,11 +14,11 @@ import {
 import { EXPO_NOTIFICATIONS_LOAD_TIMEOUT_MS, loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
 import { withTimeout } from '@/utils/timing/time';
 import { navigateToSessionRoute } from '@/hooks/session/navigateToSessionRoute';
-import { executeNotificationPermissionAction, isNotificationPermissionAction } from './notificationPermissionActions';
+import { executeNotificationPermissionAction } from './notificationPermissionActions';
 import { markNotificationResponseHandled, wasNotificationResponseHandled } from './notificationResponseConsumption';
 import { consumeNotificationPermissionRecoveryNeeded, markNotificationPermissionRecoveryNeeded } from './notificationPermissionRecovery';
 
-import { isUnsafeNotificationServerUrl, parseNotificationTap } from '../notificationRouting';
+import { isNotificationPermissionAction, isUnsafeNotificationServerUrl, parseNotificationTap } from '../notificationRouting';
 
 type ExpoNotificationsWithClear = ExpoNotificationsModule & Readonly<{
     clearLastNotificationResponseAsync?: () => Promise<void>;
@@ -40,6 +40,7 @@ export function useNotificationResponseRouting(params: Readonly<{
     refreshAuth: () => Promise<void>;
 }>): void {
     const refreshAuthRef = React.useRef(params.refreshAuth);
+    const handledNavigationResponsesRef = React.useRef(new Set<string>());
 
     React.useEffect(() => {
         refreshAuthRef.current = params.refreshAuth;
@@ -148,8 +149,13 @@ export function useNotificationResponseRouting(params: Readonly<{
                 parsed = { ...parsed, permissionAction: null, isOpenAction: true };
             }
 
-            if (wasNotificationResponseHandled(parsed)) return;
-            markNotificationResponseHandled(parsed);
+            if (isNotificationPermissionAction(parsed)) {
+                if (wasNotificationResponseHandled(parsed)) return;
+                markNotificationResponseHandled(parsed);
+            } else if (parsed.dedupeKey) {
+                if (handledNavigationResponsesRef.current.has(parsed.dedupeKey)) return;
+                handledNavigationResponsesRef.current.add(parsed.dedupeKey);
+            }
 
             if (!parsed.route) return;
 

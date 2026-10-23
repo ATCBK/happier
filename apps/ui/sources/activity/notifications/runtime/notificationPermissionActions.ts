@@ -1,5 +1,4 @@
-import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol';
-import { parseNotificationTap, type ParsedNotificationTap } from '../notificationRouting';
+import { isNotificationPermissionAction, parseNotificationTap, type ParsedNotificationTap } from '../notificationRouting';
 import { createNotificationPermissionCoordinator, type NotificationPermissionOutcome } from './notificationPermissionCoordinator';
 import { markNotificationResponseHandled } from './notificationResponseConsumption';
 import { markNotificationPermissionRecoveryNeeded } from './notificationPermissionRecovery';
@@ -7,11 +6,6 @@ import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestrati
 import { withTimeout } from '@/utils/timing/time';
 
 const coordinate = createNotificationPermissionCoordinator();
-
-export function isNotificationPermissionAction(parsed: ParsedNotificationTap): boolean {
-    return parsed.actionIdentifier === PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1
-        || parsed.actionIdentifier === PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1;
-}
 
 function reportOutcome(outcome: NotificationPermissionOutcome): NotificationPermissionOutcome {
     if (outcome.status !== 'confirmed' && outcome.status !== 'ignored') {

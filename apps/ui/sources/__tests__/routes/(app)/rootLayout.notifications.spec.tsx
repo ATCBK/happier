@@ -367,7 +367,7 @@ describe('App RootLayout notifications', () => {
         expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_123');
     });
 
-    it('dedupes notification responses across cold start and response listener', async () => {
+    it('dedupes body taps within a mount and permits the same notification after remount', async () => {
         const Notifications = await import('expo-notifications');
         const response = {
             actionIdentifier: Notifications.DEFAULT_ACTION_IDENTIFIER,
@@ -387,7 +387,7 @@ describe('App RootLayout notifications', () => {
                 },
             },
         };
-        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue(response as any);
+        vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValueOnce(response).mockResolvedValue(null);
         vi.spyOn(Notifications, 'clearLastNotificationResponseAsync').mockResolvedValue(undefined as any);
         vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation((listener: any) => {
             listener(response);
@@ -399,6 +399,11 @@ describe('App RootLayout notifications', () => {
         expect(mockState.pushSpy).toHaveBeenCalledTimes(1);
         expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_123');
         expect(Notifications.clearLastNotificationResponseAsync).toHaveBeenCalledTimes(1);
+
+        // A new live body tap remains navigation after the root hook remounts.
+        await renderRootLayout();
+        expect(mockState.pushSpy).toHaveBeenCalledTimes(2);
+        expect(mockState.pushSpy).toHaveBeenLastCalledWith('/session/s_123');
     });
 
     it('switches server and navigates when a notification includes serverUrl', async () => {

@@ -1,10 +1,11 @@
-import type { ParsedNotificationTap } from '../notificationRouting';
+import { isNotificationPermissionAction, type ParsedNotificationTap } from '../notificationRouting';
 
-// Shared by headless handling and foreground navigation. This runtime-only set
-// records delivered events for presentation; it never admits or rejects a send.
+// Permission callbacks can reach headless handling and a later foreground mount.
+// Presentation consumption is shared for those callbacks; ordinary navigation is hook-local.
 const handledResponses = new Set<string>();
 
 function responseKey(parsed: ParsedNotificationTap): string | null {
+    if (!isNotificationPermissionAction(parsed)) return null;
     const permission = parsed.permissionAction;
     const identity = parsed.dedupeKey ?? (permission?.occurrenceId
         ? JSON.stringify([permission.sessionId, permission.requestId, permission.occurrenceId])
