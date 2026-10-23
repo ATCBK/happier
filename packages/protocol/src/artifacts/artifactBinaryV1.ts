@@ -5,13 +5,10 @@ import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { preservedBoundedNfcString } from '../strings/preservedBoundedNfcString.js';
 import type { ActionExecutorContext } from '../actions/executor/types.js';
 import { ArtifactStoredKindV1Schema } from './artifactKindV1.js';
+import { BinaryBlobAccountEncryptionStageV1Schema, BinaryBlobContentKindV1Schema, BinaryBlobReferenceV1Schema, BinaryBlobStoredContentV1Schema } from '../storage/binaryBlobV1.js';
 
 /** Sensitive file metadata stays inside the ordinary Artifact body envelope. */
-export const ArtifactBlobReferenceV1Schema = lazyZodSchema(() => z.strictObject({
-  blobId: z.string().check(z.uuid()), mime: z.string().check(z.minLength(1)),
-  sizeBytes: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
-  sha256: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
-}));
+export const ArtifactBlobReferenceV1Schema = BinaryBlobReferenceV1Schema;
 export type ArtifactBlobReferenceV1 = z.infer<typeof ArtifactBlobReferenceV1Schema>;
 export const ArtifactBodyV1Schema = lazyZodSchema(() => z.union([z.string(), ArtifactBlobReferenceV1Schema]));
 export type ArtifactBodyV1 = z.infer<typeof ArtifactBodyV1Schema>;
@@ -66,20 +63,13 @@ export function artifactSavedByFromActionContextV1(caller?: ActionExecutorContex
 }
 
 /** Mode is explicit before any binary opening or disclosure. Payloads use standard base64. */
-const bytesBase64 = z.string().check(z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/));
-export const ArtifactBlobStoredContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.strictObject({ t: z.literal('plain'), v: bytesBase64 }),
-  z.strictObject({ t: z.literal('encrypted'), c: bytesBase64 }),
-]));
+export const ArtifactBlobStoredContentV1Schema = BinaryBlobStoredContentV1Schema;
 export type ArtifactBlobStoredContentV1 = z.infer<typeof ArtifactBlobStoredContentV1Schema>;
 /** Signed conversion directives identify staged bytes rather than carrying them inline. */
-export const ArtifactBlobAccountEncryptionStageV1Schema = lazyZodSchema(() => z.strictObject({
-  t: z.enum(['plain', 'encrypted']), uploadId: z.string().check(z.uuid()),
-  contentSha256: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
-}));
+export const ArtifactBlobAccountEncryptionStageV1Schema = BinaryBlobAccountEncryptionStageV1Schema;
 export type ArtifactBlobAccountEncryptionStageV1 = z.infer<typeof ArtifactBlobAccountEncryptionStageV1Schema>;
 const uploadIdentity = {
-  artifactId: z.string().check(z.minLength(1)), blobId: z.string().check(z.uuid()), t: z.enum(['plain', 'encrypted']),
+  artifactId: z.string().check(z.minLength(1)), blobId: z.string().check(z.uuid()), t: BinaryBlobContentKindV1Schema,
   sizeBytes: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
 };
 const artifactUuid = z.string().check(z.uuid());

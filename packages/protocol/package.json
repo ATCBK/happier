@@ -7,6 +7,26 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./storage/binaryBlobV1": {
+      "happier-source": "./src/storage/binaryBlobV1.ts",
+      "types": "./dist/storage/binaryBlobV1.d.ts",
+      "default": "./dist/storage/binaryBlobV1.js"
+    },
+    "./transfers/attachments/attachmentPayloadV1": {
+      "happier-source": "./src/transfers/attachments/attachmentPayloadV1.ts",
+      "types": "./dist/transfers/attachments/attachmentPayloadV1.d.ts",
+      "default": "./dist/transfers/attachments/attachmentPayloadV1.js"
+    },
+    "./transfers/attachments/attachmentPathV1": {
+      "happier-source": "./src/transfers/attachments/attachmentPathV1.ts",
+      "types": "./dist/transfers/attachments/attachmentPathV1.d.ts",
+      "default": "./dist/transfers/attachments/attachmentPathV1.js"
+    },
+    "./transfers/attachments/attachmentLimitsV1": {
+      "happier-source": "./src/transfers/attachments/attachmentLimitsV1.ts",
+      "types": "./dist/transfers/attachments/attachmentLimitsV1.d.ts",
+      "default": "./dist/transfers/attachments/attachmentLimitsV1.js"
+    },
     "./workflows/workflowDiscussionPublicationV1": {
       "happier-source": "./src/workflows/workflowDiscussionPublicationV1.ts",
       "types": "./dist/workflows/workflowDiscussionPublicationV1.d.ts",
