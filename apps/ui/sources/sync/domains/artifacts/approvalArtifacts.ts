@@ -337,10 +337,6 @@ function listSessionApprovalArtifacts(
         const entry = admitted.sessionEntry;
         const { approval } = entry;
         if (approval.status === 'open' ? artifact.header?.approvalStatus !== 'open' : !keepsSettled?.(approval)) return [];
-        if (!admitted.references.some((reference) => (
-            referenceMatchesTarget(reference, target, knownSessionAddresses)
-        ))) return [];
-
         return [entry];
     });
 }
