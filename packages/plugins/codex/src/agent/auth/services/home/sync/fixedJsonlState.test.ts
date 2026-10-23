@@ -1,8 +1,54 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { reconcileCodexSharedJsonlState } from './fixedJsonlState.js';
 
 describe('reconcileCodexSharedJsonlState', () => {
+  it.each([
+    ['history.jsonl', 'equal'], ['session_index.jsonl', 'equal'],
+    ['history.jsonl', 'prefix'], ['session_index.jsonl', 'prefix'],
+    ['history.jsonl', 'empty'], ['session_index.jsonl', 'empty'],
+  ] as const)('does not parse lines on repeated unchanged %s reconciliation (%s)', (entryPath, relation) => {
+    const contents = Array.from({ length: 10_000 }, (_, id) =>
+      JSON.stringify({ id: String(id), updated_at: '2026-10-23T10:00:00Z', text: 'fixture history' }),
+    ).join('\n') + '\n';
+    const currentContents = relation === 'prefix'
+      ? contents + '{"id":"new-native-session","updated_at":"2026-10-24T10:00:00Z"}\n' : contents;
+    const incomingContents = relation === 'empty' ? '' : contents;
+    // Observe parser work without replacing either the parser or the real codec.
+    const parse = vi.spyOn(JSON, 'parse');
+    const split = vi.spyOn(String.prototype, 'split');
+    let noOps = 0;
+    let parsedLines = 0;
+    let splitCalls = 0;
+    try {
+      for (let invocation = 0; invocation < 20; invocation++) {
+        const result = reconcileCodexSharedJsonlState({ entryPath, currentContents, incomingContents });
+        if (result?.appendText === '') noOps++;
+      }
+      parsedLines = parse.mock.calls.length;
+      splitCalls = split.mock.calls.length;
+    } finally { parse.mockRestore(); split.mockRestore(); }
+    expect(noOps).toBe(20);
+    expect(parsedLines).toBe(0);
+    expect(splitCalls).toBe(0);
+  });
+
+  it('keeps rewritten and truncated fixed state current without metadata shortcuts', () => {
+    const oldIndex = '{"id":"session","updated_at":"2026-10-22"}\n';
+    const rewrittenIndex = '{"id":"session","updated_at":"2026-10-23"}\n';
+    expect(rewrittenIndex.length).toBe(oldIndex.length);
+    expect(reconcileCodexSharedJsonlState({ entryPath: 'session_index.jsonl',
+      currentContents: oldIndex, incomingContents: rewrittenIndex })).toEqual({ appendText: rewrittenIndex });
+    expect(reconcileCodexSharedJsonlState({ entryPath: 'session_index.jsonl',
+      currentContents: oldIndex + rewrittenIndex, incomingContents: oldIndex })).toEqual({ appendText: '' });
+    expect(reconcileCodexSharedJsonlState({ entryPath: 'history.jsonl',
+      currentContents: 'old history\n', incomingContents: 'new history\n' })).toEqual({ appendText: 'new history\n' });
+    expect(reconcileCodexSharedJsonlState({ entryPath: 'history.jsonl',
+      currentContents: 'old history\nnew history\n', incomingContents: 'old history\n' })).toEqual({ appendText: '' });
+    expect(reconcileCodexSharedJsonlState({ entryPath: 'history.jsonl',
+      currentContents: 'partial prefix suffix\n', incomingContents: 'partial prefix' })).toEqual({ appendText: 'partial prefix\n' });
+  });
+
   it('adopts only exact complete-line extensions of the same rollout', () => {
     const entryPath = 'sessions/2026/10/19/rollout-2026-10-19T15-51-26-01a1546e-701a-7b41-8277-bdf4e72f2b28.jsonl';
     const metadata = '{"type":"session_meta","payload":{"id":"01a1546e-701a-7b41-8277-bdf4e72f2b28"}}\n';

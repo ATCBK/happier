@@ -79,6 +79,11 @@ export const reconcileCodexSharedJsonlState: AgentConnectedAccountSharedStateFil
   }
   const file = CODEX_JSONL_STATE_FILES.find(candidate => candidate.name === input.entryPath);
   if (!file) return null;
+  const current = input.currentContents ?? '';
+  const incoming = input.incomingContents;
+  // Empty text, exact text or an adopted complete-line prefix proves a no-op without
+  // parsing. File metadata alone cannot prove this for rewrites or truncation.
+  if (!incoming || current === incoming || (incoming.endsWith('\n') && current.startsWith(incoming))) return { appendText: '' };
   const missing = file.kind === 'history'
     ? resolveMissingHistoryLines(input.currentContents, input.incomingContents)
     : resolveMissingSessionIndexLines(input.currentContents, input.incomingContents);
