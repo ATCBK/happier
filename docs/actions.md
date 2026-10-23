@@ -5978,6 +5978,21 @@ because its issued observer lost the socket while the authority may still run.
 
 Development-source Home RPC diagnostics retain separate `rpc-target-lookup`,
 `rpc-target-issued` and `rpc-target-ack` facts for correlated socket calls.
+Every shared-client issuance has an observation id: existing cancellable/signed
+calls keep `requestId`, while ordinary calls carry diagnostic-only `traceId`.
+The latter must not create cancellation state, authorize execution, or change
+result custody. Home validates this transient metadata with the existing RPC id
+schema, hashes opaque caller ids in logs, and replaces it with a fresh
+target-local trace. Invalid diagnostic metadata is discarded without changing
+the operation. `rpc-call-received` precedes asynchronous Home admission;
+`rpc-call-admitted` means admission to target lookup, not effect execution.
+Non-Machine calls complete with `rpc-call-completed`.
+The daemon's existing RPC observer records received, manager-admitted and
+completed phases using the target trace. A valid `traceId` takes diagnostic
+precedence if Home's existing input-authorization path also supplies `requestId`;
+only the latter retains its signed/cancellation meaning. Manager admission is
+not a promise that a handler's domain policy will accept the effect. Local
+in-process calls retain their completion-only diagnostics.
 Their `requestId` is the server-minted target id; the existing
 `machine-rpc-relay-completed` record joins it to the caller request id and
 original caller namespace, including that namespace's connected state at
