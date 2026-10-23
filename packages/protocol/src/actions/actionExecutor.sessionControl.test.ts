@@ -55,6 +55,7 @@ describe('createActionExecutor (session control)', () => {
     { rejection: Object.assign(new Error('Session missing'), { code: 'session_not_found' }), expectedCode: 'session_not_found' },
     { rejection: Object.assign(new Error('Connection refused'), { code: 'ECONNREFUSED' }), expectedCode: 'server_unreachable' },
     { rejection: Object.assign(new Error('Unclassified failure'), { code: 'private_adapter_code' }), expectedCode: 'action_failed' },
+    { rejection: { rpcErrorCode: 'private_adapter_code', message: 'Unclassified carrier' }, expectedCode: 'action_failed' },
   ])('preserves the public action error classification $expectedCode', async ({ rejection, expectedCode }) => {
     const executor = createExecutor({
       // The host's outbound operation reports its genuine RPC/system error.

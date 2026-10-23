@@ -55,7 +55,7 @@ import {
   type SpawnConfigOptionValue,
 } from './sessionSpawnConfigOptions.js';
 import { EXECUTION_RUN_ACTION_PERMISSION_MODES } from './executionRunActionPermissionMode.js';
-import { readRpcErrorCode } from '../rpcErrors.js';
+import { isRpcError, readRpcErrorCode } from '../rpcErrors.js';
 
 /**
  * Resolve the canonical run-start model + config-option selection from an agent-facing action
@@ -1231,7 +1231,7 @@ function normalizeActionExecutorThrownError(error: unknown): Readonly<{ errorCod
           ? String(anyErr.message)
         : '';
 
-  const rpcErrorCode = readRpcErrorCode(error)?.trim();
+  const rpcErrorCode = isRpcError(error) ? readRpcErrorCode(error)?.trim() : undefined;
   if (rpcErrorCode) {
     return {
       errorCode: rpcErrorCode,
