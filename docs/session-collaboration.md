@@ -789,6 +789,12 @@ through its ordinary reader. Missing or mode-mismatched E2EE material is an
 error, never a plaintext or quote-only fallback. Non-Voice source reads do not
 inherit Voice's transcript-sharing preference.
 
+Session sources select their known committed `messageId` through the existing semantic
+`session.transcript.get` owner, rather than paging transcript bodies. Preview and Ask each
+perform their own admitted read; Ask never reuses the preview's quote. The selected result
+must be a complete assistant text message on the captured Home. Missing, filtered,
+truncated or unavailable content still refuses composition without a fallback scan.
+
 Voice proposes the ordinary human approval rather than acquiring human
 authority from a confirmation waiver. Approved preview reads retain the
 verified proposal's Voice disclosure policy even when the person approves in

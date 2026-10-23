@@ -1311,6 +1311,16 @@ with `sessionId` (`400 invalid_params`).
   identity only. Archived candidates use the same readable admission as the mutation. Both responsibility operations require
   the server's `sharing.session` feature and return `404` when it is disabled.
 
+In 0.3 development, the existing Session messages reader accepts `messageId` to select one
+committed row before fetching its body. It retains current transcript access, publication,
+chain and role filters; a missing or filtered row returns an empty page with no continuation.
+The selector cannot be combined with `beforeSeq`, `afterSeq`, `limit` or a collection
+`projection`. The semantic `session.transcript.get` Action exposes the same `messageId`
+selection, exclusive with `cursor`, `direction`, `limit` and `projection`, while preserving
+its ordinary content opening, role/text projection and requested truncation. External-shareable
+plugin reads retain their closed page contract and do not accept the selector. This coordinated
+development extension is not support for a new client against a 0.2 Home.
+
 Current Session records expose `responsibleAccountId` as an Account ID or explicit `null`, plus the
 paired safe `responsibleAccount` summary (`null` when unassigned, omitted exactly when the id is
 omitted). An omitted field means responsibility is unavailable, not that the Session is unassigned.
