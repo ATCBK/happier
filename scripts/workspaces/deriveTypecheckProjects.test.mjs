@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -10,6 +12,65 @@ import { prepareReferencedTypecheckDeclarations } from './prepareReferencedTypec
 import { prepareUiTypecheckProjects } from '../../apps/ui/scripts/deriveTypecheckProjects.mjs';
 import { deriveCliTypecheckProjects, prepareCliTypecheckProjects } from '../../apps/cli/scripts/deriveTypecheckProjects.mjs';
 import { installUiTypecheckFixtureDependencies } from '../testing/lib/typecheckProjectFixture.mjs';
+
+for (const failure of ['ENOENT', 'ENOTDIR', 'EISDIR']) {
+  test(`public derivation handles a listed root changed before reading: ${failure}`, { skip: process.platform === 'win32' }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-compiler-vanished-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const names = ['foundation', 'services', 'core', 'source', 'test', 'test-ui'];
+    await mkdir(join(root, 'src/vanished'), { recursive: true });
+    await writeFile(join(root, 'src/kept.ts'), 'export const kept = 1;');
+    await writeFile(join(root, 'src/kept.test.ts'), 'export const keptTest = 1;');
+    await writeFile(join(root, 'src/shared.d.ts'), 'declare const shared: string;');
+    const vanished = ['entry.ts', 'globals.d.ts', 'entry.test.ts'].map(name => join(root, 'src/vanished', name));
+    for (const file of vanished) await writeFile(file, 'export {};');
+    await writeFile(join(root, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: { noEmit: true, strict: true, types: [] }, include: ['src/**/*.ts'],
+    }));
+    const config = JSON.stringify({ extends: './tsconfig.json', files: [], include: [] });
+    for (const name of names.slice(1)) await writeFile(join(root, `tsconfig.${name}.json`), config);
+    const pipe = join(root, 'tsconfig.foundation.json');
+    const staged = join(root, 'foundation.next.json');
+    await writeFile(staged, config);
+    assert.equal(spawnSync('mkfifo', [pipe]).status, 0);
+    // Opening this real config pipe proves the original root list was read.
+    // The writer changes real files before allowing derivation to continue.
+    const writer = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { openSync, closeSync, writeSync, readFileSync, renameSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+      const [pipe, staged, directory, failure] = process.argv.slice(1);
+      const fd = openSync(pipe, 'w');
+      rmSync(directory, { recursive: true });
+      if (failure === 'ENOTDIR') writeFileSync(directory, 'removed directory');
+      if (failure === 'EISDIR') mkdirSync(directory + '/globals.d.ts', { recursive: true });
+      renameSync(staged, pipe);
+      writeSync(fd, readFileSync(pipe));
+      closeSync(fd);
+    `, pipe, staged, join(root, 'src/vanished'), failure], { stdio: 'ignore' });
+    const writerDone = once(writer, 'exit');
+    t.after(() => { if (writer.exitCode === null) writer.kill(); });
+    const deriving = deriveCliTypecheckProjects(root);
+    if (failure === 'EISDIR') {
+      await assert.rejects(deriving, { code: 'EISDIR' });
+      assert.equal((await writerDone)[0], 0);
+      return;
+    }
+    const inventory = await deriving;
+    assert.equal((await writerDone)[0], 0);
+    const configs = await Promise.all(inventory.map(async ({ configPath }) => JSON.parse(await readFile(configPath, 'utf8'))));
+    for (const file of vanished) {
+      assert.ok(!inventory.baseline.fileNames.includes(file), 'vanished roots leave the selected baseline');
+      assert.ok(configs.every(config => !config.files.includes(file)), 'no stale compiler files entry survives');
+    }
+    assert.ok(inventory.baseline.fileNames.includes(join(root, 'src/kept.ts')));
+    await verifyTypeScriptProjectCoverage({ baselinePath: join(root, 'tsconfig.json'), baseline: inventory.baseline,
+      projectPaths: inventory.map(project => project.configPath), cwd: root });
+    const result = spawnSync(process.execPath, [new URL('./runTypeScriptCli.mjs', import.meta.url).pathname,
+      ...inventory.flatMap(project => ['--project', project.configPath])], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, HAPPIER_TYPESCRIPT_COMPILER: 'microsoft' },
+    });
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+  });
+}
 
 test('compiler switches isolate internal declarations and keep references on the selected graph', async t => {
   const root = await mkdtemp(join(tmpdir(), 'happier-typecheck-compiler-'));

@@ -22,20 +22,29 @@ export function resolveTypecheckPrimaryTypeReferences({ configPath, parsed }) {
 
 const readProject = readTypecheckProject;
 
-function sharedDeclaration(file) {
-  if (!file.endsWith('.d.ts')) return false;
-  return contributesAmbientTypes(file);
+function readSourceText(file) {
+  try { return readFileSync(file, 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return;
+    throw error;
+  }
 }
 
-function readAmbientSource(file) {
+function sharedDeclaration(file, readSource) {
+  if (!file.endsWith('.d.ts')) return false;
+  return contributesAmbientTypes(file, readSource);
+}
+
+function readAmbientSource(file, readSource = readSourceText) {
   if (!/\.[cm]?tsx?$/.test(file)) return;
-  const text = readFileSync(file, 'utf8');
+  const text = readSource(file);
+  if (text === undefined) return;
   if (!/\.d\.[cm]?ts$/.test(file) && !text.includes('declare')) return;
   return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
 }
 
-function contributesAmbientTypes(file) {
-  const source = readAmbientSource(file);
+function contributesAmbientTypes(file, readSource) {
+  const source = readAmbientSource(file, readSource);
   if (!source) return false;
   return (source.isDeclarationFile && !ts.isExternalModule(source)) || source.statements.some(statement =>
     ts.isModuleDeclaration(statement) && (ts.isStringLiteral(statement.name)
@@ -77,13 +86,20 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
   const declarationRoot = file => resolve(declarationOverrides.get(resolve(file)) ?? file);
   // Finite preparation can own a generated declaration independently of a
   // live tool's output, including when that live output does not exist yet.
+  const missingFiles = new Set();
+  const readSource = file => {
+    if (missingFiles.has(file)) return;
+    const text = readSourceText(file);
+    if (text === undefined) missingFiles.add(file);
+    return text;
+  };
   const originalRoots = new Set([...original.parsed.fileNames.map(declarationRoot), ...declarationOverrides.values()]);
-  const shared = [...originalRoots].filter(sharedDeclaration);
+  const shared = [...originalRoots].filter(file => sharedDeclaration(file, readSource));
   const sharedSet = new Set(shared);
   const testConfig = readProject(resolve(packageDir, `tsconfig.${testProject}.json`));
   const existingTests = new Set(testConfig.parsed.fileNames.map(declarationRoot).filter(file => existsSync(file)
     && !basename(file).includes('.composed.')));
-  const testRoots = new Set([...existingTests, ...originalRoots].filter(file => !sharedSet.has(file)
+  const testRoots = new Set([...existingTests, ...originalRoots].filter(file => !sharedSet.has(file) && existsSync(file)
     && (existingTests.has(file) || /\.(?:test|spec)\.tsx?$/.test(file)
       || file.replaceAll('\\', '/').includes('/__tests__/'))));
   const owned = new Set();
@@ -162,7 +178,9 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
     if (!contextualImports.has(context.configPath)) contextualImports.set(context.configPath, new Map());
     const cache = contextualImports.get(context.configPath);
     if (!cache.has(file)) {
-      const info = ts.preProcessFile(readFileSync(file, 'utf8'), true, true);
+      const text = readSource(file);
+      if (text === undefined) return;
+      const info = ts.preProcessFile(text, true, true);
       const dependencies = info.importedFiles.flatMap(({ fileName }) => {
         const resolved = ts.resolveModuleName(fileName, file, context.parsed.options, ts.sys, moduleCache(context)).resolvedModule;
         return resolved && authored(resolved) ? [resolve(resolved.resolvedFileName)] : [];
@@ -185,9 +203,10 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
     const pending = [...seeds];
     while (pending.length) {
       const file = pending.pop();
-      if (found.has(file) || !existsSync(file) || !accepts(file)) continue;
-      found.add(file);
+      if (found.has(file) || !accepts(file)) continue;
       const dependencies = dependenciesFor(file, compilerContext ?? sourceContext(file));
+      if (!dependencies) continue;
+      found.add(file);
       if (!compilerContext) imports.set(file, dependencies);
       for (const dependency of dependencies) pending.push(dependency);
     }
@@ -303,14 +322,14 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
       const acceptsOwnerInput = file => /[\\/]node_modules[\\/]/.test(file)
         || sourceContext(file).configPath === owner.configPath;
       const primaryInputs = [...primaryTypes(owner).values()].flatMap(reference => reference ? [resolve(reference.resolvedFileName)] : []);
-      const producerAmbientInputs = importClosure([...owner.parsed.fileNames, ...primaryInputs], acceptsOwnerInput, owner).filter(contributesAmbientTypes);
+      const producerAmbientInputs = importClosure([...owner.parsed.fileNames, ...primaryInputs], acceptsOwnerInput, owner).filter(file => contributesAmbientTypes(file, readSource));
       // Canonical authored ambient roots form the producer's type contract.
       // Dependency augmentations join that contract through reached inputs,
       // not through unrelated UI/test implementations in the whole program.
       const authoredAmbientRoots = owner.parsed.fileNames.filter(file =>
-        !/[\\/]node_modules[\\/]/.test(file) && acceptsOwnerInput(file) && contributesAmbientTypes(file));
+        !/[\\/]node_modules[\\/]/.test(file) && acceptsOwnerInput(file) && contributesAmbientTypes(file, readSource));
       const ambientInputs = importClosure([...seeds, ...authoredAmbientRoots, ...primaryInputs], acceptsOwnerInput, owner)
-        .filter(contributesAmbientTypes);
+        .filter(file => contributesAmbientTypes(file, readSource));
       // Declaration facades can re-export implementations that no consumer
       // reaches directly. Include their closure before emitting a composite
       // producer, rather than appending unwalked roots during preparation.
@@ -335,13 +354,23 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
     };
     if (resolveSourceOwners) consumerPrimaryAmbientInputs.set(consumer.configPath,
       [...primaryTypes(consumer)].flatMap(([, reference]) => reference
-        ? importClosure([resolve(reference.resolvedFileName)], () => true, consumer).filter(contributesAmbientTypes) : []));
+        ? importClosure([resolve(reference.resolvedFileName)], () => true, consumer).filter(file => contributesAmbientTypes(file, readSource)) : []));
     const overrides = testCompilerOptions(roots.map(file => testContexts.get(file)), consumer);
     testOptionOverrides.push(overrides);
     results.push({ ...config, compilerOptions: { ...config.compilerOptions,
       ...overrides },
     files: [...roots, ...shared].map(path).sort(), include: [], exclude: [] });
   }
+  // A missing read removes that input from this invocation's entire selection,
+  // including seeds retained before dependency traversal observed the removal.
+  for (const file of missingFiles) {
+    originalRoots.delete(file);
+    testContexts.delete(file);
+  }
+  for (const [configPath, files] of consumerPrimaryAmbientInputs) {
+    consumerPrimaryAmbientInputs.set(configPath, files.filter(file => !missingFiles.has(file)));
+  }
+  for (const config of results) config.files = config.files.filter(file => !missingFiles.has(resolve(packageDir, file)));
   // Catch a stale selector or accidental test/source overlap before native
   // declaration emission; never silently omit an original implementation root.
   const memberships = results.map(config => new Set(config.files));
@@ -356,7 +385,7 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
       await writeJsonAtomic(resolve(packageDir, `tsconfig.${names[index]}.json`), results[index]);
     }
     if (!names.includes(testProject)) await writeJsonAtomic(resolve(packageDir, `tsconfig.${testProject}.json`), {
-      ...testConfig.config, files: [...testRoots, ...shared].map(path).sort(), include: [], exclude: [],
+      ...testConfig.config, files: [...testRoots, ...shared].filter(file => !missingFiles.has(file)).map(path).sort(), include: [], exclude: [],
     });
   }
   const changed = [];
@@ -397,7 +426,9 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
   // Coverage must observe the same editor roots that this invocation assigned.
   // Files created during graph traversal belong to the next invocation.
   inventory.baseline = { configPath: originalConfigPath, fileNames: [...originalRoots] };
-  inventory.foreignProjects = [...foreignProjects.values()].map(project => ({ ...project, files: [...project.files].sort() }));
+  inventory.foreignProjects = [...foreignProjects.values()].map(project => ({ ...project,
+    ambientInputs: project.ambientInputs.filter(file => !missingFiles.has(file)),
+    files: [...project.files].filter(file => !missingFiles.has(file)).sort() }));
   inventory.testContexts = testContexts;
   inventory.consumerPrimaryAmbientInputs = consumerPrimaryAmbientInputs;
   return inventory;
