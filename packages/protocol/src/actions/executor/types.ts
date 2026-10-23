@@ -580,6 +580,8 @@ export type SessionPermissionRemoteActionArgs =
     }>;
 
 export type ActionExecutorContext = Readonly<{
+  /** Exact dependency census retained from this host's reviewed Delete click; never Action input or execution authority. */
+  reviewedMachineReferences?: import('../../machines/machineReferenceCensusV1.js').MachineReferenceCensusV1;
   /** Host-private custody restored only from a validated, human-approved native review. */
   nativeServiceStartApproval?: LocalServiceStartApprovalReviewV1;
   /** Host-only, exact-invocation observer of actual credential admission. Never parsed from input. */

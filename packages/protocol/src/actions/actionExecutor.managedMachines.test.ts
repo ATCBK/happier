@@ -58,6 +58,23 @@ describe('managed Machine Action executor', () => {
     expect(await missing.execute('machines.managed.references.get', { homeId: 'home', managedId: 'managed' }, context))
       .toEqual({ ok: true, result: { homeId: 'home', machineId: null, coverage: 'partial', references: [], unavailable: ['requester_authority'] } });
   });
+  it('submits Delete with the census from the reviewed click without a second dependency read', async () => {
+    const census = { homeId: 'home', machineId: 'guest', coverage: 'partial',
+      references: [{ kind: 'profile', id: 'profile-one', name: 'Profile one' }], unavailable: ['profiles'] } as const;
+    const managedMachineReferences = vi.fn(async () => { throw new Error('Delete confirmation repeated its review'); });
+    const managedMachineAction = vi.fn(async () => ({ kind: 'approval_request_created', artifactId: 'delete-approval',
+      actionId: 'machines.managed.delete' as const }));
+    const executor = createActionExecutor({ managedMachineReferences, managedMachineAction } as unknown as ActionExecutorDeps);
+    const result = await executor.execute('machines.managed.delete', {
+      homeId: 'home', managedId: 'managed', when: 'now', expectedRevision: 4, intent: 'delete', reviewedDependencies: true,
+    }, { surface: 'ui', authority: 'present_user', serverId: 'home', expectedAccountId: 'requester',
+      presentUserConfirmation: { actionId: 'machines.managed.delete' }, reviewedMachineReferences: census });
+
+    expect(result).toEqual({ ok: true, result: { kind: 'approval_request_created', artifactId: 'delete-approval',
+      actionId: 'machines.managed.delete', machineReferences: census } });
+    expect(managedMachineReferences).not.toHaveBeenCalled();
+    expect(managedMachineAction).toHaveBeenCalledOnce();
+  });
   it.each(['ui', 'cli', 'agent', 'mcp'] as const)('refuses opted-out acquisition before approval or transport on %s', async surface => {
     // Durable allocation and approval Artifact persistence are the boundaries.
     const managedMachineAction = vi.fn(async () => ({ managedId: 'managed' }));

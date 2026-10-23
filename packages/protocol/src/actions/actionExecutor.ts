@@ -6352,7 +6352,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           let nativeContext = ctx;
           if (managedMachineActionId === 'machines.managed.delete') {
             const deleteInput = ManagedMachineActionInputSchemasV1['machines.managed.delete'].parse(nativeInput);
-            machineReferences = MachineReferenceCensusV1Schema.parse(deps.managedMachineReferences
+            const reviewedMachineReferences = ctx.reviewedMachineReferences?.homeId === deleteInput.homeId
+              ? MachineReferenceCensusV1Schema.parse(ctx.reviewedMachineReferences)
+              : undefined;
+            machineReferences = reviewedMachineReferences ?? MachineReferenceCensusV1Schema.parse(deps.managedMachineReferences
               ? await deps.managedMachineReferences({ input: deleteInput, context: ctx, ...(ctx.signal ? { signal: ctx.signal } : {}) })
               : { homeId: deleteInput.homeId, machineId: null, coverage: 'partial', references: [], unavailable: ['requester_authority'] });
             const census = machineReferences;
