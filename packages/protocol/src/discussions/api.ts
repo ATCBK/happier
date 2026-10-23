@@ -7,6 +7,7 @@ import { ResourceRecipientKeyEnvelopesV1Schema, type ResourceRecipientKeyEnvelop
 import { DiscussionInitialParticipantsV1Schema, DiscussionOwnedSessionV1Schema, DiscussionSessionParticipantRefV1Schema, type DiscussionInitialParticipantV1 } from './participants.js';
 import { DiscussionAnchorV1Schema, DiscussionReplyTargetV1Schema, type DiscussionAnchorV1, type DiscussionReplyTargetV1 } from './replyTargets.js';
 import { SessionMessageDiscussionReplyReturnV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
+import { WorkflowDiscussionOriginV1Schema } from '../workflows/workflowDestinationsV1.js';
 
 import {
   SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1,
@@ -25,6 +26,7 @@ import {
   DiscussionIdSchema,
   DiscussionLocalIdSchema,
   DiscussionMessageContentV1Schema,
+  DiscussionWorkflowProducerV1Schema,
   isDiscussionDocEditProposalContentV1,
   type DiscussionMessageContentV1,
 } from './content.js';
@@ -297,7 +299,7 @@ export const DiscussionAgentPostPublicationV1Schema = lazyZodSchema(() => z.exte
 }));
 export type DiscussionAgentPostPublicationV1 = z.infer<typeof DiscussionAgentPostPublicationV1Schema>;
 /** The installed owning Machine replays a privately reviewed post without impersonating a live Session publisher. */
-export const DiscussionAgentApprovedReplayPublicationV1Schema = lazyZodSchema(() => z.strictObject({
+const DiscussionAgentReviewedReplayPublicationV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   operation: z.literal('approved_replay'),
   machineId: z.string().check(z.minLength(1)),
@@ -306,6 +308,20 @@ export const DiscussionAgentApprovedReplayPublicationV1Schema = lazyZodSchema(()
     { message: 'Reviewed replay requires its durable Session source or protected original return' },
   )),
 }));
+/** The existing installed Machine publication channel also carries accepted Workflow leaves. */
+export const DiscussionWorkflowPostPublicationV1Schema = lazyZodSchema(() => z.strictObject({
+  discussionId: DiscussionIdSchema, request: DiscussionPostRequestV1Schema,
+  producer: DiscussionWorkflowProducerV1Schema,
+  origin: WorkflowDiscussionOriginV1Schema,
+  /** Exact existing interrupted-Run observation custody, not a new worker claim. */
+  expectedParentRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
+}));
+export type DiscussionWorkflowPostPublicationV1 = z.infer<typeof DiscussionWorkflowPostPublicationV1Schema>;
+export const DiscussionAgentApprovedReplayPublicationV1Schema = lazyZodSchema(() => z.union([
+  DiscussionAgentReviewedReplayPublicationV1Schema,
+  z.strictObject({ v: z.literal(1), operation: z.literal('workflow_result'), machineId: DiscussionIdSchema,
+    publication: DiscussionWorkflowPostPublicationV1Schema }),
+]));
 export type DiscussionAgentApprovedReplayPublicationV1 = z.infer<typeof DiscussionAgentApprovedReplayPublicationV1Schema>;
 export const DiscussionAgentPublisherPublicationV1Schema = lazyZodSchema(() => z.union([
   DiscussionAgentPostPublicationV1Schema, DiscussionAgentCreateRequestV1Schema,

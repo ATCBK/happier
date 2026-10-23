@@ -367,6 +367,7 @@ export function rewriteWorkflowBlockReferences(block: WorkflowBlock, rewrite: Wo
     case 'step': return {
       ...block, ...guarded,
       input: block.input.map(reference),
+      ...(block.discussionReplyTo ? { discussionReplyTo: producer(block.discussionReplyTo) } : {}),
       ...(block.execution === undefined ? {} : { execution: {
         ...block.execution,
         ...(block.execution.engine && 'kind' in block.execution.engine && block.execution.engine.kind === 'input'

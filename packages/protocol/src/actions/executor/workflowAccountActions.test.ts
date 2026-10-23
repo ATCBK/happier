@@ -37,6 +37,15 @@ function executor(invalidStoredHeader = false, readFailure?: unknown,
 }
 
 describe('workflow Action refusal classification', () => {
+  it('preserves the missing daemon runtime cause through the strict Workflow failure consumer', async () => {
+    const actions = executor(false, Object.assign(new Error('Daemon runtime unavailable'), {
+      code: 'PLUGIN_DAEMON_RUNTIME_UNAVAILABLE',
+    }));
+    const result = await actions({ actionId: 'workflow.definition.get', input: { definitionId }, context: {} });
+    expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false,
+      errorCode: 'target_unavailable', details: { code: 'target_unavailable',
+        reason: 'requester_runtime_unavailable', errorCode: 'PLUGIN_DAEMON_RUNTIME_UNAVAILABLE' } });
+  });
   it.each([
     new DOMException('Read cancelled', 'AbortError'),
     Object.assign(new Error('Read cancelled'), { code: 'ERR_CANCELED' }),

@@ -252,7 +252,11 @@ describe('shared workflow definition create', () => {
       delete: async () => ({ ok: true }),
     };
     const actions = createWorkflowDefinitionActions({ artifactStore: store, encodeListCursor: () => 'cursor', assertDefinitionWriteAllowed: () => {} });
-    const input = { definitionId, definition, metadata: { title: 'Review' } };
+    const captureProvenance = { discussion: { serverId: 'home', discussionId: 'source-discussion' }, messages: [{
+      source: { kind: 'discussion' as const, discussion: { serverId: 'home', discussionId: 'source-discussion' }, messageId: 'question' },
+      authorAccountId: 'source-author',
+    }] };
+    const input = { definitionId, definition, metadata: { title: 'Review', captureProvenance } };
     const created = await actions.create(input, undefined, { surface: 'ui_button', runtimeAccountId: 'account-person' });
     expect(created).toMatchObject({ savedBy: { kind: 'person', accountId: 'account-person' } });
     expect((await store.read(definitionId))?.provenance).toEqual({ savedBy: { kind: 'person', accountId: 'account-person' } });
@@ -275,7 +279,8 @@ describe('shared workflow definition create', () => {
       ops: [{ kind: 'rename', name: 'Reviewed' }] }, undefined,
     { surface: 'ui_button', runtimeAccountId: 'account-person' });
     await expect(actions.get({ definitionId }))
-      .resolves.toMatchObject({ metadata: { title: 'Reviewed' }, savedBy: { kind: 'person', accountId: 'account-person' } });
+      .resolves.toMatchObject({ metadata: { title: 'Reviewed', captureProvenance }, savedBy: { kind: 'person', accountId: 'account-person' } });
+    expect((await actions.get({ definitionId })).definition).not.toHaveProperty('captureProvenance');
     expect((await store.read(definitionId))?.header).toMatchObject({ previewSteps: ['Review'] });
     expect((await store.read(definitionId))?.header).not.toHaveProperty('savedBy');
   });

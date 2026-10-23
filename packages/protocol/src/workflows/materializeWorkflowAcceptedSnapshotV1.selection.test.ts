@@ -7,6 +7,7 @@ import { admitAgentStartV1 } from '../account/settings/admitAgentStartV1.js';
 import { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } from '../account/settings/sessionAgentSpawnPolicyV1.js';
 import { LaunchProfileV2Schema } from '../profiles/v2/schema.js';
 import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
+import { RoleArtifactV1Schema } from '../prompts/roles/roleArtifactV1.js';
 
 const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
 const context = {
@@ -24,6 +25,53 @@ function materialize(overrides: Partial<MaterializeWorkflowAcceptedSnapshotV1Inp
 }
 
 describe('accepted Workflow selection bindings', () => {
+  it.each(['literal', 'input', 'item', 'model', 'child'] as const)('demands the selected Role at the canonical %s resolution and freezes its layered facts', async (kind) => {
+    const roleId = 'selected-role';
+    const reads: string[] = [];
+    const source = RoleArtifactV1Schema.parse({ name: 'Selected', instructions: 'Source instructions',
+      engine: { agentTargetKey: buildBackendTargetKeyV2(agentTarget) }, runsAs: { kind: 'session' },
+      workspaceWrites: 'allow', secondOpinion: 'off', enabled: true });
+    const withRole = { ...definition, roles: [{ roleId, workspaceWrites: 'deny' }],
+      defaults: { engine: { role: roleId } } };
+    const launch = { executionTarget: { serverId: 'home', machineId: 'machine' },
+      directory: { kind: 'path', path: '/project' }, agentTarget, roleId };
+    const authored = kind === 'literal' ? withRole : kind === 'child' ? { ...definition,
+      blocks: [{ kind: 'workflow', id: 'nested', workflowRef: 'builtin:selected-child', input: {} }] }
+      : kind === 'input' ? { ...withRole, defaults: {}, inputs: [{ name: 'chosen', valueType: 'json', required: true }],
+        blocks: [{ ...definition.blocks[0], execution: { engine: { kind: 'input', name: 'chosen' } } }] }
+      : kind === 'item' ? { ...withRole, defaults: {}, inputs: [{ name: 'choices', valueType: 'json', required: true }],
+        blocks: [{ kind: 'loop', id: 'each', repetition: { kind: 'items', items: { kind: 'input', name: 'choices' },
+          execution: 'parallel', failurePolicy: 'collect_outcomes' },
+        body: [{ ...definition.blocks[0], execution: { engine: { kind: 'item', field: 'value' } } }] }] }
+      : { ...withRole, defaults: {}, inputs: [{ name: 'chosen', valueType: 'json', required: true,
+        inputType: { hostType: 'agentParticipant' } }],
+        blocks: [{ ...definition.blocks[0], execution: { participant: { kind: 'input', name: 'chosen' } } }] };
+    const inputs = kind === 'input' ? { chosen: { role: roleId } } : kind === 'item' ? { choices: [{ role: roleId }, { role: roleId }] }
+      : kind === 'model' ? { chosen: { kind: 'model', launch } } : {};
+    const effects = { resolveTargetAvailability: available,
+      readWorkflowDefinition: async () => ({ definition: withRole, sourceKey: 'builtin:selected-child' }),
+      readRoleSelection: async (selectedId: string) => {
+        reads.push(selectedId);
+        return { settingsRoles: { [selectedId]: source },
+          settingsOverrides: { [selectedId]: { roleId: selectedId, instructionsOverride: 'Fresh settings instructions' } } };
+      },
+    };
+    const accepted = await materialize({ definition: authored, context: { ...context, inputs },
+      roleOverrides: [{ roleId, secondOpinion: 'encouraged' }], effects });
+    expect(accepted, JSON.stringify(accepted)).toMatchObject({ ok: true, snapshot: { materializedLeaves: expect.arrayContaining([
+      expect.objectContaining({ role: expect.objectContaining({ roleId, instructions: 'Fresh settings instructions',
+        workspaceWrites: 'deny', secondOpinion: 'encouraged' }) }),
+    ]) } });
+    expect(reads).toEqual([roleId]);
+    if (!accepted.ok) throw new Error(accepted.error.code);
+    reads.length = 0;
+    const replay = await materialize({ definition: authored, context: { ...context, inputs },
+      replay: { snapshot: accepted.snapshot }, effects: { ...effects,
+        readRoleSelection: async (selectedId: string) => { reads.push(selectedId); throw new Error('Live Role source is unavailable'); } } });
+    expect(replay).toMatchObject({ ok: true });
+    expect(reads).toEqual([]);
+  });
+
   it('preserves a configured Agent identity from an engine option key through admission', async () => {
     const configured = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'configured' };
     const authored = { version: 1, defaults: {}, inputs: [{ name: 'engines', valueType: 'json', required: true }], blocks: [{
@@ -53,7 +101,7 @@ describe('accepted Workflow selection bindings', () => {
     expect(() => resolveWorkflowAcceptedStepSelectionV1(leaf, { kind: 'session', session: { serverId: 'home', sessionId: 'unadmitted' } }))
       .toThrow(expect.objectContaining({ code: 'invalid_input' }));
   });
-  it.each(['direct', 'engine_binding', 'child'] as const)('refuses unsupported Discussion delivery to a detached %s Agent before target effects', async topology => {
+  it.each(['direct', 'engine_binding', 'child'] as const)('admits Discussion delivery to an attributed detached %s Agent through the existing result obligation', async topology => {
     const detached = { ...definition, blocks: [{ ...definition.blocks[0], execution: {
       executionTarget: { kind: 'detached_run' }, conversation: { kind: 'fresh' } } }] };
     const authored = topology === 'child' ? { ...definition, blocks: [{ kind: 'workflow', id: 'nested',
@@ -71,8 +119,8 @@ describe('accepted Workflow selection bindings', () => {
     const discussion = { discussion: { serverId: 'home', discussionId: 'discussion-1' }, messageId: 'question-1', throughSeq: 1 };
     expect(await materialize({ definition: authored, context: { ...context, inputs,
       origin: { kind: 'direct', discussion }, resultDelivery: { kind: 'originating_discussion', ...discussion } }, effects }))
-      .toMatchObject({ ok: false, error: { code: 'target_unavailable', reason: 'selection_unavailable' } });
-    expect(observedTargets).toBe(0);
+      .toMatchObject({ ok: true, snapshot: { resultDelivery: { kind: 'originating_discussion', ...discussion } } });
+    expect(observedTargets).toBeGreaterThan(0);
   });
   it('freezes an input-selected existing participant on its own Home and Machine', async () => {
     const session = { serverId: 'home-b', sessionId: 'reviewer' };

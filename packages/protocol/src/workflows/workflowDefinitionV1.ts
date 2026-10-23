@@ -13,7 +13,8 @@ import {
   WorkflowParticipantBindingV1Schema,
   WorkflowLeafExecutionTargetV1Schema as WorkflowRunExecutionTargetV1Schema,
 } from './workflowV1.js';
-import { WorkflowDefinitionIdV1Schema } from './workflowIdsV1.js';
+import { WorkflowDefinitionIdV1Schema, WorkflowRunIdV1Schema } from './workflowIdsV1.js';
+import { DiscussionAddressV1Schema, DiscussionMessageRefV1Schema } from '../discussions/references.js';
 import { preservedBoundedNfcString } from '../strings/preservedBoundedNfcString.js';
 import { StrictJsonValueSchema, sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { AgentPermissionIntentV1Schema, type AgentPermissionIntentV1 } from '../runtime/permissionIntentV1.js';
@@ -33,6 +34,8 @@ import { ActionSessionAddressV1Schema } from '../actions/sessionTargetV1.js';
 import { ExecutableParticipantSelectionV1Schema } from '../discussions/executableParticipants.js';
 import { SessionSpawnNewSelectionV2Schema } from '../sessions/creation/sessionSpawnNewSelectionV2.js';
 import { ActionRequestAttributionV1Schema } from '../actions/actionRequestAttributionV1.js';
+import { ActionsSettingsV1Schema } from '../actions/actionSettings.js';
+import { ActionRequiredAuthoritySchema, ActionSurfaceSchema } from '../actions/metadata.js';
 import { WorkflowDiscussionOriginV1Schema, WorkflowResultDeliveryV1Schema } from './workflowDestinationsV1.js';
 export { collectWorkflowLeavesV1, deriveWorkflowDestinationsV1, readWorkflowLeafTargetSessionIdsV1,
   resolveWorkflowDestinationsV1, WorkflowDestinationsV1Schema, type WorkflowDestinationsV1 } from './workflowDestinationsV1.js';
@@ -62,9 +65,23 @@ export const WorkflowArtifactRevisionV1Schema = lazyZodSchema(() => z.strictObje
 }));
 export type WorkflowArtifactRevisionV1 = z.infer<typeof WorkflowArtifactRevisionV1Schema>;
 
+/** Descriptive source lineage, never execution identity, source access or trusted actor authority. */
+export const WorkflowDefinitionCaptureProvenanceV1Schema = lazyZodSchema(() => z.strictObject({
+  discussion: DiscussionAddressV1Schema,
+  messages: z.array(z.strictObject({ source: DiscussionMessageRefV1Schema, authorAccountId: z.nullable(z.string()),
+    participantSessionId: z.optional(z.string()) })),
+  workflow: z.optional(z.strictObject({ runId: WorkflowRunIdV1Schema, source: z.strictObject({
+    kind: z.enum(['inline', 'saved', 'catalog', 'automation']),
+    definitionId: z.optional(WorkflowDefinitionIdV1Schema),
+    ref: z.optional(z.string()), revision: z.optional(WorkflowArtifactRevisionV1Schema),
+    version: z.optional(z.union([z.string(), z.number()])), automationId: z.optional(z.string()),
+  }) })),
+}));
+
 export const WorkflowDefinitionMetadataV1Schema = lazyZodSchema(() => z.strictObject({
   title: z.string().check(z.trim(), z.minLength(1)),
   description: z.optional(z.string()),
+  captureProvenance: z.optional(WorkflowDefinitionCaptureProvenanceV1Schema),
 }));
 export type WorkflowDefinitionMetadataV1 = z.infer<typeof WorkflowDefinitionMetadataV1Schema>;
 
@@ -207,6 +224,12 @@ export const WorkflowAcceptedOriginV1Schema = lazyZodSchema(() => z.strictObject
   originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
   discussion: z.optional(WorkflowDiscussionOriginV1Schema),
   actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
+  /** Invoking policy for contained effects, never a durable present-person grant. */
+  actionPolicy: z.optional(z.strictObject({
+    surface: z.optional(z.keyof(ActionSurfaceSchema)),
+    authority: ActionRequiredAuthoritySchema,
+    actionsSettings: z.optional(ActionsSettingsV1Schema),
+  })),
 }));
 export type WorkflowAcceptedOriginV1 = z.infer<typeof WorkflowAcceptedOriginV1Schema>;
 

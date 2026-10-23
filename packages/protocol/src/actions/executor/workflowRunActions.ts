@@ -331,9 +331,13 @@ function currentControllerAuthorization(args: RunArgs) {
 }
 
 /** Public routing metadata excludes the host-private accepted request cause. */
-function projectAcceptedOrigin(origin: ReturnType<typeof WorkflowAcceptedSnapshotV1Schema.parse>['origin']) {
+function projectAcceptedOrigin(
+  origin: ReturnType<typeof WorkflowAcceptedSnapshotV1Schema.parse>['origin'],
+  publicOrigin?: WorkflowRunSummaryV1['origin'],
+) {
+  if (publicOrigin?.kind === 'automation') return publicOrigin;
   return origin ? { kind: origin.kind, ...(origin.originSessionId ? { originSessionId: origin.originSessionId } : {}),
-    ...(origin.discussion ? { discussion: origin.discussion } : {}) } : undefined;
+    ...(origin.discussion ? { discussion: origin.discussion } : {}) } : publicOrigin;
 }
 
 function projectAcceptedContext(accepted: ReturnType<typeof WorkflowAcceptedSnapshotV1Schema.parse>) {
@@ -514,6 +518,10 @@ export type WorkflowAccountRunActionDeps = Readonly<{
 
 /** One Account run owner; hosts supply concrete storage, authority and machine effects. */
 export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActionDeps): WorkflowRunActionOwner {
+  const isSameHome = (context: RunArgs['context'], serverId: string) =>
+    areServerProfileIdentifiersEquivalent(context.serverId, serverId, identifier =>
+      context.serverIdentityId && (identifier === context.serverId || identifier === context.serverIdentityId)
+        ? context.serverIdentityId : deps.resolveServerProfileScopeId?.(identifier));
   const storage = deps.storage;
   const prepareWorkspace = deps.prepareWorkspace;
   const restoreWorkspace = deps.restoreWorkspace;
@@ -734,7 +742,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       || resultDelivery?.kind === 'originating_discussion' && !requestedDiscussion) throw workflowError('invalid_input');
     const resolveDiscussion = async () => {
       if (!requestedDiscussion) return undefined;
-      if (!args.context.serverId || !areServerProfileIdentifiersEquivalent(args.context.serverId, requestedDiscussion.discussion.serverId)
+      if (!args.context.serverId || !isSameHome(args.context, requestedDiscussion.discussion.serverId)
         || !deps.resolveDiscussionOrigin) throw workflowError('run_access_denied');
       const resolved = WorkflowDiscussionOriginV1Schema.parse(await deps.resolveDiscussionOrigin({ origin: requestedDiscussion, context: args.context }));
       if (!sameStrictJsonValue(resolved.discussion, requestedDiscussion.discussion)
@@ -823,7 +831,8 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         throw workflowError('currentness_conflict');
       }
       await assertAcceptedAuthorizationCurrent(existing.accepted.authorization, args.context.signal, deps.isAcceptedAuthorizationCurrent);
-      return WorkflowActionOutputSchemasV1['workflow.run.start'].parse({ run: existing.snapshot.run, admission: 'existing' });
+      return WorkflowActionOutputSchemasV1['workflow.run.start'].parse({ run: { ...existing.snapshot.run,
+        origin: projectAcceptedOrigin(existing.accepted.origin, existing.snapshot.run.origin) }, admission: 'existing' });
     };
     if (!replaySource) {
       try {
@@ -962,10 +971,14 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     materialization = { ...materialization, effects: { ...materialization.effects,
       admitSessionAuthority: async target => {
         const context = args.context;
-        if (context.serverId && !areServerProfileIdentifiersEquivalent(target.address.serverId, context.serverId,
-          identifier => identifier === context.serverId || identifier === context.serverIdentityId
-            ? context.serverIdentityId : deps.resolveServerProfileScopeId?.(identifier))) return false;
-        const failure = await resolveActionCurrentSessionScopeFailure('reviews.comments.list', {
+        if (context.serverId && !isSameHome(context, target.address.serverId)) return false;
+        // Starter targets spend start authority; Workflow callers below consume
+        // their existing accepted invocation scope instead of a read grant.
+        if (controller.principal.kind === 'session' && context.actionCaller?.kind !== 'workflowRun') {
+          const authority = await resolveActionAgentStartContextV1(deps, context, target.address.sessionId);
+          return admitActionAgentStartV1(context, { kind: 'session_target', targetSessionId: target.address.sessionId }, authority).ok;
+        }
+        const failure = await resolveActionCurrentSessionScopeFailure('workflow.run.start', {
           sessionId: target.address.sessionId, serverId: target.address.serverId,
         }, controller.principal.kind === 'session' ? { ...context, surface: 'agent' } : context, { sessionId: 'current_session' }, {
           resolveAgentStartContext: deps.resolveAgentStartContext,
@@ -1008,6 +1021,9 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       workspaceTarget: preparedWorkspace.workspaceTarget,
       origin: { kind: 'direct', ...(originSessionId ? { originSessionId } : {}),
         ...(discussionOrigin ? { discussion: discussionOrigin } : {}),
+        actionPolicy: { ...(args.context.surface ? { surface: args.context.surface } : {}),
+          authority: args.context.authority ?? 'account_automation',
+          ...(args.context.actionsSettings ? { actionsSettings: args.context.actionsSettings } : {}) },
         ...(args.context.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.context.actionRequestAttributionV1 } : {}) },
       authorization: { principal: controller.principal,
         ...('sourceAuthority' in controller ? { sourceAuthority: controller.sourceAuthority } : {}) },
@@ -1083,7 +1099,9 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       }
       translateStorageError(error);
     }
-    return WorkflowActionOutputSchemasV1['workflow.run.start'].parse({ run: result.run, admission: result.kind });
+    const run = WorkflowRunSummaryV1Schema.parse(result.run);
+    return WorkflowActionOutputSchemasV1['workflow.run.start'].parse({ run: { ...run,
+      origin: projectAcceptedOrigin(accepted.origin, run.origin) }, admission: result.kind });
   };
 
   /** Opens one row's private progress under its exact row binding. */
@@ -2215,6 +2233,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
           const invocationProvenance: NonNullable<ReturnType<typeof WorkflowRunListResultV1Schema.parse>['invocationProvenance']> = [];
           const runs: WorkflowRunSummaryV1[] = [];
           for (const run of page.runs) {
+            let origin = run.origin;
             let matchesResource = !(target?.kind === 'machine' && target.project);
             let matchesDestination = args.input.targetSessionId === undefined;
             let matchesDiscussion = args.input.originDiscussionId === undefined;
@@ -2245,11 +2264,12 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
               });
               if (opened.kind !== 'available') throw workflowError('content_unavailable');
               const accepted = WorkflowAcceptedSnapshotV1Schema.parse(opened.content);
+              origin = projectAcceptedOrigin(accepted.origin, run.origin) ?? run.origin;
               callerAccessByRunId[run.id] = projectRunCallerAccess(census);
               supportsAnotherRoundByRunId[run.id] = supportsWorkflowAnotherRoundV1(accepted.authoredDefinition);
               matchesDiscussion = args.input.originDiscussionId === undefined || Boolean(args.context.serverId
                 && accepted.origin?.discussion?.discussion.discussionId === args.input.originDiscussionId
-                && areServerProfileIdentifiersEquivalent(accepted.origin.discussion.discussion.serverId, args.context.serverId));
+                && isSameHome(args.context, accepted.origin.discussion.discussion.serverId));
               assertRunResourceRestriction(args.context, { machineId: accepted.machineId,
                 project: accepted.workspaceTarget.project }, deps.normalizeAbsolutePath);
               matchesResource = true;
@@ -2332,7 +2352,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
               projected = { kind: 'unavailable', reason: reason.success ? reason.data : 'content_unavailable' };
             }
             if (!matchesResource || !matchesDestination || !matchesUnder || !matchesDiscussion) continue;
-            runs.push({ ...run, where, startedBy, stepProgress, stepProgressCurrentness, heldStep });
+            runs.push({ ...run, origin, where, startedBy, stepProgress, stepProgressCurrentness, heldStep });
             if (projected) metadataByRunId[run.id] = projected;
           }
           return WorkflowActionOutputSchemasV1[args.actionId].parse({
@@ -2426,7 +2446,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       );
       const { stepProgress, stepProgressCurrentness } = openRootProgress(args.input.runId, snapshot.rootProgress, enc, accountId);
       return WorkflowActionOutputSchemasV1[args.actionId].parse({
-        run: { ...snapshot.run, stepProgress, stepProgressCurrentness },
+        run: { ...snapshot.run, origin: projectAcceptedOrigin(accepted.origin, snapshot.run.origin), stepProgress, stepProgressCurrentness },
         callerAccess: projectRunCallerAccess(snapshot.keyCensus),
         definition: accepted.definition,
         authoredDefinition: accepted.authoredDefinition,
@@ -2442,6 +2462,9 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       const deadline = args.input.timeoutSeconds === undefined
         ? undefined
         : Date.now() + args.input.timeoutSeconds * 1_000;
+      const unboundedCallingSession = deadline === undefined
+        && (args.context.surface === 'agent' || args.context.surface === 'mcp')
+        && Boolean(args.context.defaultSessionId);
       let stored: unknown;
       let revision = 0;
       let wake: (() => void) | undefined;
@@ -2468,7 +2491,9 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         args.context.signal?.throwIfAborted();
         if (failure !== undefined) throw failure;
         const observedRevision = revision;
-        const afterRevision = await assertWaitDoesNotOccupyTargetConversation(waitArgs);
+        const afterRevision = unboundedCallingSession
+          ? undefined
+          : await assertWaitDoesNotOccupyTargetConversation(waitArgs);
         try {
           stored = await deps.storage.execute({
             operation: 'wait', runId: args.input.runId,
@@ -2480,10 +2505,18 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
           if (args.context.signal?.aborted) throw args.context.signal.reason;
           translateStorageError(error);
         }
-        await assertWaitDoesNotOccupyTargetConversation(waitArgs);
+        const raw = record(stored);
+        if (unboundedCallingSession) {
+          // The storage wait is one exact read. A settled terminal observation
+          // cannot occupy this Session waiting on a future workflow branch.
+          // Active work and passive sinks still require the caller's deadline.
+          if (args.context.onWaitSnapshot || record(raw.run).workflowCustodyState !== 'settled'
+            || (raw.observation !== 'terminal' && raw.observation !== 'not_matched_terminal')) {
+            throw workflowError('invalid_input');
+          }
+        } else await assertWaitDoesNotOccupyTargetConversation(waitArgs);
         args.context.signal?.throwIfAborted();
         if (failure !== undefined) throw failure;
-        const raw = record(stored);
         const onSnapshot = args.context.onWaitSnapshot;
         if (onSnapshot) {
           const snapshot = WorkflowRunWaitSnapshotV1Schema.parse({ run: raw.run });

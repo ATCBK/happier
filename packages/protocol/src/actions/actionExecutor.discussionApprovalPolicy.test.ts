@@ -11,6 +11,7 @@ import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 import { deriveWorkflowSessionInputLocalIdV2 } from '../sessions/messages/sessionInputAdmission.js';
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '../sessions/messages/sessionMessageReplyV1.js';
+import { deriveWorkflowDiscussionReplyLocalIdV1 } from '../workflows/workflowInvocationIdentityV1.js';
 
 const input = { discussionId: 'discussion', localId: 'answer', content: { v: 1 as const,
   parts: [{ t: 'text' as const, text: 'Private draft answer' }] }, replyTarget: { kind: 'message' as const, messageId: 'question' } };
@@ -65,14 +66,36 @@ function harness(initialPolicy: DiscussionAnswerPolicyV1 = 'drafts_for_approval'
 }
 
 describe('Discussion direct-user creation policy', () => {
-  it('lets an exact host Workflow original reach the trusted publisher without enrolling its implicit leaf', async () => {
+  it('uses default informational-return policy for exact non-Session Workflow custody without a waiver and retains explicit Ask', async () => {
+    const state = harness('when_addressed', { isActionApprovalRequired: undefined });
+    state.setPolicy(null);
+    const producer = { v: 1 as const, kind: 'workflow' as const, runId: 'run', invocationRecordId: 'leaf', invocationAttempt: '0',
+      execution: { kind: 'action' as const, actionId: 'plugin:external/check' }, outcome: 'answer' as const };
+    const localId = deriveWorkflowDiscussionReplyLocalIdV1(producer);
+    const host: ActionExecutorContext = { surface: 'agent', authority: 'account_automation', serverId: 'home',
+      serverIdentityId: 'srv_home', runtimeAccountId: 'alice', defaultSessionMachineId: 'machine',
+      actionCaller: { kind: 'workflowRun', runId: 'run', authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' } },
+      actionRequestId: localId, actionsSettings: normalizeActionsSettingsV1({ v: 1 }),
+      discussionReplyReturn: { kind: 'workflow_invocation', serverId: 'srv_home', producer,
+        origin: { discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'question', throughSeq: 1 } } };
+    expect(await state.executor.execute('discussion.reply', { ...input, localId }, host)).toMatchObject({ ok: true });
+    expect(state.publications).toHaveLength(1);
+    expect(state.stored()).toBeNull();
+    expect(await state.executor.execute('discussion.reply', { ...input, localId }, { ...host,
+      actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: { 'discussion.reply': { approvalRequiredSurfaces: ['agent'] } } }) }))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(state.publications).toHaveLength(1);
+    expect(requiresExactDaemonApprovalReplay(state.stored()!)).toBe(true);
+  });
+  it.each(['text', 'typed'] as const)('lets an exact host Workflow original reach the trusted publisher without enrolling its implicit leaf (%s)', async resultKind => {
     const state = harness('when_addressed', { isActionApprovalRequired: undefined });
     state.setPolicy(null);
     const workflow = { runId: 'workflow-run', invocationRecordId: 'leaf', invocationAttempt: '0' };
     const requestLocalId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', runId: workflow.runId, invocationRecordId: workflow.invocationRecordId });
     const marker = { serverId: 'srv_home', requestLocalId, acceptedTurnId: 'leaf-turn', workflow };
     const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'receiver', localId: requestLocalId, acceptedTurnId: 'leaf-turn' });
-    const publication = { ...input, localId };
+    const publication = { ...input, localId, ...(resultKind === 'typed' ? { content: { kind: 'workflow_result' as const, value: { checked: true },
+      summary: 'Workflow result', source: workflow } } : {}) };
     const host: ActionExecutorContext = { ...context, actionsSettings: normalizeActionsSettingsV1({ v: 1 }),
       actionCaller: { kind: 'host' }, actionRequestId: localId,
       discussionReplyReturn: marker, sessionInputSource: { sourceSessionId: 'receiver', sourceInputId: requestLocalId,

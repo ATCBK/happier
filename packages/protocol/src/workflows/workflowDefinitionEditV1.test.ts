@@ -86,6 +86,8 @@ describe('typed workflow definition edits', () => {
         external: { kind: 'workspace', producer: { blockId: 'external', scope: { kind: 'outer', levels: 1 } }, field: 'directory' },
         literal: { kind: 'literal', value: { blockId: 'producer', path: ['producer'] } },
       } },
+      { kind: 'step', id: 'review', document: { text: 'Review', references: [], attachments: [] }, input: [],
+        discussionReplyTo: { blockId: 'producer', scope: { kind: 'current' } }, result: { kind: 'text' } },
     ], repetition: { kind: 'evaluate', maxIterations: 3, history: 'none', evaluator: {
       kind: 'action', id: 'judge', actionId: 'notifications.notify_me', input: {
         aggregate: { kind: 'result', producer: { blockId: 'loop', scope: { kind: 'current' } }, path: ['last', 'producer'] },
@@ -105,6 +107,7 @@ describe('typed workflow definition edits', () => {
     expect(copy.repetition.evaluator).toMatchObject({ input: { aggregate: {
       producer: { blockId: copy.id }, path: ['last', copy.body[0]!.id],
     } } });
+    expect(copy.body[2]).toMatchObject({ discussionReplyTo: { blockId: copy.body[0]!.id, scope: { kind: 'current' } } });
     expect(duplicateWorkflowBlock(draft, 'missing')).toEqual({ draft, blockId: null });
   });
   it('inserts every canonical leaf with optional nested identities and canonical defaults', () => {

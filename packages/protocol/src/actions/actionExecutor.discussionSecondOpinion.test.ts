@@ -15,6 +15,7 @@ import { createWorkflowAccountRunActionOwner } from './executor/workflowRunActio
 import { WorkflowRunSummaryV1Schema } from '../workflows/workflowProgressV1.js';
 import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from './actionCatalog.js';
 import { readCommittedDiscussionMessage } from './executor/docCollaborationActions.js';
+import { areServerProfileIdentifiersEquivalent } from '../features/payload/capabilities/serverIdentityCapabilities.js';
 
 const request = {
   intent: 'preview', title: 'Review this answer', question: 'What would you change?',
@@ -26,7 +27,8 @@ const request = {
 function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceReady?: boolean; lostCreate?: boolean; lostPost?: boolean;
   reviewer?: DiscussionSecondOpinionReviewerV1; sourcePages?: 'paged' | 'truncated'; lostGrant?: boolean;
   publisherSessionId?: string; publisherDisclosure?: boolean; noReviewers?: boolean;
-  reviewers?: readonly DiscussionSecondOpinionReviewerV1[] } = {}) {
+  reviewers?: readonly DiscussionSecondOpinionReviewerV1[];
+  routeHostChildAction?: ActionExecutorDeps['routeHostChildAction'] } = {}) {
   const events: string[] = [];
   const creates: unknown[] = [], posts: unknown[] = [], invites: unknown[] = [];
   const approvals: ApprovalRequestV2[] = [];
@@ -35,6 +37,7 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
   const reviewer = options.reviewer ?? request.reviewers[0];
   const reviewers = options.reviewers ?? [reviewer];
   const workflowAdmissions: unknown[] = [];
+  const resolveServerProfileScopeId = (identifier: string) => ['stack_qa', 'home'].includes(identifier) ? 'home' : null;
   let grantReady = !options.needsGrant, createLost = false, postLost = false, grantLost = false;
   const preview = () => DiscussionSecondOpinionPreviewV1Schema.parse({
     source: request.source, sourceContentReady: options.sourceReady ?? true, sourceAudienceAccountIds: grantReady ? ['alice', 'bob'] : ['alice'],
@@ -66,6 +69,18 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
       approvals.push(ApprovalRequestV2Schema.parse(approval));
       return { artifactId: `opinion-approval-${approvals.length}` };
     },
+    approvalsGet: async ({ artifactId }) => approvals[Number(artifactId.split('-').at(-1)) - 1] ?? null,
+    // Home currentness is a transport boundary; only this fixture Account and Machine serve it.
+    isApprovalExecutionOriginCurrent: async ({ origin }) => origin.accountId === 'alice' && origin.machineId === 'machine',
+    approvalsUpdate: async ({ artifactId, request: next }) => {
+      const index = Number(artifactId.split('-').at(-1)) - 1;
+      const stored = approvals[index];
+      if (!stored) throw new Error('Missing approval');
+      const transition = decideApprovalRequestTransition(stored, next);
+      if (!transition.ok) return transition;
+      approvals[index] = ApprovalRequestV2Schema.parse(next);
+      return { ok: true };
+    },
     discussionAction: async args => {
       events.push(args.actionId);
       if (args.actionId === 'discussion.second_opinion.start') return { ok: true, value: preview() };
@@ -80,8 +95,8 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
         const invite = DiscussionInviteInputV1Schema.parse(args.input);
         if (invite.participant.kind === 'session') speakers.set(invite.participant.sessionId, invite.answerPolicy ?? 'when_addressed');
         return { discussionId: 'opinion', ownerAccountId: 'alice', access: 'owner', grants: [], changed: true,
-        ...(reviewer.selection.kind === 'model' ? { modelParticipant: {
-          participant: { kind: 'model', participantSlotId: reviewer.participantSlotId }, launch: reviewer.selection.launch,
+        ...(invite.participant.kind === 'model' ? { modelParticipant: {
+          participant: { kind: 'model', participantSlotId: invite.participant.participantSlotId }, launch: invite.participant.launch,
           sessionId: null, answerPolicy: 'when_addressed', createdAt: 1,
         } } : {}) }; }
       if (args.actionId === 'discussion.post') {
@@ -99,7 +114,7 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
     },
     sessionSpawnNew: async args => {
       births.push(args);
-      return { type: 'success', disposition: 'rejoined', sessionId: 'allocated-reviewer', executionTarget: args.executionTarget,
+      return { type: 'success', disposition: 'rejoined', sessionId: reviewers.length > 1 ? `allocated-reviewer-${births.length % reviewers.length}` : 'allocated-reviewer', executionTarget: args.executionTarget,
         organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
     },
     sessionTranscriptGet: async args => {
@@ -112,6 +127,7 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
     },
   } as ActionExecutorDeps;
   const workflow = createWorkflowAccountRunActionOwner({
+    resolveServerProfileScopeId,
     resolveAccountId: async () => 'alice', resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
     resolveRunReportPolicy: async () => ({ preset: 'important' }), normalizeAbsolutePath: path => path.startsWith('/') ? path : null,
     definitions: { get: async () => { throw new Error('unexpected_definition'); } },
@@ -120,7 +136,8 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
     resolveDiscussionOrigin: async ({ origin, context }) => {
       const result = await readCommittedDiscussionMessage({ kind: 'discussion', discussion: origin.discussion, messageId: origin.addressingMessageId }, context,
         async () => ({ v: 1, serverId: 'home', discussionId: 'opinion', messageSeq: 2,
-          messages: [message('question', 2)], hasMoreOlder: false, incomplete: false }));
+          messages: [message('question', 2)], hasMoreOlder: false, incomplete: false }), undefined,
+        (left, right) => areServerProfileIdentifiersEquivalent(left, right, resolveServerProfileScopeId));
       if (!result.ok) throw new Error('invalid_origin');
       return { discussion: origin.discussion, messageId: result.message.id, throughSeq: result.message.seq };
     },
@@ -143,7 +160,8 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
     try { return await workflow.execute(args); }
     catch (error) { events.push(`workflow-error:${error instanceof Error ? error.message : String(error)}`); throw error; }
   };
-  const executor = createActionExecutor(deps);
+  const executor = createActionExecutor({ ...deps, resolveServerProfileScopeId,
+    ...(options.routeHostChildAction ? { routeHostChildAction: options.routeHostChildAction } : {}) });
   const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'home', bypassApprovals: true,
     actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
       'discussion.second_opinion.start': ['ui'], 'discussion.create': ['ui'], 'discussion.invite': ['ui'],
@@ -416,16 +434,74 @@ describe('Second opinion canonical Action composition', () => {
     expect(spec.inputSchema.safeParse(request).success).toBe(true);
   });
 
-  it('previews two reviewers and starts Fresh opinions through the real Workflow admission owner', async () => {
+  it.each(['home', 'stack_qa'])('previews two reviewers and starts Fresh opinions through the real Workflow admission owner (%s)', async serverId => {
     const reviewers = [request.reviewers[0], { selection: { kind: 'session' as const, session: { serverId: 'home', sessionId: 'other-reviewer' } } }];
     const f = fixture({ reviewers });
-    expect(await f.executor.execute('discussion.second_opinion.start', { ...request, reviewers }, f.context))
+    const context = { ...f.context, serverId };
+    expect(await f.executor.execute('discussion.second_opinion.start', { ...request, reviewers }, context))
       .toMatchObject({ ok: true, result: { status: 'preview', preview: { reviewers: expect.any(Array) } } });
     const result = await f.executor.execute('discussion.second_opinion.start', { ...request, intent: 'ask', reviewers, confirmedPreview: f.preview(),
-      project: { machineId: 'machine', directory: '/repo' } }, f.context);
+      project: { machineId: 'machine', directory: '/repo' } }, context);
     expect(result, JSON.stringify({ result, events: f.events })).toMatchObject({ ok: true, result: { status: 'asked', mode: 'fresh_opinions', runId: expect.any(String) } });
     expect(f.workflowAdmissions).toHaveLength(1);
     expect(f.posts).toEqual([expect.objectContaining({ content: { v: 1, parts: [{ t: 'text', text: request.question }] } })]);
+  });
+  it('routes a Machine child of the approved Account composite before local Workflow admission', async () => {
+    const reviewers = [request.reviewers[0], { selection: { kind: 'session' as const,
+      session: { serverId: 'home', sessionId: 'other-reviewer' } } }];
+    const routed: string[] = [];
+    const f = fixture({ reviewers, routeHostChildAction: async ({ actionId, input, context }) => {
+      // Source reads retain this fixture's native transcript transport.
+      if (actionId !== 'workflow.run.start') return null;
+      routed.push(actionId);
+      expect(actionId).toBe('workflow.run.start');
+      expect(input).toMatchObject({ source: { kind: 'catalog', workflow: 'builtin:fresh-opinions' } });
+      expect(context.externalActionTarget).toEqual({ kind: 'machine', machineId: 'machine',
+        project: { machineId: 'machine', directory: '/repo' } });
+      return { ok: false, errorCode: 'daemon_fixture_unavailable', error: 'daemon_fixture_unavailable' };
+    } });
+    const context = { ...f.context, surface: 'cli' as const, runtimeAccountId: 'alice',
+      defaultSessionMachineId: 'machine', actionRequestId: 'opinion', bypassApprovals: false };
+    expect(await f.executor.execute('approval.request.create', {
+      actionId: 'discussion.second_opinion.start', summary: 'Ask reviewers', createdBy: { surface: 'cli' },
+      actionArgs: { ...request, intent: 'ask', reviewers, confirmedPreview: f.preview(),
+        project: { machineId: 'machine', directory: '/repo' } },
+    }, context)).toMatchObject({ ok: true, result: { artifactId: 'opinion-approval-1' } });
+    expect(requiresExactDaemonApprovalReplay(f.approvals[0]!)).toBe(false);
+    const result = await f.executor.execute('approval.request.decide', {
+      artifactId: 'opinion-approval-1', decision: 'approve',
+    }, context);
+    expect(result).toMatchObject({ ok: true, result: { execution: { ok: true, result: {
+      status: 'pending', stage: 'workflow', errorCode: 'daemon_fixture_unavailable' } } } });
+    expect(routed).toEqual(['workflow.run.start']);
+    expect(f.workflowAdmissions).toEqual([]);
+  });
+  it.each(['local', 'routed'] as const)('gives sibling Machine children stable distinct request identities on %s retry', async placement => {
+    const reviewers = ['reviewer-a', 'reviewer-b'].map(participantSlotId => ({ participantSlotId,
+      selection: { kind: 'model' as const, launch: { executionTarget: { serverId: 'home', machineId: 'machine' },
+        directory: { kind: 'path' as const, path: '/repo' },
+        agentTarget: { kind: 'agent' as const, identity: { pluginId: 'acme.agents', localId: 'reviewer' } }, permissionMode: 'read-only' as const } } }));
+    const routed: Array<{ requestId: string | undefined; input: unknown }> = [];
+    const routeHostChildAction: ActionExecutorDeps['routeHostChildAction'] = async ({ actionId, input, context }) => {
+      if (actionId !== 'session.spawn_new') return null;
+      routed.push({ requestId: context.actionRequestId, input });
+      return { ok: true, result: { type: 'success', disposition: 'rejoined', sessionId: `allocated-reviewer-${routed.length % reviewers.length}`,
+        executionTarget: { serverId: 'home', machineId: 'machine' }, organizationPlacement: { folderId: null, tagIds: [] },
+        initialInput: { status: 'notRequested' } } };
+    };
+    const f = fixture({ reviewers, needsGrant: true, ...(placement === 'routed' ? { routeHostChildAction } : {}) });
+    const context = { ...f.context, actionRequestId: 'two-model-reviewers' };
+    const input = { ...request, intent: 'ask', reviewers, confirmedPreview: f.preview(), project: { machineId: 'machine', directory: '/repo' } };
+    for (let retry = 0; retry < 2; retry++) {
+      const result = await f.executor.execute('discussion.second_opinion.start', input, context);
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'asked' } });
+    }
+    const identities = placement === 'routed' ? routed.map(child => child.requestId) : f.births.map(child => child.actionRequestId);
+    expect(identities).toHaveLength(4);
+    expect(identities[0]).toEqual(expect.any(String));
+    expect(identities[0]).not.toBe(context.actionRequestId);
+    expect(identities[1]).not.toBe(identities[0]);
+    expect(identities.slice(2)).toEqual(identities.slice(0, 2));
   });
   it('requires multi-reviewer Workflow placement before source grants or Discussion mutations', async () => {
     const reviewers = [request.reviewers[0], { selection: { kind: 'session' as const, session: { serverId: 'home', sessionId: 'other-reviewer' } } }];
@@ -435,5 +511,23 @@ describe('Second opinion canonical Action composition', () => {
     expect(f.events).toEqual([]);
     expect(f.creates).toHaveLength(0);
     expect(f.workflowAdmissions).toHaveLength(0);
+  });
+  it('keeps child policy admission ahead of the host Machine handoff', async () => {
+    const reviewers = [request.reviewers[0], { selection: { kind: 'session' as const,
+      session: { serverId: 'home', sessionId: 'other-reviewer' } } }];
+    const routed: string[] = [];
+    const f = fixture({ reviewers, routeHostChildAction: async ({ actionId }) => {
+      if (actionId !== 'workflow.run.start') return null;
+      routed.push(actionId);
+      return { ok: false, errorCode: 'daemon_fixture_unavailable', error: 'daemon_fixture_unavailable' };
+    } });
+    const result = await f.executor.execute('discussion.second_opinion.start', { ...request, intent: 'ask',
+      reviewers, confirmedPreview: f.preview(), project: { machineId: 'machine', directory: '/repo' } }, {
+      ...f.context, actionsSettings: normalizeActionsSettingsV1({ v: 1,
+        actions: { 'workflow.run.start': { enabled: false } } }),
+    });
+    expect(result).toMatchObject({ ok: true, result: { status: 'pending', stage: 'workflow', errorCode: 'action_disabled' } });
+    expect(routed).toEqual([]);
+    expect(f.workflowAdmissions).toEqual([]);
   });
 });

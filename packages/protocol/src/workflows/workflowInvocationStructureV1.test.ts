@@ -29,6 +29,31 @@ function resolve(definition: WorkflowDefinitionV1, rows: readonly WorkflowInvoca
 }
 
 describe('frozen invocation structure owner', () => {
+  it.each(['running', 'cancel_requested', 'cancelled', 'completed'] as const)(
+    'checks ancestry eligibility without rejecting a completed loop source (%s)', async lifecycle => {
+      const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], blocks: [
+        { kind: 'step', id: 'select', document, result: { kind: 'json', schema: { type: 'array', items: { type: 'string' } } } },
+        { kind: 'loop', id: 'panel', repetition: { kind: 'items',
+          items: { kind: 'result', producer: { blockId: 'select', scope: { kind: 'current' } }, path: [] },
+          execution: 'parallel', failurePolicy: 'collect_outcomes' }, body: [{ kind: 'step', id: 'answer', document }] },
+      ] });
+      const source = row(4, 0, '0', 'step', 'select', { result: ['first', 'second'] });
+      source.index.lifecycle = 'completed';
+      const loop = row(1, 0, '1', 'loop', 'panel', { container: {
+        kind: 'loop', mode: 'items', nextMemberIndex: '0', nextBodyBlockOrdinal: '0',
+        source: { kind: 'result', recordId: source.index.id, path: [] }, itemCount: '2',
+      } });
+      loop.index.lifecycle = lifecycle;
+      const rows = [row(0, null, '0', 'root', '$root'), loop,
+        row(2, 1, '1', 'loop', 'panel', { frame: { ownerBlockId: 'panel', source: { kind: 'item', index: '1' } } }),
+        row(3, 2, '0', 'step', 'answer'), source];
+      const result = await resolveWorkflowInvocationStructureV1({ definition, inputs: {}, invocation: rows[3]!,
+        readInvocation: async id => rows.find(candidate => candidate.index.id === id), keyOfInvocation: value => value.index.id,
+        isAncestryCurrent: candidate => candidate.index.lifecycle === 'running' });
+      if (lifecycle === 'running') expect(result).toMatchObject({ frame: { item: { value: 'second', index: 1 } } });
+      else expect(result).toBeUndefined();
+    });
+
   it('recovers the exact item from the frozen loop source for accepted selection after restart', async () => {
     const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'loop', id: 'panel',
       repetition: { kind: 'items', items: { kind: 'literal', value: ['first', 'second'] }, execution: 'parallel', failurePolicy: 'collect_outcomes' },

@@ -58,6 +58,17 @@ export function parseWorkflowLiteralEngineSelectionV1(value: unknown): ReturnTyp
   return WorkflowLiteralEngineSelectionV1Schema.safeParse(value);
 }
 
+/** Resolve a lexical engine before opening the selected Role's Account sources. */
+export function resolveWorkflowEngineSelectionV1(input: ResolveWorkflowStepSelectionV1Input): WorkflowStepSelectionV1['engine'] {
+  const engine = input.step?.engine ?? input.defaults.engine;
+  if (!engine || !('kind' in engine) || input.purpose === 'authoring') return engine;
+  const value = engine.kind === 'input' ? input.inputs?.[engine.name] : input.itemValue;
+  const selected = value === undefined ? undefined : readWorkflowValuePathV1(value, engine.path ?? []);
+  const parsed = parseWorkflowLiteralEngineSelectionV1(selected);
+  if (!parsed.success) throw new WorkflowStepSelectionErrorV1({ code: 'invalid_input' });
+  return parsed.data;
+}
+
 /** Invocation admission can choose only a concrete engine already approved in this leaf. */
 export function listWorkflowAcceptedLeafSelectionsV1(leaf: WorkflowMaterializedLeafV1): readonly WorkflowMaterializedLeafV1[] {
   const participants = leaf.participantBindings ? leaf.participantBindings.selections.map(selected => ({ ...leaf,
@@ -110,14 +121,7 @@ export function resolveWorkflowStepSelectionV1(input: Readonly<{
 }>): Omit<ResolveWorkflowStepSelectionV1Result, 'selection'> & Readonly<{ selection: WorkflowStepExecutionSelection }>;
 export function resolveWorkflowStepSelectionV1(input: ResolveWorkflowStepSelectionV1Input): ResolveWorkflowStepSelectionV1Result;
 export function resolveWorkflowStepSelectionV1(input: ResolveWorkflowStepSelectionV1Input): ResolveWorkflowStepSelectionV1Result {
-  let engine = input.step?.engine ?? input.defaults.engine;
-  if (engine && 'kind' in engine && input.purpose !== 'authoring') {
-    const value = engine.kind === 'input' ? input.inputs?.[engine.name] : input.itemValue;
-    const selected = value === undefined ? undefined : readWorkflowValuePathV1(value, engine.path ?? []);
-    const parsed = parseWorkflowLiteralEngineSelectionV1(selected);
-    if (!parsed.success) throw new WorkflowStepSelectionErrorV1({ code: 'invalid_input' });
-    engine = parsed.data;
-  }
+  const engine = resolveWorkflowEngineSelectionV1(input);
   const { engine: defaultEngine, participant: defaultParticipant, executionTarget: defaultTarget, ...defaults } = input.defaults;
   const { engine: stepEngine, participant: stepParticipant, executionTarget: stepTarget, ...step } = input.step ?? {};
   const participant = stepParticipant ?? defaultParticipant;

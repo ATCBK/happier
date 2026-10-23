@@ -12,6 +12,7 @@ import {
 import { PortableRuntimeDescriptorV1Schema } from '../sessions/metadata/runtimeDescriptorV1.js';
 import { WorkflowStepComposerDocumentSchema } from './workflowComposerDocumentV1.js';
 import {
+  WorkflowAuthoredProducerRefSchema,
   WorkflowAuthoredResultReferenceSchema,
   WorkflowBlockIdSchema,
   WorkflowConditionSchema,
@@ -278,6 +279,8 @@ export const WorkflowStepSchema = lazyZodSchema(() => z.strictObject({
   inputMode: z.optional(z.literal('none')),
   execution: z.optional(WorkflowStepSelectionV1Schema),
   input: z._default(z.array(WorkflowValueReferenceSchema), []),
+  /** Publish this leaf as a reply to the exact producer's committed Discussion result. */
+  discussionReplyTo: z.optional(WorkflowAuthoredProducerRefSchema),
   result: zMini._default(WorkflowResultContractSchema, { kind: 'text' }),
   timeoutMs: z.optional(z.number().check(z.int(), z.positive(), z.int())),
   pauseForReview: z.optional(z.boolean()),

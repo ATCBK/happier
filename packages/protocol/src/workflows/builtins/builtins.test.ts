@@ -15,6 +15,17 @@ function listBlocks(blocks: readonly WorkflowBlock[]): WorkflowBlock[] {
 }
 
 describe('built-in workflow catalog', () => {
+  it('binds the review publication to its exact answer, and rejects an unavailable parent', () => {
+    const definition = catalog.resolveBuiltinWorkflowDefinitionV1('answer-and-review')!.definition;
+    const review = listBlocks(definition.blocks).find(block => block.id === 'review');
+    expect(review).toMatchObject({ discussionReplyTo: { blockId: 'answer', scope: { kind: 'outer', levels: 1 } } });
+    const invalid = structuredClone(definition);
+    const invalidReview = listBlocks(invalid.blocks).find(block => block.id === 'review')!;
+    Object.assign(invalidReview, { discussionReplyTo: { blockId: 'missing', scope: { kind: 'outer', levels: 1 } } });
+    expect(validateWorkflowDefinition(invalid).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing_reference', blockId: 'review' }),
+    ]));
+  });
   it('makes built-ins discoverable without a saved Artifact or UI loader', () => {
     expect(catalog.getBuiltinWorkflowCatalogV1().map((entry) => entry.id)).toEqual([
       'builtin:keep-going',

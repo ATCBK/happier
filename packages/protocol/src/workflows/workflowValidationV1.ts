@@ -704,6 +704,10 @@ function validateStep(
   options?: Readonly<{ requireDecisionResult?: boolean }>,
 ): void {
   validateStepExecution(state, step, path);
+  if (step.discussionReplyTo) {
+    validateValueReference(state, { kind: 'result', producer: step.discussionReplyTo, path: [] },
+      joinPath(path, 'discussionReplyTo'), step.id);
+  }
   const invalidBindings = new Map<number, WorkflowValidationIssue>();
   step.input.forEach((reference, index) => {
     const issueCount = state.issues.length;

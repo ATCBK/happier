@@ -63,6 +63,8 @@ export function workflowBodyOwnsConversation(owner: Extract<WorkflowBlock, { kin
 /** One frozen ancestry walk for result contracts, lexical frames and admission ownership. */
 export async function resolveWorkflowInvocationStructureV1(params: WorkflowInvocationBindingParamsV1 & Readonly<{
   keyOfInvocation: (row: WorkflowInvocationBindingRowV1) => string;
+  /** Admission may narrow ancestry lifetime; completed result sources are not ancestors. */
+  isAncestryCurrent?: (row: WorkflowInvocationBindingRowV1) => boolean;
 }>): Promise<Readonly<{
   leaf: WorkflowLeafV1;
   definition: WorkflowDefinitionV1;
@@ -72,13 +74,15 @@ export async function resolveWorkflowInvocationStructureV1(params: WorkflowInvoc
   rootConversationOwnerRecordId: string;
   inputs: WorkflowResolvedInputsV1;
 }> | undefined> {
+  if (params.isAncestryCurrent?.(params.invocation) === false) return undefined;
   const ancestry: WorkflowInvocationBindingRowV1[] = [params.invocation];
   const seen = new Set([params.invocation.index.id]);
   while (ancestry[0]!.index.parentRecordId !== null) {
     const parentId = ancestry[0]!.index.parentRecordId!;
     if (seen.has(parentId)) return undefined;
     const parent = await params.readInvocation(parentId);
-    if (!parent || parent.index.id !== parentId || parent.index.runId !== params.invocation.index.runId) return undefined;
+    if (!parent || parent.index.id !== parentId || parent.index.runId !== params.invocation.index.runId
+      || params.isAncestryCurrent?.(parent) === false) return undefined;
     seen.add(parentId);
     ancestry.unshift(parent);
   }

@@ -22,6 +22,9 @@ import { markSessionListQueryResultV1 } from '../../sessions/awareness/action.js
 import { ActionIdSchema } from '../actionIds.js';
 import { getActionSpec } from '../actionSpecs.js';
 import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '../actionCatalog.js';
+import { resolveActionCurrentSessionScopeFailure } from './sessionListAccess.js';
+import { AutomationStoredWorkflowDefinitionRecipeV2Schema } from '../../automations/automationWorkflowRecipeV2.js';
+import { SessionInitialTriggerAdmissionV1Schema } from '../../sessions/creation/sessionInitialTriggerAdmissionV1.js';
 
 const definition = WorkflowDefinitionV1Schema.parse({ version: 1,
   defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } },
@@ -832,7 +835,11 @@ describe('workflow trigger Automation composition', () => {
     } });
     const replayContext = observations.filter((entry) => entry.bypassApprovals).at(-1);
     expect(replayContext).toMatchObject({ surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
-    expect(replayContext?.defaultSessionId).toBeUndefined();
+    // The reviewed Session remains contextual default; the human host invocation
+    // carries no restored Session start policy or caller authority.
+    expect(replayContext?.defaultSessionId).toBe('session-one');
+    expect(replayContext?.agentStartContext).toBeUndefined();
+    expect(replayContext?.sessionAgentSpawnPolicyV1).toBeUndefined();
     policyFactsAvailable = false;
     expect(await executor.execute('session.trigger.list', { sessionId: 'session-one' }, withoutDepth))
       .toMatchObject({ ok: true, result: { sets: [expect.objectContaining({ health: 'available' })] } });
@@ -976,6 +983,84 @@ describe('workflow trigger Automation composition', () => {
       expect(rows.size).toBe(1);
     }
   });
+
+  it.each(['current_only', 'birth', 'nested', 'plugin', 'mcp', 'own', 'led', 'birth_own', 'birth_led', 'human', 'wrong_caller', 'foreign_home'] as const)(
+    'admits typed trigger targets with starter authority rather than readable-child authority: %s', async scenario => {
+      const f = fixture();
+      const birth = scenario === 'birth' || scenario === 'birth_own' || scenario === 'birth_led';
+      const address = { serverId: scenario === 'foreign_home' ? 'other-home' : 'home',
+        sessionId: scenario === 'own' || scenario === 'birth_own' || scenario === 'foreign_home' ? 'session-one' : 'readable-child' };
+      const child = WorkflowDefinitionV1Schema.parse({ version: 1, defaults: {}, inputs: [{ name: 'reviewSession',
+        valueType: 'json', required: true, inputType: { hostType: 'session' } }], blocks: [{ kind: 'action', id: 'comments',
+        actionId: 'reviews.comments.list', input: { sessionId: { kind: 'input', name: 'reviewSession', path: ['sessionId'] } } }] });
+      const pluginRef = 'plugin:external.workflow/review';
+      const authored = scenario === 'nested' ? WorkflowDefinitionV1Schema.parse({ version: 1, defaults: {}, blocks: [{
+        kind: 'workflow', id: 'child', workflowRef: pluginRef, input: { reviewSession: { kind: 'literal', value: address } },
+      }] }) : child;
+      const sessionList: NonNullable<ActionExecutorDeps['sessionList']> = async () => markSessionListQueryResultV1({
+        sessions: [{ id: address.sessionId, active: false, presence: 'offline', updatedAt: 1 }],
+        nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+      });
+      const caller: ActionExecutorContext = scenario === 'human'
+        ? { surface: 'ui', authority: 'present_user', serverId: 'home', actionCaller: { kind: 'host' } }
+        : { ...ownCaller, serverId: 'home', defaultSessionId: 'session-one', defaultSessionMachineId: project.machineId,
+          authority: 'account_automation', callerPermissionMode: 'default', surface: scenario === 'mcp' ? 'mcp' : 'agent',
+          actionCaller: { ...ownCaller.agentStartContext.caller },
+          sessionListAccess: scenario === 'led' || scenario === 'birth_led' ? 'led_subtree' : 'current_session',
+          // Captured readable/led facts cannot broaden the host's current-only start grant.
+          agentStartContext: { ...ownCaller.agentStartContext, ledSubtreeSessionIds: [address.sessionId],
+            ...(scenario === 'wrong_caller' ? { caller: { ...ownCaller.agentStartContext.caller, sessionId: 'another-caller' } } : {}) },
+        };
+      const pluginSources = () => [{ workflow: pluginRef, pluginId: 'external.workflow', version: '1', title: 'Review', definition: child }];
+      const actions = createWorkflowTriggerActions({ ...f.deps, sessionList,
+        resolveSession: async () => ({ project, nativeGoalOwner: false }),
+        resolveWorkflow: async ref => {
+          const resolved = await resolveWorkflowDefinitionRefV1(ref, { readPluginWorkflows: pluginSources });
+          if (!resolved) throw new Error('source_unavailable');
+          return resolved.definition;
+        },
+        resolveMaterializer: async () => ({ effects: {
+          readWorkflowDefinition: async () => ({ definition: child, sourceKey: pluginRef, version: '1' }),
+          resolveTargetAvailability: async () => true,
+          resolveSessionTarget: async () => ({ address, machineId: project.machineId }),
+          readActionContract: async actionId => freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(getActionSpec(ActionIdSchema.parse(actionId)))),
+        } }),
+      });
+      if (scenario === 'current_only' || scenario === 'birth') {
+        // Deliberately keep the real read owner permissive: borrowing its Action
+        // identity to populate starter witnesses must fail this composed test.
+        await expect(resolveActionCurrentSessionScopeFailure('reviews.comments.list', address, caller,
+          { sessionId: 'current_session' }, { sessionList })).resolves.toBeNull();
+      }
+      const target = scenario === 'plugin' ? { kind: 'workflow' as const, ref: pluginRef }
+        : { kind: 'inline' as const, definition: authored };
+      const request = { target, trigger, ...(scenario === 'nested' ? {} : { inputs: { reviewSession: address } }) };
+      const positive = ['own', 'led', 'birth_own', 'birth_led', 'human'].includes(scenario);
+      if (birth) {
+        const pending = actions.prepareSessionInitialTriggers({ project, initialTriggers: [request], caller });
+        if (positive) {
+          const prepared = await pending;
+          expect(SessionInitialTriggerAdmissionV1Schema.parse(prepared[0])).toMatchObject({ executionRecipe: { v: 2 } });
+          expect(AutomationStoredWorkflowDefinitionRecipeV2Schema.parse(prepared[0]?.executionRecipe))
+            .toMatchObject({ workflow: { t: 'plain', v: { inputs: { reviewSession: address } } } });
+        } else await expect(pending).rejects.toMatchObject({ code: 'subtree_denied' });
+        expect(f.rows.size).toBe(0);
+        return;
+      }
+      const result = await f.executor(actions, { resolveAgentStartContext: async () => ownCaller.agentStartContext })
+        .execute('session.trigger.add', { ...request, sessionId: 'session-one' }, caller);
+      if (!positive) {
+        expect(result).toMatchObject({ ok: false, errorCode: scenario === 'wrong_caller' ? 'target_unavailable' : 'subtree_denied' });
+        expect(f.rows.size).toBe(0);
+        return;
+      }
+      expect(result).toMatchObject({ ok: true, result: { set: { health: 'available' } } });
+      expect(f.rows.size).toBe(1);
+      const recipe = AutomationStoredWorkflowDefinitionRecipeV2Schema.parse([...f.rows.values()][0]?.executionRecipe);
+      expect(recipe).toMatchObject({ workflow: { t: 'plain', v: { inputs: { reviewSession: address }, inlineDefinition: child } } });
+      expect(SessionTriggerListResultV1Schema.parse(await actions.sessionList({ sessionId: 'session-one' }, caller)).sets)
+        .toMatchObject([{ context: { inputs: { reviewSession: address } } }]);
+    });
 
   it('admits the exact human-approved review target without widening the proposing Session authority', async () => {
     const f = fixture();

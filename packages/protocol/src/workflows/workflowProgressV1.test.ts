@@ -7,6 +7,7 @@ import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js
 
 import {
   WorkflowContainerClosingV1Schema,
+  WorkflowAuthoredInputV1Schema,
   WorkflowActionFailureV1Schema,
   WorkflowExecutionCorrespondenceV1Schema,
   WorkflowConversationRefV1Schema,
@@ -32,6 +33,10 @@ import {
 } from './workflowProgressV1.js';
 
 describe('workflow progress v1', () => {
+  it('rejects caller-authored publication authority in a recovery replacement input', () => {
+    expect(WorkflowAuthoredInputV1Schema.safeParse({ document: { text: 'Retry', references: [], attachments: [] }, input: [],
+      discussionReplyTo: { discussion: { serverId: 'home', discussionId: 'other-discussion' }, messageId: 'other-question', throughSeq: 1 } }).success).toBe(false);
+  });
   it('retains the original typed reply outcome independently of selected result text', () => {
     const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
       invocationPath: { blockId: 'review', scope: [] }, attempt: '0', logicalInvocationRecordId: 'review-invocation',

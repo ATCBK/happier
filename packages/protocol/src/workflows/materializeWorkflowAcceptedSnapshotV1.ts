@@ -17,7 +17,7 @@ import { WorkflowAcceptedSnapshotV1Schema, WorkflowMaterializedLeafV1Schema, Wor
   type WorkflowMaterializedLeafV1, type WorkflowResolvedInputsV1, type WorkflowRoleOverridesV1,
   type WorkflowReplayAgentOverrideV1,
   type WorkflowRunExecutionTargetV1 } from './workflowDefinitionV1.js';
-import { listWorkflowAcceptedLeafSelectionsV1, parseWorkflowLiteralEngineSelectionV1, resolveWorkflowAcceptedStepSelectionV1, resolveWorkflowStepSelectionV1, WorkflowStepSelectionErrorV1, type WorkflowResolvedStepSelectionV1, type WorkflowStepSelectionRefusalV1, type WorkflowRoleSelectionContextV1 } from './workflowStepSelectionV1.js';
+import { listWorkflowAcceptedLeafSelectionsV1, parseWorkflowLiteralEngineSelectionV1, resolveWorkflowAcceptedStepSelectionV1, resolveWorkflowEngineSelectionV1, resolveWorkflowStepSelectionV1, WorkflowStepSelectionErrorV1, type ResolveWorkflowStepSelectionV1Input, type WorkflowResolvedStepSelectionV1, type WorkflowStepSelectionRefusalV1, type WorkflowRoleSelectionContextV1 } from './workflowStepSelectionV1.js';
 import { validateWorkflowDefinition } from './workflowValidationV1.js';
 import { WorkflowStepExecutionSelectionSchema, type WorkflowBlock, type WorkflowDefinitionV1,
   type WorkflowIngressContextV1, type WorkflowLeafV1, type WorkflowStepSelectionV1,
@@ -60,6 +60,8 @@ export type WorkflowMaterializationEffectsV1 = Readonly<{
   admitSessionAuthority?: (target: WorkflowResolvedSessionTargetV1) => Promise<boolean>;
   readWorkflowDefinition?: (ref: WorkflowDefinitionRefV1) => Promise<Readonly<{ definition: unknown; sourceKey: string; version?: number | string }> | null>;
   readLaunchProfile?: (profileId: string) => Promise<AiLaunchProfile | null>;
+  /** Fresh source facts for an unfrozen Role actually consumed by this admission. */
+  readRoleSelection?: (roleId: string) => Promise<NonNullable<MaterializeWorkflowAcceptedSnapshotV1Input['roleSelection']>>;
   resolveTargetAvailability: (leaf: Readonly<{
     blockId: string; selection: WorkflowResolvedStepSelectionV1;
     executionTarget: WorkflowRunExecutionTargetV1; actionId?: string; kind?: WorkflowMaterializedLeafV1['kind'];
@@ -467,6 +469,17 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
   const normalized = validateWorkflowDefinition(input.definition, { context: input.ingressContext });
   if (!normalized.valid || !normalized.normalizedDefinition) return invalidDefinition(normalized.issues);
   const root = normalized.normalizedDefinition;
+  // One finite admission observes each consumed source once; a later operation
+  // opens it afresh. Unchanged frozen replay never opens the mutable catalog.
+  const roleSelections = new Map<string, Promise<NonNullable<MaterializeWorkflowAcceptedSnapshotV1Input['roleSelection']>>>();
+  const readRoleSelection = async (roleId: string) => {
+    let selected = roleSelections.get(roleId);
+    if (!selected) {
+      selected = input.effects.readRoleSelection?.(roleId) ?? Promise.resolve({});
+      roleSelections.set(roleId, selected);
+    }
+    return { ...await selected, ...input.roleSelection };
+  };
   if (purpose === 'run') {
     try {
       input = { ...input, context: { ...input.context, inputs: await resolveWorkflowContextInputsV1({ definition: root,
@@ -676,7 +689,7 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
                     if (accepted.role?.roleId !== chosenLaunch.roleId) return invalidInput(leaf.id);
                     role = accepted.role;
                   } else {
-                    const roleResult = resolveRoleSelectionV1({ ...input.roleSelection, workflowRoles: definition.roles,
+                    const roleResult = resolveRoleSelectionV1({ ...await readRoleSelection(chosenLaunch.roleId), workflowRoles: definition.roles,
                       runOverrides: overrides.data, roleId: chosenLaunch.roleId,
                       defaultEngine: { agentTargetKey: buildBackendTargetKeyV2(chosenLaunch.agentTarget),
                         ...(chosenLaunch.modelSelection ? { modelId: chosenLaunch.modelSelection.ref.modelId } : {}) } });
@@ -770,20 +783,27 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
           }
         }
         const sessionTargets = boundSessions;
-        const resolveSelection = (itemValue?: JsonValue, inputs = frameInputs[0] ?? {}) => resolveWorkflowStepSelectionV1({
-          defaults: definition.defaults, step: sessionTargets ? { ...leaf.execution, conversation: (() => {
-            const target = sessionTargets.targets.find(target => sameStrictJsonValue(target.address, inputs[sessionTargets.inputName]));
-            if (!target) throw workflowInputErrorV1(sessionTargets.inputName, 'invalid_input');
-            return { kind: 'existing_session' as const, sessionId: target.address.sessionId, machineId: target.machineId };
-          })() } : leaf.execution,
-          inputs,
-          ...(itemValue === undefined ? {} : { itemValue }),
-          runExecutionTarget: input.context.executionTarget,
-          ...(conversation?.kind === 'from_step' ? { producerExecutionTarget: producer
-            ? resolveWorkflowAcceptedStepSelectionV1(producer, itemValue, inputs).executionTarget
-            : targetById.get(conversation.producer.blockId) } : {}),
-          roleSelection: { ...input.roleSelection, workflowRoles: definition.roles, runOverrides: overrides.data },
-        });
+        const resolveSelection = async (itemValue?: JsonValue, inputs = frameInputs[0] ?? {}) => {
+          const selectionInput: ResolveWorkflowStepSelectionV1Input = {
+            defaults: definition.defaults, step: sessionTargets ? { ...leaf.execution, conversation: (() => {
+              const target = sessionTargets.targets.find(target => sameStrictJsonValue(target.address, inputs[sessionTargets.inputName]));
+              if (!target) throw workflowInputErrorV1(sessionTargets.inputName, 'invalid_input');
+              return { kind: 'existing_session' as const, sessionId: target.address.sessionId, machineId: target.machineId };
+            })() } : leaf.execution,
+            inputs,
+            ...(itemValue === undefined ? {} : { itemValue }),
+            runExecutionTarget: input.context.executionTarget,
+            ...(conversation?.kind === 'from_step' ? { producerExecutionTarget: producer
+              ? resolveWorkflowAcceptedStepSelectionV1(producer, itemValue, inputs).executionTarget
+              : targetById.get(conversation.producer.blockId) } : {}),
+            roleSelection: { ...input.roleSelection, workflowRoles: definition.roles, runOverrides: overrides.data },
+          };
+          const engine = resolveWorkflowEngineSelectionV1(selectionInput);
+          return resolveWorkflowStepSelectionV1({ ...selectionInput,
+            ...(engine && 'role' in engine ? { roleSelection: { ...await readRoleSelection(engine.role),
+              workflowRoles: definition.roles, runOverrides: overrides.data } } : {}),
+          });
+        };
         if (frozen?.engineBindings && !agentOverride) boundEngines = structuredClone(frozen.engineBindings);
         else if (!frozen && binding && (binding.kind === 'item' || sourceKey !== '$root')) {
           boundEngines = { reference: binding, selections: [] };
@@ -794,7 +814,7 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
               const raw = binding.kind === 'item' ? item!.value : inputs[binding.name];
               const value = parseWorkflowLiteralEngineSelectionV1(raw === undefined ? undefined : readWorkflowValuePathV1(raw, binding.path ?? []));
               if (!value.success) return invalidInput(leaf.id);
-              const selected = resolveSelection(item?.value, inputs);
+              const selected = await resolveSelection(item?.value, inputs);
               boundEngines.selections.push({ value: value.data, selection: selected.selection,
                 executionTarget: selected.executionTarget ?? input.context.executionTarget,
                 ...(selected.role ? { role: selected.role } : {}) });
@@ -804,12 +824,12 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
         resolved = boundParticipants ? { selection: boundParticipants.selections[0]?.selection ?? {},
           executionTarget: { kind: 'session' }, role: boundParticipants.selections[0]?.role } : frozen ? { selection: agentOverride
           ? resolveWorkflowStepSelectionV1({ defaults: frozen.selection, step: { engine: agentOverride.engine },
-            roleSelection: input.roleSelection,
+            roleSelection: 'role' in agentOverride.engine ? await readRoleSelection(agentOverride.engine.role) : input.roleSelection,
             ...(frozen.selection.conversation?.kind === 'from_step'
               ? { producerExecutionTarget: frozen.executionTarget } : {}) }).selection
           : structuredClone(frozen.selection), executionTarget: frozen.executionTarget, role: frozen.role }
           : boundEngines ? boundEngines.selections[0] ?? resolveWorkflowStepSelectionV1({ defaults: definition.defaults,
-            step: leaf.execution, purpose: 'authoring' }) : resolveSelection();
+            step: leaf.execution, purpose: 'authoring' }) : await resolveSelection();
       } catch (error) {
         if (error instanceof WorkflowInputErrorV1) return invalidInput(leaf.id, error.issues);
         if (error instanceof WorkflowStepSelectionErrorV1) {
@@ -930,11 +950,6 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
     concrete.set(sourceKey, { ...definition, defaults });
   }
   let agentStartLeaves: readonly MaterializedWorkflowLeafV1[];
-  if (purpose === 'run' && input.context.resultDelivery?.kind === 'originating_discussion') {
-    const unsupported = materializedLeaves.flatMap(listWorkflowAcceptedLeafSelectionsV1)
-      .find(leaf => leaf.kind === 'step' && leaf.executionTarget.kind === 'detached_run');
-    if (unsupported) return unavailable(unsupported.blockId, { code: 'target_unavailable', reason: 'selection_unavailable' });
-  }
   const frozenChildren = Object.fromEntries([...concrete].filter(([key]) => key !== '$root'));
   try { agentStartLeaves = await readWorkflowAcceptedAgentStartLeavesV1({
     machineId: input.context.machineId, workspaceTarget: input.context.workspaceTarget, materializedLeaves,

@@ -1,4 +1,5 @@
 import { z } from 'zod/mini';
+import type { DiscussionProducerV1 } from './content.js';
 
 /** Shared wire invariant for stored and executor-opened Discussion messages. */
 export function refineDiscussionAccountActor(
@@ -6,7 +7,7 @@ export function refineDiscussionAccountActor(
     authorAccountId: string | null;
     accountActor: Readonly<{ accountId: string }> | null;
     requesterAccountActor?: Readonly<{ accountId: string }> | null;
-    producerV1?: Readonly<{ actionRequestAttributionV1?: Readonly<{ requester: Readonly<{ accountId: string }> | null }> }> | null;
+    producerV1?: DiscussionProducerV1 | null;
   }>,
   context: z.core.$RefinementCtx,
 ): void {
@@ -17,7 +18,8 @@ export function refineDiscussionAccountActor(
       message: 'Discussion actor identity must match the authenticated author',
     });
   }
-  if (value.requesterAccountActor != null && value.requesterAccountActor.accountId !== value.producerV1?.actionRequestAttributionV1?.requester?.accountId) {
+  if (value.requesterAccountActor != null && value.requesterAccountActor.accountId !== (value.producerV1?.kind === 'agent'
+    ? value.producerV1.actionRequestAttributionV1?.requester?.accountId : undefined)) {
     context.addIssue({ code: 'custom', path: ['requesterAccountActor', 'accountId'],
       message: 'Discussion requester actor must match its host-stamped cause' });
   }

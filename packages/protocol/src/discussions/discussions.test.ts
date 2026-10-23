@@ -61,6 +61,18 @@ const plainMessage = {
 };
 
 describe('session discussion content', () => {
+  it('reads an attributed Workflow result without inventing a Session producer', () => {
+    const producer = { v: 1, kind: 'workflow', runId: 'run', invocationRecordId: 'invocation', invocationAttempt: '0',
+      execution: { kind: 'action', actionId: 'plugin:external/check' }, outcome: 'answer' };
+    expect(DiscussionProducerV1Schema.parse(producer)).toEqual(producer);
+    expect(DiscussionProducerV1Schema.safeParse({ ...producer, sessionId: 'fabricated' }).success).toBe(false);
+    const publication = { v: 1, operation: 'workflow_result', machineId: 'machine', publication: {
+      discussionId: 'discussion', request: { ...plainMessage, replyTarget: { kind: 'message', messageId: 'question' } },
+      producer, origin: { discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'question', throughSeq: 1 },
+    } };
+    expect(DiscussionAgentApprovedReplayPublicationV1Schema.parse(publication)).toEqual(publication);
+    expect(DiscussionAgentPostRequestV1Schema.safeParse(publication.publication).success).toBe(false);
+  });
   it('keeps the reviewed Machine replay closed and separate from current Session publication', () => {
     const post = { v: 1, sessionId: 'receiver', discussionId: 'discussion', request: plainMessage,
       sourceSession: { sourceSessionId: 'receiver', sourceInputId: 'input', sourceTurnId: 'turn', via: 'action' },

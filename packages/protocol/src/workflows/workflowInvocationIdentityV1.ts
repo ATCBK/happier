@@ -3,6 +3,11 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import type { WorkflowDefinitionV1 } from './workflowV1.js';
 
+/** One Discussion mutation identity for one accepted leaf attempt, shared by all transports and recovery. */
+export function deriveWorkflowDiscussionReplyLocalIdV1(input: Readonly<{ runId: string; invocationRecordId: string; invocationAttempt: string }>): string {
+  return deriveWorkflowReplacementId(['workflow.discussion.reply', input.runId, input.invocationRecordId, input.invocationAttempt]);
+}
+
 /** The first proposal keeps the hold identity; a changed proposal has its own semantic identity. */
 export function deriveWorkflowPlanRunIdV1(runId: string, invocationId: string, normalizedProposal?: WorkflowDefinitionV1): string {
   return deriveWorkflowReplacementId(['workflow.review.plan_run', runId, invocationId,

@@ -581,6 +581,8 @@ export const WorkflowProgressEnvelopeV1Schema = lazyZodSchema(() => z.strictObje
   loopProgress: z.optional(z.strictObject({ completed: z.number().check(z.int(), z.nonnegative(), z.int()), total: z.number().check(z.int(), z.nonnegative(), z.int()) }).check(z.refine(value => value.completed <= value.total))),
   attempt: WorkflowDecimalV1Schema,
   input: zMini.optional(StrictJsonValueSchema),
+  /** Host-resolved committed parent; never accepted from authored recovery input. */
+  discussionReplyTo: z.optional(WorkflowDiscussionOriginV1Schema),
   validationIssues: z.optional(WorkflowResultValidationIssuesV1Schema),
   result: zMini.optional(StrictJsonValueSchema),
   /** Original admitted Session input outcome; selected/reviewed result text stays independent. */
@@ -689,6 +691,7 @@ export function classifyWorkflowReviewEntryV1(params: Readonly<{
 
 /** Observation-owned fields only. Review transitions exclusively replace existing result/reason. */
 export const WorkflowInvocationFactV1Schema = lazyZodSchema(() => z.strictObject({
+  discussionReplyTo: z.optional(WorkflowDiscussionOriginV1Schema),
   resultProvenance: z.optional(WorkflowResultProvenanceV1Schema),
   validationIssues: z.optional(WorkflowResultValidationIssuesV1Schema),
   result: zMini.optional(StrictJsonValueSchema),

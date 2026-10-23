@@ -43,7 +43,8 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
   // The template codec's reasons also drive locked-row listing inside the
   // trigger owner. At the Action boundary they describe unreadable content,
   // not a failure to reach storage.
-  const code = rawCode === 'automation_disabled' ? 'ineligible_state'
+  const code = rawCode === 'PLUGIN_DAEMON_RUNTIME_UNAVAILABLE' ? 'target_unavailable'
+    : rawCode === 'automation_disabled' ? 'ineligible_state'
     : rawCode === 'automation_not_found' || rawCode === 'artifact_not_found'
       || rawCode === 'automation_stored_content_unavailable' ? 'content_unavailable'
     : rawCode === 'artifact_access_forbidden' || rawCode === 'credential_scope_denied' ? 'run_access_denied'
@@ -55,7 +56,9 @@ export function normalizeWorkflowActionThrownError(error: unknown, diagnostic?: 
     : rawCode === 'session_key_required' || rawCode === 'encryption_material_unavailable'
     || rawCode === 'encryption_mode_mismatch' || rawCode === 'invalid_template'
     ? 'content_unavailable' : rawCode;
-  const details = sessionSnapshotUnavailable ? { code: 'target_unavailable', reason: 'session_unavailable' }
+  const details = rawCode === 'PLUGIN_DAEMON_RUNTIME_UNAVAILABLE'
+    ? { code: 'target_unavailable', reason: 'requester_runtime_unavailable', errorCode: rawCode }
+    : sessionSnapshotUnavailable ? { code: 'target_unavailable', reason: 'session_unavailable' }
     : rawCode === 'account_role_overrides_unavailable' ? { reason: rawCode }
     : error !== null && typeof error === 'object' && 'details' in error ? error.details : undefined;
   const failure = WorkflowActionFailureV1Schema.safeParse({
@@ -167,12 +170,6 @@ export function createWorkflowActionExecutor(deps: Readonly<{
       }
 
       const actionId = rawArgs.actionId;
-      if (actionId === 'workflow.run.wait'
-        && (rawArgs.context.surface === 'agent' || rawArgs.context.surface === 'mcp')
-        && rawArgs.context.defaultSessionId
-        && rawArgs.input.timeoutSeconds === undefined) {
-        return { ok: false, errorCode: 'invalid_input', error: 'invalid_input' };
-      }
       const resolvesIngress = actionId === 'workflow.validate'
         || actionId === 'workflow.run.start'
         || actionId === 'workflow.run.resume'

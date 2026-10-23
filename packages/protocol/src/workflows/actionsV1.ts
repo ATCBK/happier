@@ -69,6 +69,9 @@ import {
 } from './workflowIdsV1.js';
 import { WorkflowInputNameSchema } from './workflowReferenceV1.js';
 import { WorkflowDefinitionEditRequestV1Schema, WorkflowDefinitionEditResultV1Schema } from './workflowDefinitionEditV1.js';
+import { WorkflowDefinitionCaptureRequestV1Schema, WorkflowDefinitionCaptureResultV1Schema } from './workflowDiscussionCaptureV1.js';
+export { WorkflowDefinitionCaptureRequestV1Schema, WorkflowDefinitionCaptureResultV1Schema } from './workflowDiscussionCaptureV1.js';
+export type { WorkflowDefinitionCaptureRequestV1, WorkflowDefinitionCaptureResultV1 } from './workflowDiscussionCaptureV1.js';
 import { WorkflowDocumentV1Schema, WorkflowDocumentParseFailureV1Schema } from './workflowDocumentSchemasV1.js';
 import { WorkflowDefinitionRefV1StringSchema, parseWorkflowDefinitionRefV1 } from './workflowDefinitionRefV1.js';
 import { WorkflowPluginSourceV1Schema } from './workflowPluginSourceContractV1.js';
@@ -545,6 +548,7 @@ export const WorkflowActionInputSchemasV1 = {
   'workflow.definition.edit': WorkflowDefinitionEditRequestV1Schema,
   'workflow.definition.delete': WorkflowDefinitionDeleteRequestV1Schema,
   'workflow.definition.import': WorkflowDefinitionImportRequestV1Schema,
+  'workflow.definition.capture': WorkflowDefinitionCaptureRequestV1Schema,
   'workflow.definition.export': WorkflowDefinitionExportRequestV1Schema,
   'workflow.trigger.list': WorkflowTriggerListRequestV1Schema,
   'workflow.trigger.add': WorkflowTriggerAddRequestV1Schema,
@@ -580,6 +584,7 @@ export const WorkflowActionOutputSchemasV1 = {
   'workflow.definition.edit': WorkflowDefinitionEditResultV1Schema,
   'workflow.definition.delete': WorkflowDefinitionDeleteResultV1Schema,
   'workflow.definition.import': WorkflowDefinitionImportResultV1Schema,
+  'workflow.definition.capture': WorkflowDefinitionCaptureResultV1Schema,
   'workflow.definition.export': WorkflowDefinitionExportResultV1Schema,
   'workflow.trigger.list': WorkflowTriggerListResultV1Schema,
   'workflow.trigger.add': WorkflowTriggerWriteResultV1Schema,

@@ -1,0 +1,113 @@
+import { describe, expect, it } from 'vitest';
+import { createActionExecutor, type ActionExecutorDeps } from '../actionExecutor.js';
+import { createWorkflowActionExecutor } from './workflowAccountActions.js';
+import { createWorkflowDefinitionActions } from './workflowDefinitions.js';
+import { DiscussionOpenedMessageV1Schema } from '../../discussions/actions.js';
+import { validateWorkflowDefinition } from '../../workflows/workflowValidationV1.js';
+import { validateHostInputTypeValue } from '../../inputs/inputTypeRuntime.js';
+import { WorkflowDefinitionCaptureResultV1Schema } from '../../workflows/workflowDiscussionCaptureV1.js';
+
+const discussion = { serverId: 'home', discussionId: 'discussion' };
+const message = (id: string, seq: number, text: string, sessionId?: string, parent?: string) => DiscussionOpenedMessageV1Schema.parse({
+  id, seq, discussionId: discussion.discussionId, localId: null, authorAccountId: null, accountActor: null,
+  producerV1: sessionId ? { v: 1, kind: 'agent', sessionId } : null,
+  content: { v: 1, parts: [{ t: 'text', text }] }, mentionedAccountIds: [], createdAt: seq,
+  messageRef: { kind: 'discussion', discussion, messageId: id },
+  ...(parent ? { replyTarget: { kind: 'message', messageId: parent } } : {}),
+});
+const question = message('question', 1, 'Compare the proposals');
+const answer = message('answer', 2, 'An answer must not become an instruction', 'answerer', 'question');
+const review = message('review', 3, 'A review result', 'reviewer', 'answer');
+
+function harness(messages = [question, answer, review], responseHome = discussion.serverId) {
+  const unused = (): never => { throw new Error('capture_must_not_write_or_run'); };
+  const definitions = createWorkflowDefinitionActions({ artifactStore: { read: unused, list: unused,
+    create: unused, update: unused, delete: unused }, encodeListCursor: unused, assertDefinitionWriteAllowed: unused });
+  const workflowAction = createWorkflowActionExecutor({ definitions, isWorkflowFeatureEnabled: () => true, runs: { execute: unused } });
+  // Discussion HTTP and Artifact persistence are the only substituted boundaries.
+  const executor = createActionExecutor({ workflowAction, discussionAction: async () => ({ v: 1, serverId: responseHome,
+    discussionId: discussion.discussionId, messages, hasMoreOlder: false, messageSeq: 20, incomplete: false }),
+  } as unknown as ActionExecutorDeps);
+  return (input: unknown, surface: 'ui' | 'mcp' | 'agent' = 'ui') => executor.execute('workflow.definition.capture', input,
+    { surface, serverId: 'home', runtimeAccountId: 'account', ...(surface === 'agent' ? { actionCaller: { kind: 'plugin', pluginId: 'example.patterns' } } : {}) });
+}
+
+describe('workflow.definition.capture through the public Action owner', () => {
+  it.each(['ui', 'mcp', 'agent'] as const)('captures exact dependencies without copying answer prose on %s', async surface => {
+    const capture = harness([... [question, answer, review], message('private', 4, 'UNRELATED_PRIVATE_SENTINEL')]);
+    const value = await capture({ discussion, messageIds: ['question', 'answer', 'review'], name: 'Compare and review' }, surface);
+    expect(value).toMatchObject({ ok: true, result: { status: 'ready', name: 'Compare and review',
+      steps: [expect.objectContaining({ messageId: 'question', role: 'input' }),
+        expect.objectContaining({ messageId: 'answer', dependsOnMessageIds: ['question'] }),
+        expect.objectContaining({ messageId: 'review', dependsOnMessageIds: ['answer'] })] } });
+    if (!value.ok) throw new Error(value.errorCode);
+    const draft = value.result as { definition: unknown };
+    const produced = WorkflowDefinitionCaptureResultV1Schema.parse(value.result);
+    expect(validateHostInputTypeValue({ hostType: 'agentParticipant' }, produced.inputs.participant_1)).toMatchObject({ status: 'valid' });
+    expect(validateWorkflowDefinition(draft.definition)).toMatchObject({ valid: true });
+    expect(JSON.stringify(draft.definition)).not.toContain('UNRELATED_PRIVATE_SENTINEL');
+    expect(JSON.stringify(draft.definition)).not.toContain('An answer must not become an instruction');
+    expect(JSON.stringify(draft.definition)).toContain('"blockId":"step_1"');
+  });
+  it('keeps an unlinked selection unresolved until an explicit role is supplied', async () => {
+    const capture = harness([question, message('orphan', 3, 'Unlinked answer', 'answerer')]);
+    expect(await capture({ discussion, messageIds: ['question', 'orphan'] })).toMatchObject({ ok: true,
+      result: { status: 'needs_review', definition: null, unresolved: expect.arrayContaining([
+        { messageId: 'orphan', reason: 'unlinked_message' }, { messageId: 'question', reason: 'unlinked_message' },
+      ]) } });
+  });
+  it('requires a choice for a human selection outside the executable dependency closure', async () => {
+    const capture = harness([question, answer, message('unlinked-human', 3, 'A separate human note')]);
+    const input = { discussion, messageIds: ['question', 'answer', 'unlinked-human'] };
+    expect(await capture(input)).toMatchObject({ ok: true, result: {
+      status: 'needs_review', definition: null,
+      unresolved: [{ messageId: 'unlinked-human', reason: 'unlinked_message' }],
+    } });
+    for (const role of ['input', 'exclude'] as const) {
+      expect(await capture({ ...input, choices: [{ messageId: 'unlinked-human', role }] }))
+        .toMatchObject({ ok: true, result: { status: 'ready', unresolved: [] } });
+    }
+  });
+  it('lets review choose fixed defaults and repair an unlinked dependency explicitly', async () => {
+    const capture = harness([question, message('orphan', 3, 'Unlinked answer', 'answerer'),
+      message('excluded', 4, 'Unrelated answer', 'other-answerer', 'unselected-parent')]);
+    const value = await capture({ discussion, messageIds: ['question', 'orphan', 'excluded'], choices: [
+      { messageId: 'question', role: 'input', perRun: false },
+      { messageId: 'orphan', role: 'step', dependsOnMessageIds: ['question'], instruction: 'Compare both proposals carefully.', perRun: false },
+      { messageId: 'excluded', role: 'exclude' },
+    ] });
+    expect(value).toMatchObject({ ok: true, result: { status: 'ready', definition: { inputs: [
+      { name: 'question', required: false, default: 'Compare the proposals' },
+      expect.objectContaining({ name: 'participant_1', required: false, default: { kind: 'session', session: { serverId: 'home', sessionId: 'answerer' } } }),
+    ] } } });
+  });
+  it('keeps independent answers parallel and binds a later review to only the selected answer', async () => {
+    const capture = harness([question, answer, message('other', 3, 'Other independent answer', 'other-answerer', 'question'),
+      message('review', 4, 'Review result', 'reviewer', 'answer')]);
+    const value = await capture({ discussion, messageIds: ['question', 'answer', 'other', 'review'] });
+    expect(value).toMatchObject({ ok: true, result: { definition: { blocks: [
+      { kind: 'parallel', branches: [expect.any(Object), expect.any(Object)] },
+      { kind: 'step', input: [{ kind: 'result', producer: { blockId: 'exchange_1' }, path: [0, 'results', 'step_1'] }] },
+    ] } } });
+  });
+  it('carries an exact answer dependency through a human review request instead of scheduling both agents independently', async () => {
+    const capture = harness([question, answer, message('review-request', 3, 'Review this answer for missing evidence', undefined, 'answer'),
+      message('review', 4, 'Review result', 'reviewer', 'review-request')]);
+    const value = await capture({ discussion, messageIds: ['question', 'answer', 'review-request', 'review'] });
+    expect(value).toMatchObject({ ok: true, result: { definition: { blocks: [
+      { kind: 'step', id: 'step_1' },
+      { kind: 'step', id: 'step_2', input: expect.arrayContaining([
+        expect.objectContaining({ kind: 'input', name: 'context_2' }),
+        { kind: 'result', producer: { blockId: 'step_1', scope: { kind: 'current' } }, path: [] },
+      ]) },
+    ] } } });
+  });
+  it('refuses a mis-bound Home response and never falls back to local text', async () => {
+    expect(await harness([question, answer], 'other-home')({ discussion, messageIds: ['question', 'answer'] }))
+      .toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+  });
+  it('refuses a selected unreadable source before returning any draft', async () => {
+    expect(await harness([question, { ...answer, content: null }])({ discussion, messageIds: ['question', 'answer'] }))
+      .toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+  });
+});

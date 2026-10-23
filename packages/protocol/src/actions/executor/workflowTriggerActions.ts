@@ -40,14 +40,13 @@ import { validateWorkflowDefinition } from '../../workflows/workflowValidationV1
 import type { WorkflowDefinitionV1 } from '../../workflows/workflowV1.js';
 import { resolveWorkflowDestinationsV1 } from '../../workflows/workflowDestinationsV1.js';
 import type { ActionExecutorDeps, WorkflowActionExecuteArgs } from './types.js';
-import { isActionCallerOwnSessionV1, resolveActionAgentStartContextV1 } from './agentStartAdmission.js';
+import { admitActionAgentStartV1, isActionCallerOwnSessionV1, resolveActionAgentStartContextV1 } from './agentStartAdmission.js';
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { canonicalizeAutomationSessionLifecycleEvents } from '../../automations/automationSessionLifecycle.js';
 import type { AutomationRunLifecycleSource } from '../../automations/automationRunLifecycle.js';
 import { ManagedPowerInputV1Schema, ManagedDeleteInputV1Schema } from '../../machines/managed/actionsV1.js';
 import { computeActionInputApprovalDigestV1 } from '../decisionAuthority.js';
 import type { ManagedMachineV1 } from '../../machines/managed/managedMachineV1.js';
-import { resolveActionCurrentSessionScopeFailure } from './sessionListAccess.js';
 import { areServerProfileIdentifiersEquivalent } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 import type { WorkflowActionFailureV1 } from '../../workflows/workflowProgressV1.js';
 
@@ -282,12 +281,10 @@ export function createWorkflowTriggerActions(deps: WorkflowTriggerActionsDepende
           if (caller.serverId && !areServerProfileIdentifiersEquivalent(target.address.serverId, caller.serverId,
             identifier => identifier === caller.serverId || identifier === caller.serverIdentityId
               ? caller.serverIdentityId : deps.resolveServerProfileScopeId?.(identifier))) return false;
-          const failure = await resolveActionCurrentSessionScopeFailure('reviews.comments.list', {
-            sessionId: target.address.sessionId, serverId: target.address.serverId,
-          }, { ...caller, surface: 'agent' }, { sessionId: 'current_session' }, {
-            sessionList: deps.sessionList ?? (async () => { throw new Error('session_scope_unavailable'); }),
-          });
-          return failure === null;
+          // Typed targets spend the author's start authority, independently of
+          // the trigger's own scope Session and ordinary readable-child access.
+          const authority = await resolveActionAgentStartContextV1(deps, caller, target.address.sessionId);
+          return admitActionAgentStartV1(caller, { kind: 'session_target', targetSessionId: target.address.sessionId }, authority).ok;
         } },
         roleOverrides: context.roleOverrides,
         context: { actionCaller: caller.actionCaller, source: { kind: 'inline' as const }, inputs: context.inputs ?? {}, machineId: targetProject.machineId,
