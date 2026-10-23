@@ -5,6 +5,7 @@ import {
   HappierPressable,
   HAPPIER_PRESS_FEEDBACK_V1,
   isHappierPageRowNarrow,
+  isHappierPageRowAccessoryStacked,
   type HappierDisclosureHeaderState,
 } from '@happier-dev/plugin-ui/presentation';
 
@@ -40,10 +41,24 @@ export function WorkflowRunFoldHeader(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const [narrow, setNarrow] = React.useState(false);
+  const [headerWidth, setHeaderWidth] = React.useState<number | null>(null);
+  const [actionsWidth, setActionsWidth] = React.useState<number | null>(null);
   const onLayout = React.useCallback((event: LayoutChangeEvent) => {
-    setNarrow(isHappierPageRowNarrow(event.nativeEvent.layout.width));
+    setHeaderWidth(event.nativeEvent.layout.width);
   }, []);
+  const onActionsLayout = React.useCallback((event: LayoutChangeEvent) => {
+    setActionsWidth(event.nativeEvent.layout.width);
+  }, []);
+  const narrow = isHappierPageRowNarrow(headerWidth);
+  const open = props.onOpen;
+  const hasActions = props.actions != null;
+  // The row's operations never squeeze out what the Run is: by the page row rule for operations they
+  // move beneath the line when they would leave it less than its label column. Open, short, stays.
+  const stacked = hasActions && isHappierPageRowAccessoryStacked({
+    kind: 'operation',
+    rowWidthPx: headerWidth,
+    accessoryWidthPx: actionsWidth,
+  });
   const { verb, details, meta, purpose } = props.presentation;
   const line = [verb, ...details].join(' · ');
   const glyph = purpose ? (
@@ -59,14 +74,13 @@ export function WorkflowRunFoldHeader(
       color={theme.colors.text.secondary}
     />
   );
-  const open = props.onOpen;
   // The outcome is the fact the row exists for: on a narrow row it wraps rather than ellipsizes, and the
   // trailing workflow/trigger fact is what gives way.
   const summary = (
     <>
       <View style={styles.glyph}>{glyph}</View>
       <Text
-        numberOfLines={narrow ? 3 : 1}
+        numberOfLines={narrow || stacked ? 3 : 1}
         ellipsizeMode="tail"
         style={styles.line}
       >
@@ -75,7 +89,7 @@ export function WorkflowRunFoldHeader(
           <Text key={index} style={styles.detail}>{` · ${part}`}</Text>
         ))}
       </Text>
-      {meta && !narrow ? (
+      {meta && !narrow && !stacked ? (
         <Text numberOfLines={1} ellipsizeMode="tail" style={styles.meta}>
           {meta}
         </Text>
@@ -83,60 +97,73 @@ export function WorkflowRunFoldHeader(
     </>
   );
   const { disclosure } = props;
-  return (
-    <View style={styles.header} onLayout={onLayout}>
-      {disclosure ? (
-        <HappierPressable
-          {...disclosure.headerProps}
-          expanded={disclosure.expanded}
-          accessibilityLabel={line}
-          testID={`workflow-run-fold-toggle:${props.runId}`}
-          style={({ pressed, focused }) => [
-            styles.toggle,
-            pressed
-              ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle }
-              : null,
-            focusRingStyle({ focused, color: theme.colors.border.focus }),
-          ]}
-        >
-          {summary}
-        </HappierPressable>
-      ) : (
-        <View style={styles.toggle} testID={`workflow-run-fold:${props.runId}`}>
-          {summary}
-        </View>
-      )}
+  const openAction = open ? (
+    <HappierPressable
+      onPress={open}
+      accessibilityRole="button"
+      accessibilityLabel={`${t('workflows.run.open')}: ${verb}`}
+      testID={`workflow-run-fold-open:${props.runId}`}
+      style={({ pressed, focused }) => [
+        styles.open,
+        pressed
+          ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle }
+          : null,
+        focusRingStyle({ focused, color: theme.colors.border.focus }),
+      ]}
+    >
+      <Text style={styles.openLabel}>{t('workflows.run.open')}</Text>
+    </HappierPressable>
+  ) : null;
+  // Measured only inline: that is the cluster's natural width the stacking rule compares.
+  const actions = stacked ? null : (
+    <View style={styles.actions} onLayout={onActionsLayout}>
       {props.actions}
-      {open ? (
-        <HappierPressable
-          onPress={open}
-          accessibilityRole="button"
-          accessibilityLabel={`${t('workflows.run.open')}: ${verb}`}
-          testID={`workflow-run-fold-open:${props.runId}`}
-          style={({ pressed, focused }) => [
-            styles.open,
-            pressed
-              ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle }
-              : null,
-            focusRingStyle({ focused, color: theme.colors.border.focus }),
-          ]}
-        >
-          <Text style={styles.openLabel}>{t('workflows.run.open')}</Text>
-        </HappierPressable>
-      ) : null}
-      {disclosure ? (
-        // The caret ends the row, past the action. It repeats the row toggle for the pointer only; keyboard
-        // and assistive technology reach the one toggle above.
-        <View aria-hidden style={styles.caretHost}>
+      {openAction}
+    </View>
+  );
+  return (
+    <View
+      style={[styles.header, stacked ? styles.headerStacked : null]}
+      onLayout={onLayout}
+    >
+      <View style={styles.summaryRow}>
+        {disclosure ? (
           <HappierPressable
-            onPress={disclosure.headerProps.onPress}
-            tabIndex={-1}
-            style={styles.caret}
+            {...disclosure.headerProps}
+            expanded={disclosure.expanded}
+            accessibilityLabel={line}
+            testID={`workflow-run-fold-toggle:${props.runId}`}
+            style={({ pressed, focused }) => [
+              styles.toggle,
+              pressed
+                ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle }
+                : null,
+              focusRingStyle({ focused, color: theme.colors.border.focus }),
+            ]}
           >
-            <ExpandableItemCaret expanded={disclosure.expanded} />
+            {summary}
           </HappierPressable>
-        </View>
-      ) : null}
+        ) : (
+          <View style={styles.toggle} testID={`workflow-run-fold:${props.runId}`}>
+            {summary}
+          </View>
+        )}
+        {stacked ? openAction : actions}
+        {disclosure ? (
+          // The caret ends the row, past the action. It repeats the row toggle for the pointer only; keyboard
+          // and assistive technology reach the one toggle above.
+          <View aria-hidden style={styles.caretHost}>
+            <HappierPressable
+              onPress={disclosure.headerProps.onPress}
+              tabIndex={-1}
+              style={styles.caret}
+            >
+              <ExpandableItemCaret expanded={disclosure.expanded} />
+            </HappierPressable>
+          </View>
+        ) : null}
+      </View>
+      {stacked ? <View style={styles.actionsStacked}>{props.actions}</View> : null}
     </View>
   );
 }
@@ -145,15 +172,27 @@ const FOLD_ROW_HEIGHT = 36;
 
 const styles = StyleSheet.create((theme) => ({
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
     minHeight: FOLD_ROW_HEIGHT,
     borderRadius: theme.borderRadius.lg,
     ...resolveThemeHairlineBorderStyle(theme.colors.border.surface),
     paddingLeft: theme.space.s10,
     paddingRight: theme.space.s8,
+  },
+  headerStacked: { paddingBottom: theme.space.s6 },
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: FOLD_ROW_HEIGHT,
     gap: theme.space.s8,
   },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: theme.space.s8,
+  },
+  // Beneath the line, starting under it; wraps rather than overflowing the column.
+  actionsStacked: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8 },
   toggle: {
     flex: 1,
     minWidth: 0,
