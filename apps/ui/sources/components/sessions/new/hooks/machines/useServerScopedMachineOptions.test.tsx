@@ -65,6 +65,51 @@ function createMachine(id: string): Machine {
 }
 
 describe('useServerScopedMachineOptions', () => {
+    it('retains unaffected scoped rows across unrelated Machine arrivals', async () => {
+        const fleet = Array.from({ length: 100 }, (_, index) => createMachine(`picker-${index}`));
+        const allowedServerIds = ['server-b'];
+        const activeMachines: Machine[] = [];
+        let current: ReturnType<typeof useServerScopedMachineOptions> = [];
+        act(() => storage.setState({
+            machineListByServerId: { 'server-b': fleet },
+            machineListStatusByServerId: { 'server-b': 'idle' },
+        }));
+        const screen = await renderScreen(<Probe allowedServerIds={allowedServerIds} activeServerId="server-a"
+            activeMachines={activeMachines} onGroups={groups => { current = groups; }} />);
+        let unaffectedProjectionReplacements = 0;
+        try {
+            for (let arrival = 1; arrival <= 3; arrival += 1) {
+                const previous = current[0]!.machines;
+                const changed = { ...fleet[0]!, metadataVersion: arrival + 1,
+                    metadata: { ...fleet[0]!.metadata!, displayName: `Changed ${arrival}` } };
+                await act(async () => storage.setState({
+                    machineListByServerId: { 'server-b': [changed, ...fleet.slice(1)] },
+                }));
+                const next = current[0]!.machines;
+                expect(next[0]?.metadata?.displayName).toBe(`Changed ${arrival}`);
+                expect(next[0]).not.toBe(previous[0]);
+                unaffectedProjectionReplacements += next.slice(1).filter((row, index) => row !== previous[index + 1]).length;
+            }
+            // These are producer identities, not a consumer comparator: every retained
+            // Machine feeds the picker accessory/mark props through this owner.
+            expect(unaffectedProjectionReplacements).toBe(0);
+            const priorRows = new Map(current[0]!.machines.map(row => [row.id, row]));
+            const reordered = storage.getState().machineListByServerId['server-b']!.slice().reverse();
+            await act(async () => storage.setState({ machineListByServerId: { 'server-b': reordered } }));
+            expect(current[0]!.machines.every(row => row === priorRows.get(row.id))).toBe(true);
+            const removed = fleet[1]!;
+            await act(async () => storage.setState({
+                machineListByServerId: { 'server-b': reordered.filter(row => row.id !== removed.id) },
+            }));
+            await act(async () => storage.setState({ machineListByServerId: { 'server-b': reordered } }));
+            // Only the current projection is retained: a removed row is not
+            // resurrected from a superseded inventory when its id returns.
+            expect(current[0]!.machines.find(row => row.id === removed.id)).not.toBe(priorRows.get(removed.id));
+        } finally {
+            await screen.unmount();
+        }
+    });
+
     it('publishes changed launch metadata without a consumer-owned field signature', async () => {
         const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
         const row = createMachine('inventory-change');

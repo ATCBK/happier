@@ -105,12 +105,22 @@ export function useServerScopedMachineOptions(params: UseServerScopedMachineOpti
         [rawServerProfiles],
     );
     const serverProfiles = useStableValueBySignature(rawServerProfiles, serverProfilesSignature);
-    const machineListByServerId = useMachineListByServerId(params.presented, params.inventoryPurpose);
-    const machineListStatusByServerId = useMachineListStatusByServerId();
+    const demanded = allowedServerIds.length > 0;
+    const machineListByServerId = useMachineListByServerId(params.presented, params.inventoryPurpose, demanded);
+    const machineListStatusByServerId = useMachineListStatusByServerId(demanded);
+    // This is the current scoped projection, not a cache of older inventories.
+    // A new inventory array changes membership, not every retained Machine.
+    // Keep the source identity beside the row we produce, qualified by Home;
+    // replacing the projection below releases removed rows and retired Homes.
+    const scopedRows = React.useRef<ReadonlyMap<string, ReadonlyMap<string, Readonly<{
+        source: Machine;
+        row: ServerScopedMachine;
+    }>>>>(new Map());
 
     return React.useMemo(() => {
         const activeServerId = String(params.activeServerId ?? '').trim();
-        return allowedServerIds.map((serverId) => {
+        const nextRows = new Map<string, Map<string, Readonly<{ source: Machine; row: ServerScopedMachine }>>>();
+        const groups = allowedServerIds.map((serverId) => {
             const profile = serverProfiles.get(serverId);
             const serverName = resolveHomeDisplayLabel(profile, serverId);
             const isActive = Boolean(activeServerId) && areServerProfileIdentifiersEquivalent(serverId, activeServerId);
@@ -124,9 +134,19 @@ export function useServerScopedMachineOptions(params: UseServerScopedMachineOpti
             const signedOut = inventory.status === 'signedOut';
             const error = inventory.status === 'error';
             const loading = !isActive && !signedOut && !error && inventory.machines === null;
+            const previousRows = scopedRows.current.get(serverId);
+            const rows = new Map<string, Readonly<{ source: Machine; row: ServerScopedMachine }>>();
+            nextRows.set(serverId, rows);
             const machines = (inventory.machines ?? [])
                 .filter(isMachineVisibleForLaunchSelection)
-                .map((machine) => buildServerScopedMachine(machine, { serverId, serverName }));
+                .map((machine) => {
+                    const previous = previousRows?.get(machine.id);
+                    const projected = previous?.source === machine && previous.row.serverName === serverName
+                        ? previous
+                        : { source: machine, row: buildServerScopedMachine(machine, { serverId, serverName }) };
+                    rows.set(machine.id, projected);
+                    return projected.row;
+                });
             return {
                 serverId,
                 serverName,
@@ -136,6 +156,8 @@ export function useServerScopedMachineOptions(params: UseServerScopedMachineOpti
                 error,
             };
         });
+        scopedRows.current = nextRows;
+        return groups;
     }, [
         allowedServerIds,
         params.activeMachines,

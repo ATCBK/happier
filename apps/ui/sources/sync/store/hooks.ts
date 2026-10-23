@@ -2436,9 +2436,11 @@ function usePresentedMachineInventory<T>(select: (state: StorageState) => T, pre
   return getStorage()(useShallow(selector));
 }
 
-export function useLaunchSelectionMachines(presented = true): Machine[] {
+export function useLaunchSelectionMachines(presented = true, enabled = true): Machine[] {
   const reconcile = React.useMemo(createLaunchSelectionReconciler, []);
-  return usePresentedMachineInventory(resolveVisibleMachinesForActiveServerFromState, presented, reconcile);
+  const select = React.useCallback((state: StorageState) => enabled
+    ? resolveVisibleMachinesForActiveServerFromState(state) : emptyArray as Machine[], [enabled]);
+  return usePresentedMachineInventory(select, presented || !enabled, reconcile);
 }
 
 function createLaunchSelectionReconciler() {
@@ -2512,12 +2514,12 @@ export function useMachineRecordListsByServerId(enabled = true): Record<string, 
   }, [machineListByServerId]);
 }
 
-const selectMachineListByServerId = (state: StorageState) => state.machineListByServerId;
-
 /** Launch projections retain identity across resource-only publications; live resources have their own hooks. */
-export function useMachineListByServerId(presented = true, purpose: 'full' | 'launch' = 'full'): Record<string, Machine[] | null> {
+export function useMachineListByServerId(presented = true, purpose: 'full' | 'launch' = 'full', enabled = true): Record<string, Machine[] | null> {
   const reconcile = React.useMemo(createLaunchMachineListsReconciler, []);
-  const machineListByServerIdRaw = usePresentedMachineInventory(selectMachineListByServerId, presented,
+  const select = React.useCallback((state: StorageState) => enabled
+    ? state.machineListByServerId : EMPTY_MACHINE_LIST_BY_SERVER_ID, [enabled]);
+  const machineListByServerIdRaw = usePresentedMachineInventory(select, presented || !enabled,
     purpose === 'launch' ? reconcile : undefined);
   const machineListByServerId = machineListByServerIdRaw ?? EMPTY_MACHINE_LIST_BY_SERVER_ID;
   return React.useMemo(() => {
