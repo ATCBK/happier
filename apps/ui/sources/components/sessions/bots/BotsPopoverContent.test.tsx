@@ -532,7 +532,7 @@ describe('Bots roster', () => {
       const { useSessionListRailOrganizationAction } = await import('@/components/sessions/shell/useSessionListRailOrganizationAction');
       function RailWithoutColumn() {
         useSessionListRailOrganizationAction([serverId]);
-        return <AppRailBotPin bot={bot} animateEntry={false} slotStyle={{}} nextBotSessionId="last-bot" />;
+        return <AppRailBotPin bot={bot} animateEntry={false} nextBotSessionId="last-bot" />;
       }
       const container = document.createElement('div');
       document.body.appendChild(container);
