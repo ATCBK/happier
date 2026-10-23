@@ -24,6 +24,22 @@ const preview: LocalServicePreviewResourceV1 = {
 };
 
 describe("local service public exposure runtime", () => {
+    it('creates the minimum positive TTL from one issuance timestamp when the clock advances', () => {
+        let now = 1_000;
+        const runtime = createLocalServicePublicRuntime({
+            publicBaseUrl: 'https://home.example.test', hostOriginBaseDomain: 'preview.example.test',
+            tokenSecret: 'fixture-key',
+            policy: { enabled: true, allowedModes: ['secret_link'], maxTtlMs: 60_000,
+                dnsTlsRequired: false, auditRequired: true, rateLimitProfileIds: ['default'] },
+            nowMs: () => now++, allowTestDevAuditSink: true,
+            recordAuditEvent: () => {}, checkRateLimit: () => true,
+        });
+        const result = runtime.createExposure({ preview, requestedMode: 'secret_link', requestedTtlMs: 1,
+            actorId: 'owner', sessionAuthorized: true, dnsTlsValid: true, rateLimitProfileId: 'default' });
+
+        expect(result).toMatchObject({ ok: true, exposure: { issuedAt: 1_000, expiresAt: 1_001 } });
+    });
+
     it('uses the exposure deadline beyond the platform timer range and releases the retained timer', () => {
         vi.useFakeTimers();
         try {

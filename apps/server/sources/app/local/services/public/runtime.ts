@@ -374,7 +374,7 @@ export function createLocalServicePublicRuntime(
         if (!exposureOrigin.ok) {
             return { ok: false, reasonCode: "public_origin_unavailable" };
         }
-        const issuedAt = nowMs();
+        const issuedAt = decisionNowMs;
         const parsed = LocalServicePublicExposureV1Schema.safeParse({
             exposureId,
             previewId: createInput.preview.previewId,
