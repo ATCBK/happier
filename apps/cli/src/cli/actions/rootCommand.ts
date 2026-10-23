@@ -8,6 +8,8 @@ import { printJsonEnvelope, wantsJson } from '@/cli/output/jsonEnvelope';
 import { actionCliCommandUsagePath, listCompiledActionCliCommands, type CompiledActionCliCommand } from './compiledCommands';
 import { actionCliEnvelopeKind } from './commandPresentation';
 import { ACTION_CLI_HELP_FLAGS } from './parseCommandInput';
+import { renderActionCliRootHelpFromDeclarations } from './helpDeclarations';
+import { projectActionCliHelpDeclaration } from './commandHelp';
 
 function commandsUnderRoot(prefix: readonly string[]): readonly CompiledActionCliCommand[] {
   return listCompiledActionCliCommands().filter((command) => (
@@ -21,28 +23,7 @@ function commandsUnderRoot(prefix: readonly string[]): readonly CompiledActionCl
  * dispatchable one.
  */
 export function renderActionCliRootHelp(root: string, prefix: readonly string[] = [root]): string {
-  const commands = commandsUnderRoot(prefix);
-  return renderHelpPage({
-    title: `happier ${prefix.join(' ')}`,
-    subtitle: `Action-backed ${root} commands`,
-    usage: [...commands.map((command) => ({
-      label: `happier ${actionCliCommandUsagePath(command)}${
-        command.actionId === 'workflow.definition.import' ? ' <file|->'
-        : command.actionId === 'workflow.definition.export' ? ' <definition-id> [file|-]'
-        : command.positionals.length || command.variadicPositional
-          ? ` ${[
-              ...command.positionals.slice(command.positionalsBeforeLastSegment.length).map((field) => `<${field.path}>`),
-              ...(command.variadicPositional ? [`<${command.variadicPositional.path}...>`] : []),
-            ].join(' ')}`
-          : ''
-      }`,
-      description: command.spec.title,
-    }))],
-    notes: [
-      `Use \`happier ${root} <subcommand> --help\` for that command's arguments.`,
-      'Every subcommand accepts --input-json for whole structured input and --json for a stable envelope.',
-    ],
-  });
+  return renderActionCliRootHelpFromDeclarations(root, prefix, commandsUnderRoot(prefix).map((command) => projectActionCliHelpDeclaration(command)));
 }
 
 /**

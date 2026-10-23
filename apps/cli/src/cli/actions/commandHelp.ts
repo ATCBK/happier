@@ -1,3 +1,11 @@
+import { buildFieldOptionRows } from './fieldHelp';
+export { buildFieldOptionRows } from './fieldHelp';
+import { ActionCliHelpRow, ActionCliHelpModel, renderActionCliHelpModel } from './helpModel';
+import type { ActionCliHelpDeclaration } from './helpDeclarations';
+import { actionCliCommandPattern } from './commandPatterns';
+import { actionCliEnvelopeKind } from './commandPresentationMetadata';
+export { renderActionCliHelpModel } from './helpModel';
+export type { ActionCliHelpRow, ActionCliHelpModel } from './helpModel';
 import { renderHelpPage } from '@happier-dev/cli-common/output';
 
 import {
@@ -16,18 +24,7 @@ import {
   ACTION_CLI_WHOLE_INPUT_FLAG,
 } from './parseCommandInput';
 
-export type ActionCliHelpRow = Readonly<{ label: string; description: string }>;
 
-export type ActionCliHelpModel = Readonly<{
-  title: string;
-  subtitle: string;
-  usage: string;
-  positionals: readonly ActionCliHelpRow[];
-  options: readonly ActionCliHelpRow[];
-  /** CLI-owned flags: routing, output mode and the JSON escape hatches. */
-  cliOptions: readonly ActionCliHelpRow[];
-  notes: readonly string[];
-}>;
 
 type ActionCliInvokeHelpOptions = Readonly<{
   actionId: string;
@@ -52,69 +49,9 @@ function buildCliOptionRows(command: CompiledActionCliCommand): readonly ActionC
   ].map((row) => Object.freeze(row)));
 }
 
-function describeFieldKind(field: ActionCliField): string {
-  switch (field.kind) {
-    case 'boolean':
-      return 'flag';
-    case 'string_list':
-      return 'repeatable';
-    case 'enum':
-      return field.choices ? field.choices.join(' | ') : 'value';
-    case 'integer':
-    case 'number':
-      return 'number';
-    case 'json':
-      return 'json';
-    default:
-      return 'value';
-  }
-}
 
-function optionLabel(field: ActionCliField): string {
-  if (field.kind === 'boolean') {
-    return [field.flag, ...field.aliases, `--no-${field.flag.slice(2)}`].join(', ');
-  }
-  const spellings = field.kind === 'json'
-    ? [`${field.flag}-json <json>`, ...field.aliases.map((alias) => `${alias} <json>`)]
-    : [...[field.flag, ...field.aliases].map((flag) => `${flag} <value>`), `${field.flag}-json <json>`];
-  return spellings.join(', ');
-}
 
-function optionDescription(field: ActionCliField): string {
-  const parts = [field.title ?? field.path, `(${describeFieldKind(field)})`];
-  if (field.description) parts.push(field.description);
-  if (field.required) parts.push('[required]');
-  else if (field.requiredWhen) parts.push('[conditionally required]');
-  if (field.visibleWhen) parts.push('[conditionally available]');
-  if (field.disabledWhen) parts.push('[conditionally disabled]');
-  if (field.listSeparator) {
-    parts.push(`${field.listSeparator}-separated${field.maxSelections === null ? '' : `; at most ${field.maxSelections}`}`);
-  } else if (field.maxSelections !== null) {
-    parts.push(`at most ${field.maxSelections}`);
-  }
-  if (field.minimum !== null && field.maximum !== null) {
-    parts.push(`${field.minimum}–${field.maximum}`);
-  } else if (field.minimum !== null) {
-    parts.push(`at least ${field.minimum}`);
-  } else if (field.maximum !== null) {
-    parts.push(`at most ${field.maximum}`);
-  }
-  if (field.exclusiveMinimum !== null) parts.push(`greater than ${field.exclusiveMinimum}`);
-  if (field.exclusiveMaximum !== null) parts.push(`less than ${field.exclusiveMaximum}`);
-  return parts.join(' ');
-}
 
-/**
- * The option rows every Action-driven command documents its fields with — type,
- * requiredness, conditions, choices and ranges — for built-in, generic-invoke and
- * plugin-contributed commands alike.
- */
-export function buildFieldOptionRows(fields: readonly ActionCliField[]): readonly ActionCliHelpRow[] {
-  return Object.freeze(fields.map((field) => Object.freeze({
-    label: optionLabel(field),
-    description: optionDescription(field),
-  })));
-}
 
 /** Shared help model for generic built-in and contributed Action invocation. */
 export function buildActionCliInvokeHelpModel(options: ActionCliInvokeHelpOptions): ActionCliHelpModel {
@@ -252,16 +189,21 @@ export function renderActionCliCommandHelp(command: CompiledActionCliCommand): s
   return renderActionCliHelpModel(buildActionCliHelpModel(command));
 }
 
-export function renderActionCliHelpModel(model: ActionCliHelpModel): string {
-  return renderHelpPage({
-    title: model.title,
-    subtitle: model.subtitle,
-    usage: [{ label: model.usage, description: '' }],
-    sections: [
-      { title: 'Arguments:', rows: [...model.positionals] },
-      { title: 'Options:', rows: [...model.options] },
-      { title: 'CLI options:', rows: [...model.cliOptions] },
-    ],
-    notes: [...model.notes],
-  });
+export function projectActionCliHelpDeclaration(command: CompiledActionCliCommand, envelopeKind = actionCliEnvelopeKind(command.path)): ActionCliHelpDeclaration {
+  return {
+    actionId: command.actionId, path: command.path, visibility: command.visibility,
+    pattern: actionCliCommandPattern(command), title: command.spec.title, envelopeKind,
+    usageLine: buildActionCliCommandUsageLine(command),
+    rootUsageLine: `happier ${actionCliCommandUsagePath(command)}${
+      command.actionId === 'workflow.definition.import' ? ' <file|->'
+      : command.actionId === 'workflow.definition.export' ? ' <definition-id> [file|-]'
+      : command.positionals.length || command.variadicPositional
+        ? ` ${[
+            ...command.positionals.slice(command.positionalsBeforeLastSegment.length).map((field) => `<${field.path}>`),
+            ...(command.variadicPositional ? [`<${command.variadicPositional.path}...>`] : []),
+          ].join(' ')}`
+        : ''
+    }`,
+    help: buildActionCliHelpModel(command),
+  };
 }

@@ -14,6 +14,7 @@ import {
 import { buildActionCliHelpModel } from './commandHelp';
 import { readActionCliServerId } from './actionServerTarget';
 import { stripTransportTokens } from './executeCommand';
+import { actionCliCommandPattern, resolveActionCliCommandPathCompletionCandidates } from './commandPatterns';
 import {
   resolveCompiledActionCliCompletionCandidates,
   resolveCompiledActionCliCompletionCandidatesWithDynamicOptions,
@@ -84,6 +85,25 @@ function compileFixture(cli: NonNullable<ActionSpec['cli']> = SEND_CLI, override
 }
 
 describe('compileActionCliCommands', () => {
+  it('keeps hidden aliases and interleaved caller slots identical in published path completion', () => {
+    const commands = compileFixture({
+      commands: [
+        { path: ['session', 'capabilities', 'list'], positionalsBeforeLastSegment: ['sessionId'], visibility: 'canonical' },
+        { path: ['session', 'capabilities', 'inspect'], positionalsBeforeLastSegment: ['sessionId'], visibility: 'alias' },
+        { path: ['session', 'capabilities', 'invisible'], positionalsBeforeLastSegment: ['sessionId'], visibility: 'hidden' },
+      ],
+    } as NonNullable<ActionSpec['cli']>);
+    const declarations = JSON.parse(JSON.stringify(commands.map((command) => ({
+      visibility: command.visibility, pattern: actionCliCommandPattern(command),
+    })))) as Parameters<typeof resolveActionCliCommandPathCompletionCandidates>[0]['commands'];
+    for (const committed of [['session', 'capabilities'], ['session', 'capabilities', 'session-1']]) {
+      const context = { committed, prefix: '', commands };
+      expect(resolveActionCliCommandPathCompletionCandidates({ ...context, commands: declarations }))
+        .toEqual(resolveCompiledActionCliCompletionCandidates(context));
+    }
+    expect(resolveActionCliCommandPathCompletionCandidates({ committed: ['session', 'capabilities', 'session-1'], prefix: '', commands: declarations }))
+      .toEqual(['inspect', 'list']);
+  });
   it('compiles MCP duplicate with one source positional into the semantic Action input', () => {
     const command = findCompiledActionCliCommand(['mcp', 'servers', 'duplicate'])!;
     expect(command.actionId).toBe('mcp.servers.duplicate');

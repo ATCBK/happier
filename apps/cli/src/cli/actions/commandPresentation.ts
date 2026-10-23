@@ -3,14 +3,7 @@ import type { SessionGoalControlFailureV1 } from '@happier-dev/protocol/sessions
 
 import type { CompiledActionCliCommand } from './compiledCommands';
 
-/**
- * The stable JSON envelope kind a compiled friendly command uses. Released
- * spellings such as `session_send` and `machines_list` are exactly the command
- * path in snake case, so the derivation preserves them without a table.
- */
-export function actionCliEnvelopeKind(path: readonly string[]): string {
-  return path.join('_').replace(/-/g, '_');
-}
+export { actionCliEnvelopeKind } from './commandPresentationMetadata';
 
 export type ActionCliPresentationContext = Readonly<{
   command: CompiledActionCliCommand;

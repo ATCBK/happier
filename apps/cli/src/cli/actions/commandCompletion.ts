@@ -5,6 +5,7 @@ import {
   type ActionCliField,
   type CompiledActionCliCommand,
 } from './compiledCommands';
+import { resolveActionCliCommandPathCompletionCandidates } from './commandPatterns';
 import {
   ACTION_CLI_HELP_FLAGS,
   ACTION_CLI_JSON_OUTPUT_FLAG,
@@ -269,16 +270,9 @@ export function resolveCompiledActionCliCompletionCandidates(
   const commands = context.commands ?? listCompiledActionCliCommands();
   const candidates = new Set<string>();
 
-  for (const command of commands) {
-    if (command.visibility === 'hidden') continue;
-    const pattern = actionCliCommandPattern(command);
-    if (!context.committed.every((word, index) => {
-      const segment = pattern[index];
-      return segment !== undefined && (typeof segment === 'string' ? segment === word : !word.startsWith('-'));
-    })) continue;
-    const next = pattern[context.committed.length];
-    if (typeof next === 'string' && next.startsWith(context.prefix)) candidates.add(next);
-  }
+  for (const candidate of resolveActionCliCommandPathCompletionCandidates({
+    ...context, commands: commands.map((command) => ({ visibility: command.visibility, pattern: actionCliCommandPattern(command) })),
+  })) candidates.add(candidate);
 
   const exact = findCompiledActionCliCommand(context.committed, commands);
   if (exact && exact.path.length <= context.committed.length) {
