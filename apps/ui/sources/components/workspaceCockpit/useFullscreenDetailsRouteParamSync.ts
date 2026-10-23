@@ -10,7 +10,8 @@ export type UseFullscreenDetailsRouteParamSyncInput = Readonly<{
     routeSelectionSignature: string;
     selectedSelectionSignature: string;
     onApplyRouteSelection: () => void;
-    onWriteSelectedSelection: () => void;
+    /** Absent where another owner writes the route (a workspace-hosted destination): the route is only applied. */
+    onWriteSelectedSelection?: () => void;
 }>;
 
 export function useFullscreenDetailsRouteParamSync(
@@ -68,6 +69,7 @@ export function useFullscreenDetailsRouteParamSync(
 
     React.useEffect(() => {
         if (!input.enabled) return;
+        if (!input.onWriteSelectedSelection) return;
         if (!input.isFocused) return;
         if (!input.hydrated) return;
         if (!input.hasSelectedSelection) return;

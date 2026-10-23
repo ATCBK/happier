@@ -383,8 +383,14 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
     const pluginBinding = React.useMemo<BoundPluginSurfaceBinding>(() => ({ openSurface }), [openSurface]);
 
     const switchSurface = React.useCallback((surface: SessionMobileSurface) => {
+        // Leaving the File scene retires its presentation before the route changes, as Chat would on focus: the
+        // Session the route returns to must not publish the open Details again and present the File scene.
+        if (props.surface === 'tabs' && surface !== 'tabs' && !hasDeepLinkedDetailsTarget) {
+            closeDetails();
+            if (surface === 'chat') closeRight();
+        }
         surfaceNavigationRef.current?.switchSurface(surface);
-    }, []);
+    }, [closeDetails, closeRight, hasDeepLinkedDetailsTarget, props.surface]);
     const requestCloseDetails = React.useCallback(() => {
         closeDetails();
         surfaceNavigationRef.current?.returnToPreviousSurface();

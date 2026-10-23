@@ -32,7 +32,6 @@ import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPan
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { SessionBoardControllerProvider } from '@/components/sessions/board/SessionBoardControllerProvider';
 import { useSessionBoardPrimaryMountResolver } from '@/components/sessions/board/useSessionBoardPrimaryMountHost';
-import { useSessionCockpitChromeRegister } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { useSessionTerminalAvailability } from '@/components/sessions/terminal/useSessionTerminalAvailability';
 import type { SessionMobileSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
 
@@ -85,8 +84,9 @@ export function SessionDetailsDestinationBody() {
     );
     const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
     const mobileExperience = useMobileWorkspaceExperienceState();
-    const cockpitEnabled = instanceKey === null && mobileExperience.cockpitEnabled;
-    const registerCockpitChrome = useSessionCockpitChromeRegister();
+    // A phone presents Details as its Session cockpit's File scene, routed or hosted alike, so the File page
+    // sits beside the cockpit's one Chat composer (phone Ask raises it over the page).
+    const cockpitEnabled = mobileExperience.cockpitEnabled;
     const { sidebarTabAvailable: terminalTabAvailable } = useSessionTerminalAvailability(routeScope.serverId);
     const scopeId = createSessionPaneScopeId(sessionId, routeScope.serverId, instanceKey);
     const pane = useAppPaneScope(scopeId);
@@ -143,17 +143,6 @@ export function SessionDetailsDestinationBody() {
         // The canonical Session route owner emits only registered Session hrefs.
         router.replace(fallbackDetailsHref as Href);
     }, [fallbackDetailsHref, retireDetailsPresentation, params.sourceSurface, persistSessionSurface, routeScope.serverId, router, sessionId]);
-    React.useEffect(() => {
-        if (!instanceKey || !mobileExperience.cockpitEnabled || !isFocused || !visible) return;
-        // Hosted Details has no nested cockpit navigator. Its retained pane still
-        // owns presentation and must retire it before the outer chrome changes routes.
-        return registerCockpitChrome({
-            sessionId, serverId: routeScope.serverId, activeSurface: 'tabs',
-            terminalTabAvailable, openDetailsTabCount: detailsSelection.tabs.length,
-            switchSurface: surface => { if (surface !== 'tabs') retireDetailsPresentation(surface); },
-        });
-    }, [detailsSelection.tabs.length, instanceKey, isFocused, mobileExperience.cockpitEnabled,
-        registerCockpitChrome, retireDetailsPresentation, routeScope.serverId, sessionId, terminalTabAvailable, visible]);
     const openDestinationTab = React.useCallback((tab: DetailsTab) => {
         const selection = buildActiveDetailsRouteParams([tab], tab.key);
         const query = new URLSearchParams();
@@ -164,9 +153,14 @@ export function SessionDetailsDestinationBody() {
         if (selection.details) router.push(`/session/${encodeURIComponent(sessionId)}/details?${query}`);
     }, [routeScope.serverId, router, sessionId]);
 
+    const writeSelectedDetailsParams = React.useCallback(() => {
+        router.setParams(selectedDetailsParams);
+    }, [router, selectedDetailsParams]);
     useFullscreenDetailsRouteParamSync({
         resetKey: sessionId,
-        enabled: Boolean(sessionId) && instanceKey === null,
+        // A hosted desktop destination reads its own selection; a cockpit presents the pane's. Workspace
+        // navigation owns a hosted destination's URL, so there the route is only applied.
+        enabled: Boolean(sessionId) && (instanceKey === null || cockpitEnabled),
         isFocused,
         hydrated: sessionHydrated,
         hasRouteSelection: Boolean(routeDetailsState),
@@ -179,9 +173,7 @@ export function SessionDetailsDestinationBody() {
             }
             applySessionPaneUrlState(pane, routeDetailsState, sessionAddress);
         }, [pane, routeDetailsState, sessionAddress]),
-        onWriteSelectedSelection: React.useCallback(() => {
-            router.setParams(selectedDetailsParams);
-        }, [router, selectedDetailsParams]),
+        onWriteSelectedSelection: instanceKey === null ? writeSelectedDetailsParams : undefined,
     });
 
     const { onRequestClose } = useFullscreenDetailsRouteController({
@@ -216,10 +208,13 @@ export function SessionDetailsDestinationBody() {
             {sessionHydrated ? (
                 cockpitEnabled ? (
                     <SessionCockpitShell
+                        surfaceFocusedOverride={isFocused}
+                        surfaceVisibleOverride={visible}
                         sessionId={sessionId}
                         scopeId={scopeId}
                         surface="tabs"
                         safeAreaPadding={false}
+                        terminalTabAvailable={terminalTabAvailable}
                         routeServerId={routeScope.serverId}
                         routeHydrationState={routeHydrationState}
                     />
