@@ -48,14 +48,19 @@ function sourceOptionDetail(slices: readonly UsageQueryResultSlice[], source: st
 
 /** One choice/toggle owner consumed by both the toolbar and mounted current-context commands. */
 export function useUsageWidgetPageFilters(page: UsageWidgetPageContextState, slices: readonly UsageQueryResultSlice[], sessionScoped: boolean) {
-    const machines = useAllMachines();
     const { scope, setScope } = page;
+    const referencedMachineIds = React.useMemo(() => [...readUsageScopeOptions(slices, 'machines', scope.machines).keys()], [slices, scope.machines]);
+    // Filters consume names, not Machine runtime/presence. Select the canonical
+    // display strings so those publications cannot invalidate every chart's drill.
+    const machineNames = useAllMachines(React.useCallback(machines => {
+        const listed = new Set(machines.map(machine => machine.id));
+        return Object.fromEntries(resolveMachineDisplayNames([...machines,
+            ...referencedMachineIds.filter(id => !listed.has(id)).map(id => ({ id, absence: 'unlisted' as const }))]));
+    }, [referencedMachineIds]));
     return React.useMemo((): readonly UsageWidgetPageFilter[] => sessionScoped ? [] :
         (['sources', 'agents', 'machines', 'projects'] as const).map(field => {
             const selected = scope[field];
             const labels = readUsageScopeOptions(slices, field, selected);
-            const machineNames = field === 'machines' ? resolveMachineDisplayNames([...machines,
-                ...[...labels.keys()].filter(id => !machines.some(machine => machine.id === id)).map(id => ({ id, absence: 'unlisted' as const }))]) : new Map<string, string>();
             const title = t(FIELD_TITLE[field]);
             const listed = [...labels.keys()];
             const gaps = field === 'sources' ? slices.flatMap(slice => readUsageCoverageGaps(slice, ['accounting'])) : [];
@@ -65,7 +70,7 @@ export function useUsageWidgetPageFilters(page: UsageWidgetPageContextState, sli
                 ...[...labels].map(([id, fallback]) => {
                     const sourceGap = gaps.find(gap => gap.source === id);
                     return { id, label: field === 'agents' ? usageAgentTitle(id, fallback)
-                        : field === 'machines' ? machineNames.get(id) ?? getMachineDisplayName({ id, absence: 'unlisted' })
+                        : field === 'machines' ? machineNames[id] ?? getMachineDisplayName({ id, absence: 'unlisted' })
                         : field === 'sources' ? sentenceCase(usageSourceTitle(id, fallback))
                         : fallback,
                         ...(field === 'sources' && usageSourceAgentId(id) ? { agentId: usageSourceAgentId(id)! } : {}),
@@ -77,5 +82,5 @@ export function useUsageWidgetPageFilters(page: UsageWidgetPageContextState, sli
                 if (id !== USAGE_SCOPE_FILTER_ALL && !labels.has(id)) return false;
                 return setScope({ [field]: id === USAGE_SCOPE_FILTER_ALL ? [] : toggleUsageScopeSelection(selected, id, listed) });
             } };
-        }), [machines, scope, setScope, sessionScoped, slices]);
+        }), [machineNames, scope, setScope, sessionScoped, slices]);
 }

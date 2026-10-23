@@ -351,7 +351,12 @@ export function resolveUsageComparisonQuery(candidate: UsageQuery, period?: Read
   if (startMs === undefined || endMs === undefined || endMs <= startMs) return null;
   const previousStart = startMs - (endMs - startMs);
   if (previousStart < 0) return null;
-  return normalizeUsageQuery({ ...query, period: { startMs: previousStart, endMs: startMs } });
+  // Comparison consumers use token/money totals, including client price
+  // overrides over the admitted contributions. They do not consume charts or
+  // whole-Session message counts from this preceding population.
+  return normalizeUsageQuery({ ...query, period: { startMs: previousStart, endMs: startMs },
+    breakdown: [], includeSeries: false, includeInsights: false, includeActivity: false,
+    includeLeaders: false, includeModelTimeline: false, includeMessageStats: false });
 }
 
 export function resolveUsagePageAccountingReads(queries: readonly UsageQuery[], nowMs: number): Readonly<{ query: UsageQuery; period: ReturnType<typeof resolveUsageQueryPeriod> }>[] {

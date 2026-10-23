@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { normalizeUsageQuery, resolveUsageQueryPeriod } from '../inputs/usageQuery.js';
+import { normalizeUsageQuery, resolveUsageQueryPeriod, usageQueryToAnalyticsRequest } from '../inputs/usageQuery.js';
 import { UsageAnalyticsQueryResponseSchema, UsageAnalyticsSourceCoverageSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { resolveUsagePageAggregation, resolveUsagePageAccountingRequests, projectUsageAccountingSnapshotPrices, projectUsageAccountingSnapshotCalendar, retainUsageQueryResultReferences, UsageQueryBatchResultSchema } from './resolveUsagePageAggregation.js';
 import type { UsageWorkEvidence } from './usageOutcomeAllocation.js';
@@ -17,6 +17,37 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('resolveUsagePageAggregation', () => {
+  it('reads preceding totals without acquiring unused chart or message-count sections and preserves repriced comparisons', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, breakdown: ['agent', 'model'],
+      includeSeries: true, includeInsights: true, includeActivity: true, includeLeaders: true,
+      includeModelTimeline: true, includeMessageStats: true });
+    const [current, comparison] = resolveUsagePageAccountingRequests([query], 200);
+    expect(current).toEqual(query);
+    expect(usageQueryToAnalyticsRequest(comparison!, 200)).toMatchObject({
+      dateRange: { startMs: 0, endMs: 100 }, breakdowns: [], includeSeries: false,
+      includeInsights: false, includeActivity: false, includeLeaders: false,
+      includeModelTimeline: false, includeMessageStats: false,
+    });
+    const value = (input: number): UsageAnalyticsQueryResponse => ({ v: 1,
+      totals: { eventCount: 1, tokens: { ...tokens, input, total: input + tokens.output },
+        cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } },
+      priceCatalog: { ...bundledUsageModelPriceCatalog, models: { model: { inputUsdPerMillion: 1, outputUsdPerMillion: 1 } } },
+      contributions: [{ id: `input-${input}`, observedAtMs: input, sessionId: null, turnId: null, agentId: null,
+        modelId: 'model', machineId: null, projectKey: null, workspaceId: null, source: null,
+        eventCount: 1, tokens: { ...tokens, input, total: input + tokens.output },
+        tokenCategories: { ...tokens, input, total: input + tokens.output },
+        cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }],
+    });
+    const result = resolveUsagePageAggregation({ queries: [query], accounting: [
+      { query: current!, value: value(24), status: 'available' },
+      { query: comparison!, value: value(12), status: 'available' },
+    ], pricingOverrides: { model: { kind: 'rates', inputUsdPerMillion: 3, outputUsdPerMillion: 2 } } });
+    expect(result.results[0]?.accounting?.totals.tokens.total).toBe(28);
+    expect(result.results[0]?.comparison?.accounting?.totals.tokens.total).toBe(16);
+    expect(result.results[0]?.accounting?.totals.cost.apiEquivalentUsd).toBeCloseTo(80 / 1_000_000);
+    expect(result.results[0]?.comparison?.accounting?.totals.cost.apiEquivalentUsd).toBeCloseTo(44 / 1_000_000);
+  });
+
   it('shares an accounting-only calendar across sibling presentation and evidence flags without reusing private detail', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 1_000 }, includeActivity: true,
       includeModelTimeline: false, includeWorkEvidence: false, includeSessionEvidence: false, includeTranscriptEvidence: false });
@@ -926,7 +957,7 @@ describe('resolveUsagePageAggregation', () => {
   });
   it('retains exact preceding-period facts on ordinary comparison refresh failure', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
-    const comparison = normalizeUsageQuery({ ...query, period: { startMs: 0, endMs: 100 } });
+    const comparison = resolveUsagePageAccountingRequests([query], 200)[1]!;
     const previous = resolveUsagePageAggregation({ queries: [query], accounting: [
       { query, value: accounting, status: 'available' }, { query: comparison, value: accounting, status: 'available', asOfMs: 100 },
     ] });
@@ -1200,7 +1231,7 @@ describe('resolveUsagePageAggregation', () => {
 
   it('names and composes the exact preceding range without assigning those facts to the current period', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, timeZoneOffsetMinutes: 120 });
-    const previousPeriod = normalizeUsageQuery({ ...query, period: { startMs: 0, endMs: 100 } });
+    const previousPeriod = resolveUsagePageAccountingRequests([query], 200)[1]!;
     const result = resolveUsagePageAggregation({ queries: [query], accounting: [
       { query, status: 'pending' }, { query: previousPeriod, status: 'available', value: accounting },
     ] });
