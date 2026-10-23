@@ -1,5 +1,52 @@
 # Pending delivery architecture
 
+## Composer send choices (0.3 development)
+
+The existing-session composer's send button offers per-message choices on long
+press (or right-click on web): **Steer now** when the current session can steer,
+**Queue**, and **Send now (interrupt)**. Selecting a choice submits the current
+draft through the existing submission owner, overriding saved send preferences
+for that message. A normal tap keeps the saved behavior; dismissal preserves the
+draft. Dictation, Stop, pending-message editing, routed messages, and armed Agent
+or route continuations retain their own actions without this menu.
+
+Composer shortcuts in development source use the platform modifier: Command on
+Apple platforms and Control elsewhere. Normal submit follows the saved delivery
+preference. `Mod+Enter` selects the other noninterrupting action (steer when the
+default queues; queue when the default steers). `Mod+Shift+Enter` explicitly
+interrupts and sends. With no composer text or attachments, these two shortcuts
+instead steer or interrupt-and-send the first queued row, respectively; they do
+not replay history or create a new copy. An unavailable row or empty queue is a
+no-op. Pending interrupt actions retain their confirmation, and failures leave
+queued custody intact.
+
+The send menu and hover/focus tooltip show the effective shortcuts, including
+custom bindings. The existing persisted `composer.sendImmediate` command id now
+names alternate send; `composer.sendPending` remains rebindable with no default,
+and `composer.sendInterrupt` owns the new Shift binding. No settings format or
+Pending wire shape changes. Explicit steering never selects interrupt as a fallback.
+
+## Follow-original replay (0.3 development)
+
+An Account-issued Follow original is identified by its source Session, original
+sequence, event and authenticated admission receipt. Its delivered content is
+derived from that source event. After host admission freezes Pending custody,
+a freshly authorized, matching replay rejoins the existing input as
+`alreadyAccepted` (HTTP `didWrite: false`); it never replaces retained content, receipt, claim or
+queue position, and does not prove provider acceptance or advance the source
+frontier. Changed event, delivery intent, receipt or content mode still refuses.
+
+Every replay of that frozen Pending row passes through its request-equality
+owner. Plaintext must match the retained original plaintext digest, even after host settlement
+replaces request metadata with protected authority. An encrypted retry carrying
+an equality tag must match the retained tag. Account-issued encrypted Follow
+originals carry no such tag on the Account HTTP route: fresh authorization and
+the same canonical original identity permit only a no-op rejoin, including when
+re-encryption produces different ciphertext. Home does not infer plaintext
+equality from opaque bytes or store the retry's ciphertext. This identity-only
+rule applies to frozen Account Follow custody; Machine-issued replay retains
+its existing equality contract. No new proof field or route shape is required.
+
 ## Host retirement before dispatch (0.3 development)
 
 Claiming an input transfers custody to the host; it does not prove native
