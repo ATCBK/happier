@@ -1209,6 +1209,8 @@ terminal binding, and host-failure reporting to its runtime, including deferred 
 after a server connection failure. The shared session initializer still reports the
 session to the daemon; its temporary plain/requested-tmux launch metadata is not a
 terminal fallback. Ordinary daemon tmux fallbacks retain their warning.
+Supported Codex App Server and OpenCode server hosted clients use the same ownership:
+their shared attached-terminal supervisor persists and reports the actual presenter.
 For these shared provider-attach runtimes, the hosted native TUI is optional:
 `spawnHooks.resolveDaemonTerminalPresentation` keeps the controller headless,
 and `createSharedProviderLocalControl.onTerminalExit` releases the local-control
