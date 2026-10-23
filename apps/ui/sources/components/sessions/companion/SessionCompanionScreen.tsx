@@ -11,6 +11,7 @@ import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
 import type { SessionBoardPrimaryMountResolver } from '@/sync/domains/session/board';
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { useSessionWidgetSurface } from '@/components/widgets/surface/useWidgetInputsEditor';
 
 import { SessionCompanionContent } from './SessionCompanionContent';
 import {
@@ -82,12 +83,15 @@ export const SessionCompanionScreen = React.memo(function SessionCompanionScreen
         if (!outcome) throw new Error('session_companion_write_refused');
     }, [mutateCompanion]);
     const boardSnapshot = mountedBoard?.binding.status === 'ready' ? mountedBoard.binding.snapshot : null;
+    const companionSurface = useSessionWidgetSurface({ owner: 'companion', serverId: props.address.serverId,
+        sessionId: props.sessionId, session });
     const navAddBinding = React.useMemo(() => ({
         ...addBoard,
         refs: controller.preference.items,
         snapshot: boardSnapshot,
         addItem,
-    }), [addBoard, addItem, boardSnapshot, controller.preference.items]);
+        context: companionSurface.context,
+    }), [addBoard, addItem, boardSnapshot, companionSurface.context, controller.preference.items]);
     const manageBoardItemPlugin = React.useCallback((itemId: string) => {
         if (!mountedBoard?.controller.supports('item.managePlugin')) return;
         void mountedBoard.controller.run({ kind: 'item.managePlugin', itemId });
