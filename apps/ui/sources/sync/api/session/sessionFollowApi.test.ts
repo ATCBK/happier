@@ -45,19 +45,45 @@ async function setup(secret?: string) {
         url.endsWith('/session-follow-rules') ? { rules: [] } : url.endsWith('/session-follows') ? { follows: [] } : { sources: [] },
     ));
     const accountEncryption = { mode: 'plain' as 'plain' | 'e2ee', contentKeyFingerprint: null as string | null };
+    const actionSettings = { value: {} as Record<string, unknown> };
+    const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+    const features = createRootLayoutFeaturesResponse({ features: { sessions: { following: { enabled: true } } } });
+    const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    for (const serverId of [active.id, target.id]) primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     setRuntimeFetch(async (url, init) => {
         if (new URL(String(url)).pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
+        if (new URL(String(url)).pathname === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: actionSettings.value } });
         if (new URL(String(url)).pathname === '/v1/account/encryption') return Response.json({ mode: accountEncryption.mode, updatedAt: 1 });
         if (new URL(String(url)).pathname === '/v1/account/encryption/currentness') return Response.json({ mode: accountEncryption.mode, version: 1,
             signingKeyFingerprint: accountEncryption.mode === 'plain' ? null : 'signing-fingerprint',
             contentKeyFingerprint: accountEncryption.contentKeyFingerprint, updatedAt: 1 });
         return request(String(url), init);
     });
-    return { target, request, credentials, token, storage, active, TokenStorage, accountEncryption };
+    return { target, request, credentials, token, storage, active, TokenStorage, accountEncryption, actionSettings };
 }
 
 describe('Follow exact Home Action transport', () => {
+    it('admits personal Follow mutations through the shared Action settings', async () => {
+        const env = await setup();
+        const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+        const features = createRootLayoutFeaturesResponse({ features: { sessions: { following: { enabled: true } } } });
+        const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        primeServerFeaturesSnapshot({ serverId: env.target.id, snapshot: { status: 'ready', features } });
+        env.actionSettings.value = { actionsSettingsV1: { v: 1, actions: { 'follow.set': { enabled: false }, 'follow.remove': { enabled: false } } } };
+        env.request.mockImplementation(async (url, init) => {
+            if (url.endsWith('/v2/account/settings')) return Response.json({ version: 1, content: { t: 'plain', v: {
+                actionsSettingsV1: { v: 1, actions: { 'follow.set': { enabled: false }, 'follow.remove': { enabled: false } } },
+            } } });
+            return Response.json(init?.method === 'DELETE' ? { changed: true } : { changed: true, follow: { sessionId: 'source', following: true,
+                notificationLevel: 'all', includeInVoice: false }, voiceInitialSnapshotPending: false });
+        });
+        const api = await import('./sessionFollowApi');
+        const address = { serverId: env.target.id, sessionId: 'source' };
+        expect(await api.sessionFollowSet(address, { policy: { preset: 'quiet' } })).toMatchObject({ kind: 'failed' });
+        expect(await api.sessionFollowRemove(address)).toMatchObject({ kind: 'failed' });
+        expect(env.request.mock.calls.filter(([url, init]) => url.includes('/follow') && init?.method !== 'GET')).toHaveLength(0);
+    });
     it('evaluates one source through fresh exact-Home reads without a Session corpus query', async () => {
         const homes = createHomeGovernanceHarness();
         await homes.reset();

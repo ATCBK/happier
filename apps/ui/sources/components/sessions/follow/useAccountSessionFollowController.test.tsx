@@ -4,6 +4,8 @@ import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } from '@happier-dev/protocol/s
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 
@@ -11,7 +13,7 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 const network = await installSessionOpsNetworkBoundary();
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
-const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const { setServerReachabilityNetworkAllowed } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
 const { useAccountSessionFollowController } = await import('./useAccountSessionFollowController');
@@ -25,8 +27,43 @@ afterEach(async () => {
 });
 afterAll(() => network.dispose());
 
+function enableFollow(serverId: string) {
+    primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features:
+        createRootLayoutFeaturesResponse({ features: { sessions: { following: { enabled: true } } } }) } });
+}
+
+it('keeps an inactive-Home editor across focused Home changes but retires its own Account', async () => {
+    const focused = await network.addHome('https://follow-focused-lifetime.test', 'focused-account');
+    const addressed = await network.addHome('https://follow-addressed-lifetime.test', 'addressed-account');
+    enableFollow(addressed.id);
+    const focus = (home: typeof focused, generation: number) => {
+        publishAppliedActiveServerRuntimeAvailability(false);
+        setActiveServerId(home.id);
+        storage.getState().activateProfileScope({ serverId: home.id, accountId: home.accountId });
+        publishAppliedActiveServerSnapshot({ serverId: home.id, serverUrl: home.serverUrl, generation });
+    };
+    focus(focused, 1);
+    const path = '/v2/sessions/shown-session/follow';
+    network.setHttpResponder(async input => new URL(String(input)).pathname === path ? Response.json({
+        follow: { sessionId: 'shown-session', following: true, notificationLevel: 'important', includeInVoice: false },
+        isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false,
+    }) : null);
+    const retired = vi.fn();
+    const hook = await renderHook(() => useAccountSessionFollowController({ serverId: addressed.id, sessionId: 'shown-session' }, true, retired));
+    await vi.waitFor(() => expect(hook.getCurrent().state.projection?.follow?.notificationLevel).toBe('important'));
+    await act(async () => { focus(addressed, 2); });
+    await flushHookEffects();
+    expect(retired).not.toHaveBeenCalled();
+    expect(hook.getCurrent().state.projection?.follow?.notificationLevel).toBe('important');
+    await act(async () => { focus(focused, 3); });
+    await act(async () => { await network.setAccount(addressed.serverUrl, 'replacement-account'); });
+    expect(retired).toHaveBeenCalled();
+    await hook.unmount();
+});
+
 it('keeps one personal Follow read across 1,000 unrelated changes while refreshing exact and private Follow facts', async () => {
     const home = await network.addHome('https://personal-follow-demand.test', 'follow-account');
+    enableFollow(home.id);
     setActiveServerId(home.id);
     publishAppliedActiveServerSnapshot({ serverId: home.id, serverUrl: home.serverUrl, generation: 1 });
     storage.setState(state => ({ profileScope: { serverId: home.id, accountId: home.accountId },

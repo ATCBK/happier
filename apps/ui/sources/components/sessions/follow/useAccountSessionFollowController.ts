@@ -8,18 +8,24 @@ import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAcc
 import { isServerReachabilityNetworkAllowed, subscribeServerReachabilityNetworkAllowed } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 import { createAccountSessionFollowController, projectAccountSessionFollowPolicyEditor } from './accountSessionFollowController';
 import { isSessionFollowAccountChangeRelevant } from './sessionFollowAccountChange';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 
 /** Every personal Follow host shares this captured Account/Home lifetime. */
 export function useAccountSessionFollowController(address: SessionAddress, enabled: boolean, onRetire?: () => void) {
     const { serverId, sessionId } = address;
+    const actions = useMountedActionExecution(serverId);
+    const executeRef = React.useRef(actions.execute);
+    executeRef.current = actions.execute;
     const controller = React.useMemo(() => createAccountSessionFollowController({ serverId, sessionId }, {
-        get: sessionFollowGet, set: sessionFollowSet, remove: sessionFollowRemove,
+        get: target => sessionFollowGet(target, (actionId, input) => executeRef.current(actionId, input)),
+        set: (target, preferences) => sessionFollowSet(target, preferences, (actionId, input) => executeRef.current(actionId, input)),
+        remove: target => sessionFollowRemove(target, (actionId, input) => executeRef.current(actionId, input)),
     }), [serverId, sessionId]);
     const state = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
     const onRetireRef = React.useRef(onRetire);
     onRetireRef.current = onRetire;
     React.useEffect(() => {
-        if (!enabled) return;
+        if (!enabled || !actions.ready) return;
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime?.isCurrent()) return;
         const retire = () => { controller.dispose(); onRetireRef.current?.(); };
@@ -40,7 +46,7 @@ export function useAccountSessionFollowController(address: SessionAddress, enabl
         });
         void controller.refresh();
         return () => { retirement.dispose(); credentials(); connectivity(); changes(); };
-    }, [controller, enabled, serverId, sessionId]);
+    }, [actions.ready, controller, enabled, serverId, sessionId]);
     const policyEditor = React.useMemo(() => projectAccountSessionFollowPolicyEditor(state), [state]);
     return { controller, state, policyEditor };
 }

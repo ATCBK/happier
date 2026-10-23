@@ -14,7 +14,8 @@ import {
   type SessionFollowHeaderPreset,
 } from './sessionFollowHeaderPreset';
 
-function presetLabel(preset: SessionFollowHeaderPreset): string {
+/** The Follow level in words, shared by the header chip and Info's Follow row. */
+export function sessionFollowPresetLabel(preset: SessionFollowHeaderPreset): string {
   switch (preset) {
     case 'none': return t('session.follow.follow');
     case 'everything': return t('session.follow.policy.everything');
@@ -46,7 +47,7 @@ export function SessionFollowHeaderChip(
     (session) => (session ? readSessionFollowHeaderPreset(session) : null),
   );
   if (preset === null) return null;
-  const label = presetLabel(preset);
+  const label = sessionFollowPresetLabel(preset);
   const glyph = (
     <Icon
       name={preset === 'none' ? 'bell-slash' : 'bell'}
