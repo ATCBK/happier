@@ -252,10 +252,18 @@ export async function enrichLocalServiceInventoryPageTitles(input: Readonly<{
     snapshot: NormalizedLocalServiceInventorySnapshot;
     enricher: LocalPageTitleEnricher;
 }>): Promise<NormalizedLocalServiceInventorySnapshot> {
+    // Different bind-address rows can describe the same application endpoint.
+    // Share its observation within this scan before any title fetch settles.
+    const titlesByUrl = new Map<string, Promise<LocalPageTitleResult | null>>();
     const entries = await Promise.all(input.snapshot.entries.map(async (entry) => {
         const url = buildLocalPageTitleUrl(entry);
         if (!url) return entry;
-        const title = await input.enricher.fetchTitle(url);
+        let pending = titlesByUrl.get(url);
+        if (!pending) {
+            pending = input.enricher.fetchTitle(url);
+            titlesByUrl.set(url, pending);
+        }
+        const title = await pending;
         if (!title) return entry;
         return {
             ...entry,

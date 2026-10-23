@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
     buildLocalPageTitleUrl,
     createLocalPageTitleEnricher,
+    enrichLocalServiceInventoryPageTitles,
     extractLocalPageTitle,
     isLocalPageTitleHost,
 } from './pageTitle';
-import type { NormalizedLocalServiceInventoryEntry } from './scanner';
+import { normalizeLocalServiceScan, type NormalizedLocalServiceInventoryEntry } from './scanner';
 
 function streamBody(html: string): ReadableStream<Uint8Array> {
     const bytes = new TextEncoder().encode(html);
@@ -65,6 +66,36 @@ describe('isLocalPageTitleHost', () => {
 });
 
 describe('createLocalPageTitleEnricher', () => {
+    it.each([true, false])('fetches each endpoint once for a thousand inventory rows sharing listener addresses (available: %s)', async available => {
+        const listeners = Array.from({ length: 1_000 }, (_, index) => ({
+            address: index % 2 === 0 ? '127.0.0.1' : '0.0.0.0',
+            port: 10_000 + Math.floor(index / 2), protocol: 'tcp' as const,
+        }));
+        const normalized = normalizeLocalServiceScan({ machineId: 'machine-a', now: 1_000,
+            previous: null, listeners, processes: new Map(), workspaces: [], ownership: [] });
+        const snapshot = { ...normalized, entries: normalized.entries.map(entry => ({
+            ...entry, endpoint: { scheme: 'http' as const, host: '127.0.0.1', port: entry.port,
+                probeState: 'ready' as const, probedAt: 1_000 },
+        })) };
+        let fetches = 0;
+        const enricher = createLocalPageTitleEnricher({ timeoutMs: 1_000, maxBodyBytes: 1_024,
+            concurrency: 8, successTtlMs: 60_000, failureTtlMs: 60_000,
+            fetch: async () => {
+                fetches += 1;
+                return available
+                    ? new Response('<title>Local application</title>', { headers: { 'content-type': 'text/html' } })
+                    : new Response(null, { status: 503 });
+            },
+        });
+
+        const enriched = await enrichLocalServiceInventoryPageTitles({ snapshot, enricher });
+
+        expect(enriched.entries.map(entry => entry.id)).toEqual(snapshot.entries.map(entry => entry.id));
+        if (available) expect(enriched.entries.every(entry => entry.presentation?.pageTitle === 'Local application')).toBe(true);
+        else expect(enriched.entries).toEqual(snapshot.entries);
+        expect(fetches).toBe(500);
+    });
+
     it('refuses redirects to public hosts and reads only bounded local html prefixes', async () => {
         const enricher = createLocalPageTitleEnricher({
             timeoutMs: 100,
