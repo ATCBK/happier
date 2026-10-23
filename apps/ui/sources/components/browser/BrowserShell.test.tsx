@@ -2324,14 +2324,14 @@ describe('BrowserShell', () => {
     expect(sendCommand).not.toHaveBeenCalled();
   });
 
-  it('mounts daemon browser diagnostics snapshots into the default product diagnostics panel', async () => {
+  it('acquires daemon ring history only while the Diagnostics drawer is open', async () => {
     const { BrowserShell } = await import('./BrowserShell');
     const { useBrowserDiagnosticsRuntime } = await import('./diagnostics');
     const { selectActiveBrowserView } =
       await import('@/sync/domains/browser/shell');
     const state = await createShellState();
     stubBrowserDiagnosticsWebEnvironment();
-    testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc.mockResolvedValueOnce(
+    testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc.mockResolvedValue(
       {
         ok: true,
         snapshot: createDaemonDiagnosticsSnapshot([
@@ -2358,34 +2358,43 @@ describe('BrowserShell', () => {
       );
     }
 
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const screen = await renderScreen(<BrowserShellWithExplicitDiagnostics />);
-    await flushHookEffects({ cycles: 2, turns: 2 });
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+      expect(testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc).toHaveBeenCalledTimes(0);
+      expect(screen.findByTestId('browser-shell-diagnostics-container-closed')).toBeTruthy();
 
-    expect(
-      testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        machineId: 'machine_1',
-        serverId: 'server_1',
-      }),
-    );
-    // Console is the default drawer section; its family panel + row render
-    // inside the drawer body with the trust/fidelity badge preserved.
-    expect(
-      screen.findByTestId('browser-shell-diagnostics-container-closed'),
-    ).toBeTruthy();
-    await screen.pressByTestIdAsync('browser-shell-diagnostics-open');
-    expect(
-      screen.findByTestId('browser-shell-diagnostics-body-fidelity-cdp'),
-    ).toBeTruthy();
-    expect(
-      screen.findByTestId('browser-shell-diagnostics-body-console-panel'),
-    ).toBeTruthy();
-    expect(
-      screen.findByTestId(
-        'browser-shell-diagnostics-body-console-row-evt_daemon_console_1',
-      ),
-    ).toBeTruthy();
+      await screen.pressByTestIdAsync('browser-shell-diagnostics-open');
+      await flushHookEffects();
+      expect(testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc).toHaveBeenCalledTimes(1);
+      expect(testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc).toHaveBeenCalledWith(
+        expect.objectContaining({ machineId: 'machine_1', serverId: 'server_1' }),
+      );
+      const firstSignal = testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc.mock.calls[0][0].signal;
+      // This event predates opening: the daemon's existing ring supplies history on demand.
+      expect(screen.findByTestId('browser-shell-diagnostics-body-fidelity-cdp')).toBeTruthy();
+      expect(screen.findByTestId('browser-shell-diagnostics-body-console-row-evt_daemon_console_1')).toBeTruthy();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      expect(testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc).toHaveBeenCalledTimes(2);
+      await screen.pressByTestIdAsync('browser-shell-diagnostics-close');
+      expect(firstSignal.aborted).toBe(true);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+      expect(testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc).toHaveBeenCalledTimes(2);
+
+      testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc.mockResolvedValue({
+        ok: true,
+        snapshot: createDaemonDiagnosticsSnapshot([createDaemonDiagnosticsEvent({ eventId: 'evt_while_closed' })]),
+      });
+      await screen.pressByTestIdAsync('browser-shell-diagnostics-open');
+      await flushHookEffects();
+      expect(testState.fetchBrowserDiagnosticsSnapshotViaMachineRpc).toHaveBeenCalledTimes(3);
+      expect(screen.findByTestId('browser-shell-diagnostics-body-console-row-evt_while_closed')).toBeTruthy();
+    } finally {
+      await screen.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('starts host-owned annotation mode from browser shell context chrome', async () => {

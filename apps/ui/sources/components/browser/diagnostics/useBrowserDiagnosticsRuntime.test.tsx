@@ -11,6 +11,7 @@ import { createNativeWebViewPageInfoDiagnosticEvent } from '@/components/browser
 import { buildBrowserAdapterCapabilities } from '@/sync/domains/browser/adapters/capabilities';
 import type { BrowserControlViewState } from '@/sync/domains/browser/control';
 import { selectBrowserDiagnosticsForView } from '@/sync/domains/browser/diagnostics/store';
+import { useBrowserDiagnosticsDaemonSnapshot } from '@/sync/domains/browser/diagnostics/daemonSnapshot';
 import type { BrowserDiagnosticsSnapshotClientInput, BrowserDiagnosticsSnapshotClientResult } from '@/sync/domains/browser/diagnostics/machineRpc';
 
 import { useBrowserDiagnosticsRuntime as useRuntime, type UseBrowserDiagnosticsRuntimeInput } from './useBrowserDiagnosticsRuntime';
@@ -24,12 +25,14 @@ import { loadBrowserDaemonRuntimeForTests } from '@/dev/testkit/harness/browserD
 import { BrowserDiagnosticsEvalResultV1Schema, BrowserDiagnosticsElementPickerResultV1Schema, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { uiBrowserAutomationDispatchMethod } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
 
-// Keep all hook tests on real admission and default mounted-owner composition. Only the
-// network snapshot transport above and the engine callbacks supplied by each test are boundaries.
+// These hook cases have a presented snapshot consumer. BrowserShell.test.tsx exercises the
+// actual drawer's open/closed acquisition wiring. Admission, snapshot and collector logic stay real.
 const executor = createActionExecutor(createActionExecutorBoundaryFixture({ runtimeActionExecute: createDefaultRuntimeActionExecutor() }));
+const noDaemonSnapshot = { view: null, enabled: false, onEvents: () => {} };
 function useBrowserDiagnosticsRuntime(input: UseBrowserDiagnosticsRuntimeInput) {
     const runtime = useRuntime({ ...input, actionExecute: input.actionExecute ?? executor.execute,
         actionContext: { surface: 'ui', authority: 'present_user', bypassApprovals: true, ...input.actionContext } });
+    useBrowserDiagnosticsDaemonSnapshot(runtime?.daemonSnapshot ?? noDaemonSnapshot);
     const current = React.useRef(input.view);
     current.current = input.view;
     React.useEffect(() => {

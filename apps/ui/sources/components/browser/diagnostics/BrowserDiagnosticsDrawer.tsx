@@ -20,8 +20,9 @@ import type {
     BrowserDiagnosticsPanelProjection,
     BrowserViewDiagnosticsProjection,
     BrowserDiagnosticsUiStore,
+    UseBrowserDiagnosticsDaemonSnapshotInput,
 } from '@/sync/domains/browser/diagnostics';
-import { selectBrowserDiagnosticsForView } from '@/sync/domains/browser/diagnostics';
+import { selectBrowserDiagnosticsForView, useBrowserDiagnosticsDaemonSnapshot } from '@/sync/domains/browser/diagnostics';
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import type { StoreApi } from 'zustand/vanilla';
 import { t } from '@/text';
@@ -223,17 +224,20 @@ function projectionForSection(
 
 type DiagnosticsEventSource = Pick<StoreApi<BrowserDiagnosticsUiStore>, 'getState' | 'subscribe'>;
 const noSubscribe = () => () => {};
+const noDaemonSnapshot: UseBrowserDiagnosticsDaemonSnapshotInput = { view: null, enabled: false, onEvents: () => {} };
 
-/** Mounted only while the drawer is open; collection is owned by the surface runtime. */
+/** Mounted only while open: acquire the daemon's ring here; collectors keep their own lifetime. */
 function BrowserDiagnosticsDrawerBody(props: Readonly<{
     diagnostics: BrowserDiagnosticsPanelProjection;
     state?: BrowserDiagnosticsUiStore;
     eventSource?: DiagnosticsEventSource;
+    daemonSnapshot?: UseBrowserDiagnosticsDaemonSnapshotInput;
     section: SectionKey | null;
     interaction?: BrowserDiagnosticsInteractionControls;
     interactionSurface?: BrowserDiagnosticsInteractionSurface;
     testID: string;
 }>): React.ReactElement {
+    useBrowserDiagnosticsDaemonSnapshot(props.daemonSnapshot ?? noDaemonSnapshot);
     const viewKey = props.diagnostics.sourceKind === 'browserDiagnostics' ? browserViewKey(props.diagnostics) : null;
     const readView = React.useCallback(() => viewKey
         ? (props.eventSource?.getState() ?? props.state)?.viewsByKey[viewKey] ?? null
@@ -255,6 +259,7 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
     diagnostics: BrowserDiagnosticsPanelProjection;
     state?: BrowserDiagnosticsUiStore;
     eventSource?: DiagnosticsEventSource;
+    daemonSnapshot?: UseBrowserDiagnosticsDaemonSnapshotInput;
     /**
      * A second diagnostics source (the preview proxy). Rendered as an extra SECTION of this drawer,
      * never as a second drawer: two stacked panels with the same title is what the surface used to
@@ -541,6 +546,7 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
                             diagnostics={bodyDiagnostics}
                             state={showingSupplemental ? undefined : props.state}
                             eventSource={showingSupplemental ? undefined : props.eventSource}
+                            daemonSnapshot={props.daemonSnapshot}
                             section={activeSection}
                             interaction={bodyInteraction}
                             interactionSurface={bodyInteractionSurface}

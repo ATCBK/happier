@@ -10,6 +10,7 @@ export type {
     BrowserDiagnosticsSnapshotClientResult,
 } from './machineRpc';
 export {
+    resolveBrowserDiagnosticsSnapshotMachineId,
     useBrowserDiagnosticsDaemonSnapshot,
 } from './daemonSnapshot';
 export type {

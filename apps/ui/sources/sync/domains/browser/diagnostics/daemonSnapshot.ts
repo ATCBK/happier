@@ -50,7 +50,7 @@ function resolveRefreshIntervalMs(value: number | null | undefined): number | nu
     return Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(value));
 }
 
-function resolveMachineId(view: BrowserControlViewState | null): string | null {
+export function resolveBrowserDiagnosticsSnapshotMachineId(view: BrowserControlViewState | null): string | null {
     if (view?.target.kind !== 'localServicePreview') {
         return null;
     }
@@ -83,7 +83,7 @@ export function useBrowserDiagnosticsDaemonSnapshot(
 ): void {
     const presented = useLayoutPresentationActive();
     const enabled = (input.enabled ?? true) && presented;
-    const machineId = resolveMachineId(input.view);
+    const machineId = resolveBrowserDiagnosticsSnapshotMachineId(input.view);
     const serverId = normalizeId(input.serverId);
     const refreshIntervalMs = resolveRefreshIntervalMs(input.refreshIntervalMs);
     const viewKey = activeViewKey(input.view, machineId);

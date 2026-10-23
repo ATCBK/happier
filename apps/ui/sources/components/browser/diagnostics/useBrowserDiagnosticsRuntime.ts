@@ -22,9 +22,10 @@ import {
     applyBrowserDiagnosticEvents,
     createBrowserDiagnosticsUiStore,
     selectBrowserDiagnosticsEventCount,
+    resolveBrowserDiagnosticsSnapshotMachineId,
     type BrowserDiagnosticsSnapshotClient,
     type BrowserDiagnosticsUiStore,
-    useBrowserDiagnosticsDaemonSnapshot,
+    type UseBrowserDiagnosticsDaemonSnapshotInput,
 } from '@/sync/domains/browser/diagnostics';
 
 import type { BrowserDiagnosticsEngineBridgeConfig } from '../frame/types';
@@ -96,6 +97,8 @@ export type BrowserDiagnosticsRuntimeProjection = Readonly<{
     state: BrowserDiagnosticsUiStore;
     eventSource?: Pick<StoreApi<BrowserDiagnosticsUiStore>, 'getState' | 'subscribe'>;
     hasRenderableDiagnostics?: boolean;
+    /** The open drawer acquires this source; collectors continue independently while it is closed. */
+    daemonSnapshot?: UseBrowserDiagnosticsDaemonSnapshotInput;
     bridge?: BrowserDiagnosticsEngineBridgeConfig | null;
     interaction?: BrowserDiagnosticsInteractionControls;
     runtimeAdapter?: BrowserRuntimeDiagnosticsAdapter;
@@ -229,14 +232,14 @@ export function useBrowserDiagnosticsRuntime(
         }), true);
     }, [eventSource, input.enabled, valueCapture]);
 
-    useBrowserDiagnosticsDaemonSnapshot({
-        view: input.view,
-        enabled: input.enabled === true,
-        serverId: input.daemonSnapshotServerId,
-        refreshIntervalMs: input.daemonSnapshotRefreshIntervalMs,
-        snapshotClient: input.daemonSnapshotClient,
-        onEvents,
-    });
+    const daemonSnapshot = React.useMemo<UseBrowserDiagnosticsDaemonSnapshotInput | undefined>(() => (
+        input.enabled === true && resolveBrowserDiagnosticsSnapshotMachineId(input.view)
+            ? { view: input.view, enabled: true, serverId: input.daemonSnapshotServerId,
+                refreshIntervalMs: input.daemonSnapshotRefreshIntervalMs,
+                snapshotClient: input.daemonSnapshotClient, onEvents }
+            : undefined
+    ), [input.enabled, input.view, input.daemonSnapshotServerId, input.daemonSnapshotRefreshIntervalMs,
+        input.daemonSnapshotClient, onEvents]);
 
     React.useEffect(() => {
         setInteractionEnabled(false);
@@ -668,9 +671,10 @@ export function useBrowserDiagnosticsRuntime(
         unavailable,
     ]);
 
-    const readAvailability = React.useCallback(() => !!bridge || !!(browserSessionId && viewId
+    const hasDaemonSnapshotSource = daemonSnapshot !== undefined;
+    const readAvailability = React.useCallback(() => hasDaemonSnapshotSource || !!bridge || !!(browserSessionId && viewId
         && selectBrowserDiagnosticsEventCount(eventSource.getState(), { browserSessionId, viewId })),
-    [bridge, browserSessionId, eventSource, viewId]);
+    [hasDaemonSnapshotSource, bridge, browserSessionId, eventSource, viewId]);
     const hasRenderableDiagnostics = React.useSyncExternalStore(eventSource.subscribe, readAvailability, readAvailability);
     return React.useMemo(() => {
         if ((input.enabled !== true && input.automationEnabled !== true) || !input.view) return null;
@@ -678,6 +682,7 @@ export function useBrowserDiagnosticsRuntime(
             get state() { return eventSource.getState(); },
             eventSource,
             hasRenderableDiagnostics,
+            daemonSnapshot,
             bridge,
             interaction,
             ...(bridgeBase && interactionSupported ? { runtimeAdapter: diagnostics } : {}),
@@ -685,6 +690,6 @@ export function useBrowserDiagnosticsRuntime(
             requestGetProperties,
             requestReleaseObjectGroup,
         };
-    }, [input.enabled, input.automationEnabled, input.view, eventSource, hasRenderableDiagnostics, bridge, interaction,
+    }, [input.enabled, input.automationEnabled, input.view, eventSource, hasRenderableDiagnostics, daemonSnapshot, bridge, interaction,
         requestEval, requestGetProperties, requestReleaseObjectGroup, bridgeBase, interactionSupported, diagnostics]);
 }

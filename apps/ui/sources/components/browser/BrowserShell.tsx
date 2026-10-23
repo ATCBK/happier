@@ -858,6 +858,7 @@ export function BrowserShell(props: Readonly<{
                     diagnostics={activeDiagnostics ?? props.supplementalDiagnostics!}
                     state={browserDiagnostics?.eventSource ? undefined : browserDiagnostics?.state}
                     eventSource={browserDiagnostics?.eventSource}
+                    daemonSnapshot={browserDiagnostics?.daemonSnapshot}
                     supplemental={activeDiagnostics ? props.supplementalDiagnostics : null}
                     interaction={browserDiagnostics?.interaction}
                     surfaceHeightPx={chromeDensity.containerHeightPx ?? undefined}

@@ -1149,7 +1149,7 @@ describe('BrowserSurfaceHost', () => {
         expect(screen.findByTestId('browser-surface-supplemental-diagnostics')).toBeNull();
     });
 
-    it('does not mount the injected diagnostics drawer for local-preview web iframes without a supported producer', async () => {
+    it('offers on-demand daemon diagnostics without fabricating an injected iframe bridge', async () => {
         const initialBrowserState = openBrowserTarget(createBrowserViewState(), target, {
             platform: 'web',
             currentUrl: 'https://preview.happier.test/',
@@ -1171,10 +1171,10 @@ describe('BrowserSurfaceHost', () => {
             />,
         );
 
-        // Web local previews do not have a production collector-injection path; the supported
-        // fidelity for this adapter/engine is previewProxy supplemental diagnostics, not a fake
-        // injected drawer that can only render "Unavailable".
-        expect(screen.findByTestId('browser-surface-diagnostics')).toBeNull();
+        const { BrowserShell } = await import('@/components/browser/BrowserShell');
+        expect(screen.findByType(BrowserShell).props.browserDiagnostics?.bridge).toBeNull();
+        expect(screen.findByTestId('browser-surface-diagnostics-container-closed')).not.toBeNull();
+        expect(screen.findByTestId('browser-surface-diagnostics-body')).toBeNull();
     });
 
     it('renders preview-proxy diagnostics in the single diagnostics drawer for local-preview web iframes', async () => {
