@@ -3,13 +3,11 @@ import type { FollowRulePreviewResultV1 } from '@happier-dev/protocol/sessions/f
 import type { SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 
 import { executeSessionFollowAction } from '@/sync/api/session/sessionFollowApi';
-import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { t } from '@/text';
-import { isSessionFollowAccountChangeRelevant } from './sessionFollowAccountChange';
+import { isAccountFollowConfigurationChangeRelevant, isSessionFollowAccountChangeRelevant } from './sessionFollowAccountChange';
+import { useSessionFollowRules, type SessionFollowRulesController } from './useSessionFollowRules';
 
 export type FollowRuleMatchCount = Readonly<
   | { status: 'loading' }
@@ -48,31 +46,30 @@ export function useFollowRuleMatchCounts(
   serverId: string | null,
   receiverSessionId: string,
   rules: readonly Readonly<{ key: string; filter: SessionListFilterV1 }>[],
+  acquired?: SessionFollowRulesController,
 ): Readonly<Record<string, FollowRuleMatchCount>> {
-  const activeScope = useActiveServerAccountScope();
-  const currentScope = rules.length ? selectActiveServerAccountScopeForServer(activeScope, serverId) : null;
-  const { binding } = useServerCredentialAccountScopeBinding(rules.length && !currentScope ? serverId : null);
-  const lifetime = currentScope ? captureActiveServerAccountScopeLifetime() : binding;
-  const accountId = currentScope?.accountId ?? binding?.accountId;
+  const ownRules = useSessionFollowRules(serverId, !acquired && rules.length > 0);
+  const { snapshot, lifetime, accountId } = acquired ?? ownRules;
   const [state, setState] = React.useState<Readonly<{
     key: string;
+    lifetime: typeof lifetime;
     counts: Readonly<Record<string, FollowRuleMatchCount>>;
-  }>>({ key: '', counts: {} });
+  }>>({ key: '', lifetime: null, counts: {} });
   const signature = JSON.stringify([
     serverId,
     receiverSessionId,
-    accountId, binding?.revision,
+    accountId,
     rules.map((rule) => [rule.key, rule.filter]),
   ]);
   const rulesRef = React.useRef(rules);
   rulesRef.current = rules;
   React.useEffect(() => {
-    if (!serverId || !lifetime?.isCurrent() || !rulesRef.current.length) return;
+    if (!serverId || !snapshot || !lifetime?.isCurrent() || !rulesRef.current.length) return;
     const controller = new AbortController();
     const isCurrent = () => !controller.signal.aborted && lifetime.isCurrent();
     const retirement = lifetime.onRetire(() => {
       controller.abort();
-      setState({ key: signature, counts: {} });
+      setState({ key: signature, lifetime, counts: {} });
     });
     let running = false;
     let dirty = false;
@@ -85,19 +82,21 @@ export function useFollowRuleMatchCounts(
           do {
             dirty = false;
             await Promise.all(rulesRef.current.map(async (rule) => {
-              setState(previous => ({ key: signature, counts: {
-                ...(previous.key === signature ? previous.counts : {}),
-                [rule.key]: previous.key === signature && previous.counts[rule.key]?.status === 'ready'
+              setState(previous => ({ key: signature, lifetime, counts: {
+                ...(previous.key === signature && previous.lifetime === lifetime ? previous.counts : {}),
+                [rule.key]: previous.key === signature && previous.lifetime === lifetime && previous.counts[rule.key]?.status === 'ready'
                   ? previous.counts[rule.key] : { status: 'loading' },
               } }));
               let count: FollowRuleMatchCount;
               try {
                 const result = await executeSessionFollowAction('follow.preview', {
                   receiver: { kind: 'session', sessionId: receiverSessionId }, filter: rule.filter,
-                }, serverId, controller.signal, accountId);
+                }, serverId, controller.signal, accountId, undefined, { rules: snapshot });
                 count = result.kind === 'ok' ? { status: 'ready', preview: result.value } : { status: 'unavailable' };
               } catch { count = { status: 'unavailable' }; }
-              if (isCurrent()) setState(previous => ({ key: signature, counts: { ...previous.counts, [rule.key]: count } }));
+              if (isCurrent()) setState(previous => ({ key: signature, lifetime, counts: {
+                ...(previous.key === signature && previous.lifetime === lifetime ? previous.counts : {}), [rule.key]: count,
+              } }));
             }));
           } while (dirty && isCurrent());
         } finally { running = false; }
@@ -105,11 +104,11 @@ export function useFollowRuleMatchCounts(
     };
     const unsubscribe = subscribeHomeAccountChange(event => {
       if (isCurrent() && areServerProfileIdentifiersEquivalent(event.serverId, serverId)
-        && isSessionFollowAccountChangeRelevant(event)) read();
+        && !isAccountFollowConfigurationChangeRelevant(event) && isSessionFollowAccountChangeRelevant(event)) read();
     });
     read();
     return () => { controller.abort(); retirement.dispose(); unsubscribe(); };
     // Equal rule arrays retain their useful read; only scope/definition changes retire it.
-  }, [signature, lifetime]);
-  return lifetime?.isCurrent() && state.key === signature ? state.counts : {};
+  }, [signature, lifetime, snapshot]);
+  return lifetime?.isCurrent() && state.lifetime === lifetime && state.key === signature ? state.counts : {};
 }

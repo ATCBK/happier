@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest';
 import { createMachineFixture, createRootLayoutFeaturesResponse, createSessionFixture,
     createSessionListRenderableSessionFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -163,6 +163,99 @@ it('reads its saved rule filter and Include again result back into the open edit
         expect(screen.findByTestId(`${row}-left-out-undo`)).toBeTruthy();
         expect(errors.mock.calls.filter(args => args.some(value => String(value).includes('getSnapshot')))).toEqual([]);
     } finally { await screen.unmount(); errors.mockRestore(); }
+});
+
+it('acquires one private census for Following rule counts and draft edits, and refreshes real rule changes', async () => {
+    const { normalizeSessionListFilterV1 } = await import('@happier-dev/protocol/sessions/listFilter/sessionListFilterV1');
+    const { SessionFollowRuleV1Schema } = await import('@happier-dev/protocol/sessions/follow/sessionFollowRuleV1');
+    const { DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1 } = await import('@happier-dev/protocol/sessions/follow/accountFollow');
+    const { SessionListQueryV1Schema, SESSION_LIST_PAGE_MAX_LIMIT } = await import('@happier-dev/protocol/sessions/listing/query');
+    const { SessionListQueryResponseV1Schema } = await import('@happier-dev/protocol/sessions/listing/response');
+    const { encodeV2SessionListCursorV1 } = await import('@happier-dev/protocol');
+    const { createPlainSessionByIdResponseFixture, createSessionOwnerViewerFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+    const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+    const home = await network.addHome('https://following-rule-demand.test', 'follow-account');
+    const features = createRootLayoutFeaturesResponse({ features: { sessions: { enabled: true, following: { enabled: true } } } });
+    const filter = normalizeSessionListFilterV1({ show: 'sessions', homeServerIds: [home.id], scope: 'all_accessible',
+        startedBy: ['you', 'agents', 'triggers'] });
+    let rules = ['payments', 'daily'].map(ruleId => SessionFollowRuleV1Schema.parse({ ruleId,
+        receiver: { kind: 'session', sessionId: 'destination' }, version: 1,
+        content: { t: 'plain', v: { v: 1, enabled: true, filter, policy: { preset: 'important' } } } }));
+    const sessions = Array.from({ length: 1_001 }, (_, index) => {
+        const session = createSessionFixture({ id: `member-${index}`, serverId: home.id,
+            metadata: { path: '/payments', host: 'test', projectId: 'payments' } });
+        return { ...createPlainSessionByIdResponseFixture(session).session, viewer: createSessionOwnerViewerFixture(session) };
+    });
+    const offsets = new Map<string, number>();
+    network.setHttpResponder(async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/features') return Response.json(features);
+        if (path === '/v1/account/profile') return Response.json({ id: home.accountId });
+        if (path === '/v2/account/session-follow-preferences') return Response.json(DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1);
+        if (path === '/v2/account/session-follow-rules') return Response.json({ rules });
+        if (path === '/v2/sessions/destination/follows/sessions') return Response.json({ sources: [] });
+        if (path === '/v2/sessions/query') {
+            const query = SessionListQueryV1Schema.parse(JSON.parse(String(init?.body)));
+            const offset = query.cursor ? offsets.get(query.cursor)! : 0;
+            const end = Math.min(offset + (query.limit ?? SESSION_LIST_PAGE_MAX_LIMIT), sessions.length);
+            const nextCursor = end < sessions.length ? encodeV2SessionListCursorV1(String(end)) : null;
+            if (nextCursor) offsets.set(nextCursor, end);
+            return Response.json(SessionListQueryResponseV1Schema.parse({ sessions: sessions.slice(offset, end),
+                hasNext: nextCursor !== null, nextCursor, attentionHasNext: false, attentionNextCursor: null }));
+        }
+        return null;
+    });
+    // Query previews need the actual Sync transport and hydration owner, not
+    // only a seeded Account projection sufficient for Following's exact reads.
+    const connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId: home.accountId,
+        credentials: { token: home.token }, request: network.request });
+    onTestFinished(connection.dispose);
+    await vi.waitFor(() => expect(storage.getState().isDataReady).toBe(true));
+    const censusReads = () => network.httpRequests.filter(request => new URL(request.url).pathname === '/v2/account/session-follow-rules').length;
+    const sourceReads = () => network.httpRequests.filter(request => new URL(request.url).pathname === '/v2/sessions/destination/follows/sessions').length;
+    const row = (ruleId: string) => `session-follow-source-rule:${ruleId}`;
+    const screen = await renderScreen(<SessionFollowSourcesEditor destination={{ id: 'destination' }}
+        serverId={home.id} destinationMachineId={null} />);
+    const count = (ruleId: string) => screen.findAllByTestId(row(ruleId))
+        .find(node => typeof node.props.subtitle === 'string')?.props.subtitle;
+    try {
+        await vi.waitFor(() => {
+            expect(count('payments')).toContain('count=1001');
+            expect(count('daily')).toContain('count=1001');
+        });
+        expect(censusReads()).toBe(1);
+        const sourcesBeforeDetail = sourceReads();
+        await act(async () => publishHomeAccountChange(home.id, ['destination'], { changeKinds: ['session'], sessionListQueryAffects: false }));
+        await vi.waitFor(() => expect(sourceReads()).toBe(sourcesBeforeDetail + 1));
+        await flushHookEffects();
+        expect(censusReads()).toBe(1);
+        await screen.pressByTestIdAsync(row('payments'));
+        await screen.pressByTestIdAsync(`${row('payments')}-filter`);
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('count=1001'));
+        await screen.pressByTestIdAsync('session-list-filter:status:failed');
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('count=0'));
+        expect(censusReads()).toBe(1);
+        await screen.pressByTestIdAsync(`${row('payments')}-filter-back`);
+        rules = rules.map(rule => rule.ruleId === 'daily' ? { ...rule, version: 2,
+            content: { t: 'plain' as const, v: { v: 1 as const, enabled: true,
+                filter: normalizeSessionListFilterV1({ ...filter, statuses: ['failed'] }), policy: { preset: 'important' as const } } } } : rule);
+        await act(async () => publishHomeAccountChange(home.id, ['session-follows'], { changeKinds: ['account'] }));
+        await vi.waitFor(() => expect(count('daily')).toContain('count=0'));
+        expect(count('payments')).toContain('count=1001');
+        expect(censusReads()).toBe(2);
+        rules = rules.map(rule => rule.ruleId === 'payments' ? { ...rule, version: 3,
+            content: { t: 'plain' as const, v: { v: 1 as const, enabled: true,
+                filter: normalizeSessionListFilterV1({ ...filter, statuses: ['failed'] }), policy: { preset: 'important' as const } } } } : rule);
+        await act(async () => publishHomeAccountChange(home.id, ['unrelated-future-entity'], { changeKinds: ['future_follow_projection'] }));
+        await vi.waitFor(() => expect(count('payments')).toContain('count=0'));
+        expect(censusReads()).toBe(3);
+        rules = rules.map(rule => rule.ruleId === 'payments' ? { ...rule, version: 4,
+            content: { t: 'plain' as const, v: { v: 1 as const, enabled: true, filter, policy: { preset: 'important' as const } } } } : rule);
+        await act(async () => publishHomeAccountChange(home.id, ['unqualified-entity']));
+        await vi.waitFor(() => expect(count('payments')).toContain('count=1001'));
+        expect(censusReads()).toBe(4);
+    } finally { await screen.unmount(); }
 });
 
 it('keeps an explicit source-key Retry enabled and dispatches while automatic network work is paused', async () => {

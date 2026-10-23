@@ -377,7 +377,7 @@ import { createReviewCommentsHttpActionExecutor } from '@/sync/domains/reviews/c
 import { createPluginPermissionGrantHttpActionExecutor } from '@/sync/domains/plugins/permissions/api';
 import { createPluginWebhookEndpointHttpActionExecutor } from '@/sync/api/plugins/webhooks/endpointActions';
 import { sessionFollowAction } from '@/sync/api/session/sessionFollowApi';
-import { readSessionFollowRuleCensus } from '@/sync/api/session/sessionFollowRulesApi';
+import { readSessionFollowRuleInputs, type SessionFollowReadInputs } from '@/sync/api/session/sessionFollowRulesApi';
 import { resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
 import { prepareSessionFollowSourceKey } from '@/components/sessions/follow/prepareSessionFollowSourceKey';
 import { sessionReadStateAction } from '@/sync/api/session/sessionReadStateAction';
@@ -772,7 +772,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
   /** Host-page defaults remain outside Action input and personal persisted copies. */
   resolveWidgetAreaPresets?: Parameters<typeof createWidgetAreaActionDepsV1>[1];
   widgetAreaIsCurrent?: () => boolean;
-  }>, accountContext?: LazyActionAccountContext & { settings: Awaited<ReturnType<LazyActionAccountContext['readSettings']>> }): UiProtocolActionExecutor & Readonly<{
+  }>, accountContext?: LazyActionAccountContext & { settings: Awaited<ReturnType<LazyActionAccountContext['readSettings']>> }, followReadInputs?: SessionFollowReadInputs): UiProtocolActionExecutor & Readonly<{
     executeNativeManagedAction(actionId: ManagedMachineActionIdV1, input: unknown, context?: ActionExecutorContext): Promise<ActionExecuteResult>;
     readWidgetMovementAdmission(ref: WidgetInstanceRefV1, surface: WidgetSurfaceRefV1, context: ActionExecutorContext): ReturnType<typeof readWidgetEntityMovementAdmission>;
     readWidgetInputDescriptor(request: Parameters<NonNullable<ReturnType<typeof createWidgetInputActionDepsV1>['readWidgetInputDescriptor']>>[0]): ReturnType<NonNullable<ReturnType<typeof createWidgetInputActionDepsV1>['readWidgetInputDescriptor']>>;
@@ -1477,7 +1477,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           ...(request.v === 2 && request.executionOriginV1.sessionTargetsV1 ? { sessionTargetsV1: request.executionOriginV1.sessionTargetsV1 } : {}),
           signature: origin.externalActionInputSignature, publicKey: source.installationPublicKey })) || stale('credential_changed');
     },
-    sessionFollowPreview: async (args) => sessionFollowAction({ ...args, serverId: args.serverId ?? args.context.serverId, actionId: 'follow.preview' }),
+    sessionFollowPreview: async (args) => sessionFollowAction({ ...args, serverId: args.serverId ?? args.context.serverId, actionId: 'follow.preview' }, followReadInputs),
     readSessionFollowRules: async ({ context, serverId, signal }) => {
       if (!accountContext || !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId)
         || context.expectedAccountId && context.expectedAccountId !== accountContext.accountId
@@ -1485,22 +1485,18 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       try {
         const assertCurrent = () => { throwIfAborted(signal); accountContext.assertCurrent(); };
         assertCurrent();
-        const { encryption } = await accountContext.resolveAccountEncryption();
-        const account = await resolveAccountStorageContext(accountContext.credentials, { encryption, request: accountContext.request, usage: 'identity' });
+        const snapshot = await readSessionFollowRuleInputs(serverId, signal, {
+          expectedAccountId: accountContext.accountId, ...(followReadInputs ? { rules: followReadInputs.rules } : {}),
+        });
         assertCurrent();
-        const rules = await readSessionFollowRuleCensus({ mode: account.mode,
-          material: account.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(accountContext.credentials),
-          request: accountContext.request, assertCurrent, signal });
-        const current = await resolveAccountStorageContext(accountContext.credentials, { encryption, request: accountContext.request, usage: 'fresh-authority' });
-        assertCurrent();
-        return current.mode === account.mode ? { kind: 'complete', rules } : { kind: 'unavailable' };
+        return snapshot.status === 'ready' ? { kind: 'complete', rules: snapshot.rules } : { kind: 'unavailable' };
       } catch {
         throwIfAborted(signal);
         return { kind: 'unavailable' };
       }
     },
     sessionFollowAction: async (args) => {
-      const result = await sessionFollowAction(args);
+      const result = await sessionFollowAction(args, followReadInputs);
       const failed = typeof result === 'object'
         && result !== null
         && 'ok' in result
@@ -4415,7 +4411,8 @@ export type UiActionExecutorContext = ActionExecutorContext & Readonly<{
   /** Destination-owner navigation leaf, consumed only in this invocation. */
   openRoute?: (route: string) => void | Promise<void>;
 }>;
-type DefaultActionExecutor = Omit<UiProtocolActionExecutor, 'execute' | 'prepare'> & Readonly<{
+type DefaultActionExecutor = Omit<UiProtocolActionExecutor, 'execute' | 'prepare' | 'previewSessionTargets'> & Readonly<{
+  previewSessionTargets: (target: SessionTargetSelectorV1, context?: UiActionExecutorContext, readInputs?: SessionFollowReadInputs) => Promise<UiSessionTargetPreview>;
   execute: (actionId: ActionId, input: unknown, context?: UiActionExecutorContext) => ReturnType<ReturnType<typeof createActionExecutor>['execute']>;
   prepare: (actionId: ActionId, input: unknown, context?: UiActionExecutorContext) => ReturnType<ReturnType<typeof createActionExecutor>['prepare']>;
 }>;
@@ -4655,6 +4652,7 @@ export async function withDefaultActionExecuteContext<TResult>(
   work: (executor: ReturnType<typeof buildDefaultActionExecutor>, account: LazyActionAccountContext,
     settings: Awaited<ReturnType<typeof readActionAdmissionSettings>>) => Promise<TResult>,
   executedActionId?: ActionId,
+  followReadInputs?: SessionFollowReadInputs,
 ): Promise<TResult> {
   // A retained host invocation may withdraw its pending approval after its
   // intent signal ends. Its captured Account still owns that final Artifact
@@ -4669,7 +4667,7 @@ export async function withDefaultActionExecuteContext<TResult>(
       const settings = await readActionAdmissionSettings(account);
       account.assertCurrent();
       throwIfAborted(context.signal);
-      const result = await work(buildDefaultActionExecutor({ ...opts, archiveInvocation, ...(context.openRoute ? { openRoute: context.openRoute } : {}) }, { ...account, settings }), account, settings);
+      const result = await work(buildDefaultActionExecutor({ ...opts, archiveInvocation, ...(context.openRoute ? { openRoute: context.openRoute } : {}) }, { ...account, settings }, followReadInputs), account, settings);
       const effectClass = executedActionId ? getActionSpec(executedActionId).sideEffectClass : undefined;
       // Return an effect's actual disposition to its captured invoker. Retirement
       // suppresses Account projection publication, but cannot rewrite an acknowledgement.
@@ -4891,12 +4889,12 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
       ? { ok: false as const, errorCode: 'server_unreachable', error: 'server_unreachable' }
       : null;
   return {
-    previewSessionTargets: async (target, context) => {
+    previewSessionTargets: async (target, context, readInputs) => {
       const serverId = context?.serverId;
       if (!serverId || await apiTokenTransport()) return { coverage: 'unavailable', addresses: [], error: 'session_target_unavailable' };
       try {
         return await withDefaultActionExecuteContext(opts, { ...context, serverId }, (executor, account) =>
-          executor.previewSessionTargets(target, { ...context, serverId, runtimeAccountId: account.accountId }));
+          executor.previewSessionTargets(target, { ...context, serverId, runtimeAccountId: account.accountId }), undefined, readInputs);
       } catch (error) {
         const failure = accountScopeFailure(error);
         return { coverage: 'unavailable', addresses: [], error: failure?.errorCode ?? 'session_target_unavailable' };

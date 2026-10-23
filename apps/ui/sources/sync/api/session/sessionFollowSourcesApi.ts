@@ -4,6 +4,7 @@ import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/se
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
 import { executeSessionFollowAction, type SessionFollowApiResult } from './sessionFollowApi';
+import type { SessionFollowReadInputs } from './sessionFollowRulesApi';
 
 export type SessionFollowSourcesResult<T> = SessionFollowApiResult<T>;
 export type SessionFollowSourcesFailure = Extract<SessionFollowApiResult<never>, { kind: 'failed' }>;
@@ -15,11 +16,12 @@ export function listSessionFollowers(source: SessionAddress, signal?: AbortSigna
     }, source.serverId, signal, expectedAccountId);
 }
 
-export async function listSessionFollowSources(destination: SessionAddress, signal?: AbortSignal, expectedAccountId?: string) {
+export async function listSessionFollowSources(destination: SessionAddress, signal?: AbortSignal, expectedAccountId?: string,
+    readInputs?: SessionFollowReadInputs) {
     const result = await executeSessionFollowAction('follow.list', {
         direction: 'following',
         receiver: { kind: 'session', sessionId: destination.sessionId },
-    }, destination.serverId, signal, expectedAccountId);
+    }, destination.serverId, signal, expectedAccountId, undefined, readInputs);
     return result.kind === 'ok'
         ? { kind: 'ok' as const, value: { sources: result.value.sources, rules: result.value.rules,
             coverage: result.value.coverage,

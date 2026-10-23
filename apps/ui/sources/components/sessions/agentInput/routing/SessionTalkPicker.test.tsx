@@ -139,7 +139,7 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
       || request.path === '/v2/account/session-follow-rules' || request.path === '/v1/account/encryption/currentness');
     let targets: ReturnType<typeof useSessionTalkTargets> | null = null;
     function Matching({ filter }: { filter: SessionListFilterV1 }) {
-      targets = useSessionTalkTargets('api', serverId, { matchingFilter: filter });
+      targets = useSessionTalkTargets('api', serverId, { matchingFilter: filter, selectors: ['matching'] });
       const preview = targets.matching;
       return <SessionTalkMatchingStep serverId={serverId} filter={filter} onFilterChange={() => {}}
         summary={preview.loading ? 'loading' : `${preview.coverage}:${preview.addresses.map(address => address.sessionId).join(',')}`}
@@ -153,6 +153,9 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
       // attributing every preview request to the equal-filter rerender below.
       await vi.waitFor(() => expect(targets && (['manager', 'workers', 'siblings', 'followers', 'following'] as const)
         .every(selector => !targets?.[selector].loading)).toBe(true));
+      const ruleReads = () => homes.requests.filter(request => request.path === '/v2/account/session-follow-rules').length;
+      expect(ruleReads()).toBe(1);
+      expect(homes.requests.filter(request => /\/follows\//.test(request.path))).toHaveLength(0);
       const before = previewReads().length;
       await screen.update(<Matching filter={normalizeSessionListFilterV1({ ...filter })} />);
       expect(previewReads()).toHaveLength(before);
@@ -175,6 +178,7 @@ describe('SessionTalkPicker (composer To: Send · Ask · Post update)', () => {
     const settled = previewReads().length;
     await screen.update(<Matching filter={normalizeSessionListFilterV1({ ...filter })} />);
     expect(previewReads()).toHaveLength(settled);
+    expect(homes.requests.filter(request => request.path === '/v2/account/session-follow-rules')).toHaveLength(1);
   });
 
   it('writes an Ask that returns here when the person picks Siblings, and closes', async () => {

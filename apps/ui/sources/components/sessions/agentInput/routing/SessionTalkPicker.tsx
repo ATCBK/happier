@@ -141,6 +141,7 @@ export function SessionTalkPicker(props: SessionTalkPickerProps) {
   const matchingFilter = step === 'matching' ? draftFilter : chosenFilter;
   const targets = useSessionTalkTargets(props.sessionId, props.serverId, {
     enabled: verb !== 'post_update',
+    ...(step === 'matching' ? { selectors: ['matching'] as const } : step === 'discussion' ? { selectors: ['discussion'] as const } : {}),
     ...(discussionId ? { discussionId } : {}),
     ...(matchingFilter ? { matchingFilter } : {}),
   });

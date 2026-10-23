@@ -424,9 +424,10 @@ describe('SessionFollowSourcesEditor', () => {
         await vi.waitFor(() => expect(screen.findByTestId('session-follow-source-source-a')).not.toBeNull());
         const callsAfterMount = api.list.mock.calls.length;
 
-        publishHomeAccountChange('home-b', ['destination-a']);
-        publishHomeAccountChange('home-a', ['unrelated-session']);
-        await act(async () => { await Promise.resolve(); });
+        await act(async () => {
+            publishHomeAccountChange('home-b', ['destination-a'], { changeKinds: ['session'] });
+            publishHomeAccountChange('home-a', ['unrelated-session'], { changeKinds: ['session'] });
+        });
         expect(api.list).toHaveBeenCalledTimes(callsAfterMount);
 
         currentSources = [];
@@ -846,9 +847,6 @@ describe('SessionFollowSourcesEditor', () => {
         await vi.waitFor(() => expect(findSourceRow(screen, 'rule:rule-1')?.props.subtitle).toBe('sessionCoordinator.make.count'));
         expect(screen.findAllByTestId('session-follow-sources-empty')).toHaveLength(0);
         expect(findSourceRow(screen, 'rule:rule-1')?.props.title).toBe('session.follow.sources.ruleMatching');
-        expect(followAction.execute).toHaveBeenCalledWith('follow.preview',
-            { receiver: { kind: 'session', sessionId: 'destination-a' }, filter }, 'home-a', expect.anything(), 'follow-account');
-
         await openSource(screen, 'rule:rule-1');
         expect(screen.findByTestId('session-follow-source-rule:rule-1-panel')).not.toBeNull();
         await act(async () => { sourcePresetSegment(screen, 'rule:rule-1', 'quiet')?.props.onPress?.(); await Promise.resolve(); });

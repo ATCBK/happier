@@ -224,7 +224,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const rules = following.projection?.rules ?? EMPTY_RULES;
     const projects = useSessionListFilterProjectOptions();
     const ruleCountInputs = React.useMemo(() => rules.map((rule) => ({ key: ruleKey(rule), filter: rule.definition.filter })), [rules]);
-    const ruleCounts = useFollowRuleMatchCounts(enabled ? props.serverId : null, props.destination.id, ruleCountInputs);
+    const ruleCounts = useFollowRuleMatchCounts(enabled ? props.serverId : null, props.destination.id, ruleCountInputs, following.ruleInputs);
     const { loading, refresh } = following;
     const [savingId, setSavingId] = React.useState<string | null>(null);
     const [openSourceId, setOpenSourceId] = React.useState<string | null>(null);
@@ -232,7 +232,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const [ruleFilterDraft, setRuleFilterDraft] = React.useState<Readonly<{ ruleId: string; filter: SessionListFilterV1 }> | null>(null);
     const [ruleReceipt, setRuleReceipt] = React.useState<Readonly<{ ruleId: string; label: string; undo: FollowRuleProjectEditUndo }> | null>(null);
     const draftCountInputs = React.useMemo(() => (ruleFilterDraft ? [{ key: 'draft', filter: ruleFilterDraft.filter }] : []), [ruleFilterDraft]);
-    const draftCount = useFollowRuleMatchCounts(enabled ? props.serverId : null, props.destination.id, draftCountInputs).draft;
+    const draftCount = useFollowRuleMatchCounts(enabled ? props.serverId : null, props.destination.id, draftCountInputs, following.ruleInputs).draft;
     const failed = following.error !== null;
     const [mutation, dispatchMutation] = React.useReducer(
         reduceSourceMutation,

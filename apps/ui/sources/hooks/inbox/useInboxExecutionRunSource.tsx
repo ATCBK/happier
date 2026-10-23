@@ -1,12 +1,12 @@
 import * as React from 'react';
 import type { OtherAccountFollowV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
-import { executeSessionFollowAction } from '@/sync/api/session/sessionFollowApi';
+import { readAccountSessionFollowRelations } from '@/sync/api/session/sessionFollowApi';
 import { useActiveServerAccountScopeLifetime } from '@/sync/store/hooks';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import { isSessionFollowAccountChangeRelevant } from '@/components/sessions/follow/sessionFollowAccountChange';
+import { isAccountFollowConfigurationChangeRelevant } from '@/components/sessions/follow/sessionFollowAccountChange';
 import { readSessionRunningExecutionRuns } from '@/hooks/session/useSessionRunningExecutionRuns';
 import { readRunningExecutionRunRoster, subscribeRunningExecutionRunRoster } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { classifyInboxExecutionRun, type InboxExecutionRun } from '@/components/inbox/inboxItems';
@@ -42,18 +42,16 @@ function useCreateSource(): Source {
                     const follows: RunFollow[] = [];
                     let cursor: string | undefined;
                     do {
-                        const result = await executeSessionFollowAction('follow.list', {
-                            direction: 'following', receiver: { kind: 'account' }, ...(cursor ? { cursor } : {}),
-                        }, lifetime.scope.serverId, controller.signal, lifetime.scope.accountId);
+                        const result = await readAccountSessionFollowRelations(lifetime.scope,
+                            cursor ? { cursor } : undefined, controller.signal);
                         if (controller.signal.aborted || !lifetime.isCurrent()) return;
-                        if (result.kind !== 'ok' || result.value.coverage === 'unavailable') throw new Error('unavailable');
+                        if (result.kind !== 'ok') throw new Error('unavailable');
                         for (const follow of result.value.follows) {
                             if ('source' in follow && follow.source.kind === 'execution_run' && follow.following && follow.persistent) {
                                 follows.push({ ...follow, source: follow.source });
                             }
                         }
                         cursor = result.value.continuation;
-                        if (result.value.coverage === 'partial' && !cursor) throw new Error('incomplete');
                     } while (cursor);
                     setCensus(previous => ({ lifetime,
                         follows: previous?.lifetime === lifetime && JSON.stringify(previous.follows) === JSON.stringify(follows) ? previous.follows : follows,
@@ -66,8 +64,8 @@ function useCreateSource(): Source {
         };
         const unsubscribe = subscribeHomeAccountChange(event => {
             if (lifetime.isCurrent() && areServerProfileIdentifiersEquivalent(event.serverId, lifetime.scope.serverId)
-                && isSessionFollowAccountChangeRelevant(event)) void refresh();
-        }, { includeCatchUpPending: true });
+                && isAccountFollowConfigurationChangeRelevant(event)) void refresh();
+        });
         void refresh();
         return () => { controller.abort(); retirement.dispose(); unsubscribe(); };
     }, [enabled, lifetime]);

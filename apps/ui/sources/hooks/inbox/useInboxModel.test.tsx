@@ -80,7 +80,7 @@ const automationBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const collectionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const discussionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const artifactReadBoundary = vi.hoisted(() => ({ request: vi.fn() }));
-const executionRunBoundary = vi.hoisted(() => ({ list: vi.fn(), follows: vi.fn() }));
+const executionRunBoundary = vi.hoisted(() => ({ list: vi.fn(), follows: vi.fn(), rules: vi.fn() }));
 let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let disposeActionLoader: (() => void) | undefined;
@@ -143,6 +143,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         artifactReadBoundary.request.mockReset().mockResolvedValue(null);
         executionRunBoundary.list.mockReset().mockResolvedValue({ runs: [] });
         executionRunBoundary.follows.mockReset().mockResolvedValue({ follows: [] });
+        executionRunBoundary.rules.mockReset().mockResolvedValue({ rules: [] });
         automationBoundary.request.mockImplementation(async () => new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
         const base = createRootLayoutFeaturesResponse();
         const features = FeaturesResponseSchema.parse({
@@ -170,7 +171,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v2/account/session-follows') return Response.json(
                 ListAccountSessionFollowsResponseV1Schema.parse(await executionRunBoundary.follows()));
-            if (path === '/v2/account/session-follow-rules') return Response.json({ rules: [] });
+            if (path === '/v2/account/session-follow-rules') return Response.json(await executionRunBoundary.rules());
             if (path === '/v2/sessions/run-session') return Response.json({
                 session: createPlainSessionCurrentProjectionRecordFixture({ id: 'run-session', active: true }),
             });
@@ -267,6 +268,12 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(countInbox(model!)).toBe(1);
         expect(summary.current!.count).toBe(1);
         expect(executionRunBoundary.follows).toHaveBeenCalledTimes(1);
+        expect(executionRunBoundary.rules).not.toHaveBeenCalled();
+        await act(async () => {
+            for (let index = 0; index < 1_000; index++) publishHomeAccountChange(serverId, undefined, { source: 'catch-up-pending' });
+        });
+        expect(executionRunBoundary.follows).toHaveBeenCalledTimes(1);
+        expect(executionRunBoundary.rules).not.toHaveBeenCalled();
         const rendersBeforePermission = summaryRenders;
         executionRunBoundary.list.mockResolvedValue({ runs: [{ ...run,
             attention: { kind: 'permission_required', requestIds: ['permission-a'] } }] });
@@ -286,7 +293,8 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         await act(async () => notifyExecutionRunActivity({ serverId, sessionId: 'run-session' }, { runId: run.runId }));
         await vi.waitFor(() => expect(model!.items.filter(item => item.source.kind === 'execution_run')).toHaveLength(1));
         executionRunBoundary.follows.mockResolvedValue({ follows: [] });
-        await act(async () => publishHomeAccountChange(serverId, undefined, { source: 'catch-up-pending' }));
+        const { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } = await import('@happier-dev/protocol/sessions/follow/changes');
+        await act(async () => publishHomeAccountChange(serverId, [ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID], { changeKinds: ['account'] }));
         await vi.waitFor(() => expect(model!.items.filter(item => item.source.kind === 'execution_run')).toEqual([]));
         expect(summary.current!.count).toBe(0);
     });

@@ -33,7 +33,7 @@ import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { randomUUID } from '@/platform/randomUUID';
 import { describeFollowRuleMatchCount, useFollowRuleMatchCounts, type FollowRuleMatchCount } from '@/components/sessions/follow/followRuleMatchCounts';
 import { leaveProjectToFollowRule, undoFollowRuleProjectEdit } from '@/sync/api/session/sessionFollowRuleEdits';
-import { readSessionFollowRules } from '@/sync/api/session/sessionFollowRulesApi';
+import { useSessionFollowRules, type SessionFollowRulesController } from '@/components/sessions/follow/useSessionFollowRules';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { useSession, useSessionDisplayNameProjections, useSetting } from '@/sync/domains/state/storage';
 import { useProjectAccountWorkspaceRefs } from '@/sync/domains/workspaces/projectAccountRows';
@@ -118,23 +118,20 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
                 keep: current.keepFromSetting ? resolveCoordinatorKeepDefault(current.keepPreference, homeWide ? 'home' : 'project') : current.keep };
         });
     }, [preparedDraft]);
-    const [census, setCensus] = React.useState<Census>('loading');
+    const ruleInputs = useSessionFollowRules(serverId, true);
+    const census: Census = ruleInputs.snapshot === null ? (ruleInputs.loading ? 'loading' : null)
+        : ruleInputs.snapshot.status === 'ready' ? { serverId, coverage: 'complete', rules: ruleInputs.snapshot.rules } : null;
     const managedByChosen = React.useRef(false);
     React.useEffect(() => {
-        const controller = new AbortController();
-        void readSessionFollowRules(serverId, controller.signal).then((snapshot) => {
-            if (controller.signal.aborted) return;
-            const next = snapshot.status === 'ready' ? { serverId, coverage: 'complete' as const, rules: snapshot.rules } : null;
-            setCensus(next);
-            if (managedByChosen.current) return;
-            const suggested = buildMakeCoordinatorDraft({ serverId, sessionId, ownerMetadata, workspaceRefs, settings, ruleIds, ruleCensus: next }).managedBySessionId;
-            setDraft((current) => (current.managedBySessionId === suggested ? current : { ...current, managedBySessionId: suggested }));
-        });
-        return () => controller.abort();
-        // One read per open; the settings and project were captured with the draft.
-    }, [serverId]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (!ruleInputs.snapshot || managedByChosen.current) return;
+        const next = ruleInputs.snapshot.status === 'ready'
+            ? { serverId, coverage: 'complete' as const, rules: ruleInputs.snapshot.rules } : null;
+        const suggested = buildMakeCoordinatorDraft({ serverId, sessionId, ownerMetadata, workspaceRefs, settings, ruleIds, ruleCensus: next }).managedBySessionId;
+        setDraft(current => current.managedBySessionId === suggested ? current : { ...current, managedBySessionId: suggested });
+        // Setup choices were captured for this open; only its authoritative rule input changes this suggestion.
+    }, [ruleInputs.snapshot]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const counts = useRulePreviews(serverId, sessionId, draft.rules);
+    const counts = useRulePreviews(serverId, sessionId, draft.rules, ruleInputs);
     const [submitting, setSubmitting] = React.useState(false);
     const [footnote, setFootnote] = React.useState<string | null>(null);
     // The Role step was held back: the committed steps and the draft stay, Retry is the primary action.
@@ -260,7 +257,7 @@ export function MakeCoordinatorDialog(props: MakeCoordinatorDialogProps) {
                     projectLabel={projectLabel}
                     census={census}
                     preview={counts.project}
-                    onEdited={setCensus}
+                    onEdited={() => { void ruleInputs.refresh(); }}
                 />
             ) : null}
             <MachineNote sessionId={sessionId} serverId={serverId} />
@@ -297,10 +294,10 @@ function describeRuleCount(count: RuleCount | undefined): string {
     return describeFollowRuleMatchCount(count, t('session.follow.policy.important'));
 }
 
-/** What a suggestion would match is fixed for the dialog's life; toggling it changes nothing here. */
-function useRulePreviews(serverId: string, sessionId: string, rules: MakeCoordinatorDraft['rules']) {
+/** Toggling a suggestion does not change its filter; live counts share this dialog's private input. */
+function useRulePreviews(serverId: string, sessionId: string, rules: MakeCoordinatorDraft['rules'], acquired: SessionFollowRulesController) {
     const previews = React.useMemo(() => rules.map((rule) => ({ key: rule.scope, filter: rule.suggestion.ruleDefinition.filter })), [rules]);
-    return useFollowRuleMatchCounts(serverId, sessionId, previews) as Partial<Record<RuleScope, RuleCount>>;
+    return useFollowRuleMatchCounts(serverId, sessionId, previews, acquired) as Partial<Record<RuleScope, RuleCount>>;
 }
 
 /** The same Role catalog and marks every role picker reads. */

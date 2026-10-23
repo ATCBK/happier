@@ -3,7 +3,9 @@ import type { ActionSessionAddress } from '@happier-dev/protocol/actions/executo
 import type { SessionTargetSelectorV1 } from '@happier-dev/protocol/actions/sessionTargetV1';
 import type { SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 
-import { isSessionFollowAccountChangeRelevant } from '@/components/sessions/follow/sessionFollowAccountChange';
+import { isAccountFollowConfigurationChangeRelevant, isSessionFollowAccountChangeRelevant } from '@/components/sessions/follow/sessionFollowAccountChange';
+import { useSessionFollowRules } from '@/components/sessions/follow/useSessionFollowRules';
+import type { SessionFollowRulesReadResult } from '@/sync/api/session/sessionFollowRulesApi';
 import { createDefaultActionExecutor, type UiSessionTargetPreview } from '@/sync/ops/actions/defaultActionExecutor';
 import { useServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -23,6 +25,8 @@ export type SessionTalkTargetPreview = Readonly<{
 export type SessionTalkTargetOptions = Readonly<{
     /** The picker/open-intent owner supplies demand; closed controls do no work. */
     enabled?: boolean;
+    /** A sub-step demands only the selectors it presents; the parent retains its rule input. */
+    selectors?: readonly SessionTalkSelector[];
     matchingFilter?: SessionListFilterV1;
     discussionId?: string;
 }>;
@@ -44,8 +48,9 @@ function useSelectorPreview(target: SessionTargetSelectorV1 | null, context: Rea
     sessionId: string;
     resolving: boolean;
     revision: number;
+    rules?: SessionFollowRulesReadResult | null;
 }>): PreviewState {
-    const { enabled, binding, scopeKey, sessionId, resolving, revision } = context;
+    const { enabled, binding, scopeKey, sessionId, resolving, revision, rules } = context;
     // Each selector owns only its own inputs. Editing Matching must neither retire
     // another selector's in-flight read nor discard its last-good preview.
     const targetKey = JSON.stringify(target);
@@ -55,7 +60,7 @@ function useSelectorPreview(target: SessionTargetSelectorV1 | null, context: Rea
     const refreshRef = React.useRef<() => void>(() => {});
     const previousRevision = React.useRef(revision);
     React.useEffect(() => {
-        if (!enabled || !binding?.isCurrent() || !stableTarget) return;
+        if (!enabled || rules === null || !binding?.isCurrent() || !stableTarget) return;
         const abort = new AbortController();
         const isCurrent = () => !abort.signal.aborted && binding.isCurrent();
         const retirement = binding.onRetire(() => {
@@ -91,7 +96,7 @@ function useSelectorPreview(target: SessionTargetSelectorV1 | null, context: Rea
                             publish(await createDefaultActionExecutor().previewSessionTargets(stableTarget, {
                                 surface: 'ui', serverId: binding.serverId, defaultSessionId: sessionId,
                                 expectedAccountId: binding.accountId, signal: abort.signal,
-                            }));
+                            }, rules ? { rules } : undefined));
                         } catch {
                             publish({ coverage: 'unavailable', addresses: [], error: 'session_target_unavailable' });
                         }
@@ -102,7 +107,7 @@ function useSelectorPreview(target: SessionTargetSelectorV1 | null, context: Rea
         refreshRef.current = read;
         read();
         return () => { abort.abort(); retirement.dispose(); refreshRef.current = () => {}; };
-    }, [enabled, binding, key, stableTarget, sessionId]);
+    }, [enabled, binding, key, stableTarget, sessionId, rules]);
     React.useEffect(() => {
         if (previousRevision.current === revision) return;
         previousRevision.current = revision;
@@ -122,6 +127,7 @@ function useSelectorPreview(target: SessionTargetSelectorV1 | null, context: Rea
 export function useSessionTalkTargets(sessionId: string, serverId: string | null, options: SessionTalkTargetOptions = {}): SessionTalkTargets {
     const enabled = options.enabled !== false;
     const { binding, resolution } = useServerCredentialAccountScopeBinding(enabled ? serverId : null);
+    const ruleInputs = useSessionFollowRules(serverId, enabled);
     const targetKey = JSON.stringify([sessionId, options.matchingFilter ?? null, options.discussionId ?? null]);
     const targets = React.useMemo((): Readonly<Record<SessionTalkSelector, SessionTargetSelectorV1 | null>> => {
         const [of, matchingFilter, discussionId] = JSON.parse(targetKey) as [string, SessionListFilterV1 | null, string | null];
@@ -131,26 +137,36 @@ export function useSessionTalkTargets(sessionId: string, serverId: string | null
             discussion: discussionId ? { selector: 'discussion', of, discussionId } : null };
     }, [targetKey]);
     const scopeKey = JSON.stringify([serverId, binding?.accountId, binding?.revision]);
-    const [revision, refresh] = React.useReducer(value => value + 1, 0);
+    const [revision, invalidate] = React.useReducer((value: Readonly<{ all: number; corpus: number }>, configuration: boolean) => ({
+        all: value.all + 1, corpus: value.corpus + (configuration ? 0 : 1),
+    }), { all: 0, corpus: 0 });
+    const refresh = React.useCallback(() => { invalidate(true); void ruleInputs.refresh(); }, [ruleInputs.refresh]);
     React.useEffect(() => {
         if (!enabled || !binding?.isCurrent()) return;
         return subscribeHomeAccountChange(event => {
             if (!binding.isCurrent() || !areServerProfileIdentifiersEquivalent(event.serverId, binding.serverId)) return;
             // Discussion participants have independent membership; all Session
             // and Follow corpus changes use the same relevance owner as rule counts.
-            if (!event.changeKinds?.includes('discussion') && !isSessionFollowAccountChangeRelevant(event)) return;
-            refresh();
+            const configuration = isAccountFollowConfigurationChangeRelevant(event);
+            if (!configuration && !event.changeKinds?.includes('discussion') && !isSessionFollowAccountChangeRelevant(event)) return;
+            invalidate(configuration);
         });
     }, [enabled, binding]);
-    const previewContext = { enabled, binding, scopeKey, sessionId, resolving: resolution.kind === 'resolving', revision };
+    const previewContext = (selector: SessionTalkSelector) => {
+        const usesRules = selector === 'followers' || selector === 'following' || selector === 'matching';
+        return { enabled: enabled && (options.selectors?.includes(selector) ?? true),
+            binding, scopeKey, sessionId, resolving: resolution.kind === 'resolving',
+            revision: usesRules ? revision.corpus : revision.all,
+            ...(usesRules ? { rules: ruleInputs.snapshot } : {}) };
+    };
     const previews = {
-        manager: useSelectorPreview(targets.manager, previewContext),
-        workers: useSelectorPreview(targets.workers, previewContext),
-        siblings: useSelectorPreview(targets.siblings, previewContext),
-        followers: useSelectorPreview(targets.followers, previewContext),
-        following: useSelectorPreview(targets.following, previewContext),
-        matching: useSelectorPreview(targets.matching, previewContext),
-        discussion: useSelectorPreview(targets.discussion, previewContext),
+        manager: useSelectorPreview(targets.manager, previewContext('manager')),
+        workers: useSelectorPreview(targets.workers, previewContext('workers')),
+        siblings: useSelectorPreview(targets.siblings, previewContext('siblings')),
+        followers: useSelectorPreview(targets.followers, previewContext('followers')),
+        following: useSelectorPreview(targets.following, previewContext('following')),
+        matching: useSelectorPreview(targets.matching, previewContext('matching')),
+        discussion: useSelectorPreview(targets.discussion, previewContext('discussion')),
     };
     const addresses = SELECTORS.flatMap(selector => previews[selector].addresses);
     const titles = useSessionDisplayTitles(addresses);
