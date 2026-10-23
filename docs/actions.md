@@ -4324,6 +4324,17 @@ preference cannot relabel running audio; ending or replacing the attempt retires
 that fact. Start distinguishes an exact Home-qualified Session target from
 global mode, and both retain the ordinary configurable human approval policy.
 
+In 0.3 development, the top-bar caption, glance overlay dismissal, setup tile,
+panel Close and Escape enter the existing Voice presentation Actions. Setup Done
+waits for the admitted close result before using the existing Home dismissal
+owner; a refused close cannot hide the setup through dismissal.
+`ui.voice_global.setup.microphone.permission.request` shares the device permission
+owner without starting Voice. It retains the automation approval floor and
+reports observed granted, denied, unavailable or unknown permission explicitly.
+`ui.voice_global.setup.system_settings.open` uses the same native application
+settings owner as setup; web or failed opening returns typed unavailability.
+Neither operation grants remote capture consent or starts an audio conversation.
+
 `session.voice.preference.set` uses the registered `intent.voicePreference`
 owner field. Null restores Account inheritance; a selection changes only a
 provider-declared voice field, never the provider, credentials, model or speed.
