@@ -11,7 +11,8 @@ import {
 } from './collections.js';
 import { requireChannelsAccountStorage } from './requiredAccountStorage.js';
 import { createSupervisorWake } from './supervisorWake.js';
-import { isConversationConnectionPlacedForInvocation } from './reconciliation.js';
+import { hasCurrentConversationExecutionPlacement, isConversationConnectionPlacedForInvocation } from './reconciliation.js';
+import { asChannelStateRow, readConversationConnectionUpdateRow } from './accountLocalBindingPolicy.js';
 import {
   classifySupervisorFailure,
   isInactiveSupervisorCollectionFailure,
@@ -301,15 +302,6 @@ function logOutwardDeliverySupervisorDeliveryOutcome(
   return true;
 }
 
-function isProjectionConnectionCurrent(value: JsonValue, connectionId: string): boolean {
-  if (!isJsonRecord(value)
-    || value[CHANNEL_STATE_FIELD.recordKind] !== CHANNEL_STATE_RECORD_KIND.connection
-    || value[CHANNEL_STATE_FIELD.id] !== connectionId
-    || value[CHANNEL_STATE_FIELD.connectionId] !== connectionId
-    || !isJsonRecord(value.payload)) return false;
-  return value.payload.enabled === true && value.payload.deletionState === 'none';
-}
-
 function defaultAttemptId(): string {
   return `channels:outward-attempt:v1:${globalThis.crypto.randomUUID()}`;
 }
@@ -420,12 +412,10 @@ async function readUnreachableControlSourceIds(input: Readonly<{
 async function readCurrentBindingIds(context: BackgroundServiceContext): Promise<readonly string[]> {
   const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
   const bindingIds: string[] = [];
-  // Connection currentness is a per-connection fact shared by its bindings.
-  // Reading it once per binding cost
-  // repeated serial gets for the same answers, on the wake that also owns
-  // permission-wait redrive. The enumeration is one consistent read anyway: a
-  // connection that changes mid-enumeration is re-read at every effect, which
-  // is where currentness is actually enforced.
+  // Select this runtime's work before expanding a connection into its bindings.
+  // Shared-Account changes can concern another Machine's whole binding set.
+  // This existing pass-local observation is discovery only: every effect still
+  // re-reads its connection and placement at the canonical final check.
   const connectionCurrentness = new Map<string, boolean>();
   let cursor: string | undefined;
   do {
@@ -442,8 +432,13 @@ async function readCurrentBindingIds(context: BackgroundServiceContext): Promise
       if (bindingId === undefined || connectionId === undefined) continue;
       let current = connectionCurrentness.get(connectionId);
       if (current === undefined) {
-        const connection = await collection.get(connectionId, { signal: context.signal });
-        current = connection !== null && isProjectionConnectionCurrent(connection.value, connectionId);
+        const row = asChannelStateRow(await collection.get(connectionId, { signal: context.signal }));
+        if (row === undefined) current = false;
+        else {
+          const connection = readConversationConnectionUpdateRow({ row, connectionId });
+          current = connection.lifecycle.enabled && connection.lifecycle.deletionState === 'none'
+            && await hasCurrentConversationExecutionPlacement(context, connection.transportOrigin);
+        }
         connectionCurrentness.set(connectionId, current);
       }
       if (current) bindingIds.push(bindingId);

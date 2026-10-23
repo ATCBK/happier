@@ -1257,6 +1257,63 @@ describe('Channels outward-delivery supervisor', () => {
     } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
   });
 
+  it('does not fan foreign-placement invalidations into binding reads and parks without changes', async () => {
+    vi.useFakeTimers();
+    const generation = new AbortController();
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await state.put(connectionRow(), { expectedRevision: 'absent' });
+    for (let index = 0; index < 100; index += 1) {
+      const id = `foreign-binding-${index}`;
+      await state.put({ ...bindingRow(), id, 'binding-id': id }, { expectedRevision: 'absent' });
+    }
+    const changes = new Set<() => void>();
+    // Collection observation and Machine placement are host boundaries. The
+    // actual scanner, binding selection, mediation and projection stay real.
+    state.watch = (_query?: unknown, listener?: () => void) => {
+      if (listener) changes.add(listener);
+      return { dispose() { if (listener) changes.delete(listener); } };
+    };
+    const reads = vi.spyOn(state, 'get');
+    const execute = vi.fn(async (action: string) => action === 'session.permission.remote.pending.list'
+      ? emptyPendingPermissionPage()
+      : { ok: true, projection: 'externalShareableV1', sessionId: 'session-1', scannedThroughSeq: 0,
+        nextCursor: '0', hasMore: false, items: [] });
+    let placed = false;
+    const base = backgroundContext({ state, deliveries, execute,
+      executeAdmittedTargetedOperationWithExecutionOrigin: vi.fn() });
+    const context = { ...base, signal: generation.signal, services: { ...base.services,
+      actions: { ...base.services.actions, getCurrentExecutionRouting: async () => placed
+        ? { ...getPluginMachineExecutionRouting(providerTransportOrigin), pluginId: 'happier.channels' }
+        : null } } } satisfies BackgroundServiceContext;
+    const supervisor = createConversationOutwardDeliverySupervisor();
+    const running = supervisor.run(context);
+    const bindingReads = () => reads.mock.calls.filter(([id]) => id.startsWith('foreign-binding-')).length;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(bindingReads()).toBe(0);
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(execute).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reads).toHaveBeenCalledTimes(1);
+
+      for (let index = 0; index < 50; index += 1) for (const changed of changes) changed();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(bindingReads()).toBe(0);
+      expect(reads).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reads).toHaveBeenCalledTimes(2);
+
+      // Real placement recovery still discovers all admitted local work.
+      placed = true;
+      for (const changed of changes) changed();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(bindingReads()).toBeGreaterThan(0);
+      expect(execute).toHaveBeenCalled();
+    } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
+    expect(changes.size).toBe(0);
+  });
+
   it('subscribes before the bound transcript read and wakes on Session changes without a timer', async () => {
     vi.useFakeTimers();
     const generation = new AbortController();
