@@ -45,9 +45,9 @@ describe('GitHub detail route templates', () => {
   });
 
   /**
-   * The rebuild claim this whole paging design rests on: a URL rebuilt from the
-   * template with the advertised page is the exact URL GitHub advertised, which
-   * is what lets only the page NUMBER cross the Action boundary.
+   * Named-route Links rebuild byte for byte. Numeric repository aliases below
+   * identify the same admitted collection; only the page number crosses the
+   * Action boundary in either case.
    */
   it('rebuilds the page GitHub advertised, byte for byte', () => {
     const requested = buildGithubTimelineUrl({
@@ -72,6 +72,22 @@ describe('GitHub detail route templates', () => {
     });
     expect(validateGithubFollowUpPageUrl(requested, requested)).toBeNull();
     expect(validateGithubFollowUpPageUrl(requested.replace('page=2', 'page=1'), requested)).toBeNull();
+  });
+
+  it('accepts the observed numeric repository alias only with matching admitted identity and unchanged resource/query', () => {
+    // PR #657's real API Link uses /repositories/{id}, not the requested /repos/{owner}/{name}.
+    const requested = buildGithubTimelineUrl({ route: ROUTE, entryNumber: '1284', perPage: 50, page: 1 });
+    const advertised = 'https://api.github.com/repositories/4210/issues/1284/timeline?per_page=50&page=2';
+    expect(validateGithubFollowUpPageUrl(advertised, requested, '4210')).toBe(advertised);
+    expect(validateGithubFollowUpPageUrl(advertised, requested)).toBeNull();
+    for (const foreign of [
+      advertised.replace('/4210/', '/4211/'),
+      advertised.replace('/1284/', '/1285/'),
+      advertised.replace('per_page=50', 'per_page=100'),
+      `${advertised}&filter=other`,
+      advertised.replace('api.github.com', 'evil.example.com'),
+      advertised.replace('page=2', 'page=1'),
+    ]) expect(validateGithubFollowUpPageUrl(foreign, requested, '4210')).toBeNull();
   });
 
   it('sizes the changed-file page so the documented ceiling lands on a page boundary', () => {

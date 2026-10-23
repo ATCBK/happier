@@ -41,6 +41,7 @@ import {
   readGithubPullRequestReviewPublicationRecords,
 } from '../reviews.js';
 import type { GithubTriageEntryLocalRefV1 } from '../types.js';
+import { readGithubRepositoryIdFromCollisionScope } from '../identity.js';
 
 import type {
   GithubMergeMethodV1,
@@ -500,12 +501,14 @@ export async function publishGithubPullRequestReview(
       : await readGithubPullRequestReviewPublicationRecords({
         route: input.route,
         number: input.localRef.entryId,
+        repositoryId: readGithubRepositoryIdFromCollisionScope(input.localRef.collisionScope),
       }, dependencies);
     const confirmedComments = entryMarkers.length === 0
       ? Object.freeze({ comments: [], failure: null, incomplete: false })
       : await readGithubPullRequestReviewCommentRecords({
         route: input.route,
         number: input.localRef.entryId,
+        repositoryId: readGithubRepositoryIdFromCollisionScope(input.localRef.collisionScope),
       }, dependencies);
     const publication = validateReviewCommentPublicationResultAgainstPlanV1(
       input.publicationPlan,
@@ -784,6 +787,7 @@ export async function publishGithubPullRequestComment(
       : await readGithubPullRequestReviewCommentRecords({
         route: input.route,
         number: input.localRef.entryId,
+        repositoryId: readGithubRepositoryIdFromCollisionScope(input.localRef.collisionScope),
       }, dependencies);
     const matched = comments.failure === null && !comments.incomplete
       ? matchReviewCommentPublicationMarkerV1(

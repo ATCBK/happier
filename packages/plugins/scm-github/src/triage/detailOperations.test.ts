@@ -291,7 +291,7 @@ describe('GitHub overview plane', () => {
 /* --------------------------------------------------------------------- timeline */
 
 describe('GitHub timeline plane', () => {
-  it('walks pages by minting its own position and never carrying a provider URL', async () => {
+  it.each(['named', 'repository-id'] as const)('walks %s pages by minting its own position and never carrying a provider URL', async (routeKind) => {
     const stub = createStubGithubTransport({
       respond: (request: RecordedGithubRequest): StubHttpResponse | undefined => {
         if (!request.url.includes('/issues/1284/timeline')) return undefined;
@@ -299,7 +299,8 @@ describe('GitHub timeline plane', () => {
         if (page === '1') {
           return jsonResponse(
             [githubTimelineEvent({ id: 1, event: 'labeled', createdAt: '2026-08-01T00:00:00Z', label: 'bug' })],
-            { link: githubFollowUpLinkHeader({ requestedUrl: request.url, nextPage: 2 }) },
+            { link: githubFollowUpLinkHeader({ requestedUrl: routeKind === 'named' ? request.url
+              : request.url.replace(`/repos/${GITHUB_FIXTURE_OWNER}/${GITHUB_FIXTURE_REPOSITORY}/`, '/repositories/4210/'), nextPage: 2 }) },
           );
         }
         return jsonResponse([

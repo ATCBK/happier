@@ -22,7 +22,7 @@ import {
 } from '../errors.js';
 import { readGithubIssue, type GithubIssueFactsV1, type GithubIssueReadV1 } from '../get.js';
 import { buildGithubApiUrl, type GithubRepositoryRouteV1 } from '../locator.js';
-import { buildGithubEntryLocalRef } from '../identity.js';
+import { buildGithubEntryLocalRef, readGithubRepositoryIdFromCollisionScope } from '../identity.js';
 import { decodeGithubIssueBody } from '../mapping/entry.js';
 import { toTriageFailure, toTriageObservation } from '../mapping/protocol.js';
 import {
@@ -418,6 +418,7 @@ export async function publishGithubIssueComment(
     const comments = await readGithubIssueCommentPublicationRecords({
       route: input.route,
       number: input.localRef.entryId,
+      repositoryId: readGithubRepositoryIdFromCollisionScope(input.localRef.collisionScope),
     }, dependencies);
     const matched = comments.failure === null && !comments.incomplete
       ? matchReviewCommentPublicationMarkerV1(

@@ -155,7 +155,7 @@ describe('registered GitHub task writes at the provider HTTP boundary', () => {
     } finally { await plugin.dispose(); }
   });
 
-  it('reads live parent, paged sub-issues and blocked-by identities without inventing missing permissions', async () => {
+  it.each(['named', 'repository-id'] as const)('reads live parent, paged %s sub-issues and blocked-by identities without inventing missing permissions', async (routeKind) => {
     let denied = false;
     const related = (number: number, state = 'open') => ({ ...GITHUB_ISSUE_RESPONSE, number, state, html_url: `https://github.com/${route}/issues/${number}`, repository_url: `https://api.github.com/repos/${route}` });
     const transport = createStubGithubTransport({ respond: (request) => {
@@ -165,7 +165,8 @@ describe('registered GitHub task writes at the provider HTTP boundary', () => {
       if (url.pathname.endsWith('/parent')) return { status: 200, body: related(41) };
       if (url.pathname.endsWith('/sub_issues')) return url.searchParams.get('page') === '2'
         ? { status: 200, body: [related(43, 'closed')] }
-        : { status: 200, body: [related(42)], headers: { link: `<${url.toString()}&page=2>; rel="next"` } };
+        : { status: 200, body: [related(42)], headers: { link: `<${routeKind === 'named' ? url.toString()
+          : url.toString().replace(`/repos/${route}/`, `/repositories/${String(GITHUB_REPOSITORY_RESPONSE.id)}/`)}&page=2>; rel="next"` } };
       if (url.pathname.endsWith('/dependencies/blocked_by')) return { status: 200, body: [related(44)] };
       return undefined;
     } });

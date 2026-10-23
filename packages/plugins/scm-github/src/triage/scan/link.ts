@@ -68,12 +68,14 @@ export function validateGithubSearchNextUrl(
 /**
  * The general follow-up-page rule for GitHub's other paginated collections (check runs,
  * commit statuses, reviews, requested reviewers): the returned URL must be the SAME
- * request with only `page` advanced. Anything else — a different origin, path, page
- * size, or filter — is refused rather than followed.
+ * request with only `page` advanced. GitHub may replace /repos/{owner}/{name}
+ * with /repositories/{id}; only the caller's admitted immutable id proves that
+ * alias. A different origin, resource, page size, or filter is still refused.
  */
 export function validateGithubFollowUpPageUrl(
   candidate: string,
   requestedUrl: string,
+  expectedRepositoryId?: string | null,
 ): string | null {
   let next: URL;
   let requested: URL;
@@ -85,7 +87,11 @@ export function validateGithubFollowUpPageUrl(
   }
   if (next.origin !== GITHUB_API_ORIGIN || next.origin !== requested.origin) return null;
   if (next.username || next.password || next.hash) return null;
-  if (next.pathname !== requested.pathname) return null;
+  if (next.pathname !== requested.pathname) {
+    const resource = /^\/repos\/[^/]+\/[^/]+(\/.*)$/u.exec(requested.pathname)?.[1];
+    if (typeof expectedRepositoryId !== 'string' || !/^[1-9][0-9]*$/u.test(expectedRepositoryId)
+      || resource === undefined || next.pathname !== `/repositories/${expectedRepositoryId}${resource}`) return null;
+  }
 
   const page = Number(next.searchParams.get('page'));
   if (!Number.isSafeInteger(page) || page < 1) return null;
@@ -105,6 +111,7 @@ export function validateGithubFollowUpPageUrl(
 export function readValidatedGithubFollowUpPage(
   headers: Readonly<Record<string, string>>,
   requestedUrl: string,
+  expectedRepositoryId?: string | null,
 ): Readonly<{ kind: 'ended' }> | Readonly<{ kind: 'next'; url: string }>
   | Readonly<{ kind: 'invalid' }> {
   const parsed = parseForgeLinkHeader(readForgeLinkHeaderValue(headers));
@@ -112,7 +119,7 @@ export function readValidatedGithubFollowUpPage(
   if (parsed.kind === 'absent') return Object.freeze({ kind: 'ended' });
   const next = parsed.links.next;
   if (next === undefined) return Object.freeze({ kind: 'ended' });
-  const validated = validateGithubFollowUpPageUrl(next, requestedUrl);
+  const validated = validateGithubFollowUpPageUrl(next, requestedUrl, expectedRepositoryId);
   return validated === null
     ? Object.freeze({ kind: 'invalid' })
     : Object.freeze({ kind: 'next', url: validated });

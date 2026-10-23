@@ -24,7 +24,7 @@ async function readChecks(
   const transport = createStubGithubTransport({ respond });
   const client = await createTestGithubApiClient(transport);
   const surface = await readGithubPullRequestChecks(
-    { route: ROUTE, headSha: HEAD_SHA },
+    { route: ROUTE, headSha: HEAD_SHA, repositoryId: '4210' },
     { client, now: fixedClock(1_000), signal: transport.context.signal },
   );
   return { surface, transport };
@@ -197,7 +197,7 @@ describe('GitHub pull-request checks', () => {
     expect(oneReadFailed.surface.rowState).toEqual({ kind: 'failing', failingCount: 1 });
   });
 
-  it('reads an eleventh check-run page while the provider offers it', async () => {
+  it.each(['named', 'repository-id'] as const)('reads an eleventh %s check-run page while the provider offers it', async (routeKind) => {
     const pages: number[] = [];
     const { surface } = await readChecks((request) => {
       if (!request.url.includes('/check-runs')) return emptyStatus();
@@ -206,7 +206,7 @@ describe('GitHub pull-request checks', () => {
       return {
         status: 200,
         headers: page < 11 ? {
-          link: '<https://api.github.com/repos/octo-org/example-app/commits/'
+          link: `<https://api.github.com/${routeKind === 'named' ? 'repos/octo-org/example-app' : 'repositories/4210'}/commits/`
             + `${HEAD_SHA}/check-runs?filter=all&per_page=100&page=${page + 1}>; rel="next"`,
         } : {},
         body: githubCheckRunsResponse({
@@ -227,7 +227,7 @@ describe('GitHub pull-request checks', () => {
     expect(surface.state).toBe('resolved');
   });
 
-  it('reads an eleventh commit-status page while the provider offers it', async () => {
+  it.each(['named', 'repository-id'] as const)('reads an eleventh %s commit-status page while the provider offers it', async (routeKind) => {
     const { surface } = await readChecks((request) => {
       if (request.url.includes('/check-runs')) {
         return { status: 200, body: githubCheckRunsResponse({ runs: [] }) };
@@ -236,7 +236,7 @@ describe('GitHub pull-request checks', () => {
       return {
         status: 200,
         ...(page < 11 ? { headers: {
-          link: '<https://api.github.com/repos/octo-org/example-app/commits/'
+          link: `<https://api.github.com/${routeKind === 'named' ? 'repos/octo-org/example-app' : 'repositories/4210'}/commits/`
             + `${HEAD_SHA}/status?per_page=100&page=${page + 1}>; rel="next"`,
         } } : {}),
         body: githubCombinedStatusResponse({

@@ -271,6 +271,7 @@ export async function listGithubTimeline(
 
   const page = await readGithubTimelinePage({
     route: admitted.route,
+    repositoryId: admitted.repository.repositoryId,
     entryNumber: admitted.entryNumber,
     perPage: request.limit,
     page: position.page,
@@ -594,6 +595,7 @@ export async function readGithubChecks(
   const read = await readGithubChecksSurface({
     route: admitted.route,
     entryNumber: admitted.entryNumber,
+    repositoryId: admitted.repository.repositoryId,
   }, { client: admitted.client, now: Date.now, signal: admitted.signal });
   if (!read.ok) return unavailable(toTriageFailure(read.failure));
 
@@ -659,7 +661,7 @@ export async function readGithubPullRequestStatus(
   };
   const [surface, reviews, requests] = await Promise.all([
     read.facts.headRevision === null ? null : readGithubPullRequestChecks({
-      route: admitted.route, headSha: read.facts.headRevision,
+      route: admitted.route, headSha: read.facts.headRevision, repositoryId,
     }, dependencies),
     readGithubFeedbackConnection({ ...feedbackInput, connection: 'reviews' }, dependencies),
     readGithubFeedbackConnection({ ...feedbackInput, connection: 'requests' }, dependencies),

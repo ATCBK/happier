@@ -44,9 +44,9 @@ import {
  * `Link` is the only next-page proof accepted, and it is accepted only after
  * `scan/link.ts` proves the advertised URL is the SAME request with only `page`
  * advanced. What crosses back out is that page NUMBER, so the following request
- * is rebuilt from this source's own route template — a URL provably identical to
- * the one GitHub advertised, without a provider-controlled URL ever reaching a
- * panel.
+ * is rebuilt from this source's own route template — the same collection (also
+ * when GitHub advertises its admitted /repositories/{id} alias), without a
+ * provider-controlled URL ever reaching a panel.
  *
  * Three walk outcomes are kept distinct because they are three different
  * answers, and the panels render them differently:
@@ -128,10 +128,11 @@ function verifyNextPage(
   response: GithubApiResponseV1,
   requestedUrl: string,
   requestedPage: number,
+  repositoryId?: string,
 ): Readonly<{ kind: 'ended' }>
   | Readonly<{ kind: 'next'; page: number }>
   | Readonly<{ kind: 'unusable' }> {
-  const next = readValidatedGithubFollowUpPage(response.headers, requestedUrl);
+  const next = readValidatedGithubFollowUpPage(response.headers, requestedUrl, repositoryId);
   if (next.kind === 'ended') return Object.freeze({ kind: 'ended' as const });
   if (next.kind === 'invalid') return Object.freeze({ kind: 'unusable' as const });
   const page = readGithubValidatedPageNumber(next.url);
@@ -140,13 +141,14 @@ function verifyNextPage(
     : Object.freeze({ kind: 'next' as const, page });
 }
 
-type PagedReadInput = GithubDetailPageRequestV1;
+type PagedReadInput = GithubDetailPageRequestV1 & Readonly<{ repositoryId?: string }>;
 
 async function readPagedCollection<TRow>(
   dependencies: GithubDetailReadDependenciesV1,
   input: Readonly<{
     url: string;
     page: number;
+    repositoryId?: string;
     project: (body: unknown) => GithubPageProjectionV1<TRow>;
     /**
      * Stated only by the changed-file walk, which has a documented provider
@@ -170,7 +172,7 @@ async function readPagedCollection<TRow>(
   if (!Array.isArray(decoded.body)) return failed(RESPONSE_SHAPE_INVALID);
 
   const projected = input.project(decoded.body);
-  const next = verifyNextPage(response, input.url, input.page);
+  const next = verifyNextPage(response, input.url, input.page, input.repositoryId);
   const hasNext = next.kind === 'next';
   // The walk stops here when another page would begin past the documented
   // maximum, and it SAYS the collection is capped when either the rows this
@@ -209,6 +211,7 @@ export async function readGithubTimelinePage(
   return readPagedCollection(dependencies, {
     url,
     page: input.page,
+    ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
     project: (body) => projectGithubTimelineRows(body, GITHUB_DETAIL_BOUNDS_V1),
   });
 }
@@ -322,6 +325,7 @@ export async function readGithubChecksSurface(
   input: Readonly<{
     route: GithubRepositoryRouteV1;
     entryNumber: string;
+    repositoryId?: string;
   }>,
   dependencies: GithubDetailReadDependenciesV1 & Readonly<{ signal: AbortSignal }>,
 ): Promise<GithubDetailReadResultV1<GithubChecksReadV1>> {
@@ -342,7 +346,8 @@ export async function readGithubChecksSurface(
   if (!decoded.ok) return failed(decoded.failure);
 
   const view = decodeGithubPullRequestBody(decoded.body);
-  if (view === null || view.number !== input.entryNumber) {
+  if (view === null || view.number !== input.entryNumber
+    || (input.repositoryId !== undefined && view.repositoryId !== input.repositoryId)) {
     return failed(RESPONSE_SHAPE_INVALID);
   }
   const headRevision = view.nativeRevision;
@@ -353,7 +358,9 @@ export async function readGithubChecksSurface(
     return failed(HEAD_REVISION_UNREADABLE);
   }
 
-  const surface = await readGithubPullRequestChecks({ route: input.route, headSha: headRevision }, {
+  const surface = await readGithubPullRequestChecks({ route: input.route, headSha: headRevision,
+    repositoryId: input.repositoryId ?? view.repositoryId,
+  }, {
     client: dependencies.client,
     now: dependencies.now,
     signal: dependencies.signal,

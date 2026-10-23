@@ -48,6 +48,7 @@ async function readPaginated<T, TPageRow = unknown>(
   dependencies: GithubReviewsDependenciesV1,
   input: Readonly<{
     initialUrl: string;
+    repositoryId?: string | null;
     readPage: (body: unknown) => readonly TPageRow[] | null;
     decodeRow: (raw: TPageRow) => T | null;
   }>,
@@ -122,7 +123,7 @@ async function readPaginated<T, TPageRow = unknown>(
       if (decoded !== null) rows.push(decoded);
     }
 
-    const next = readValidatedGithubFollowUpPage(response.headers, requestedUrl);
+    const next = readValidatedGithubFollowUpPage(response.headers, requestedUrl, input.repositoryId);
     if (next.kind === 'next') {
       url = next.url;
     } else if (next.kind === 'invalid') {
@@ -183,7 +184,7 @@ function decodeGithubPullRequestReviewCommentRecord(
  * review state the richer reviewer-detail decoder does not yet understand.
  */
 export async function readGithubPullRequestReviewPublicationRecords(
-  input: Readonly<{ route: GithubRepositoryRouteV1; number: string }>,
+  input: Readonly<{ route: GithubRepositoryRouteV1; number: string; repositoryId?: string | null }>,
   dependencies: GithubReviewsDependenciesV1,
 ): Promise<Readonly<{
   reviews: readonly GithubPullRequestReviewPublicationRecordV1[];
@@ -195,6 +196,7 @@ export async function readGithubPullRequestReviewPublicationRecords(
   ]);
   const read = await readPaginated<GithubPullRequestReviewPublicationRecordV1>(dependencies, {
     initialUrl: `${base}/reviews?per_page=${GITHUB_MAX_PAGE_SIZE_V1}`,
+    repositoryId: input.repositoryId ?? null,
     decodeRow: decodeGithubPullRequestReviewPublicationRecord,
     readPage: (body) => (Array.isArray(body) ? Object.freeze([...body]) : null),
   });
@@ -207,7 +209,7 @@ export async function readGithubPullRequestReviewPublicationRecords(
 
 /** Canonical full walk used only for exact publication-marker reconciliation. */
 export async function readGithubPullRequestReviewCommentRecords(
-  input: Readonly<{ route: GithubRepositoryRouteV1; number: string }>,
+  input: Readonly<{ route: GithubRepositoryRouteV1; number: string; repositoryId?: string | null }>,
   dependencies: GithubReviewsDependenciesV1,
 ): Promise<Readonly<{
   comments: readonly GithubPullRequestReviewCommentRecordV1[];
@@ -224,6 +226,7 @@ export async function readGithubPullRequestReviewCommentRecords(
   ]);
   const read = await readPaginated<GithubPullRequestReviewCommentRecordV1>(dependencies, {
     initialUrl: `${base}?per_page=${GITHUB_MAX_PAGE_SIZE_V1}`,
+    repositoryId: input.repositoryId ?? null,
     decodeRow: decodeGithubPullRequestReviewCommentRecord,
     readPage: (body) => (Array.isArray(body) ? Object.freeze([...body]) : null),
   });
@@ -236,7 +239,7 @@ export async function readGithubPullRequestReviewCommentRecords(
 
 /** Canonical full issue-conversation walk for exact publication markers. */
 export async function readGithubIssueCommentPublicationRecords(
-  input: Readonly<{ route: GithubRepositoryRouteV1; number: string }>,
+  input: Readonly<{ route: GithubRepositoryRouteV1; number: string; repositoryId?: string | null }>,
   dependencies: GithubReviewsDependenciesV1,
 ): Promise<Readonly<{
   comments: readonly GithubPullRequestReviewCommentRecordV1[];
@@ -248,6 +251,7 @@ export async function readGithubIssueCommentPublicationRecords(
   ]);
   const read = await readPaginated<GithubPullRequestReviewCommentRecordV1>(dependencies, {
     initialUrl: `${base}?per_page=${GITHUB_MAX_PAGE_SIZE_V1}`,
+    repositoryId: input.repositoryId ?? null,
     decodeRow: decodeGithubPullRequestReviewCommentRecord,
     readPage: (body) => (Array.isArray(body) ? Object.freeze([...body]) : null),
   });

@@ -175,6 +175,7 @@ async function readPaginatedCollection(
   dependencies: GithubChecksDependenciesV1,
   input: Readonly<{
     initialUrl: string;
+    repositoryId?: string | null;
     readPage: (body: unknown) => Readonly<{
       rows: readonly unknown[];
       totalCount: number | null;
@@ -238,7 +239,7 @@ async function readPaginatedCollection(
       else omittedRows += 1;
     }
 
-    const next = readValidatedGithubFollowUpPage(response.headers, requestedUrl);
+    const next = readValidatedGithubFollowUpPage(response.headers, requestedUrl, input.repositoryId);
     if (next.kind === 'next') {
       url = next.url;
     } else if (next.kind === 'invalid') {
@@ -255,7 +256,7 @@ async function readPaginatedCollection(
 }
 
 export async function readGithubPullRequestChecks(
-  input: Readonly<{ route: GithubRepositoryRouteV1; headSha: string;
+  input: Readonly<{ route: GithubRepositoryRouteV1; headSha: string; repositoryId?: string | null;
     observation?: Readonly<{ pullRequestNumber: number; selection: 'all' | 'required' }>;
   }>,
   dependencies: GithubChecksDependenciesV1,
@@ -280,6 +281,7 @@ export async function readGithubPullRequestChecks(
 
   const checkRuns = await readPaginatedCollection(dependencies, {
     initialUrl: checkRunsUrl,
+    repositoryId: input.repositoryId ?? null,
     decodeRow: decodeCheckRun,
     readPage: (body) => {
       if (!isRecord(body) || !Array.isArray(body.check_runs)) return null;
@@ -296,6 +298,7 @@ export async function readGithubPullRequestChecks(
   });
   const commitStatuses = await readPaginatedCollection(dependencies, {
     initialUrl: statusUrl,
+    repositoryId: input.repositoryId ?? null,
     decodeRow: decodeCommitStatus,
     readPage: (body) => {
       if (!isRecord(body) || !Array.isArray(body.statuses)) return null;

@@ -5,7 +5,7 @@ import { GITHUB_PLUGIN_ID } from '../observations/githubProviderContracts.js';
 import { GITHUB_TRIAGE_CONTRIBUTION_LOCAL_ID_V1 } from './contribution.js';
 import { isGithubSuccessStatus } from './errors.js';
 import type { GithubGetDependenciesV1 } from './get.js';
-import { buildGithubEntryLocalRef } from './identity.js';
+import { buildGithubEntryLocalRef, readGithubRepositoryIdFromCollisionScope } from './identity.js';
 import { buildGithubApiUrl, type GithubRepositoryRouteV1 } from './locator.js';
 import { decodeGithubIssueBody } from './mapping/entry.js';
 import type { GithubRepositoryReaderV1 } from './repositories.js';
@@ -66,7 +66,8 @@ export async function readGithubIssueRelations(
         entries.push(entryRef);
         if (typeof body === 'object' && body !== null && 'state' in body && body.state === 'closed') completed += 1;
       }
-      const next = readValidatedGithubFollowUpPage(page.response.headers, url);
+      const next = readValidatedGithubFollowUpPage(page.response.headers, url,
+        readGithubRepositoryIdFromCollisionScope(localRef.collisionScope));
       if (next.kind === 'invalid') return null;
       if (next.kind === 'ended') return { entries, completed };
       url = next.url;
