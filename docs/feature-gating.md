@@ -128,8 +128,12 @@ Its server value is produced by `resolveSessionAgentSwitchingFeature`
 opt-out. The registry is resolved at process start, so changing it needs a server restart.
 
 Default-on and `fail_closed` are orthogonal and both correct: a server that answers advertises
-`true`, while a missing or malformed bit resolves to the client's disabled default. `sessions.folders`
-is the same combination and is the shape to copy.
+`true`, while a missing or malformed bit resolves to the client's disabled default.
+
+In 0.3 development, Account section operations share the incumbent `sessions`
+availability boundary. The retained `sessions.folders` reply bit mirrors that
+final availability for older clients; it has no independent operator setting,
+local opt-in or feature decision. New section consumers use `sessions` directly.
 
 ### Workflows feature id
 
