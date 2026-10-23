@@ -158,7 +158,7 @@ describe('registered Channels Account read Actions', () => {
         custody: { state: 'outcomeUnknown', attemptCount: 1, providerMessageIds: [] } });
       expect(updated.kind).toBe('updated');
       const attention = await kit.invokeAction('delivery/attention-v1', { connectionId: 'connection-1', limit: 1 }, { surface: 'agent' });
-      expect(attention).toMatchObject({ rows: [{ custodyId, bindingId: 'binding-1', revision: 2, state: 'outcomeUnknown', acceptedPartCount: 0 }] });
+      expect(attention).toMatchObject({ rows: [{ custodyId, bindingId: 'binding-1', revision: 2, createdAt: expect.any(Number), state: 'outcomeUnknown', acceptedPartCount: 0 }] });
       const unknown = await kit.invokeAction('delivery/read-v1', { custodyId }, { surface: 'agent' });
       expect(unknown).toMatchObject({ kind: 'ready', delivery: { revision: 2, lastOutcome: 'unknown', projection: { attention: true } } });
       expect(unknown).toMatchObject({ kind: 'ready', delivery: { recommendedRecovery: {

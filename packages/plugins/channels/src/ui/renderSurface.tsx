@@ -1494,8 +1494,9 @@ function historyGapReasonDescription(reason: ConnectionHistoryGapReason, t: Tran
   );
 }
 
-function formatHistoryGapReportedAt(reportedAt: number, t: Translate): string {
-  const date = new Date(reportedAt);
+/** A moment a person reads back (a reported gap, when a delivery was queued): date and time. */
+function formatEventTime(atMs: number, t: Translate): string {
+  const date = new Date(atMs);
   if (!Number.isFinite(date.getTime())) {
     return t('plugins.channels.surface.historyGapUnknownReportedAt', 'at an unknown time');
   }
@@ -1516,7 +1517,7 @@ function historyGapDescription(
   return `${historyGapReasonDescription(historyGap.reason, t)} ${t(
     'plugins.channels.surface.historyGapReportedAt',
     'Reported',
-  )} ${formatHistoryGapReportedAt(historyGap.reportedAt, t)}.`;
+  )} ${formatEventTime(historyGap.reportedAt, t)}.`;
 }
 
 function providerReadinessDescription(
@@ -12028,9 +12029,7 @@ function deliveryDecisionGroups(
     }
     const binding = bindingById.get(bindingId);
     return binding === undefined
-      ? t('plugins.channels.surface.deliveryResolutionGroupUnlistedConversation', 'Conversation {id}', {
-        id: shortRowIdentity(bindingId),
-      })
+      ? t('plugins.channels.surface.deliveryResolutionGroupUnlisted', 'A conversation not listed here')
       : bindingEndpointLabel(binding, t);
   };
   const groups = [...rowsByBinding.entries()].map(([bindingId, groupRows]) => ({
@@ -12194,6 +12193,7 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
   if (!hasAmbiguousDelivery) return null;
 
   const rows = deliveryRows.rows ?? [];
+  const singleDecisionKind = rows.length > 0 && new Set(rows.map((row) => row.state)).size === 1;
   const loading = deliveryRows.resource.pending !== 'idle';
   const initialLoading = deliveryRows.rows === undefined && loading;
   const canLoadMore = deliveryRows.nextCursor !== undefined;
@@ -12201,11 +12201,12 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
     'plugins.channels.surface.deliveryResolutionUnknownDescription',
     'The decision may already be saved. Refresh delivery details before making another choice.',
   );
-  // The privacy-safe delivery projection carries no endpoint or content label,
-  // so each row's controls are named by the delivery's short custody identity;
-  // two ambiguous deliveries otherwise present identical button names.
-  const deliveryRowName = (custodyId: string): string =>
-    `${props.t('plugins.channels.surface.deliveryResolutionTitle', 'Resolve delivery outcome')} — ${shortRowIdentity(custodyId)}`;
+  // The privacy-safe projection carries no content: inside its conversation's group a delivery is named by
+  // when it was queued, which is also what tells two rows' identical buttons apart.
+  const deliveryRowName = (row: ConversationOutwardDeliveryResolutionRow): string =>
+    props.t('plugins.channels.surface.deliveryResolutionRowName', 'Delivery sent {time}', {
+      time: formatEventTime(row.createdAt, props.t),
+    });
   return (
     <Stack testID="channels-delivery-resolution-controls" gap="small">
       <Heading
@@ -12247,6 +12248,11 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
         />
       ) : null}
 
+      {/* When every delivery needs the same decision, the count and its cause are said once here
+          instead of under each conversation. */}
+      {singleDecisionKind ? (
+        <Text tone="secondary" value={deliveryDecisionGroupSummary(rows, props.t)} />
+      ) : null}
       {deliveryDecisionGroups(rows, props.bindings, props.t).map((group) => {
         // A conversation whose deliveries need one kind of decision says it once in its summary;
         // only a mixed group names each row's decision.
@@ -12256,7 +12262,7 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
             key={group.bindingId ?? 'connection'}
             testID={`channels-delivery-resolution-group-${group.bindingId ?? 'connection'}`}
             title={group.title}
-            description={deliveryDecisionGroupSummary(group.rows, props.t)}
+            {...(singleDecisionKind ? {} : { description: deliveryDecisionGroupSummary(group.rows, props.t) })}
           >
             {group.rows.map((row, index) => {
               const busy = action.execution.status === 'pending' && activeCustodyId === row.custodyId;
@@ -12283,14 +12289,9 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
                 <CountedDisclosureItem
                   key={row.custodyId}
                   testID={`channels-delivery-resolution-${row.custodyId}`}
-                  // The privacy-safe projection carries no content or endpoint label: a delivery is
-                  // named by its short custody identity and the revision a decision applies to.
-                  title={`${props.t('plugins.channels.surface.deliveryResolutionRevision', 'Delivery')} ${props.t(
-                    'plugins.channels.surface.deliveryResolutionRevisionValue', '{id} · revision {revision}', {
-                      id: shortRowIdentity(row.custodyId),
-                      revision: row.revision,
-                    },
-                  )}`}
+                  title={props.t('plugins.channels.surface.deliveryResolutionSentAt', 'Sent {time}', {
+                    time: formatEventTime(row.createdAt, props.t),
+                  })}
                   {...(facts === '' ? {} : { subtitle: facts })}
                   showDivider={index > 0}
                 >
@@ -12308,7 +12309,7 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
                           accessibilityLabel={`${props.t(
                             'plugins.channels.surface.deliveryResolutionRetryAfterUnarchive',
                             'Unarchived it — send again',
-                          )} (${deliveryRowName(row.custodyId)})`}
+                          )} (${deliveryRowName(row)})`}
                           busy={busy}
                           disabled={actionUnavailable}
                           onPress={() => resolve(row, 'retryAfterUnarchive')}
@@ -12346,7 +12347,7 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
                             accessibilityLabel={`${props.t(
                               'plugins.channels.surface.deliveryResolutionAccept',
                               'Accept as sent',
-                            )} (${deliveryRowName(row.custodyId)})`}
+                            )} (${deliveryRowName(row)})`}
                             busy={busy}
                             disabled={actionUnavailable
                               || (row.createdThreadEndpointRequired !== undefined
@@ -12362,7 +12363,7 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
                             accessibilityLabel={`${props.t(
                               'plugins.channels.surface.deliveryResolutionDiscard',
                               'Discard delivery',
-                            )} (${deliveryRowName(row.custodyId)})`}
+                            )} (${deliveryRowName(row)})`}
                             busy={busy}
                             disabled={actionUnavailable}
                             onPress={() => resolve(row, 'discarded')}

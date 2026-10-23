@@ -402,6 +402,8 @@ export type ConversationOutwardDeliveryResolutionRow = Readonly<{
   custodyId: string;
   bindingId?: string;
   revision: number;
+  /** When the delivery was queued: with its conversation, how a person tells one undecided delivery from another. */
+  createdAt: number;
   state: 'partial' | 'outcomeUnknown' | 'archiveRecoverable';
   /**
    * How many native parts the provider already accepted before the ambiguity. Only the count: the
@@ -1055,6 +1057,7 @@ export async function readConversationOutwardDeliveryResolutionPage(input: Reado
       custodyId: record.custodyId,
       ...(record.obligation.bindingId === undefined ? {} : { bindingId: record.obligation.bindingId }),
       revision: record.revision,
+      createdAt: record.createdAt,
       state,
       acceptedPartCount: record.custody.providerMessageIds.length,
       ...(record.custody.failedChunk === undefined ? {} : { failedChunk: record.custody.failedChunk }),

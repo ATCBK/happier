@@ -102,7 +102,7 @@ export const ConversationIngressAttentionResultV1Schema = defineProtocolObject({
 ])), nextCursor }, closed);
 const createdThreadEndpointRequired = defineProtocolObject({ parentId: text }, closed).optional();
 export const ConversationDeliveryAttentionResultV1Schema = defineProtocolObject({ rows: defineProtocolArray(defineProtocolObject({
-    custodyId, bindingId: ConversationBindingIdV1Schema.optional(), revision, state: values(['partial', 'outcomeUnknown', 'archiveRecoverable']),
+    custodyId, bindingId: ConversationBindingIdV1Schema.optional(), revision, createdAt: integer, state: values(['partial', 'outcomeUnknown', 'archiveRecoverable']),
     acceptedPartCount: integer, failedChunk: integer.optional(), createdThreadEndpointRequired, recommendedRecovery,
 }, closed)), nextCursor }, closed);
 export const CONVERSATION_DELIVERY_CUSTODY_STATES_V1 = [

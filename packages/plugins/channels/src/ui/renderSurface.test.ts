@@ -9933,7 +9933,10 @@ describe('Channels collapsed row identity', () => {
       // One connection carries three deliveries: each conversation is its own named group holding
       // only its deliveries, and the delivery outside any linked conversation stays connection-level.
       expect(group('binding-1')?.textContent).toContain('Example conversation');
-      expect(group('binding-1')?.textContent).toContain('1 delivery with an unknown outcome');
+      // Every delivery needs the same decision, so its count is said once above the conversations.
+      expect(document.querySelector('[data-testid="channels-delivery-resolution-controls"]')?.textContent)
+        .toContain('3 deliveries with an unknown outcome');
+      expect(group('binding-1')?.textContent).not.toContain('delivery with an unknown outcome');
       expect(rowIn('binding-1', exampleCustodyId)).not.toBeNull();
       expect(rowIn('binding-1', morgesCustodyId)).toBeNull();
       expect(rowIn('binding-2', morgesCustodyId)).not.toBeNull();
@@ -9954,18 +9957,22 @@ describe('Channels collapsed row identity', () => {
     }
   });
 
-  it('names each ambiguous delivery decision by its short custody identity offline', async () => {
+  it('names each ambiguous delivery decision by when it was sent, never by an internal id', async () => {
     const account = createOfflineChannelStateFixture();
     const first = offlineAmbiguousDeliveryRow();
     const secondCustodyId = 'd'.repeat(43);
+    const secondCreatedAt = 7_200_000;
     const second = {
       ...offlineAmbiguousDeliveryRow(),
       rowId: secondCustodyId,
       value: {
         ...offlineAmbiguousDeliveryRow().value,
         id: secondCustodyId,
+        'created-at': secondCreatedAt,
       },
     };
+    const sentAt = (atMs: number) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      .format(new Date(atMs));
     account.deliveries.rows.set(first.rowId, first);
     account.deliveries.rows.set(second.rowId, second);
     const fixture = await createPluginUiTestkit({
@@ -9984,8 +9991,8 @@ describe('Channels collapsed row identity', () => {
       // Undecided deliveries of one kind are one group: its count leads, its cause is said once,
       // and each delivery is one folded row instead of a repeated block.
       await vi.waitFor(() => {
-        const group = document.querySelector('[data-testid="channels-delivery-resolution-group-binding-1"]');
-        expect(group?.textContent).toContain('2 deliveries with an unknown outcome');
+        const controls = document.querySelector('[data-testid="channels-delivery-resolution-controls"]');
+        expect(controls?.textContent).toContain('2 deliveries with an unknown outcome');
       });
       expect(document.querySelectorAll('[data-testid^="channels-delivery-resolution-accept-"]').length).toBe(0);
       await openDeliveryDecision('c'.repeat(43));
@@ -9993,16 +10000,16 @@ describe('Channels collapsed row identity', () => {
       await vi.waitFor(() => {
         expect(document.querySelectorAll('[data-testid^="channels-delivery-resolution-accept-"]').length).toBe(2);
       });
-      // The privacy-safe delivery projection carries no endpoint label, so the
-      // two rows' identical buttons are distinguished by their short custody
-      // identities in the accessible names.
-      const firstName = 'Accept as sent (Resolve delivery outcome — cccccccc)';
-      const secondName = 'Accept as sent (Resolve delivery outcome — dddddddd)';
-      await expect(fixture.getByRole('button', { name: firstName })).resolves.toBeDefined();
-      await expect(fixture.getByRole('button', { name: secondName })).resolves.toBeDefined();
+      // The privacy-safe projection carries no content: each delivery is named by when it was sent, which
+      // also tells the two rows' identical buttons apart. No custody id or revision reaches the reader.
+      await expect(fixture.getByRole('button', { name: `Accept as sent (Delivery sent ${sentAt(1_000)})` })).resolves.toBeDefined();
+      await expect(fixture.getByRole('button', { name: `Accept as sent (Delivery sent ${sentAt(secondCreatedAt)})` })).resolves.toBeDefined();
       await expect(fixture.getByRole('button', {
-        name: `Discard delivery (Resolve delivery outcome — dddddddd)`,
+        name: `Discard delivery (Delivery sent ${sentAt(secondCreatedAt)})`,
       })).resolves.toBeDefined();
+      expect(document.body.textContent).toContain(`Sent ${sentAt(secondCreatedAt)}`);
+      expect(document.body.textContent).not.toContain('cccccccc');
+      expect(document.body.textContent).not.toContain('revision');
     } finally {
       await fixture.dispose();
     }

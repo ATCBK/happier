@@ -33,7 +33,7 @@ describe('Channels ingress attention privacy contract', () => {
 });
 
 describe('Channels delivery attention conversation identity', () => {
-    const row = { custodyId: 'd'.repeat(43), revision: 1, state: 'outcomeUnknown', acceptedPartCount: 0 };
+    const row = { custodyId: 'd'.repeat(43), revision: 1, createdAt: 1_000, state: 'outcomeUnknown', acceptedPartCount: 0 };
 
     it('reads the owning binding and keeps connection-only custody unbound', () => {
         const schema = compilePluginJsonSchema(ConversationDeliveryAttentionResultV1Schema.jsonSchema);
