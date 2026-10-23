@@ -248,7 +248,8 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
   }, [canOpenSurface, hostApi, text]);
 
   const refreshPluginList = React.useCallback((afterReload = false): Promise<void> => {
-    if (readiness.pending || readiness.ready === false) return Promise.resolve();
+    // Pending prerequisites defer the read; settled refusals use the Action's existing error contract.
+    if (readiness.pending) return Promise.resolve();
     if (inventoryRead.current && !afterReload) return inventoryRead.current;
     if (!hostApi) {
       setError({ kind: 'inventory', code: 'host_api_unavailable',
@@ -283,7 +284,7 @@ export function InspectorSurface({ hostApi, surface, subPath }: InspectorRenderS
     });
     inventoryRead.current = read;
     return read;
-  }, [hostApi, readiness.pending, readiness.ready, text]);
+  }, [hostApi, readiness.pending, text]);
 
   React.useEffect(() => {
     void refreshPluginList();
