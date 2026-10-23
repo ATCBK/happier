@@ -7163,11 +7163,16 @@ export function useSessionComposerController({
                             }
                             outboundHandoffLocalId = localId ?? null;
                             onAdmitted();
-                            if (shouldSendReviewComments) {
-                                clearSentReviewCommentDrafts();
-                            }
                             recordOutboundAccepted();
                             return true;
+                        };
+                        const clearReviewDraftsAfterSubmit = (result: Awaited<ReturnType<typeof submitAppSessionComposerMessage>>) => {
+                            // Custody belongs to the Account's accepted submission, even when the phone Ask host
+                            // has hidden/frozen its composer before the receipt arrives. Unaccepted drafts stay put.
+                            if (shouldSendReviewComments && (result.persistence !== 'none'
+                                || hasCanonicalOutboundHandoffForLocalId(sessionId, result.localId ?? null))) {
+                                clearSentReviewCommentDrafts();
+                            }
                         };
 
                         // Destination selection for a true send (section 3.3).
@@ -7551,7 +7556,9 @@ export function useSessionComposerController({
                                             }
                                         },
                                     });
-                                    if (!outboundAccountLifetime.isCurrent() || !composerPresentationMountedRef.current) return { status: 'rejected' };
+                                    if (!outboundAccountLifetime.isCurrent()) return { status: 'rejected' };
+                                    clearReviewDraftsAfterSubmit(result);
+                                    if (!composerPresentationMountedRef.current) return { status: 'rejected' };
                                     if (result.type === 'wake_failed' && resolveResumeFailurePresentation(result, t('session.resumeFailed')).kind === 'directory_missing') {
                                         setDirectoryRecovery({ scopeKey: sessionAccountScopeKey, busy: false });
                                     }
@@ -7576,9 +7583,6 @@ export function useSessionComposerController({
                                                 destination: attachmentSendDestination.kind,
                                             },
                                         };
-                                    }
-                                    if (shouldSendReviewComments) {
-                                        clearSentReviewCommentDrafts();
                                     }
                                     if (!didClearForAttachmentHandoff) {
                                         clearAttachmentsAfterProjectionHandoff();
@@ -7817,7 +7821,9 @@ export function useSessionComposerController({
                                     },
                                 });
 
-                                if (!outboundAccountLifetime.isCurrent() || !composerPresentationMountedRef.current) return { status: 'rejected' };
+                                if (!outboundAccountLifetime.isCurrent()) return { status: 'rejected' };
+                                clearReviewDraftsAfterSubmit(result);
+                                if (!composerPresentationMountedRef.current) return { status: 'rejected' };
 
                                 if (result.type === 'wake_failed' && resolveResumeFailurePresentation(result, t('session.resumeFailed')).kind === 'directory_missing') {
                                     setDirectoryRecovery({ scopeKey: sessionAccountScopeKey, busy: false });
@@ -7844,12 +7850,6 @@ export function useSessionComposerController({
                                 }
 
                                 recordOutboundAccepted();
-
-                                if (result.persistence !== 'none') {
-                                    if (shouldSendReviewComments) {
-                                        clearSentReviewCommentDrafts();
-                                    }
-                                }
 
                                 return { status: 'accepted' };
                             } finally {

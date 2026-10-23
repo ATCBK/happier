@@ -1743,6 +1743,8 @@ describe('SessionView (direct sessions)', () => {
     presentation?: SessionViewPresentation;
     browserContextStateForComposer?: import('@/sync/domains/browser/context').BrowserContextState;
     initialAttachmentDrafts?: readonly AttachmentDraft[];
+    renderComposer?: import('@/components/sessions/composer/sessionComposerModel').SessionComposerRenderer;
+    wrapper?: React.ComponentType<React.PropsWithChildren>;
   } = {}) {
     const sessionId = props.sessionId ?? 's1';
     const routeServerId = props.routeServerId?.trim();
@@ -1764,9 +1766,11 @@ describe('SessionView (direct sessions)', () => {
           presentation={props.presentation}
           browserContextStateForComposer={props.browserContextStateForComposer}
           initialAttachmentDrafts={props.initialAttachmentDrafts}
+          renderComposer={props.renderComposer}
         />
       </AppPaneProvider>
       </InjectedAuthProvider>,
+      { wrapper: props.wrapper },
     );
   }
 
@@ -7507,9 +7511,15 @@ describe('SessionView (direct sessions)', () => {
     expect(typeof reviewCommentsChip?.collapsedAction).toBe('function');
   });
 
-  it('removes only sent workspace review comment drafts after submitting them', async () => {
+  it.each([false, true])('removes only sent workspace review drafts when the phone Ask host freezes after Send: %s', async phoneAsk => {
     installRunnerActiveDirectSubmitStatus();
     featureEnabledState['files.reviewComments'] = true;
+    const receipt = createDeferred<void>();
+    syncSubmitMessageSpy.mockImplementationOnce(async (...args: unknown[]) => {
+      const payload = args[0] as { localId: string };
+      await receipt.promise;
+      return { ok: true, id: 'review-message', seq: 2, localId: payload.localId, didWrite: true };
+    });
     reviewCommentDraftsState.current = [
       {
         id: 'included-draft',
@@ -7546,12 +7556,24 @@ describe('SessionView (direct sessions)', () => {
       active: true,
       metadata: { host: 'happy-host' },
     };
-    const screen = await renderSessionView();
+    const { Freeze } = await import('react-freeze');
+    const { PhoneAskSheet } = await import('@/components/sessions/composer/phoneAsk/PhoneAskSheet');
+    const { PhoneAskSheetProvider, usePhoneAskSheetState } = await import('@/components/sessions/composer/phoneAsk/phoneAskSheetState');
+    function PhoneHost({ children }: React.PropsWithChildren) {
+      const sheet = usePhoneAskSheetState(true)!;
+      React.useEffect(() => { sheet.open(); }, [sheet.open]);
+      return <PhoneAskSheetProvider value={sheet}><Freeze freeze={sheet.phase === 'working'}>{children}</Freeze></PhoneAskSheetProvider>;
+    }
+    const screen = await renderSessionView(phoneAsk ? {
+      wrapper: PhoneHost, renderComposer: composer => <PhoneAskSheet composer={composer} />,
+    } : {});
 
     const agentInput = findAgentInput(screen);
-    await act(async () => {
-      await agentInput.props.onSend();
-    });
+    let sending: Promise<void> | undefined;
+    await act(async () => { sending = agentInput.props.onSend(); });
+    await vi.waitFor(() => expect(syncSubmitMessageSpy).toHaveBeenCalledTimes(1));
+    await flushHookEffects({ cycles: 3 });
+    await act(async () => { receipt.resolve(); await sending; });
 
     expect(syncSubmitMessageSpy).toHaveBeenCalledWith(
       expect.objectContaining({
