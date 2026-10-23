@@ -441,14 +441,28 @@ describe('Android notification permission entry points', () => {
         expect(boundary.rpc).not.toHaveBeenCalled();
     });
 
-    it.each([PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1, PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1])('keeps iOS occurrence-bound permission responses and foreground navigation: %s', async (action) => {
+    it.each([PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1, PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1])('routes iOS legacy permission notifications to review and sends only occurrence-bound responses: %s', async (action) => {
         Platform.OS = 'ios';
         const hook = await renderHook(() => useNotificationResponseRouting({ enabled: true, refreshAuth: async () => {} }));
-        await act(async () => { boundary.listener?.(response(action)); });
-        await flushHookEffects();
-        await vi.waitFor(() => expect(boundary.rpc).toHaveBeenCalledTimes(1));
-        expect(boundary.rpc.mock.calls[0]?.[1]).toMatchObject({ method: 'session:session.permission.respondToOccurrence.v1' });
-        expect(boundary.navigate).toHaveBeenCalled();
+        const current = response(action, `ios-current-${responseSequence}`);
+        const { occurrenceId: _occurrenceId, ...legacyData } = current.notification.request.content.data;
+        const legacy = { ...current, notification: { request: {
+            ...current.notification.request, identifier: `ios-legacy-${responseSequence}`, content: { data: legacyData },
+        } } };
+        await act(async () => { boundary.listener?.(legacy); });
+        // Navigation follows the awaited permission branch, so this observes its
+        // completion before making the negative assertion at the real socket boundary.
+        await vi.waitFor(() => expect(boundary.navigate).toHaveBeenCalledWith('/session/session', expect.any(Object)));
+        expect(boundary.rpc).not.toHaveBeenCalled();
+
+        // The same loaded hook and boundary must execute a current payload.
+        await act(async () => { boundary.listener?.(current); });
+        await vi.waitFor(() => expect(boundary.navigate).toHaveBeenCalledTimes(2));
+        expect(boundary.rpc).toHaveBeenCalledTimes(1);
+        expect(boundary.rpc.mock.calls[0]?.[1]).toMatchObject({
+            method: 'session:session.permission.respondToOccurrence.v1',
+            params: expect.objectContaining({ occurrenceId: current.notification.request.content.data.occurrenceId }),
+        });
         expect(profiles.getActiveServerUrl()).toBe(serverUrl);
         await hook.unmount();
     });

@@ -580,12 +580,41 @@ The actual agent-state update rechecks it, so a delayed response cannot settle a
 new occurrence sharing the local request ID. Existing `permission` callers retain
 their released method and payload; no second permission executor is introduced.
 
-Updated notification handlers do not fall back to the legacy method. A payload
-without occurrence identity opens for review, and an unsupported receiver or
-relay produces operation-scoped recovery. Other app operations and in-app
+Updated notification handlers do not fall back to the legacy method. An Android
+live or headless response without occurrence identity records a generic review
+notice without navigating. An unhandled cached Android launch response and an
+iOS response without occurrence identity navigate for review without sending a
+decision. An unsupported receiver or relay produces operation-scoped recovery.
+Other app operations and in-app
 permission controls remain available. An older UI can continue using its legacy
 permission operation against an updated CLI. No phone-side permission journal,
 parallel state writer or migration is needed.
+
+The account-scoped Session RPC resolves authenticated access and the existing
+plain, data-key, or legacy credential-key encryption mode without mounted UI.
+An optional Account hint must match saved credentials. Background actions use a
+caller-owned one-shot socket while foreground networking is paused, retaining
+the same authenticated-origin checks. Completion or cancellation disconnects
+that socket even when native encryption is pending; a late connection cannot
+send an expired action. The action reuses the scoped RPC timeout budget across
+preparation and dispatch. That budget is not an Android execution guarantee and
+does not resume background sync or change the active server.
+
+The foreground listener and native task share one coordinator. Identical active
+decisions share work; conflicting active decisions cannot overwrite it. Only
+explicit application success confirms the response. Failed or uncertain sends
+are not automatically retried. Runtime response-consumption notes prevent a
+handled cached response from navigating again after remount. Only a generic
+presentation-recovery flag is persisted, without permission decisions, tokens,
+tool arguments, or a lifetime request quota.
+
+Android task registration is attempted once per runtime using the existing
+notification native-call budget; late completion still delivers through the
+same coordinator. This source adds `expo-task-manager` and bumps the native
+runtime, so it requires a new Android build rather than an OTA-only update to
+an older binary. Expo SDK 54 action-task delivery does not replace the
+foreground listener. Force-stop, battery restrictions, and native background or
+terminated-state delivery remain subject to physical-device validation.
 
 ## Migration history
 

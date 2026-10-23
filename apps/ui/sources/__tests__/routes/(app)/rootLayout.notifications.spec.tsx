@@ -48,8 +48,6 @@ const mockState = await vi.hoisted(async () => {
         navigateSpy: vi.fn(),
         serverProfilesValue: [] as { id: string; serverUrl: string }[],
         tabActiveServerId: null as string | null,
-        sessionAllowSpy: vi.fn((..._args: unknown[]) => Promise.resolve()),
-        sessionDenySpy: vi.fn((..._args: unknown[]) => Promise.resolve()),
         setActiveServerAndSwitchSpy: vi.fn(async (_params: { serverId: string; scope: string; refreshAuth: unknown }) => true),
         upsertActivateAndSwitchServerSpy: vi.fn(async (_params: { serverUrl: string; source: string; scope: string; refreshAuth: unknown }) => true),
     };
@@ -216,11 +214,6 @@ vi.mock('@/sync/domains/pending/pendingNotificationAction', () => ({
     },
 }));
 
-vi.mock('@/sync/ops', () => ({
-    sessionAllow: (...args: unknown[]) => mockState.sessionAllowSpy(...args),
-    sessionDeny: (...args: unknown[]) => mockState.sessionDenySpy(...args),
-}));
-
 vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
     getReadyServerFeatures: async () =>
         createRootLayoutFeaturesResponse({
@@ -247,8 +240,6 @@ afterEach(async () => {
     mockState.clearPendingTerminalConnectSpy.mockClear();
     mockState.clearPendingNotificationNavSpy.mockClear();
     mockState.clearPendingNotificationActionSpy.mockClear();
-    mockState.sessionAllowSpy.mockClear();
-    mockState.sessionDenySpy.mockClear();
     vi.restoreAllMocks();
     vi.resetModules();
 });
@@ -479,7 +470,7 @@ describe('App RootLayout notifications', () => {
         expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_789');
     });
 
-    it('opens an older permission notification for review without automatically approving', async () => {
+    it('opens the session for review from an older permission notification', async () => {
         const Notifications = await import('expo-notifications');
         vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
             actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
@@ -503,12 +494,11 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
         expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_allow', expect.any(Object));
         expect(mockState.navigateSpy.mock.calls[0]?.[1]?.dangerouslySingular?.()).toBe('session');
     });
 
-    it('opens an older inactive-server permission notification for review without approving', async () => {
+    it('switches to the saved server and opens review for an older permission notification', async () => {
         mockState.serverProfilesValue = [
             { id: 'server-1', serverUrl: 'https://api.happier.dev' },
             { id: 'server-2', serverUrl: 'https://company.example.test' },
@@ -542,12 +532,11 @@ describe('App RootLayout notifications', () => {
             scope: 'device',
             refreshAuth: expect.any(Function),
         });
-        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
         expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_allow_2', expect.any(Object));
         expect(mockState.navigateSpy.mock.calls[0]?.[1]?.dangerouslySingular?.()).toBe('session');
     });
 
-    it('does not perform permission allow when notification action is pressed without serverUrl', async () => {
+    it('opens the session when a permission notification has no serverUrl', async () => {
         const Notifications = await import('expo-notifications');
         vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
             actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
@@ -571,11 +560,10 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
         expect(mockState.pushSpy).toHaveBeenCalledWith('/session/s_allow_3');
     });
 
-    it('does not perform permission allow when notification action targets an unsaved server', async () => {
+    it('opens server settings when a permission notification targets an unsaved server', async () => {
         mockState.serverProfilesValue = [
             { id: 'server-1', serverUrl: 'https://api.happier.dev' },
         ];
@@ -603,7 +591,6 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
         expect(mockState.setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
         expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
         expect(mockState.pendingNotificationNavValue).toEqual({ serverUrl: 'https://unknown.example.test', route: '/session/s_allow_4' });
@@ -644,7 +631,7 @@ describe('App RootLayout notifications', () => {
         expect(mockState.pushSpy).not.toHaveBeenCalled();
     });
 
-    it('auto-adds and switches server when zero servers exist and a permission action targets an unsaved server (but does not perform the action)', async () => {
+    it('auto-adds and switches server to open a permission notification when zero servers exist', async () => {
         mockState.serverProfilesValue = [];
         mockState.activeServerUrl = 'https://api.happier.dev';
         const Notifications = await import('expo-notifications');
@@ -670,7 +657,6 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.sessionAllowSpy).not.toHaveBeenCalled();
         expect(mockState.upsertActivateAndSwitchServerSpy).toHaveBeenCalledWith({
             serverUrl: 'https://new.example.test',
             source: 'notification',
@@ -714,7 +700,7 @@ describe('App RootLayout notifications', () => {
         expect(mockState.upsertActivateAndSwitchServerSpy).not.toHaveBeenCalled();
     });
 
-    it('opens an older deny notification for review without automatically responding', async () => {
+    it('opens the session for review from an older deny notification', async () => {
         const Notifications = await import('expo-notifications');
         vi.spyOn(Notifications, 'getLastNotificationResponseAsync').mockResolvedValue({
             actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1,
@@ -738,7 +724,6 @@ describe('App RootLayout notifications', () => {
 
         await renderRootLayout();
 
-        expect(mockState.sessionDenySpy).not.toHaveBeenCalled();
         expect(mockState.navigateSpy).toHaveBeenCalledWith('/session/s_deny', expect.any(Object));
         expect(mockState.navigateSpy.mock.calls[0]?.[1]?.dangerouslySingular?.()).toBe('session');
     });
