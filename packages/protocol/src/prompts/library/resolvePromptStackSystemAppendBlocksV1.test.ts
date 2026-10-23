@@ -76,7 +76,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     })).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'wrong_kind' });
   });
 
-  it('omits unavailable optional entries while retaining required preparation failure and cancellation', async () => {
+  it('keeps transient optional entries pending while omitting only definitive absence and preserving cancellation', async () => {
     const scope = { serverId: 'home', accountId: 'account' };
     const readArtifact = async (ref: { artifactId: string }) => {
       if (ref.artifactId === 'optional') throw new Error('Home unavailable');
@@ -84,9 +84,16 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     };
     const input = { surface: 'coding' as const, scope,
       accountEntries: [entry('optional'), { ...entry('required'), required: true }], readArtifact };
-    expect(await resolvePromptStackSystemAppendBlocksV1(input)).toMatchObject({
-      blocks: ['required'], admittedEntries: [
+    await expect(resolvePromptStackSystemAppendBlocksV1(input)).rejects.toMatchObject({
+      code: 'preparation_pending', reason: 'unavailable', admittedEntries: [
         { entryId: 'optional', outcome: 'unavailable', reason: 'unavailable', revision: null },
+      ],
+    });
+    expect(await resolvePromptStackSystemAppendBlocksV1({ ...input,
+      readArtifact: async ref => ref.artifactId === 'optional' ? null : artifact(ref.artifactId),
+    })).toMatchObject({
+      blocks: ['required'], admittedEntries: [
+        { entryId: 'optional', outcome: 'unavailable', reason: 'not_found', revision: null },
         { entryId: 'required', outcome: 'ready' },
       ],
     });
@@ -100,7 +107,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     })).rejects.toBe(failure);
   });
 
-  it.each(['locked', 'malformed', 'wrong_kind'] as const)('omits optional %s content but preserves a required refusal and repaired retry', async reason => {
+  it.each(['locked', 'malformed', 'wrong_kind'] as const)('refuses optional and required %s content and accepts a repaired retry', async reason => {
     const selected = entry('selected');
     const broken = reason === 'wrong_kind' ? { ...artifact('selected'), header: { v: 1, kind: 'other', title: 'Wrong kind' } }
       : { ...artifact('selected'), body: '{invalid-json' };
@@ -108,8 +115,9 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
       if (reason === 'locked') throw Object.assign(new Error('Private encryption detail'), { code: 'artifact_encryption_material_unavailable' });
       return broken;
     };
-    expect(await resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', accountEntries: [selected], readArtifact }))
-      .toMatchObject({ blocks: [], admittedEntries: [{ entryId: 'selected', outcome: 'unavailable', reason }] });
+    await expect(resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', accountEntries: [selected], readArtifact }))
+      .rejects.toMatchObject({ code: 'attachment_unavailable', reason, ref: selected.ref,
+        admittedEntries: [{ entryId: 'selected', outcome: 'unavailable', reason }] });
     await expect(resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', accountEntries: [{ ...selected, required: true }], readArtifact }))
       .rejects.toMatchObject({ code: 'attachment_unavailable', reason, ref: selected.ref });
     expect((await resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', accountEntries: [{ ...selected, required: true }],
@@ -283,16 +291,14 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
           sessionEntries: [{ ...entry('selected'), required }],
           readArtifactHeader: read, readArtifact: read };
         const unavailable = resolvePromptStackSystemAppendBlocksV1(input);
-        if (required) await expect(unavailable).rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
-        else await expect(unavailable).resolves.toMatchObject({ blocks: [], admittedEntries: [
+        await expect(unavailable).rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable', admittedEntries: [
           { entryId: 'selected', outcome: 'unavailable', reason: 'unavailable', revision: null },
         ] });
         // Missing currentness is retryable; a confirmed mode mismatch still needs repair.
         for (const lockedCode of ['artifact_account_mode_mismatch', 'artifact_encryption_material_unavailable']) {
           errorCode = lockedCode;
           const locked = resolvePromptStackSystemAppendBlocksV1(input);
-          if (required) await expect(locked).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'locked' });
-          else await expect(locked).resolves.toMatchObject({ blocks: [], admittedEntries: [
+          await expect(locked).rejects.toMatchObject({ code: 'attachment_unavailable', reason: 'locked', admittedEntries: [
             { entryId: 'selected', outcome: 'unavailable', reason: 'locked' },
           ] });
         }
@@ -304,7 +310,7 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
     }
   });
 
-  it.each(['coding', 'voice'] as const)('omits transient optional header/body failures on %s', async surface => {
+  it.each(['coding', 'voice'] as const)('keeps transient optional header/body failures pending and omits definitive absence on %s', async surface => {
     const scope = { serverId: 'home', accountId: 'account' };
     for (const memoryEnabled of [true, false]) {
       const args = { surface, scope, memoryEnabled,
@@ -317,8 +323,13 @@ describe('resolvePromptStackSystemAppendBlocksV1', () => {
           if (ref.artifactId === 'optional') throw new Error('offline');
           return artifact(ref.artifactId);
         } };
-      await expect(resolvePromptStackSystemAppendBlocksV1(args)).resolves.toMatchObject({ blocks: ['required'],
-        admittedEntries: [{ entryId: 'optional', outcome: 'unavailable', reason: 'unavailable' },
+      await expect(resolvePromptStackSystemAppendBlocksV1(args)).rejects.toMatchObject({ code: 'preparation_pending', reason: 'unavailable',
+        admittedEntries: [{ entryId: 'optional', outcome: 'unavailable', reason: 'unavailable' }] });
+      await expect(resolvePromptStackSystemAppendBlocksV1({ ...args,
+        readArtifactHeader: async ref => ref.artifactId === 'optional' ? null : { header: artifact(ref.artifactId).header },
+        readArtifact: async ref => ref.artifactId === 'optional' ? null : artifact(ref.artifactId),
+      })).resolves.toMatchObject({ blocks: ['required'],
+        admittedEntries: [{ entryId: 'optional', outcome: 'unavailable', reason: 'not_found' },
           { entryId: 'required', outcome: 'ready' }] });
       await expect(resolvePromptStackSystemAppendBlocksV1({ ...args,
         accountEntries: [{ ...entry('optional'), required: true }] })).rejects.toMatchObject({ reason: 'unavailable' });
