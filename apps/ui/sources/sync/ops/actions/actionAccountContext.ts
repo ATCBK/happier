@@ -521,7 +521,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                     readPage: pageOptions => listArtifacts(pageOptions ?? {}), encodeCursor: encodeArtifactListCursor,
                     // Exact-kind selection opens only matching headers. Ordinary structural
                     // lists retain their existing page/body coverage contract.
-                    ...(options.kind && options.includeBody ? { readBodies: async (items: readonly ReturnType<typeof projectArtifactListItem>[]) => {
+                    ...((options.kind || options.headerFilter) && options.includeBody ? { readBodies: async (items: readonly ReturnType<typeof projectArtifactListItem>[]) => {
                         const results = await withArtifactReadSignal(options.signal, async borrowerSignal =>
                             fetchArtifactsWithBodiesFromApi({ ...await artifactParams(), artifactIds: items.map(item => item.artifactId), signal: borrowerSignal }));
                         assertCurrent();
