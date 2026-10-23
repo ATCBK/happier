@@ -13,7 +13,7 @@ const snapshot = ConversationProviderConnectionReconciliationSnapshotV1Schema.pa
   providerConfig: { teamId: 'T1', appId: 'A1', botUserId: 'U1', botId: 'B1', label: 'Happier' }, credentialRef,
   authorityEpoch: 7, enabled: true, deletionState: 'none', requiresFullSharedMessageContent: false });
 
-function harness(input: Readonly<{ unreadable?: boolean; disconnect?: boolean; failFacts?: boolean }> = {}) {
+function harness(input: Readonly<{ empty?: boolean; unreadable?: boolean; disconnect?: boolean; failFacts?: boolean; retryAfterSeconds?: number }> = {}) {
   const supervisor = createSlackSocketSupervisor();
   const controller = new AbortController();
   const frames: unknown[] = [{ type: 'hello', connection_info: { app_id: 'A1' } }, {
@@ -37,8 +37,12 @@ function harness(input: Readonly<{ unreadable?: boolean; disconnect?: boolean; f
   const admissions: unknown[] = [];
   const facts: ReturnType<typeof ConversationTransportFactReportInputV1Schema.parse>[] = [];
   let reads = 0;
+  let lists = 0;
   let socketsOpened = 0;
-  let listed = true;
+  let listed = !input.empty;
+  const unavailable = { list: false, read: input.unreadable ?? false };
+  let rateLimitedOnce = input.retryAfterSeconds !== undefined;
+  let resyncCredentials = () => {};
   let background!: BackgroundServiceContext;
   const execute = vi.fn(async (action: string | Readonly<{ pluginId: string; localId: string }>, value: unknown, options?: Readonly<{ signal?: AbortSignal }>) => {
     if (typeof action === 'string') throw new Error('Unexpected host Action.');
@@ -54,10 +58,14 @@ function harness(input: Readonly<{ unreadable?: boolean; disconnect?: boolean; f
       return;
     }
     if (action.pluginId !== 'happier.channels') throw new Error('Unexpected plugin Action.');
-    if (action.localId === CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList) return listed ? { [snapshot.connectionId]: snapshot } : {};
+    if (action.localId === CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList) {
+      lists += 1;
+      if (unavailable.list) throw new Error('Account is unavailable');
+      return listed ? { [snapshot.connectionId]: snapshot } : {};
+    }
     if (action.localId === CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionRead) {
       reads += 1;
-      return input.unreadable || !listed ? {} : { [snapshot.connectionId]: snapshot };
+      return unavailable.read || !listed ? {} : { [snapshot.connectionId]: snapshot };
     }
     if (action.localId === CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.observationIngest) { admissions.push(ConversationProviderObservationIngestInputV1Schema.parse(value)); return; }
     if (action.localId === CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.transportFactReport) {
@@ -73,8 +81,14 @@ function harness(input: Readonly<{ unreadable?: boolean; disconnect?: boolean; f
   // boundaries. The worker, provider API, classifier and protocol stay real.
   const services = {
     actions: { execute },
-    connectedAccounts: { async materialize() { return { kind: 'environment', env: { SLACK_BOT_TOKEN: 'xoxb-test', SLACK_APP_TOKEN: 'xapp-test' } }; }, watch() { return { dispose() {} }; } },
+    connectedAccounts: { async materialize() { return { kind: 'environment', env: { SLACK_BOT_TOKEN: 'xoxb-test', SLACK_APP_TOKEN: 'xapp-test' } }; },
+      watch(_purpose: string, listener: () => void) { resyncCredentials = listener; return { dispose() {} }; } },
     http: { async openWebSocket() { socketsOpened += 1; return socket; }, async request({ url }: Readonly<{ url: string }>) {
+      if (rateLimitedOnce && url.includes('auth.test')) {
+        rateLimitedOnce = false;
+        return { status: 429, finalUrl: url, headers: { 'retry-after': String(input.retryAfterSeconds) },
+          body: new TextEncoder().encode(JSON.stringify({ ok: false, error: 'ratelimited' })) };
+      }
       const body = url.includes('auth.test') ? { ok: true, team_id: 'T1', user_id: 'U1', bot_id: 'B1' }
         : url.includes('bots.info') ? { ok: true, bot: { id: 'B1', user_id: 'U1', app_id: 'A1', name: 'Happier' } }
           : url.includes('conversations.info') ? { ok: true, channel: { id: 'C1', is_im: false, is_mpim: false, is_private: false, is_archived: false } }
@@ -90,10 +104,84 @@ function harness(input: Readonly<{ unreadable?: boolean; disconnect?: boolean; f
     occurrenceId: 'channels-generation-1', sourceCustody: { kind: 'managed', immutableGenerationId: 'channels-generation-1', installSource: 'npm' },
     contribution: { id: 'connection-stop-v1', qualifiedId: 'happier.channels/actions/connection-stop-v1' },
     materialization: { machineId: 'machine-1', materializationId: 'core-materialization', pluginId: 'happier.channels' } } };
-  return { supervisor, background, stopContext, admissions, facts, controller, get reads() { return reads; }, get socketsOpened() { return socketsOpened; } };
+  return { supervisor, background, stopContext, admissions, facts, controller, unavailable,
+    resyncCredentials: () => resyncCredentials(),
+    get lists() { return lists; }, get reads() { return reads; }, get socketsOpened() { return socketsOpened; } };
 }
 
 describe('Slack socket supervisor through real target worker Action', () => {
+  it.each([true, false])('does no reconciliation reads or timer work in a settled minute (empty: %s)', async empty => {
+    vi.useFakeTimers();
+    const h = harness({ empty });
+    const running = h.supervisor.run(h.background);
+    try {
+      if (empty) await vi.waitFor(() => expect(h.lists).toBe(1));
+      else await vi.waitFor(() => expect(h.facts).toContainEqual({ connectionId: 'connection-1', authorityEpoch: 7,
+        fact: { kind: 'providerReadiness', status: 'ready' } }));
+      await vi.advanceTimersByTimeAsync(0);
+      const before = { lists: h.lists, reads: h.reads };
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect({ lists: h.lists - before.lists, reads: h.reads - before.reads }).toEqual({ lists: 0, reads: 0 });
+      expect(vi.getTimerCount()).toBe(0);
+
+      h.supervisor.invalidateConnections();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.lists).toBe(before.lists + 1);
+      expect(h.reads).toBe(before.reads + (empty ? 0 : 1));
+      expect(h.socketsOpened).toBe(empty ? 0 : 1);
+      h.resyncCredentials();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.lists).toBe(before.lists + 2);
+      expect(h.reads).toBe(before.reads + (empty ? 0 : 2));
+      expect(h.socketsOpened).toBe(empty ? 0 : 1);
+    } finally { h.controller.abort(); await h.supervisor.dispose(); await running; vi.useRealTimers(); }
+  });
+
+  it.each(['list', 'read'] as const)('retains a repair deadline after an unavailable %s, then parks after recovery', async boundary => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.unavailable[boundary] = true;
+    const running = h.supervisor.run(h.background);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.lists).toBe(1);
+      expect(h.socketsOpened).toBe(0);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(h.lists).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.lists).toBe(2);
+      h.unavailable[boundary] = false;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.facts).toContainEqual({ connectionId: 'connection-1', authorityEpoch: 7,
+        fact: { kind: 'providerReadiness', status: 'ready' } });
+      const before = h.lists;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.lists).toBe(before);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { h.controller.abort(); await h.supervisor.dispose(); await running; vi.useRealTimers(); }
+  });
+
+  it('waits for the provider retry deadline without periodic reads and parks once the worker recovers', async () => {
+    vi.useFakeTimers();
+    const h = harness({ retryAfterSeconds: 45 });
+    const running = h.supervisor.run(h.background);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const before = h.lists;
+      expect(h.socketsOpened).toBe(0);
+      await vi.advanceTimersByTimeAsync(44_999);
+      expect(h.lists).toBe(before);
+      expect(h.socketsOpened).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.admissions).toHaveLength(1);
+      expect(h.socketsOpened).toBe(1);
+      const recovered = h.lists;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.lists).toBe(recovered);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { h.controller.abort(); await h.supervisor.dispose(); await running; vi.useRealTimers(); }
+  });
+
   it('rereads authority, ingests, projects readiness and stops only the exact frozen old epoch', async () => {
     const h = harness();
     const running = h.supervisor.run(h.background);
@@ -140,6 +228,9 @@ describe('Slack socket supervisor through real target worker Action', () => {
       // delay alone must not masquerade as retained gap-custody protection.
       await vi.advanceTimersByTimeAsync(30_000);
       expect(h.reads).toBeGreaterThan(reads);
+      const retriedReads = h.reads;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.reads).toBeGreaterThan(retriedReads);
       expect(h.socketsOpened).toBe(1);
       expect(h.facts.some(report => report.fact.kind === 'historyGap')).toBe(false);
     } finally { h.controller.abort(); await h.supervisor.dispose(); await running; vi.useRealTimers(); }

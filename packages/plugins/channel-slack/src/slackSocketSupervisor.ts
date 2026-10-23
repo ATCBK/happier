@@ -16,9 +16,9 @@ import { createSlackApi } from './slackApi.js';
 import { SLACK_CREDENTIAL_PURPOSE, SLACK_PLUGIN_ID, SLACK_SOCKET_BACKGROUND_SERVICE_ID, SLACK_SOCKET_WORKER_ATTEMPT_ACTION_ID } from './slackPluginConstants.js';
 import { startSlackSocketWorker, type SlackSocketWorker, type SlackSocketWorkerResult } from './slackSocketWorker.js';
 
-// Same bounded authoritative repair cadence as the existing Discord supervisor
-// (CHAN-28). Provider Retry-After replaces this deadline for a failed attempt.
-const RECONCILIATION_INTERVAL_MS = 30_000;
+// Repair failed authority/fact reads at the existing CHAN-28 cadence. Settled
+// workers wait for invalidation; failed attempts retain provider Retry-After.
+const RECOVERY_INTERVAL_MS = 30_000;
 type Snapshot = ConversationProviderConnectionReconciliationSnapshotV1;
 type Fact = ConversationTransportFactReportInputV1['fact'];
 type WorkerEntry = {
@@ -56,6 +56,11 @@ export function createSlackSocketSupervisor() {
   let running: Promise<void> | null = null;
   let abortRun: AbortController | null = null;
   let disposed = false;
+  let recoveryAt: number | undefined;
+
+  const retryReconciliation = (): void => {
+    recoveryAt = Date.now() + RECOVERY_INTERVAL_MS;
+  };
 
   const addFact = (snapshot: Snapshot, fact: Fact): void => {
     const key = factKey(snapshot);
@@ -83,7 +88,7 @@ export function createSlackSocketSupervisor() {
           : failure.reason === 'invalidConfiguration' ? 'providerConfigurationInvalid' : null;
       if (code !== null) addFact(entry.snapshot, { kind: 'providerReadiness', status: 'attention', code,
         ...(failure.diagnostic === undefined ? {} : { diagnostic: failure.diagnostic }) });
-      retryAt.set(entry.snapshot.connectionId, Date.now() + (failure.retryAfterMs ?? RECONCILIATION_INTERVAL_MS));
+      retryAt.set(entry.snapshot.connectionId, Date.now() + (failure.retryAfterMs ?? RECOVERY_INTERVAL_MS));
     }
     if (result.kind === 'stopped' && result.unprovenContinuity) {
       if (entry.stopIntent === 'reconcile' && entry.replacement) addFact(entry.replacement, { kind: 'historyGap', reason: 'providerHistoryUnavailable' });
@@ -152,7 +157,7 @@ export function createSlackSocketSupervisor() {
         }, { connectionId: snapshot.connectionId, authorityEpoch: snapshot.authorityEpoch, fact }, { signal: context.signal }));
         if (result.kind === 'staleAuthority') { pendingFacts.delete(key); return false; }
         if (fact.kind === 'historyGap') historyGap = true;
-      } catch { return false; }
+      } catch { retryReconciliation(); return false; }
     }
     // Preserve any newer fact queued while publication was in flight.
     const remaining = (pendingFacts.get(key) ?? []).filter(fact => !facts.includes(fact));
@@ -161,12 +166,13 @@ export function createSlackSocketSupervisor() {
   };
 
   const reconcile = async (context: BackgroundServiceContext): Promise<void> => {
+    recoveryAt = undefined;
     let listed: ReturnType<typeof ConversationProviderConnectionsSnapshotV1Schema.parse>;
     try {
       listed = ConversationProviderConnectionsSnapshotV1Schema.parse(await context.services.actions.execute({
         pluginId: 'happier.channels', localId: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList,
       }, {}, { signal: context.signal }));
-    } catch { await stopAll('authorityUnavailable'); return; }
+    } catch { await stopAll('authorityUnavailable'); retryReconciliation(); return; }
     const current = new Set<string>();
     const retainedFactKeys = new Set<string>();
     for (const discovery of Object.values(listed)) {
@@ -180,6 +186,7 @@ export function createSlackSocketSupervisor() {
         if (values.length !== 1 || values[0]?.connectionId !== discovery.connectionId) throw new Error('Slack connection authority is unavailable.');
         snapshot = values[0];
       } catch {
+        retryReconciliation();
         const entry = workers.get(discovery.connectionId);
         if (entry) { retainedFactKeys.add(factKey(entry.snapshot)); stopEntry(entry, 'authorityUnavailable'); }
         continue;
@@ -218,7 +225,7 @@ export function createSlackSocketSupervisor() {
           if (!controller.signal.aborted) recordResult(next, { kind: 'notReady', failure: { kind: 'notReady', reason: 'network' } });
         } finally {
           if (workers.get(snapshot.connectionId) === next) workers.delete(snapshot.connectionId);
-          if (!controller.signal.aborted && !retryAt.has(snapshot.connectionId)) retryAt.set(snapshot.connectionId, Date.now() + RECONCILIATION_INTERVAL_MS);
+          if (!controller.signal.aborted && !retryAt.has(snapshot.connectionId)) retryAt.set(snapshot.connectionId, Date.now() + RECOVERY_INTERVAL_MS);
           wake();
         }
       })();
@@ -247,10 +254,15 @@ export function createSlackSocketSupervisor() {
           if (controller.signal.aborted) break;
           if (invalidated) continue;
           const deadlines = [...retryAt.values()].filter(at => at > Date.now());
-          const delay = Math.min(RECONCILIATION_INTERVAL_MS, ...deadlines.map(at => at - Date.now()));
+          if (recoveryAt !== undefined) deadlines.push(recoveryAt);
+          const deadline = deadlines.length === 0 ? undefined : Math.min(...deadlines);
           let timer: ReturnType<typeof setTimeout> | undefined;
           try {
-            await new Promise<void>(resolve => { resume = resolve; timer = setTimeout(resolve, delay); if (invalidated || controller.signal.aborted) resolve(); });
+            await new Promise<void>(resolve => {
+              resume = resolve;
+              if (deadline !== undefined) timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
+              if (invalidated || controller.signal.aborted) resolve();
+            });
           } finally { clearTimeout(timer); resume = undefined; }
         }
       } finally {
