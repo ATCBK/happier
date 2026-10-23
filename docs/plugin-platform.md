@@ -588,6 +588,11 @@ installer owns progress and removes staging after extraction; cancellation can
 leave private staging without authorizing further guest IO. First-party and externally installed
 provisioners consume the same schema and assembly recipe; no Lima-specific path,
 new Action role, retry, timer, or development compatibility shim is required.
+The shared role schema is the base64 authority. Native adapters decode admitted
+fragments once without roundtrip re-encoding or a vendor base64 grammar; Fly
+passes the encoded fragment to its guest decoder. Fly's public direct native
+client reuses the same role schema at that ingress, while retaining its native
+path, mode and timeout checks.
 
 For an asynchronous native deletion, a reconciling provisioner's destroy Action may return the canonical `accepted` result with its declared native-operation reference. The managed-machine row remains the custody owner: it persists that reference with the submitted Delete intent, re-supplies it to the same destroy role, and clears the resource only after a `confirmed` result. Legacy provisioners may keep returning the synchronous power-result shape; an `unknown` result never discards retained deletion custody or proves absence.
 
