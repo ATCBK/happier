@@ -60,8 +60,9 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
     if (!reference) return { text: '', named: false };
     const scope = { serverId: account.serverId, accountId: account.accountId };
     const teamScope = { ...scope, serverId: resolveServerProfileScopeIdForIdentifier(scope.serverId) };
-    const teamResources = reference.kind === 'providerConnection' || reference.kind === 'providerModel'
-        ? readTeamCredentialResourceCatalogs(teamScope) : [];
+    const teamSource = reference.kind === 'providerConnection' || reference.kind === 'providerModel'
+        ? findApprovalProviderSource(reference, readTeamCredentialResourceCatalogs(teamScope)) : undefined;
+    const teamResources = teamSource ? [teamSource] : [];
     const state = storage.getState();
     const sources: ApprovalReferenceSources = {
         serverId: reference.kind === 'session' ? reference.serverId ?? account.serverId : account.serverId,
@@ -73,8 +74,9 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
         projects: readCurrentProjectAccountRows(state),
         providerCatalog: getProviderCatalogSnapshot(scope),
         teamResources,
-        teamNameById: Object.fromEntries(teamResources.map(resource => [resource.teamId,
-            readTeam(teamScope, { serverId: teamScope.serverId, teamId: resource.teamId })?.name ?? ''])),
+        teamNameById: reference.kind === 'providerConnection' && teamSource
+            ? { [teamSource.teamId]: readTeam(teamScope, { serverId: teamScope.serverId, teamId: teamSource.teamId })?.name ?? '' }
+            : {},
     };
     if (reference.kind === 'artifact' || reference.kind === 'skill') {
         sources.artifact = await account.fetchArtifact(reference.id, { signal });
