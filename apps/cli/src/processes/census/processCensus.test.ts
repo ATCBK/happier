@@ -7,6 +7,7 @@ import { execFileWithDeadline } from '@happier-dev/cli-common/process';
 import { createProcessCensusReader, readProcessCensus } from './processCensus';
 import { readLinuxProcFile } from './linuxProcfs';
 import { procfsFileHandle } from '@/testkit/process/procfsFileHandle';
+import { logger } from '@/ui/logger';
 
 // Genuine procfs descriptor boundary; retain actual OS I/O unless a test selects a fixture.
 vi.mock('node:fs/promises', async importOriginal => {
@@ -412,6 +413,65 @@ describe('process census', () => {
         expect(first).toBe(second);
         expect(first.status === 'ok' && first.rows[0]?.start.startTimeMs).toBe(1000);
         expect(fresh.status === 'ok' && fresh.rows[0]?.start.startTimeMs).toBe(2000);
+    });
+
+    it.each(['linux', 'darwin', 'win32'] as const)('reports native census executions once per capture rather than once per shared caller on %s', async platform => {
+        const { boundary } = fixture();
+        let nativeReads = 0;
+        // Logging is an output boundary; census decoding and sharing remain real.
+        const diagnostics = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+        try {
+            const reader = createProcessCensusReader({ platform, selfPid: 42, logicalCpus: 1, helperExecutablePath: '/helper', linuxBoundary: {
+                ...boundary, readdir: async () => { nativeReads++; return boundary.readdir(); },
+            }, execFile: async () => {
+                nativeReads++;
+                return { stdout: JSON.stringify({ v: 1, capturedAtMs: 1000, logicalCpus: 1, rows: [
+                    { pid: 42, ppid: 1, start: { startTimeMs: 900 }, principal: { kind: platform === 'win32' ? 'sid' : 'uid', value: 'self' },
+                        name: 'private-name', argv: ['private-command'], cwd: '/private-directory', memory: null, cpuTimeUs: null },
+                ] }) };
+            } });
+            await Promise.all(Array.from({ length: 8 }, () => reader({ freshness: 'shared', scope: 'all', fields: [] })));
+            expect(nativeReads).toBe(1);
+            const captures = () => diagnostics.mock.calls.filter(([message, data]) => message === '[process-census] Observation phase settled'
+                && typeof data === 'object' && data !== null && 'phase' in data && data.phase === 'native_census');
+            expect(captures()).toHaveLength(1);
+            await Promise.all([reader({ freshness: 'fresh', fields: [] }), reader({ freshness: 'fresh', fields: [] })]);
+            expect(nativeReads).toBe(3);
+            expect(captures()).toHaveLength(3);
+            await reader({ freshness: 'shared', pids: [42], fields: ['memory', 'cpuTimeUs'] });
+            expect(nativeReads).toBe(platform === 'linux' ? 3 : 4);
+            expect(captures()).toHaveLength(3);
+            for (const [, data] of captures()) {
+                expect(data).toEqual({ phase: 'native_census', platform, capturedAtMs: expect.any(Number), elapsedMs: expect.any(Number) });
+            }
+        } finally { diagnostics.mockRestore(); }
+    });
+
+    it.each(['darwin', 'win32'] as const)('does not report native enumerations for a missing helper or its failure backoff on %s', async platform => {
+        const diagnostics = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+        let now = 1000;
+        let executions = 0;
+        const execFile = async () => { executions++; throw new Error('private-native-error'); };
+        try {
+            const captures = () => diagnostics.mock.calls.filter(([message]) => message === '[process-census] Observation phase settled');
+            const missing = createProcessCensusReader({ platform, selfPid: 42, helperExecutablePath: null, execFile });
+            expect(await missing({ freshness: 'fresh' })).toEqual({ status: 'unavailable', reason: 'helper_missing' });
+            expect(executions).toBe(0);
+            expect(captures()).toHaveLength(0);
+            const failing = createProcessCensusReader({ platform, selfPid: 42, helperExecutablePath: '/helper', execFile, now: () => now });
+            expect(await failing({ freshness: 'fresh' })).toEqual({ status: 'unavailable', reason: 'read_failed' });
+            expect(executions).toBe(1);
+            expect(captures()).toHaveLength(1);
+            now = 2000;
+            await failing({ freshness: 'fresh' });
+            expect(executions).toBe(1);
+            expect(captures()).toHaveLength(1);
+            now = 60000;
+            await failing({ freshness: 'fresh' });
+            expect(executions).toBe(2);
+            expect(captures()).toHaveLength(2);
+            expect(JSON.stringify(captures())).not.toContain('private-native-error');
+        } finally { diagnostics.mockRestore(); }
     });
 
     it.skipIf(process.platform !== 'linux')('matches the unchanged persisted witness for 20 live Linux processes', async () => {

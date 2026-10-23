@@ -1,6 +1,8 @@
 import { readdir, readlink } from 'node:fs/promises';
 import { cpus } from 'node:os';
+import { execFileWithDeadline } from '@happier-dev/cli-common/process';
 import { createProcessCustodySamplingInvoker, resolveProcessCustodySupportExecutable, type ProcessCustodySamplingExecFile } from '@/subprocess/supervision/processCustody';
+import { logger } from '@/ui/logger';
 import { createLinuxCensusReader, DAEMON_OWNERSHIP_ENVIRONMENT_VARIABLE_KEYS, type LinuxCensusBoundary } from './linux';
 import { readLinuxProcFile } from './linuxProcfs';
 import { decodeHelperCensus } from './decodeHelperCensus';
@@ -64,8 +66,22 @@ export function createProcessCensusReader(dependencies: ProcessCensusDependencie
     const platform = dependencies.platform ?? process.platform;
     const selfPid = dependencies.selfPid ?? process.pid;
     const readLinux = createLinuxCensusReader(dependencies.linuxBoundary ?? { readFile: readLinuxProcFile, readdir, readlink });
+    async function observeNativeCensus<T>(capturedAtMs: number, operation: () => Promise<T>): Promise<T> {
+        const startedAtMs = Date.now();
+        try { return await operation(); }
+        finally {
+            logger.debug('[process-census] Observation phase settled', {
+                phase: 'native_census', platform, capturedAtMs, elapsedMs: Date.now() - startedAtMs,
+            });
+        }
+    }
     const invokeNative = createProcessCustodySamplingInvoker({
-        execFile: dependencies.execFile,
+        execFile: (file, args, options) => {
+            const execute = () => (dependencies.execFile ?? execFileWithDeadline)(file, args, options);
+            // Observe actual helper execution, after missing-helper/backoff admission.
+            return args.some(arg => arg.startsWith('--pids=')) ? execute()
+                : observeNativeCensus((dependencies.now ?? Date.now)(), execute);
+        },
         resolveExecutable: () => dependencies.helperExecutablePath === undefined
             ? resolveProcessCustodySupportExecutable(platform) : dependencies.helperExecutablePath,
     });
@@ -78,11 +94,12 @@ export function createProcessCensusReader(dependencies: ProcessCensusDependencie
         let snapshot: ProcessCensusSnapshot;
         try {
             if (platform === 'linux') {
-                snapshot = await readLinux({
+                const read = () => readLinux({
                     selfPid, pids: requested, capturedAtMs, logicalCpus: dependencies.logicalCpus ?? cpus().length,
                     fields: input.fields, commandRoots: input.commandRoots, includeAncestors: input.includeAncestors,
                     includeDescendants: input.includeDescendants,
                 });
+                snapshot = requested ? await read() : await observeNativeCensus(capturedAtMs, read);
             } else if (platform === 'darwin' || platform === 'win32') {
                 const result = await invokeNative({ command: 'process-census', sampledAt: capturedAtMs, args: [
                     `--caller-pid=${selfPid}`, `--scope=${input.scope ?? 'own_principal'}`,
