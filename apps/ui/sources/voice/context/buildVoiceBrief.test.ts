@@ -89,7 +89,7 @@ describe('Voice brief from the mounted Inbox', () => {
         for (const session of sessions) {
             const item = brief.items.find(item => item.destination.kind === 'session' && item.destination.address.sessionId === session.id);
             expect(item?.title)
-                .toBe(readInboxSessionTitle(session, session.serverId ?? null, 1000));
+                .toBe(readInboxSessionTitle(session, session.serverId ?? null));
             const candidate = [...sessionPresentation.sessionsNeedingAttention.map(entry => entry.candidate), ...sessionPresentation.readySessions]
                 .find(candidate => candidate.sessionId === session.id)!;
             expect(item?.subtitle).toBe(buildInboxSessionContextLine(candidate));

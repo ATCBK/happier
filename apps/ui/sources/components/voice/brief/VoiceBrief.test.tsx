@@ -377,7 +377,7 @@ describe('mounted Voice Brief request', () => {
             const address = { serverId: account!.home.id, sessionId: session.id };
             const testID = `voice-brief.item.${sessionAddressKey(address)}`;
             const row = screen.findAllByType(Item).find(item => item.props.testID === testID);
-            expect(row?.props.title).toBe(readInboxSessionTitle(session, address.serverId, 1000));
+            expect(row?.props.title).toBe(readInboxSessionTitle(session, address.serverId));
             await screen.pressByTestIdAsync(testID);
             expect(opened.mock.lastCall?.[0].destination).toEqual({ kind: 'session', address });
         }
