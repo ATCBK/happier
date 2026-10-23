@@ -6,7 +6,7 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { createCliRemoteHostStoreForOperation } from './remoteHostStore';
+import { createCliRemoteHostStore, createCliRemoteHostStoreForOperation } from './remoteHostStore';
 import { createCliRemoteHostActionExecuteV1 } from '@/session/actions/cliActionDeps/createCliRemoteHostActionDeps';
 import { deriveSavedSecretImportResourceIdV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
@@ -16,6 +16,25 @@ import type { AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
+
+it('does not disclose a current remote-host row when final Account authority becomes unavailable', async () => {
+  const credentials = { token: 'remote-current-authority', encryption: null };
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7,
+    loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+  let rowRead = false;
+  vi.spyOn(axios, 'get').mockImplementation(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/v1/account/encryption/currentness') return rowRead ? { status: 503, data: {} }
+      : { status: 200, data: { mode: 'plain', version: 1, settingsVersion: 7,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/remote-hosts') {
+      rowRead = true;
+      return { status: 200, data: { status: 'deleted', revision: 2 } };
+    }
+    throw new Error(`Unexpected current remote-host boundary: ${path}`);
+  });
+  await expect(createCliRemoteHostStore({ credentials }).readCatalogForOperation()).rejects.toThrow();
+});
 
 it.each(['matching', 'rotated'] as const)('cleans signed SSH history through the issued CLI catalog only for exact historical material (%s)', async state => {
   const accountId = 'ssh-history-account';

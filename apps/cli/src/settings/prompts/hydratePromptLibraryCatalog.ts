@@ -116,8 +116,8 @@ export async function prepareActivePromptLibraryRecord(input: ActivePromptLibrar
   const currentRead = current.promptLibraryCatalog ? readPromptLibraryCatalogRecordV1({ catalog: current.promptLibraryCatalog,
     key: input.key, rawSettings: current.source === 'none' ? undefined : current.rawSettings }) : undefined;
   if (input.refresh || currentRead?.status !== 'ready') {
-    // A fresh destination read is a consumption demand. The explicit refresh /
-    // Account-change owner retains source and exact-history maintenance.
+    // A fresh destination read is a consumption demand. Full hydration retains
+    // source and exact-history maintenance.
     const completion = refresh({ ...input, ...(input.refresh ? { maintainSource: false } : {}) },
       { scopeKey: input.scopeKey, lifetimeToken: input.lifetimeToken });
     const readers = pending.get(`${input.scopeKey}:${input.lifetimeToken}`)?.readers;
@@ -184,7 +184,7 @@ function refresh(input: RefreshInput, captured?: CapturedPromptAccount, afterCha
   beginActivePromptLibraryCatalogRefresh({ scopeKey, lifetimeToken });
   let work!: Promise<PromptLibraryCatalogSnapshotV1>;
   work = (async (): Promise<PromptLibraryCatalogSnapshotV1> => {
-    let requestInput: RefreshInput = afterChange ? { credentials: input.credentials } : input;
+    let requestInput: RefreshInput = afterChange ? { credentials: input.credentials, maintainSource: false } : input;
     while (true) {
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
       const request = pending.get(key);
@@ -202,7 +202,7 @@ function refresh(input: RefreshInput, captured?: CapturedPromptAccount, afterCha
       }
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
       if (pending.get(key)?.completion !== work) return catalog;
-      if (refreshAfterInFlight.delete(key)) { requestInput = { credentials: input.credentials }; continue; }
+      if (refreshAfterInFlight.delete(key)) { requestInput = { credentials: input.credentials, maintainSource: false }; continue; }
       // A synchronous wake cannot join a request which already chose to finish.
       if (pending.get(key)?.completion === work) pending.delete(key);
       commitActivePromptLibraryCatalog({ scopeKey, lifetimeToken, catalog });
@@ -218,7 +218,7 @@ function refresh(input: RefreshInput, captured?: CapturedPromptAccount, afterCha
 export function refreshActivePromptLibraryCatalog(input: RefreshInput): Promise<PromptLibraryCatalogSnapshotV1> { return refresh(input); }
 /** The original lifetime needs a read issued after a durable write or Account wake. */
 export function refreshActivePromptLibraryCatalogAfterChange(input: RefreshInput & CapturedPromptAccount): Promise<PromptLibraryCatalogSnapshotV1> {
-  return refresh({ credentials: input.credentials }, input, true);
+  return refresh({ credentials: input.credentials, maintainSource: false }, input, true);
 }
 export type MachineSkillInstallCatalogDemand = Readonly<{
   target: MachineAdministrationTargetV1; libraryServerIdentityId: string;

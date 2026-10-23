@@ -237,7 +237,9 @@ function createCapturedStore(input: Readonly<{
   const readCatalogForOperation = async (): Promise<RemoteHostCatalogSnapshotV1> => {
     const admitted = await readStorageContext();
     const destination = await loadRemoteHostCatalogV1({ ...admitted, signal: input.signal, readRow });
-    return destination.status === 'ready' && destination.revision === 'absent' ? readCatalog() : destination;
+    const catalog = destination.status === 'ready' && destination.revision === 'absent' ? await readCatalog() : destination;
+    const current = await readStorageContext();
+    return current.mode === admitted.mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' };
   };
   const mutateHosts = async (value: SaveInput | Address, remove: boolean): Promise<MutationResult> => {
     const hostId = 'host' in value ? value.host.id : value.hostId;

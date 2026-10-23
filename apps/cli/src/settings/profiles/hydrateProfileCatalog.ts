@@ -55,9 +55,10 @@ function refreshCapturedProfileCatalog(input: Parameters<typeof refreshActivePro
       : commitActiveProfileCatalog({ scopeKey, lifetimeToken, catalog });
   };
   let work!: Promise<ProfileCatalogSnapshotV1>;
+  let maintainSource = !reobserve;
   work = (async (): Promise<ProfileCatalogSnapshotV1> => {
     while (true) {
-      if (!context) reloadAfterPending.delete(key);
+      if (!context && reloadAfterPending.delete(key)) maintainSource = false;
       let catalog: ProfileCatalogSnapshotV1;
       try {
         if (context && !await context.isCurrent()) return { status: 'unavailable', reason: 'scope-retired' };
@@ -105,7 +106,7 @@ function refreshCapturedProfileCatalog(input: Parameters<typeof refreshActivePro
           }
         }
         if (!context && reloadAfterPending.has(key)) continue;
-        if (catalog.status === 'ready' && catalog.control?.record.phase === 'active') {
+        if (maintainSource && catalog.status === 'ready' && catalog.control?.record.phase === 'active') {
           // Cleanup does not own destination admission. Publish the complete current
           // catalog first, then let the existing transfer owner resume source/history work.
           if (!await publishCatalog(catalog)) return { status: 'unavailable', reason: 'scope-retired' };

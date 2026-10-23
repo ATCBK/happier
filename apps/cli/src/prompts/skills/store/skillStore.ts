@@ -176,12 +176,17 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                 const entriesPresent = await exists(skillsRoot) && (await readdir(skillsRoot)).length === items.length
                     && (await Promise.all(items.map(item => exists(join(skillsRoot, item.sourceFolderName ?? item.name))))).every(Boolean);
                 const copy = platform === 'win32' || admitted.materialization === 'copy';
-                const copiesPresent = !copy || entriesPresent && (await Promise.all(items.map(async item => {
+                const entrypointsPresent = entriesPresent && (await Promise.all(items.map(async item => {
                     const entry = join(skillsRoot, item.sourceFolderName ?? item.name, 'SKILL.md');
-                    return await exists(entry) && !(await lstat(entry)).isSymbolicLink();
+                    return await exists(entry) && (await lstat(entry)).isFile();
+                }))).every(Boolean);
+                const copiesPresent = !copy || entrypointsPresent && (await Promise.all(items.map(async item => {
+                    const directory = join(skillsRoot, item.sourceFolderName ?? item.name);
+                    return (await Promise.all((await readdir(directory)).map(async name =>
+                        !(await lstat(join(directory, name))).isSymbolicLink()))).every(Boolean);
                 }))).every(Boolean);
                 const marketplaceManifest = join(pluginRoot, '.augment-plugin', 'marketplace.json');
-                if (unchanged && entriesPresent && copiesPresent && await exists(marketplaceManifest)) return result();
+                if (unchanged && entrypointsPresent && copiesPresent && await exists(marketplaceManifest)) return result();
                 await mkdir(pluginRoot, { recursive: true, mode: 0o700 });
                 await mkdir(skillsRoot, { recursive: true, mode: 0o700 });
                 await chmod(skillsRoot, 0o700);
@@ -190,10 +195,13 @@ export function createSkillStore(input: Readonly<{ happyHomeDir: string; platfor
                     const temporary = join(skillsRoot, `.staging-${randomUUID()}`);
                     try {
                         const source = materialized.get(item.name)!;
-                        // A real folder under the source name (or declared name without a source tree), so sibling paths resolve even where the
-                        // platform follows links before `..`; on POSIX its children link to the immutable cache entry.
+                        // Keep source folders for sibling links and a real entrypoint for native scanners
+                        // (including Codex 0.162.1), which skip file-symlink SKILL.md entries.
                         if (copy) await cp(source, temporary, { recursive: true });
-                        else await linkDirectoryChildren({ source, destination: temporary });
+                        else {
+                            await linkDirectoryChildren({ source, destination: temporary, exclude: ['SKILL.md'] });
+                            await cp(join(source, 'SKILL.md'), join(temporary, 'SKILL.md'));
+                        }
                         await makeReadOnly(temporary);
                         await removeOwnedTree(destination);
                         await rename(temporary, destination);

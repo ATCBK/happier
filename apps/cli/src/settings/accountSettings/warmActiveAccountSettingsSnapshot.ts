@@ -46,7 +46,10 @@ export async function warmActiveAccountSettingsSnapshotBestEffort(params: Readon
     if (context.source === 'none') {
       throw new Error('Account settings warm completed without an available snapshot');
     }
-    await hydrateNotificationChannelCatalogForActiveAccount({ credentials: params.credentials });
+    const notificationCatalog = getActiveSnapshot()?.notificationChannelCatalog;
+    await hydrateNotificationChannelCatalogForActiveAccount({ credentials: params.credentials,
+      ...(notificationCatalog?.status === 'ready' && typeof notificationCatalog.revision === 'number'
+        ? { maintainSource: false } : {}) });
     return true;
   } catch (error) {
     logger.debug('[accountSettings] Failed to warm active account-settings snapshot (non-fatal)', error);

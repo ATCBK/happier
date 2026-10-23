@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -53,7 +53,7 @@ describe('daemon skill store', () => {
             expect((await stat(join(f.cachePath(item), 'SKILL.md'))).mode & 0o777).toBe(0o444);
             expect((await stat(join(f.cachePath(item), 'scripts', 'run.sh'))).mode & 0o777).toBe(0o555);
             expect((await lstat(join(first.skillsRoot, 'guide'))).isDirectory()).toBe(true);
-            expect((await lstat(join(first.skillsRoot, 'guide', 'SKILL.md'))).isSymbolicLink()).toBe(true);
+            expect((await lstat(join(first.skillsRoot, 'guide', 'SKILL.md'))).isFile()).toBe(true);
         }
     });
     it('updates links and session manifest in the same folder and serializes concurrent writes', async () => {
@@ -85,6 +85,29 @@ describe('daemon skill store', () => {
         expect((await stat(join(result.pluginRoot, 'session.json'))).mtimeMs).toBe(before.mtimeMs);
         await f.store.releaseSkillSessionDirs('session-one');
         await expect(lstat(result.pluginRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+    it('publishes discoverable entrypoint files at source folders and repairs old linked entrypoints', async () => {
+        const f = await fixture();
+        const first = { ...skill('declared-a', 'Read ../source-b/SKILL.md'), sourceFolderName: 'source-a' };
+        const sibling = { ...skill('declared-b', 'Read scripts/run.sh'), sourceFolderName: 'source-b' };
+        const result = await f.ensure('session-one', [first, sibling]);
+        const entry = join(result.items[0]!.directory, 'SKILL.md');
+        expect((await lstat(entry)).isFile()).toBe(true);
+        expect(result.items.map(item => item.directory)).toEqual([join(result.skillsRoot, 'source-a'), join(result.skillsRoot, 'source-b')]);
+        expect(await readFile(join(result.items[0]!.directory, '..', 'source-b', 'SKILL.md'), 'utf8')).toBe('Read scripts/run.sh');
+        expect(await readFile(join(result.items[1]!.directory, 'scripts', 'run.sh'), 'utf8')).toContain('echo guide');
+        if (process.platform !== 'win32') {
+            await chmod(result.items[0]!.directory, 0o700);
+            await unlink(entry);
+            await symlink(join(f.cachePath(first), 'SKILL.md'), entry);
+            await chmod(result.items[0]!.directory, 0o555);
+            await f.ensure('session-one', [first, sibling]);
+            expect((await lstat(entry)).isFile()).toBe(true);
+            expect(await readFile(entry, 'utf8')).toBe('Read ../source-b/SKILL.md');
+            await f.store.ensureSkillSessionDir({ ownerKey: 'session-one', items: [first, sibling], nativeDisables: [], materialization: 'copy' });
+            expect((await lstat(join(result.items[1]!.directory, 'scripts'))).isDirectory()).toBe(true);
+            expect(await readFile(join(result.items[1]!.directory, 'scripts', 'run.sh'), 'utf8')).toContain('echo guide');
+        }
     });
     it('rejects tampered bodies before publication and isolates a staging filesystem failure per item', async () => {
         const f = await fixture();

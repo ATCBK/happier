@@ -30,7 +30,7 @@ function createContext(settingsVersion: number): AccountSettingsContext {
 }
 
 describe('warmActiveAccountSettingsSnapshotBestEffort', () => {
-  it('warms the real notification catalog despite an unchanged preference version', async () => {
+  it('warms current notification rows without repeating retained maintenance on an unchanged preference version', async () => {
     const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'notification-warm-account' })).toString('base64url')}.signature`,
       encryption: null };
     const settings = accountSettingsParse({});
@@ -38,13 +38,16 @@ describe('warmActiveAccountSettingsSnapshotBestEffort', () => {
       settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
     const channel = NotificationChannelRecordV1Schema.parse({ v: 1, id: 'retained-warm-channel', kind: 'webhook', topics: {},
       url: 'http://127.0.0.1/notification', signingSecretRef: null });
+    let revision = 8;
+    const reads: string[] = [];
     // HTTP is the only substituted boundary: warm/refresh/publication and row opening remain real.
     const get = vi.spyOn(axios, 'get').mockImplementation(async input => {
       const path = new URL(String(input)).pathname;
+      reads.push(path);
       if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
         settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
       if (path === '/v1/account/entity-rows/notification-channels') return { status: 200, data: {
-        status: 'present', revision: 8, content: { t: 'plain', v: { v: 1, channels: [channel] } } } };
+        status: 'present', revision, content: { t: 'plain', v: { v: 1, channels: [channel] } } } };
       if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 7 } };
       if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
       throw new Error(`Unexpected notification warm boundary: ${path}`);
@@ -53,6 +56,13 @@ describe('warmActiveAccountSettingsSnapshotBestEffort', () => {
       await expect(warmActiveAccountSettingsSnapshotBestEffort({ credentials })).resolves.toBe(true);
       expect(getActiveAccountSettingsSnapshot()).toMatchObject({ settingsVersion: 7,
         notificationChannelCatalog: { status: 'ready', revision: 8, channels: [channel] } });
+      expect(reads).toContain('/v2/account/settings');
+      reads.length = 0;
+      revision = 9;
+      await expect(warmActiveAccountSettingsSnapshotBestEffort({ credentials })).resolves.toBe(true);
+      expect(getActiveAccountSettingsSnapshot()?.notificationChannelCatalog).toMatchObject({ status: 'ready', revision: 9, channels: [channel] });
+      expect(reads.filter(path => path !== '/v1/account/entity-rows/notification-channels'
+        && path !== '/v1/account/encryption/currentness')).toEqual([]);
     } finally { get.mockRestore(); resetActiveAccountSettingsSnapshotForTests(); }
   });
   // Incident Jun-11 H-A / FIX-1a: the daemon's in-memory account-settings snapshot used to stay

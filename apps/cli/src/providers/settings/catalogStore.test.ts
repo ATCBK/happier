@@ -9,7 +9,7 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from './catalogStore';
-import { refreshActiveProviderConnectionsCatalog } from './hydrate';
+import { refreshActiveProviderConnectionsCatalog, refreshDemandedActiveProviderConnectionsCatalog } from './hydrate';
 import { createCliProviderActionExecuteV1 } from '@/session/actions/cliActionDeps/createCliProviderActionDeps';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { CustomProviderTemplateV1Schema } from '@happier-dev/protocol/providers/connections/customTemplateV1';
@@ -24,6 +24,42 @@ import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportD
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
+
+it.each([4, 'absent'] as const)('refreshes demanded Provider authority while preserving absent-destination activation (revision=%s)', async revision => {
+  const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: `provider-demand-${revision}` })).toString('base64url')}.signature`, encryption: null };
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7,
+    loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
+    providerConnectionsCatalog: { status: 'ready', revision, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } });
+  vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  let activated = revision !== 'absent';
+  const reads: string[] = [];
+  vi.spyOn(axios, 'get').mockImplementation(async input => {
+    const path = new URL(String(input)).pathname;
+    reads.push(path);
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+      settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: activated
+      ? { status: 'present', revision: 2, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } }
+      : { status: 'absent' } };
+    if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
+    if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+    return emptyAccountSettingsHistoryCaptureResponse(path) ?? { status: 404, data: {} };
+  });
+  const writes = vi.spyOn(axios, 'post').mockImplementation(async (input, body) => {
+    expect(new URL(String(input)).pathname).toBe('/v1/account/entity-rows/provider-connections');
+    expect(ProviderConnectionsRowMutationV1Schema.parse(body)).toMatchObject({ expectedRevision: 'absent', sourceSettingsVersion: 7 });
+    activated = true;
+    return { status: 200, data: { status: 'updated', revision: 2, cursor: 1 } };
+  });
+  await refreshDemandedActiveProviderConnectionsCatalog({ token: credentials.token });
+  expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: 2 });
+  if (revision === 'absent') expect(writes).toHaveBeenCalledTimes(1);
+  else {
+    expect(writes).not.toHaveBeenCalled();
+    expect(reads.filter(path => path !== '/v1/account/entity-rows/provider-connections'
+      && path !== '/v1/account/encryption/currentness')).toEqual([]);
+  }
+});
 
 it.each(['readCatalogForMutation', 'readCatalog', 'prepare', 'refresh'] as const)('shares requester Home verification within %s and rechecks the next read', async method => {
   const f = await createProjectSessionRuntimeFixture();

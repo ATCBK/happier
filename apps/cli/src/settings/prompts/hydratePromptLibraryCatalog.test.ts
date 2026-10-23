@@ -14,6 +14,8 @@ import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secret
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
+import * as persistence from '@/persistence';
+import { refreshDemandedActivePromptLibraryCatalog } from './hydratePromptLibraryCatalog';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
 
@@ -39,6 +41,25 @@ function readPublishedRole() {
 }
 
 describe('CLI prompt catalog acknowledged mutation publication', () => {
+  it('refreshes demanded prompt rows without reading retained Settings or history', async () => {
+    const credentials = seedAccount('prompt-current-demand');
+    vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+    const reads: string[] = [];
+    vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const path = new URL(String(input)).pathname;
+      reads.push(path);
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+        settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === '/v1/account/entity-rows/prompt-library') return { status: 200, data: listed(2) };
+      if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
+      return { status: 404, data: {} };
+    });
+    await refreshDemandedActivePromptLibraryCatalog({ token: credentials.token });
+    expect(readPublishedRole()).toMatchObject({ status: 'ready', record: { value: { overrides: {
+      builder: { workspaceWrites: 'deny' } } } } });
+    expect(reads.filter(path => path !== '/v1/account/entity-rows/prompt-library'
+      && path !== '/v1/account/encryption/currentness')).toEqual([]);
+  });
   it('retains confirmed database rollback through prompt catalog hydration', async () => {
     const credentials = seedAccount('prompt-read-rollback');
     vi.spyOn(axios, 'get').mockImplementation(async url => {

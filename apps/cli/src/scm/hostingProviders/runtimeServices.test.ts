@@ -240,7 +240,35 @@ function createAuthenticationBindingOwner(
 }
 
 describe('createHostScmHostingProviderRuntimeServices', () => {
-  it('cancels configured deployment discovery with its hosting operation instead of continuing through other providers', async () => {
+  it('discovers independent hosting deployments concurrently without materializing credentials', async () => {
+    const entered = new Set<string>();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const owner = createAuthenticationBindingOwner(
+      async () => { throw new Error('Deployment discovery must not materialize credentials'); },
+      async ({ target }) => {
+        if (target.kind !== 'account') throw new Error('Expected an Account-bound inventory');
+        entered.add(target.account.service.pluginId);
+        await held;
+        return { status: 'complete', accounts: [createListedDeploymentAccount(
+          target.account.service, target.account.accountId,
+          target.account.service.pluginId === GITHUB_PLUGIN_MANIFEST.id ? 'https://github.com' : 'https://bitbucket.org',
+        )] };
+      },
+    );
+    const services = createHostScmHostingProviderRuntimeServices({
+      ...createCrossProviderRuntimeInput(), resolveConnectedAccountPurposeBindingOwner: () => owner,
+    });
+    const pending = services.resolveScmHostingProviderRegistry!();
+    try {
+      // The metadata transport is held; all deterministic owner work drains first.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(entered).toEqual(new Set([GITHUB_PLUGIN_MANIFEST.id, BITBUCKET_PLUGIN_MANIFEST.id]));
+    } finally { release(); }
+    expect((await pending).providers).toHaveLength(2);
+  });
+
+  it('cancels in-flight deployment discovery with its hosting operation without publishing late inventory', async () => {
     const controller = new AbortController();
     const reason = new Error('compose observation retired');
     let releaseMetadata!: () => void;
@@ -255,7 +283,7 @@ describe('createHostScmHostingProviderRuntimeServices', () => {
         if (metadataReads === 1) {
           metadataEntered();
           // A late HTTP response may still arrive after cancellation. The real
-          // purpose owner and host must not publish it or start another read.
+          // purpose owner and host must not publish it.
           await heldMetadata;
         }
         return { status: 'complete', accounts: target.kind === 'account' ? [
@@ -275,13 +303,14 @@ describe('createHostScmHostingProviderRuntimeServices', () => {
     try {
       const pending = runWithHostingProviderRuntimeServices(services, readRegistry, { signal: controller.signal });
       await entered;
+      await new Promise<void>(resolve => setImmediate(resolve));
       controller.abort(reason);
       releaseMetadata();
       await expect(pending).rejects.toBe(reason);
-      expect(metadataReads).toBe(1);
+      expect(metadataReads).toBe(2);
       const registry = await runWithHostingProviderRuntimeServices(services, readRegistry, { signal: new AbortController().signal });
       expect(registry.diagnostics).toEqual([]);
-      expect(metadataReads).toBe(3);
+      expect(metadataReads).toBe(4);
     } finally {
       releaseMetadata();
     }
@@ -785,6 +814,7 @@ describe('createHostScmHostingProviderRuntimeServices', () => {
     expect(resolveExecutable).toHaveBeenCalledWith(
       { kind: 'managedDependency', id: 'forge-cli' },
       'scm-github',
+      undefined,
     );
     expect(release).toHaveBeenCalledOnce();
   });

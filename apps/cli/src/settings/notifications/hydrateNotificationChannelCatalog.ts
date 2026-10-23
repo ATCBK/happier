@@ -30,7 +30,7 @@ export async function hydrateNotificationChannelCatalogForOperation(input: Reado
 
 /** A real daemon/bootstrap demand, admitted to the captured Account lifetime. */
 export async function hydrateNotificationChannelCatalogForActiveAccount(input: Readonly<{
-  credentials: StoredCredentials; signal?: AbortSignal; scopeKey?: string; lifetimeToken?: number;
+  credentials: StoredCredentials; signal?: AbortSignal; scopeKey?: string; lifetimeToken?: number; maintainSource?: false;
 }>): Promise<NotificationChannelCatalogSnapshotV1> {
   const scopeKey = input.scopeKey ?? resolveAccountSettingsScopeKey(input.credentials);
   const lifetimeToken = input.lifetimeToken ?? getActiveAccountSettingsSnapshotLifetimeToken();
@@ -40,7 +40,7 @@ export async function hydrateNotificationChannelCatalogForActiveAccount(input: R
   beginActiveNotificationChannelCatalogRefresh({ scopeKey, lifetimeToken });
   const catalog = await createCliNotificationChannelStore(input).readNotificationChannelCatalog(async ready => {
     if (current()) commitActiveNotificationChannelCatalog({ scopeKey, lifetimeToken, catalog: ready });
-  });
+  }, { maintainSource: input.maintainSource });
   if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
   commitActiveNotificationChannelCatalog({ scopeKey, lifetimeToken, catalog });
   return catalog;
@@ -48,9 +48,12 @@ export async function hydrateNotificationChannelCatalogForActiveAccount(input: R
 
 export async function refreshDemandedActiveNotificationChannelCatalog(input: Readonly<{ token: string; signal?: AbortSignal }>): Promise<void> {
   const snapshot = getActiveAccountSettingsSnapshot();
-  if (!snapshot?.scopeKey) return;
+  if (!snapshot?.scopeKey || snapshot.notificationChannelCatalog === undefined) return;
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const credentials = await readStoredCredentials();
   if (!credentials || credentials.token !== input.token) return;
-  await hydrateNotificationChannelCatalogForActiveAccount({ ...input, credentials, scopeKey: snapshot.scopeKey, lifetimeToken });
+  await hydrateNotificationChannelCatalogForActiveAccount({ ...input, credentials, scopeKey: snapshot.scopeKey, lifetimeToken,
+    ...((snapshot.notificationChannelCatalog.status === 'ready' || snapshot.notificationChannelCatalog.status === 'partial')
+      && typeof snapshot.notificationChannelCatalog.revision === 'number'
+      ? { maintainSource: false } : {}) });
 }

@@ -17,7 +17,7 @@ const pending = new Map<string, {
 }>();
 const reloadAfterPending = new Set<string>();
 type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSignal; operationContext?: SavedSecretOperationContextV1;
-  isCredentialCurrent?(): boolean | Promise<boolean> }>;
+  isCredentialCurrent?(): boolean | Promise<boolean>; maintainSource?: false }>;
 
 type CliCatalogInput = Readonly<{
   expectedScopeKey: string; operationContext?: SavedSecretOperationContextV1; signal?: AbortSignal; credentials?: StoredCredentials;
@@ -119,7 +119,7 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
       let catalog: ProviderConnectionsCatalogSnapshotV1;
       let publishedReady: ProviderConnectionsCatalogSnapshotV1 | undefined;
       try {
-        catalog = await store.readCatalog({ onReadyBeforeCleanup: async ready => {
+        catalog = input.maintainSource === false ? await store.readCatalogForMutation() : await store.readCatalog({ onReadyBeforeCleanup: async ready => {
           if (!context && reloadAfterPending.has(key)) return;
           if (await publish(ready)) {
             if (!context && reloadAfterPending.has(key)) return;
@@ -173,8 +173,10 @@ function refresh(input: RefreshInput, intent: 'read' | 'reobserve' | 'change' = 
 
 /** The incumbent Account-change observer reopens only an already-demanded catalog. */
 export async function refreshDemandedActiveProviderConnectionsCatalog(input: Readonly<{ token: string; signal?: AbortSignal }>): Promise<void> {
-  if (getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog === undefined) return;
+  const catalog = getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog;
+  if (catalog === undefined) return;
   const credentials = await readStoredCredentials();
   if (!credentials || credentials.token !== input.token) return;
-  await refresh({ credentials, signal: input.signal }, 'change');
+  await refresh({ credentials, signal: input.signal,
+    ...(catalog.status === 'ready' && typeof catalog.revision === 'number' ? { maintainSource: false } : {}) }, 'change');
 }

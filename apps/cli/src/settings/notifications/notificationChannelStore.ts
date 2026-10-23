@@ -86,7 +86,8 @@ export function createCliNotificationChannelStore(input: Readonly<{
     if (operation) await operation.replaceAccountSettings(next);
     else commitActiveAccountSettingsSnapshot(next);
   };
-  const readCapturedNotificationChannelCatalog = async (onReady?: (catalog: NotificationChannelCatalogSnapshotV1) => Promise<void>) => {
+  const readCapturedNotificationChannelCatalog = async (onReady?: (catalog: NotificationChannelCatalogSnapshotV1) => Promise<void>,
+    maintainSource = true) => {
     const context = await readStorageContext('identity');
     const accountId = readAccountIdFromToken(input.credentials.token);
     if (!accountId) throw Object.assign(new Error('Account identity unavailable'), { code: 'unauthorized' });
@@ -109,7 +110,7 @@ export function createCliNotificationChannelStore(input: Readonly<{
       settingsSecretsReadKeys: readSnapshot()?.settingsSecretsReadKeys,
       readRow,
       ...(onReady ? { onReadyBeforeCleanup: async catalog => { await reobserveMode(); await onReady(catalog); } } : {}),
-      transfer: {
+      transfer: maintainSource ? {
         accountId,
         readSourceSnapshot,
         initializeRecord: async value => {
@@ -261,12 +262,13 @@ export function createCliNotificationChannelStore(input: Readonly<{
             unavailable: (_status, message) => { throw new Error(message); },
           } });
         },
-      } });
+      } : undefined });
     await reobserveMode();
     return catalog;
   };
-  const readNotificationChannelCatalog = async (onReady?: (catalog: NotificationChannelCatalogSnapshotV1) => Promise<void>): Promise<NotificationChannelCatalogSnapshotV1> => {
-    try { return await readCapturedNotificationChannelCatalog(onReady); }
+  const readNotificationChannelCatalog = async (onReady?: (catalog: NotificationChannelCatalogSnapshotV1) => Promise<void>,
+    options?: Readonly<{ maintainSource?: false }>): Promise<NotificationChannelCatalogSnapshotV1> => {
+    try { return await readCapturedNotificationChannelCatalog(onReady, options?.maintainSource !== false); }
     catch (error) {
       const code = error instanceof Error && 'code' in error ? error.code : undefined;
       return { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled' : !isCurrent() ? 'scope-retired'

@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -8,7 +10,8 @@ import { deriveSavedSecretImportResourceIdV1 } from '@happier-dev/protocol/accou
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 import { openSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 import { SharedSavedSecretPromoteInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
-import { NotificationChannelCatalogReadResponseV1Schema, openNotificationChannelCatalogContentV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { NotificationChannelCatalogMutationV1Schema, NotificationChannelCatalogReadResponseV1Schema,
+  openNotificationChannelCatalogContentV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { homeDomainActionTransportV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { createAccountScopedCryptoMaterialSnapshotV1, deriveAccountMachineKeyFromRecoverySecret, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
@@ -22,6 +25,115 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createCliNotificationChannelStore } from './notificationChannelStore';
+import * as persistence from '@/persistence';
+import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
+  setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { refreshDemandedActiveNotificationChannelCatalog } from './hydrateNotificationChannelCatalog';
+
+it('does not demand notification rows or Settings history before a consumer requests the catalog', async () => {
+  const credentials = { token: 'notification-not-demanded', encryption: null };
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7,
+    loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+  const previous = getActiveAccountSettingsSnapshot();
+  const stored = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  const http = vi.spyOn(axios, 'get').mockRejectedValue(new Error('Unexpected undemanded HTTP'));
+  try {
+    await refreshDemandedActiveNotificationChannelCatalog({ token: credentials.token });
+    expect(http).not.toHaveBeenCalled();
+    expect(getActiveAccountSettingsSnapshot()).toBe(previous);
+    expect(getActiveAccountSettingsSnapshot()?.notificationChannelCatalog).toBeUndefined();
+  } finally { http.mockRestore(); stored.mockRestore(); resetActiveAccountSettingsSnapshotForTests(); }
+});
+
+it('refreshes demanded notification rows without retained-source or historical maintenance', async () => {
+  const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'notification-current-demand' })).toString('base64url')}.signature`, encryption: null };
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7,
+    loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
+    notificationChannelCatalog: { status: 'ready', revision: 1, channels: [], diagnostics: [] } });
+  const stored = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  const reads: string[] = [];
+  const http = vi.spyOn(axios, 'get').mockImplementation(async input => {
+    const path = new URL(String(input)).pathname;
+    reads.push(path);
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+      settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/notification-channels') return { status: 200, data: { status: 'deleted', revision: 2 } };
+    return { status: 404, data: {} };
+  });
+  try {
+    await refreshDemandedActiveNotificationChannelCatalog({ token: credentials.token });
+    expect(getActiveAccountSettingsSnapshot()?.notificationChannelCatalog).toMatchObject({ status: 'ready', revision: 2 });
+    expect(reads.filter(path => path !== '/v1/account/entity-rows/notification-channels'
+      && path !== '/v1/account/encryption/currentness')).toEqual([]);
+  } finally { http.mockRestore(); stored.mockRestore(); resetActiveAccountSettingsSnapshotForTests(); }
+});
+
+it.each([1, 'absent'] as const)('preserves demanded partial Notification destination authority (revision=%s)', async revision => {
+  const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: `notification-partial-${revision}` })).toString('base64url')}.signature`, encryption: null };
+  let row = NotificationChannelCatalogReadResponseV1Schema.parse(revision === 'absent'
+    ? { status: 'absent' } : { status: 'deleted', revision: 2 });
+  const requests: string[] = [];
+  const mutations: ReturnType<typeof NotificationChannelCatalogMutationV1Schema.parse>[] = [];
+  let boundaryError: unknown;
+  // Real HTTP keeps Account admission, source activation, row readback and
+  // publication composed. Only persisted credential lookup is substituted.
+  const server = createServer(async (request, response) => {
+    const path = request.url;
+    requests.push(`${request.method} ${path}`);
+    response.setHeader('Content-Type', 'application/json');
+    try {
+      if (path === '/v1/account/encryption/currentness') {
+        response.end(JSON.stringify({ mode: 'plain', version: 1, settingsVersion: 7,
+          signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+      } else if (path === '/v1/account/entity-rows/notification-channels' && request.method === 'GET') {
+        response.end(JSON.stringify(row));
+      } else if (path === '/v1/account/entity-rows/notification-channels' && request.method === 'POST') {
+        let body = '';
+        for await (const chunk of request) body += String(chunk);
+        const mutation = NotificationChannelCatalogMutationV1Schema.parse(JSON.parse(body));
+        mutations.push(mutation);
+        row = NotificationChannelCatalogReadResponseV1Schema.parse({ status: 'present', revision: 2, content: mutation.content });
+        response.end(JSON.stringify({ status: 'updated', revision: 2, cursor: 1 }));
+      } else if (path === '/v2/account/settings' && request.method === 'GET') {
+        response.end(JSON.stringify({ version: 7, content: { t: 'plain', v: { notificationChannelsV1: [] } } }));
+      } else {
+        // Optional retained-source cleanup cannot undo destination activation.
+        response.statusCode = 503;
+        response.end(JSON.stringify({ error: 'unavailable' }));
+      }
+    } catch (error) {
+      boundaryError = error;
+      response.statusCode = 500;
+      response.end(JSON.stringify({ error: 'invalid-fixture-request' }));
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const stored = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  try {
+    await runWithServerHttpBaseUrl(base, async () => {
+      setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7,
+        loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
+        notificationChannelCatalog: { status: 'partial', revision, channels: [], diagnostics: [] } });
+      await refreshDemandedActiveNotificationChannelCatalog({ token: credentials.token });
+      expect(boundaryError).toBeUndefined();
+      expect(getActiveAccountSettingsSnapshot()?.notificationChannelCatalog).toMatchObject({ status: 'ready', revision: 2 });
+      if (revision === 'absent') {
+        expect(requests).toContain('GET /v2/account/settings');
+        expect(mutations).toMatchObject([{ expectedRevision: 'absent', sourceSettingsVersion: 7 }]);
+      } else {
+        expect(mutations).toEqual([]);
+        expect(requests.filter(path => path !== 'GET /v1/account/entity-rows/notification-channels'
+          && path !== 'GET /v1/account/encryption/currentness')).toEqual([]);
+      }
+    });
+  } finally {
+    stored.mockRestore();
+    resetActiveAccountSettingsSnapshotForTests();
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
 
 describe('notification catalog initial signing resource transfer', () => {
   it.each(['plain', 'e2ee'] as const)('atomically initializes signed channel identities with exact resource packets in persisted %s mode', async mode => {
