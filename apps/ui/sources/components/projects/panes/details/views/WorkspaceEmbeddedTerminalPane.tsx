@@ -33,7 +33,7 @@ export type WorkspaceEmbeddedTerminalPaneProps = Readonly<{
 export const WorkspaceEmbeddedTerminalPane = React.memo(function WorkspaceEmbeddedTerminalPane(props: WorkspaceEmbeddedTerminalPaneProps) {
     const terminalRendererRef = React.useRef<EmbeddedTerminalRendererHandle | null>(null);
     const machine = useMachinePresenceSummary(props.serverId, props.machineId);
-    const machineReachable = machine.reachability === 'reachable';
+    const machineReachable = machine.reachability === 'unknown' ? null : machine.reachability === 'reachable';
 
     const terminalKey = props.terminalKey;
 

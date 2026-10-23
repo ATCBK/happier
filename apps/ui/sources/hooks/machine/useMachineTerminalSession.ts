@@ -457,8 +457,8 @@ export function useMachineTerminalSession(params: Readonly<{
                 return;
             }
             if (attemptMachineReachable === null) {
-                setStatus('error');
-                setError('terminal_unavailable');
+                // Unknown presence waits in the admission state above; it is
+                // not a terminal failure. Do not capture authority or attach yet.
                 return;
             }
             if ((params.readOnly && !params.attachedTerminalId) || params.attachedTerminalId === null || (params.attachedTerminalId === undefined && !initialTerminalSize)) {
