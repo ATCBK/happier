@@ -57,7 +57,6 @@ export type PluginMachineSourceExecutionOriginCandidateV1 = PluginMachineRelease
         version: string;
         occurrenceId: string;
         serverId: string;
-        generation: number;
     }>;
 }>;
 export type PluginExecutionOriginCandidateV1 = PluginMachineExecutionOriginCandidateV1 | PluginMachineSourceExecutionOriginCandidateV1;

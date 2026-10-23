@@ -428,7 +428,6 @@ describe('resolveWorkspaceFileViewer', () => {
             hostOrigin: {
                 machineId: 'machine-a',
                 serverId: 'server-1',
-                generation: 1,
                 phase: 'current',
                 interactionEnabled: true,
                 executionOrigin: {
@@ -446,7 +445,6 @@ describe('resolveWorkspaceFileViewer', () => {
             hostOrigin: {
                 machineId: 'machine-b',
                 serverId: 'server-1',
-                generation: 1,
                 phase: 'current',
                 interactionEnabled: true,
                 executionOrigin: {
@@ -464,7 +462,6 @@ describe('resolveWorkspaceFileViewer', () => {
             hostOrigin: {
                 machineId: 'machine-a',
                 serverId: 'server-1',
-                generation: 1,
                 phase: 'current',
                 interactionEnabled: true,
             },
@@ -474,7 +471,6 @@ describe('resolveWorkspaceFileViewer', () => {
             hostOrigin: {
                 machineId: 'machine-a',
                 serverId: 'server-1',
-                generation: 1,
                 phase: 'current',
                 interactionEnabled: true,
             },

@@ -109,7 +109,6 @@ const appSidebarPlacement = {
   hostOrigin: {
     machineId: 'machine-a',
     serverId: 'server-1',
-    generation: 3,
     phase: 'current',
     interactionEnabled: true,
     executionOrigin: {

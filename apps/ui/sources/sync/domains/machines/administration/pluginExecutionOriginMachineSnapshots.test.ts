@@ -30,7 +30,7 @@ function fixture() {
     const source = { source: { origin: { serverIdentityId: home.serverIdentityId,
         sourceRef: { machineId: machine.id, pluginId: 'acme.count',
             sourceCustody: { kind: 'development' as const, registeredRootId: 'root' } } },
-        version: '1.0.0', occurrenceId: 'occurrence', serverId: home.id, generation: 1 },
+        version: '1.0.0', occurrenceId: 'occurrence', serverId: home.id },
         releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } };
     storage.setState({ machines: {}, machineListByServerId: { [home.id]: [machine] },
         machineListStatusByServerId: { [home.id]: 'idle' } });
@@ -258,7 +258,7 @@ describe('execution-origin Machine publication', () => {
             storage.setState({ settingsVersion: index });
         }
         expect([serialize.mock.calls.length, targets.mock.calls.length, project.mock.calls.length]).toEqual(before);
-        shell.updateInputs({ ...inputs, sources: [{ ...source, source: { ...source.source, generation: 2 } }] });
+        shell.updateInputs({ ...inputs, sources: [{ ...source, source: { ...source.source } }] });
         expect(shell.getSnapshot()).toBe(first);
         expect(serialize.mock.calls.length).toBe(before[0]);
         const changed = { ...inputs, sources: [{ ...source, source: { ...source.source,

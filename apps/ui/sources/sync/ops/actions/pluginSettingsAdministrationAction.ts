@@ -247,7 +247,7 @@ export function createUiPluginSettingsAdministrationAction(
                 assertDeclarationCurrent = () => {
                     const current = readSelected();
                     if (!current?.source || !arePluginMachineExecutionOriginsEqual(current.origin, selectedSource.origin)
-                        || current.source.occurrenceId !== source.occurrenceId || current.source.generation !== source.generation)
+                        || current.source.occurrenceId !== source.occurrenceId)
                         throw new Error('plugin_settings_target_not_current');
                 };
                 const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
@@ -256,7 +256,6 @@ export function createUiPluginSettingsAdministrationAction(
                 assertCurrent();
                 const declaration = projection?.pluginProjectionById[input.pluginId];
                 if (!declaration?.installedPackage?.executionOrigin || declaration.occurrenceId !== source.occurrenceId
-                    || declaration.generation !== source.generation
                     || !arePluginMachineExecutionOriginsEqual(declaration.installedPackage.executionOrigin, selectedSource.origin)) return null;
                 groups = declaration.editableSettingsGroups;
             } else {

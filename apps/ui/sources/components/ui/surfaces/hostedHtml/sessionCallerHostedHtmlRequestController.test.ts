@@ -77,7 +77,7 @@ describe('Session caller-hosted HTML request controller', () => {
         const controller = createSessionCallerHostedHtmlRequestController({
             sessionId: 'session-1', serverId: 'home-1', serverIdentityId: 'server-identity-1', accountId: 'viewer',
             executeHostAction: async () => ({ ok: true, result: null }), isAccountCurrent: () => true, isSessionCurrent: () => true,
-            pluginTarget: { machineId: 'machine-1', serverId: 'home-1', generation: 7, projection: projected, isCurrent: () => true },
+            pluginTarget: { machineId: 'machine-1', serverId: 'home-1', projection: projected, isCurrent: () => true },
             publishResourceEvent: () => {}, notify: () => {},
             // The daemon long-poll is the genuine external boundary. Keep the
             // canonical Resource watch lifecycle and its abort ownership real.
@@ -105,10 +105,10 @@ describe('Session caller-hosted HTML request controller', () => {
         const base = projection();
         const projected = { ...base, resourcesById: { ...base.resourcesById,
             'acme.preview/status': { ...base.resourcesById['acme.preview/status']!, scope: 'global' as const,
-                hostOrigin: { machineId: 'machine-1', serverId: 'home-1', generation: 7, phase: 'current' as const, interactionEnabled: true, executionOrigin: null } },
+                hostOrigin: { machineId: 'machine-1', serverId: 'home-1', phase: 'current' as const, interactionEnabled: true, executionOrigin: null } },
             'acme.preview/session-only': { ...base.resourcesById['acme.preview/status']!, id: 'session-only', scope: 'session' as const },
             'acme.preview/foreign': { ...base.resourcesById['acme.preview/status']!, id: 'foreign', scope: 'global' as const,
-                hostOrigin: { machineId: 'foreign-machine', serverId: 'foreign-home', generation: 7, phase: 'current' as const, interactionEnabled: true, executionOrigin: null } },
+                hostOrigin: { machineId: 'foreign-machine', serverId: 'foreign-home', phase: 'current' as const, interactionEnabled: true, executionOrigin: null } },
         } };
         const reads: unknown[] = [];
         const controller = createSessionCallerHostedHtmlRequestController({
@@ -116,7 +116,7 @@ describe('Session caller-hosted HTML request controller', () => {
             executeHostAction: async () => ({ ok: true, result: null }),
             isAccountCurrent: () => current,
             isSessionCurrent: () => true,
-            pluginTarget: { machineId: null, serverId: null, generation: null, projection: projected, isCurrent: () => current },
+            pluginTarget: { machineId: null, serverId: null, projection: projected, isCurrent: () => current },
             publishResourceEvent: () => {}, notify: () => {},
             readResource: async (machineId, options) => { reads.push({ machineId, options }); return { supported: true,
                 result: { ok: true, resource: options.resource, kind: 'config', contentType: 'application/json', digest: DIGEST, bytesBase64: 'e30=' } }; },
@@ -321,7 +321,6 @@ describe('Session caller-hosted HTML request controller', () => {
             pluginTarget: {
                 machineId: 'machine-1',
                 serverId: 'home-1',
-                generation: 7,
                 projection: projection(),
                 isCurrent: () => true,
             },
@@ -402,7 +401,6 @@ describe('Session caller-hosted HTML request controller', () => {
             pluginTarget: {
                 machineId: 'machine-1',
                 serverId: 'home-1',
-                generation: 7,
                 projection: projection(),
                 isCurrent: () => true,
             },

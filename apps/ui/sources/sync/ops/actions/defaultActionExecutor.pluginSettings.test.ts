@@ -91,7 +91,7 @@ describe('Plugin Settings through the default Account Action host', () => {
             .toMatchObject({ ok: false, errorCode: 'plugin_settings_unavailable' });
     });
 
-    it('uses the fresh Administration-selected source declaration while keeping writes in Account custody', async () => {
+    it('keeps source Settings current across unrelated registry generations while admitting fresh declaration changes', async () => {
         const serverUrl = 'https://source-settings-actions.test';
         const pluginId = 'acme.source-settings';
         const machineId = 'source-machine';
@@ -111,7 +111,7 @@ describe('Plugin Settings through the default Account Action host', () => {
         const definition = PluginSettingsContributionV2Schema.parse({ id: 'preferences', title: 'Preferences', scope: 'account',
             target: { kind: 'plugin' }, fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' } }] });
         const projectedSettings = projectPluginSettingsContributionV2({ pluginId, definition });
-        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {}, actionsById: {}, toolsById: {}, commandsById: {}, resourcesById: {},
+        let projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {}, actionsById: {}, toolsById: {}, commandsById: {}, resourcesById: {},
             settingsById: { [projectedSettings.id]: projectedSettings }, diagnostics: [], installedPackagesById: {
                 [pluginId]: { id: pluginId, displayName: 'Source Settings', version: '1.0.0', enabled: true,
                     source: { kind: 'localPath', locator: 'source-root' }, occurrenceId: 'source-occurrence',
@@ -152,6 +152,7 @@ describe('Plugin Settings through the default Account Action host', () => {
         const { readPluginAccountAvailability } = await import('@/sync/domains/plugins/availability/projection');
         const { resolveFreshPluginMachineExecutionOrigin } = await import('@/sync/domains/machines/administration/usePluginExecutionOriginSelection');
         const { loadDaemonMergedProjectionInputs, readCachedDaemonMergedProjectionCacheEntry } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+        const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime) throw new Error('Missing source Settings Account lifetime');
         vi.useFakeTimers({ toFake: ['Date'] });
@@ -160,11 +161,17 @@ describe('Plugin Settings through the default Account Action host', () => {
         storage.setState({ profileScope: lifetime.scope, settingsScope: lifetime.scope, settings: settingsParse(settings), settingsVersion: 1,
             isDataReady: true, machines: { [machineId]: machine }, machineListByServerId: { [connection.home.id]: [machine] },
             machineListStatusByServerId: { [connection.home.id]: 'idle' } });
-        const model = unionPluginUiProjections([{ machineId, serverId: connection.home.id, serverIdentityId: identity,
+        const readModel = () => unionPluginUiProjections([{ machineId, serverId: connection.home.id, serverIdentityId: identity,
             phase: 'current', interactionEnabled: true, projection: normalizePluginUiProjection(projection) }]).pluginUiProjection;
+        const model = readModel();
         let currentModel = model;
         const candidates = createPluginUiExecutionOriginCandidatePublication();
         candidates.publish(model, [], [pluginId]);
+        const publishCurrentSource = () => {
+            currentModel = readModel();
+            candidates.publish(currentModel, [], [pluginId]);
+        };
+        const invalidateProjection = () => publishMachineContributionRegistryProjectionInvalidation({ machineId, serverId: connection.home.id });
         const unpublish = publishCommittedAppShellPluginUiProjection(() => currentModel,
             id => currentModel ? candidates.getSnapshot().get(id) ?? null : null);
         try {
@@ -180,9 +187,15 @@ describe('Plugin Settings through the default Account Action host', () => {
             let revision = 7;
             let values: Record<string, unknown> = { enabled: false, unrelated: 'retained' };
             let withdrawOnRead = false;
+            let advanceUnrelatedGenerationOnRead = false;
             const path = `/v1/account/plugin-settings/${pluginId}`;
             homes.answer(serverId, path, { select: () => {
                 if (withdrawOnRead) currentModel = null;
+                if (advanceUnrelatedGenerationOnRead) {
+                    advanceUnrelatedGenerationOnRead = false;
+                    projection = { ...projection, generation: projection.generation + 1 };
+                    publishCurrentSource();
+                }
                 return { body: { status: 'present', revision, content: { t: 'plain', v: { v: 1, values } } } };
             } });
             homes.answer(serverId, `POST ${path}`, { select: input => {
@@ -196,17 +209,61 @@ describe('Plugin Settings through the default Account Action host', () => {
             const executor = createDefaultActionExecutor();
             const input = { pluginId, scope: { kind: 'account' }, target: { kind: 'account' }, localId: 'enabled' };
             const context = { serverId: connection.home.id, expectedAccountId: 'alice', surface: 'ui' as const };
+            // A neighboring plugin changes the registry observation, not this
+            // source's occurrence, authority or editable declaration.
+            projection = { ...projection, generation: projection.generation + 1 };
+            invalidateProjection();
             const write = await executor.execute('plugins.settings.set', { ...input, value: true, expectedRevision: '7' }, context);
             expect(write, JSON.stringify(write))
                 .toMatchObject({ ok: true, result: { data: { target: { kind: 'account' }, revision: '8' } } });
             expect(values).toEqual({ enabled: true, unrelated: 'retained' });
             expect(await executor.execute('plugins.settings.get', input, context)).toMatchObject({ ok: true, result: { data: { value: true } } });
-            withdrawOnRead = true;
+            publishCurrentSource();
+            advanceUnrelatedGenerationOnRead = true;
             expect(await executor.execute('plugins.settings.set', { ...input, value: false, expectedRevision: '8' }, context))
-                .toMatchObject({ ok: false, errorCode: 'plugin_settings_target_not_current' });
-            expect(await executor.execute('plugins.settings.set', { ...input, value: false, expectedRevision: '8' }, context))
+                .toMatchObject({ ok: true, result: { data: { revision: '9' } } });
+            expect(values).toEqual({ enabled: false, unrelated: 'retained' });
+
+            // A real source edit publishes a new occurrence and its schema
+            // together. A stale selection cannot borrow that fresh declaration.
+            const changedDefinition = PluginSettingsContributionV2Schema.parse({ ...definition,
+                fields: [{ id: 'enabled', title: 'Mode', schema: { type: 'string', enum: ['stable', 'preview'] } }] });
+            const changedSettings = projectPluginSettingsContributionV2({ pluginId, definition: changedDefinition });
+            projection = { ...projection, generation: projection.generation + 1,
+                installedPackagesById: { ...projection.installedPackagesById,
+                    [pluginId]: { ...projection.installedPackagesById[pluginId]!, occurrenceId: 'replacement-occurrence' } },
+                settingsById: { [changedSettings.id]: changedSettings },
+                familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                    home: { ...projection.familiesById.pluginUi!.entriesById.home!, occurrenceId: 'replacement-occurrence' },
+                } } },
+            };
+            invalidateProjection();
+            expect(await executor.execute('plugins.settings.set', { ...input, value: 'preview', expectedRevision: '9' }, context))
                 .toMatchObject({ ok: false, errorCode: 'plugin_settings_unavailable' });
-            expect(revision).toBe(8);
+            expect(revision).toBe(9);
+            publishCurrentSource();
+            expect(await executor.execute('plugins.settings.set', { ...input, value: true, expectedRevision: '9' }, context))
+                .toMatchObject({ ok: false, errorCode: 'plugin_settings_invalid_value' });
+            expect(revision).toBe(9);
+            expect(await executor.execute('plugins.settings.set', { ...input, value: 'preview', expectedRevision: '9' }, context))
+                .toMatchObject({ ok: true, result: { data: { revision: '10' } } });
+            expect(values).toEqual({ enabled: 'preview', unrelated: 'retained' });
+
+            projection = { ...projection, installedPackagesById: { ...projection.installedPackagesById,
+                [pluginId]: { ...projection.installedPackagesById[pluginId]!, enabled: false } } };
+            publishCurrentSource();
+            expect(await executor.execute('plugins.settings.set', { ...input, value: 'stable', expectedRevision: '10' }, context))
+                .toMatchObject({ ok: false, errorCode: 'plugin_settings_unavailable' });
+            expect(revision).toBe(10);
+            projection = { ...projection, installedPackagesById: { ...projection.installedPackagesById,
+                [pluginId]: { ...projection.installedPackagesById[pluginId]!, enabled: true } } };
+            publishCurrentSource();
+            withdrawOnRead = true;
+            expect(await executor.execute('plugins.settings.set', { ...input, value: 'stable', expectedRevision: '10' }, context))
+                .toMatchObject({ ok: false, errorCode: 'plugin_settings_target_not_current' });
+            expect(await executor.execute('plugins.settings.set', { ...input, value: 'stable', expectedRevision: '10' }, context))
+                .toMatchObject({ ok: false, errorCode: 'plugin_settings_unavailable' });
+            expect(revision).toBe(10);
         } finally { unpublish(); vi.useRealTimers(); await connection.dispose(); }
     });
     it.each([false, true])('preserves default approval or executes the user-waived MCP operation (waived=%s)', async waived => {

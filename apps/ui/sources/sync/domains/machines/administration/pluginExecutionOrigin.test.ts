@@ -200,7 +200,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
     it('keeps an explicit admitted development choice able to replace the bundled rendered version', () => {
         const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'dev-machine', pluginId: 'acme.plugin',
             sourceCustody: { kind: 'development', registeredRootId: 'dev-root' } } } as const;
-        const source = { source: { origin, version: '2.0.0', occurrenceId: 'dev-occurrence', serverId: 'local-one', generation: 1 },
+        const source = { source: { origin, version: '2.0.0', occurrenceId: 'dev-occurrence', serverId: 'local-one' },
             releaseContent: 'matched', validation: { kind: 'admitted' } } as const;
         const params = { pluginId: 'acme.plugin', storedOrigin: null, renderedVersion: '1.0.0', candidates: [source] };
         expect(resolvePluginMachineExecutionOriginState({ ...params, storedOrigin: origin })).toMatchObject({ kind: 'selected', origin, selectionSource: 'pinned' });
@@ -271,7 +271,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         const materialization = candidate({ serverIdentityId: 'srv_reachability', machineId, materializationId: 'reachability-mat' }).materialization;
         const source = { source: { origin: { serverIdentityId: 'srv_reachability', sourceRef: { machineId,
             pluginId: 'acme.plugin', sourceCustody: { kind: 'development', registeredRootId: 'reachability-root' } } },
-            version: '1.0.0', occurrenceId: 'reachability-occurrence', serverId, generation: 1 },
+            version: '1.0.0', occurrenceId: 'reachability-occurrence', serverId },
             releaseContent: 'matched', validation: { kind: 'admitted' } } as const;
         const machineSnapshots = [{ kind: 'resolved', accountId, profileId: serverId, serverIdentityId: 'srv_reachability',
             serverName: 'Studio', observation: 'live', machines: [{ id: machineId, updatedAt: 1, active: true,
@@ -298,7 +298,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
     it('coalesces only a machine-local census with its supplying source, not other Homes or exact sources', () => {
         const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine-a', pluginId: 'acme.plugin',
             sourceCustody: { kind: 'development', registeredRootId: 'source-a' } } } as const;
-        const source = { source: { origin, version: '1.0.0', occurrenceId: 'source-a', serverId: 'local-one', generation: 1 },
+        const source = { source: { origin, version: '1.0.0', occurrenceId: 'source-a', serverId: 'local-one' },
             releaseContent: 'matched', validation: { kind: 'rejected', reason: 'offline' } } as const;
         const alternate = { ...source, source: { ...source.source, origin: { ...origin,
             sourceRef: { ...origin.sourceRef, sourceCustody: { kind: 'development', registeredRootId: 'source-b' } } } } } as const;
@@ -313,7 +313,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
         const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine-a', pluginId: 'acme.plugin',
             sourceCustody: { kind: 'development', registeredRootId: 'registered-source-a' } } } as const;
         const sourceCandidate = { source: { origin, version: '1.0.0', occurrenceId: 'occurrence-a',
-            serverId: 'local-one', generation: 1 }, releaseContent: 'matched', validation: { kind: 'admitted' } } as const;
+            serverId: 'local-one' }, releaseContent: 'matched', validation: { kind: 'admitted' } } as const;
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
             candidates: [sourceCandidate] })).toMatchObject({ kind: 'selected', origin, selectionSource: 'auto' });
         expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: origin,

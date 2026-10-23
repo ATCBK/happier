@@ -108,6 +108,34 @@ export function mergeInstalledPluginUiProjections(
     return deriveInstalledPluginUiProjection(installed, runtime, materializations, explicitOrigins, createDeclarationComparisons(), completeUiPluginIds);
 }
 
+/** A previous publication cannot stand in for this merge's source choice. */
+function withoutHostUiSourceSelection<T>(entry: T): T {
+    const record = asRecord(entry);
+    if (record?.hostUiSourceSelection === undefined
+        || (record.contributionKind !== 'surfacePlacement' && record.contributionKind !== 'settingsPage')) return entry;
+    const unselected = Object.assign({}, entry);
+    Reflect.deleteProperty(unselected, 'hostUiSourceSelection');
+    return Object.freeze(unselected);
+}
+
+function withoutProjectionHostUiSourceSelections(projection: PluginUiProjectionModel | null): PluginUiProjectionModel | null {
+    if (!projection) return projection;
+    const clear = <T>(entries: Readonly<Record<string, T>>): Readonly<Record<string, T>> => {
+        let changed: Record<string, T> | null = null;
+        for (const [id, entry] of Object.entries(entries)) {
+            const unselected = withoutHostUiSourceSelection(entry);
+            if (unselected === entry) continue;
+            changed ??= { ...entries };
+            changed[id] = unselected;
+        }
+        return changed ? Object.freeze(changed) : entries;
+    };
+    const surfacePlacementsById = clear(projection.surfacePlacementsById);
+    const settingsPagesById = clear(projection.settingsPagesById);
+    return surfacePlacementsById === projection.surfacePlacementsById && settingsPagesById === projection.settingsPagesById
+        ? projection : Object.freeze({ ...projection, surfacePlacementsById, settingsPagesById });
+}
+
 function deriveInstalledPluginUiProjection(
     installed: readonly PluginUiProjectionModel[],
     runtime: PluginUiProjectionModel | null,
@@ -116,7 +144,7 @@ function deriveInstalledPluginUiProjection(
     comparisons: DeclarationComparisons,
     completeUiPluginIds?: ReadonlySet<string>,
 ): PluginUiProjectionModel | null {
-    if (installed.length === 0) return runtime;
+    if (installed.length === 0) return withoutProjectionHostUiSourceSelections(runtime);
     // A renderer descriptor selects that renderer, not the plugin's entire
     // declaration census. Partial installation metadata retains known rows,
     // but cannot turn an unobserved UI declaration into a withdrawal.
@@ -132,9 +160,11 @@ function deriveInstalledPluginUiProjection(
     ]).filter(id => completeUiPluginIds === undefined || completeUiPluginIds.has(id)));
     const hostBundledPluginIds = new Set(installed.flatMap(model => Object.values(model.installedPackagesById)
         .filter(plugin => plugin.source.kind === 'bundled' && !plugin.occurrenceId).map(plugin => plugin.id)));
-    const merge = <T>(read: (model: PluginUiProjectionModel) => Readonly<Record<string, T>>, artifactFacts = false) => {
+    const merge = <T>(read: (model: PluginUiProjectionModel) => Readonly<Record<string, T>>, artifactFacts = false, hostDeclarations = false) => {
         const declared: Record<string, T> = Object.assign({}, ...installed.map(read));
-        for (const [key, entry] of Object.entries(runtime ? read(runtime) : {})) {
+        if (hostDeclarations) for (const [key, entry] of Object.entries(declared)) declared[key] = withoutHostUiSourceSelection(entry);
+        for (const [key, runtimeEntry] of Object.entries(runtime ? read(runtime) : {})) {
+            const entry = hostDeclarations ? withoutHostUiSourceSelection(runtimeEntry) : runtimeEntry;
             const declaration = asRecord(declared[key]);
             // Account Actions and their per-Action executable graphs share
             // Availability custody, independently of an optional Machine supplier.
@@ -148,7 +178,12 @@ function deriveInstalledPluginUiProjection(
                     && supply.executionOrigin && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, selectedOrigin))) {
                 // Only the explicitly selected live source overrides host bytes.
                 // Other suppliers remain byte routes and cannot select the UI.
-                declared[key] = entry;
+                // Carry this already-decided choice to mounted requester
+                // readiness; raw Account Availability alone cannot select it.
+                const kind = asRecord(entry)?.contributionKind;
+                declared[key] = kind === 'surfacePlacement' || kind === 'settingsPage'
+                    ? Object.freeze(Object.assign({}, entry, { hostUiSourceSelection: 'explicitDevelopment' as const }))
+                    : entry;
                 continue;
             }
             const executableOwner = asRecord(entry)?.generatedOwnerKind;
@@ -202,11 +237,12 @@ function deriveInstalledPluginUiProjection(
         searchProvidersById: runtime?.searchProvidersById ?? EMPTY_PLUGIN_UI_PROJECTION.searchProvidersById,
         hostedWebById: merge(model => model.hostedWebById, true),
         reactNativeBundlesById: merge(model => model.reactNativeBundlesById, true),
-        surfacePlacementsById: merge(model => model.surfacePlacementsById),
+        surfacePlacementsById: merge(model => model.surfacePlacementsById, false, true),
         settingsGroupsById: merge(model => model.settingsGroupsById),
-        settingsPagesById: merge(model => model.settingsPagesById),
+        settingsPagesById: merge(model => model.settingsPagesById, false, true),
         composerControlsById: merge(model => model.composerControlsById),
         composerRegionsById: merge(model => model.composerRegionsById),
+        composerReferencesById: merge(model => model.composerReferencesById),
         voiceProvidersById: merge(model => model.voiceProvidersById),
         atmospherePicturesById: merge(model => model.atmospherePicturesById),
         registrySourcesById: merge(model => model.registrySourcesById),
@@ -401,10 +437,9 @@ export function createInstalledPluginUiProjectionPublication() {
                 return snapshot;
             }
             if (installed.length === 0) {
-                // The canonical one-shot merge is an exact passthrough here.
-                // In particular, a new raw runtime does not authorize cloning
-                // or walking all of its payloads just to publish that value.
-                snapshot = runtime;
+                // Strip only a prior merge's private source choice. Unmarked
+                // runtime rows and their authored payloads retain identity.
+                snapshot = withoutProjectionHostUiSourceSelections(runtime);
                 runtimeIndex = readPublishedProjectionPluginIndex(runtime);
                 installedIndexes = new Map();
                 comparisons = createDeclarationComparisons();
@@ -479,28 +514,10 @@ function asRecord(value: unknown): UnknownRecord | null {
         : null;
 }
 
-/**
- * A 32-bit FNV-1a over the members' `machineId=generation` pairs. Used only when
- * several machines contribute, where no member's generation can stand for the
- * whole union: it is a non-negative integer that changes whenever any member's
- * generation changes and is stable otherwise, which is what every consumer of
- * the model-level generation actually needs.
- */
-function deriveUnionGeneration(members: readonly PluginUiProjectionUnionMember[]): number {
-    let hash = 0x811c9dc5;
-    const source = members
-        .map((member) => `${member.machineId}=${String(member.projection?.generation ?? 'null')}`)
-        .join('\n');
-    for (let index = 0; index < source.length; index += 1) {
-        hash ^= source.charCodeAt(index);
-        hash = Math.imul(hash, 0x01000193);
-    }
-    return hash >>> 0;
-}
-
 function resolveUnionGeneration(members: readonly (PluginUiProjectionUnionMember & { projection: PluginUiProjectionModel })[]): number | null {
-    return members.every(member => member.projection.generation === null) ? null
-        : members.length === 1 ? members[0]!.projection.generation : deriveUnionGeneration(members);
+    // Keep an observed source's readiness; the UI has no aggregate registry revision.
+    for (const member of members) if (member.projection.generation !== null) return member.projection.generation;
+    return null;
 }
 
 function selectedOriginOwnsEntry(input: Readonly<{
@@ -553,7 +570,7 @@ const DECLARATION_MAP_KEYS = ['translationsByPluginId', 'sessionHeaderActionsByI
     'hostedWebById', 'reactNativeBundlesById', 'surfacePlacementsById', 'settingsGroupsById', 'settingsPagesById',
     'actionsById', 'voiceProvidersById', 'dragSourcesById', 'workItemsById', 'dropTargetsById',
     'atmospherePicturesById', 'registrySourcesById', 'skillsById', 'unknownEntriesById', 'inputTypesById',
-    'composerControlsById', 'composerRegionsById'] as const;
+    'composerControlsById', 'composerRegionsById', 'composerReferencesById'] as const;
 const UNION_MAP_KEYS = [...DECLARATION_MAP_KEYS, 'resourcesById', 'installedPackagesById'] as const;
 type UnionMapKey = typeof UNION_MAP_KEYS[number];
 
@@ -687,7 +704,8 @@ function publishInstalledPluginChanges(previous: PluginUiProjectionModel | null,
         const old = asRecord(previous)!;
         const next = asRecord(model)!;
         const keys = Object.keys(model);
-        if (keys.length === Object.keys(previous).length && keys.every(key => Object.hasOwn(old, key) && old[key] === next[key])) return previous;
+        if (keys.length === Object.keys(previous).length && keys.every(key => Object.hasOwn(old, key)
+            && (key === 'generation' ? (previous.generation === null) === (model.generation === null) : old[key] === next[key]))) return previous;
     }
     return publishProjectionPluginIndex(model, replacePublishedPluginSlices(previousIndex, changedModels));
 }
@@ -735,11 +753,11 @@ function samePluginUnionInputs(leftMembers: readonly PluginUiProjectionUnionMemb
             || member.serverIdentityId !== other.serverIdentityId
             || beforeIndex.publicationIndex.slices[id] !== afterIndex.publicationIndex.slices[id]
             || !samePluginUiMaterializationFacts(member.materializationsByPluginId?.[id], other.materializationsByPluginId?.[id])) return false;
-        // Declaration correspondence consumes no generation or live phase.
-        // Those facts still invalidate the runtime publication below.
+        // Declaration correspondence consumes no live readiness or phase.
+        // Readiness, phase and relevant refusals still invalidate availability.
         return declarationsOnly || (member.phase === other.phase
             && member.interactionEnabled === other.interactionEnabled && member.unavailableReasonCode === other.unavailableReasonCode
-            && model.generation === next.generation
+            && (model.generation === null) === (next.generation === null)
             && (model.diagnostics === next.diagnostics || memberHasActivationRefusal(member, id) === memberHasActivationRefusal(other, id))
             && [...beforeIndex.keysByPlugin.get(id)?.get('atmospherePicturesById') ?? []].every(key =>
                 beforeIndex.pictureOrdinals.get(key) === afterIndex.pictureOrdinals.get(key)));
@@ -822,7 +840,7 @@ function prepareUnionPublicationSource(members: readonly PluginUiProjectionUnion
             ?? (sameDictionaries && preceding ? preceding.publicationIndex : prepareProjectionPluginIndex(model, preceding?.publicationIndex));
         const modelSlices = new Map(Object.entries(publicationIndex.slices).map(([id, slice]) => {
             const old = preceding?.slices.get(id);
-            return [id, old && preceding?.publicationIndex.slices[id] === slice && old.generation === model.generation
+            return [id, old && preceding?.publicationIndex.slices[id] === slice && (old.generation === null) === (model.generation === null)
                 && old.diagnostics === model.diagnostics ? old
                 : Object.freeze({ ...slice.model, generation: model.generation, diagnostics: model.diagnostics })] as const;
         }));
@@ -887,7 +905,7 @@ function pluginUnionMembers(members: readonly PluginUiProjectionUnionMember[], s
     const scopedMembers = members.map((member, index) => {
         const scoped = { ...member,
             // The source slice, unlike an output-index dictionary slice, carries
-            // this exact current root's generation and activation diagnostics.
+            // this source's readiness and activation diagnostics.
             projection: member.projection ? source.slices.get(member.projection)?.get(pluginId) ?? null : null,
             materializationsByPluginId: member.materializationsByPluginId?.[pluginId]
                 ? { [pluginId]: member.materializationsByPluginId[pluginId]! } : undefined,
@@ -986,7 +1004,7 @@ function publishPluginUnionChanges(snapshot: PluginUiProjectionUnion, members: r
     } else {
         const pending = retainPluginUiProjectionValue(pluginUiProjection?.establishingExecutionTargetsByPluginId,
             establishingFacts.establishingExecutionTargetsByPluginId);
-        if (modelChanged || pluginUiProjection?.generation !== generation
+        if (modelChanged || (pluginUiProjection?.generation == null) !== (generation === null)
             || pending !== pluginUiProjection?.establishingExecutionTargetsByPluginId) {
             const base = pluginUiProjection ?? [...changedModels.values()].find(model => model !== null) ?? EMPTY_PLUGIN_UI_PROJECTION;
             const { establishingExecutionTargetsByPluginId: _previousPending, ...withoutPending } = base;
@@ -1016,7 +1034,7 @@ function publishPluginUnionChanges(snapshot: PluginUiProjectionUnion, members: r
 function declarationContent(entry: unknown): unknown {
     const record = asRecord(entry);
     if (!record) return entry;
-    const { occurrenceId, executionOrigin, sourceCustody, immutableGenerationId, generation,
+    const { occurrenceId, executionOrigin, sourceCustody, immutableGenerationId, generation, hostUiSourceSelection,
         enabled, availability, available, runtimeMode, runtimeDiagnostics, diagnostics, ...content } = record;
     const renderer = asRecord(content.renderer);
     if (renderer?.kind !== 'declarative' || renderer.model === undefined) return content;
@@ -1279,11 +1297,11 @@ function derivePluginUiExecutionOriginCandidates(
             if (supply.executionTargetDefault && !conflict
                 && !declaredDefaultOrigins.some(candidate => arePluginMachineExecutionOriginsEqual(candidate, origin))) declaredDefaultOrigins.push(origin);
             if (!('sourceRef' in origin) || !supply.occurrenceId || !supply.pluginVersion
-                || !supply.serverId || supply.generation === null
+                || !supply.serverId
                 || sourceCandidates.some(candidate => arePluginMachineExecutionOriginsEqual(candidate.source.origin, origin))) continue;
             sourceCandidates.push(Object.freeze({
                 source: Object.freeze({ origin, version: supply.pluginVersion, occurrenceId: supply.occurrenceId,
-                    serverId: supply.serverId, generation: supply.generation }),
+                    serverId: supply.serverId }),
                 // A machine-local source is selected by exact custody, not by
                 // correspondence with another Machine's portable release.
                 releaseContent: 'matched',
@@ -1305,8 +1323,7 @@ function derivePluginUiExecutionOriginCandidates(
         && previous.sourceCandidates.length === sourceCandidates.length
         && sourceCandidates.every((candidate, index) => {
             const other = previous.sourceCandidates[index]!;
-            return candidate.source.generation === other.source.generation
-                && candidate.source.serverId === other.source.serverId
+            return candidate.source.serverId === other.source.serverId
                 && candidate.source.version === other.source.version
                 && candidate.source.occurrenceId === other.source.occurrenceId
                 && arePluginMachineExecutionOriginsEqual(candidate.source.origin, other.source.origin)
@@ -1345,7 +1362,7 @@ function sameCandidateMembers(left: readonly PluginUiProjectionUnionMember[], ri
         return member.machineId === other.machineId && member.serverId === other.serverId
             && member.serverIdentityId === other.serverIdentityId && member.phase === other.phase
             && member.unavailableReasonCode === other.unavailableReasonCode && member.interactionEnabled === other.interactionEnabled
-            && member.projection?.generation === other.projection?.generation
+            && (member.projection?.generation == null) === (other.projection?.generation == null)
             && member.projection?.installedPackagesById[pluginId] === other.projection?.installedPackagesById[pluginId]
             && samePluginUiMaterializationFacts(member.materializationsByPluginId?.[pluginId], other.materializationsByPluginId?.[pluginId])
             && memberHasActivationRefusal(member, pluginId) === memberHasActivationRefusal(other, pluginId);
@@ -1509,7 +1526,7 @@ function resolveMemberContributionOrigin(
     return Object.freeze({ machineId: member.machineId, serverId: member.serverId,
         ...(member.serverIdentityId ? { serverIdentityId: member.serverIdentityId } : {}),
         ...(unavailableReasonCode ? { unavailableReasonCode } : {}),
-        generation: member.projection.generation, phase: member.phase,
+        phase: member.phase,
         executionOrigin: resolveMemberEntryExecutionOrigin(member, entry, packageOriginsByPluginId),
         interactionEnabled: member.interactionEnabled && member.projection.generation !== null
             && member.projection.installedPackagesById[pluginId]?.enabled !== false
@@ -1521,7 +1538,7 @@ function resolveMemberContributionOrigin(
  * Whether two member lists describe the same union, so the caller can keep the
  * previously built model instead of publishing a new object identity. Member
  * projections are compared by IDENTITY, which is exactly the stability the
- * per-machine currentness owner already guarantees for an unchanged generation.
+ * canonical per-machine projection owner guarantees for unchanged UI declarations.
  */
 export function arePluginUiProjectionUnionMembersEquivalent(
     left: readonly PluginUiProjectionUnionMember[],
@@ -1710,6 +1727,7 @@ function derivePluginUiProjectionUnion(
     const unknownEntriesById: Record<string, UnknownRecord> = {};
     const composerControlsById: Record<string, PluginUiProjectionModel['composerControlsById'][string]> = {};
     const composerRegionsById: Record<string, PluginUiProjectionModel['composerRegionsById'][string]> = {};
+    const composerReferencesById: Record<string, PluginUiProjectionModel['composerReferencesById'][string]> = {};
 
     // Aggregate equivalent declarations without appointing a producer. Exact
     // source facts are retained separately, including offline supplying copies.
@@ -1822,6 +1840,10 @@ function derivePluginUiProjectionUnion(
         for (const [id, entry] of Object.entries(model.composerRegionsById)) {
             const origin = originFor(entry);
             if (origin) publishFirstAdmitted(member, composerRegionsById, id, entry, origin);
+        }
+        for (const [id, entry] of Object.entries(model.composerReferencesById)) {
+            const origin = originFor(entry);
+            if (origin) publishFirstAdmitted(member, composerReferencesById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.hostedWebById)) {
             const origin = originFor(entry);
@@ -1941,7 +1963,7 @@ function derivePluginUiProjectionUnion(
     const publishedMaps: readonly Record<string, unknown>[] = [translationsByPluginId, sessionHeaderActionsById, searchProvidersById,
         hostedWebById, reactNativeBundlesById, surfacePlacementsById, settingsGroupsById, settingsPagesById, actionsById,
         voiceProvidersById, dragSourcesById, workItemsById, dropTargetsById, atmospherePicturesById, registrySourcesById, skillsById, unknownEntriesById, inputTypesById,
-        composerControlsById, composerRegionsById, resourcesById];
+        composerControlsById, composerRegionsById, composerReferencesById, resourcesById];
     for (const [index, map] of publishedMaps.entries()) {
         for (const [key, entry] of Object.entries(map)) {
             const pluginId = readString(asRecord(entry)?.pluginId);
@@ -1973,6 +1995,7 @@ function derivePluginUiProjectionUnion(
         + Object.keys(skillsById).length
         + Object.keys(composerControlsById).length
         + Object.keys(composerRegionsById).length
+        + Object.keys(composerReferencesById).length
         + Object.keys(unknownEntriesById).length;
 
     if (generation === null && entryCount === 0) {
@@ -2000,6 +2023,7 @@ function derivePluginUiProjectionUnion(
         composerAttachmentsById: Object.freeze({}),
         composerControlsById: Object.freeze(composerControlsById),
         composerRegionsById: Object.freeze(composerRegionsById),
+        composerReferencesById: Object.freeze(composerReferencesById),
         // Provisioner catalogs remain owned by their machine projection; no
         // App-union consumer selects or executes these contributions.
         machineProvisionersById: EMPTY_PLUGIN_UI_PROJECTION.machineProvisionersById,

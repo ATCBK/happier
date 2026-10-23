@@ -164,7 +164,6 @@ function useProjectRightSidebarModel(props: ProjectRightPanelProps) {
         activePage: props.activePage,
         presentation: deviceType === 'phone' ? 'mobile' : 'desktop',
         pluginPlacements: pluginRightSidebarPlacements,
-        projectionGeneration: pluginProjection.pluginUiProjection?.generation ?? null,
         runtimeAdmission,
         localize: localizePluginText,
     }), [
@@ -173,7 +172,6 @@ function useProjectRightSidebarModel(props: ProjectRightPanelProps) {
         terminalTabAvailable,
         deviceType,
         localizePluginText,
-        pluginProjection.pluginUiProjection?.generation,
         pluginRightSidebarPlacements,
         props.activePage,
         runtimeAdmission,
@@ -507,7 +505,7 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                         .filter((tab): tab is RightSidebarPluginTabDefinition => tab.owner === 'plugin')
                         .map((tab) => tab.disabledReason ? null : (
                             <RetainedPanelSurface
-                                key={tab.retentionKey}
+                                key={tab.id}
                                 isActive={activeTab === tab.id}
                                 testID={`project-rightpanel-surface-${tab.id}`}
                             >

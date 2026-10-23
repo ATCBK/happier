@@ -48,7 +48,6 @@ export type ResolveRightSidebarTabsInput = Readonly<{
     codeIntelligenceAvailable?: boolean;
     presentation?: RightSidebarPresentation;
     pluginPlacements?: readonly PluginUiSurfacePlacementProjection[];
-    projectionGeneration?: number | null;
     runtimeAdmission?: RightSidebarPluginTabRuntimeAdmission;
     localize?: PluginLocalizedTextResolver;
     /**
@@ -57,7 +56,6 @@ export type ResolveRightSidebarTabsInput = Readonly<{
      * already has them as its plugin placements.
      */
     appPluginPlacements?: readonly PluginUiSurfacePlacementProjection[];
-    appProjectionGeneration?: number | null;
     appLocalize?: PluginLocalizedTextResolver;
 }>;
 
@@ -130,7 +128,6 @@ export function resolveRightSidebarTabs(
     const pluginTabs = resolveRightSidebarPluginTabs({
         scope: input.scope,
         placements: input.pluginPlacements,
-        projectionGeneration: input.projectionGeneration,
         ...(input.localize ? { localize: input.localize } : {}),
         ...(input.runtimeAdmission === undefined ? {} : { runtimeAdmission: input.runtimeAdmission }),
     });
@@ -139,7 +136,6 @@ export function resolveRightSidebarTabs(
         : resolveRightSidebarPluginTabs({
             scope: 'app',
             placements: input.appPluginPlacements,
-            projectionGeneration: input.appProjectionGeneration,
             ...(input.appLocalize ? { localize: input.appLocalize } : {}),
             ...(input.runtimeAdmission === undefined ? {} : { runtimeAdmission: input.runtimeAdmission }),
         });

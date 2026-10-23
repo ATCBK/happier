@@ -38,7 +38,6 @@ const selectedPlacement = {
     hostOrigin: {
         machineId,
         serverId,
-        generation: 1,
         phase: 'current',
         interactionEnabled: true,
         executionOrigin,

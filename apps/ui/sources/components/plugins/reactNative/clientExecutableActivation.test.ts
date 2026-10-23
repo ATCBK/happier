@@ -153,7 +153,6 @@ function projection(input: Readonly<{
     const hostOrigin = Object.freeze({
         machineId,
         serverId,
-        generation: input.generation,
         interactionEnabled: true,
         phase: 'current' as const,
         executionOrigin: origin,
@@ -299,7 +298,6 @@ function address(input: Readonly<{
         localId: input.localId,
         target,
         executionOrigin: origin,
-        projectionGeneration: input.generation,
     });
 }
 

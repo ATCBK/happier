@@ -24,12 +24,12 @@ import {
 
 type ActivityProfile = PluginUiTranscriptActivityProjection;
 
-function profileKey(profile: ActivityProfile, generation: string): string {
+function profileKey(profile: ActivityProfile): string {
     return JSON.stringify([
         profile.pluginId,
         profile.descriptorId,
         profile.resource.localId,
-        generation,
+        profile.occurrenceId,
     ]);
 }
 
@@ -55,7 +55,6 @@ function readSnapshot(bytes: Uint8Array, contentType: string) {
 function snapshotRows(params: Readonly<{
     profile: ActivityProfile;
     snapshot: NonNullable<ReturnType<typeof readSnapshot>>;
-    generation: string;
     sessionId: string;
     freshness: PluginTranscriptActivityLiveRow['freshness'];
 }>): PluginTranscriptActivityLiveRow[] {
@@ -63,7 +62,7 @@ function snapshotRows(params: Readonly<{
     return params.snapshot.activities.map((activity) => ({
         pluginId: params.profile.pluginId,
         contributionId: params.profile.descriptorId,
-        generation: params.generation,
+        occurrenceId: params.profile.occurrenceId,
         sessionId: params.sessionId,
         resourceId: params.profile.resource.localId,
         localActivityId: activity.localActivityId,
@@ -98,7 +97,6 @@ function snapshotRows(params: Readonly<{
 function replaceProfileRows(
     previous: readonly PluginTranscriptActivityLiveRow[],
     profile: ActivityProfile,
-    generation: string,
     next: readonly PluginTranscriptActivityLiveRow[],
     priorCurrentRows: readonly PluginTranscriptActivityLiveRow[] = [],
 ): PluginTranscriptActivityLiveRow[] {
@@ -106,7 +104,7 @@ function replaceProfileRows(
             activity.pluginId === profile.pluginId
             && activity.contributionId === profile.descriptorId
             && activity.resourceId === profile.resource.localId
-            && activity.generation === generation
+            && activity.occurrenceId === profile.occurrenceId
     ));
     const priorByIdentity = new Map(previous.map((activity) => [
         buildPluginTranscriptActivityIdentityKey(activity),
@@ -132,12 +130,11 @@ function replaceProfileRows(
 function isProfileRow(
     activity: PluginTranscriptActivityLiveRow,
     profile: ActivityProfile,
-    generation: string,
 ): boolean {
     return activity.pluginId === profile.pluginId
         && activity.contributionId === profile.descriptorId
         && activity.resourceId === profile.resource.localId
-        && activity.generation === generation;
+        && activity.occurrenceId === profile.occurrenceId;
 }
 
 function sameActivityRow(
@@ -147,7 +144,7 @@ function sameActivityRow(
     if (
         left.pluginId !== right.pluginId
         || left.contributionId !== right.contributionId
-        || left.generation !== right.generation
+        || left.occurrenceId !== right.occurrenceId
         || left.sessionId !== right.sessionId
         || left.resourceId !== right.resourceId
         || left.localActivityId !== right.localActivityId
@@ -175,7 +172,6 @@ function sameActivityRow(
 function markProfileRowsStale(
     previous: readonly PluginTranscriptActivityLiveRow[],
     profile: ActivityProfile,
-    generation: string,
 ): PluginTranscriptActivityLiveRow[] {
     let changed = false;
     const next = previous.map((activity) => {
@@ -183,7 +179,7 @@ function markProfileRowsStale(
             activity.pluginId !== profile.pluginId
             || activity.contributionId !== profile.descriptorId
             || activity.resourceId !== profile.resource.localId
-            || activity.generation !== generation
+            || activity.occurrenceId !== profile.occurrenceId
             || activity.freshness === 'stale'
         ) {
             return activity;
@@ -197,7 +193,7 @@ function markProfileRowsStale(
 /**
  * The transcript-only Resource consumer. It holds ephemeral view state for the
  * existing transcript host, but defers Resource authorization, invalidation,
- * reconnect/resynchronization, and generation fencing to the canonical adapters.
+ * reconnect/resynchronization, and occurrence retirement to the canonical adapters.
  */
 export function usePluginTranscriptActivities(params: Readonly<{
     accountLifetime: ActiveServerAccountScopeLifetime | null;
@@ -214,16 +210,10 @@ export function usePluginTranscriptActivities(params: Readonly<{
     dismissedActivityIds: ReadonlySet<string>;
     onDismissActivity: (identityKey: string) => void;
 }> {
-    const generation = params.pluginUiProjection?.generation;
-    const generationKey = generation === null || generation === undefined ? null : String(generation);
+    const projectionReady = params.pluginUiProjection?.generation != null;
     const profiles = React.useMemo(() => sortProfiles(
         Object.values(params.pluginUiProjection?.transcriptActivitiesById ?? {}),
     ), [params.pluginUiProjection?.transcriptActivitiesById]);
-    const profilesKey = React.useMemo(() => (
-        generationKey === null
-            ? ''
-            : profiles.map((profile) => profileKey(profile, generationKey)).join('|')
-    ), [generationKey, profiles]);
     const resourceStoreOwner = usePluginContextualResourceStoreOwner();
     const [activities, setActivities] = React.useState<readonly PluginTranscriptActivityLiveRow[]>([]);
     const priorBindingKeyRef = React.useRef<string | null>(null);
@@ -244,8 +234,8 @@ export function usePluginTranscriptActivities(params: Readonly<{
         sessionId: params.sessionId,
         removed: params.sessionRemoved === true,
     };
-    const bindingKey = generationKey && params.machineId
-        ? `${params.sessionId}:${params.machineId}:${params.serverId ?? ''}:${generationKey}`
+    const bindingKey = params.machineId
+        ? `${params.sessionId}:${params.machineId}:${params.serverId ?? ''}`
         : null;
     const {
         dismissedActivityIds,
@@ -256,7 +246,7 @@ export function usePluginTranscriptActivities(params: Readonly<{
         sessionId: params.sessionId,
         machineId: params.machineId,
         serverId: params.serverId,
-        generation: generationKey,
+        ready: projectionReady,
         sessionRemoved: params.sessionRemoved,
     });
     const priorProfileSourcesRef = React.useRef<Readonly<{
@@ -271,7 +261,7 @@ export function usePluginTranscriptActivities(params: Readonly<{
         const sourceKeys = new Set(profiles.map((profile) => buildPluginTranscriptActivitySourceKey({
             pluginId: profile.pluginId,
             contributionId: profile.descriptorId,
-            generation: generationKey ?? '',
+            occurrenceId: profile.occurrenceId,
             sessionId: params.sessionId,
             resourceId: profile.resource.localId,
         })));
@@ -282,12 +272,12 @@ export function usePluginTranscriptActivities(params: Readonly<{
             }
         }
         priorProfileSourcesRef.current = { bindingKey, sourceKeys };
-    }, [bindingKey, generationKey, params.sessionId, profiles, profilesKey, reconcileActivitySource]);
+    }, [bindingKey, params.sessionId, profiles, reconcileActivitySource]);
 
-    // A generation/profile replacement is a lifecycle retirement, not an
+    // An occurrence/profile replacement is a lifecycle retirement, not an
     // offline event: prior Resource bytes may not seed the replacement.
     React.useEffect(() => {
-        if (params.sessionRemoved || generationKey === null || profiles.length === 0 || !params.machineId) {
+        if (params.sessionRemoved || !projectionReady || profiles.length === 0 || !params.machineId) {
             setActivities([]);
             priorBindingKeyRef.current = null;
             priorCurrentRowsByProfileRef.current.clear();
@@ -295,14 +285,14 @@ export function usePluginTranscriptActivities(params: Readonly<{
         }
         if (priorBindingKeyRef.current !== bindingKey) {
             priorBindingKeyRef.current = bindingKey;
-            // A Session/machine/generation replacement is a new contextual
+            // A Session/machine replacement is a new contextual
             // Resource binding. Its rows may not seed the next binding before
             // a current snapshot says they still exist.
             setActivities([]);
             priorCurrentRowsByProfileRef.current.clear();
             return;
         }
-        const admittedProfiles = new Set(profiles.map((profile) => profileKey(profile, generationKey)));
+        const admittedProfiles = new Set(profiles.map(profileKey));
         for (const key of priorCurrentRowsByProfileRef.current.keys()) {
             if (!admittedProfiles.has(key)) priorCurrentRowsByProfileRef.current.delete(key);
         }
@@ -311,11 +301,11 @@ export function usePluginTranscriptActivities(params: Readonly<{
                 activity.pluginId,
                 activity.contributionId,
                 activity.resourceId,
-                activity.generation,
+                activity.occurrenceId,
             ])));
             return next.length === previous.length ? previous : next;
         });
-    }, [bindingKey, generationKey, params.machineId, params.sessionRemoved, profiles, profilesKey]);
+    }, [bindingKey, params.machineId, params.sessionRemoved, profiles, projectionReady]);
 
     React.useEffect(() => {
         priorCurrentRowsByProfileRef.current.clear();
@@ -330,8 +320,7 @@ export function usePluginTranscriptActivities(params: Readonly<{
     React.useEffect(() => {
         if (
             params.sessionRemoved
-            ||
-            generationKey === null
+            || !projectionReady
             || !params.machineId
             || !params.accountLifetime
             || profiles.length === 0
@@ -345,7 +334,7 @@ export function usePluginTranscriptActivities(params: Readonly<{
         const isCurrent = (): boolean => !cancelled && (params.accountLifetime?.isCurrent() ?? true);
         // Profiles only lease the app-local generic contextual Resource store.
         // That owner owns the one read/watch/LKG/reconnect lifecycle for an
-        // exact Account/plugin/machine/generation/host-stamped Session binding.
+        // exact Account/plugin/machine/occurrence/host-stamped Session binding.
         const leasesByPluginId = new Map<string, PluginContextualResourceStoreLease>();
         const storeForProfile = (profile: ActivityProfile) => {
             const existing = leasesByPluginId.get(profile.pluginId);
@@ -378,14 +367,13 @@ export function usePluginTranscriptActivities(params: Readonly<{
                     // their uncertainty explicit instead of treating them as
                     // current until another valid snapshot replaces them.
                     if (value || resource.error || resource.freshness === 'stale') {
-                        setActivities((previous) => markProfileRowsStale(previous, profile, generationKey));
+                        setActivities((previous) => markProfileRowsStale(previous, profile));
                     }
                     return;
                 }
                 const nextRows = snapshotRows({
                     profile,
                     snapshot,
-                    generation: generationKey,
                     sessionId: params.sessionId,
                     freshness: resource.freshness === 'fresh' ? 'current' : 'stale',
                 });
@@ -393,27 +381,26 @@ export function usePluginTranscriptActivities(params: Readonly<{
                     buildPluginTranscriptActivitySourceKey(nextRows[0] ?? {
                         pluginId: profile.pluginId,
                         contributionId: profile.descriptorId,
-                        generation: generationKey,
+                        occurrenceId: profile.occurrenceId,
                         sessionId: params.sessionId,
                         resourceId: profile.resource.localId,
                     }),
                     new Set(nextRows.map(buildPluginTranscriptActivityIdentityKey)),
                 );
                 const profileCurrentRows = resource.freshness === 'fresh'
-                    ? priorCurrentRowsByProfileRef.current.get(profileKey(profile, generationKey))
+                    ? priorCurrentRowsByProfileRef.current.get(profileKey(profile))
                     : undefined;
                 setActivities((previous) => {
                     const nextActivities = replaceProfileRows(
                         previous,
                         profile,
-                        generationKey,
                         nextRows,
                         profileCurrentRows,
                     );
                     if (resource.freshness === 'fresh') {
                         priorCurrentRowsByProfileRef.current.set(
-                            profileKey(profile, generationKey),
-                            nextActivities.filter((activity) => isProfileRow(activity, profile, generationKey)),
+                            profileKey(profile),
+                            nextActivities.filter((activity) => isProfileRow(activity, profile)),
                         );
                     }
                     return nextActivities;
@@ -437,14 +424,13 @@ export function usePluginTranscriptActivities(params: Readonly<{
             });
         };
     }, [
-        generationKey,
         params.accountLifetime,
         params.machineId,
         params.sessionRemoved,
         params.serverId,
         params.sessionId,
         profiles,
-        profilesKey,
+        projectionReady,
         reconcileActivitySource,
         resourceStoreOwner,
     ]);

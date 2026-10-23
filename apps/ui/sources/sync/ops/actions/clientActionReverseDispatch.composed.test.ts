@@ -189,7 +189,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       executionOrigin,
       authorization: { generation: { targetGeneration: 'test-reverse-occurrence', desiredGeneration: 'test-reverse-occurrence',
         appliedGeneration: 'test-reverse-occurrence' }, resourceSelections: [], scopedGrants: [], serviceAvailability: [], operatingSystemAuthorization: [] } });
-    const origin = { machineId: machine.id, serverId, generation: 1, interactionEnabled: true, phase: 'current' as const,
+    const origin = { machineId: machine.id, serverId, interactionEnabled: true, phase: 'current' as const,
       executionOrigin };
     let bindingRenders = 0;
     const project = (hostOrigin: PluginUiContributionOriginV1) => ({ ...EMPTY_PLUGIN_UI_PROJECTION,

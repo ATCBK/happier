@@ -222,7 +222,6 @@ function createPluginProjection(input: Readonly<{
         hostOrigin: {
             machineId: 'machine-1',
             serverId: 'server-1',
-            generation: 4,
             phase: 'current',
             interactionEnabled: true,
             executionOrigin: {

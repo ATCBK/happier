@@ -32,7 +32,6 @@ import {
 export type CurrentCallerHostedHtmlPluginTarget = Readonly<{
     machineId: string | null;
     serverId: string | null;
-    generation: number | null;
     projection: PluginUiProjectionModel;
     isCurrent: () => boolean;
 }>;

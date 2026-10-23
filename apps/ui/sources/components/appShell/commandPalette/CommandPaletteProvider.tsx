@@ -131,12 +131,11 @@ export function useCommandPalettePluginActionPresentation(activeSessionId: strin
     const snapshotRef = React.useRef<PluginContributedActionCurrentSnapshot | null>(null);
     // This scope follows authority identity, not catalog metadata. The shared
     // controller re-resolves metadata/availability at open time, while a
-    // target, Account, or generation transition retires any live form/action.
+    // target or Account transition retires any live form/action.
     const actionScope = React.useMemo(() => new AbortController(), [
         activeSessionId,
         accountLifetime,
         machineId,
-        projection.inputs?.pluginProjectionV2?.generation,
         projection.phase,
         serverId,
     ]);
@@ -153,13 +152,11 @@ export function useCommandPalettePluginActionPresentation(activeSessionId: strin
         ) {
             return null;
         }
-        let current!: PluginContributedActionCurrentSnapshot;
-        current = {
+        const resolveContributedAction = createPluginUiProjectedActionResolver(inputs.pluginUiProjection?.actionsById);
+        const current: PluginContributedActionCurrentSnapshot = {
             pluginProjectionById: inputs.pluginProjectionById,
             pluginUiProjection: inputs.pluginUiProjection,
-            resolveContributedAction: createPluginUiProjectedActionResolver(
-                inputs.pluginProjectionV2?.actionsById,
-            ),
+            resolveContributedAction,
             host: {
                 machineId,
                 serverId,
@@ -171,7 +168,7 @@ export function useCommandPalettePluginActionPresentation(activeSessionId: strin
                     ? { readCurrentUiContext: currentUiContextReader.readCurrentUiContext }
                     : {}),
                 isCurrent: () => (
-                    snapshotRef.current === current
+                    snapshotRef.current?.host.signal === actionScope.signal
                     && actionScope.signal.aborted === false
                     && accountLifetime?.isCurrent() !== false
                 ),
@@ -179,23 +176,19 @@ export function useCommandPalettePluginActionPresentation(activeSessionId: strin
                 // app-scope origin. A Session palette already has its exact
                 // Session machine/currentness owner and must not acquire a
                 // second app-scope selection gate.
-                ...(activeSessionId ? {} : {
-                    isActionCurrent: (identity: Readonly<{ pluginId: string; localId: string }>) => {
-                        const projectedAction = appShellProjectionRef.current.pluginUiProjection?.actionsById[
-                            buildQualifiedPluginContributionKey(identity)
-                        ];
-                        const origin = readPluginUiContributionOrigin(projectedAction);
-                        const exactRef = origin?.executionOrigin ? getPluginMachineExecutionOriginRef(origin.executionOrigin) : null;
-                        return origin?.machineId === machineId
-                            && origin.serverId === serverId
-                            && origin.generation !== null
-                            && String(origin.generation) === String(generation)
-                            && origin.interactionEnabled === true
-                            && origin.phase === 'current'
-                            && exactRef?.pluginId === identity.pluginId
-                            && exactRef.machineId === machineId;
-                    },
-                }),
+                isActionCurrent: (identity: Readonly<{ pluginId: string; localId: string }>) => {
+                    const action = resolveContributedAction(identity);
+                    if (!action || snapshotRef.current?.resolveContributedAction?.(identity) !== action) return false;
+                    if (activeSessionId) return true;
+                    const projectedAction = appShellProjectionRef.current.pluginUiProjection?.actionsById[
+                        buildQualifiedPluginContributionKey(identity)
+                    ];
+                    const origin = readPluginUiContributionOrigin(projectedAction);
+                    const exactRef = origin?.executionOrigin ? getPluginMachineExecutionOriginRef(origin.executionOrigin) : null;
+                    return origin?.machineId === machineId && origin.serverId === serverId
+                        && origin.interactionEnabled === true && origin.phase === 'current'
+                        && exactRef?.pluginId === identity.pluginId && exactRef.machineId === machineId;
+                },
             },
         };
         return current;

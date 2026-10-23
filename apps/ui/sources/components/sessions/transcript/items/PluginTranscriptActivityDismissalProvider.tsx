@@ -11,14 +11,11 @@ type DismissalBinding = Readonly<{
     sessionId: string;
     machineId: string;
     serverId: string | null;
-    generation: string;
 }>;
 
 type DismissalEntry = {
     readonly sessionId: string;
-    readonly machineId: string;
     readonly serverId: string | null;
-    readonly generation: string;
     dismissedActivityIds: ReadonlySet<string>;
     /** Each dismissal belongs to one authoritative Activity Resource source. */
     dismissedSourceKeyByActivityId: ReadonlyMap<string, string>;
@@ -39,7 +36,7 @@ type DismissalLease = Readonly<{
     dismiss(identityKey: string, sourceKey: string): void;
     /** A valid snapshot omitting an Activity revokes only that source's dismissal. */
     reconcileSource(sourceKey: string, activeIdentityKeys: ReadonlySet<string>): void;
-    /** Permanent Session/generation retirement, not ordinary consumer release. */
+    /** Permanent Session retirement, not ordinary consumer release. */
     retire(): void;
     dispose(): void;
 }>;
@@ -54,7 +51,6 @@ function bindingKey(binding: Omit<DismissalBinding, 'accountLifetime'>): string 
         binding.sessionId,
         binding.machineId,
         binding.serverId,
-        binding.generation,
     ]);
 }
 
@@ -79,7 +75,7 @@ function createDismissalOwner(): PluginTranscriptActivityDismissalOwner {
     // A dismissed binding is intentionally dormant across route navigation so
     // A → B → A preserves the user's decision while Session A remains live.
     // Its lifetime is nevertheless bounded by the canonical Session deletion,
-    // generation retirement, and Account retirement owners below; this is not
+    // source omission, and Account retirement owners below; this is not
     // an arbitrary count or time-based cache.
     // Session deletion is owned by the sessions store, not by route mounts.
     // Observe that canonical fact so a dismissed entry cannot survive after
@@ -115,28 +111,11 @@ function createDismissalOwner(): PluginTranscriptActivityDismissalOwner {
                 entriesByAccountLifetime.set(binding.accountLifetime, accountEntries);
             }
             const entries = accountEntries.entries;
-            // A generation replacement can happen while this Session is not
-            // mounted. Retire its dormant prior-generation presentation state
-            // when the canonical replacement is next acquired.
-            for (const [oldKey, oldEntry] of entries) {
-                if (
-                    oldEntry.consumers === 0
-                    && oldEntry.sessionId === binding.sessionId
-                    && oldEntry.machineId === binding.machineId
-                    && oldEntry.serverId === binding.serverId
-                    && oldEntry.generation !== binding.generation
-                ) {
-                    disposeEntry(oldEntry);
-                    entries.delete(oldKey);
-                }
-            }
             let entry = entries.get(key);
             if (!entry || entry.disposed) {
                 entry = {
                     sessionId: binding.sessionId,
-                    machineId: binding.machineId,
                     serverId: binding.serverId,
-                    generation: binding.generation,
                     dismissedActivityIds: EMPTY_DISMISSED_ACTIVITY_IDS,
                     dismissedSourceKeyByActivityId: new Map(),
                     listeners: new Set(),
@@ -194,8 +173,8 @@ function createDismissalOwner(): PluginTranscriptActivityDismissalOwner {
                     entry!.consumers = Math.max(0, entry!.consumers - 1);
                     // Empty bindings have no presentation state worth
                     // retaining. Dismissed bindings remain available for the
-                    // approved A → B → A continuity until account/generation
-                    // retirement.
+                    // approved A → B → A continuity until Account/Session
+                    // retirement or authoritative source omission.
                     if (entry!.consumers === 0 && entry!.dismissedActivityIds.size === 0) {
                         disposeEntry(entry!);
                         if (entries.get(key) === entry) entries.delete(key);
@@ -254,7 +233,8 @@ export function usePluginTranscriptActivityDismissal(input: Readonly<{
     sessionId: string;
     machineId: string | null;
     serverId: string | null;
-    generation: string | null;
+    /** Live projection readiness, never a source identity or numeric revision. */
+    ready: boolean;
     /** The canonical permanent Session-removal fact, never route navigation. */
     sessionRemoved?: boolean;
 }>): Readonly<{
@@ -263,12 +243,11 @@ export function usePluginTranscriptActivityDismissal(input: Readonly<{
     reconcileActivitySource(sourceKey: string, activeIdentityKeys: ReadonlySet<string>): void;
 }> {
     const owner = React.useContext(PluginTranscriptActivityDismissalContext);
-    const targetBindingKey = !input.sessionRemoved && input.accountLifetime?.isCurrent() && input.machineId && input.generation
+    const targetBindingKey = !input.sessionRemoved && input.ready && input.accountLifetime?.isCurrent() && input.machineId
         ? bindingKey({
             sessionId: input.sessionId,
             machineId: input.machineId,
             serverId: input.serverId,
-            generation: input.generation,
         })
         : null;
     const [lease, setLease] = React.useState<DismissalLease | null>(null);
@@ -280,7 +259,7 @@ export function usePluginTranscriptActivityDismissal(input: Readonly<{
             owner
             && input.accountLifetime
             && input.machineId
-            && input.generation
+            && input.ready
             && !input.sessionRemoved
         )
             ? owner.acquire({
@@ -288,22 +267,19 @@ export function usePluginTranscriptActivityDismissal(input: Readonly<{
                 sessionId: input.sessionId,
                 machineId: input.machineId,
                 serverId: input.serverId,
-                generation: input.generation,
             })
             : null;
         setLease(nextLease);
         return () => {
             if (!nextLease) return;
             const current = currentInputRef.current;
-            const generationRetired = current.accountLifetime === input.accountLifetime
+            const readinessRetired = current.accountLifetime === input.accountLifetime
                 && current.sessionId === input.sessionId
                 && current.machineId === input.machineId
                 && current.serverId === input.serverId
-                && current.generation !== input.generation;
-            if (
-                (current.sessionId === input.sessionId && current.sessionRemoved === true)
-                || generationRetired
-            ) {
+                && input.ready
+                && !current.ready;
+            if ((current.sessionId === input.sessionId && current.sessionRemoved === true) || readinessRetired) {
                 nextLease.retire();
             } else {
                 nextLease.dispose();
@@ -311,8 +287,8 @@ export function usePluginTranscriptActivityDismissal(input: Readonly<{
         };
     }, [
         input.accountLifetime,
-        input.generation,
         input.machineId,
+        input.ready,
         input.serverId,
         input.sessionRemoved,
         input.sessionId,

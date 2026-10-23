@@ -661,7 +661,7 @@ export function commitCompactAppDestinationSources(source: CompactAppDestination
             pages: projection ? resolvePluginAppPages({ placements: selectPluginAppPagePlacements(projection), localize }) : [],
             rightSidebarTabs: projection ? resolveRightSidebarTabs({ scope: 'app',
                 pluginPlacements: selectPluginRightSidebarTabPlacements(projection, 'app'),
-                projectionGeneration: projection.generation, localize,
+                localize,
             }).filter((tab): tab is RightSidebarPluginTabDefinition => tab.owner === 'plugin') : [],
         };
     }

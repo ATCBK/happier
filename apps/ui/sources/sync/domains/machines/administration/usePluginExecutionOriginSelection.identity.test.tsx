@@ -107,7 +107,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const b = createMachineFixture({ id: 'auto-b', active: true, activeAt: Date.now() });
         const sources = [a, b].map(machine => ({ source: { origin: { serverIdentityId, sourceRef: { machineId: machine.id, pluginId,
             sourceCustody: { kind: 'development' as const, registeredRootId: machine.id } } }, version: '1.0.0',
-            occurrenceId: machine.id, serverId: home.id, generation: 1 }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }));
+            occurrenceId: machine.id, serverId: home.id }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }));
         const pending = (machine: typeof a) => ({ ...machine, availability: undefined, metadata: null });
         storage.setState({ profileScope: scope, settingsScope: scope, isDataReady: true, machines: {},
             machineListByServerId: { [home.id]: [pending(a), pending(b)] }, machineListStatusByServerId: { [home.id]: 'loading' } });
@@ -203,7 +203,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const origin = { serverIdentityId, sourceRef: { machineId: machine.id, pluginId,
             sourceCustody: { kind: 'development' as const, registeredRootId: 'scoped-origin-root' } } };
         const sources = [{ source: { origin, version: '1.0.0', occurrenceId: 'scoped-occurrence',
-            generation: 1, serverId: home.id }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
+            serverId: home.id }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
         let sourceCandidates = sources;
         let renders = 0;
         // Spy on the genuine device-storage boundary, forwarding every read.
@@ -408,7 +408,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const origin = { serverIdentityId, sourceRef: { machineId: machine.id, pluginId,
             sourceCustody: { kind: 'development' as const, registeredRootId: 'return-root' } } };
         const candidates = [{ source: { origin, version: '1.0.0', occurrenceId: 'return-occurrence',
-            generation: 1, serverId: home.id }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
+            serverId: home.id }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
         const { getPluginUiEphemeralSharedScope } = await import('@/components/plugins/surfaces/pluginUiEphemeralSharedScope');
         const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
         const { acquireTriageListWindow, readTriageListWindowSnapshot, refreshTriageListWindow } = await import(
@@ -521,7 +521,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
         } });
         const origin = { serverIdentityId, sourceRef: { machineId: machine.id, pluginId,
             sourceCustody: { kind: 'development' as const, registeredRootId: 'source-root' } } };
-        const source = { origin, version: '0.0.0', occurrenceId: 'source-occurrence', generation: 1, serverId: home.id };
+        const source = { origin, version: '0.0.0', occurrenceId: 'source-occurrence', serverId: home.id };
         const sources = [{ source, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
         const classified: string[] = [];
         const classifiedDuringRender: boolean[] = [];
@@ -578,7 +578,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
             settings: { ...storage.getState().settings, machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} } } });
         const origin = { serverIdentityId, sourceRef: { machineId: machine.id, pluginId: 'acme.source',
             sourceCustody: { kind: 'development' as const, registeredRootId: 'source-root' } } };
-        const source = { origin, version: '1.0.0', occurrenceId: 'source-occurrence', generation: 1, serverId: home.id };
+        const source = { origin, version: '1.0.0', occurrenceId: 'source-occurrence', serverId: home.id };
         const candidates = [{ source, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
         let currentSources: typeof candidates = candidates;
         let currentDefaults = [origin];
@@ -674,7 +674,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
             settings: { ...storage.getState().settings, machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} } } });
         const origin = { serverIdentityId, sourceRef: { machineId: machine.id, pluginId: 'acme.presence',
             sourceCustody: { kind: 'development' as const, registeredRootId: 'presence-root' } } };
-        const source = { origin, version: '1.0.0', occurrenceId: 'presence-occurrence', generation: 1, serverId: home.id };
+        const source = { origin, version: '1.0.0', occurrenceId: 'presence-occurrence', serverId: home.id };
         const candidates = [{ source, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
         replacePluginAccountAvailabilityProjection({ scope, snapshot: {
             availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
@@ -859,7 +859,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
                 const sources = machines.map(machine => ({ source: { origin: { serverIdentityId,
                     sourceRef: { machineId: machine.id, pluginId, sourceCustody: {
                         kind: 'development' as const, registeredRootId: machine.id,
-                    } } }, version: '1.0.0', occurrenceId: machine.id, serverId: home.id, generation: 1 },
+                    } } }, version: '1.0.0', occurrenceId: machine.id, serverId: home.id },
                     releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }));
                 const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({
                     pluginId, sourceCandidates: sources, autoPick: true, renderedVersion: '1.0.0',
@@ -974,7 +974,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const sourceFor = (pluginId: string, machineId: string) => [{
             source: { origin: { serverIdentityId, sourceRef: { machineId, pluginId,
                 sourceCustody: { kind: 'development' as const, registeredRootId: 'retained-source-root' } } },
-                version: '1.0.0', occurrenceId: `${pluginId}-occurrence`, generation: 1, serverId: home.id },
+                version: '1.0.0', occurrenceId: `${pluginId}-occurrence`, serverId: home.id },
             releaseContent: 'matched' as const, validation: { kind: 'admitted' as const },
         }];
         const sourceA = sourceFor('acme.retained-a', machines[0]!.id);
@@ -1043,7 +1043,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const sources = [{ source: {
             origin: { serverIdentityId, sourceRef: { machineId: machine.id, pluginId,
                 sourceCustody: { kind: 'development' as const, registeredRootId: 'snapshot-expiry-root' } } },
-            version: '1.0.0', occurrenceId: 'snapshot-expiry-occurrence', generation: 1, serverId: home.id,
+            version: '1.0.0', occurrenceId: 'snapshot-expiry-occurrence', serverId: home.id,
         }, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
         externalStoreReads.reads.length = 0;
         vi.mocked(React.useMemo).mockClear();

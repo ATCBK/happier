@@ -873,7 +873,6 @@ describe('SessionCockpitTabNavigator keyboard behavior', () => {
         const catalog = resolveSessionCockpitMobileCatalog({
             terminalTabAvailable: false,
             pluginPlacements: Object.values(pluginProjection.surfacePlacementsById),
-            projectionGeneration: pluginProjection.generation,
         });
         expect(
             screen.tree.findAllByType('BottomTabScreen' as never).map((node) => node.props.name),

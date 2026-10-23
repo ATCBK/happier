@@ -23,7 +23,6 @@ export type RightSidebarPluginTabRuntimeAdmission = Readonly<{
 export type ResolveRightSidebarPluginTabsInput = Readonly<{
     scope: RightSidebarScope;
     placements?: readonly PluginUiSurfacePlacementProjection[];
-    projectionGeneration?: number | null;
     policyContext?: PluginUiPolicyEvaluationContext;
     localize?: PluginLocalizedTextResolver;
     /** Current mounted host facts for catalog admission. */
@@ -96,8 +95,6 @@ function isMobilePluginTab(
 export function resolveRightSidebarPluginTabs(
     input: ResolveRightSidebarPluginTabsInput,
 ): readonly RightSidebarPluginTabDefinition[] {
-    const generation = input.projectionGeneration ?? null;
-
     const destinations = resolveRightSidebarPluginDestinations(input).filter((destination) => (
         !input.runtimeAdmission
         || isPluginUiDestinationBindingAdmittedAtRuntimeV1({
@@ -125,9 +122,7 @@ export function resolveRightSidebarPluginTabs(
             plugin: Object.freeze({
                 pluginId: destination.placement.binding.destination.pluginId,
                 descriptorId: destination.placement.binding.destination.localId,
-                generation,
             }),
-            retentionKey: `${destination.id}:${generation ?? 'unknown'}`,
         }) as RightSidebarPluginTabDefinition;
     }));
 }

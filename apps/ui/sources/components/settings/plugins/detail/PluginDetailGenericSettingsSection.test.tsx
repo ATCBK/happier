@@ -986,7 +986,6 @@ describe('PluginDetailGenericSettingsSection', () => {
                     actionAvailable
                     openSurface={async () => null}
                     openSurfaceAvailable={false}
-                    authorityGeneration={1}
                 />
             </>,
         );

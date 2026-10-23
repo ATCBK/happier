@@ -1372,7 +1372,7 @@ describe('usePluginUiProjectionCurrentness', () => {
         await flushHookEffects();
         expect(rendered.getCurrent().currentness.phase).toBe('establishing');
         expect(rendered.getCurrent().selected.selectedSupply).toMatchObject({
-            occurrenceId: firstSupply!.occurrenceId, generation: firstSupply!.generation,
+            occurrenceId: firstSupply!.occurrenceId,
             phase: 'establishing', interactionEnabled: false,
         });
         expect(rendered.getCurrent().selected.selection.canExecute).toBe(false);

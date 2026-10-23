@@ -270,7 +270,6 @@ export function createTargetedPluginSurfaceBoundFacts(input: Readonly<{
     targetAuthorityKey?: string | null;
     platform: PluginUiSurfaceContextV1['platform'];
     channel: PluginUiChannelV1;
-    projectionGeneration?: number | string | null;
     pluginProjectionById?: Readonly<Record<string, PluginProjectionEntry>> | null;
     pluginUiProjection?: PluginUiProjectionModel | null;
     accountLifetime: ActiveServerAccountScopeLifetime | null;
@@ -293,7 +292,6 @@ export function createTargetedPluginSurfaceBoundFacts(input: Readonly<{
         resourceScope: EMPTY_TARGETED_SURFACE_RESOURCE_SCOPE,
         machineId: physical.executionOrigin ? getPluginMachineExecutionOriginRef(physical.executionOrigin).machineId : input.machineId ?? null,
         serverId: input.serverId,
-        projectionGeneration: input.projectionGeneration,
         occurrenceId: physical.targetedContributions.target.occurrenceId,
         executionOrigin: physical.executionOrigin,
         accountExecutionOrigin: physical.accountExecutionOrigin,

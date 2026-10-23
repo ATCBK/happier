@@ -54,7 +54,6 @@ type SessionCockpitTabBarProps = Readonly<{
     terminalTabAvailable: boolean;
     openDetailsTabCount: number;
     pluginPlacements?: readonly PluginUiSurfacePlacementProjection[];
-    projectionGeneration?: number | null;
     onSurfacePress: (surface: SessionMobileSurface) => void;
 }>;
 
@@ -161,8 +160,7 @@ export const SessionCockpitTabBar = React.memo((props: SessionCockpitTabBarProps
         boardFeatureEnabled,
         terminalTabAvailable: props.terminalTabAvailable,
         pluginPlacements: props.pluginPlacements,
-        projectionGeneration: props.projectionGeneration,
-    }), [appTabInputs, boardFeatureEnabled, sessionSharingAvailable, props.pluginPlacements, props.projectionGeneration, props.terminalTabAvailable]);
+    }), [appTabInputs, boardFeatureEnabled, sessionSharingAvailable, props.pluginPlacements, props.terminalTabAvailable]);
     const visibility = React.useMemo(() => resolveSessionCockpitMobileTabVisibility({
         catalog,
         preferences,

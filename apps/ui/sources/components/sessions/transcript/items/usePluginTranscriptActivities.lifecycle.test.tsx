@@ -68,15 +68,15 @@ async function createAccountLifetime(accountId = 'account-a') {
     return { lifetime, retire: retireActiveServerAccountScopeLifetime };
 }
 
-function projection(generation: number): PluginUiProjectionModel {
+function projection(occurrence: number): PluginUiProjectionModel {
     return Object.freeze({
         ...EMPTY_PLUGIN_UI_PROJECTION,
-        generation,
+        generation: 7,
         transcriptActivitiesById: Object.freeze({
             'acme.preview/activity': Object.freeze({
                 id: 'acme.preview/activity',
                 pluginId: 'acme.preview',
-                occurrenceId: `preview-occurrence-${generation}`,
+                occurrenceId: `preview-occurrence-${occurrence}`,
                 contributionKind: 'transcriptActivity' as const,
                 descriptorId: 'activity',
                 resource: Object.freeze({ pluginId: 'acme.preview', localId: 'live-activity' }),

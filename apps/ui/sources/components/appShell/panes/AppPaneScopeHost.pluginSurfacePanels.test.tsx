@@ -107,7 +107,6 @@ function createPlacement(input: Readonly<{
         hostOrigin: {
             machineId: 'machine-1',
             serverId: runtime.serverId,
-            generation: 1,
             phase: 'current',
             interactionEnabled: true,
             executionOrigin: PluginMachineExecutionOriginV1Schema.parse({

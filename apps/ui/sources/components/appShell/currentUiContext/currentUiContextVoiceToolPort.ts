@@ -253,13 +253,9 @@ function isResolvedCommandCurrent(
         && current.command === resolved.command;
 }
 
-type CurrentUiContextVoiceActionOrigin = Readonly<
-    Omit<PluginUiContributionOriginV1, 'generation'> & Readonly<{ generation: number }>
->;
-
 type CurrentUiContextVoiceResolvedAction = Readonly<{
     action: PluginProjectedActionV2;
-    origin: CurrentUiContextVoiceActionOrigin;
+    origin: PluginUiContributionOriginV1;
 }>;
 
 /**
@@ -281,23 +277,15 @@ function resolveCurrentAction(
     ) {
         return null;
     }
-    const generation = origin.generation;
-    if (
-        typeof generation !== 'number'
-        || !Number.isInteger(generation)
-        || generation < 0
-    ) {
-        return null;
-    }
     return Object.freeze({
         action,
-        origin: Object.freeze({ ...origin, generation }),
+        origin,
     });
 }
 
 /**
  * Client Actions become discoverable only after the one generic executable
- * composition has committed their exact target, origin, and generation.
+ * composition has committed their exact target and origin.
  * Daemon Actions retain the dispatcher-owned availability path.
  */
 function hasCurrentClientActionRegistration(
@@ -321,7 +309,6 @@ function isResolvedActionCurrent(
         && current.action === resolved.action
         && current.origin.machineId === resolved.origin.machineId
         && current.origin.serverId === resolved.origin.serverId
-        && current.origin.generation === resolved.origin.generation
         && (
             current.origin.executionOrigin === resolved.origin.executionOrigin
             || (

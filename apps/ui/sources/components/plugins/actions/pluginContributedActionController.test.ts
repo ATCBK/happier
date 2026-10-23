@@ -326,7 +326,6 @@ const CLIENT_REGISTERED_EXECUTION_ORIGIN = Object.freeze({
 const CLIENT_REGISTERED_HOST_ORIGIN = Object.freeze({
     machineId: CLIENT_REGISTERED_EXECUTION_ORIGIN.materializationRef.machineId,
     serverId: 'server-client-registered-action',
-    generation: GENERATION,
     interactionEnabled: true,
     phase: 'current' as const,
     executionOrigin: CLIENT_REGISTERED_EXECUTION_ORIGIN,

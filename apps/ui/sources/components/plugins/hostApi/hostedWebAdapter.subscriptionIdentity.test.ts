@@ -22,7 +22,7 @@ it('keeps the wire subscription identity authoritative over guest payload and cl
         executeHostAction: async () => ({ ok: true, result: null }),
         isAccountCurrent: () => true, isSessionCurrent: () => true,
         pluginTarget: {
-            machineId: 'machine-review', serverId: 'home-review', generation: 1, isCurrent: () => true,
+            machineId: 'machine-review', serverId: 'home-review', isCurrent: () => true,
             projection: {
                 ...EMPTY_PLUGIN_UI_PROJECTION,
                 generation: 1,

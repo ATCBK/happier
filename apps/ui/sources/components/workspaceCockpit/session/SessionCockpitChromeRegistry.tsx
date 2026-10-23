@@ -12,7 +12,6 @@ export type SessionCockpitChromeRegistration = Readonly<{
     terminalTabAvailable: boolean;
     openDetailsTabCount: number;
     pluginPlacements?: readonly PluginUiSurfacePlacementProjection[];
-    projectionGeneration?: number | null;
     switchSurface: (surface: SessionMobileSurface) => void;
 }>;
 
@@ -207,7 +206,6 @@ export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children:
                 && currentRegistration.terminalTabAvailable === nextRegistration.terminalTabAvailable
                 && currentRegistration.openDetailsTabCount === nextRegistration.openDetailsTabCount
                 && currentRegistration.pluginPlacements === nextRegistration.pluginPlacements
-                && currentRegistration.projectionGeneration === nextRegistration.projectionGeneration
             ) {
                 return currentRegistration;
             }
@@ -219,7 +217,6 @@ export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children:
                 terminalTabAvailable: nextRegistration.terminalTabAvailable,
                 openDetailsTabCount: nextRegistration.openDetailsTabCount,
                 pluginPlacements: nextRegistration.pluginPlacements,
-                projectionGeneration: nextRegistration.projectionGeneration,
                 switchSurface: (surface) => {
                     const latest = latestRegistrationRef.current;
                     if (latest?.sessionId !== nextRegistration.sessionId || latest.serverId !== nextRegistration.serverId) return;

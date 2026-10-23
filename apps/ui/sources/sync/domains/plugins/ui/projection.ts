@@ -7,6 +7,7 @@ import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugi
 import type { PluginProjectedWorkItemsEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import type { PluginDeclaredUiEntriesV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import type { PluginContributionIntrospectionPresentationV1 } from '@happier-dev/protocol/daemon/pluginContributionIntrospection';
 import { resolveLocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/platform';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
 import { PluginUiWidgetAreaDeclarationsV1Schema, type PluginUiWidgetAreaDeclarationV1 } from '@happier-dev/protocol/plugins/contributions/ui/widgetAreas';
@@ -38,6 +39,11 @@ import {
 } from '@happier-dev/protocol/plugins/ui';
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
+
+/** Host-only result of declaration selection, never an execution grant or wire field. */
+type PluginUiHostDeclarationSourceSelection = Readonly<{
+    hostUiSourceSelection?: 'explicitDevelopment';
+}>;
 
 /** Observation time remains an Availability fact, not an input to UI declarations. */
 export function samePluginUiMaterializationFacts(left: PluginMachineMaterializationV1 | undefined, right: PluginMachineMaterializationV1 | undefined): boolean {
@@ -75,6 +81,13 @@ export type PluginUiInputTypeProjection = NonNullable<DaemonContributionRegistry
 export type PluginUiAtmospherePictureProjection = NonNullable<DaemonContributionRegistryProjection['familiesById']['atmospherePictures']>['entriesById'][string];
 export type PluginUiRegistrySourceProjection = NonNullable<DaemonContributionRegistryProjection['familiesById']['registrySources']>['entriesById'][string];
 export type PluginUiSkillProjection = NonNullable<DaemonContributionRegistryProjection['familiesById']['skills']>['entriesById'][string];
+export type PluginUiComposerReferenceProjection = Readonly<{
+    id: string;
+    pluginId: string;
+    identity: PluginContributionIdentityV1;
+    occurrenceId: string;
+    definition: Extract<PluginContributionIntrospectionPresentationV1, { kind: 'composerReference' }>;
+}>;
 
 /**
  * The OS-level platform every plugin UI projection is normalized for.
@@ -175,7 +188,7 @@ export type PluginUiPageHeaderActionProjection = Readonly<{
     command: PluginUiResolvedSemanticCommandV1;
 }>;
 
-type PluginUiSurfacePlacementProjectionFields = UnknownRecord & Readonly<{
+type PluginUiSurfacePlacementProjectionFields = UnknownRecord & PluginUiHostDeclarationSourceSelection & Readonly<{
     id: string;
     pluginId: string;
     /** Exact process-local occurrence projected with this contribution row. */
@@ -266,7 +279,7 @@ export type PluginUiSettingsGroupProjection = UnknownRecord & Readonly<{
  * `settingsPage × app` binding, carried verbatim so both the Settings catalog
  * and generic route consume the same canonical destination identity.
  */
-export type PluginUiSettingsPageProjection = UnknownRecord & Readonly<{
+export type PluginUiSettingsPageProjection = UnknownRecord & PluginUiHostDeclarationSourceSelection & Readonly<{
     id: string;
     pluginId: string;
     contributionKind: 'settingsPage';
@@ -402,13 +415,14 @@ export type PluginUiProjectionModel = Readonly<{
     transcriptActivitiesById: Readonly<Record<string, PluginUiTranscriptActivityProjection>>;
     sessionInfoSectionsById: Readonly<Record<string, PluginUiSessionInfoSectionProjection>>;
     /**
-     * The three Composer maps retain only daemon-admitted static declarations.
+     * Composer maps retain only daemon-admitted static declarations.
      * Document state, picker state, effect dispatch, and surface lifecycle stay
      * with their existing owners; this model is the one UI catalog projection.
      */
     composerAttachmentsById: Readonly<Record<string, PluginUiComposerAttachmentProjection>>;
     composerControlsById: Readonly<Record<string, PluginProjectedComposerControlEntryV1>>;
     composerRegionsById: Readonly<Record<string, PluginProjectedComposerRegionEntryV1>>;
+    composerReferencesById: Readonly<Record<string, PluginUiComposerReferenceProjection>>;
     actionsById: Readonly<Record<string, PluginUiActionProjection>>;
     /** Exact current Resource declarations for host-owned qualified consumers. */
     resourcesById: Readonly<Record<string, PluginUiResourceProjection>>;
@@ -441,6 +455,7 @@ export const EMPTY_PLUGIN_UI_PROJECTION: PluginUiProjectionModel = Object.freeze
     composerAttachmentsById: Object.freeze({}),
     composerControlsById: Object.freeze({}),
     composerRegionsById: Object.freeze({}),
+    composerReferencesById: Object.freeze({}),
     actionsById: Object.freeze({}),
     resourcesById: Object.freeze({}),
     machineProvisionersById: Object.freeze({}),
@@ -986,7 +1001,7 @@ export function normalizePluginUiProjection(
         && projection.actionsById === previousInput.actionsById && projection.resourcesById === previousInput.resourcesById
         && projection.familiesById === previousInput.familiesById
         && coverage?.resourceDeclarations === coverage?.previousResourceDeclarations) {
-        return projection.generation === previous.generation && diagnostics === previous.diagnostics ? previous
+        return (projection.generation === null) === (previous.generation === null) && diagnostics === previous.diagnostics ? previous
             : Object.freeze({ ...previous, generation: projection.generation, diagnostics });
     }
     const sameFamily = (id: keyof PluginUiProjectionNormalizationInput['familiesById']) => previousInput !== undefined
@@ -1008,6 +1023,16 @@ export function normalizePluginUiProjection(
     const composerRegionsById = previous && sameFamily('composerRegions') ? previous.composerRegionsById : Object.freeze({
         ...(projection.familiesById.composerRegions?.entriesById ?? {}),
     });
+    const composerReferencesById = previous && projection.contributionIntrospection === previousInput?.contributionIntrospection
+        ? previous.composerReferencesById : Object.freeze(Object.fromEntries(
+            (projection.contributionIntrospection?.contributions ?? []).flatMap(record => {
+                const identity = record.contribution;
+                if (identity.kind !== 'localId' || identity.family !== 'composerReferences'
+                    || record.presentation?.kind !== 'composerReference' || !record.occurrenceId) return [];
+                return [[identity.qualifiedId, { id: identity.qualifiedId, pluginId: identity.pluginId,
+                    identity: { pluginId: identity.pluginId, localId: identity.localId }, occurrenceId: record.occurrenceId,
+                    definition: record.presentation } satisfies PluginUiComposerReferenceProjection]];
+            })));
     // The daemon Registry has already resolved availability, identity, and
     // execution target. Keep these entries verbatim so the client executable
     // owner consumes one canonical projection rather than rebuilding Actions
@@ -1090,6 +1115,7 @@ export function normalizePluginUiProjection(
             composerAttachmentsById,
             composerControlsById,
             composerRegionsById,
+            composerReferencesById,
             actionsById,
             resourcesById,
             machineProvisionersById,
@@ -1269,6 +1295,7 @@ export function normalizePluginUiProjection(
         composerAttachmentsById,
         composerControlsById,
         composerRegionsById,
+        composerReferencesById,
         actionsById,
         resourcesById,
         machineProvisionersById,

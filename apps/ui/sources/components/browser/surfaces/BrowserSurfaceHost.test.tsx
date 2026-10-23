@@ -405,7 +405,6 @@ const BROWSER_CLIENT_ACTION_ORIGIN = Object.freeze(PluginMachineMaterializationE
 const BROWSER_CLIENT_ACTION_ORIGIN_PROJECTION = Object.freeze({
     machineId: target.machineId,
     serverId: 'srv_browser_client_action',
-    generation: BROWSER_CLIENT_ACTION_GENERATION,
     interactionEnabled: true,
     phase: 'current' as const,
     executionOrigin: BROWSER_CLIENT_ACTION_ORIGIN,

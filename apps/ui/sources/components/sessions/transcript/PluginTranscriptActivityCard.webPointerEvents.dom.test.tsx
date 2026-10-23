@@ -35,7 +35,7 @@ const activity: PluginActivityItem = {
     identityKey: 'build',
     pluginId: 'acme.preview',
     contributionId: 'activity',
-    generation: '7',
+    occurrenceId: 'preview-occurrence',
     sessionId: 'session-a',
     resourceId: 'live-activity',
     localActivityId: 'build',

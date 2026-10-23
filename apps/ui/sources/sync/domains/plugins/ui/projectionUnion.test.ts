@@ -98,7 +98,7 @@ it('retains current Account Actions through installed composition without replac
     expect(resolveProjectedPluginUiClientExecutables({ actionProjection: { projection: installed }, platform: 'web' }))
         .toMatchObject([{ authority: { kind: 'account', custodyId: action.occurrenceId }, actions: [{ id: 'read' }] }]);
     const machineOrigin = { machineId: 'machine-optional', serverId: 'server-1',
-        generation: 1, phase: 'current' as const, interactionEnabled: true, executionOrigin: null };
+        phase: 'current' as const, interactionEnabled: true, executionOrigin: null };
     // Distinct Actions may use the same physical artifact/export in both realms.
     const clientAction = { ...action, id: 'machine-client', hostAccountOrigin: undefined, occurrenceId: 'machine:current',
         execution: { target: 'client' as const, client: { artifactId: 'account', exportName: 'activate' }, platforms: ['web' as const] },
@@ -292,8 +292,18 @@ it('uses a development override only for the explicitly selected source and othe
     expect(mergeInstalledPluginUiProjections(installed, current)?.surfacePlacementsById[String(entry.id)]?.display)
         .toEqual({ title: 'Bundled page' });
     const selectedSources = new Map([[pluginId, origin]]);
-    expect(mergeInstalledPluginUiProjections(installed, current, undefined, selectedSources)?.surfacePlacementsById[String(entry.id)]?.display)
+    const explicitlySelected = mergeInstalledPluginUiProjections(installed, current, undefined, selectedSources);
+    expect(explicitlySelected?.surfacePlacementsById[String(entry.id)]?.display)
         .toEqual({ title: 'Edited page' });
+    const automaticAgain = mergeInstalledPluginUiProjections(installed, current, undefined, new Map());
+    expect(automaticAgain?.surfacePlacementsById[String(entry.id)]?.display).toEqual({ title: 'Bundled page' });
+    expect(automaticAgain?.surfacePlacementsById[String(entry.id)]?.hostUiSourceSelection).toBeUndefined();
+    // A prior merge result is not a fresh explicit decision when reused as an
+    // upstream runtime projection, including the no-installed fast path.
+    expect(mergeInstalledPluginUiProjections([], explicitlySelected)?.surfacePlacementsById[String(entry.id)]?.hostUiSourceSelection)
+        .toBeUndefined();
+    expect(mergeInstalledPluginUiProjections(installed, explicitlySelected)?.surfacePlacementsById[String(entry.id)]?.display)
+        .toEqual({ title: 'Bundled page' });
     const missingSource = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test', sourceRef: {
         machineId: 'missing-machine', pluginId, sourceCustody: { kind: 'development', registeredRootId: 'another-root' },
     } });
@@ -642,7 +652,7 @@ it('does not walk unchanged authored declarations when currentness republishes a
     const publish = (generation: number) => installed.publish([declared], union.publish([{
         ...current, projection: { ...current.projection!, generation },
     }], selectedOrigins(origin)).pluginUiProjection);
-    publish(1);
+    const firstPublished = publish(1);
     const descriptors = vi.spyOn(Object, 'getOwnPropertyDescriptors');
     const values = vi.spyOn(Object, 'values');
     const parseModel = vi.spyOn(PluginDeclarativeProjectedModelV1Schema, 'safeParse');
@@ -654,7 +664,7 @@ it('does not walk unchanged authored declarations when currentness republishes a
         expect(parseModel).not.toHaveBeenCalled();
         const unchangedDictionaryWalks = values.mock.calls.filter(([value]) => value === current.projection!.surfacePlacementsById).length;
         expect(unchangedDictionaryWalks).toBe(0);
-        expect(installed.getSnapshot()?.generation).toBe(101);
+        expect(installed.getSnapshot()).toBe(firstPublished);
     } finally { descriptors.mockRestore(); values.mockRestore(); parseModel.mockRestore(); }
 
     const rawModel = Object.freeze({ ...model, identity: { ...model.identity, occurrenceId: entry.occurrenceId }, root: { ...model.root } });
@@ -790,7 +800,7 @@ it('projects only a real current source occurrence for execution and retains its
         .toEqual({ kind: 'development', registeredRootId: 'replacement-root' });
     expect(read(source).sourceCandidates).toEqual([expect.objectContaining({ source: {
         origin: { serverIdentityId: 'srv_test', sourceRef: { machineId: 'machine-a', pluginId, sourceCustody } },
-        version: '1.0.0', occurrenceId, serverId: 'server-1', generation: 7,
+        version: '1.0.0', occurrenceId, serverId: 'server-1',
     }, validation: { kind: 'admitted' } })]);
     const unstamped = { ...source, projection: { ...source.projection!, installedPackagesById: {
         ...source.projection!.installedPackagesById,
@@ -1654,7 +1664,6 @@ describe('unionPluginUiProjections', () => {
         expect(readPluginUiContributionOrigin(placements[0])).toEqual({
             machineId: 'machine-a',
             serverId: 'server-1',
-            generation: 3,
             interactionEnabled: true,
             phase: 'current',
             executionOrigin: selectedOrigin('acme.alpha', 'machine-a'),
@@ -1664,7 +1673,6 @@ describe('unionPluginUiProjections', () => {
         expect(readPluginUiContributionOrigin(placements[1])).toEqual({
             machineId: 'machine-b',
             serverId: 'server-1',
-            generation: 4,
             interactionEnabled: false,
             phase: 'retainedOffline',
             executionOrigin: selectedOrigin('acme.beta', 'machine-b'),
@@ -1698,7 +1706,7 @@ describe('unionPluginUiProjections', () => {
             : [];
         expect(placements).toHaveLength(1);
         expect(placements[0]?.hostCompatibility).toBe('compatible');
-        expect(readPluginUiContributionOrigin(placements[0])).toMatchObject({ machineId: 'machine-a', generation: 2 });
+        expect(readPluginUiContributionOrigin(placements[0])).toMatchObject({ machineId: 'machine-a' });
 
     });
 
@@ -1756,7 +1764,6 @@ describe('unionPluginUiProjections', () => {
         expect(readPluginUiContributionOrigin(projected)).toEqual({
             machineId: 'machine-a',
             serverId: 'server-1',
-            generation: 3,
             interactionEnabled: true,
             phase: 'current',
             executionOrigin: selected,
@@ -1803,7 +1810,7 @@ describe('unionPluginUiProjections', () => {
             : [];
         expect(placements.map((entry) => entry.id)).toEqual(['surfacePlacement:acme.inspector:panel']);
         expect(placements[0]?.hostCompatibility).toBe('compatible');
-        expect(readPluginUiContributionOrigin(placements[0])).toMatchObject({ machineId: 'machine-b', generation: 9 });
+        expect(readPluginUiContributionOrigin(placements[0])).toMatchObject({ machineId: 'machine-b' });
 
     });
 
@@ -1820,19 +1827,27 @@ describe('unionPluginUiProjections', () => {
         expect(union.pluginUiProjection?.generation).toBe(11);
     });
 
-    it('changes the model generation when any member generation changes, and only then', () => {
-        const build = (betaGeneration: number) => unionPluginUiProjections([
-            member({ machineId: 'machine-a', generation: 3, entriesById: { a: placementEntry({ pluginId: 'acme.alpha', localId: 'panel' }) } }),
-            member({ machineId: 'machine-b', generation: betaGeneration, entriesById: { b: placementEntry({ pluginId: 'acme.beta', localId: 'panel' }) } }),
-        ], selectedOrigins(
+    it('keeps publication identity across unrelated member generations and publishes an edited declaration', () => {
+        const publication = projectionUnion.createPluginUiProjectionUnionPublication();
+        const alphaEntry = placementEntry({ pluginId: 'acme.alpha', localId: 'panel' });
+        const betaEntry = placementEntry({ pluginId: 'acme.beta', localId: 'panel' });
+        const alpha = member({ machineId: 'machine-a', generation: 3, entriesById: { [alphaEntry.id]: alphaEntry } });
+        const beta = member({ machineId: 'machine-b', generation: 4, entriesById: { [betaEntry.id]: betaEntry } });
+        const origins = selectedOrigins(
             selectedOrigin('acme.alpha', 'machine-a'),
             selectedOrigin('acme.beta', 'machine-b'),
-        ));
-        const first = build(4).pluginUiProjection?.generation;
-        expect(build(4).pluginUiProjection?.generation).toBe(first);
-        expect(build(5).pluginUiProjection?.generation).not.toBe(first);
-        expect(Number.isInteger(first)).toBe(true);
-        expect(first as number).toBeGreaterThanOrEqual(0);
+        );
+        const first = publication.publish([alpha, beta], origins).pluginUiProjection;
+        expect(publication.publish([alpha, { ...beta, projection: { ...beta.projection!, generation: 5 } }], origins).pluginUiProjection).toBe(first);
+        const changed = { ...beta, projection: { ...beta.projection!, surfacePlacementsById: {
+            ...beta.projection!.surfacePlacementsById,
+            [betaEntry.id]: { ...beta.projection!.surfacePlacementsById[betaEntry.id]!, display: {
+                ...beta.projection!.surfacePlacementsById[betaEntry.id]!.display, title: 'Edited beta panel',
+            } },
+        } } };
+        const updated = publication.publish([alpha, changed], origins).pluginUiProjection;
+        expect(updated).not.toBe(first);
+        expect(updated?.surfacePlacementsById[betaEntry.id]?.display.title).toBe('Edited beta panel');
     });
 
     it('reports a current empty catalog only after members have settled their describes', () => {

@@ -97,7 +97,7 @@ export function createWidgetRefreshActionDepsV1(account: LazyActionAccountContex
             const declarations = readWidgetDefinitionResourcesV1(authored);
             if (!declarations.length || !runtime.projection || !runtime.isCurrent()) return unavailable();
             const target = { machineId: runtime.machineId, serverId: runtime.machineId ? account.serverId : null,
-                generation: runtime.projection.generation, projection: runtime.projection, isCurrent: runtime.isCurrent };
+                projection: runtime.projection, isCurrent: runtime.isCurrent };
             const resources = declarations.map(reference => ({ reference, binding: resolveCallerHostedHtmlResourceBindingV1({
                 target, reference, serverId: account.serverId, sessionId: parsedSession?.success ? parsedSession.data.sessionId : undefined,
                 launchInput: resolved.input,

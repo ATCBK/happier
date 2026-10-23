@@ -13,7 +13,7 @@ import type { TranscriptRowShellItem } from '../measurement/transcriptRowShellSi
 function activity(params: Readonly<{
     pluginId: string;
     contributionId: string;
-    generation?: string;
+    occurrenceId?: string;
     sessionId?: string;
     resourceId?: string;
     localActivityId: string;
@@ -21,7 +21,7 @@ function activity(params: Readonly<{
     return {
         pluginId: params.pluginId,
         contributionId: params.contributionId,
-        generation: params.generation ?? '7',
+        occurrenceId: params.occurrenceId ?? 'preview-occurrence',
         sessionId: params.sessionId ?? 'session-1',
         resourceId: params.resourceId ?? 'progress',
         localActivityId: params.localActivityId,

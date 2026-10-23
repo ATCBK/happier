@@ -268,7 +268,6 @@ function haveSameOrigin(
     const rightExecutionOrigin = right.executionOrigin;
     return left.machineId === right.machineId
         && left.serverId === right.serverId
-        && left.generation === right.generation
         && left.interactionEnabled === right.interactionEnabled
         && (leftExecutionOrigin === null || leftExecutionOrigin === undefined
             ? rightExecutionOrigin === null || rightExecutionOrigin === undefined

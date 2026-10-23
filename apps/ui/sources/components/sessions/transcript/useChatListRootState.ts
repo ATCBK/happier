@@ -303,14 +303,16 @@ export function useChatListRootState(props: ChatListProps) {
     });
     // Whole-message Actions consume the generic normalized daemon projection,
     // but only while this transcript's existing local-owner projection remains
-    // current. The generation agreement prevents an Action catalog refresh from
-    // borrowing a now-stale transcript lifecycle snapshot.
+    // current. Exact Action occurrence/source admission remains with the shared
+    // controller; an unrelated daemon observation is not transcript retirement.
     const pluginMessageActionProjection = useDaemonMergedProjectionInputs({
         machineId: pluginActivityProjection.machineId,
         serverId: pluginActivityProjection.serverId,
         enabled: isExactOwner && pluginActivityProjection.interactionEnabled,
         staleMs: 60_000,
     });
+    const pluginMessageActionsReady = pluginActivityProjection.pluginUiProjection?.generation != null
+        && pluginMessageActionProjection.inputs?.pluginProjectionV2 != null;
     const pluginMessageActionSnapshotRef = React.useRef<PluginContributedActionCurrentSnapshot | null>(null);
     const pluginMessageActionScope = React.useMemo(
         () => new AbortController(),
@@ -321,9 +323,7 @@ export function useChatListRootState(props: ChatListProps) {
             pluginActivityProjection.interactionEnabled,
             pluginActivityProjection.machineId,
             pluginActivityProjection.serverId,
-            pluginActivityProjection.pluginUiProjection?.generation,
-            pluginMessageActionProjection.inputs?.pluginProjectionById,
-            pluginMessageActionProjection.inputs?.pluginProjectionV2?.generation,
+            pluginMessageActionsReady,
             pluginMessageActionProjection.phase,
             props.session.id,
         ],
@@ -331,27 +331,21 @@ export function useChatListRootState(props: ChatListProps) {
     React.useEffect(() => () => pluginMessageActionScope.abort(), [pluginMessageActionScope]);
     const pluginMessageActionSnapshot = React.useMemo<PluginContributedActionCurrentSnapshot | null>(() => {
         const inputs = pluginMessageActionProjection.inputs;
-        const lifecycleGeneration = pluginActivityProjection.pluginUiProjection?.generation;
-        const actionGeneration = inputs?.pluginProjectionV2?.generation;
         if (
             !isExactOwner
             || interaction.canSendMessages !== true
             || pluginActivityProjection.interactionEnabled !== true
             || pluginMessageActionProjection.phase !== 'ready'
             || !inputs
-            || lifecycleGeneration == null
-            || actionGeneration == null
-            || String(lifecycleGeneration) !== String(actionGeneration)
+            || !pluginMessageActionsReady
         ) {
             return null;
         }
-        let snapshot!: PluginContributedActionCurrentSnapshot;
-        snapshot = {
+        const resolveContributedAction = createPluginUiProjectedActionResolver(inputs.pluginUiProjection.actionsById);
+        const snapshot: PluginContributedActionCurrentSnapshot = {
             pluginProjectionById: inputs.pluginProjectionById,
-            pluginUiProjection: pluginActivityProjection.pluginUiProjection,
-            resolveContributedAction: createPluginUiProjectedActionResolver(
-                inputs.pluginProjectionV2?.actionsById,
-            ),
+            pluginUiProjection: inputs.pluginUiProjection,
+            resolveContributedAction,
             host: {
                 machineId: pluginActivityProjection.machineId,
                 serverId: pluginActivityProjection.serverId,
@@ -362,7 +356,13 @@ export function useChatListRootState(props: ChatListProps) {
                 ...(currentUiContextReader
                     ? { readCurrentUiContext: currentUiContextReader.readCurrentUiContext }
                     : {}),
-                isCurrent: () => pluginMessageActionSnapshotRef.current === snapshot,
+                isCurrent: () => !pluginMessageActionScope.signal.aborted
+                    && pluginMessageActionSnapshotRef.current?.host.signal === pluginMessageActionScope.signal,
+                isActionCurrent: (identity) => {
+                    const action = resolveContributedAction(identity);
+                    return action !== null
+                        && pluginMessageActionSnapshotRef.current?.resolveContributedAction?.(identity) === action;
+                },
             },
         };
         return snapshot;
@@ -374,8 +374,8 @@ export function useChatListRootState(props: ChatListProps) {
         pluginActivityLifetime,
         pluginActivityProjection.interactionEnabled,
         pluginActivityProjection.machineId,
-        pluginActivityProjection.pluginUiProjection?.generation,
         pluginActivityProjection.serverId,
+        pluginMessageActionsReady,
         pluginMessageActionProjection.inputs,
         pluginMessageActionProjection.phase,
         pluginMessageActionScope,
@@ -392,7 +392,14 @@ export function useChatListRootState(props: ChatListProps) {
                 resolveCurrent: () => pluginMessageActionSnapshotRef.current,
             })
             : null
-    ), [clientExecutableRegistrationRevision, pluginMessageActionSnapshot]);
+    ), [
+        clientExecutableRegistrationRevision,
+        pluginMessageActionScope,
+        pluginMessageActionSnapshot !== null,
+        pluginMessageActionProjection.inputs?.pluginUiProjection.actionsById,
+        pluginMessageActionProjection.inputs?.pluginUiProjection.installedPackagesById,
+        pluginMessageActionProjection.inputs?.pluginUiProjection.translationsByPluginId,
+    ]);
     const isPluginTranscriptActivityActionAvailable = React.useCallback((action: Readonly<{
         pluginId: string;
         localId: string;
@@ -446,7 +453,14 @@ export function useChatListRootState(props: ChatListProps) {
                 signal: pluginMessageActionScope.signal,
             })
             : null
-    ), [pluginMessageActionScope, pluginMessageActionSnapshot, props.session.id]);
+    ), [
+        pluginMessageActionScope,
+        pluginMessageActionSnapshot !== null,
+        pluginMessageActionProjection.inputs?.pluginUiProjection.actionsById,
+        pluginMessageActionProjection.inputs?.pluginUiProjection.installedPackagesById,
+        pluginMessageActionProjection.inputs?.pluginUiProjection.translationsByPluginId,
+        props.session.id,
+    ]);
     const internalMessagesById = forkedTranscriptEnabled ? messagesById : EMPTY_MESSAGES_BY_ID;
 
     return {

@@ -122,6 +122,52 @@ describe('AppShell projection source publication', () => {
         } finally { stop(); owner.dispose(); }
     });
 
+    it('keeps committed UI quiet across unrelated registry generations and publishes changed declarations and availability', () => {
+        const owner = createAppShellPluginUiProjectionPublication();
+        owner.publishSources({ accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
+            activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
+            onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
+        const model = translationProjection(1, 'First');
+        owner.publishMachineCurrentness('machine', null, currentness(model));
+        const initial = owner.getSnapshot().pluginUiProjection;
+        const detach = publishCommittedAppShellPluginUiProjection(() => owner.getSnapshot().pluginUiProjection,
+            id => owner.getSnapshot().candidateFactsByPluginId.get(id) ?? null, listener => owner.subscribe(listener, 'committed'));
+        let publications = 0;
+        let rawPublications = 0;
+        const stop = subscribeCommittedAppShellPluginUiProjection(() => { publications++; });
+        const stopRaw = owner.subscribe(() => { rawPublications++; });
+        try {
+            for (let generation = 2; generation <= 21; generation++) {
+                owner.publishMachineCurrentness('machine', null, currentness({ ...model, generation }));
+            }
+            expect.soft(publications).toBe(0);
+            expect(rawPublications).toBe(20);
+            expect(owner.getSnapshot().currentnessForActiveAccountByMachineId.get('machine')?.pluginUiProjection?.generation).toBe(21);
+            expect.soft(owner.getSnapshot().pluginUiProjection).toBe(initial);
+            const changed = translationProjection(21, 'Changed');
+            owner.publishMachineCurrentness('machine', null, currentness(changed));
+            expect(publications).toBe(1);
+            expect(readCurrentAppShellPluginUiProjection()?.translationsByPluginId['acme.publication']?.bundles)
+                .toEqual({ en: { title: 'Changed' } });
+            owner.publishMachineCurrentness('machine', null, { ...currentness(changed),
+                phase: 'retainedOffline', interactionEnabled: false });
+            expect(publications).toBe(2);
+            expect(owner.getSnapshot().projectionUnion.interactionEnabled).toBe(false);
+            owner.publishMachineCurrentness('machine', null, currentness(changed));
+            expect(publications).toBe(3);
+            owner.publishMachineCurrentness('machine', null, { ...currentness({ ...changed, generation: null }),
+                phase: 'establishing', interactionEnabled: false });
+            expect(publications).toBe(4);
+            expect(owner.getSnapshot().projectionUnion.interactionEnabled).toBe(false);
+            owner.publishMachineCurrentness('machine', null, currentness(changed));
+            expect(publications).toBe(5);
+            expect(owner.getSnapshot().projectionUnion.interactionEnabled).toBe(true);
+            owner.publishMachineCurrentness('machine', null, currentness({ ...EMPTY_PLUGIN_UI_PROJECTION, generation: 21 }));
+            expect(publications).toBe(6);
+            expect(readCurrentAppShellPluginUiProjection()?.translationsByPluginId['acme.publication']).toBeUndefined();
+        } finally { stopRaw(); stop(); detach(); owner.dispose(); }
+    });
+
     it('publishes the prepared Skills identity atomically and retains it across runtime generation changes', () => {
         const owner = createAppShellPluginUiProjectionPublication();
         const pluginId = 'acme.publication';
@@ -134,11 +180,12 @@ describe('AppShell projection source publication', () => {
             onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
         owner.publishMachineCurrentness('machine', null, currentness(model));
         const first = owner.getSnapshot().skillSourceIdentity;
+        const firstProjection = owner.getSnapshot().pluginUiProjection;
         expect(first).not.toBe(emptyIdentity);
         const generations = { ...model, generation: 999 };
         owner.publishMachineCurrentness('machine', null, currentness(generations));
         expect(owner.getSnapshot().skillSourceIdentity).toBe(first);
-        expect(readPluginUiContributionSupplies(owner.getSnapshot().pluginUiProjection?.skillsById[id])[0]?.generation).toBe(999);
+        expect(owner.getSnapshot().pluginUiProjection).toBe(firstProjection);
         const notifications: Array<ReturnType<typeof owner.getSnapshot>> = [];
         const stop = owner.subscribe(() => { notifications.push(owner.getSnapshot()); });
         try {
@@ -292,21 +339,21 @@ describe('AppShell projection source publication', () => {
             + values.mock.calls.filter(([value]) => siblingMaps.has(value)).length
             + keys.mock.calls.filter(([value]) => siblingMaps.has(value)).length;
         try {
-            // Native-only currentness is still published to its candidate
-            // owner, but cannot change any already-admitted UI declaration.
+            // A global registry counter cannot change an admitted UI
+            // declaration or the exact native source occurrence.
             for (let generation = 2; generation <= 4; generation++) {
                 owner.publishMachineCurrentness(machines[11]!, null,
                     { ...currentness({ ...models[11]!, generation }), machineId: machines[11]!, serverId: 'server-1' });
                 owner.publishSources({ ...sources });
                 expect.soft(owner.getSnapshot().projectionUnion).toBe(initial.projectionUnion);
-                expect(owner.getSnapshot().candidateFactsByPluginId.get(ids[11]!)?.sourceCandidates[0]?.source.generation).toBe(generation);
+                expect(owner.getSnapshot().candidateFactsByPluginId.get(ids[11]!)).toBe(initial.candidateFactsByPluginId.get(ids[11]!));
             }
             expect.soft(siblingWalks()).toBe(0);
             owner.publishMachineCurrentness(machines[0]!, null, { ...currentness(models[0]!), machineId: machines[0]!, serverId: 'server-1',
                 phase: 'establishing', interactionEnabled: false });
             const pending = owner.getSnapshot();
             expect(readPluginUiContributionSupplies(pending.pluginUiProjection?.translationsByPluginId[ids[0]!])).toMatchObject([
-                { phase: 'establishing', interactionEnabled: false, generation: 1 },
+                { phase: 'establishing', interactionEnabled: false },
             ]);
             for (const id of ids.slice(1, 11)) {
                 expect(pending.pluginUiProjection?.translationsByPluginId[id]).toBe(initial.pluginUiProjection?.translationsByPluginId[id]);
@@ -436,11 +483,11 @@ describe('AppShell projection source publication', () => {
             onlineMachineIds: Object.freeze(['machine']), selectableMachineIds: Object.freeze(['machine']) };
         const pluginId = 'acme.native-only';
         let sourceReads = 0;
-        const publishNative = (generation: number) => {
+        const publishNative = (occurrence: number) => {
             const sourceCustody = Object.freeze({ kind: 'development' as const, registeredRootId: 'native-only-root' });
-            const model: PluginUiProjectionModel = Object.freeze({ ...EMPTY_PLUGIN_UI_PROJECTION, generation,
+            const model: PluginUiProjectionModel = Object.freeze({ ...EMPTY_PLUGIN_UI_PROJECTION, generation: 1,
                 installedPackagesById: Object.freeze({ [pluginId]: Object.freeze({ id: pluginId, displayName: 'Native only',
-                    version: '1.0.0', enabled: true, source: { kind: 'localPath' as const, locator: 'native-only-root' }, occurrenceId: `${pluginId}:occurrence`,
+                    version: '1.0.0', enabled: true, source: { kind: 'localPath' as const, locator: 'native-only-root' }, occurrenceId: `${pluginId}:occurrence-${occurrence}`,
                     executionOrigin: { serverIdentityId: 'srv_test', sourceRef: { machineId: 'machine', pluginId, sourceCustody } },
                     sourceCustody }) }) });
             const report = { ...currentness(new Proxy(model, {
@@ -453,14 +500,14 @@ describe('AppShell projection source publication', () => {
         const firstReport = publishNative(7);
         const first = owner.getSnapshot();
         expect(first.pluginUiProjection).toBeNull();
-        expect(first.candidateFactsByPluginId.get(pluginId)?.sourceCandidates[0]?.source.generation).toBe(7);
+        expect(first.candidateFactsByPluginId.get(pluginId)?.sourceCandidates[0]?.source.occurrenceId).toBe(`${pluginId}:occurrence-7`);
         const read = () => owner.getSnapshot().pluginUiProjection;
         let sourceSubscriptions = 0;
         const bind = () => publishCommittedAppShellPluginUiProjection(read,
             id => owner.getSnapshot().candidateFactsByPluginId.get(id) ?? null,
             listener => {
                 sourceSubscriptions += 1;
-                const stop = owner.subscribe(listener);
+                const stop = owner.subscribe(listener, 'committed');
                 return () => { sourceSubscriptions -= 1; stop(); };
             });
         const firstCleanup = bind();
@@ -484,7 +531,7 @@ describe('AppShell projection source publication', () => {
             expect(owner.getSnapshot().pluginUiProjection).toBe(first.pluginUiProjection);
             expect(owner.getSnapshot().projectionUnion.phase).toBe(first.projectionUnion.phase);
             expect(notifications).toBe(1);
-            expect(observed.sourceCandidates[0]?.source.generation).toBe(8);
+            expect(observed.sourceCandidates[0]?.source.occurrenceId).toBe(`${pluginId}:occurrence-8`);
             expect(sourceReads).toBeGreaterThan(0);
 
             // Rebinding the same read function must detach its predecessor,
@@ -496,7 +543,7 @@ describe('AppShell projection source publication', () => {
             notifications = 0;
             publishNative(9);
             expect(notifications).toBe(1);
-            expect(observed.sourceCandidates[0]?.source.generation).toBe(9);
+            expect(observed.sourceCandidates[0]?.source.occurrenceId).toBe(`${pluginId}:occurrence-9`);
             currentCleanup();
             expect(sourceSubscriptions).toBe(0);
             expect(readCurrentAppShellPluginUiProjection()).toBeNull();

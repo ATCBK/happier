@@ -25,7 +25,7 @@ export function createPluginTranscriptActivityTranscriptItemsCache(): PluginTran
 export type PluginTranscriptActivityLiveRow = Readonly<{
     pluginId: string;
     contributionId: string;
-    generation: string;
+    occurrenceId: string;
     sessionId: string;
     resourceId: string;
     localActivityId: string;
@@ -52,13 +52,13 @@ export type PluginTranscriptActivityLiveRow = Readonly<{
 export function buildPluginTranscriptActivityIdentityKey(
     activity: Pick<
         PluginTranscriptActivityLiveRow,
-        'pluginId' | 'contributionId' | 'generation' | 'sessionId' | 'resourceId' | 'localActivityId'
+        'pluginId' | 'contributionId' | 'occurrenceId' | 'sessionId' | 'resourceId' | 'localActivityId'
     >,
 ): string {
     return JSON.stringify([
         activity.pluginId,
         activity.contributionId,
-        activity.generation,
+        activity.occurrenceId,
         activity.sessionId,
         activity.resourceId,
         activity.localActivityId,
@@ -73,13 +73,13 @@ export function buildPluginTranscriptActivityIdentityKey(
 export function buildPluginTranscriptActivitySourceKey(
     activity: Pick<
         PluginTranscriptActivityLiveRow,
-        'pluginId' | 'contributionId' | 'generation' | 'sessionId' | 'resourceId'
+        'pluginId' | 'contributionId' | 'occurrenceId' | 'sessionId' | 'resourceId'
     >,
 ): string {
     return JSON.stringify([
         activity.pluginId,
         activity.contributionId,
-        activity.generation,
+        activity.occurrenceId,
         activity.sessionId,
         activity.resourceId,
     ]);
@@ -179,7 +179,7 @@ export function appendPluginTranscriptActivityTranscriptItems<Base extends reado
             identityKey: `plugin-transcript-activity:aggregate-overflow:${input.sessionId}`,
             pluginId: '',
             contributionId: '',
-            generation: '',
+            occurrenceId: '',
             sessionId: input.sessionId,
             resourceId: '',
             localActivityId: '',

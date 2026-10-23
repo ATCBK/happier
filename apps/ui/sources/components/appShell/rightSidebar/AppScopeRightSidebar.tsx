@@ -131,9 +131,8 @@ function AppScopeRightSidebarContent(props: AppScopeRightSidebarProps): React.Re
     const tabs = React.useMemo(() => resolveRightSidebarTabs({
         scope: 'app',
         pluginPlacements: placements,
-        projectionGeneration: projection?.generation ?? null,
         localize: localizePluginText,
-    }), [localizePluginText, placements, projection?.generation]);
+    }), [localizePluginText, placements]);
 
     const requestedDestinationKey = props.requestedDestination
         ? `${props.requestedDestination.pluginId}\u0000${props.requestedDestination.localId}`

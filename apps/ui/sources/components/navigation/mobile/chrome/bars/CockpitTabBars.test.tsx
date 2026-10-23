@@ -799,7 +799,6 @@ describe('cockpit tab bars', () => {
                 terminalTabAvailable={false}
                 openDetailsTabCount={0}
                 pluginPlacements={[placement]}
-                projectionGeneration={4}
                 onSurfacePress={() => {}}
             />
         );
@@ -835,7 +834,6 @@ describe('cockpit tab bars', () => {
                     terminalTabAvailable={false}
                     openDetailsTabCount={0}
                     pluginPlacements={[placement]}
-                    projectionGeneration={4}
                     onSurfacePress={onSurfacePress}
                 />
             );

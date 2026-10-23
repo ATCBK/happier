@@ -13,7 +13,7 @@ it('invalidates the former revision fields without treating runtime generation o
     const origin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_skills',
         materializationRef: { machineId: 'supplier', pluginId: entry.pluginId, materializationId: 'installation' } });
     const otherOrigin = PluginMachineExecutionOriginV1Schema.parse({ ...origin, serverIdentityId: 'srv_other' });
-    const supply: PluginUiContributionSupplyV1 = { machineId: 'supplier', serverId: 'server', generation: 1, phase: 'current',
+    const supply: PluginUiContributionSupplyV1 = { machineId: 'supplier', serverId: 'server', phase: 'current',
         interactionEnabled: true, executionOrigin: origin, occurrenceId: 'runtime', pluginVersion: '1.0.0',
         sourceCustody: null, executionTargetDefault: false };
     const base = { ...entry, occurrenceId: 'runtime', executionOrigin: origin, hostOrigin: supply,
@@ -46,7 +46,7 @@ it('retains the Skills source revision across supplying-generation-only publicat
     const owner = createPluginSkillSourceIdentityPublication();
     const entry = projectPluginSkillDeclarationV1({ pluginId: 'com.acme.skills', pluginVersion: '1.0.0',
         definition: { id: 'check', directory: './resources/check' } });
-    const supply = { machineId: 'supplier', serverId: 'server', generation: 1, phase: 'current' as const,
+    const supply = { machineId: 'supplier', serverId: 'server', phase: 'current' as const,
         interactionEnabled: true, executionOrigin: null, occurrenceId: 'runtime', pluginVersion: '1.0.0',
         sourceCustody: null, executionTargetDefault: false };
     const projection = { ...EMPTY_PLUGIN_UI_PROJECTION, skillsById: { [entry.id]: { ...entry, hostSupplies: [supply] } } };

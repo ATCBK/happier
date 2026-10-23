@@ -39,7 +39,7 @@ async function installLiveMachine() {
 
 const unlistedSource: PluginMachineSourceExecutionOriginCandidateV1 = {
     source: { origin: { serverIdentityId: 'srv_picker_one', sourceRef: { machineId: 'unknown-machine', pluginId: 'acme.plugin',
-        sourceCustody: { kind: 'development', registeredRootId: 'source-a' } } }, version: '1.0.0', occurrenceId: 'occurrence-a', serverId: 'srv_picker_one', generation: 1 },
+        sourceCustody: { kind: 'development', registeredRootId: 'source-a' } } }, version: '1.0.0', occurrenceId: 'occurrence-a', serverId: 'srv_picker_one' },
     releaseContent: 'matched', validation: { kind: 'admitted' },
 };
 

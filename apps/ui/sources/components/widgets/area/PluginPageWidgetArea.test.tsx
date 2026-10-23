@@ -707,7 +707,7 @@ describe('a plugin page widget area', () => {
         const scroller = kind === 'plugin'
             ? <ScrollArea testID="area-scroll"><WidgetSurface area="pinned" context={{ repository: 'happier' }} testID={areaId} /></ScrollArea>
             : kind === 'declarative' ? <DeclarativePluginSurface pluginId="acme.prs" model={model} environment={environment} interactionEnabled daemonInteractionEnabled
-                dispatchAction={async () => null} actionAvailable={false} openSurface={async () => null} openSurfaceAvailable={false} authorityGeneration={1}
+                dispatchAction={async () => null} actionAvailable={false} openSurface={async () => null} openSurfaceAvailable={false}
                 renderWidgetArea={createDeclarativeWidgetAreaRender({ dispatch: async (request, options) => StrictJsonValueSchema.parse(await plugin.hostApi.widgetArea(request as never, options)), surfaceName: 'PRs & Issues' })} />
             : <ItemList testID="area-scroll"><ProjectWidgetArea projectName="Project" port={project.port}
                 context={{ slots: { repository: { label: 'Repository', value: { value: 'happier', label: 'happier' } } } }} testID={areaId} /></ItemList>;
@@ -1191,7 +1191,7 @@ describe('a declarative page’s widget area node', () => {
                 interactionEnabled: true, machineId: 'machine-1', serverId: scope.serverId, platform: 'web',
                 accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>
                 <DeclarativePluginSurface pluginId="acme.prs" model={model} environment={environment} interactionEnabled daemonInteractionEnabled
-                    dispatchAction={async () => null} actionAvailable={false} openSurface={async () => null} openSurfaceAvailable={false} authorityGeneration={1}
+                    dispatchAction={async () => null} actionAvailable={false} openSurface={async () => null} openSurfaceAvailable={false}
                     renderWidgetArea={createDeclarativeWidgetAreaRender({ dispatch: dispatch as never, surfaceName: 'PRs & Issues' })} />
             </AppShellPluginUiProjectionValueProvider>,
         );

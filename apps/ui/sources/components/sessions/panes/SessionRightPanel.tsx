@@ -267,7 +267,6 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
         boardFeatureEnabled,
         presentation: props.presentation === 'screen' ? 'mobile' : 'desktop',
         pluginPlacements: pluginRightSidebarPlacements,
-        projectionGeneration: pluginRuntime.pluginUiProjection?.generation ?? null,
         runtimeAdmission,
         localize: localizePluginText,
     }), [
@@ -275,7 +274,6 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
         sessionSharingAvailable,
         boardFeatureEnabled,
         localizePluginText,
-        pluginRuntime.pluginUiProjection?.generation,
         pluginRightSidebarPlacements,
         props.presentation,
         runtimeAdmission,
@@ -322,14 +320,12 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
     const scopedLaunchFacts = React.useMemo(() => Object.freeze({
         serverId: pluginRuntime.serverId ?? null,
         machineId: pluginRuntime.machineId ?? null,
-        generation: pluginRuntime.pluginUiProjection?.generation ?? null,
         interactionEnabled: pluginRuntime.phase === 'current'
             && pluginRuntime.interactionEnabled === true,
     }), [
         pluginRuntime.interactionEnabled,
         pluginRuntime.phase,
         pluginRuntime.machineId,
-        pluginRuntime.pluginUiProjection?.generation,
         pluginRuntime.serverId,
     ]);
     const activePaneLaunch = usePluginSurfacePaneLaunch({
@@ -724,7 +720,7 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
                             .filter((tab): tab is RightSidebarPluginTabDefinition => tab.owner === 'plugin')
                             .map((tab) => tab.disabledReason ? null : (
                                 <SessionRetainedPane
-                                    key={tab.retentionKey}
+                                    key={tab.id}
                                     tabId={tab.id}
                                     isActive={activeTab === tab.id}
                                     mode="absolute-overlay"

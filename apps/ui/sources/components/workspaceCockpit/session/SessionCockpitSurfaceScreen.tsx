@@ -235,14 +235,12 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
         boardFeatureEnabled,
         terminalTabAvailable,
         pluginPlacements,
-        projectionGeneration: pluginProjection.pluginUiProjection?.generation ?? null,
         runtimeAdmission,
     }), [
         appTabInputs,
         boardFeatureEnabled,
         sessionSharingAvailable,
         pluginPlacements,
-        pluginProjection.pluginUiProjection?.generation,
         runtimeAdmission,
         terminalTabAvailable,
     ]);
@@ -485,14 +483,12 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
             terminalTabAvailable,
             openDetailsTabCount,
             pluginPlacements,
-            projectionGeneration: pluginProjection.pluginUiProjection?.generation ?? null,
             switchSurface,
         });
     }, [
         isFocused,
         openDetailsTabCount,
         pluginPlacements,
-        pluginProjection.pluginUiProjection?.generation,
         props.sessionId,
         servicesServerId,
         props.surface,

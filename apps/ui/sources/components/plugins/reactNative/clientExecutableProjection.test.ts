@@ -53,7 +53,6 @@ const artifactGraph = PluginUiArtifactsManifestEntryV2Schema.parse({
 const hostOrigin = Object.freeze({
     machineId: origin.materializationRef.machineId,
     serverId: 'server-1',
-    generation,
     interactionEnabled: true,
     phase: 'current' as const,
     executionOrigin: origin,
@@ -269,7 +268,6 @@ describe('resolveProjectedPluginUiClientExecutables', () => {
             occurrenceId: voiceOccurrenceId,
             target,
             executionOrigin: origin,
-            projectionGeneration: generation,
             contributes: {
                 voiceProviders: [expect.objectContaining({ id: voiceLocalId })],
             },
@@ -377,8 +375,7 @@ describe('resolveProjectedPluginUiClientExecutables', () => {
         const currentAction = source.actionsById[firstActionKey];
         const currentBundle = source.reactNativeBundlesById[firstBundleKey];
         if (!currentAction || !currentBundle) throw new Error('first projected client Action missing');
-        const { generation: catalogGeneration, ...currentOrigin } = hostOrigin;
-        void catalogGeneration;
+        const currentOrigin = hostOrigin;
         const withOrigin = (interactionEnabled: boolean): PluginUiProjectionModel => Object.freeze({
             ...source,
             actionsById: Object.freeze({ [firstActionKey]: Object.freeze({
@@ -405,7 +402,6 @@ describe('resolveProjectedPluginUiClientExecutables', () => {
             pluginId,
             target,
             executionOrigin: origin,
-            projectionGeneration: generation,
             contributes: {
                 actions: [
                     expect.objectContaining({ id: 'open-first' }),

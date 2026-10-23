@@ -34,7 +34,6 @@ const pluginId = 'acme.preview';
     exportName: 'activate',
     platform: 'web' as const,
 });
-const projectionGeneration = 12;
 const occurrenceId = 'preview-occurrence-12';
 const hostUiApiRange = '^1.0.0';
 const executionOrigin = Object.freeze({
@@ -148,7 +147,7 @@ describe('getPluginUiClientExecutableTargetAddressKey', () => {
             executionOrigin: sourceOrigin, occurrenceId })?.executionOrigin).toEqual(sourceOrigin);
         const sourceAction = { ...withCurrentAuthorization(projectedClientAction()), executionOrigin: sourceOrigin };
         const stampedAction = { ...sourceAction, [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: {
-            machineId: authority.machineId, serverId: authority.serverId, generation: projectionGeneration,
+            machineId: authority.machineId, serverId: authority.serverId,
             phase: 'current', interactionEnabled: true, executionOrigin: sourceOrigin,
         } };
         expect(resolvePluginUiClientActionRegistration({ action: stampedAction, platform: target.platform, reader: index }))
@@ -661,7 +660,6 @@ describe('generic client executable contribution registration', () => {
                 materializationId: 'materialization-second',
             }),
         });
-        const secondIdentityProjectionGeneration = projectionGeneration;
         const secondAuthority = authority;
         const secondIdentity: PluginReactNativeBundleCacheIdentity = Object.freeze({
             ...identity,
@@ -727,7 +725,6 @@ describe('generic client executable contribution registration', () => {
             contributes: actionOnlyContributes,
             target,
             executionOrigin,
-            projectionGeneration: projectionGeneration,
             cache: cacheWithIdentity(),
             identity,
             moduleReference,
@@ -744,7 +741,6 @@ describe('generic client executable contribution registration', () => {
             contributes: secondActionOnlyContributes,
             target: secondTarget,
             executionOrigin: secondOrigin,
-            projectionGeneration: secondIdentityProjectionGeneration,
             cache: (() => {
                 const cache = createPluginReactNativeBundleCache();
                 cache.putInstalledArtifact({
@@ -803,11 +799,9 @@ describe('generic client executable contribution registration', () => {
         const replacementFirstActivation = Object.freeze({
             ...firstActivation,
             occurrenceId: replacementOccurrenceId,
-            projectionGeneration: projectionGeneration + 1,
         });
         const unchangedSecondAtNewProjection = Object.freeze({
             ...secondActivation,
-            projectionGeneration: projectionGeneration + 1,
             immutableGenerationId: 'managed-second-2',
         });
         await expect(composition.reconcile([
@@ -937,7 +931,6 @@ describe('generic client executable contribution registration', () => {
             contributes: firstContributes,
             target,
             executionOrigin,
-            projectionGeneration: projectionGeneration,
             cache: cacheWithIdentity(),
             identity,
             moduleReference,
@@ -952,7 +945,6 @@ describe('generic client executable contribution registration', () => {
             contributes: otherContributes,
             target: otherTarget,
             executionOrigin: otherOrigin,
-            projectionGeneration: projectionGeneration,
             cache: (() => {
                 const cache = createPluginReactNativeBundleCache();
                 cache.putInstalledArtifact({
@@ -1024,7 +1016,6 @@ describe('generic client executable contribution registration', () => {
             contributes,
             target,
             executionOrigin,
-            projectionGeneration: projectionGeneration,
             cache: cacheWithIdentity(),
             identity,
             moduleReference,
@@ -1070,7 +1061,6 @@ describe('generic client executable contribution registration', () => {
             contributes: actionOnlyContributes(),
             target,
             executionOrigin,
-            projectionGeneration: projectionGeneration,
             cache: cacheWithIdentity(),
             identity,
             moduleReference,
@@ -1139,7 +1129,6 @@ describe('generic client executable contribution registration', () => {
             contributes: actionOnlyContributes,
             target,
             executionOrigin,
-            projectionGeneration: projectionGeneration,
             cache: cacheWithIdentity(),
             identity,
             moduleReference,
@@ -1202,7 +1191,6 @@ describe('generic client executable contribution registration', () => {
             contributes: actionOnlyContributes,
             target,
             executionOrigin,
-            projectionGeneration: projectionGeneration,
             cache: cacheWithIdentity(),
             identity,
             moduleReference,

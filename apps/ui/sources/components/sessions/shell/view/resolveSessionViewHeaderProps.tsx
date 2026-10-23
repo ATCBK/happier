@@ -229,7 +229,6 @@ function buildSessionViewHeaderPropsCacheKey(input: Readonly<{
     paneScopeId: string;
     sessionAutomationsEnabledCount: number;
     headerMenuExtraItemIdsKey: string;
-    pluginUiProjectionGeneration: number | null;
     pluginUiLocale: string | null;
     pluginUiScopedServerId: string | null;
     pluginUiScopedMachineId: string | null;
@@ -281,7 +280,6 @@ function buildSessionViewHeaderPropsCacheKey(input: Readonly<{
         input.paneScopeId,
         input.sessionAutomationsEnabledCount,
         input.headerMenuExtraItemIdsKey,
-        input.pluginUiProjectionGeneration ?? '',
         input.pluginUiLocale ?? '',
         input.pluginUiScopedServerId ?? '',
         input.pluginUiScopedMachineId ?? '',
@@ -418,7 +416,6 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
         paneScopeId: input.paneScopeId,
         sessionAutomationsEnabledCount: input.sessionAutomationsEnabledCount,
         headerMenuExtraItemIdsKey: (input.headerMenuExtraItems ?? []).map((item) => item.id).join('|'),
-        pluginUiProjectionGeneration: input.pluginUiProjection?.generation ?? null,
         pluginUiLocale: input.pluginUiLocale ?? null,
         pluginUiScopedServerId: input.pluginUiScopedLaunchFacts?.serverId ?? null,
         pluginUiScopedMachineId: input.pluginUiScopedLaunchFacts?.machineId ?? null,

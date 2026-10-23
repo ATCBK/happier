@@ -1457,14 +1457,12 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
     const headerScopedLaunchFacts = React.useMemo(() => Object.freeze({
         serverId: headerPluginProjection.serverId ?? null,
         machineId: headerPluginProjection.machineId ?? null,
-        generation: headerPluginProjection.pluginUiProjection?.generation ?? null,
         interactionEnabled: headerPluginProjection.phase === 'current'
             && headerPluginProjection.interactionEnabled === true,
     }), [
         headerPluginProjection.interactionEnabled,
         headerPluginProjection.phase,
         headerPluginProjection.machineId,
-        headerPluginProjection.pluginUiProjection?.generation,
         headerPluginProjection.serverId,
     ]);
     // Reuse the captured Account lifetime as the only press-time currentness

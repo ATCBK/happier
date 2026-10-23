@@ -548,7 +548,7 @@ describe('PluginContextualResourceStoreProvider', () => {
                 contentType: 'application/json', ...(owner === 'shared' ? { scope: 'session' as const } : {}) } });
         const controller = createBoundPluginSurfaceController({ facts: { ...requestSurface,
             accountLifetime: account.lifetime, machineId: 'machine-1', serverId: account.lifetime.scope.serverId,
-            sessionId: 'session-1', occurrenceId: 'occurrence-42', projectionGeneration: 1,
+            sessionId: 'session-1', occurrenceId: 'occurrence-42',
             resourceCapability: { readable: true, dynamic: true }, pluginUiProjection: projected,
             interactionEnabled: true, daemonInteractionEnabled: true } });
         // The mounted facade includes both shared declarations and its ordinary fallback transport.
@@ -746,7 +746,7 @@ describe('PluginContextualResourceStoreProvider', () => {
         let projection = normalizePluginInstalledUiDeclarations({}, 'ios', widgetInstalledPackage('acme.composer', 'Composer'));
         const controller = createBoundPluginSurfaceController({ facts: { ...requestSurface,
             accountLifetime: account.lifetime, machineId: 'machine-1', serverId: account.lifetime.scope.serverId,
-            sessionId: 'session-1', occurrenceId: 'occurrence-42', projectionGeneration: 1,
+            sessionId: 'session-1', occurrenceId: 'occurrence-42',
             resourceCapability: { readable: true, dynamic: true }, pluginUiProjection: projection,
             readActionInputFacts: () => ({ pluginUiProjection: projection }),
             interactionEnabled: true, daemonInteractionEnabled: true } });
@@ -1243,7 +1243,7 @@ describe('PluginContextualResourceStoreProvider', () => {
         let projection = normalizePluginInstalledUiDeclarations({}, 'ios', widgetInstalledPackage('acme.composer', 'Composer'));
         const controller = createBoundPluginSurfaceController({ facts: { ...requestSurface,
             accountLifetime: account.lifetime, machineId: 'machine-1', serverId: account.lifetime.scope.serverId,
-            sessionId: 'session-1', occurrenceId: 'occurrence-42', projectionGeneration: 1,
+            sessionId: 'session-1', occurrenceId: 'occurrence-42',
             resourceContext: { kind: 'session', sessionId: 'session-1' },
             resourceCapability: { readable: true, dynamic: true }, pluginUiProjection: projection,
             readActionInputFacts: () => ({ pluginUiProjection: projection }),

@@ -682,7 +682,6 @@ describe('DeclarativeCollectionList', () => {
                 actionAvailable={true}
                 openSurface={async () => null}
                 openSurfaceAvailable={false}
-                authorityGeneration={1}
                 accountLifetime={surfaceAccountLifetime()}
                 dataClient={pager.dataClient}
                 embeddedPresentation="content"

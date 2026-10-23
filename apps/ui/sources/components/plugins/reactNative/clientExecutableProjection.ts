@@ -90,7 +90,6 @@ export type PluginUiProjectedClientExecutableTarget = Readonly<{
      * daemon's transport) is then its only route, exactly as for bytes.
      */
     executionOrigin: PluginMachineExecutionOriginV1 | null;
-    projectionGeneration: number;
     authority: PluginUiClientExecutableActivation['authority'];
     artifactGraph: PluginUiArtifactsManifestEntryV2;
     cacheIdentity: PluginReactNativeBundleCacheIdentity;
@@ -101,7 +100,6 @@ export type PluginUiProjectedClientExecutableTarget = Readonly<{
 
 type ProjectedExecutableOrigin = Readonly<{
     executionOrigin: PluginMachineExecutionOriginV1 | null;
-    projectionGeneration: number;
     authority: PluginUiClientExecutableActivation['authority'];
 }>;
 
@@ -119,7 +117,6 @@ type ResolvedProjectedClientExecutableContribution = Readonly<{
      * daemon's transport) is then its only route, exactly as for bytes.
      */
     executionOrigin: PluginMachineExecutionOriginV1 | null;
-    projectionGeneration: number;
     authority: PluginUiClientExecutableActivation['authority'];
     artifactGraph: PluginUiArtifactsManifestEntryV2;
     cacheIdentity: PluginReactNativeBundleCacheIdentity;
@@ -146,13 +143,10 @@ function asRecord(value: unknown): UnknownRecord | null {
 
 function isCurrentUnionOrigin(
     origin: PluginUiContributionOriginV1 | null,
-): origin is PluginUiContributionOriginV1 & Readonly<{ generation: number }> {
+): origin is PluginUiContributionOriginV1 {
     return origin !== null
         && origin.phase === 'current'
         && origin.interactionEnabled
-        && typeof origin.generation === 'number'
-        && Number.isInteger(origin.generation)
-        && origin.generation >= 0
         // The projecting daemon is the route. A materialization, when the
         // plugin has one, must live on that same machine.
         && (origin.executionOrigin === null
@@ -171,7 +165,7 @@ function readCurrentProjectedExecutableOrigin(input: Readonly<{
 }>): ProjectedExecutableOrigin | null {
     if (asRecord(input.entry)?.hostAccountOrigin !== undefined) {
         const account = readPluginUiAccountExecutableOrigin(input.entry);
-        return account ? Object.freeze({ executionOrigin: null, projectionGeneration: 0,
+        return account ? Object.freeze({ executionOrigin: null,
             authority: Object.freeze({ kind: 'account' as const, serverId: account.serverId,
                 accountId: account.accountId, custodyId: account.custodyId }) }) : null;
     }
@@ -181,7 +175,6 @@ function readCurrentProjectedExecutableOrigin(input: Readonly<{
         if (!isCurrentUnionOrigin(unionOrigin)) return null;
         return Object.freeze({
             executionOrigin: unionOrigin.executionOrigin,
-            projectionGeneration: unionOrigin.generation,
             authority: Object.freeze({
                 serverId: unionOrigin.serverId,
                 machineId: unionOrigin.machineId,
@@ -189,12 +182,9 @@ function readCurrentProjectedExecutableOrigin(input: Readonly<{
         });
     }
 
-    const projectionGeneration = input.source.projection.generation;
     const executionOrigin = readPluginUiProjectionEntryExecutionOrigin(input.entry) ?? null;
     if (
-        typeof projectionGeneration !== 'number'
-        || !Number.isInteger(projectionGeneration)
-        || projectionGeneration < 0
+        input.source.projection.generation === null
         || (executionOrigin !== null
             && getPluginMachineExecutionOriginRef(executionOrigin).machineId !== directMachineAuthority.machineId)
     ) {
@@ -202,7 +192,6 @@ function readCurrentProjectedExecutableOrigin(input: Readonly<{
     }
     return Object.freeze({
         executionOrigin,
-        projectionGeneration,
         authority: Object.freeze({
             serverId: directMachineAuthority.serverId,
             machineId: directMachineAuthority.machineId,
@@ -379,7 +368,6 @@ function readClientContributionCandidate(input: Readonly<{
             : { pluginVersion: readInstalledPluginVersion(input.source.projection, entry.pluginId) }),
         target,
         executionOrigin: origin.executionOrigin,
-        projectionGeneration: origin.projectionGeneration,
         authority: origin.authority,
         artifactGraph: artifactGraph.data,
         cacheIdentity,
@@ -482,7 +470,6 @@ function readVoiceCandidate(input: Readonly<{
             : { pluginVersion: readInstalledPluginVersion(input.source.projection, entry.pluginId) }),
         target,
         executionOrigin: origin.executionOrigin,
-        projectionGeneration: origin.projectionGeneration,
         authority: origin.authority,
         artifactGraph: artifactGraph.data,
         cacheIdentity,
@@ -599,7 +586,6 @@ export function resolveProjectedPluginUiClientExecutables(input: Readonly<{
                 contributes,
                 target: first.target,
                 executionOrigin: first.executionOrigin,
-                projectionGeneration: first.projectionGeneration,
                 authority: first.authority,
                 artifactGraph: first.artifactGraph,
                 cacheIdentity: first.cacheIdentity,

@@ -192,14 +192,12 @@ export const SessionCockpitTabNavigator = React.memo((props: SessionCockpitTabNa
         boardFeatureEnabled,
         terminalTabAvailable,
         pluginPlacements,
-        projectionGeneration: boardPluginRuntime.pluginUiProjection?.generation ?? null,
         runtimeAdmission,
     }), [
         appTabInputs,
         boardFeatureEnabled,
         sessionSharingAvailable,
         pluginPlacements,
-        boardPluginRuntime.pluginUiProjection?.generation,
         runtimeAdmission,
         terminalTabAvailable,
     ]);

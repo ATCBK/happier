@@ -65,9 +65,7 @@ export type RightSidebarPluginTabDefinition = RightSidebarTabBase & Readonly<{
     plugin: Readonly<{
         pluginId: string;
         descriptorId: string;
-        generation: number | null;
     }>;
-    retentionKey: string;
 }>;
 
 export type RightSidebarTabDefinition =

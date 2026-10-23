@@ -612,7 +612,6 @@ type DeclarativePluginSurfaceWithDocumentSourceProps = Readonly<{
     /** Daemon-only admission for declarative actions and daemon settings. */
     daemonInteractionEnabled: boolean;
     controller: BoundPluginSurfaceController;
-    authorityGeneration: number | string;
     pluginUiProjection?: PluginUiProjectionModel | null;
     policyContext?: PluginUiPolicyEvaluationContext;
 }>;
@@ -686,7 +685,6 @@ function DeclarativePluginSurfaceDocumentContent(
             policyContext={props.policyContext}
             openSurface={props.controller.openSurface}
             openSurfaceAvailable={props.controller.installedMethods.includes('openSurface')}
-            authorityGeneration={props.authorityGeneration}
             accountLifetime={props.accountLifetime}
             dataClient={props.dataClient}
             documentSourcePresentation={{
@@ -831,7 +829,6 @@ function DeclarativePluginSurfaceWithDocumentSource(
                 policyContext={props.policyContext}
                 openSurface={props.controller.openSurface}
                 openSurfaceAvailable={props.controller.installedMethods.includes('openSurface')}
-                authorityGeneration={props.authorityGeneration}
                 accountLifetime={props.accountLifetime}
                 dataClient={props.dataClient}
                 renderTargetedSurface={props.renderTargetedSurface}
@@ -2155,8 +2152,6 @@ export type PluginSurfaceTargetedMountProps = Readonly<{
     physicalTarget: PluginSurfaceTarget;
     /** The existing A controller lifetime that B must compose, never replace. */
     parentLifetime: BoundPluginSurfaceMountLifetime;
-    /** Exact V2 response generation that contained the correlated A→B mount. */
-    projectionGeneration?: number | string | null;
     /** Exact response-local projection map; never a broad app projection lookup. */
     pluginProjectionById?: Readonly<Record<string, PluginProjectionEntry>> | null;
     /** Exact response-local V2 package/translation facts for B presentation. */
@@ -2447,8 +2442,13 @@ function PluginSurfaceHostMount(props: Readonly<(
     const requesterAccountEntry = descriptor?.contributionKind === 'settingsPage'
         ? requesterAccountProjection?.settingsPagesById[descriptor.id]
         : descriptor ? requesterAccountProjection?.surfacePlacementsById[descriptor.id] : undefined;
-    const expectedRequesterOrigin = React.useMemo(() => readPluginUiAccountExecutableOrigin(requesterAccountEntry),
-        [requesterAccountEntry]);
+    // The canonical union may explicitly select trusted development UI instead
+    // of the bundled declaration. Observe that producer choice without electing
+    // a source here or borrowing the bundled declaration's Account custody.
+    const requesterDeclaration = descriptor?.hostUiSourceSelection === 'explicitDevelopment'
+        ? descriptor : requesterAccountEntry;
+    const expectedRequesterOrigin = React.useMemo(() => readPluginUiAccountExecutableOrigin(requesterDeclaration),
+        [requesterDeclaration]);
     const requesterAccountObservationLoaded = requesterAccountAdmission !== undefined
         && (requesterAccountAdmission.kind === 'available'
             || (requesterAccountAdmission.code !== 'account_availability_not_loaded'
@@ -2533,13 +2533,6 @@ function PluginSurfaceHostMount(props: Readonly<(
             ? Object.freeze({ serverId, machineId })
             : undefined
     ), [machineId, serverId]);
-    const projectionGeneration = targetedBinding
-        ? targetedMount?.projectionGeneration
-        : composerBinding
-            ? composerBinding.mount.projectionGeneration
-            : ephemeralBinding
-                ? ephemeralBinding.surface.projectionGeneration
-        : origin ? origin.generation : accountUnionMount ? null : props.pluginUiProjection?.generation;
     const mountedPluginUiProjection = (
         targetedBinding
             ? targetedMount?.pluginUiProjection ?? null
@@ -2996,7 +2989,6 @@ function PluginSurfaceHostMount(props: Readonly<(
             targetAuthorityKey: surfaceTargetAuthorityKey,
             platform: surfacePlatform,
             channel: surfaceChannel,
-            projectionGeneration,
             pluginProjectionById: targetedMount?.pluginProjectionById ?? null,
             pluginUiProjection: mountedPluginUiProjection,
             accountLifetime,
@@ -3019,7 +3011,6 @@ function PluginSurfaceHostMount(props: Readonly<(
                 resourceScope: surfaceScope.declared ? surfaceScope.resourceScope : [],
                 machineId,
                 serverId,
-                projectionGeneration,
                 occurrenceId: composerBinding.mount.occurrenceId,
                 executionOrigin,
                 resourceCapability,
@@ -3048,7 +3039,6 @@ function PluginSurfaceHostMount(props: Readonly<(
                 resourceScope: surfaceScope.declared ? surfaceScope.resourceScope : [],
                 machineId,
                 serverId,
-                projectionGeneration,
                 occurrenceId: ephemeralBinding.surface.occurrenceId,
                 executionOrigin,
                 resourceCapability,
@@ -3080,7 +3070,6 @@ function PluginSurfaceHostMount(props: Readonly<(
             homeHasMachines,
             pluginDisplayName: installedPackagesById?.[mountedPluginId]?.displayName ?? null,
             serverId,
-            projectionGeneration,
             occurrenceId: accountExecutionOrigin?.custodyId ?? mountedTarget?.occurrenceId ?? null,
             daemonOccurrenceId: accountUnionMount
                 ? (needsMachineExecution ? pluginExecution.selectedSupply : presentationSupply)?.occurrenceId
@@ -3711,7 +3700,6 @@ function PluginSurfaceHostMount(props: Readonly<(
                     request,
                     physicalTarget: resolvedSurfaceTarget.target,
                     parentLifetime: controller,
-                    projectionGeneration: currentMountedTargetRead?.projectionInputs?.pluginProjectionV2?.generation,
                     pluginProjectionById: currentMountedTargetRead?.projectionInputs?.pluginProjectionById,
                     pluginProjectionV2: currentMountedTargetRead?.projectionInputs?.pluginProjectionV2,
                     pluginUiProjection: currentMountedTargetRead?.pluginUiProjection ?? null,
@@ -3956,9 +3944,6 @@ function PluginSurfaceHostMount(props: Readonly<(
                 // scope DID bind the canonical navigation owner, so an enabled
                 // control resolved after doing nothing.
                 openSurfaceAvailable={controller.installedMethods.includes('openSurface')}
-                // Settings declarations belong to this catalog snapshot, not
-                // ordinary daemon-state publications such as heartbeat updates.
-                authorityGeneration={projectionGeneration ?? 0}
                 accountLifetime={accountLifetime}
                 dataClient={mountedPluginUiDataClient}
                 renderTargetedSurface={hasEmbeddedMount ? undefined : renderTargetedSurface}
@@ -4011,7 +3996,6 @@ function PluginSurfaceHostMount(props: Readonly<(
                     focusEligible={presentationFocusEligible}
                     daemonInteractionEnabled={daemonOwnedInteractionEnabled}
                     controller={controller}
-                    authorityGeneration={projectionGeneration ?? 0}
                     pluginUiProjection={mountedPluginUiProjection}
                     policyContext={hasEmbeddedRendererMount ? undefined : policyContext}
                     renderTargetedSurface={hasEmbeddedMount ? undefined : renderTargetedSurface}

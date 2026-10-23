@@ -178,7 +178,6 @@ describe('DeclarativePluginSurface Account secrets', () => {
                 actionAvailable={false}
                 openSurface={openSurface}
                 openSurfaceAvailable={false}
-                authorityGeneration={1}
                 accountLifetime={accountLifetime}
             />,
         );
@@ -312,7 +311,6 @@ describe('DeclarativePluginSurface ordinary Settings', () => {
                 actionAvailable={false}
                 openSurface={openSurface}
                 openSurfaceAvailable={false}
-                authorityGeneration={1}
                 accountLifetime={accountLifetime}
             />
         );
@@ -366,7 +364,7 @@ describe('DeclarativePluginSurface action continuity', () => {
             return <DeclarativePluginSurface pluginId="acme.pending" model={pendingModel}
                 interactionEnabled={true} daemonInteractionEnabled={true}
                 dispatchAction={execute} actionAvailable={true} openSurface={openSurface}
-                openSurfaceAvailable={false} authorityGeneration={1} accountLifetime={accountLifetime} />;
+                openSurfaceAvailable={false} accountLifetime={accountLifetime} />;
         };
         const screen = await renderScreen(render());
         const testID = 'plugin-declarative-action:acme.pending/refresh';
@@ -399,7 +397,6 @@ describe('DeclarativePluginSurface document source feedback', () => {
             actionAvailable={false}
             openSurface={openSurface}
             openSurfaceAvailable={false}
-            authorityGeneration={1}
             accountLifetime={createAccountLifetime()}
             documentSourcePresentation={{ presentation: resolvePluginSurfaceStatePresentation({ state, hasRetainedContent: true }) }}
         />,
@@ -469,7 +466,6 @@ describe('DeclarativePluginSurface settings rows', () => {
                 actionAvailable={false}
                 openSurface={openSurface}
                 openSurfaceAvailable={false}
-                authorityGeneration={1}
                 accountLifetime={createAccountLifetime()}
             />,
         );

@@ -207,7 +207,6 @@ describe('SVG File page preview dispatch', () => {
                         pluginId: 'com.external.viewer-11', contributionId: 'text-viewer',
                         surfaceId: 'surfacePlacement:com.external.viewer-11:text-viewer',
                         placement: 'projectSurface', platform, ...fixture.scope,
-                        projectionGeneration: mounted.props.pluginUiProjection.generation,
                         occurrenceId: mounted.props.placement.occurrenceId,
                         executionOrigin: mounted.props.placement.executionOrigin,
                         accountLifetime: captureActiveServerAccountScopeLifetime(), interactionEnabled: true,

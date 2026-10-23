@@ -90,7 +90,7 @@ export type ChatListItem =
         identityKey: string;
         pluginId: string;
         contributionId: string;
-        generation: string;
+        occurrenceId: string;
         sessionId: string;
         resourceId: string;
         localActivityId: string;

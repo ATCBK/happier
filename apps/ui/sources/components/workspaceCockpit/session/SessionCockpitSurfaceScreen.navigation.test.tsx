@@ -415,7 +415,6 @@ function createCockpitPluginProjection(input: Readonly<{
         hostOrigin: {
             machineId: 'machine-1',
             serverId: 'server-1',
-            generation: 4,
             interactionEnabled: true,
             // The canonical union producer stamps projection phase; currentness
             // is never inferred from the model or the interaction boolean.

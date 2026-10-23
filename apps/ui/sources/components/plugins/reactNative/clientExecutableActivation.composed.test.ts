@@ -90,7 +90,7 @@ function fixture() {
     let actionsById: PluginUiProjectionModel['actionsById'] = {};
     let reactNativeBundlesById: PluginUiProjectionModel['reactNativeBundlesById'] = {};
     for (const artifact of BUNDLED_PLUGIN_UI_APP_ARTIFACTS) {
-        const origin = { machineId: 'byte-supplier', serverId: lifetime.scope.serverId, generation: 1,
+        const origin = { machineId: 'byte-supplier', serverId: lifetime.scope.serverId,
             interactionEnabled: true, phase: 'current' as const, executionOrigin: null };
         const action = PluginContributesV2Schema.parse({ actions: [{ id: 'run', title: 'Run', scopes: ['session'],
             surfaces: ['ui'], placementBindings: ['detailsPanel'], dangerLevel: 'safe',

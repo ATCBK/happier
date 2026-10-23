@@ -117,7 +117,6 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
         supply.executionOrigin !== null && previous?.supply.executionOrigin != null
         && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, previous.supply.executionOrigin)
         && supply.occurrenceId === previous.supply.occurrenceId
-        && supply.generation === previous.supply.generation
         && supply.pluginVersion === previous.supply.pluginVersion
         && supply.serverId === previous.supply.serverId
     );
@@ -158,11 +157,11 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
         const entry = params.entry && projection
             ? projection.surfacePlacementsById[params.entry.id] ?? projection.settingsPagesById[params.entry.id]
                 ?? projection.composerControlsById[params.entry.id] ?? projection.composerRegionsById[params.entry.id]
+                ?? projection.composerReferencesById[params.entry.id]
             : null;
         return readPluginUiContributionSupplies(entry).some(supply => (
                 supply.executionOrigin && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, fresh.origin)
                 && supply.occurrenceId === selectedSupply.occurrenceId
-                && supply.generation === selectedSupply.generation
                 && supply.serverId === selectedSupply.serverId
                 && supply.phase === 'current' && supply.interactionEnabled
             ));

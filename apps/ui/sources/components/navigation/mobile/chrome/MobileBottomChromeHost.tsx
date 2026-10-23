@@ -413,7 +413,6 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
                         terminalTabAvailable={terminalTabAvailable}
                         openDetailsTabCount={openDetailsTabCount}
                         pluginPlacements={matchingRegistration?.pluginPlacements}
-                        projectionGeneration={matchingRegistration?.projectionGeneration}
                         onSurfacePress={(surface) => handleSessionCockpitSurfacePress(sessionCockpitModel.sessionId, surface)}
                     />
                 ),

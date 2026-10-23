@@ -117,7 +117,6 @@ describe('sessionCockpitMobileCatalog', () => {
             terminalTabAvailable: true,
             boardFeatureEnabled: true,
             pluginPlacements: [plugin],
-            projectionGeneration: 7,
         });
 
         expect(catalog.map((entry) => entry.id)).toEqual([
@@ -208,7 +207,6 @@ describe('sessionCockpitMobileCatalog', () => {
         const iosInput = {
             terminalTabAvailable: true,
             pluginPlacements: [androidOnlyPlugin],
-            projectionGeneration: 7,
             runtimeAdmission: { platform: 'ios' as const, formFactor: 'phone' as const },
         };
         const androidInput = {

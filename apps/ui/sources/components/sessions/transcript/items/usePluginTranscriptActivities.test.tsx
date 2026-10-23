@@ -59,7 +59,8 @@ installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
 const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
-const { EMPTY_PLUGIN_UI_PROJECTION, normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+const { EMPTY_PLUGIN_UI_PROJECTION, normalizePluginUiProjection, normalizePluginInstalledUiDeclarations } = await import('@/sync/domains/plugins/ui/projection');
+const { publishDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
 const { PluginContextualResourceStoreProvider } = await import('@/components/plugins/surfaces/PluginContextualResourceStoreProvider');
 const { storage } = await import('@/sync/domains/state/storage');
 const {
@@ -187,7 +188,7 @@ describe('plugin transcript Activity Resource projection', () => {
                 sessionId: props.sessionId,
                 machineId: 'machine-1',
                 serverId: ACCOUNT_LIFETIME.scope.serverId,
-                generation: '1',
+                ready: true,
             });
             return null;
         }
@@ -210,47 +211,6 @@ describe('plugin transcript Activity Resource projection', () => {
         });
         await act(async () => {
             tree?.update(<PluginTranscriptActivityDismissalProvider><Probe sessionId={sessionA} /></PluginTranscriptActivityDismissalProvider>);
-            await Promise.resolve();
-        });
-        expect(latest.dismissedActivityIds).toEqual(new Set());
-        await act(async () => { tree?.unmount(); });
-    });
-
-    it('retires a dormant prior-generation dismissal when the same Session is reacquired at a new generation', async () => {
-        const account = await createAccountLifetime('generation-retirement');
-        let latest!: ReturnType<typeof usePluginTranscriptActivityDismissal>;
-        function Probe(props: Readonly<{ sessionId: string; generation: string }>) {
-            latest = usePluginTranscriptActivityDismissal({
-                accountLifetime: account.lifetime,
-                sessionId: props.sessionId,
-                machineId: 'machine-1',
-                serverId: ACCOUNT_LIFETIME.scope.serverId,
-                generation: props.generation,
-            });
-            return null;
-        }
-
-        let tree: renderer.ReactTestRenderer | null = null;
-        await act(async () => {
-            tree = renderer.create(<PluginTranscriptActivityDismissalProvider><Probe sessionId="generation-session-a" generation="1" /></PluginTranscriptActivityDismissalProvider>);
-            await Promise.resolve();
-            await Promise.resolve();
-        });
-        await act(async () => {
-            latest.dismissActivity('activity-a', 'source-a');
-            await Promise.resolve();
-        });
-        await act(async () => {
-            tree?.update(<PluginTranscriptActivityDismissalProvider><Probe sessionId="generation-session-b" generation="1" /></PluginTranscriptActivityDismissalProvider>);
-            await Promise.resolve();
-        });
-
-        await act(async () => {
-            tree?.update(<PluginTranscriptActivityDismissalProvider><Probe sessionId="generation-session-a" generation="2" /></PluginTranscriptActivityDismissalProvider>);
-            await Promise.resolve();
-        });
-        await act(async () => {
-            tree?.update(<PluginTranscriptActivityDismissalProvider><Probe sessionId="generation-session-a" generation="1" /></PluginTranscriptActivityDismissalProvider>);
             await Promise.resolve();
         });
         expect(latest.dismissedActivityIds).toEqual(new Set());
@@ -1610,6 +1570,21 @@ describe('plugin transcript Activity Resource projection', () => {
         transport.next.mockReset();
         transport.close.mockReset();
 
+        const activityId = 'transcriptActivity:acme.preview:activity';
+        const rawProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 7, familiesById: {
+            pluginUi: { family: 'pluginUi', entriesById: {
+                [activityId]: { ...projection.transcriptActivitiesById['acme.preview/activity'], id: activityId },
+            } },
+        } });
+        const published = publishDaemonMergedProjectionInputs({ projection: rawProjection });
+        const ownProjection = published.pluginUiProjection;
+        expect(ownProjection.transcriptActivitiesById[activityId]?.occurrenceId).toBe('preview-occurrence-7');
+        const unreadyProjection = normalizePluginInstalledUiDeclarations({
+            [activityId]: { ...projection.transcriptActivitiesById['acme.preview/activity']!, id: activityId },
+        });
+        expect(unreadyProjection.generation).toBeNull();
+        expect(unreadyProjection.transcriptActivitiesById[activityId]?.descriptorId).toBe('activity');
+
         const currentBySession = new Map<string, ReturnType<typeof response>>([
             ['session-a', response({
                 version: 1,
@@ -1655,6 +1630,10 @@ describe('plugin transcript Activity Resource projection', () => {
         transport.close.mockResolvedValue(undefined);
 
         let latest: ReturnType<typeof usePluginTranscriptActivities> | null = null;
+        function readLatest(): ReturnType<typeof usePluginTranscriptActivities> {
+            if (latest === null) throw new Error('Expected the current Activity hook result.');
+            return latest;
+        }
         function Probe(props: Readonly<{
             sessionId: string;
             projectionModel?: PluginUiProjectionModel;
@@ -1665,7 +1644,7 @@ describe('plugin transcript Activity Resource projection', () => {
                 interactionEnabled: false,
                 machineId: 'machine-1',
                 platform: 'web',
-                pluginUiProjection: props.projectionModel ?? projection,
+                pluginUiProjection: props.projectionModel ?? ownProjection,
                 serverId: ACCOUNT_LIFETIME.scope.serverId,
                 sessionId: props.sessionId,
                 sessionRemoved: props.sessionRemoved,
@@ -1675,7 +1654,15 @@ describe('plugin transcript Activity Resource projection', () => {
 
         let tree: renderer.ReactTestRenderer | null = null;
         await act(async () => {
-            tree = renderer.create(<ActivityTestProviders><Probe sessionId="session-a" /></ActivityTestProviders>);
+            tree = renderer.create(<ActivityTestProviders><Probe sessionId="session-a" projectionModel={unreadyProjection} /></ActivityTestProviders>);
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        expect(readLatest().activities).toEqual([]);
+        expect(readLatest().dismissedActivityIds.size).toBe(0);
+        expect(transport.read).not.toHaveBeenCalled();
+        await act(async () => {
+            tree?.update(<ActivityTestProviders><Probe sessionId="session-a" /></ActivityTestProviders>);
             await Promise.resolve();
             await Promise.resolve();
         });
@@ -1691,6 +1678,54 @@ describe('plugin transcript Activity Resource projection', () => {
             expect(latest?.dismissedActivityIds.has(sessionAIdentity)).toBe(true);
         });
 
+        const originalRow = latest!.activities[0];
+        const originalReads = transport.read.mock.calls.length;
+        const originalWatches = transport.open.mock.calls.length;
+        const unrelatedChange = publishDaemonMergedProjectionInputs({ projection: PluginProjectionV2Schema.parse({
+            ...rawProjection, generation: 77, familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                ...rawProjection.familiesById.pluginUi!.entriesById,
+                'translations:acme.unrelated': { id: 'translations:acme.unrelated', pluginId: 'acme.unrelated',
+                    occurrenceId: 'unrelated-occurrence', contributionKind: 'translations', locales: ['en'],
+                    bundles: { en: { title: 'A real unrelated declaration change' } } },
+            } } },
+        }) }, published).pluginUiProjection;
+        expect(unrelatedChange.generation).toBe(77);
+        expect(unrelatedChange.transcriptActivitiesById).toBe(ownProjection.transcriptActivitiesById);
+        await act(async () => {
+            tree?.update(<ActivityTestProviders><Probe sessionId="session-a" projectionModel={unrelatedChange} /></ActivityTestProviders>);
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        expect(readLatest().dismissedActivityIds.has(sessionAIdentity)).toBe(true);
+        expect(readLatest().activities[0]).toBe(originalRow);
+        expect(transport.read.mock.calls.length).toBe(originalReads);
+        expect(transport.open.mock.calls.length).toBe(originalWatches);
+
+        await act(async () => {
+            tree?.update(<ActivityTestProviders><Probe sessionId="session-a" projectionModel={unreadyProjection} /></ActivityTestProviders>);
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        expect(readLatest().activities).toEqual([]);
+        expect(readLatest().dismissedActivityIds.size).toBe(0);
+        expect(transport.read.mock.calls.length).toBe(originalReads);
+        await act(async () => {
+            tree?.update(<ActivityTestProviders><Probe sessionId="session-a" /></ActivityTestProviders>);
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        await vi.waitFor(() => expect(latest?.activities).toHaveLength(1));
+        await act(async () => { latest!.onDismissActivity(sessionAIdentity); });
+        expect(readLatest().dismissedActivityIds.has(sessionAIdentity)).toBe(true);
+
+        // Unready B cannot retire A's dormant dismissal during navigation.
+        await act(async () => {
+            tree?.update(<ActivityTestProviders><Probe sessionId="session-b" projectionModel={unreadyProjection} /></ActivityTestProviders>);
+            await Promise.resolve();
+            await Promise.resolve();
+        });
+        expect(readLatest().activities).toEqual([]);
+        expect(readLatest().dismissedActivityIds.size).toBe(0);
         await act(async () => {
             tree?.update(<ActivityTestProviders><Probe sessionId="session-b" /></ActivityTestProviders>);
             await Promise.resolve();
@@ -1710,23 +1745,18 @@ describe('plugin transcript Activity Resource projection', () => {
             expect(latest?.dismissedActivityIds.has(sessionAIdentity)).toBe(true);
         });
 
-        // Replacing a contributor generation retires its old local dismissal;
-        // returning to the former generation must not resurrect a stale card
-        // decision from that retired source.
-        const replacementGeneration = Object.freeze({
-            ...projection,
-            generation: 8,
-            transcriptActivitiesById: Object.freeze({
-                'acme.preview/activity': Object.freeze({
-                    ...projection.transcriptActivitiesById['acme.preview/activity']!,
-                    occurrenceId: 'preview-occurrence-8',
-                }),
-            }),
-        });
+        // A real occurrence replacement retires only that source's dismissal,
+        // even when the diagnostic model generation has not changed.
+        const replacementOccurrence = publishDaemonMergedProjectionInputs({ projection: PluginProjectionV2Schema.parse({
+            ...rawProjection, familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                [activityId]: { ...rawProjection.familiesById.pluginUi!.entriesById[activityId], occurrenceId: 'preview-occurrence-8' },
+            } } },
+        }) }, published).pluginUiProjection;
+        expect(replacementOccurrence.generation).toBe(ownProjection.generation);
         await act(async () => {
             tree?.update(
                 <ActivityTestProviders>
-                    <Probe sessionId="session-a" projectionModel={replacementGeneration} />
+                    <Probe sessionId="session-a" projectionModel={replacementOccurrence} />
                 </ActivityTestProviders>,
             );
             await Promise.resolve();

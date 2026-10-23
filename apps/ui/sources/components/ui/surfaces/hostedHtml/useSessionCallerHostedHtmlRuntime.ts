@@ -72,7 +72,6 @@ export function useSessionCallerHostedHtmlRuntime(
         const pluginTarget = pluginTargetCurrent ? {
             machineId: pluginMachineId ?? null,
             serverId: pluginServerId ?? null,
-            generation: pluginUiProjection.generation,
             projection: pluginUiProjection,
             isCurrent: () => isCurrent()
                 && pluginRuntimeRef.current?.phase === 'current'

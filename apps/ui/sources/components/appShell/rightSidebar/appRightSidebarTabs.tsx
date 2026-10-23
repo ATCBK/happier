@@ -19,7 +19,6 @@ import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/
  */
 export function useAppRightSidebarTabInputs(): Readonly<{
     appPluginPlacements: readonly PluginUiSurfacePlacementProjection[];
-    appProjectionGeneration: number | null;
     appLocalize: PluginLocalizedTextResolver;
 }> {
     const projection = useAppShellPluginUiProjection().pluginUiProjection;
@@ -30,9 +29,8 @@ export function useAppRightSidebarTabInputs(): Readonly<{
     );
     return React.useMemo(() => ({
         appPluginPlacements,
-        appProjectionGeneration: projection?.generation ?? null,
         appLocalize,
-    }), [appLocalize, appPluginPlacements, projection?.generation]);
+    }), [appLocalize, appPluginPlacements]);
 }
 
 /** The App rail and its pane adapter read one catalog, not separate tab-availability rules. */
@@ -41,9 +39,8 @@ export function useAppRightSidebarTabs() {
     return React.useMemo(() => resolveRightSidebarTabs({
         scope: 'app',
         pluginPlacements: inputs.appPluginPlacements,
-        projectionGeneration: inputs.appProjectionGeneration,
         localize: inputs.appLocalize,
-    }), [inputs.appLocalize, inputs.appPluginPlacements, inputs.appProjectionGeneration]);
+    }), [inputs.appLocalize, inputs.appPluginPlacements]);
 }
 
 export type AppRightSidebarTabFacts = Readonly<{

@@ -68,7 +68,6 @@ describe('rightSidebarPluginTabs', () => {
                     rankHint: -25,
                 },
             })],
-            projectionGeneration: 4,
         });
 
         expect(tabs).toHaveLength(1);
@@ -85,9 +84,7 @@ describe('rightSidebarPluginTabs', () => {
             plugin: {
                 pluginId: REVIEW_PLUGIN_ID,
                 descriptorId: 'review-panel',
-                generation: 4,
             },
-            retentionKey: `plugin:${REVIEW_PLUGIN_ID}:review-panel:4`,
         });
     });
 
@@ -195,7 +192,6 @@ describe('rightSidebarPluginTabs', () => {
                     },
                 }),
             ],
-            projectionGeneration: 4,
             policyContext: { platform: 'web' },
         });
         const incompatible = resolveRightSidebarPluginTabs({
@@ -208,7 +204,6 @@ describe('rightSidebarPluginTabs', () => {
                     },
                 }),
             ],
-            projectionGeneration: 4,
             policyContext: { platform: 'ios' },
         });
 
@@ -237,7 +232,6 @@ describe('rightSidebarPluginTabs', () => {
                     },
                 }),
             ],
-            projectionGeneration: 4,
         });
 
         expect(tabs).toEqual([]);
@@ -260,7 +254,6 @@ describe('rightSidebarPluginTabs', () => {
         const tabs = resolveRightSidebarPluginTabs({
             scope: 'session',
             placements,
-            projectionGeneration: 4,
         });
 
         expect(tabs).toEqual([]);
@@ -270,7 +263,6 @@ describe('rightSidebarPluginTabs', () => {
         expect(resolveRightSidebarPluginTabs({
             scope: 'project',
             placements: [createPlacement()],
-            projectionGeneration: 4,
         })).toEqual([]);
     });
 

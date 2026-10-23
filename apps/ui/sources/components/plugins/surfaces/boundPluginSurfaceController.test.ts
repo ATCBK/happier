@@ -123,7 +123,6 @@ const FACTS = {
     channel: 'internal',
     machineId: 'machine_1',
     serverId: 'server-1',
-    projectionGeneration: 12,
     occurrenceId: 'acme.browser:12',
     executionOrigin: {
         serverIdentityId: 'srv_browser_fixture',

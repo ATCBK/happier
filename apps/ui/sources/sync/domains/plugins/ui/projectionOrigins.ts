@@ -21,8 +21,6 @@ export type PluginUiContributionOriginV1 = Readonly<{
     serverIdentityId?: string;
     /** Currentness/activation cause, separate from release correspondence. */
     unavailableReasonCode?: string;
-    /** The origin's generation, never the aggregate union's generation. */
-    generation: number | null;
     /** Each contribution retains its own origin's executable currentness. */
     interactionEnabled: boolean;
     phase: PluginUiProjectionPhase;
@@ -136,7 +134,6 @@ export function readPluginUiContributionOrigin(entry: unknown): PluginUiContribu
         serverId: readString(origin.serverId),
         ...(readString(origin.serverIdentityId) ? { serverIdentityId: readString(origin.serverIdentityId)! } : {}),
         ...(readString(origin.unavailableReasonCode) ? { unavailableReasonCode: readString(origin.unavailableReasonCode)! } : {}),
-        generation: typeof origin.generation === 'number' && Number.isFinite(origin.generation) ? origin.generation : null,
         interactionEnabled: origin.interactionEnabled === true,
         phase,
         executionOrigin,
@@ -295,7 +292,7 @@ function retainCanonicalSupply(previous: PluginUiContributionSupplyV1, next: Plu
     if (executionOrigin === previous.executionOrigin && sourceCustody === previous.sourceCustody
         && previous.machineId === next.machineId && previous.serverId === next.serverId
         && previous.serverIdentityId === next.serverIdentityId && previous.unavailableReasonCode === next.unavailableReasonCode
-        && previous.generation === next.generation && previous.interactionEnabled === next.interactionEnabled && previous.phase === next.phase
+        && previous.interactionEnabled === next.interactionEnabled && previous.phase === next.phase
         && previous.occurrenceId === next.occurrenceId && previous.pluginVersion === next.pluginVersion
         && previous.executionTargetDefault === next.executionTargetDefault && previous.executionTargetAutoPick === next.executionTargetAutoPick
         && previous.resourceCapability?.readable === next.resourceCapability?.readable

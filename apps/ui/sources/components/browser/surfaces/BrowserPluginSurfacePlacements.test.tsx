@@ -95,7 +95,6 @@ const browserPanelPlacement = {
     hostOrigin: {
         machineId: 'machine-admitted',
         serverId: 'srv_account_one',
-        generation: 9,
         phase: 'current',
         interactionEnabled: true,
         executionOrigin: {

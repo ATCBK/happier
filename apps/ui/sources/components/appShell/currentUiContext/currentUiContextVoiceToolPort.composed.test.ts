@@ -159,7 +159,6 @@ const ACTION_DISCOVERY_ID = formatQualifiedPluginActionId(ACTION_ID);
 const ACTION_ORIGIN = Object.freeze({
     machineId: 'machine-actions',
     get serverId() { return actionHomeId; },
-    generation: 27,
     interactionEnabled: true,
     phase: 'current' as const,
     executionOrigin: {
@@ -191,7 +190,6 @@ const CLIENT_ACTION_EXECUTION_ORIGIN = Object.freeze({
 const CLIENT_ACTION_HOST_ORIGIN = Object.freeze({
     machineId: CLIENT_ACTION_EXECUTION_ORIGIN.materializationRef.machineId,
     get serverId() { return clientHomeId; },
-    generation: CLIENT_ACTION_GENERATION,
     interactionEnabled: true,
     phase: 'current' as const,
     executionOrigin: CLIENT_ACTION_EXECUTION_ORIGIN,
@@ -235,7 +233,6 @@ const PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN = Object.freeze({
 const PUBLIC_AUTHORING_CLIENT_ACTION_HOST_ORIGIN = Object.freeze({
     machineId: PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN.materializationRef.machineId,
     get serverId() { return publicHomeId; },
-    generation: PUBLIC_AUTHORING_CLIENT_ACTION_GENERATION,
     interactionEnabled: true,
     phase: 'current' as const,
     executionOrigin: PUBLIC_AUTHORING_CLIENT_ACTION_EXECUTION_ORIGIN,
@@ -588,7 +585,7 @@ function createDaemonActionProjection(input: Readonly<{
     });
     return Object.freeze({
         ...EMPTY_PLUGIN_UI_PROJECTION,
-        generation: ACTION_ORIGIN.generation,
+        generation: 27,
         actionsById: Object.freeze({
             [`${ACTION_ID.pluginId}/${ACTION_ID.localId}`]: action,
         }),

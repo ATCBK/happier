@@ -290,7 +290,6 @@ const CLIENT_ACTION_ARTIFACT_GRAPH = PluginUiArtifactsManifestEntryV2Schema.pars
 const CLIENT_ACTION_HOST_ORIGIN = Object.freeze({
     machineId: CLIENT_ACTION_ORIGIN.materializationRef.machineId,
     serverId: 'server-client-action',
-    generation: CLIENT_ACTION_GENERATION,
     interactionEnabled: true,
     phase: 'current' as const,
     executionOrigin: CLIENT_ACTION_ORIGIN,

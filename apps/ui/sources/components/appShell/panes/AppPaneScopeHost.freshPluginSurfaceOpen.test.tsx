@@ -100,7 +100,6 @@ function createPlacement(input: Readonly<{
         hostOrigin: {
             machineId: 'machine-1',
             serverId: 'server-1',
-            generation: 1,
             phase: 'current',
             interactionEnabled: true,
             executionOrigin: {

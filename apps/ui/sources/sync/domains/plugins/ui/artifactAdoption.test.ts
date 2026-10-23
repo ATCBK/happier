@@ -13,7 +13,7 @@ import {
 describe('readPluginUiDaemonProjectionSelection', () => {
     it('retains every byte supplier without admitting a Machine execution origin', () => {
         const supply = { machineId: 'offline', serverId: 'home', phase: 'retainedOffline', interactionEnabled: false,
-            generation: 1, executionOrigin: null, occurrenceId: 'old', pluginVersion: '1.0.0', sourceCustody: null };
+            executionOrigin: null, occurrenceId: 'old', pluginVersion: '1.0.0', sourceCustody: null };
         expect(readPluginUiArtifactDaemonSources({ hostSupplies: [supply, { ...supply, machineId: 'other' }, supply] }))
             .toEqual([{ machineId: 'offline', serverId: 'home' }, { machineId: 'other', serverId: 'home' }]);
     });
@@ -52,7 +52,6 @@ describe('readPluginUiDaemonProjectionSelection', () => {
                 serverId: 'server-a',
                 phase: 'current',
                 interactionEnabled: true,
-                generation: 3,
                 executionOrigin: null,
             },
         })).toEqual({
@@ -65,7 +64,7 @@ describe('readPluginUiDaemonProjectionSelection', () => {
 
     it('uses compatible current renderer supplies for bytes without restoring execution authority', () => {
         const supply = { machineId: 'machine-b', serverId: 'server-a', phase: 'current', interactionEnabled: true,
-            generation: 3, executionOrigin: null, occurrenceId: 'occurrence-b', pluginVersion: '1.2.3', sourceCustody: null };
+            executionOrigin: null, occurrenceId: 'occurrence-b', pluginVersion: '1.2.3', sourceCustody: null };
         const contribution = { artifactSelectionOwner: 'daemonProjection', contributionId: 'renderer-a', pluginVersion: '1.2.3',
             hostOrigin: null, hostCompatibility: 'compatible',
             hostSupplies: [{ ...supply, machineId: 'machine-a', phase: 'retainedOffline', interactionEnabled: false }, supply] };

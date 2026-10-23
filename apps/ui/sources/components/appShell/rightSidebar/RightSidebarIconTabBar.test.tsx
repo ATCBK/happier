@@ -134,10 +134,8 @@ describe('RightSidebarIconTabBar', () => {
             plugin: {
                 pluginId,
                 descriptorId: 'review-panel',
-                generation: 4,
             },
             placement,
-            retentionKey: `plugin:${pluginId}:review-panel:4`,
         } as const;
 
         const screen = await renderScreen(

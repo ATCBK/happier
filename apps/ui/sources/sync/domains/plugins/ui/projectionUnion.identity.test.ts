@@ -146,7 +146,7 @@ describe('execution-origin projection identity', () => {
                     if (value === reportingCustody) reportingSupplierPreparations++;
                 }
                 const after = readPluginUiContributionSupplies(projection.unknownEntriesById.row);
-                expect(after[index]).toMatchObject({ machineId: member.machineId, generation: 2, phase, interactionEnabled: false });
+                expect(after[index]).toMatchObject({ machineId: member.machineId, phase, interactionEnabled: false });
                 for (let other = 0; other < members.length; other++) if (other !== index) expect(after[other]).toBe(before[other]);
                 expect(projection.unknownEntriesById.row!.payload).toBe(payload);
                 remember(after);
@@ -178,7 +178,7 @@ describe('execution-origin projection identity', () => {
         const first = { ...members[0]!, phase: 'current' as const, interactionEnabled: true };
         members = [{ ...first, phase: 'establishing', interactionEnabled: false }, ...members.slice(1)];
         projection = publish();
-        expect(readPluginUiContributionOrigin(projection.unknownEntriesById.row)).toMatchObject({ generation: 2,
+        expect(readPluginUiContributionOrigin(projection.unknownEntriesById.row)).toMatchObject({
             phase: 'establishing', interactionEnabled: false });
         members = [{ ...first, unavailableReasonCode: 'plugin_source_not_ready', interactionEnabled: false }, ...members.slice(1)];
         projection = publish();
@@ -213,7 +213,7 @@ describe('execution-origin projection identity', () => {
         members = [];
         expect(publish().unknownEntriesById.row).toBeUndefined();
         members = [replaced];
-        expect(readPluginUiContributionOrigin(publish().unknownEntriesById.row)).toMatchObject({ executionOrigin, generation: 2, interactionEnabled: true });
+        expect(readPluginUiContributionOrigin(publish().unknownEntriesById.row)).toMatchObject({ executionOrigin, interactionEnabled: true });
     });
 
     it('publishes a fresh empty Account through absent, native-only, UI, pending, clearing and reacquired inputs', () => {
@@ -831,8 +831,7 @@ describe('execution-origin projection identity', () => {
         const custody = { kind: 'development', registeredRootId: 'raw' };
         const raw = { serverIdentityId: 'srv_identity', sourceRef: { machineId: 'first', pluginId: 'acme.first', sourceCustody: custody } };
         const arbitrary = Object.freeze({ pluginId: 'acme.first', executionOrigin: raw,
-            hostOrigin: Object.freeze({ machineId: 'first', serverId: 'server', generation: 1,
-                phase: 'current', interactionEnabled: true, executionOrigin: raw }) });
+            hostOrigin: Object.freeze({ machineId: 'first', serverId: 'server', phase: 'current', interactionEnabled: true, executionOrigin: raw }) });
         expect(readPluginUiProjectionEntryExecutionOrigin(arbitrary)).not.toBeNull();
         expect(readPluginUiContributionOrigin(arbitrary)?.executionOrigin).not.toBeNull();
         custody.kind = 'invalid';
@@ -843,8 +842,7 @@ describe('execution-origin projection identity', () => {
     it('prepares immutable producer origins without changing input fields, ordering or raw-input validation', () => {
         const executionOrigin = { sourceRef: { sourceCustody: { registeredRootId: 'first', kind: 'development' },
             pluginId: 'acme.first', machineId: 'first' }, serverIdentityId: 'srv_identity' };
-        const hostOrigin = { machineId: 'first', serverId: 'server', generation: 1,
-            phase: 'current', interactionEnabled: true, executionOrigin };
+        const hostOrigin = { machineId: 'first', serverId: 'server', phase: 'current', interactionEnabled: true, executionOrigin };
         const hostAccountOrigin = { custodyId: 'account-custody', serverId: 'server', sourceCustody: {
             archiveDigestSha256: `sha256:${'a'.repeat(64)}`, version: '1.0.0', pluginId: 'acme.first', kind: 'account_release',
         }, accountId: 'account' };
@@ -910,8 +908,10 @@ describe('execution-origin projection identity', () => {
         expect(withdrawn).not.toBe(initial);
         expect(withdrawn.sourceCandidates[0]?.validation).toEqual({ kind: 'rejected', reason: 'stale' });
         expect(read(source, withdrawn).sourceCandidates[0]?.validation).toEqual({ kind: 'admitted' });
-        const successor = { ...source, projection: { ...source.projection!, generation: 2 } };
-        expect(read(successor, initial).sourceCandidates[0]?.source.generation).toBe(2);
+        const successor = { ...source, projection: { ...source.projection!, installedPackagesById: {
+            [pluginId]: { ...source.projection!.installedPackagesById[pluginId]!, occurrenceId: 'successor-occurrence' },
+        } } };
+        expect(read(successor, initial).sourceCandidates[0]?.source.occurrenceId).toBe('successor-occurrence');
     });
 });
 

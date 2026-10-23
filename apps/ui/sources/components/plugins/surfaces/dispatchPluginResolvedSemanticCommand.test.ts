@@ -47,7 +47,6 @@ function unionProjectionWithActionOrigin(): PluginUiProjectionModel {
                 hostOrigin: Object.freeze({
                     machineId: 'machine-action',
                     serverId: 'server-action',
-                    generation: 41,
                     interactionEnabled: true,
                     phase: 'current' as const,
                     executionOrigin: {
@@ -77,7 +76,6 @@ function unionProjectionWithOriginlessAction(): PluginUiProjectionModel {
                 hostOrigin: Object.freeze({
                     machineId: 'machine-action',
                     serverId: 'server-action',
-                    generation: 41,
                     interactionEnabled: true,
                     phase: 'current' as const,
                     executionOrigin: null,

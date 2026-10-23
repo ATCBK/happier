@@ -84,7 +84,7 @@ function addCatalogEntry(
 }
 
 export function resolveSessionCockpitMobileCatalog(input: Readonly<Pick<ResolveRightSidebarTabsInput,
-    'appPluginPlacements' | 'appProjectionGeneration' | 'appLocalize'> & {
+    'appPluginPlacements' | 'appLocalize'> & {
     terminalTabAvailable: boolean;
     /**
      * The exact Home's `sessions.board` decision; omitted means disabled. It
@@ -94,21 +94,18 @@ export function resolveSessionCockpitMobileCatalog(input: Readonly<Pick<ResolveR
     boardFeatureEnabled?: boolean;
     sessionSharingAvailable?: boolean;
     pluginPlacements?: readonly PluginUiSurfacePlacementProjection[];
-    projectionGeneration?: number | null;
     runtimeAdmission?: RightSidebarPluginTabRuntimeAdmission;
 }>): readonly SessionCockpitMobileCatalogEntry[] {
     const projectedEntries = resolveRightSidebarMobileProjection({
         scope: 'session',
         tabs: resolveSessionRightSidebarTabs({
             appPluginPlacements: input.appPluginPlacements,
-            appProjectionGeneration: input.appProjectionGeneration,
             appLocalize: input.appLocalize,
             presentation: 'mobile',
             terminalTabAvailable: input.terminalTabAvailable,
             boardFeatureEnabled: input.boardFeatureEnabled === true,
             sessionSharingAvailable: input.sessionSharingAvailable === true,
             pluginPlacements: input.pluginPlacements,
-            projectionGeneration: input.projectionGeneration,
             ...(input.runtimeAdmission === undefined ? {} : { runtimeAdmission: input.runtimeAdmission }),
         }),
     }).flatMap((entry) => {

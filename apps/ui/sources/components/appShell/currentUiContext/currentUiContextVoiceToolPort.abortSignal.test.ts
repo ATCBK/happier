@@ -48,7 +48,6 @@ const ACTION_ID = Object.freeze({ pluginId: 'acme.current-ui', localId: 'retirin
 const ACTION_ORIGIN = Object.freeze({
     machineId: 'machine-current-ui',
     get serverId() { return serverId; },
-    generation: 41,
     interactionEnabled: true,
     phase: 'current' as const,
     executionOrigin: {
@@ -76,7 +75,7 @@ function createDaemonActionProjection(): PluginUiProjectionModel {
     } satisfies PluginProjectedActionV2 & Record<typeof PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY, typeof ACTION_ORIGIN>);
     return Object.freeze({
         ...EMPTY_PLUGIN_UI_PROJECTION,
-        generation: ACTION_ORIGIN.generation,
+        generation: 41,
         actionsById: Object.freeze({
             [`${ACTION_ID.pluginId}/${ACTION_ID.localId}`]: action,
         }),

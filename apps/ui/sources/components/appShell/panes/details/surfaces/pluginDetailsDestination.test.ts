@@ -87,7 +87,6 @@ function createDetailsTabProjection() {
         hostOrigin: {
             machineId: 'machine-1',
             serverId: runtime.serverId,
-            generation: 4,
             phase: 'current',
             interactionEnabled: true,
             executionOrigin: {
@@ -313,7 +312,6 @@ describe('pluginDetailsDestination', () => {
             hostOrigin: {
                 machineId: 'machine-1',
                 serverId: runtime.serverId,
-                generation: 4,
                 phase: 'current',
                 interactionEnabled: true,
                 executionOrigin: {

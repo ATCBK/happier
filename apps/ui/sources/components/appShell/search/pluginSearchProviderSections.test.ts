@@ -30,7 +30,6 @@ function hostOrigin(pluginId: string, machineId: string, generation: number) {
     return Object.freeze({
         machineId,
         serverId: `server-${machineId}`,
-        generation,
         interactionEnabled: true,
         phase: 'current' as const,
         executionOrigin: {

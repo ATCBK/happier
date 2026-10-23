@@ -6,6 +6,17 @@ import { resolveExternalSessionOperationOriginAvailability } from '@/components/
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createServerScopedMachineRpcBoundaryMock } from '@/dev/testkit/mocks/serverScopedRpc';
+import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { configureConnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+
+const daemon = vi.hoisted(() => ({ reply: vi.fn() }));
+// Only the daemon network boundary is replaced; projection publication,
+// transcript lifetime and Action admission remain real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () =>
+    createServerScopedMachineRpcBoundaryMock(request => daemon.reply(request)));
 
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
@@ -23,6 +34,114 @@ function RootActivity(props: Readonly<{ session: Session }>) {
 }
 
 describe('transcript root activity Home', () => {
+    it('keeps whole-message Actions current through raw generation-only arrivals and refuses actual retirement', async () => {
+        const http = createHomeHubArtifactHttpBoundary('transcript-action-account');
+        const account = await restoreServerAccountForTest({ serverUrl: 'https://transcript-action-noise.test',
+            accountId: 'transcript-action-account', request: http.request,
+            configureSocket: configureConnectedServerSocketBoundary });
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { loadDaemonMergedProjectionCacheEntry } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+        const { createPluginContributedActionController } = await import('@/components/plugins/actions/pluginContributedActionController');
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        expect(lifetime?.isCurrent()).toBe(true);
+        let projection = PluginProjectionV2Schema.parse({ v: 2, generation: 7,
+            installedPackagesById: { 'acme.transcript': { id: 'acme.transcript', displayName: 'Transcript', enabled: true,
+                source: { kind: 'local', locator: '/plugins/transcript' } } },
+            actionsById: { 'acme.transcript/review': { id: 'review', pluginId: 'acme.transcript', occurrenceId: 'transcript-occurrence',
+                title: 'Review message', scopes: ['message'], surfaces: ['ui'], placementBindings: ['rowAction'],
+                inputHints: { title: 'Review message', fields: [{ path: 'note', title: 'Note', widget: 'textarea' }] },
+                execution: { target: 'daemon' }, dangerLevel: 'safe', available: true } },
+        });
+        let delaySchemas = false;
+        let settleSchemas: ((value: unknown) => void) | undefined;
+        let executions = 0;
+        daemon.reply.mockImplementation(async (request: Readonly<{ method: string }>) => {
+            if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ) {
+                if (delaySchemas) return await new Promise(resolve => { settleSchemas = resolve; });
+                return { ok: true, inputSchema: {} };
+            }
+            if (request.method === RPC_METHODS.DAEMON_PLUGIN_STRUCTURED_MESSAGE_ACTION_EXECUTE) {
+                executions++;
+                return { ok: true, result: { reviewed: true } };
+            }
+            throw new Error(`Unexpected transcript daemon request: ${request.method}`);
+        });
+        const session = createSessionFixture({ id: 'transcript-action-session', serverId: account.home.id, active: true });
+        const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
+        storage.getState().applyMachines([machine], true, { sourceServerId: account.home.id });
+        storage.getState().applySessions([session]);
+        const read = () => loadDaemonMergedProjectionCacheEntry({ machineId: machine.id, serverId: account.home.id,
+            accountLifetime: lifetime, reuseFreshReady: false });
+        const initial = await read();
+        expect(initial).toMatchObject({ kind: 'ready' });
+        const hook = await renderHook(() => useChatListRootState({ session, sessionSurfaceKey: session.id }), {
+            wrapper: ({ children }) => <AppSessionTranscriptSourceProvider sessionId={session.id} serverId={account.home.id} navigation="none">
+                <PluginContextualResourceStoreProvider>{children}</PluginContextualResourceStoreProvider>
+            </AppSessionTranscriptSourceProvider>,
+        });
+        const reference = { v: 1, sessionId: session.id, messageId: 'reviewed-message', observedRevision: 'message-revision' } as const;
+        const controller = createPluginContributedActionController({
+            resolveCurrent: () => hook.getCurrent().pluginMessageActionHost?.resolveCurrent(reference) ?? null,
+        });
+        try {
+            await vi.waitFor(() => expect(controller.isReferenceAvailable({ pluginId: 'acme.transcript', localId: 'review' })).toBe(true));
+            const host = hook.getCurrent().pluginMessageActionHost!;
+            const original = host.resolveCurrent(reference)!;
+            const action = controller.list({ placement: 'rowAction', scope: 'message' })[0]!;
+            const presentation = await controller.open(action);
+            if (presentation.kind !== 'form') throw new Error('Expected the declared message Action form');
+            presentation.form.replaceInput({ note: 'Retained transcript draft' });
+            for (let generation = 8; generation < 11; generation++) {
+                projection = PluginProjectionV2Schema.parse({ ...projection, generation });
+                let next!: Awaited<ReturnType<typeof read>>;
+                await act(async () => { next = await read(); });
+                if (initial?.kind !== 'ready' || next?.kind !== 'ready') throw new Error('Expected current projection publication');
+                expect(next.inputs.pluginProjectionV2?.generation).toBe(generation);
+                expect(next.inputs.pluginUiProjection).toBe(initial.inputs.pluginUiProjection);
+                expect(controller.isReferenceAvailable({ pluginId: 'acme.transcript', localId: 'review' })).toBe(true);
+                expect(hook.getCurrent().pluginMessageActionHost).toBe(host);
+                expect(host.signal?.aborted).toBe(false);
+                expect(original.host.isCurrent?.()).toBe(true);
+                expect(presentation.form.isRetired()).toBe(false);
+                expect(presentation.form.getInput()).toEqual({ note: 'Retained transcript draft' });
+            }
+            expect(await controller.invokeReference({ pluginId: 'acme.transcript', localId: 'review' }, {}))
+                .toMatchObject({ kind: 'settled', outcome: { ok: true } });
+            expect(executions).toBe(1);
+            delaySchemas = true;
+            const pending = controller.selectExactBoundActionInput({
+                action: { pluginId: 'acme.transcript', localId: 'review' },
+                expectedOccurrenceId: 'transcript-occurrence',
+                invocationSurface: 'ui',
+            });
+            await vi.waitFor(() => expect(settleSchemas).toBeTypeOf('function'));
+            projection = PluginProjectionV2Schema.parse({ ...projection, actionsById: {
+                'acme.transcript/review': { ...projection.actionsById['acme.transcript/review'], occurrenceId: 'transcript-replacement' },
+            } });
+            await act(async () => { await read(); });
+            expect(presentation.form.isRetired()).toBe(true);
+            expect(hook.getCurrent().pluginMessageActionHost).not.toBe(host);
+            expect(original.host.isActionCurrent?.({ pluginId: 'acme.transcript', localId: 'review' })).toBe(false);
+            settleSchemas!({ ok: true, inputSchema: {} });
+            await expect(pending).resolves.toEqual({ kind: 'unavailable', reason: 'action_not_found' });
+            expect(executions).toBe(1);
+            expect(controller.isReferenceAvailable({ pluginId: 'acme.transcript', localId: 'review' })).toBe(true);
+            projection = PluginProjectionV2Schema.parse({ ...projection, installedPackagesById: {
+                'acme.transcript': { ...projection.installedPackagesById['acme.transcript'], enabled: false },
+            } });
+            await act(async () => { await read(); });
+            expect(controller.isReferenceAvailable({ pluginId: 'acme.transcript', localId: 'review' })).toBe(false);
+            projection = PluginProjectionV2Schema.parse({ ...projection, installedPackagesById: {
+                'acme.transcript': { ...projection.installedPackagesById['acme.transcript'], enabled: true },
+            } });
+            await act(async () => { await read(); });
+            expect(controller.isReferenceAvailable({ pluginId: 'acme.transcript', localId: 'review' })).toBe(true);
+            await act(async () => { await account.dispose(); });
+            expect(original.host.accountLifetime?.isCurrent()).toBe(false);
+            expect(controller.isReferenceAvailable({ pluginId: 'acme.transcript', localId: 'review' })).toBe(false);
+        } finally { await hook.unmount(); await account.dispose(); }
+    });
     it('keeps a retained operation origin unknown until its exact Home observes Machine presence again', async () => {
         const account = await restoreServerAccountForTest({ serverUrl: 'https://operation-presence.test', accountId: 'operation-account' });
         const now = Date.now();

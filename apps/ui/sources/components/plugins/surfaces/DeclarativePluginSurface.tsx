@@ -607,7 +607,6 @@ export function DeclarativePluginSurface(props: Readonly<{
     /** Its factual installation result; local navigation may remain available offline. */
     openSurfaceAvailable: boolean;
     /** Exact numeric catalog or opaque mounted-source generation; used as identity only. */
-    authorityGeneration: number | string;
     /** Opaque shared lifetime fencing mounted Account and daemon Settings UI state. */
     accountLifetime?: ActiveServerAccountScopeLifetime | null;
     /** The host-created Data client for this same captured Account lifetime. */
@@ -706,7 +705,7 @@ export function DeclarativePluginSurface(props: Readonly<{
         ),
         [admittedModel, localized, root],
     );
-    const settingsSourceLifetimeIdentity = `${qualifiedId}:${occurrenceId ?? 'unavailable'}:${props.authorityGeneration}`;
+    const settingsSourceLifetimeIdentity = `${qualifiedId}:${occurrenceId ?? 'unavailable'}`;
     const accountServerIdentityId = React.useMemo(
         () => resolveScopedPluginSettingsServerIdentity(activeServer.serverId),
         [activeServer.serverId],
@@ -799,7 +798,6 @@ export function DeclarativePluginSurface(props: Readonly<{
         setPendingActions(new Set());
     }, [
         occurrenceId,
-        props.authorityGeneration,
         composerScopeKey,
         props.applyComposer,
         props.composerApplyAvailable,

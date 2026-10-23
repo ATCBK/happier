@@ -115,7 +115,7 @@ import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNotice, type WidgetFr
  *
  * A placement now supplies only the facts it owns. The controller decides what is
  * installable from them, and the installed set stays factual (UI-D02): a mount
- * that cannot address a machine and a projected generation installs no
+ * that cannot address a machine and an exact occurrence installs no
  * `readResource`, and a mount whose placement owns no destination catalog installs
  * no `openSurface`, so both fail with a typed `unsupported_method` rather than
  * resolving after doing nothing.
@@ -132,8 +132,8 @@ import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNotice, type WidgetFr
  * the mount distinguish a local-only facade from an offline exact target;
  * `daemonReachable` is their endpoint-plus-addressed-machine transport fact.
  * `enabled` additionally requires projection admission for daemon-owned
- * Action/Resource semantics. `daemonStateVersion` is runtime metadata; declaration
- * currentness belongs to the supplying catalog's projection generation.
+ * Action/Resource semantics. `daemonStateVersion` is runtime metadata;
+ * declaration currentness belongs to the supplying occurrence and source.
  */
 export function usePluginSurfaceDaemonInteraction(input: Readonly<{
     machineId?: string | null;
@@ -211,8 +211,6 @@ export type BoundPluginSurfaceFacts = Readonly<{
         reasonCode: string;
     }>;
     serverId?: string | null;
-    /** The projection generation this mount is bound to. */
-    projectionGeneration?: number | string | null;
     /** Exact occurrence of the plugin that owns this mounted surface. */
     occurrenceId?: string | null;
     /** Admitted Machine supplier lease for transport; never Account caller custody. */
@@ -541,7 +539,7 @@ export function resolveBoundPluginSurfaceContext(
 /**
  * The daemon binding both the contributed-action branch and the resource snapshot
  * authority ride. One derivation: a mount that cannot name a machine and the
- * generation it is bound to cannot serve either, so neither is installed.
+ * occurrence it is bound to cannot serve either, so neither is installed.
  *
  * Caller provenance is deliberately not part of this transport binding. A local
  * host Action remains locally executable while the daemon is unavailable, but a
@@ -771,8 +769,8 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const surfaceContext = resolveBoundPluginSurfaceContext(input.facts);
     const interactionOccurrenceId = input.facts.occurrenceId?.trim() || null;
     // The mounted contribution owns the only exact requester provenance for
-    // app-scope confirmation. A context-only surface with no projection
-    // generation cannot mint one, so confirmation remains unavailable there.
+    // app-scope confirmation. A context-only surface with no exact occurrence
+    // cannot mint one, so confirmation remains unavailable there.
     const interactionRequester = interactionOccurrenceId
         ? Object.freeze({
             pluginId: input.facts.pluginId,
@@ -976,7 +974,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     };
 
     const callerBinding = resolvePluginSurfaceCallerBinding(input.facts);
-    // Addressing/generation are mount identity facts. Reachability is not: a
+    // Addressing/occurrence are mount identity facts. Reachability is not: a
     // reconnect must make the existing facade capable again without replacing
     // its adapter or aborting an author-held signal.
     const daemon = resolveDaemonBinding(input.facts);

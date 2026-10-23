@@ -195,7 +195,7 @@ describe('plugin surface execution requirement', () => {
                 machineListStatusByServerId: { [connection.home.id]: 'idle', srv_surface_source: 'idle' } }));
             await hook.rerender();
             let mounted = hook.getCurrent();
-            expect(mounted.selectedSupply, JSON.stringify(mounted.selection.state)).toMatchObject({ occurrenceId: 'occurrence-a', generation: 1 });
+            expect(mounted.selectedSupply, JSON.stringify(mounted.selection.state)).toMatchObject({ occurrenceId: 'occurrence-a' });
             expect(mounted.selection.machineCandidates).toHaveLength(0);
             expect(mounted.isExecutionOriginCurrent()).toBe(true);
             // Re-description preserves this exact mounted identity, never its
@@ -204,7 +204,7 @@ describe('plugin surface execution requirement', () => {
             committedProjection = projectionForRender = project('occurrence-a', 1, 'establishing');
             pageEntryForRender = projectionForRender.surfacePlacementsById[entryId];
             await hook.rerender();
-            expect(hook.getCurrent().selectedSupply).toMatchObject({ occurrenceId: 'occurrence-a', generation: 1,
+            expect(hook.getCurrent().selectedSupply).toMatchObject({ occurrenceId: 'occurrence-a',
                 phase: 'establishing', interactionEnabled: false });
             expect(hook.getCurrent().selection.canExecute).toBe(false);
             expect(hook.getCurrent().isExecutionOriginCurrent()).toBe(false);
@@ -477,7 +477,7 @@ describe('plugin surface execution requirement', () => {
             const execute = vi.fn(async () => ({ supported: true as const, result: { ok: true as const, result: { refreshed: true } } }));
             const controller = createBoundPluginSurfaceController({ facts: {
                 pluginId, contributionId: 'home', surfaceId: entryId, placement: 'appSurface', platform: 'web', channel: 'internal',
-                machineId: supply.machineId, serverId: supply.serverId, projectionGeneration: supply.generation,
+                machineId: supply.machineId, serverId: supply.serverId,
                 occurrenceId: supply.occurrenceId, executionOrigin: supply.executionOrigin, accountLifetime: lifetime,
                 interactionEnabled: true, daemonInteractionEnabled: true,
                 resolveContributedAction: createPluginUiProjectedActionResolver({ [`${pluginId}/refresh`]: action }),

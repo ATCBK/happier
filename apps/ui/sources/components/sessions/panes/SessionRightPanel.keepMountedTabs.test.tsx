@@ -24,6 +24,11 @@ installSessionDetailsPanelCommonModuleMocks({
 
 import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
 const runtime = installSessionPaneRuntimeTestHarness();
+const { PluginProjectionV2Schema } = await import('@happier-dev/protocol');
+const { normalizePluginUiDestinationBindingV1 } = await import('@happier-dev/protocol/plugins/ui');
+const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+const { PluginSurfacePlacementHost } = await import('@/components/plugins/surfaces');
+const { SessionRightPanel } = await import('./SessionRightPanel');
 const initialTabId = 'git';
 async function renderScreen(element: React.ReactElement) {
     const screen = await renderPanelScreen(<runtime.Wrapper>{element}</runtime.Wrapper>);
@@ -32,6 +37,60 @@ async function renderScreen(element: React.ReactElement) {
 }
 
 describe('SessionRightPanel (keep mounted tabs)', () => {
+    it('retains a visited plugin pane across an unrelated plugin declaration change and delivers same-generation replacement props', async () => {
+        const pluginId = 'acme.review';
+        const localId = 'review-panel';
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId, destinationId: localId,
+            rendererId: 'review-renderer', container: 'rightSidebarTab', target: { kind: 'session' } });
+        const otherBinding = normalizePluginUiDestinationBindingV1({ pluginId: 'acme.other', destinationId: 'other-panel',
+            rendererId: 'other-renderer', container: 'rightSidebarTab', target: { kind: 'session' } });
+        if (!binding || !otherBinding) throw new Error('Expected canonical Session sidebar destinations');
+        const projected = (generation: number, occurrenceId = 'review#1', previous?: ReturnType<typeof normalizePluginUiProjection>) => normalizePluginUiProjection(PluginProjectionV2Schema.parse({
+            v: 2, generation, familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                [localId]: { id: localId, pluginId, occurrenceId, contributionKind: 'surfacePlacement',
+                    descriptorId: localId, binding, target: binding.target,
+                    renderer: { kind: 'declarative', contributionId: 'review-renderer' },
+                    display: { developerFallback: 'Review' },
+                    availability: { state: 'available', reason: 'available', diagnostics: [] }, headerActions: [],
+                    executionOrigin: { serverIdentityId: runtime.serverIdentityId,
+                        materializationRef: { pluginId, machineId: 'm1', materializationId: occurrenceId } } },
+                'other-panel': { id: 'other-panel', pluginId: 'acme.other', occurrenceId: 'other#1',
+                    contributionKind: 'surfacePlacement', descriptorId: 'other-panel', binding: otherBinding,
+                    target: otherBinding.target, renderer: { kind: 'declarative', contributionId: 'other-renderer' },
+                    display: { developerFallback: `Other panel ${generation}` },
+                    availability: { state: 'available', reason: 'available', diagnostics: [] }, headerActions: [] },
+            } } },
+        }), 'web', previous);
+        const panel = (projection: ReturnType<typeof projected>) => <runtime.Wrapper>
+            <SessionRightPanel sessionId="s1" scopeId="session:s1" paneSurfaceScope={{ targetKind: 'session',
+                sessionId: 's1', machineId: 'm1', serverId: runtime.serverId, pluginUiProjection: projection,
+                projectionPhase: 'current', interactionEnabled: true, platform: 'web' }} />
+        </runtime.Wrapper>;
+        const screen = await renderPanelScreen(<runtime.Wrapper />);
+        await act(async () => runtime.pane.selectRightDestination({ kind: 'plugin', destination: { pluginId, localId } }));
+        const initial = projected(4);
+        await screen.update(panel(initial));
+        const retainedHost = screen.findByType(PluginSurfacePlacementHost);
+        await act(async () => runtime.pane.setRightTabState(`plugin:${pluginId}:${localId}`, { draft: 'keep my review' }));
+        await screen.pressByTestIdAsync('session-rightpanel-tab:git');
+        expect(screen.findAllByType(PluginSurfacePlacementHost)).toHaveLength(1);
+
+        const unrelatedChange = projected(5, 'review#1', initial);
+        expect(unrelatedChange.surfacePlacementsById[localId]).toBe(initial.surfacePlacementsById[localId]);
+        expect(unrelatedChange.surfacePlacementsById['other-panel']).not.toBe(initial.surfacePlacementsById['other-panel']);
+        await screen.update(panel(unrelatedChange));
+        expect(screen.findAllByType(PluginSurfacePlacementHost),
+            'An unrelated acme.other label change must not retire the visited acme.review pane').toHaveLength(1);
+        expect(screen.findByType(PluginSurfacePlacementHost)).toBe(retainedHost);
+        expect(runtime.pane.scopeState?.right.tabState[`plugin:${pluginId}:${localId}`]).toEqual({ draft: 'keep my review' });
+
+        await act(async () => runtime.pane.selectRightDestination({ kind: 'plugin', destination: { pluginId, localId } }));
+        await screen.update(panel(projected(5, 'review#2', unrelatedChange)));
+        expect(screen.findByType(PluginSurfacePlacementHost)).toBe(retainedHost);
+        expect(screen.findByType(PluginSurfacePlacementHost).props.placement).toMatchObject({ occurrenceId: 'review#2',
+            executionOrigin: { materializationRef: { materializationId: 'review#2' } } });
+    });
+
     it('keeps Git and Files tab surfaces mounted so switching tabs preserves state', async () => {
         const { SessionRightPanel } = await import('./SessionRightPanel');
         const { SessionGitSurface } = await import('./surfaces/SessionGitSurface');

@@ -59,7 +59,6 @@ describe('DeclarativePluginSurface composerApply', () => {
             actionAvailable: true,
             openSurface: async () => null,
             openSurfaceAvailable: false,
-            authorityGeneration: 1,
         } satisfies React.ComponentProps<typeof DeclarativePluginSurface>;
         const screen = await renderScreen(<DeclarativePluginSurface {...props} />);
         const id = 'plugin-declarative-action:session.message.send';
@@ -98,7 +97,6 @@ describe('DeclarativePluginSurface composerApply', () => {
                         actionAvailable: false,
                         openSurface: async () => null,
                         openSurfaceAvailable: false,
-                        authorityGeneration: 1,
                         composerRef: Object.freeze({ kind: 'session' as const, sessionId: 'session-composer-rejection' }),
                         applyComposer: vi.fn(() => rejectedApply),
                         composerApplyAvailable: true,
@@ -187,7 +185,6 @@ describe('DeclarativePluginSurface composerApply', () => {
                         actionAvailable: true,
                         openSurface: async () => null,
                         openSurfaceAvailable: false,
-                        authorityGeneration: 1,
                     } as unknown as React.ComponentProps<typeof DeclarativePluginSurface>)}
                 />,
             );
@@ -237,7 +234,6 @@ describe('DeclarativePluginSurface composerApply', () => {
                     actionAvailable: false,
                     openSurface: async () => null,
                     openSurfaceAvailable: false,
-                    authorityGeneration: 1,
                     composerRef,
                     applyComposer,
                     composerApplyAvailable: true,
@@ -294,7 +290,6 @@ describe('DeclarativePluginSurface composerApply', () => {
                     actionAvailable: false,
                     openSurface: async () => null,
                     openSurfaceAvailable: false,
-                    authorityGeneration: 1,
                     composerRef,
                     applyComposer,
                     composerApplyAvailable: true,

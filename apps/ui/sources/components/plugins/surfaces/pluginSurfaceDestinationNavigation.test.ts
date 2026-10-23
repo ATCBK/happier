@@ -107,7 +107,6 @@ function settingsPage(input: Readonly<{
         hostOrigin: {
             machineId: 'machine-a',
             serverId: 'server-a',
-            generation: 4,
             phase: 'current',
             interactionEnabled: true,
             executionOrigin: executionOrigin({ pluginId }),

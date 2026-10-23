@@ -270,8 +270,7 @@ const appSidebarTab = Object.freeze({
     order: 50,
     scopes: ['app'],
     mobileSurfaces: { app: 'plugin' },
-    plugin: { pluginId: 'acme.review', descriptorId: 'review-panel', generation: 4 },
-    retentionKey: 'plugin:acme.review:review-panel:4',
+    plugin: { pluginId: 'acme.review', descriptorId: 'review-panel' },
     placement: {
         binding: {
             destination: { pluginId: 'acme.review', localId: 'review-panel' },

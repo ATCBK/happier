@@ -2795,7 +2795,7 @@ describe('PluginSurfacePlacementHost', () => {
             const sourceCustody = developmentSourceCustody('acme-notice-test-root');
             const hostSupplies = reason === 'activation_refused' ? [{
                 machineId: machine.id, serverId: scope.serverId, serverIdentityId: 'srv_server_a',
-                generation: 1, phase: 'unavailable' as const, interactionEnabled: false,
+                phase: 'unavailable' as const, interactionEnabled: false,
                 unavailableReasonCode: 'plugin_activation_failed', occurrenceId: 'notice-occurrence',
                 pluginVersion: '1.0.0', sourceCustody, executionTargetDefault: false,
                 executionOrigin: { serverIdentityId: 'srv_server_a', sourceRef: { pluginId, machineId: machine.id, sourceCustody } },
@@ -2856,7 +2856,7 @@ describe('PluginSurfacePlacementHost', () => {
         },
     );
 
-    it.each(['daemon-state', 'source-occurrence', 'catalog-generation'] as const)('keeps Account Settings intent bound to its declaration during %s updates', async change => {
+    it.each(['daemon-state', 'source-occurrence', 'catalog-generation', 'field-contract'] as const)('keeps Account Settings intent bound to its declaration during %s updates', async change => {
         const pluginId = 'acme.settings-lifetime';
         const readEntered = createDeferred<void>();
         const releaseRead = createDeferred<void>();
@@ -2904,20 +2904,21 @@ describe('PluginSurfacePlacementHost', () => {
         } });
         const binding = normalizePluginUiSettingsPageBindingV1({ pluginId, pageId: 'preferences', rendererId: 'settings-form' });
         if (!binding) throw new Error('Expected normalized Settings binding');
-        const pageFor = (occurrenceId: string): PluginUiSettingsPageProjection => ({
+        const pageFor = (occurrenceId: string, denyEnabled = false): PluginUiSettingsPageProjection => ({
             id: `settingsPage:${pluginId}:preferences`, pluginId, contributionKind: 'settingsPage', descriptorId: 'preferences', binding,
             page: { id: { pluginId, localId: 'preferences' }, title: 'Preferences', group: { kind: 'host', id: 'general' } },
             renderer: { kind: 'declarative', contributionId: 'settings-form', model: admittedDeclarativeModelFixture({
                 identity: { pluginId, localId: 'settings-form', occurrenceId }, visible: true,
                 root: { kind: 'group', path: 'root', order: 0, children: [{ kind: 'field', path: 'root.children[0]', order: 0,
                     label: 'Enabled', control: { kind: 'toggle', settingId: 'enabled' },
-                    setting: { id: 'enabled', contributionId: 'preferences', descriptor: { scope: 'account', schema: { type: 'boolean' }, default: false } },
+                    setting: { id: 'enabled', contributionId: 'preferences', descriptor: { scope: 'account',
+                        schema: { type: 'boolean', ...(denyEnabled ? { const: false } : {}) }, default: false } },
                 }] },
             }) }, availability: { state: 'available', reason: 'available', diagnostics: [] },
         });
         const { PluginSettingsPageHost } = await import('./PluginSurfaceHost');
         let projection = { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 1 };
-        const renderPage = (occurrenceId: string) => <PluginSettingsPageHost page={pageFor(occurrenceId)}
+        const renderPage = (occurrenceId: string, denyEnabled = false) => <PluginSettingsPageHost page={pageFor(occurrenceId, denyEnabled)}
             machineId="machine-1" serverId="server-a" pluginUiProjection={projection} platform="web"
             settingsScopesEnabled={{ account: true, daemon: false }} />;
         const screen = await renderScreen(renderPage('source-a'));
@@ -2933,14 +2934,17 @@ describe('PluginSurfacePlacementHost', () => {
                 applyPluginSurfaceConnectivity();
             } else if (change === 'source-occurrence') {
                 await screen.update(renderPage('source-b'));
+            } else if (change === 'field-contract') {
+                await screen.update(renderPage('source-a', true));
             } else {
                 projection = { ...projection, generation: 2 };
                 await screen.update(renderPage('source-a'));
             }
             await act(async () => { releaseRead.resolve(); });
             await vi.waitFor(() => expect(screen.findByTestId(fieldId)?.props.disabled).toBe(false));
-            expect(writes).toBe(change === 'daemon-state' ? 1 : 0);
-            expect(values).toEqual({ enabled: change === 'daemon-state' });
+            const intentStillCurrent = change === 'daemon-state' || change === 'catalog-generation';
+            expect(writes).toBe(intentStillCurrent ? 1 : 0);
+            expect(values).toEqual({ enabled: intentStillCurrent });
         } finally { releaseRead.resolve(); await screen.unmount(); }
     });
     it('renders Account-visible static HTML without a Machine or an executable occurrence', async () => {
@@ -3608,7 +3612,6 @@ describe('PluginSurfacePlacementHost', () => {
                 }}
                     openSurface={openSurface}
                     openSurfaceAvailable
-                    authorityGeneration={8}
                     accountLifetime={{
                     scope: { serverId: 'server-a', accountId: 'account-a' },
                     isCurrent: () => true,
@@ -3721,7 +3724,6 @@ describe('PluginSurfacePlacementHost', () => {
                 actionAvailable={false}
                 openSurface={vi.fn(async () => null)}
                 openSurfaceAvailable={false}
-                authorityGeneration={1}
                 renderTargetedSurface={renderTargetedSurface}
             />,
         );
@@ -4709,7 +4711,6 @@ describe('PluginSurfacePlacementHost', () => {
                 placement={placement({
                     machineId: 'machine-origin',
                     serverId: originServer.id,
-                    generation: 12,
                     interactionEnabled: true,
                     phase: 'current',
                     executionOrigin: mountedExecutionOrigin('acme.forms', 'machine-origin', 'origin-materialization', 'srv_origin'),
@@ -4733,7 +4734,6 @@ describe('PluginSurfacePlacementHost', () => {
                 placement={placement({
                     machineId: 'machine-stale',
                     serverId: originServer.id,
-                    generation: 12,
                     interactionEnabled: false,
                     phase: 'unavailable',
                     executionOrigin: mountedExecutionOrigin('acme.forms', 'machine-stale', 'stale-materialization', 'srv_origin'),
@@ -9438,7 +9438,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         const binding = normalizePluginUiSettingsPageBindingV1({ pluginId: 'acme.browser', pageId: 'preferences', rendererId: 'native-panel' });
         if (!binding) throw new Error('Expected external Settings binding');
         const hostSupplies = [{ machineId: 'machine_1', serverId: 'server_1', serverIdentityId: 'srv_server_1',
-            occurrenceId, generation: 77, phase: 'current' as const, interactionEnabled: true,
+            occurrenceId, phase: 'current' as const, interactionEnabled: true,
             pluginVersion: '3.2.1', sourceCustody, executionTargetDefault: true, executionOrigin }];
         const page: PluginUiSettingsPageProjection = {
             ...generatedReactNativePlacement({ occurrenceId }),
@@ -9615,7 +9615,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             const machineProjection = { ...base, actionsById, installedPackagesById: { [pluginId]: { ...installed,
                 declaredExecution: { daemonActions: true, contributionPoints: false } } }, settingsPagesById: {
                 [pageId]: { ...page, hostSupplies: [{ machineId: 'machine_1', serverId: 'server_1', serverIdentityId: 'srv_server_1',
-                    occurrenceId, generation: 77, phase: 'current' as const, interactionEnabled: true, pluginVersion: '3.2.1',
+                    occurrenceId, phase: 'current' as const, interactionEnabled: true, pluginVersion: '3.2.1',
                     sourceCustody, executionTargetDefault: true, executionOrigin }] },
             } };
             projection = mergeInstalledPluginUiProjections([accountProjection], machineProjection)!;
@@ -9624,7 +9624,7 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         } finally { await screen.unmount(); }
     });
 
-    it.each(['Settings', 'app-page', 'Machine-less Settings', 'retained Account Settings'] as const)('waits for an external %s requester Account origin before entering its Account read', async (surface) => {
+    it.each(['Settings', 'app-page', 'Machine-less Settings', 'retained Account Settings', 'explicit development Settings', 'explicit development app-page'] as const)('waits for an external %s requester Account origin before entering its Account read', async (surface) => {
         await primeGeneratedArtifact();
         const lifetime = pluginSurfaceAccountLifetime.value!;
         const pluginId = 'acme.browser';
@@ -9660,11 +9660,18 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         const placementId = 'surfacePlacement:acme.browser:account-page';
         const accountPlacement = accountProjection.surfacePlacementsById[placementId]!;
         if (accountPlacement.binding.kind !== 'destination') throw new Error('Expected Account page destination binding');
+        // This variant represents a host-preseeded external plugin. Provenance
+        // is a declaration fixture; its Account origin and callee stay real.
+        const bundledAccountProjection: PluginUiProjectionModel = { ...accountProjection, installedPackagesById: {
+            ...accountProjection.installedPackagesById, [pluginId]: {
+                ...accountProjection.installedPackagesById[pluginId]!, source: { kind: 'bundled', locator: pluginId },
+            },
+        } };
         const occurrenceId = 'cold-account-requester-machine';
         const sourceCustody = developmentSourceCustody('cold-account-requester-test-root');
         const executionOrigin = { serverIdentityId: 'srv_server_1', sourceRef: { pluginId, machineId: 'machine_1', sourceCustody } };
         const supply = { machineId: 'machine_1', serverId: 'server_1', serverIdentityId: 'srv_server_1', occurrenceId,
-            generation: 77, phase: 'current' as const, interactionEnabled: true, pluginVersion: '3.2.1', sourceCustody,
+            phase: 'current' as const, interactionEnabled: true, pluginVersion: '3.2.1', sourceCustody,
             executionTargetDefault: true, executionOrigin };
         const hasMachineRequester = surface !== 'Machine-less Settings';
         const coldPage: PluginUiSettingsPageProjection = { ...accountPage, hostAccountOrigin: undefined,
@@ -9674,13 +9681,16 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         const coldPlacement: PluginUiSurfacePlacementProjection = { ...accountPlacement, binding: accountPlacement.binding, hostAccountOrigin: undefined,
             occurrenceId, executionOrigin, hostOrigin: supply, hostSupplies: [supply] };
         const retainedAccountRequester = surface === 'retained Account Settings';
-        let projection: PluginUiProjectionModel = retainedAccountRequester ? accountProjection : { ...base, settingsPagesById: { [pageId]: coldPage },
+        const explicitDevelopmentRequester = surface === 'explicit development Settings' || surface === 'explicit development app-page';
+        const appPageRequester = surface === 'app-page' || surface === 'explicit development app-page';
+        const machineProjection: PluginUiProjectionModel = { ...base, settingsPagesById: { [pageId]: coldPage },
             surfacePlacementsById: { [placementId]: coldPlacement },
             actionsById: accountProjection.actionsById, installedPackagesById: { [pluginId]: {
                 id: pluginId, occurrenceId, displayName: 'External Settings', version: '3.2.1', enabled: true,
                 source: { kind: 'bundled', locator: pluginId }, sourceCustody, declaresContributionPoints: false,
                 brand: { state: 'missing' },
             } } };
+        let projection = retainedAccountRequester ? accountProjection : machineProjection;
         const attempts: string[] = [];
         const outcomes: unknown[] = [];
         const enteredSignals: AbortSignal[] = [];
@@ -9730,12 +9740,15 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
         reactNativeSurfaceRuntime.enabled = true;
         reactNativeSurfaceRuntime.module = { renderSurface: defineUiSurface(AccountRead) };
         const { PluginSettingsPageHost, PluginSurfacePlacementHost } = await import('./PluginSurfaceHost');
+        const { resolveAdmittedPluginSettingsPage } = await import('@/components/settings/catalog/runtime/pluginSettingsPageCatalog');
         const render = () => <AppShellPluginUiProjectionValueProvider value={{ pluginUiProjection: projection,
             pluginBrowserProjection: null, phase: 'current', interactionEnabled: true, machineId: null,
             serverId: 'server_1', platform: 'web', accountLifetime: lifetime, reloadConnectedAccountProjection() {},
             clientExecutableActivation: { status: 'ready' }, reloadClientExecutables() {},
-        }}>{surface !== 'app-page'
-            ? <PluginSettingsPageHost page={projection.settingsPagesById[pageId]!} pluginUiProjection={projection} platform="web"
+        }}>{!appPageRequester
+            ? <PluginSettingsPageHost page={explicitDevelopmentRequester
+                ? resolveAdmittedPluginSettingsPage({ projection, pluginId, pageId: 'preferences', locale: 'en' })!.page
+                : projection.settingsPagesById[pageId]!} pluginUiProjection={projection} platform="web"
                 reactNativeLoaderBackend={{ backendId: 'commonJs', available: true }} />
             : <PluginSurfacePlacementHost placement={projection.surfacePlacementsById[placementId]!} pluginUiProjection={projection} platform="web"
                 reactNativeLoaderBackend={{ backendId: 'commonJs', available: true }} />}</AppShellPluginUiProjectionValueProvider>;
@@ -9762,7 +9775,22 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
                 expect(attempts).toEqual([]);
                 await registerAccountRead();
             }
-            projection = accountProjection;
+            if (explicitDevelopmentRequester) {
+                const { mergeInstalledPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
+                const automatic = mergeInstalledPluginUiProjections([bundledAccountProjection], machineProjection);
+                expect(automatic?.settingsPagesById[pageId]?.hostAccountOrigin).toEqual(accountPage.hostAccountOrigin);
+                expect(automatic?.surfacePlacementsById[placementId]?.hostAccountOrigin).toEqual(accountPlacement.hostAccountOrigin);
+                const selected = mergeInstalledPluginUiProjections([bundledAccountProjection], machineProjection, undefined,
+                    new Map([[pluginId, executionOrigin]]));
+                if (!selected) throw new Error('Expected canonical explicit development projection');
+                // A selected development declaration owns its actual Machine
+                // caller; the separately registered Account Action is a callee.
+                expect(selected.settingsPagesById[pageId]?.hostAccountOrigin).toBeUndefined();
+                expect(selected.surfacePlacementsById[placementId]?.hostAccountOrigin).toBeUndefined();
+                projection = selected;
+            } else {
+                projection = accountProjection;
+            }
             await screen.update(render());
             await vi.waitFor(() => expect(enteredSignals).toHaveLength(1));
             expect(attempts).toEqual(['read']);
@@ -9772,10 +9800,12 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
             accountRead.resolve({ read: true });
             await vi.waitFor(() => expect(outcomes).toEqual([{ read: true }]));
             expect(attempts).toEqual(['read']);
-            await act(async () => { retirePluginAccountAvailabilityProjection([pluginId]); });
-            // Canonical withdrawal removes the renderer rather than publishing
-            // another context to the retired adapter's last recorded props.
-            await vi.waitFor(() => expect(requesterMounted).toBe(false));
+            if (!explicitDevelopmentRequester) {
+                await act(async () => { retirePluginAccountAvailabilityProjection([pluginId]); });
+                // Canonical withdrawal removes the Account renderer rather than
+                // publishing context to the retired adapter's recorded props.
+                await vi.waitFor(() => expect(requesterMounted).toBe(false));
+            }
             expect(attempts).toEqual(['read']);
         } finally { await screen.unmount(); await composition.unload(); }
     });
@@ -11015,7 +11045,6 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
                 isCurrent: () => true,
                 onRetire: () => Object.freeze({ dispose() {} }),
             }),
-            projectionGeneration: 77,
             pluginProjectionById: Object.freeze({}),
             pluginProjectionV2: null,
             pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION,
@@ -15911,7 +15940,6 @@ describe('canonical action dispatch reaches every mounted placement (EU-2)', () 
                 actionAvailable: false,
                 openSurface: async () => null,
                 openSurfaceAvailable: false,
-                authorityGeneration: 1,
                 reportUnsupportedNestedTargetedSurface,
             } as unknown as React.ComponentProps<typeof DeclarativePluginSurface>,
         );

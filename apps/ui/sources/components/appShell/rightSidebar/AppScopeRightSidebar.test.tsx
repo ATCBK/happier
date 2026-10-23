@@ -165,7 +165,6 @@ function withSelectedContributionOrigin(
         hostOrigin: Object.freeze({
             serverId: runtime.serverId,
             machineId: input.machineId,
-            generation: input.generation,
             phase: 'current',
             interactionEnabled: true,
             executionOrigin: executionOrigin(input),

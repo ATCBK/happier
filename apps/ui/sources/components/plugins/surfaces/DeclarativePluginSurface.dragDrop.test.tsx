@@ -86,7 +86,7 @@ describe('mounted declarative drag controls', () => {
         tray.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, toJSON() {} });
         const screen = await renderScreen(<PluginUiHostPresentationScope environment={environment} presentationHost={presentationHost}>
             <DeclarativePluginSurface pluginId={pluginId} model={model} environment={environment} interactionEnabled daemonInteractionEnabled
-                dispatchAction={async () => null} actionAvailable={false} openSurface={async () => null} openSurfaceAvailable={false} authorityGeneration={1} />
+                dispatchAction={async () => null} actionAvailable={false} openSurface={async () => null} openSurfaceAvailable={false} />
         </PluginUiHostPresentationScope>, { createNodeMock: node => node.props.testID === 'plugin-declarative-drag-source:root.children[0]' ? row
             : node.props.testID === 'plugin-declarative-drop-target:root.children[1]' ? tray : null });
         try {

@@ -160,7 +160,7 @@ function sameCandidateInputs(left: ExecutionOriginMachineSnapshotInputs, right: 
         && left.materializations === right.materializations && (left.sources === right.sources
             || left.sources.length === right.sources.length && left.sources.every((candidate, index) => {
                 const other = right.sources[index]!;
-                return candidate.source.generation === other.source.generation && candidate.source.serverId === other.source.serverId
+                return candidate.source.serverId === other.source.serverId
                     && candidate.source.version === other.source.version && candidate.source.occurrenceId === other.source.occurrenceId
                     && arePluginMachineExecutionOriginsEqual(candidate.source.origin, other.source.origin)
                     && candidate.releaseContent === other.releaseContent && candidate.validation.kind === other.validation.kind

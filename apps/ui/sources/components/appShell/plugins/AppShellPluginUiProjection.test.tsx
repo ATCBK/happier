@@ -212,7 +212,10 @@ describe('AppShell declaration subscriptions', () => {
             clientExecutableActivation: { status: 'establishing' } }));
         expect(executableRevision).toBe(2);
         expect(renders).toBe(settledRenders);
-        const nextProjection = { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 2 };
+        const nextProjection = { ...EMPTY_PLUGIN_UI_PROJECTION, translationsByPluginId: {
+            'acme.changed': { id: 'translations:acme.changed', pluginId: 'acme.changed', contributionKind: 'translations' as const,
+                locales: ['en'], bundles: { en: { title: 'Changed declaration' } } },
+        } };
         await screen.update(render({ ...value, pluginUiProjection: nextProjection }));
         expect(seen).toBe(nextProjection);
         expect(renders).toBeGreaterThan(settledRenders);
@@ -1929,7 +1932,9 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await flushHookEffects({ cycles: 5 });
         expect(readProjection()).toEqual(expect.objectContaining({
             interactionEnabled: true,
-            pluginUiProjection: expect.objectContaining({ generation: 6 }),
+            pluginUiProjection: expect.objectContaining({ surfacePlacementsById: expect.objectContaining({
+                [`surfacePlacement:${pluginId}:panel`]: expect.objectContaining({ display: expect.objectContaining({ title: 'Panel' }) }),
+            }) }),
             pluginBrowserProjection: expect.objectContaining({ generation: 6 }),
         }));
     });
@@ -2283,7 +2288,9 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await flushHookEffects({ cycles: 5 });
         expect(readProjection()).toEqual(expect.objectContaining({
             interactionEnabled: true,
-            pluginUiProjection: expect.objectContaining({ generation: 6 }),
+            pluginUiProjection: expect.objectContaining({ surfacePlacementsById: expect.objectContaining({
+                [`surfacePlacement:${pluginId}:panel`]: expect.objectContaining({ display: expect.objectContaining({ title: 'Panel' }) }),
+            }) }),
             pluginBrowserProjection: expect.objectContaining({ generation: 6 }),
         }));
     });
@@ -2316,7 +2323,10 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await flushHookEffects({ cycles: 5 });
 
         expect(projectionDescribeSpy.mock.calls.length).toBeGreaterThan(describesBeforeInvalidation);
-        expect(screen.findByType('ProjectionProbe' as never).props.value.pluginUiProjection.generation).toBe(6);
+        expect(screen.findByType('ProjectionProbe' as never).props.value.pluginUiProjection.surfacePlacementsById[
+            `surfacePlacement:${pluginId}:panel`
+        ]?.display.title).toBe('Panel');
+        expect(screen.findByType('ProjectionProbe' as never).props.value.pluginBrowserProjection.generation).toBe(6);
     });
 
     it('excludes unreachable retained and replaced machines from Connected Account conflicts', async () => {
@@ -3351,7 +3361,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
                 pluginId, contributionId: 'panel', surfaceId: `surfacePlacement:${pluginId}:panel`,
                 placement: 'rightSidebarSurface', platform: 'web', accountLifetime,
                 machineId: supply?.machineId, serverId: supply?.serverId,
-                projectionGeneration: supply?.generation, occurrenceId: supply?.occurrenceId,
+                occurrenceId: supply?.occurrenceId,
                 executionOrigin: supply?.executionOrigin, interactionEnabled: true,
                 daemonInteractionEnabled: read().execution.selection.canExecute,
                 pluginUiProjection: mountedProjection,
