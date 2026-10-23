@@ -704,9 +704,19 @@ connection or connection-wide sharing scope. Operation retirement withdraws
 that access and settles its process without affecting another operation.
 Managed source-acquisition refusals record the closed broker reason and,
 when available, the existing Provider error code in the daemon file log;
-coordinator start failures also retain their existing closed phase code.
-These diagnostics never record the caught message, source credentials or
-response body.
+Connected Account/Pool source opens also retain the failed prerequisite
+(selection, resource currentness, purpose binding or managed custody) through
+the existing application-refusal diagnostic. Coordinator start failures retain
+their closed phase code and a content-free startup cause: error class, known
+code, and available child exit code or signal. These diagnostics never record
+the caught message, source credentials, stderr or response body, and the public
+Test readiness shape is unchanged.
+
+In development source, private Team endpoint discovery preserves a recognized broker refusal code
+through the existing Team runtime issue and Session launch-error path. An HTTP
+refusal without a recognized reason reports `broker_unavailable`; it does not
+infer an audience or credential problem. Account connection consumers retain
+their existing outer Provider error.
 
 In development source, a gateway's request-auth lookup follows the containing
 native request's deadline and cancellation. It adds no shorter transport-phase
@@ -752,10 +762,15 @@ actual Machine custodian while retaining the requester as the signed Account;
 the personal hub must still belong to the requester. Exact Session/AccessKey
 admission (or Machine Use admission for a sessionless Run) remains current at
 open, refresh and request admission, including after presence discovery.
-In 0.3 development, personal opens and refreshes sign inside that final
-authorizing transaction; request admission also finishes there. The requester
-Account's existing publication fence orders this result against Machine-grant
-withdrawal: a signature may be delivered after withdrawal if it was already
+In 0.3 development, personal and Team opens and refreshes sign inside their
+final authorizing transaction; personal request admission also finishes there.
+Before the deciding reads, that transaction takes the existing sorted Account
+admission cohort with serializing intent: the requester, the initiator Machine's
+custodian, and the Team arm's existing resource and Session audience. Custody
+and authority are rechecked under those held locks at ReadCommitted. This orders
+signing against grant withdrawal and custodian Machine revocation, replacement
+and physical Account erasure without expanding those writers' publication
+audiences. A signature may be delivered after withdrawal if it was already
 created while admitted, but signing cannot follow completed withdrawal.
 Both personal and Team opens apply one shared topology rule to the resolved
 Machines and endpoints. Coinciding identities return `resource_unavailable`
@@ -1038,6 +1053,28 @@ receipt. Non-UUID grant ids and arbitrary exception codes are omitted. A carrier
 admission success proves a fresh witness, not successful native forwarding;
 a missing target receipt still needs native transport evidence. These diagnostics
 perform no additional admission, source or upstream requests.
+In development source, a fresh Home admission refusal on an already-open
+carrier answers the Agent's local HTTP request with the existing typed 403
+broker error body, including its closed reason and selected Team resource.
+The initiating host captures its existing admitted Session turn before the
+fresh Home check and retains only the closed reason, selected resource and
+allowance facts for that turn. The canonical Session lifecycle reads this
+evidence before publishing a failed turn, so the named Team denial survives
+Agents that discard the HTTP body. Daemon runners use their existing private
+service channel; temporary-computer runners read the same host evidence owner
+in process. A successful fresh admission clears that turn's refusal, and a
+late response cannot attach it to a successor. Cancellation stays cancellation.
+The existing Agent-body classifier remains an ingress for Agents that preserve
+the typed envelope. The local native callback carries the
+refusal without opening a remote stream; cancellation and unexpected callback
+failures retain their existing close behavior. This requires the matching
+rebuilt Iroh addon and updated initiator daemon; an older loaded addon cannot
+render the new local callback outcome.
+Streamed responses also record one `response_body` settlement with a closed
+`completed`, `failed` or `cancelled` outcome and the number of upstream body
+bytes read into forwarding. This distinguishes a body failure after successful
+HTTP headers from a completed response; it does not prove delivery to the Agent.
+No body content, exception text or per-chunk record is logged.
 In development, broker resource reads and Home admissions follow the containing
 request's cancellation rather than a separate ten-second HTTP cutoff.
 In 0.3 development, the Test
@@ -1125,6 +1162,11 @@ diagnostic codes. These records omit exception messages, causes, absolute paths
 and request/credential content; validated Provider refusals retain their own code.
 The shared `[RPC] Request completed` record also retains a structured error
 result's bounded code; an unclassified error result is never logged as success.
+For model-probe `capabilities.invoke` results, its `modelProbe` projection also
+records the closed `source`, `refreshError`, `availableModelsCount` and, when
+present, `spawnFailure.code` (the canonical spawn-failure reason). An outer
+`ok` result can therefore be distinguished from a nested unavailable probe.
+No model rows, names, OS error text or credentials enter this record.
 
 Agent plugins own model-switch policy. A same-session switch may be permitted only when the adapter can apply the new provider/model safely. Otherwise the UI offers restart/fork semantics. Resume and fork re-resolve the exact stored connection and refuse actionably when it was deleted, disabled, changed incompatibly, or lost its required grant/secret.
 
