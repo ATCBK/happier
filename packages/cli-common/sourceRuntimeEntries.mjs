@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readFile, readdir } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CLI_RUNTIME_SIDECAR_ENTRIES } from './cliRuntimeSidecars.mjs';
 
@@ -199,11 +199,30 @@ export async function readCliSourceEntries({ repoDir, manifest, transform,
   return { entries, pluginMetadata };
 }
 
+/** Source builders consume the same private locator for entry discovery and
+ * imports, including when the checkout's generated module does not exist. */
+export function createCliSourceProjectionResolver({ projectionRoot }) {
+  const projectDir = join(projectionRoot, 'apps/cli');
+  const path = join(projectDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
+  return {
+    name: 'cli-source-projections',
+    setup(builder) {
+      builder.onResolve({ filter: /(?:^|[/\\])generatedBundledPluginManifests(?:\.ts)?$/ },
+        () => ({ path, namespace: 'daemon-projections' }));
+      builder.onLoad({ filter: /.*/, namespace: 'daemon-projections' }, async () => ({
+        contents: await readFile(path, 'utf8'), loader: 'ts', resolveDir: projectDir,
+      }));
+    },
+  };
+}
+
 export function createWorkspaceSourceResolver({ workspacePackages, requireFromProject, externalPackages }) {
+  const resolvingExternal = Symbol('source-runtime-external');
   return {
     name: 'workspace-source-exports',
     setup(builder) {
-      builder.onResolve({ filter: /^[^./#]/ }, (args) => {
+      builder.onResolve({ filter: /^[^./#]/ }, async (args) => {
+        if (args.pluginData === resolvingExternal) return;
         if (args.path.startsWith('@/')) return;
         if (args.path.startsWith('@happier-dev/') || workspacePackages.has(packageNameOfSpecifier(args.path))) {
           return { path: resolveWorkspaceSource(workspacePackages, args.path) };
@@ -212,7 +231,21 @@ export function createWorkspaceSourceResolver({ workspacePackages, requireFromPr
         // CJS entry is bundled without converting Ink's async ESM graph.
         if (args.path === 'libsodium-wrappers-sumo') return { path: requireFromProject.resolve(args.path) };
         if (args.path === 'libsodium-sumo') return;
-        if (externalPackages === undefined || externalPackages.some((name) => args.path === name || args.path.startsWith(`${name}/`))) {
+        if (externalPackages === undefined) {
+          // Shared chunks no longer sit beside their authored package. Resolve
+          // support from the importer before externalizing, preserving its
+          // installed version and ESM/CJS export conditions under pnpm.
+          const resolved = await builder.resolve(args.path, {
+            kind: args.kind, importer: args.importer, resolveDir: args.resolveDir,
+            namespace: args.namespace, pluginData: resolvingExternal,
+          });
+          // Optional, uninstalled imports keep their existing runtime failure.
+          const path = resolved.errors.length === 0 ? resolved.path : args.path;
+          const esmImport = args.kind === 'import-statement' || args.kind === 'dynamic-import';
+          // ESM uses URLs (including Windows drives and #); require uses paths.
+          return { path: esmImport && isAbsolute(path) ? pathToFileURL(path).href : path, external: true };
+        }
+        if (externalPackages.some((name) => args.path === name || args.path.startsWith(`${name}/`))) {
           return { path: args.path, external: true };
         }
       });

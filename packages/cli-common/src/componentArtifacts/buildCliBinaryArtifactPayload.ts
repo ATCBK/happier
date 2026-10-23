@@ -17,6 +17,7 @@ import {
   SOURCE_CONDITION,
   SOURCE_RUNTIME_OUTPUT_OPTIONS,
   bundleCliSourceSidecars,
+  createCliSourceProjectionResolver,
   createWorkspaceSourceResolver,
   readCliSourceEntries,
   readWorkspacePackages,
@@ -371,20 +372,6 @@ export function readCliBinaryArtifactSupportIdentity({
   hash.update(`target\0${target.os}\0${target.arch}\0${target.exeExt}\0`);
   hash.update(`node\0${process.version}\0`);
   hash.update(`go\0${normalizedGoVersion}\0`);
-  const bundledPluginFailuresPath = join(
-    repoRoot,
-    'apps',
-    'cli',
-    BUNDLED_PLUGIN_FAILURES_RELATIVE_PATH,
-  );
-  hash.update('bundled-plugin-failures\0');
-  hash.update(
-    existsSync(bundledPluginFailuresPath)
-      ? readFileSync(bundledPluginFailuresPath)
-      : 'absent',
-  );
-  hash.update('\0');
-
   const cliDir = join(repoRoot, 'apps', 'cli');
   const workspacePackages = resolveWorkspaceBundlesFromPackageJson({
     repoRoot,
@@ -601,248 +588,281 @@ export async function buildCliBinaryArtifactCodePayload({
     imports?: Record<string, unknown>;
   };
   const workspacePackages = await readWorkspacePackages(repoRoot);
-  const { entries, pluginMetadata } = await readCliSourceEntries({
-    repoDir: repoRoot,
-    manifest,
-    transform: esbuild.transform,
-    cliPrefix: '',
-    mainOutput: 'package-dist/index',
-    publicPrefix: 'package-dist',
-    pluginPrefix: (name) => `node_modules/${name}`,
-  });
-  const mergedExternals = [
-    ...new Set([
-      ...CLI_RUNTIME_EXTERNAL_PACKAGES,
-      ...CLI_BUN_COMPILE_EXTERNAL_PACKAGES,
-      ...externals.map((value) => value.trim()).filter(Boolean),
-    ]),
-  ];
+  // Native code payloads also serve local source builds. Derive their locator,
+  // manifest assets and failures together without publishing into the checkout.
+  const generatorPath = join(cliDir, 'scripts/build-owned/generateBundledPluginEntries.ts');
+  const derivesDaemonProjections = existsSync(generatorPath) || existsSync(join(repoRoot, 'packages/plugins'));
   await mkdir(payloadDir, { recursive: true });
-  const result = await esbuild.build({
-    absWorkingDir: repoRoot,
-    entryPoints: entries,
-    outdir: payloadDir,
-    bundle: true,
-    splitting: true,
-    format: 'esm',
-    platform: 'node',
-    target: 'node20',
-    ...SOURCE_RUNTIME_OUTPUT_OPTIONS,
-    // Each authored entry keeps its own tsconfig. Forcing the CLI tsconfig on
-    // third-party JavaScript wrongly parses legacy CommonJS as strict modules.
-    conditions: [SOURCE_CONDITION],
-    chunkNames: 'package-dist/chunks/[name]-[hash]',
-    metafile: true,
-    logLevel: 'silent',
-    banner: {
-      js: "import {createRequire as __artifactCreateRequire} from 'node:module'; import {fileURLToPath as __artifactFileURLToPath} from 'node:url'; import {dirname as __artifactDirname} from 'node:path'; const require=__artifactCreateRequire(import.meta.url); const __artifactFilename=__artifactFileURLToPath(import.meta.url); const __artifactDirectory=__artifactDirname(__artifactFilename);",
-    },
-    define: {
-      __dirname: '__artifactDirectory',
-      __filename: '__artifactFilename',
-    },
-    plugins: [
-      createWorkspaceSourceResolver({
-        workspacePackages,
-        requireFromProject,
-        externalPackages: mergedExternals,
-      }),
-    ],
-  });
-  const sidecars = await bundleCliSourceSidecars({
-    repoDir: repoRoot,
-    outputDir: join(payloadDir, 'scripts'),
-    build: esbuild.build,
-    workspacePackages,
-    requireFromProject,
-  });
-  Object.assign(result.metafile!.inputs, sidecars.metafile.inputs);
-  Object.assign(result.metafile!.outputs, sidecars.metafile.outputs);
-  const assets = join(cliDir, 'assets');
-  if (existsSync(assets))
-    await cp(assets, join(payloadDir, 'assets'), { recursive: true });
-  const distInputs = Object.keys(result.metafile!.inputs).filter((file) =>
-    /^(?:packages|apps)\/.*\/(?:dist|package-dist|\.happier-plugin)\//.test(
-      file.replaceAll('\\', '/'),
-    ),
-  );
-  if (distInputs.length)
-    throw new Error(
-      `[component-artifacts] native CLI consumed first-party built code: ${distInputs.join(', ')}`,
-    );
-  for (const key of Object.keys(entries).filter((key) =>
-    key.startsWith('package-dist/'),
-  )) {
-    await writeFile(
-      join(payloadDir, key + '.mjs'),
-      `export * from './${key.split('/').at(-1)}.js';\n`,
-    );
-  }
-  await writeFile(
-    join(payloadDir, 'package.json'),
-    JSON.stringify({
-      ...manifest,
-      type: 'module',
-      bundledDependencies: pluginMetadata.map((item) =>
-        String(item.package.name),
-      ),
-      main: './package-dist/index.mjs',
-      module: './package-dist/index.mjs',
-      exports: Object.fromEntries(
-        Object.keys(manifest.exports ?? {}).map((key) => [
-          key,
-          `./package-dist/${key === '.' ? 'index' : key.slice(2)}.mjs`,
-        ]),
-      ),
-      imports: Object.fromEntries(
-        Object.entries(manifest.imports ?? {}).map(([key, value]) => [
-          key,
-          `./package-dist/${String(
-            (value as Record<string, unknown>)[SOURCE_CONDITION],
-          )
-            .slice('./src/'.length)
-            .replace(/\.[^.]+$/, '')}.mjs`,
-        ]),
-      ),
-    }),
-  );
-  for (const item of pluginMetadata) {
-    const pluginDir = join(payloadDir, item.prefix);
-    await mkdir(join(pluginDir, '.happier-plugin'), { recursive: true });
-    await writeFile(
-      join(pluginDir, 'package.json'),
-      JSON.stringify({
-        ...item.package,
-        type: 'module',
-        exports: runtimePackageExports(item.package.exports),
-      }),
-    );
-    for (const path of (item.package.files as string[] | undefined) ?? []) {
-      if (
-        path === 'package.json' ||
-        path === 'src' ||
-        path === 'dist' ||
-        path.includes('*')
-      )
-        continue;
-      if (path.startsWith('.happier-plugin')) continue;
-      const source = join(item.sourceDir, path);
-      if (existsSync(source))
-        await cp(source, join(pluginDir, path), { recursive: true });
-    }
-    await writeFile(
-      join(pluginDir, '.happier-plugin/plugin.json'),
-      JSON.stringify(item.manifest),
-    );
-  }
-  if (pluginMetadata.some((item) => item.manifest.contributes !== undefined)) {
-    const uiPreparationDir = await mkdtemp(
-      join(payloadDir, '.source-plugin-ui-'),
-    );
-    try {
-      await runCommand(
-        process.execPath,
-        [
-          '--conditions=happier-source',
-          '--import',
-          join(repoRoot, 'packages/cli-common/registerSourceRuntime.mjs'),
-          join(repoRoot, 'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs'),
-        ],
-        {
-          cwd: repoRoot,
-          input: JSON.stringify({
-            repoRoot,
-            outputDir: uiPreparationDir,
-            plugins: pluginMetadata.map((item) => ({
-              directory: String(item.package.name).slice(
-                '@happier-dev/plugins-'.length,
-              ),
-              manifest: item.manifest,
-            })),
-            artifactOutputDirs: Object.fromEntries(
-              pluginMetadata.map((item) => [
-                String(item.package.name).slice('@happier-dev/plugins-'.length),
-                join(payloadDir, item.prefix, 'dist/happier-plugin-ui'),
-              ]),
-            ),
-          }),
-        },
-      );
-    } finally {
-      await rm(uiPreparationDir, { recursive: true, force: true });
-    }
-  }
-  const staticAssets = join(
-    cliDir,
-    'src/plugins/projection/registry/static-assets',
-  );
-  if (existsSync(staticAssets))
-    await cp(
-      staticAssets,
-      join(
-        payloadDir,
-        'package-dist/plugins/projection/registry/static-assets',
-      ),
-      { recursive: true },
-    );
-  const workspaceRuntimePackages = pluginMetadata.map((item) =>
-    String(item.package.name),
-  );
-  const workspaceRuntimeIdentity =
-    readCliNodeWorkspaceRuntimeIdentityFromRuntimeRoot({
-      runtimeRoot: payloadDir,
-      packageNames: workspaceRuntimePackages,
-    }).fingerprint;
-  await writeFile(
-    join(payloadDir, 'package-dist/metafile.json'),
-    JSON.stringify(result.metafile),
-  );
-  cliDistBuildManifest.writeCliDistBuildManifest(
-    join(payloadDir, 'package-dist/index.mjs'),
-    {
-      workspaceRuntimeIdentity,
-      ...(workspaceRuntimePackages.length ? { workspaceRuntimePackages } : {}),
-    },
-  );
-  const executableName = resolveExecutableName({ baseName: 'happier', target });
-  // Bun's embedded module graph and physical plugin entries have separate
-  // module caches. The native engine loads the same executable-relative ESM
-  // graph as plugins and child entries, preserving shared SDK/Zod identities.
-  const nativeEntryDir = await mkdtemp(join(payloadDir, '.native-entry-'));
+  const daemonProjectionRoot = derivesDaemonProjections
+    ? await mkdtemp(join(payloadDir, '.source-daemon-projections-'))
+    : undefined;
   try {
-    const nativeEntry = join(nativeEntryDir, 'index.mjs');
-    await writeFile(
-      nativeEntry,
-      "import { dirname, join } from 'node:path';\n" +
-        "import { pathToFileURL } from 'node:url';\n" +
-        "await import(pathToFileURL(join(dirname(process.execPath), 'package-dist', 'index.mjs')).href);\n",
-    );
-    await compileBinary({
-      entrypoint: nativeEntry,
-      bunTarget: target.bunTarget,
-      outfile: join(payloadDir, executableName),
-      cwd: repoRoot,
-      externals: mergedExternals,
-      bunCommand,
-      autoloadDotenv: false,
-      // The physical graph resolves exports-only native packages beside itself.
-      // Ambient project configuration must not preload code into the CLI.
-      autoloadPackageJson: true,
-      runCommand,
+    if (daemonProjectionRoot) {
+      await runCommand(process.execPath, [
+        '--conditions=happier-source', '--experimental-strip-types', generatorPath,
+        '--daemon-projections', '--daemon-output-root', daemonProjectionRoot,
+      ], { cwd: repoRoot });
+      await ensureFileExists(join(daemonProjectionRoot,
+        'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts'));
+    }
+    const { entries, pluginMetadata } = await readCliSourceEntries({
+      repoDir: repoRoot,
+      projectionRoot: daemonProjectionRoot ?? repoRoot,
+      manifest,
+      transform: esbuild.transform,
+      cliPrefix: '',
+      mainOutput: 'package-dist/index',
+      publicPrefix: 'package-dist',
+      pluginPrefix: (name) => `node_modules/${name}`,
     });
-  } finally {
-    await rm(nativeEntryDir, { recursive: true, force: true });
-  }
-  return {
-    executableName,
-    entrypoint: executableName,
-    workspaceRuntimeIdentity,
-    runtimeAssetRelativePath:
-      `${CLIPROXYAPI_MANAGED_RUNTIME_RELATIVE_PATH}${target.exeExt}`.replaceAll(
-        '\\',
-        '/',
+    const mergedExternals = [
+      ...new Set([
+        ...CLI_RUNTIME_EXTERNAL_PACKAGES,
+        ...CLI_BUN_COMPILE_EXTERNAL_PACKAGES,
+        ...externals.map((value) => value.trim()).filter(Boolean),
+      ]),
+    ];
+    const result = await esbuild.build({
+      absWorkingDir: repoRoot,
+      entryPoints: entries,
+      outdir: payloadDir,
+      bundle: true,
+      splitting: true,
+      format: 'esm',
+      platform: 'node',
+      target: 'node20',
+      ...SOURCE_RUNTIME_OUTPUT_OPTIONS,
+      // Each authored entry keeps its own tsconfig. Forcing the CLI tsconfig on
+      // third-party JavaScript wrongly parses legacy CommonJS as strict modules.
+      conditions: [SOURCE_CONDITION],
+      chunkNames: 'package-dist/chunks/[name]-[hash]',
+      metafile: true,
+      logLevel: 'silent',
+      banner: {
+        js: "import {createRequire as __artifactCreateRequire} from 'node:module'; import {fileURLToPath as __artifactFileURLToPath} from 'node:url'; import {dirname as __artifactDirname} from 'node:path'; const require=__artifactCreateRequire(import.meta.url); const __artifactFilename=__artifactFileURLToPath(import.meta.url); const __artifactDirectory=__artifactDirname(__artifactFilename);",
+      },
+      define: {
+        __dirname: '__artifactDirectory',
+        __filename: '__artifactFilename',
+      },
+      plugins: [
+        ...(daemonProjectionRoot ? [createCliSourceProjectionResolver({ projectionRoot: daemonProjectionRoot })] : []),
+        createWorkspaceSourceResolver({
+          workspacePackages,
+          requireFromProject,
+          externalPackages: mergedExternals,
+        }),
+      ],
+    });
+    const sidecars = await bundleCliSourceSidecars({
+      repoDir: repoRoot,
+      outputDir: join(payloadDir, 'scripts'),
+      build: esbuild.build,
+      workspacePackages,
+      requireFromProject,
+    });
+    Object.assign(result.metafile!.inputs, sidecars.metafile.inputs);
+    Object.assign(result.metafile!.outputs, sidecars.metafile.outputs);
+    const assets = join(cliDir, 'assets');
+    if (existsSync(assets))
+      await cp(assets, join(payloadDir, 'assets'), {
+        recursive: true,
+        filter: (path) => !daemonProjectionRoot || path !== join(assets, 'bundled-plugin-manifests'),
+      });
+    if (daemonProjectionRoot) {
+      const projectedCliDir = join(daemonProjectionRoot, 'apps/cli');
+      const projectedAssets = join(projectedCliDir, 'assets');
+      if (existsSync(projectedAssets))
+        await cp(projectedAssets, join(payloadDir, 'assets'), { recursive: true });
+      const failuresTarget = join(payloadDir, BUNDLED_PLUGIN_FAILURES_RELATIVE_PATH);
+      await mkdir(dirname(failuresTarget), { recursive: true });
+      await copyFile(join(projectedCliDir, BUNDLED_PLUGIN_FAILURES_RELATIVE_PATH), failuresTarget);
+    }
+    const distInputs = Object.keys(result.metafile!.inputs).filter((file) =>
+      /^(?:packages|apps)\/.*\/(?:dist|package-dist|\.happier-plugin)\//.test(
+        file.replaceAll('\\', '/'),
       ),
-  };
+    );
+    if (distInputs.length)
+      throw new Error(
+        `[component-artifacts] native CLI consumed first-party built code: ${distInputs.join(', ')}`,
+      );
+    for (const key of Object.keys(entries).filter((key) =>
+      key.startsWith('package-dist/'),
+    )) {
+      await writeFile(
+        join(payloadDir, key + '.mjs'),
+        `export * from './${key.split('/').at(-1)}.js';\n`,
+      );
+    }
+    await writeFile(
+      join(payloadDir, 'package.json'),
+      JSON.stringify({
+        ...manifest,
+        type: 'module',
+        bundledDependencies: pluginMetadata.map((item) =>
+          String(item.package.name),
+        ),
+        main: './package-dist/index.mjs',
+        module: './package-dist/index.mjs',
+        exports: Object.fromEntries(
+          Object.keys(manifest.exports ?? {}).map((key) => [
+            key,
+            `./package-dist/${key === '.' ? 'index' : key.slice(2)}.mjs`,
+          ]),
+        ),
+        imports: Object.fromEntries(
+          Object.entries(manifest.imports ?? {}).map(([key, value]) => [
+            key,
+            `./package-dist/${String(
+              (value as Record<string, unknown>)[SOURCE_CONDITION],
+            )
+              .slice('./src/'.length)
+              .replace(/\.[^.]+$/, '')}.mjs`,
+          ]),
+        ),
+      }),
+    );
+    for (const item of pluginMetadata) {
+      const pluginDir = join(payloadDir, item.prefix);
+      await mkdir(join(pluginDir, '.happier-plugin'), { recursive: true });
+      await writeFile(
+        join(pluginDir, 'package.json'),
+        JSON.stringify({
+          ...item.package,
+          type: 'module',
+          exports: runtimePackageExports(item.package.exports),
+        }),
+      );
+      for (const path of (item.package.files as string[] | undefined) ?? []) {
+        if (
+          path === 'package.json' ||
+          path === 'src' ||
+          path === 'dist' ||
+          path.includes('*')
+        )
+          continue;
+        if (path.startsWith('.happier-plugin')) continue;
+        const source = join(item.sourceDir, path);
+        if (existsSync(source))
+          await cp(source, join(pluginDir, path), { recursive: true });
+      }
+      await writeFile(
+        join(pluginDir, '.happier-plugin/plugin.json'),
+        JSON.stringify(item.manifest),
+      );
+    }
+    if (pluginMetadata.some((item) => item.manifest.contributes !== undefined)) {
+      const uiPreparationDir = await mkdtemp(
+        join(payloadDir, '.source-plugin-ui-'),
+      );
+      try {
+        await runCommand(
+          process.execPath,
+          [
+            '--conditions=happier-source',
+            '--import',
+            join(repoRoot, 'packages/cli-common/registerSourceRuntime.mjs'),
+            join(repoRoot, 'apps/ui/scripts/prepareSourcePluginUiArtifacts.mjs'),
+          ],
+          {
+            cwd: repoRoot,
+            input: JSON.stringify({
+              repoRoot,
+              outputDir: uiPreparationDir,
+              plugins: pluginMetadata.map((item) => ({
+                directory: String(item.package.name).slice(
+                  '@happier-dev/plugins-'.length,
+                ),
+                manifest: item.manifest,
+              })),
+              artifactOutputDirs: Object.fromEntries(
+                pluginMetadata.map((item) => [
+                  String(item.package.name).slice('@happier-dev/plugins-'.length),
+                  join(payloadDir, item.prefix, 'dist/happier-plugin-ui'),
+                ]),
+              ),
+            }),
+          },
+        );
+      } finally {
+        await rm(uiPreparationDir, { recursive: true, force: true });
+      }
+    }
+    const staticAssets = join(
+      cliDir,
+      'src/plugins/projection/registry/static-assets',
+    );
+    if (existsSync(staticAssets))
+      await cp(
+        staticAssets,
+        join(
+          payloadDir,
+          'package-dist/plugins/projection/registry/static-assets',
+        ),
+        { recursive: true },
+      );
+    const workspaceRuntimePackages = pluginMetadata.map((item) =>
+      String(item.package.name),
+    );
+    const workspaceRuntimeIdentity =
+      readCliNodeWorkspaceRuntimeIdentityFromRuntimeRoot({
+        runtimeRoot: payloadDir,
+        packageNames: workspaceRuntimePackages,
+      }).fingerprint;
+    await writeFile(
+      join(payloadDir, 'package-dist/metafile.json'),
+      JSON.stringify(result.metafile),
+    );
+    cliDistBuildManifest.writeCliDistBuildManifest(
+      join(payloadDir, 'package-dist/index.mjs'),
+      {
+        workspaceRuntimeIdentity,
+        ...(workspaceRuntimePackages.length ? { workspaceRuntimePackages } : {}),
+      },
+    );
+    const executableName = resolveExecutableName({ baseName: 'happier', target });
+    // Bun's embedded module graph and physical plugin entries have separate
+    // module caches. The native engine loads the same executable-relative ESM
+    // graph as plugins and child entries, preserving shared SDK/Zod identities.
+    const nativeEntryDir = await mkdtemp(join(payloadDir, '.native-entry-'));
+    try {
+      const nativeEntry = join(nativeEntryDir, 'index.mjs');
+      await writeFile(
+        nativeEntry,
+        "import { dirname, join } from 'node:path';\n" +
+          "import { pathToFileURL } from 'node:url';\n" +
+          "await import(pathToFileURL(join(dirname(process.execPath), 'package-dist', 'index.mjs')).href);\n",
+      );
+      await compileBinary({
+        entrypoint: nativeEntry,
+        bunTarget: target.bunTarget,
+        outfile: join(payloadDir, executableName),
+        cwd: repoRoot,
+        externals: mergedExternals,
+        bunCommand,
+        autoloadDotenv: false,
+        // The physical graph resolves exports-only native packages beside itself.
+        // Ambient project configuration must not preload code into the CLI.
+        autoloadPackageJson: true,
+        runCommand,
+      });
+    } finally {
+      await rm(nativeEntryDir, { recursive: true, force: true });
+    }
+    return {
+      executableName,
+      entrypoint: executableName,
+      workspaceRuntimeIdentity,
+      runtimeAssetRelativePath:
+        `${CLIPROXYAPI_MANAGED_RUNTIME_RELATIVE_PATH}${target.exeExt}`.replaceAll(
+          '\\',
+          '/',
+        ),
+    };
+  } finally {
+    if (daemonProjectionRoot) await rm(daemonProjectionRoot, { recursive: true, force: true });
+  }
 }
 
 async function stageCliBinaryArtifactSupportPayload({
@@ -904,7 +924,7 @@ async function stageCliBinaryArtifactSupportPayload({
   const pnpm = resolvePnpmCommand({ commandProbe });
   await mkdir(payloadDir, { recursive: true });
   const runtimeSupportDirectories = preserveCompilePayloadAssets
-    ? ['.project']
+    ? []
     : ['node_modules', 'tools', '.project'];
   await Promise.all(
     runtimeSupportDirectories.map(async (name) => {
@@ -955,30 +975,6 @@ async function stageCliBinaryArtifactSupportPayload({
     runCommand,
     commandProbe,
   });
-  const bundledPluginFailuresSource = join(
-    repoRoot,
-    'apps',
-    'cli',
-    BUNDLED_PLUGIN_FAILURES_RELATIVE_PATH,
-  );
-  const bundledPluginFailuresTarget = join(
-    payloadDir,
-    BUNDLED_PLUGIN_FAILURES_RELATIVE_PATH,
-  );
-  const publicationFailures = existsSync(bundledPluginFailuresSource)
-    ? parseBundledPluginPublicationFailures(
-        readFileSync(bundledPluginFailuresSource, 'utf8'),
-      )
-    : [];
-  await mkdir(
-    join(payloadDir, '.project', 'tmp', 'bundled-plugin-publication'),
-    { recursive: true },
-  );
-  if (existsSync(bundledPluginFailuresSource)) {
-    await copyFile(bundledPluginFailuresSource, bundledPluginFailuresTarget);
-  } else {
-    await writeFile(bundledPluginFailuresTarget, '[]\n', 'utf8');
-  }
   await copyCliRuntimeTools(repoRoot, payloadDir, target);
   const cliProxyApiManagedRuntime = await stageCliProxyApiManagedRuntime({
     repoRoot,
@@ -987,7 +983,6 @@ async function stageCliBinaryArtifactSupportPayload({
     pnpm,
     runCommand,
     prebuiltExecutablePath: cliProxyApiManagedRuntimeExecutablePath,
-    publicationFailures,
   });
   await stageProcessCustodyRuntime({
     repoRoot,

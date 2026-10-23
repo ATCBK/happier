@@ -37,6 +37,7 @@ export function readCliSourceEntries(options: Readonly<{
   publicPrefix?: string;
   pluginPrefix?: (name: string) => string;
 }>): Promise<{ entries: Record<string, string>; pluginMetadata: CliSourcePluginMetadata[] }>;
+export function createCliSourceProjectionResolver(options: Readonly<{ projectionRoot: string }>): Plugin;
 export function createWorkspaceSourceResolver(options: Readonly<{
   workspacePackages: Map<string, WorkspaceSourcePackage>;
   requireFromProject: NodeRequire;
