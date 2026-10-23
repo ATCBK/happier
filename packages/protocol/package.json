@@ -8755,6 +8755,11 @@
       "types": "./dist/collections/filter/pluginListFilterFieldV1.d.ts",
       "default": "./dist/collections/filter/pluginListFilterFieldV1.js"
     },
+    "./collections/spaces/collectionSpacesV1": {
+      "happier-source": "./src/collections/spaces/collectionSpacesV1.ts",
+      "types": "./dist/collections/spaces/collectionSpacesV1.d.ts",
+      "default": "./dist/collections/spaces/collectionSpacesV1.js"
+    },
     "./actions/settings/sessionAutoFollowSettingsAction": {
       "happier-source": "./src/actions/settings/sessionAutoFollowSettingsAction.ts",
       "types": "./dist/actions/settings/sessionAutoFollowSettingsAction.d.ts",
