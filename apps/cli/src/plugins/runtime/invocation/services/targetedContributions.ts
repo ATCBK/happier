@@ -1,4 +1,5 @@
-import { PluginError, type TargetedContributionSnapshot, type TargetedContributionsService } from '@happier-dev/plugin-sdk';
+import { PluginError } from '@happier-dev/plugin-sdk/errors';
+import type { TargetedContributionSnapshot, TargetedContributionsService } from '@happier-dev/plugin-sdk';
 import { createTargetedContributionsService, projectAdmittedTargetedContributionSnapshot } from '@happier-dev/plugin-sdk/host/registration';
 import type { StableTargetedContributionsOwner, TargetedContributionsAdmissionSource } from '@happier-dev/plugin-sdk/host/registration';
 import type { PluginReloadController } from '@/plugins/runtime/reload/controller';
