@@ -32,6 +32,18 @@ private func serializedBody(_ payload: [AnyHashable: Any]) -> String {
                  "the original presence witness must keep the same cross-leg identity")
     stalled["event"] = ["type": "source_unavailable", "stalledOccurrence": ["turnId": "turn-a", "publisherFence": -1]]
     precondition(ActivityRemoteAlert(remoteUserInfo: ["body": stalled]) == nil, "invalid presence witness admitted")
+    var requestPayload = readyAlert
+    requestPayload["event"] = ["type": "permission_request", "requestId": "req:😀", "turnId": "turn-a"]
+    let requestA = ActivityRemoteAlert(remoteUserInfo: ["body": serializedBody(requestPayload)])
+    precondition(requestA?.eventIdentity == "request-turn:6:req:😀:6:turn-a", "the request lost its captured turn identity")
+    requestPayload["event"] = ["type": "permission_request", "requestId": "req:😀", "turnId": "turn-b"]
+    let requestB = ActivityRemoteAlert(remoteUserInfo: ["body": serializedBody(requestPayload)])
+    precondition(requestB != nil && requestB?.eventIdentity != requestA?.eventIdentity, "a reused request id collapsed distinct turns")
+    requestPayload["event"] = ["type": "permission_request", "requestId": "req:😀"]
+    precondition(ActivityRemoteAlert(remoteUserInfo: ["body": serializedBody(requestPayload)])?.eventIdentity == "request:req:😀",
+                 "a turnless request lost its legacy identity")
+    requestPayload["event"] = ["type": "permission_request", "requestId": "req:😀", "turnId": " "]
+    precondition(ActivityRemoteAlert(remoteUserInfo: ["body": serializedBody(requestPayload)]) == nil, "an invalid request turn was admitted")
     // A recognized alert keeps the Home's already-permitted copy and only gains
     // the canonical grouping identity.
     var delivered: UNNotificationContent?

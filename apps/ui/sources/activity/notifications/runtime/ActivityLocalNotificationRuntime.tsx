@@ -60,7 +60,7 @@ function resolveLocalNotificationEventKind(event: ActivityLocalNotificationEvent
 function resolveLocalNotificationEventIdentity(event: ActivityLocalNotificationEvent): string | undefined {
     if (event.kind === 'session-update' && event.event === 'source_unavailable' && event.stalledOccurrence)
         return resolveActivityStalledEventIdentityV1(event.stalledOccurrence);
-    if (event.kind === 'agent-request') return resolveActivityRequestEventIdentityV1(event.requestId);
+    if (event.kind === 'agent-request') return resolveActivityRequestEventIdentityV1(event.requestId, event.turnId);
     if (event.kind === 'session-update' && 'turnId' in event) return resolveActivityTurnEventIdentityV1(event.turnId);
     return 'committedSequence' in event && event.committedSequence
         ? resolveActivitySequenceEventIdentityV1(event.committedSequence)

@@ -82,4 +82,11 @@ require('./sources/unistyles');
 // Publish the single sync runtime before Router mounts consumers (including
 // native headless tasks). Lazy screens import only its narrow public handle.
 require('./sources/sync/syncEngine');
+// Android action broadcasts start the main React host without mounting Router.
+// Define the existing notification task before either headless or UI delivery.
+try {
+    require('./sources/activity/notifications/backgroundWake/defineSessionChangedBackgroundWakeTask');
+} catch {
+    console.warn('[notifications] Background notification task unavailable');
+}
 require('expo-router/entry');

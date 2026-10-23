@@ -52,6 +52,7 @@ struct ActivityRemoteAlert {
   let sequenceDomain: String?
   let discussionId: String?
   let requestId: String?
+  let requestTurnId: String?
   let stalledTurnId: String?
   let stalledPublisherFence: Int64?
   let version: Int64
@@ -70,6 +71,9 @@ struct ActivityRemoteAlert {
     if let stalledTurnId, let stalledPublisherFence { return "stalled:\(stalledTurnId):\(stalledPublisherFence)" }
     if version == 2, let requestId,
        ["permission_request", "user_action_request"].contains(eventType) {
+      if let requestTurnId {
+        return "request-turn:\(requestId.utf16.count):\(requestId):\(requestTurnId.utf16.count):\(requestTurnId)"
+      }
       return "request:\(requestId)"
     }
     guard version == 2, let messageSeq else { return nil }
@@ -166,9 +170,18 @@ struct ActivityRemoteAlert {
     self.requestId = version == 2 && ["permission_request", "user_action_request"].contains(eventType)
       ? ActivityRemoteAlert.requiredBoundedIdentifier(event["requestId"])
       : nil
+    self.requestTurnId = version == 2 && ["permission_request", "user_action_request"].contains(eventType)
+      ? ActivityRemoteAlert.requiredRequestTurnId(event["turnId"])
+      : nil
     let stalled = version == 2 && eventType == "source_unavailable" ? event["stalledOccurrence"] as? [String: Any] : nil
     self.stalledTurnId = ActivityRemoteAlert.requiredBoundedIdentifier(stalled?["turnId"])
     self.stalledPublisherFence = ActivityRemoteAlert.exactInteger(stalled?["publisherFence"])
+  }
+
+  private static func requiredRequestTurnId(_ value: Any?) -> String? {
+    guard let turnId = requiredBoundedIdentifier(value),
+          let raw = value as? String, raw == turnId else { return nil }
+    return turnId
   }
 
   private static func requiredString(_ value: Any?) -> String? {
@@ -220,9 +233,16 @@ struct ActivityRemoteAlert {
     // The committed request id is optional in the wire union, so a payload that
     // carries it must still be admitted; a present but invalid one is not.
     if version == 2 && ["permission_request", "user_action_request"].contains(type) {
-      if event["requestId"] == nil { return exactKeys(event, allowed: ["type"]) }
-      return exactKeys(event, allowed: ["type", "requestId"])
-        && requiredBoundedIdentifier(event["requestId"]) != nil
+      var allowed = Set(["type"])
+      if let requestId = event["requestId"] {
+        guard requiredBoundedIdentifier(requestId) != nil else { return false }
+        allowed.insert("requestId")
+      }
+      if let turnId = event["turnId"] {
+        guard requiredRequestTurnId(turnId) != nil else { return false }
+        allowed.insert("turnId")
+      }
+      return exactKeys(event, allowed: allowed)
     }
     if version == 2 && type == "source_unavailable", let raw = event["stalledOccurrence"] {
       guard exactKeys(event, allowed: ["type", "stalledOccurrence"]),

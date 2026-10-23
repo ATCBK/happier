@@ -173,6 +173,9 @@ afterEach(async () => {
         clearPendingTerminalConnect();
         clearPendingNotificationAction();
         await disconnectActiveServerConnection();
+        // Retire pooled Socket.IO custody before restoring its boundary responders.
+        const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+        await serverScopedRpcSocketPool.stopAll();
     } finally {
         for (const write of credentialWrites.splice(0).reverse()) await write.rollback();
         nativeNotifications.response = null;
@@ -239,19 +242,27 @@ describe('App RootLayout notifications', () => {
         await renderNotification({ sessionId: 's_123' });
         expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_123');
     });
-    it('dedupes notification responses across cold start and response listener', async () => {
+    it('dedupes one delivery and permits the same live body tap after remount', async () => {
         await arrangeHomes();
         vi.mocked(Notifications.clearLastNotificationResponseAsync).mockClear();
-        nativeNotifications.response = response({ sessionId: 's_123' });
+        const delivered = response({ sessionId: 's_123' });
+        nativeNotifications.response = delivered;
         let listener: ((response: Notifications.NotificationResponse) => void) | undefined;
         vi.spyOn(Notifications, 'addNotificationResponseReceivedListener').mockImplementation(callback => { listener = callback; return { remove: vi.fn() }; });
-        await renderRootLayoutRoute(RootLayout, credentials);
+        const first = await renderRootLayoutRoute(RootLayout, credentials);
         await vi.waitFor(() => expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_123'));
         await vi.waitFor(() => expect(Notifications.clearLastNotificationResponseAsync).toHaveBeenCalledOnce());
-        listener?.(nativeNotifications.response);
+        listener?.(delivered);
         await flushHookEffects();
         expect(routerBoundary.push.mock.calls.filter(([route]) => route === '/session/s_123')).toHaveLength(1);
         expect(Notifications.clearLastNotificationResponseAsync).toHaveBeenCalledOnce();
+        const firstListener = listener;
+        await first.unmount();
+        nativeNotifications.response = null;
+        await renderRootLayoutRoute(RootLayout, credentials);
+        await vi.waitFor(() => expect(listener).not.toBe(firstListener));
+        listener?.(delivered);
+        await vi.waitFor(() => expect(routerBoundary.push.mock.calls.filter(([route]) => route === '/session/s_123')).toHaveLength(2));
     });
     it('switches the device Home and navigates when a notification includes a saved serverUrl', async () => {
         await arrangeHomes([profile('srv_server_1', activeUrl), profile('srv_server_2', 'https://company.example.test')]);
@@ -266,26 +277,26 @@ describe('App RootLayout notifications', () => {
         expect(getActiveServerSnapshot().serverId).toBe('srv_server_3');
         expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_shared?serverId=srv_server_3');
     });
-    it('replays a pending permission action only for its exact active server id', async () => {
+    it('opens a retained permission action on its exact active Home for review without replaying', async () => {
         await arrangeHomes([profile('srv_server_2', 'https://shared.example.test'), profile('srv_server_3', 'https://shared.example.test')], 'srv_server_3');
         arrangeSession('s_pending', 'srv_server_3');
         setPendingNotificationAction({ serverUrl: 'https://shared.example.test', serverId: 'srv_server_3', sessionId: 's_pending', requestId: 'r_pending', action: 'allow' });
         await renderRootLayoutRoute(RootLayout, credentials);
-        await vi.waitFor(() => expect(permissionRequests()).toHaveLength(1));
-        expect(permissionRequests()[0]).toMatchObject({ origin: 'https://shared.example.test', payload: {
-            method: 's_pending:' + RPC_METHODS.SESSION_PERMISSION_RESPOND, params: { id: 'r_pending', approved: true },
-        } });
+        await vi.waitFor(() => expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_pending?serverId=srv_server_3'));
+        expect(permissionRequests()).toHaveLength(0);
         expect(getPendingNotificationAction()).toBeNull();
         expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_pending?serverId=srv_server_3');
     });
-    it('retains a pending permission action for another exact Home sharing the active URL', async () => {
+    it('retains only review navigation for another exact Home sharing the active URL', async () => {
         await arrangeHomes([profile('srv_server_2', 'https://shared.example.test'), profile('srv_server_3', 'https://shared.example.test')], 'srv_server_3');
         const pending = { serverUrl: 'https://shared.example.test', serverId: 'srv_server_2', sessionId: 's_pending', requestId: 'r_pending', action: 'allow' } as const;
         setPendingNotificationAction(pending);
         await renderRootLayoutRoute(RootLayout, credentials);
         await flushHookEffects();
         expect(permissionRequests()).toHaveLength(0);
-        expect(getPendingNotificationAction()).toEqual(pending);
+        expect(getPendingNotificationAction()).toBeNull();
+        expect(getPendingNotificationNav()).toMatchObject({ serverId: pending.serverId,
+            route: '/session/s_pending?serverId=srv_server_2' });
         expect(routerBoundary.push).not.toHaveBeenCalled();
     });
     it('does not choose the first saved profile for an ambiguous legacy URL-only notification', async () => {
@@ -318,26 +329,27 @@ describe('App RootLayout notifications', () => {
     ] as const)('sends the %s permission response to its admitted Home and navigates', async (actionIdentifier, approved, decision) => {
         await arrangeHomes();
         arrangeSession('s_permission');
-        await renderNotification({ sessionId: 's_permission', requestId: 'p_permission', serverUrl: activeUrl }, actionIdentifier);
+        nativeNotifications.response = response({ sessionId: 's_permission', requestId: 'p_permission', turnId: 'original-turn', serverUrl: activeUrl }, actionIdentifier);
+        await renderRootLayoutRoute(RootLayout, credentials);
         await vi.waitFor(() => expect(permissionRequests()).toHaveLength(1));
         expect(permissionRequests()[0]).toMatchObject({ origin: activeUrl, payload: {
-            method: 's_permission:' + RPC_METHODS.SESSION_PERMISSION_RESPOND, params: { id: 'p_permission', approved, decision },
+            method: 's_permission:' + RPC_METHODS.SESSION_PERMISSION_RESPOND, params: { id: 'p_permission', turnId: 'original-turn', approved, decision },
         } });
         if (!approved) {
             expect(permissionRequests()[0]).toMatchObject({ payload: { params: {
                 reason: expect.stringMatching(/\S/),
             } } });
         }
-        expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_permission');
+        await vi.waitFor(() => expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_permission'));
     });
     it('switches to a saved inactive Home before performing permission allow', async () => {
         await arrangeHomes([profile('srv_server_1', activeUrl), profile('srv_server_2', 'https://company.example.test')]);
         arrangeSession('s_allow_2', 'srv_server_2');
-        await renderNotification({ sessionId: 's_allow_2', requestId: 'p_allow_2', serverUrl: 'https://company.example.test' }, PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1);
+        await renderNotification({ sessionId: 's_allow_2', requestId: 'p_allow_2', turnId: 'inactive-turn', serverUrl: 'https://company.example.test' }, PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1);
         expect(getDeviceDefaultServerId()).toBe('srv_server_2');
         expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_allow_2?serverId=srv_server_2');
         await vi.waitFor(() => expect(permissionRequests()).toHaveLength(1));
-        expect(permissionRequests()[0]).toMatchObject({ origin: 'https://company.example.test', payload: { params: { id: 'p_allow_2', approved: true } } });
+        expect(permissionRequests()[0]).toMatchObject({ origin: 'https://company.example.test', payload: { params: { id: 'p_allow_2', turnId: 'inactive-turn', approved: true } } });
     });
     it('does not perform permission allow without serverUrl', async () => {
         await arrangeHomes();

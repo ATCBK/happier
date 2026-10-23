@@ -45,8 +45,9 @@ data class ActivityRemoteAlert(
   val eventIdentity: String?
     get() = when {
       stalledTurnId != null && stalledPublisherFence != null -> "stalled:$stalledTurnId:$stalledPublisherFence"
-      turnId != null -> "turn:$turnId"
-      requestId != null -> "request:$requestId"
+      requestId != null -> if (turnId != null)
+        "request-turn:${requestId.length}:$requestId:${turnId.length}:$turnId" else "request:$requestId"
+      turnId != null && eventType in TURN_EVENT_TYPES -> "turn:$turnId"
       version != 2 || messageSeq == null -> null
       sequenceDomain == "discussion" && discussionId != null ->
         "message-seq:discussion:$discussionId:$messageSeq"
@@ -124,10 +125,17 @@ data class ActivityRemoteAlert(
       } else if (version == 2 && eventType in REQUEST_EVENT_TYPES) {
         // The committed request id is optional in the wire union, so both the
         // bare category and the identified request are admitted.
+        val keys = mutableListOf("type")
         if (event.has("requestId")) {
-          if (!event.hasExactly("type", "requestId")) return null
           requestId = event.requiredBoundedIdentifier("requestId") ?: return null
-        } else if (!event.hasExactly("type")) return null
+          keys.add("requestId")
+        }
+        if (event.has("turnId")) {
+          turnId = event.requiredBoundedIdentifier("turnId") ?: return null
+          if (event.opt("turnId") != turnId) return null
+          keys.add("turnId")
+        }
+        if (!event.hasExactly(*keys.toTypedArray())) return null
         null
       } else if (version == 2 && eventType == "source_unavailable" && event.has("stalledOccurrence")) {
         if (!event.hasExactly("type", "stalledOccurrence")) return null

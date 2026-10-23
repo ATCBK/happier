@@ -82,12 +82,6 @@ function kotlinEventIdentityBlock() {
   return kotlinSource.slice(start, end);
 }
 
-function kotlinReplacementTagTemplate() {
-  const template = kotlinSource.match(/val replacementTag: String\s*\n\s*get\(\) = "([^"]+)"/)?.[1];
-  assert.ok(template, 'Android has no replacement identity');
-  return template;
-}
-
 function canonicalIdentityTemplate(owner) {
   const template = protocolEventIdentitySource
     .match(new RegExp(`export function ${owner}[\\s\\S]*?\\n\\}`))?.[0];
@@ -166,76 +160,6 @@ test('native event identities distinguish equal sequences owned by different Dis
     canonicalIdentityTemplate('resolveActivitySequenceEventIdentityV1')
       .map((template) => renderTemplate(template, rendered)).sort(),
   );
-});
-
-test('both native consumers name a committed request exactly as the canonical owner does', () => {
-  const [canonicalRequest] = canonicalIdentityTemplate('resolveActivityRequestEventIdentityV1');
-  const rendered = renderTemplate(canonicalRequest, { requestId: 'req-1' });
-  // Swift interpolates with `\(x)` and Kotlin with `$x`; normalize both to the
-  // canonical `${x}` so the identity a device renders is compared, not spelling.
-  const interpolations = [
-    ['kotlin', kotlinSource, /"((?:[^"\\]|\\.)*\$\{?requestId\}?(?:[^"\\]|\\.)*)"/g, (text) => text],
-    ['swift', swiftSource, /"((?:[^"]*)\\\(requestId\)(?:[^"]*))"/g, (text) => text.replace(/\\\((\w+)\)/g, '${$1}')],
-  ];
-  for (const [name, source, pattern, normalize] of interpolations) {
-    const templates = [...source.matchAll(pattern)].map((match) => normalize(match[1]));
-    assert.equal(templates.length, 1, `${name} has no single committed-request identity branch`);
-    assert.equal(renderTemplate(templates[0], { requestId: 'req-1' }), rendered,
-      `${name} committed-request identity diverges from the canonical Protocol owner`);
-  }
-  // The identity exists only where the Protocol union carries it.
-  assert.match(protocolSource, /type: z\.literal\('permission_request'\), requestId:/);
-  assert.match(protocolSource, /type: z\.literal\('user_action_request'\), requestId:/);
-});
-
-test('Android terminal turn alerts carry the canonical Protocol turn identity', () => {
-  const [canonicalTurn] = canonicalIdentityTemplate('resolveActivityTurnEventIdentityV1');
-  const identityBlock = kotlinEventIdentityBlock();
-
-  // The validated turn id must survive parsing. Discarding it collapses every
-  // terminal turn of one Session onto a single replacement identity, so a later
-  // failure silently replaces the earlier one the user has not seen.
-  assert.match(kotlinSource, /val turnId: String\?/,
-    'Android discards the validated terminal turn id');
-  assert.match(kotlinSource, /turnId = event\.requiredString\("turnId"\) \?: return null/,
-    'Android does not bind the parsed alert to its validated turn id');
-
-  const turnTemplates = [...identityBlock.matchAll(/"([^"]*\$\{?turnId\}?[^"]*)"/g)].map((match) => match[1]);
-  assert.equal(turnTemplates.length, 1, 'Android has no single terminal-turn identity branch');
-  for (const turnId of ['turn-a', 'turn-b']) {
-    assert.equal(
-      renderTemplate(turnTemplates[0], { turnId }),
-      renderTemplate(canonicalTurn, { turnId }),
-      'Android terminal identity diverges from the canonical Protocol owner',
-    );
-  }
-
-  // Both supported payload versions identify a terminal turn: the V2-only
-  // sequence gate must not send a released V1 failure back to category grouping.
-  assert.ok(identityBlock.indexOf('turnId') < identityBlock.indexOf('version != 2'),
-    'a released V1 terminal turn loses its exact identity');
-
-  // Two terminal turns of the same Home and Session therefore stay distinct
-  // notifications instead of replacing one another.
-  const tag = kotlinReplacementTagTemplate();
-  const fields = { serverId: 'home-1', sessionId: 'session-1', eventType: 'failed' };
-  const tagFor = (turnId) => renderTemplate(tag, {
-    ...fields, eventIdentity: renderTemplate(turnTemplates[0], { turnId }),
-  });
-  assert.equal(tagFor('turn-a'), 'activity_alert:home-1:session-1:turn:turn-a');
-  assert.notEqual(tagFor('turn-a'), tagFor('turn-b'));
-
-  // A terminal alert without an exact non-blank turn reference is still not
-  // admitted at all, so no alert is presented with a fabricated identity.
-  assert.match(kotlinSource, /hasExactly\("type", "turnId"\)/,
-    'Android admits a terminal event without its exact turn reference');
-  assert.match(kotlinSource, /private fun JSONObject\.requiredString[\s\S]*?trim\(\)[\s\S]*?ifEmpty \{ null \}/,
-    'Android admits a blank turn reference');
-
-  // The ambiguous released V1 sequence keeps its category grouping; only the
-  // terminal-turn identity is version-independent.
-  assert.match(identityBlock, /version != 2 \|\| messageSeq == null -> null/,
-    'an ambiguous released V1 sequence gained an exact native identity');
 });
 
 test('iOS keeps remote body-envelope admission separate from local top-level admission', () => {

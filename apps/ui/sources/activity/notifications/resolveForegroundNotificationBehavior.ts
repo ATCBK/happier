@@ -1,6 +1,7 @@
 import { ACTIVITY_REMOTE_ALERT_POLICY_EVENT_V1, ActivityRemoteAlertEventV2Schema, resolveActivityEventIdentityV2 } from '@happier-dev/protocol/push/activityRemoteAlert';
 import { PUSH_NOTIFICATION_CATEGORY_IDS } from '@happier-dev/protocol/push/pushNotificationActions';
 import { resolveActivityRequestEventIdentityV1, resolveActivityTranscriptLocalIdEventIdentityV1 } from '@happier-dev/protocol/activity/eventIdentity';
+import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 
 import { localSettingsParse, type LocalSettings } from '@/sync/domains/settings/localSettings';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
@@ -68,10 +69,15 @@ function resolveArrival(content: Readonly<{ data?: unknown; categoryIdentifier?:
             : event === 'user_action_request' ? 'user_action_required' : 'ready';
     const committedLocalId = personalEvent === 'ready' ? readTrimmedString(record, 'activityEventLocalId') ?? undefined : undefined;
     const requestId = readTrimmedString(record, 'requestId');
-    const eventIdentity = parsedEvent.success ? resolveActivityEventIdentityV2(parsedEvent.data)
-        : requestId && (personalEvent === 'permission_required' || personalEvent === 'user_action_required')
-            ? resolveActivityRequestEventIdentityV1(requestId)
-            : committedLocalId ? resolveActivityTranscriptLocalIdEventIdentityV1(committedLocalId) : undefined;
+    let eventIdentity: string | undefined;
+    if (parsedEvent.success) {
+        eventIdentity = resolveActivityEventIdentityV2(parsedEvent.data);
+    } else if (requestId && (personalEvent === 'permission_required' || personalEvent === 'user_action_required')) {
+        const requestTurnId = TurnIdSchema.safeParse(record.turnId);
+        eventIdentity = resolveActivityRequestEventIdentityV1(requestId, requestTurnId.success ? requestTurnId.data : undefined);
+    } else {
+        eventIdentity = committedLocalId ? resolveActivityTranscriptLocalIdEventIdentityV1(committedLocalId) : undefined;
+    }
     const identity = { personalEvent, eventIdentity, committedLocalId };
     const localServerId = readTrimmedString(record, 'serverId');
     if (localServerId) return { serverId: localServerId, sessionId, event, channel: 'local_notification', ...identity };

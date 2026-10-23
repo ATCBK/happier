@@ -11,6 +11,10 @@ import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/server
 import { readExactHomeAccountSettings } from '@/activity/delivery/useExactHomeAccountSettings';
 import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
 import { reconcileGuardStopWarningNotifications } from '../guardStopWarningLifecycle';
+import { parseNotificationTap } from '../notificationRouting';
+import { PUSH_NOTIFICATION_NATIVE_CALL_TIMEOUT_MS } from '../permission/pushNotificationAccess';
+import { withTimeout } from '@/utils/timing/time';
+import { executeNotificationPermissionAction, isNotificationPermissionAction } from '../runtime/notificationPermissionActions';
 
 declare const require: (id: string) => unknown;
 
@@ -37,6 +41,8 @@ type NotificationsTaskRegistrationApi = Readonly<{
 
 type TaskManagerRegistrationApi = Readonly<{
     isTaskRegisteredAsync: (taskName: string) => Promise<boolean>;
+    isTaskDefined: (taskName: string) => boolean;
+    isAvailableAsync: () => Promise<boolean>;
 }>;
 
 type TaskManagerDefinitionApi = Readonly<{
@@ -78,6 +84,7 @@ export type SessionChangedBackgroundWakeResult =
 export type SessionChangedBackgroundWakeTaskRegistrationResult =
     | Readonly<{ status: 'registered' }>
     | Readonly<{ status: 'already_registered' }>
+    | Readonly<{ status: 'unavailable' }>
     | Readonly<{ status: 'already_unregistered'; reason: 'platform_unsupported' }>;
 
 function getNotificationsApi(): NotificationsTaskRegistrationApi & NotificationsDefinitionApi {
@@ -185,7 +192,7 @@ export async function applySessionChangedBackgroundWakePayload(params: Readonly<
     };
 }
 
-export async function syncSessionChangedBackgroundWakeTaskRegistration(params: Readonly<{
+async function registerSessionChangedBackgroundWakeTask(params: Readonly<{
     platformOS?: string;
     notifications?: NotificationsTaskRegistrationApi;
     taskManager?: TaskManagerRegistrationApi;
@@ -197,11 +204,35 @@ export async function syncSessionChangedBackgroundWakeTaskRegistration(params: R
 
     const notifications = params.notifications ?? getNotificationsApi();
     const taskManager = params.taskManager ?? getTaskManagerRegistrationApi();
+    if (!taskManager.isTaskDefined(SESSION_CHANGED_BACKGROUND_WAKE_TASK_NAME)
+        || !await taskManager.isAvailableAsync()) return { status: 'unavailable' };
     const registered = await taskManager.isTaskRegisteredAsync(SESSION_CHANGED_BACKGROUND_WAKE_TASK_NAME);
 
     if (registered) return { status: 'already_registered' };
     await notifications.registerTaskAsync(SESSION_CHANGED_BACKGROUND_WAKE_TASK_NAME);
     return { status: 'registered' };
+}
+
+let runtimeRegistration: Promise<SessionChangedBackgroundWakeTaskRegistrationResult> | undefined;
+
+/** App bootstrap and mounted reconciliation share the same native registration. */
+export function syncSessionChangedBackgroundWakeTaskRegistration(
+    params: Parameters<typeof registerSessionChangedBackgroundWakeTask>[0] = {},
+): Promise<SessionChangedBackgroundWakeTaskRegistrationResult> {
+    const register = async (): Promise<SessionChangedBackgroundWakeTaskRegistrationResult> => {
+        try {
+            const result = await withTimeout(() => registerSessionChangedBackgroundWakeTask(params),
+                PUSH_NOTIFICATION_NATIVE_CALL_TIMEOUT_MS, 'notification task registration');
+            if (result.status === 'unavailable') console.warn('[notifications] Background notification registration unavailable');
+            return result;
+        } catch {
+            console.warn('[notifications] Background notification registration unavailable');
+            return { status: 'unavailable' };
+        }
+    };
+    if (params.notifications || params.taskManager || params.platformOS) return register();
+    runtimeRegistration ??= register();
+    return runtimeRegistration;
 }
 
 export function defineSessionChangedBackgroundWakeTask(params: Readonly<{
@@ -224,6 +255,15 @@ export function defineSessionChangedBackgroundWakeTask(params: Readonly<{
         SESSION_CHANGED_BACKGROUND_WAKE_TASK_NAME,
         async ({ data, error }) => {
             if (error) return notifications.BackgroundNotificationTaskResult.Failed;
+            if (platformOS === 'android') {
+                const parsed = parseNotificationTap({ response: data,
+                    defaultActionIdentifier: 'expo.modules.notifications.actions.DEFAULT' });
+                if (parsed && isNotificationPermissionAction(parsed)) {
+                    const outcome = await executeNotificationPermissionAction(parsed);
+                    return outcome.status === 'confirmed' ? notifications.BackgroundNotificationTaskResult.NewData
+                        : notifications.BackgroundNotificationTaskResult.Failed;
+                }
+            }
             const result = await applySessionChangedBackgroundWakePayload({ payload: data });
             return result.action === 'reconciled' || result.action === 'dismissed'
                 ? notifications.BackgroundNotificationTaskResult.NewData

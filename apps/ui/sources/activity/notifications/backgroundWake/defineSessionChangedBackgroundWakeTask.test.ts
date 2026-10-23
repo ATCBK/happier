@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PUSH_NOTIFICATION_ACTION_IDS } from '@happier-dev/protocol/push/pushNotificationActions';
+import { PUSH_NOTIFICATION_NATIVE_CALL_TIMEOUT_MS } from '../permission/pushNotificationAccess';
 
 import {
     SESSION_CHANGED_BACKGROUND_WAKE_TASK_NAME,
@@ -101,23 +103,66 @@ describe('session_changed background wake consumer', () => {
             .toBe(BackgroundNotificationTaskResult.NoData);
     });
 
+    it('reports an unbound Android permission button for review without reconciling a wake', async () => {
+        const taskManager = createTaskManager();
+        defineSessionChangedBackgroundWakeTask({
+            taskManager, notifications: { BackgroundNotificationTaskResult }, platformOS: 'android',
+        });
+        const executor = taskManager.tasks.get(SESSION_CHANGED_BACKGROUND_WAKE_TASK_NAME);
+        expect(await executor?.({ data: {
+            actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
+            notification: { request: { identifier: 'legacy-request', content: { data: {
+                sessionId: 'session-1', requestId: 'request-1', serverUrl: 'https://saved.example.test',
+            } } } },
+        } })).toBe(BackgroundNotificationTaskResult.Failed);
+    });
+
+    it('keeps background actions unavailable when their native consumer is not defined', async () => {
+        const registerTaskAsync = vi.fn(async () => undefined);
+        const taskManager = { isTaskRegisteredAsync: async () => false,
+            isTaskDefined: () => false, isAvailableAsync: async () => true };
+        expect(await syncSessionChangedBackgroundWakeTaskRegistration({ platformOS: 'android', taskManager,
+            notifications: { registerTaskAsync, unregisterTaskAsync: async () => {} },
+        })).toEqual({ status: 'unavailable' });
+        expect(registerTaskAsync).not.toHaveBeenCalled();
+    });
+
+    it('settles stalled native registration within the notification native-call budget', async () => {
+        vi.useFakeTimers();
+        try {
+            let result: unknown;
+            void syncSessionChangedBackgroundWakeTaskRegistration({ platformOS: 'android',
+                taskManager: { isTaskRegisteredAsync: async () => false,
+                    isTaskDefined: () => true, isAvailableAsync: async () => true },
+                notifications: { registerTaskAsync: () => new Promise(() => {}), unregisterTaskAsync: async () => {} },
+            }).then(value => { result = value; });
+            await vi.advanceTimersByTimeAsync(PUSH_NOTIFICATION_NATIVE_CALL_TIMEOUT_MS);
+            expect(result).toEqual({ status: 'unavailable' });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('registers once on each supported push platform', async () => {
         const registerTaskAsync = vi.fn(async () => undefined);
         const unregisterTaskAsync = vi.fn(async () => undefined);
         const notifications = { registerTaskAsync, unregisterTaskAsync };
 
         expect(await syncSessionChangedBackgroundWakeTaskRegistration({
-            platformOS: 'ios', notifications, taskManager: { isTaskRegisteredAsync: async () => false },
+            platformOS: 'ios', notifications, taskManager: { isTaskRegisteredAsync: async () => false,
+                    isTaskDefined: () => true, isAvailableAsync: async () => true },
         })).toEqual({ status: 'registered' });
         expect(registerTaskAsync).toHaveBeenCalledWith(SESSION_CHANGED_BACKGROUND_WAKE_TASK_NAME);
 
         expect(await syncSessionChangedBackgroundWakeTaskRegistration({
-            platformOS: 'ios', notifications, taskManager: { isTaskRegisteredAsync: async () => true },
+            platformOS: 'ios', notifications, taskManager: { isTaskRegisteredAsync: async () => true,
+                    isTaskDefined: () => true, isAvailableAsync: async () => true },
         })).toEqual({ status: 'already_registered' });
         expect(registerTaskAsync).toHaveBeenCalledTimes(1);
 
         expect(await syncSessionChangedBackgroundWakeTaskRegistration({
-            platformOS: 'android', notifications, taskManager: { isTaskRegisteredAsync: async () => false },
+            platformOS: 'android', notifications, taskManager: { isTaskRegisteredAsync: async () => false,
+                    isTaskDefined: () => true, isAvailableAsync: async () => true },
         })).toEqual({ status: 'registered' });
         expect(registerTaskAsync).toHaveBeenCalledTimes(2);
         expect(unregisterTaskAsync).not.toHaveBeenCalled();
@@ -133,7 +178,7 @@ describe('session_changed background wake consumer', () => {
         expect(await syncSessionChangedBackgroundWakeTaskRegistration({
             platformOS: 'web',
             notifications: { registerTaskAsync, unregisterTaskAsync },
-            taskManager: { isTaskRegisteredAsync },
+            taskManager: { isTaskRegisteredAsync, isTaskDefined: () => true, isAvailableAsync: async () => true },
         })).toEqual({ status: 'already_unregistered', reason: 'platform_unsupported' });
         expect(isTaskRegisteredAsync).not.toHaveBeenCalled();
         expect(registerTaskAsync).not.toHaveBeenCalled();

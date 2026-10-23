@@ -6501,6 +6501,7 @@ const enSettingsNotifications = {
 };
 
 const enNotifications = {
+  permissionActionNeedsReview: "The notification permission response could not be confirmed. Open the session and check its current request before responding again.",
   actions: {
     allow: 'Allow',
     deny: 'Deny',

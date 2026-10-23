@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PUSH_NOTIFICATION_CATEGORY_IDS } from '@happier-dev/protocol';
+import { buildAgentRequestNotificationContent } from '@happier-dev/protocol/activity/agentRequestNotificationContent';
+import { resolveActivityRemoteAlertEventForPersonalEventV2 } from '@happier-dev/protocol/push/activityRemoteAlert';
 
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
@@ -199,6 +201,55 @@ describe('resolveForegroundNotificationBehavior', () => {
         await expect(resolveForegroundNotificationBehavior({ content, localSettings: null, now: NOON, isSessionVisible: nothingVisible })).resolves.toBe('full');
         expect(consumeOtherLegActivityAlertPresentation({ address, event: personalEvent, identity: localIdentity, ...correlation, source: 'local_notification' })).toBe(true);
         expect(consumeOtherLegActivityAlertPresentation({ address, accountId: home.scope.accountId, event: personalEvent, identity: `${identity}-next`, source: 'local_notification' })).toBe(false);
+
+        if (event === 'permission_request') {
+            resetActivityAlertPresentationNotesForTests();
+            const requestContent = (turnId: string, local: boolean) => ({
+                data: {
+                    ...buildAgentRequestNotificationContent({
+                        kind: 'permission', sessionId: address.sessionId,
+                        requestId: 'request-1', turnId, toolName: 'Bash',
+                    }).data,
+                    serverUrl: home.serverUrl,
+                    ...(local ? { serverId: home.scope.serverId } : {}),
+                },
+                categoryIdentifier: PUSH_NOTIFICATION_CATEGORY_IDS.permissionRequestV1,
+            });
+            const present = (request: ReturnType<typeof requestContent>) => resolveForegroundNotificationBehavior({
+                content: request, localSettings: null, now: NOON, isSessionVisible: nothingVisible,
+            });
+            // A's local counterpart never arrives. Its presentation note must not
+            // suppress a new occurrence that reuses the request id on another turn.
+            await expect(present(requestContent('turn-a', false))).resolves.toBe('full');
+            await expect(present(requestContent('turn-b', true))).resolves.toBe('full');
+            // The second leg for B still suppresses the same committed occurrence.
+            await expect(present(requestContent('turn-b', false))).resolves.toBe('off');
+        }
+    });
+
+    it('shares the captured request turn between Home alerts and local presentation without suppressing a reused id', async () => {
+        const home = await enrollHome('home-request-turn', { attentionDeliveryPolicyV1: { v: 1, foregroundBehavior: 'full' } });
+        const requestId = 'reused-request';
+        const sessionId = 'session-1';
+        const remote = (turnId: string) => ({ data: {
+            type: 'activity_alert', v: 2, serverId: home.portableId, sessionId, accountId: home.scope.accountId,
+            event: resolveActivityRemoteAlertEventForPersonalEventV2('permission_required', undefined, turnId, requestId),
+            previewBehavior: 'title_only',
+        } });
+        const local = (turnId: string) => ({
+            data: { ...buildAgentRequestNotificationContent({ kind: 'permission', sessionId, requestId, turnId, toolName: 'Bash' }).data,
+                serverId: home.scope.serverId, serverUrl: home.serverUrl },
+            categoryIdentifier: PUSH_NOTIFICATION_CATEGORY_IDS.permissionRequestV1,
+        });
+        const present = (content: Parameters<typeof resolveForegroundNotificationBehavior>[0]['content']) =>
+            resolveForegroundNotificationBehavior({ content, localSettings: null, now: NOON, isSessionVisible: nothingVisible });
+        // A has no local counterpart; its note cannot suppress B's new turn.
+        await expect(present(remote('turn-a'))).resolves.toBe('full');
+        await expect(present(local('turn-b'))).resolves.toBe('full');
+        await expect(present(remote('turn-b'))).resolves.toBe('off');
+        resetActivityAlertPresentationNotesForTests();
+        await expect(present(local('turn-a'))).resolves.toBe('full');
+        await expect(present(remote('turn-a'))).resolves.toBe('off');
     });
 
     it('consumes both existing ready identity representations together without crossing a Home or Session', async () => {
@@ -216,7 +267,7 @@ describe('resolveForegroundNotificationBehavior', () => {
     it('presents only one simultaneous local and rich ready arrival after asynchronous policy resolution', async () => {
         const home = await enrollHome('simultaneous-ready', { attentionDeliveryPolicyV1: { v: 1, foregroundBehavior: 'full' } });
         expect(home.profileId).not.toBe(home.scope.serverId);
-        await expect(resolveServerCredentialAccountScope(home.profileId)).resolves.toEqual({ kind: 'bound', scope: home.scope });
+        await expect(resolveServerCredentialAccountScope(home.profileId)).resolves.toMatchObject({ kind: 'bound', scope: home.scope });
         const data = { sessionId: 'session-1', serverUrl: home.serverUrl, activityEventLocalId: 'local-1' };
         const arrivals = await Promise.all([
             resolveForegroundNotificationBehavior({ content: { data: { ...data, serverId: home.scope.serverId, activityEvent: { type: 'ready', sequenceDomain: 'session_transcript', messageSeq: 7 } } }, localSettings: null, now: NOON, isSessionVisible: nothingVisible }),

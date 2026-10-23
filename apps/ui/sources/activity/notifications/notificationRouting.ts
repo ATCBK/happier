@@ -56,12 +56,18 @@ function readNotificationData(params: Readonly<{ response: unknown }>): unknown 
     const request = notification.request;
     if (!isRecord(request)) return null;
     const content = request.content;
-    return isRecord(content) ? content.data : null;
+    if (!isRecord(content)) return null;
+    if (typeof content.dataString === 'string') {
+        try { return JSON.parse(content.dataString); } catch { return null; }
+    }
+    return content.data;
 }
 
 export type ParsedNotificationTap = Readonly<{
     command: ActivityInteractionCommand;
     dedupeKey: string | null;
+    actionIdentifier?: string;
+    accountId?: string | null;
 }>;
 
 export function parseNotificationTap(params: Readonly<{
@@ -132,5 +138,6 @@ export function parseNotificationTap(params: Readonly<{
         requireKnownIdentity: false,
     });
 
-    return { command, dedupeKey };
+    return { command, dedupeKey, actionIdentifier,
+        accountId: isRecord(data) && typeof data.accountId === 'string' ? data.accountId.trim() : null };
 }

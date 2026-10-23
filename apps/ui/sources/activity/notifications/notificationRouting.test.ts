@@ -38,6 +38,23 @@ describe('activity remote alert taps', () => {
     beforeEach(clearProfiles);
     afterEach(clearProfiles);
 
+    it('preserves request turn custody in an Android native action payload', () => {
+        const parsed = parseNotificationTap({
+            response: {
+                actionIdentifier: PUSH_NOTIFICATION_ACTION_IDS.permissionAllowV1,
+                notification: { request: { identifier: 'native-permission', content: {
+                    dataString: JSON.stringify({ sessionId: 'session-1', requestId: 'request-1',
+                        turnId: 'turn-a', serverUrl: 'https://saved.example.test' }),
+                } } },
+            },
+            defaultActionIdentifier: DEFAULT_ACTION_IDENTIFIER,
+        });
+        expect(parsed?.command).toMatchObject({
+            kind: 'executeAction', actionId: 'session.permission.respond',
+            payload: { sessionId: 'session-1', requestId: 'request-1', turnId: 'turn-a', decision: 'allow' },
+        });
+    });
+
     it('admits exact Guard warning Actions on their saved Home, including standalone terminals', async () => {
         const home = await serverProfiles.upsertServerProfile({ serverUrl: 'https://guard.example.test', name: 'Guard' });
         const other = await serverProfiles.upsertServerProfile({ serverUrl: 'https://other.example.test', name: 'Other' });

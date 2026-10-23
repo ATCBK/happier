@@ -6107,6 +6107,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
     },},
 
     notifications: {
+        permissionActionNeedsReview: "Non è stato possibile confermare la risposta alla richiesta di autorizzazione ricevuta tramite notifica. Apri la sessione e controlla la richiesta attuale prima di rispondere di nuovo.",
       actions: {
         allow: 'Consenti',
         deny: 'Nega',

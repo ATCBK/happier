@@ -445,7 +445,7 @@ void (async () => {
         const Notifications = await loadExpoNotifications();
         configureForegroundNotificationHandler(Notifications);
         configureAndroidNotificationChannels(Notifications);
-        if (Platform.OS !== 'web') configureNotificationCategories(Notifications);
+        if (Platform.OS !== 'web') await configureNotificationCategories(Notifications);
     } catch {
         // Native notification modules are optional in local dev clients; startup must still render.
     }

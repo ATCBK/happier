@@ -5418,6 +5418,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
     },
 
     notifications: {
+        permissionActionNeedsReview: "No s’ha pogut confirmar la resposta de permís de la notificació. Obre la sessió i comprova la sol·licitud actual abans de tornar a respondre.",
         actions: {
             other: 'Altres', alwaysAllowTool: ({ tool }: { tool: string }) => `Permet sempre ${tool}`,
             allow: 'Permetre',

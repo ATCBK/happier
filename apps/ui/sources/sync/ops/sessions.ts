@@ -82,11 +82,11 @@ import type { CurrentProjectedAgentCapabilities } from '@/agents/backendCatalog/
 import { readAgentScopedPluginSettingsSnapshot } from '@/agents/registry/agentScopedPluginSettings';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
-import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { getPendingQueueWakeResumeOptions } from '@/sync/domains/pending/pendingQueueWake';
 import { supportsSessionForkRequestId } from '@/utils/system/versionUtils';
 import { machineResolveSpawnSessionByNonceUntilSettled } from './machines';
-import { captureLazyActionAccountContext } from './actions/actionAccountContext';
+import { captureLazyActionAccountContext, withActionAccountRequestSignal } from './actions/actionAccountContext';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
 import { randomUUID } from '@/platform/randomUUID';
 import { createManagedMachineActionClient } from '@/sync/api/machines/managedMachineActions';
@@ -972,7 +972,25 @@ export async function rollbackSessionCheckpointCode(options: Readonly<{
     }
 }
 
+function applySessionThinkingDecisionRecovery(
+    sessionId: string,
+    scope: ServerAccountScope | null,
+    serverId: string,
+): void {
+    const activeScope = getActiveServerAccountScope();
+    if (scope === null ? activeScope !== null : !areServerAccountScopesEqual(scope, activeScope)) return;
+    if (!areServerProfileIdentifiersEquivalent(serverId, getActiveServerSnapshot().serverId)) return;
+    const session = storage.getState().sessions[sessionId];
+    storage.getState().clearSessionOptimisticThinking(sessionId);
+    storage.getState().clearSessionThinkingGrace(sessionId);
+    if (!session || session.thinking !== true) return;
+    storage.getState().applySessions([{ ...session, thinking: false, updatedAt: nowServerMs() }]);
+}
+
 export async function sessionAbort(sessionId: string, options?: Readonly<{ serverId?: string; signal?: AbortSignal }>): Promise<void> {
+    const recoveryScope = getActiveServerAccountScope();
+    const serverId = options?.serverId ?? resolvePreferredServerIdForSessionId(sessionId)
+        ?? getActiveServerSnapshot().serverId;
     try {
         await sessionRpcWithPreferredSessionScope<void, { reason: string }>({
             sessionId,
@@ -1009,23 +1027,11 @@ export async function sessionAbort(sessionId: string, options?: Readonly<{ serve
         }
     }
 
-    // Best-effort local UX recovery: aborts should immediately return the session to non-thinking state
-    // even if lifecycle events arrive out of order or providers publish intermittent thinking=false.
-    if (options?.serverId !== undefined && !areServerProfileIdentifiersEquivalent(options.serverId, getActiveServerSnapshot().serverId)) return;
-    const session = storage.getState().sessions[sessionId];
-    storage.getState().clearSessionOptimisticThinking(sessionId);
-    storage.getState().clearSessionThinkingGrace(sessionId);
-    if (!session || session.thinking !== true) {
-        return;
-    }
+    // The caller's Account lifetime can retire after an authoritative reply.
+    if (options?.signal?.aborted) return;
 
-    storage.getState().applySessions([
-        {
-            ...session,
-            thinking: false,
-            updatedAt: nowServerMs(),
-        },
-    ]);
+    // Best-effort recovery belongs only to the Account and Home captured before issuance.
+    applySessionThinkingDecisionRecovery(sessionId, recoveryScope, serverId);
 }
 
 /**
@@ -1036,48 +1042,105 @@ export async function sessionRespondToPermission(
     params: Omit<SessionPermissionRespondRpcParamsV1, 'answers'>,
     options?: Readonly<{ serverId?: string; signal?: AbortSignal }>,
 ): Promise<void> {
-    await sendSessionPermissionResponse(sessionId, params, options);
-    // Stop is a composed Session action; callers deliver one decision rather
-    // than separately reimplementing its abort/recovery sequence.
-    if (params.decision === 'abort') await sessionAbort(sessionId, options);
+    if (params.decision !== 'abort') {
+        await sendSessionPermissionResponse(sessionId, params, options);
+        return;
+    }
+    // Stop is one composed Session action. Retain its target Account across
+    // permission admission and abort instead of borrowing the next login.
+    const serverId = options?.serverId ?? resolvePreferredServerIdForSessionId(sessionId)
+        ?? getActiveServerSnapshot().serverId;
+    const account = await captureLazyActionAccountContext(serverId, options?.signal);
+    try {
+        await withActionAccountRequestSignal(account, options?.signal, async (signal) => {
+            account.assertCurrent();
+            await sendSessionPermissionResponse(sessionId, params, { serverId, signal });
+            account.assertCurrent();
+            await sessionAbort(sessionId, { serverId, signal });
+        });
+    } finally {
+        account.dispose();
+    }
+}
+
+type ScopedSessionPermissionResponseOptions = Readonly<{
+    scope: ServerAccountScope;
+    networkMode?: 'background-task';
+    signal?: AbortSignal;
+    onIssued?: () => void;
+}>;
+
+/** Respond to an exact notification request without rebinding its turn to mounted UI state. */
+export async function sessionRespondToPermissionWithServerAccountScope(
+    sessionId: string,
+    params: Omit<SessionPermissionRespondRpcParamsV1, 'answers' | 'decision' | 'turnId'> & Readonly<{
+        turnId: string;
+        decision?: Exclude<SessionPermissionRespondRpcParamsV1['decision'], 'abort'>;
+    }>,
+    options: ScopedSessionPermissionResponseOptions,
+): Promise<void> {
+    const request = !params.approved && params.reason === undefined
+        ? { ...params, reason: 'Denied from notification' }
+        : params;
+    await sendSessionPermissionResponse(sessionId, request, options);
 }
 
 function assertSessionInteractionResponseApplied(result: unknown): void {
-    if (result && typeof result === 'object' && 'ok' in result && result.ok === false
-        && 'errorCode' in result && typeof result.errorCode === 'string' && result.errorCode.length > 0) {
-        throw createRpcCallError({ error: result.errorCode, errorCode: result.errorCode });
+    // The receiver's established success result is void. A structured success is
+    // also accepted; transport delivery alone cannot admit an invalid result.
+    if (result === undefined) return;
+    if (result && typeof result === 'object' && 'ok' in result) {
+        if (result.ok === true) return;
+        if (result.ok === false && 'errorCode' in result
+            && typeof result.errorCode === 'string' && result.errorCode.length > 0) {
+            throw createRpcCallError({ error: result.errorCode, errorCode: result.errorCode });
+        }
     }
+    throw createRpcCallError({
+        error: 'Invalid Session interaction response',
+        errorCode: 'session_interaction_response_invalid',
+    });
 }
 
 async function sendSessionPermissionResponse(
     sessionId: string,
     params: Omit<SessionPermissionRespondRpcParamsV1, 'answers'>,
-    options?: Readonly<{ serverId?: string; signal?: AbortSignal }>,
+    options?: Readonly<{ serverId?: string; signal?: AbortSignal }> | ScopedSessionPermissionResponseOptions,
 ): Promise<void> {
+    const exactScope = options && 'scope' in options ? options : null;
+    const serverId = options && 'serverId' in options ? options.serverId : undefined;
+    const recoveryScope = exactScope?.scope ?? getActiveServerAccountScope();
+    const recoveryServerId = exactScope?.scope.serverId ?? serverId
+        ?? resolvePreferredServerIdForSessionId(sessionId) ?? getActiveServerSnapshot().serverId;
     const request: SessionPermissionRespondRpcParamsV1 = {
         ...params,
         answeringClientCategory: readAnsweringClientCategory(),
-        turnId: resolveSessionPermissionTurnId(sessionId, params.id, params.turnId, options?.serverId),
+        turnId: exactScope ? params.turnId : resolveSessionPermissionTurnId(sessionId, params.id, params.turnId, serverId),
     };
-    const result = await sessionRpcWithPreferredSessionScope<unknown, SessionPermissionRespondRpcParamsV1>({
+    const call = {
         sessionId,
-        ...(options?.serverId !== undefined ? { serverId: options.serverId } : {}),
         method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
         payload: request,
         ...(options?.signal ? { signal: options.signal } : {}),
         // The permission owner settles the admitted answer. Connection setup
         // stays bounded; the generic RPC cutoff cannot declare its effect failed.
         timeoutMs: null,
-    });
+    };
+    const result = exactScope
+        ? await sessionRpcWithServerAccountScope<unknown, SessionPermissionRespondRpcParamsV1>({
+            ...call, scope: exactScope.scope, networkMode: exactScope.networkMode, onIssued: exactScope.onIssued,
+        })
+        : await sessionRpcWithPreferredSessionScope<unknown, SessionPermissionRespondRpcParamsV1>({
+            ...call, ...(serverId !== undefined ? { serverId } : {}),
+        });
     assertSessionInteractionResponseApplied(result);
     if (params.approved) return;
     // Keep deny's existing best-effort thinking recovery on the applied Home.
-    if (options?.serverId !== undefined && !areServerProfileIdentifiersEquivalent(options.serverId, getActiveServerSnapshot().serverId)) return;
-    const session = storage.getState().sessions[sessionId];
-    storage.getState().clearSessionOptimisticThinking(sessionId);
-    storage.getState().clearSessionThinkingGrace(sessionId);
-    if (!session || session.thinking !== true) return;
-    storage.getState().applySessions([{ ...session, thinking: false, updatedAt: nowServerMs() }]);
+    // Exact external decisions must also prove the mounted Account. A known
+    // newer same-ID turn cannot inherit recovery from the admitted response.
+    const currentRequest = storage.getState().sessions[sessionId]?.agentState?.requests?.[params.id];
+    if (currentRequest && currentRequest.turnId !== request.turnId) return;
+    applySessionThinkingDecisionRecovery(sessionId, recoveryScope, recoveryServerId);
 }
 
 /** The executing client's category, as stamped on an answer; the question card compares it to say where one was given. */

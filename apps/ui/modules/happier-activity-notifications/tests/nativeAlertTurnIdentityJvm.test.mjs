@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join as joinPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCipheriv } from 'node:crypto';
-import { parseSessionChangedWakeV1, resolveActivityRemoteAlertEventIdentity } from '@happier-dev/protocol';
+import { parseSessionChangedWakeV1, resolveActivityRemoteAlertEventIdentity, resolveActivityRemoteAlertEventForPersonalEventV2 } from '@happier-dev/protocol';
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const moduleRoot = dirname(testsDir);
@@ -39,6 +39,10 @@ function wireBody(version, event) {
 // turns plus the neighboring sequence/category references whose identities
 // this lane must not change.
 const scenarios = [
+  { id: 'v2_request_turnA', body: wireBody(2, resolveActivityRemoteAlertEventForPersonalEventV2('permission_required', undefined, 'turn-AAA', 'req:😀')) },
+  { id: 'v2_request_turnB', body: wireBody(2, resolveActivityRemoteAlertEventForPersonalEventV2('permission_required', undefined, 'turn-BBB', 'req:😀')) },
+  { id: 'v2_user_action_turnA', body: wireBody(2, resolveActivityRemoteAlertEventForPersonalEventV2('user_action_required', undefined, 'turn-AAA', 'req:😀')) },
+  { id: 'v2_request_legacy', body: wireBody(2, { type: 'permission_request', requestId: 'req:😀' }) },
   { id: 'v2_stalled_turnA', body: wireBody(2, { type: 'source_unavailable', stalledOccurrence: { turnId: 'turn-AAA', publisherFence: 123 } }) },
   { id: 'v2_stalled_turnA_restall', body: wireBody(2, { type: 'source_unavailable', stalledOccurrence: { turnId: 'turn-AAA', publisherFence: 124 } }) },
   { id: 'v2_failed_turnA', body: wireBody(2, { type: 'failed', turnId: 'turn-AAA' }) },
@@ -302,6 +306,10 @@ test('Android remote alert requests keep distinct terminal turns distinct exactl
   // Distinct terminal turns on the same Home/Session are distinct Android
   // notification requests: neither the failed nor the cancelled category
   // collapses them.
+  assert.notEqual(tag('v2_request_turnA'), tag('v2_request_turnB'));
+  assert.equal(identityOf('v2_request_turnA'), 'request-turn:6:req:😀:8:turn-AAA');
+  assert.equal(tag('v2_request_turnA'), tag('v2_user_action_turnA'));
+  assert.equal(identityOf('v2_request_legacy'), 'request:req:😀');
   assert.notEqual(tag('v2_failed_turnA'), tag('v2_failed_turnB'));
   assert.notEqual(tag('v2_failed_turnA'), tag('v2_cancelled_turnC'));
   assert.notEqual(tag('v2_failed_turnB'), tag('v2_cancelled_turnC'));
