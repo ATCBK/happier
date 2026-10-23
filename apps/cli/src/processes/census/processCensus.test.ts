@@ -47,6 +47,63 @@ function fixture() {
 }
 
 describe('process census', () => {
+    it('walks children of every Linux thread without enumerating peers and fails closed on unreadable discovery', async () => {
+        const { files, boundary } = fixture();
+        files.set('/proc/43/stat', stat(43, 430).replace(' S 1 ', ' S 44 '));
+        files.set('/proc/44/task/44/children', '');
+        files.set('/proc/44/task/440/children', '43');
+        files.set('/proc/43/task/43/children', '46');
+        files.set('/proc/46/stat', stat(46, 460).replace(' S 1 ', ' S 43 '));
+        files.set('/proc/46/status', 'Uid:\t1000\n');
+        files.set('/proc/46/task/46/children', '');
+        let denied = false;
+        const directories: string[] = [];
+        const reader = createProcessCensusReader({ platform: 'linux', selfPid: 42, linuxBoundary: {
+            ...boundary,
+            readdir: async path => {
+                directories.push(path);
+                if (path === '/proc/44/task') return ['44', '440'];
+                if (path === '/proc/43/task') return ['43'];
+                if (path === '/proc/46/task') return ['46'];
+                throw new Error('must not enumerate the host or reader subtree');
+            },
+            readFile: async path => {
+                if (denied && path.endsWith('/children')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+                return boundary.readFile(path);
+            },
+        } });
+        const demand = { freshness: 'fresh', scope: 'all', pids: [44], fields: [], includeDescendants: true, includeAncestors: true } as const;
+        const snapshot = await reader(demand);
+        expect(snapshot.status === 'ok' && snapshot.rows.map(row => row.pid).sort()).toEqual([42, 43, 44, 46]);
+        expect(directories).toEqual(['/proc/44/task', '/proc/43/task', '/proc/46/task']);
+        denied = true;
+        expect(await reader(demand)).toEqual({ status: 'unavailable', reason: 'read_failed' });
+        denied = false;
+        files.delete('/proc/44/task/440/children');
+        files.set('/proc/44/task/440/stat', stat(440, 4400));
+        // A missing procfs capability is not proof that a live thread has no children.
+        expect(await reader(demand)).toEqual({ status: 'unavailable', reason: 'read_failed' });
+    });
+
+    it.each(['darwin', 'win32'] as const)('retains native subtree discovery and scoped signal observations on %s', async platform => {
+        const calls: string[][] = [];
+        const reader = createProcessCensusReader({ platform, selfPid: 42, helperExecutablePath: '/helper',
+            execFile: async (_file, args) => {
+                calls.push([...args]);
+                return { stdout: JSON.stringify({ v: 1, capturedAtMs: 1000, logicalCpus: 1,
+                    rows: [[42, 1], [43, 1], [44, 43], [45, 1]].map(([pid, ppid]) => ({ pid, ppid,
+                        start: { startTimeMs: pid }, principal: { kind: platform === 'win32' ? 'sid' : 'uid', value: 'self' },
+                        name: 'fixture', memory: null, cpuTimeUs: null })) }) };
+            },
+        });
+        const tree = await reader({ freshness: 'fresh', scope: 'all', pids: [43], fields: [], includeDescendants: true });
+        expect(tree.status === 'ok' && tree.rows.map(row => row.pid)).toEqual([42, 43, 44]);
+        expect(calls[0]?.some(arg => arg.startsWith('--pids='))).toBe(false);
+        await reader({ freshness: 'fresh', scope: 'all', pids: [43], fields: [], includeAncestors: true });
+        expect(calls[1]).toContain('--pids=43,42');
+        expect(calls[1]).toContain('--include-ancestors=true');
+    });
+
     it.each(['darwin', 'win32'] as const)('preserves native field demand for %s without enriching metrics-only reads', async platform => {
         const calls: string[][] = [];
         const self = { pid: 42, ppid: 1, start: { startTimeMs: 900 }, principal: { kind: 'uid', value: '1000' },

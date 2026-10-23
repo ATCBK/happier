@@ -17,11 +17,15 @@ it('returns private custody rows on a 10,000-process host before unrelated HTTP 
     const scope = '123456789abc';
     const auxv = Buffer.alloc(32);
     auxv.writeBigUInt64LE(6n); auxv.writeBigUInt64LE(4096n, 8);
+    let executableReads = 0;
     // Genuine OS boundary: all census parsing, attribution and projection remain real.
     const ownership = createProcessOwnershipRuntime({ selfPid: 100, platform: 'linux', daemonScopeKey: scope,
         censusDependencies: { platform: 'linux', selfPid: 100, logicalCpus: 48, linuxBoundary: {
             readdir: async () => pids.map(String),
-            readlink: async path => path.endsWith('/exe') ? '/usr/bin/node' : '/private/work',
+            readlink: async path => {
+                if (path.endsWith('/exe')) { executableReads++; return '/usr/bin/node'; }
+                return '/private/work';
+            },
             readFile: async path => {
                 if (path.endsWith('/auxv')) return auxv;
                 const pid = Number(path.split('/')[2]);
@@ -71,6 +75,8 @@ it('returns private custody rows on a 10,000-process host before unrelated HTTP 
         expect(answer?.owners.flatMap(owner => owner.members).map(row => row.pid).sort()).toEqual([100, 101, 102]);
         expect(JSON.stringify(answer)).not.toContain('private-token');
         expect(answer?.notHappier).toBeUndefined();
+        // Linux app grouping consumes cgroup/name, never executable paths.
+        expect(executableReads).toBe(0);
         expect(services.inventoryRegistry.getSnapshot().generatedAt).toBe(0);
         const ref = answer!.owners.flatMap(owner => owner.members).find(row => row.pid === 102)!.ref;
         expect((await view.get({ machineId: 'm', ref }, { accountId: 'a', custodianAccountId: 'a' })).row?.pid).toBe(102);

@@ -4,7 +4,7 @@ import { createProcessCustodySamplingInvoker, resolveProcessCustodySupportExecut
 import { createLinuxCensusReader, DAEMON_OWNERSHIP_ENVIRONMENT_VARIABLE_KEYS, type LinuxCensusBoundary } from './linux';
 import { readLinuxProcFile } from './linuxProcfs';
 import { decodeHelperCensus } from './decodeHelperCensus';
-import { ancestorsOf, indexCensus } from '../tree/processTree';
+import { ancestorsOf, descendantsOf, indexCensus } from '../tree/processTree';
 
 export type ProcessCensusFreshness = 'shared' | 'fresh';
 export type ProcessCensusField = 'argv' | 'cwd' | 'executablePath' | 'ownershipEnvironment' | 'cgroup' | 'memory' | 'cpuTimeUs';
@@ -43,6 +43,9 @@ export type ProcessCensusInput = Readonly<{
     fields?: readonly ProcessCensusField[];
     /** Filtered reads include current target/reader ancestors for signal protection. */
     includeAncestors?: boolean;
+    /** Fresh subtree observation. Linux walks every thread's children; native
+     * platforms retain their complete inventory before selecting descendants. */
+    includeDescendants?: boolean;
     /** Linux: enrich argv/cwd/executable only for these PIDs and their canonical ancestor chains.
      * Keep the full identity/ownership table for native roots and group-peer evidence.
      */
@@ -78,11 +81,12 @@ export function createProcessCensusReader(dependencies: ProcessCensusDependencie
                 snapshot = await readLinux({
                     selfPid, pids: requested, capturedAtMs, logicalCpus: dependencies.logicalCpus ?? cpus().length,
                     fields: input.fields, commandRoots: input.commandRoots, includeAncestors: input.includeAncestors,
+                    includeDescendants: input.includeDescendants,
                 });
             } else if (platform === 'darwin' || platform === 'win32') {
                 const result = await invokeNative({ command: 'process-census', sampledAt: capturedAtMs, args: [
                     `--caller-pid=${selfPid}`, `--scope=${input.scope ?? 'own_principal'}`,
-                    ...(requested ? [`--pids=${[...new Set([...requested, selfPid])].join(',')}`] : []),
+                    ...(requested && !input.includeDescendants ? [`--pids=${[...new Set([...requested, selfPid])].join(',')}`] : []),
                     ...(input.includeAncestors ? ['--include-ancestors=true'] : []),
                     ...(input.fields?.length === 0 ? ['--identity-only=true'] : []),
                     ...(input.fields?.length ? [`--fields=${[...new Set(input.fields)].join(',')}`] : []),
@@ -98,6 +102,15 @@ export function createProcessCensusReader(dependencies: ProcessCensusDependencie
         const self = snapshot.rows.find(row => row.pid === selfPid);
         if (!self) return { status: 'unavailable', reason: 'self_absent' };
         const requestedSet = requested ? new Set([...requested, selfPid]) : null;
+        if (requestedSet && input.includeDescendants) {
+            // Linux already selected the observed subtree, including children
+            // reparented during observation. Do not discard those observations.
+            if (platform === 'linux') for (const row of snapshot.rows) requestedSet.add(row.pid);
+            else {
+                const index = indexCensus(snapshot.rows);
+                for (const row of descendantsOf(index, requested!)) requestedSet.add(row.pid);
+            }
+        }
         if (requestedSet && input.includeAncestors) {
             const index = indexCensus(snapshot.rows);
             for (const pid of [...requestedSet]) for (const ancestor of ancestorsOf(index, pid)) requestedSet.add(ancestor.pid);
@@ -116,7 +129,8 @@ export function createProcessCensusReader(dependencies: ProcessCensusDependencie
             input.pids ? [...new Set(input.pids)].sort((a, b) => a - b) : null,
             [...new Set(input.verifiedJobNames ?? [])].sort(),
             input.fields ? [...new Set(input.fields)].sort() : null,
-            input.commandRoots ? [...new Set(input.commandRoots)].sort((a, b) => a - b) : null, input.includeAncestors === true]);
+            input.commandRoots ? [...new Set(input.commandRoots)].sort((a, b) => a - b) : null, input.includeAncestors === true,
+            input.includeDescendants === true]);
         const current = inFlight.get(key);
         if (current) return current;
         const pending = capture(input).finally(() => { if (inFlight.get(key) === pending) inFlight.delete(key); });

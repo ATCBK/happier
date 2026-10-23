@@ -7,7 +7,7 @@ import type { MachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSa
 import type { LocalServiceInventoryRoutes } from '@/daemon/local/services/inventory/routes';
 import type { NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
 import type { ProcessRoleCatalog } from '@/processes/classification/processRoleCatalog';
-import type { ProcessStartIdentity } from '@/processes/census/processCensus';
+import type { ProcessCensusField, ProcessStartIdentity } from '@/processes/census/processCensus';
 import { compareProcessPrincipals } from '@/processes/ownership/principal';
 import { readProcessOwnershipBootTimeMs } from '../roots/listHappierProcessRoots';
 import type { createProcessOwnershipRuntime } from '../ownership/processOwnershipRuntime';
@@ -55,7 +55,12 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
         if (options.platform === 'linux' && bootTimeMs === undefined) bootTimeMs = await readProcessOwnershipBootTimeMs(options.platform);
     };
     const capture = async (freshness: 'shared' | 'fresh') => {
-        const read = await options.processOwnershipRuntime.readOwners({ freshness });
+        // Discovery needs detached markers, fences and group peers across the
+        // host, but executable paths only serve macOS application grouping.
+        // CPU samples have their own visible-demand metrics owner below.
+        const fields: readonly ProcessCensusField[] = ['argv', 'cwd', 'ownershipEnvironment', 'cgroup', 'memory',
+            ...(options.platform === 'darwin' ? ['executablePath' as const] : [])];
+        const read = await options.processOwnershipRuntime.readOwners({ freshness, fields });
         const identities = await options.readRequesterIdentities?.().catch(() => undefined);
         options.leftBehind.observe(read);
         return { read, identities };

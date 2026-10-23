@@ -1,4 +1,4 @@
-import { createProcessCensusReader, readProcessCensus, type ProcessCensusDependencies, type ProcessCensusFreshness, type ProcessCensusSnapshot } from '@/processes/census/processCensus';
+import { createProcessCensusReader, readProcessCensus, type ProcessCensusDependencies, type ProcessCensusField, type ProcessCensusFreshness, type ProcessCensusSnapshot } from '@/processes/census/processCensus';
 import { resolveProcessOwnership } from './resolveProcessOwnership';
 import type { HappierProcessRoot, ListenerFact } from './types';
 import { logger } from '@/ui/logger';
@@ -36,8 +36,8 @@ export function createProcessOwnershipRuntime(input: Readonly<{
     };
     return {
         resolveSnapshot,
-        async readOwners(request: Readonly<{ freshness: ProcessCensusFreshness }> & ProcessOwnershipReadOptions) {
-            const snapshot = await observe('native_census', () => census({ freshness: request.freshness, scope: 'all' }));
+        async readOwners(request: Readonly<{ freshness: ProcessCensusFreshness; fields?: readonly ProcessCensusField[] }> & ProcessOwnershipReadOptions) {
+            const snapshot = await observe('native_census', () => census({ freshness: request.freshness, scope: 'all', fields: request.fields }));
             if (snapshot.status !== 'ok') return snapshot;
             return resolveSnapshot(snapshot, undefined, request);
         },

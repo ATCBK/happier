@@ -23,11 +23,11 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
     const incomplete = result => Object.assign(new Error('Process-tree termination could not be verified'), {
         code: 'plugin_exec_termination_incomplete', result,
     });
-    async function census(containment, targetPid, fields) {
+    async function census(containment, targetPids, fields, includeDescendants = false) {
         try {
             const snapshot = await readProcessCensus({ freshness: 'fresh', scope: 'all',
                 ...(fields === undefined ? {} : { fields }),
-                ...(targetPid === undefined ? {} : { pids: [targetPid], includeAncestors: true }),
+                ...(targetPids === undefined ? {} : { pids: Array.isArray(targetPids) ? targetPids : [targetPids], includeAncestors: true, includeDescendants }),
                 ...(containment?.kind === 'windows_job' ? { verifiedJobNames: [containment.name] } : {}) });
             if (snapshot.status !== 'ok' || new Set(snapshot.rows.map(row => row.pid)).size !== snapshot.rows.length) return null;
             if (containment?.kind === 'windows_job') {
@@ -50,7 +50,7 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
     async function captureTargets(root) {
         // Capture retains native identities and ancestry only. Commands, credentials,
         // containment and metrics are demanded separately by their actual consumers.
-        const table = await census(undefined, undefined, []);
+        const table = await census(undefined, [root.pid], [], true);
         if (!table) return { status: 'unavailable', reason: 'census_unavailable' };
         const row = table.index.byPid.get(root.pid);
         if (!present(row)) return { status: 'refused', reason: 'root_missing' };
@@ -64,12 +64,19 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
     }
     async function terminateTargets(input, options = {}) {
         let signalAuthorityRefused = false;
+        const captured = new Map();
         const read = async () => {
             // Ordinary teardown consumes identity/ancestry plus memory accounting,
             // not every process's command or environment. Policy callbacks still
             // receive the full fresh observations they use to authorize cleanup.
-            const table = await census(input.containment, undefined, input.authorizeSnapshot ? undefined
-                : ['memory', ...(input.containment?.kind === 'linux_unit' ? ['cgroup'] : [])]);
+            // Explicit fences can contain reparented peers; policy callbacks
+            // consume full ownership evidence. Ordinary trees need only current
+            // roots, retained generations (even after reparenting), and children.
+            const pids = input.containment || input.authorizeSnapshot ? undefined
+                : [...new Set([...(input.targets ?? []).map(target => target.pid), ...captured.keys()])];
+            const table = await census(input.containment, pids, input.authorizeSnapshot ? undefined
+                : ['memory', ...(input.containment?.kind === 'linux_unit' ? ['cgroup'] : [])],
+                input.tree !== false || input.captureDescendants === true);
             if (table && input.authorizeSnapshot) {
                 try { table.authorityRefused = !await input.authorizeSnapshot(table.snapshot); }
                 catch { table.authorityRefused = true; }
@@ -89,7 +96,6 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
         const first = await read();
         const requested = input.targets ?? [];
         if (!first) return { status: 'unavailable', outcomes: requested.map(target => ({ pid: target.pid, outcome: 'refused', reason: 'census_unavailable' })) };
-        const captured = new Map();
         const continuation = new Map();
         const outcomes = new Map();
         let verificationUnavailable = false;
@@ -256,7 +262,7 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
             const previous = outcomes.get(expected.pid);
             if (previous) {
                 // Procfs may lose status/start while a signalled generation exits.
-                // Never signal that unreadable row; the existing final full census
+                // Never signal that unreadable row; the final fresh observation
                 // can still prove this previously authorized identity is now absent.
                 if (!verificationUnavailable && !signalAuthorityRefused && final && !final.authorityRefused
                     && previous.outcome === 'refused'
@@ -285,7 +291,7 @@ function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf,
     async function terminateProcessTree(proc, options) {
         if (!proc.pid) return;
         if ((proc.exitCode !== null && proc.exitCode !== undefined) || (proc.signalCode !== null && proc.signalCode !== undefined)) {
-            const table = await census(undefined, undefined, []);
+            const table = await census(undefined, options?.ownedProcessGroup ? undefined : [proc.pid], []);
             if (!table || present(table.index.byPid.get(proc.pid))) throw incomplete({ outcomes: [{ pid: proc.pid, outcome: 'refused', reason: 'identity_changed' }] });
             if (options?.ownedProcessGroup && membersOfPgid(table.index, proc.pid).some(present)) {
                 throw incomplete({ outcomes: [{ pid: proc.pid, outcome: 'refused', reason: 'root_missing' }] });

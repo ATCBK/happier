@@ -36,7 +36,7 @@ function decodePageSize(auxv: Buffer): number | null {
 
 type LinuxCensusInput = Readonly<{
     selfPid: number; pids?: readonly number[]; capturedAtMs: number; logicalCpus: number;
-    fields?: readonly ProcessCensusField[]; commandRoots?: readonly number[]; includeAncestors?: boolean;
+    fields?: readonly ProcessCensusField[]; commandRoots?: readonly number[]; includeAncestors?: boolean; includeDescendants?: boolean;
 }>;
 
 export function createLinuxCensusReader(boundary: LinuxCensusBoundary) {
@@ -110,8 +110,47 @@ export function createLinuxCensusReader(boundary: LinuxCensusBoundary) {
             };
         };
         const rows = (await Promise.all(pids.map(readRow))).filter((row): row is ProcessCensusRow => row !== null);
-        if (input.pids && input.includeAncestors) {
+        if (input.pids && input.includeDescendants) {
             const seen = new Set(pids);
+            const observed = new Set(rows.map(row => row.pid));
+            const queue = [...input.pids];
+            for (let cursor = 0; cursor < queue.length; cursor++) {
+                const pid = queue[cursor]!;
+                if (!observed.has(pid)) continue;
+                try {
+                    // Children belong to the thread which spawned them, not
+                    // necessarily the leader. Never enumerate unrelated PIDs.
+                    const threads = await boundary.readdir(`${root}/${pid}/task`);
+                    for (const tid of threads.filter(name => /^\d+$/u.test(name))) {
+                        let children: string;
+                        try { children = await text(`${root}/${pid}/task/${tid}/children`); }
+                        catch (error) {
+                            if (!isProcessGone(error)) throw error;
+                            // A vanished thread is expected; an absent children
+                            // interface on a still-live thread is not an empty tree.
+                            try { await text(`${root}/${pid}/task/${tid}/stat`); }
+                            catch (probeError) { if (isProcessGone(probeError)) continue; throw probeError; }
+                            throw error;
+                        }
+                        for (const child of children.trim().split(/\s+/u)) {
+                            if (!/^\d+$/u.test(child)) continue;
+                            const childPid = Number(child);
+                            if (!Number.isSafeInteger(childPid) || childPid <= 0 || seen.has(childPid)) continue;
+                            seen.add(childPid);
+                            const row = await readRow(childPid);
+                            if (row) { rows.push(row); observed.add(childPid); queue.push(childPid); }
+                        }
+                    }
+                } catch (error) {
+                    if (!isProcessGone(error)) throw error;
+                    try { await text(`${root}/${pid}/stat`); }
+                    catch (probeError) { if (isProcessGone(probeError)) continue; throw probeError; }
+                    throw error;
+                }
+            }
+        }
+        if (input.pids && input.includeAncestors) {
+            const seen = new Set(rows.map(row => row.pid));
             for (let cursor = 0; cursor < rows.length; cursor++) {
                 const parent = rows[cursor]?.ppid;
                 if (parent === null || parent === undefined || parent <= 1 || seen.has(parent)) continue;
