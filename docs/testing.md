@@ -181,6 +181,10 @@ Plugin UI/SDK preparation, Metro export and precompression, and exercise capture
 membership, effective build options, damaged output, pending retention and independent
 Stack serving paths. Explicit executable app-local configuration outside the captured
 workspace uses private preparation rather than shared reuse.
+The source-export owner also checks repeated finite exports in one context:
+unchanged modules reuse persisted Metro transforms, one changed module transforms
+again, and recaptured routes remain rooted in the current captured tree. The
+project-root cache partition remains required because Router transforms embed it.
 
 The Stack unit runner isolates product state and caches without dropping its executor placement or authenticated admission identity. Tests simulating a different worker isolate that worker's OS admission state and package-manager executable paths through the canonical boundary fixtures instead of sharing the real host's reservations.
 
