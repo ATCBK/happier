@@ -243,7 +243,7 @@ export function WorkspaceProvider(props: Readonly<{
                 const state = latest.current.owner.getState();
                 const activeTabId = state.groups[state.focusedGroupId].activeTabId;
                 const retained = state.tabs[activeTabId]?.target;
-                if ((tabId && tabId !== activeTabId) || retained?.kind !== 'session'
+                if ((tabId && tabId !== activeTabId) || (retained?.kind !== 'session' && retained?.kind !== 'sessionDetails')
                     || retained.params.id !== file.target.sessionId
                     || !areServerProfileIdentifiersEquivalent(retained.params.serverId, file.target.serverId)) return false;
                 const driver = latest.current.readPaneDriver?.(createSessionPaneScopeId(file.target.sessionId, file.target.serverId, tabId));

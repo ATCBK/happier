@@ -378,6 +378,11 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                     && JSON.stringify(currentDetails) === JSON.stringify(nextDetails))
                 || (current.target.kind === 'sessionDetails' && target.kind === 'session'
                     && (nextDetails === undefined || JSON.stringify(currentDetails) === JSON.stringify(nextDetails)))
+                // A File page can update its location without becoming a new resource. In particular,
+                // phone Track's line reveal and the page's route projection share the existing tab memory.
+                || (current.target.kind === 'sessionDetails' && target.kind === 'sessionDetails'
+                    && currentDetails?.kind === 'file' && nextDetails?.kind === 'file'
+                    && currentDetails.path === nextDetails.path)
             );
             const currentSession = sessionIdentity(target)
                 && findOpenDestination(target, input.getState(), undefined, current.tabId);

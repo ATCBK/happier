@@ -278,6 +278,25 @@ describe('workspace navigation adapter', () => {
     expect(h.active().target.kind).toBe('sessionDetails');
   });
 
+  it('keeps the current File pane when its phone route updates or drops the Track anchor', () => {
+    const h = harness([], { serverId: 'home-a', accountId: 'alice' });
+    h.adapter.initialize('/session/A1/details?serverId=home-a&details=file&path=src%2Fa.ts&source=file&anchor=fileLine&startLine=14');
+    const tabId = h.active().id;
+    const tabIds = Object.keys(h.state().tabs);
+    h.adapter.acceptUrl('/session/A1/details?serverId=home-a&details=file&path=src%2Fa.ts');
+    expect(h.active().id).toBe(tabId);
+    expect(Object.keys(h.state().tabs)).toEqual(tabIds);
+    h.adapter.acceptUrl('/session/A1/details?serverId=home-a&details=file&path=src%2Fa.ts&source=file&anchor=fileLine&startLine=20');
+    expect(h.active().id).toBe(tabId);
+    expect(parseSessionPaneUrlState(h.active().target.params)?.details).toMatchObject({ anchor: { kind: 'fileLine', startLine: 20 } });
+    // An independent resource or Home still gets its own destination, not this File's memory.
+    h.adapter.acceptUrl('/session/A1/details?serverId=home-a&details=file&path=src%2Fb.ts');
+    expect(h.active().id).not.toBe(tabId);
+    const otherFileTab = h.active().id;
+    h.adapter.acceptUrl('/session/A1/details?serverId=home-b&details=file&path=src%2Fb.ts');
+    expect(h.active().id).not.toBe(otherFileTab);
+  });
+
   it('does not adopt a different Machine or Home Details link as the current pane projection', () => {
     for (const [serverId, machineId] of [
       ['home-b', 'machine-a'],
