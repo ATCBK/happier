@@ -183,8 +183,8 @@ import { LaunchProfilePublishInputV1Schema } from '../launchProfiles/publishLaun
 import { isProfileActionIdV1, parseProfileActionRequestV1 } from '../profiles/profileActionsV1.js';
 import { isMcpServerActionIdV1 } from '../mcp/servers/serverActionIdsV1.js';
 import { isProviderActionIdV1, parseProviderActionRequestV1 } from '../providers/providerActionsV1.js';
-import { isRemoteHostActionIdV1, parseRemoteHostActionRequestV1, REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1 } from '../remoteHosts/remoteHostActionsV1.js';
-import { isHomeRuntimeActionIdV1, parseHomeRuntimeActionRequestV1, HOME_RUNTIME_ACTION_OUTPUT_SCHEMAS_V1, HomeRuntimeRestartInputV1Schema } from '../home/runtime/actionsV1.js';
+import { isRemoteHostActionIdV1, REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1, type RemoteHostActionRequestV1 } from '../remoteHosts/remoteHostActionsV1.js';
+import { isHomeRuntimeActionIdV1, HOME_RUNTIME_ACTION_OUTPUT_SCHEMAS_V1, type HomeRuntimeActionRequestV1, type HomeRuntimeRestartInputV1 } from '../home/runtime/actionsV1.js';
 import { isAccountLifecycleActionId, ACCOUNT_LIFECYCLE_ACTION_INPUT_SCHEMAS, ACCOUNT_LIFECYCLE_ACTION_OUTPUT_SCHEMAS } from './accountLifecycleActionFamily.js';
 import { executeHomeRuntimeRestart } from './executor/homeRuntimeRestart.js';
 import {
@@ -5680,7 +5680,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
       if (isRemoteHostActionIdV1(actionId)) {
         if (!deps.remoteHostActionExecute) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
-        const outcome = await deps.remoteHostActionExecute(parseRemoteHostActionRequestV1(actionId, parsed.data), ctx);
+        // The spec admitted this exact action's schema; recover its erased id/input correlation without reparsing.
+        const request = { actionId, input: parsed.data } as RemoteHostActionRequestV1;
+        const outcome = await deps.remoteHostActionExecute(request, ctx);
         return outcome.ok ? { ok: true, result: REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(outcome.result) } : outcome;
       }
 
@@ -5694,10 +5696,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       if (isHomeRuntimeActionIdV1(actionId)) {
         if (actionId === 'home.runtime.restart') {
           if (!deps.homeRuntimeTaskRpc) return { ok: true, result: { status: 'unavailable', reason: 'runtime_task_transport_unavailable' } };
-          return await executeHomeRuntimeRestart(HomeRuntimeRestartInputV1Schema.parse(parsed.data), ctx, deps.homeRuntimeTaskRpc);
+          return await executeHomeRuntimeRestart(parsed.data as HomeRuntimeRestartInputV1, ctx, deps.homeRuntimeTaskRpc);
         }
         if (!deps.homeRuntimeActionExecute) return clientActionUnavailable(actionId);
-        const outcome = await deps.homeRuntimeActionExecute(parseHomeRuntimeActionRequestV1(actionId, parsed.data), ctx);
+        // The spec admitted this exact action's schema; recover its erased id/input correlation without reparsing.
+        const request = { actionId, input: parsed.data } as HomeRuntimeActionRequestV1;
+        const outcome = await deps.homeRuntimeActionExecute(request, ctx);
         return outcome.ok ? { ok: true, result: HOME_RUNTIME_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(outcome.result) } : outcome;
       }
 
