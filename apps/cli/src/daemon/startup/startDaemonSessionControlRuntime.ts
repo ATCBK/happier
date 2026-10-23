@@ -16943,6 +16943,8 @@ export async function startDaemonSessionControlRuntime(
     if (!params.openAccountConnectionManagedConsumerSource || basis.deployment.kind !== 'managedLocal'
       || basis.deployment.managedRuntime.sharing !== 'connectionMachine'
       || basis.runtimeCredentialTransport?.destination.kind !== 'httpHeader') return null;
+    // Traced phases run in callbacks; keep the managed narrowing in a local.
+    const deployment = basis.deployment;
     const lifetime = new AbortController();
     const signal = AbortSignal.any([lifetime.signal, shutdownCancellationDomains.daemonWorkSignal]);
     const preparationSignal = AbortSignal.any([signal, input.signal]);
@@ -16955,7 +16957,8 @@ export async function startDaemonSessionControlRuntime(
         resolveAttachedProviderAccount(input.sessionId, input.tracked, proof.expectedAccountSettingsScopeKey, signal));
       if (!account) return null;
       resources.register(account.release);
-      if (!account.resolveManagedPurposeBindingIntent) return null;
+      const resolveManagedPurposeBindingIntent = account.resolveManagedPurposeBindingIntent;
+      if (!resolveManagedPurposeBindingIntent) return null;
       const isRunCurrent = async (currentSignal: AbortSignal = signal) => {
         const readSignal = AbortSignal.any([signal, currentSignal]);
         try {
@@ -16994,10 +16997,10 @@ export async function startDaemonSessionControlRuntime(
           consumerMachineId: params.machineId, application, source: { kind: 'account_connection', connectionId: basis.connectionId,
             expectedConnectionSecurityFingerprint: basis.credentialAuthorization.connectionSecurityFingerprint,
             expectedManagedRuntimeBindingFingerprint: createProviderManagedRuntimeBindingFingerprintV1({
-              implementationIdentity: basis.deployment.implementationIdentity, managedRuntime: basis.deployment.managedRuntime,
-              purposeBindings: basis.deployment.purposeBindings }) } },
+              implementationIdentity: deployment.implementationIdentity, managedRuntime: deployment.managedRuntime,
+              purposeBindings: deployment.purposeBindings }) } },
         expectedAccountSettingsScopeKey: proof.expectedAccountSettingsScopeKey, readAccountSettingsSnapshot: account.readAccountSettingsSnapshot,
-        resolveManagedPurposeBindingIntent: account.resolveManagedPurposeBindingIntent, signal: preparationSignal, isCurrent: isRunCurrent }));
+        resolveManagedPurposeBindingIntent, signal: preparationSignal, isCurrent: isRunCurrent }));
       if (!opened) return null;
       resources.register(opened.retire);
       const endpointUrl = opened.access.endpointUrl(application.endpointTemplateId);

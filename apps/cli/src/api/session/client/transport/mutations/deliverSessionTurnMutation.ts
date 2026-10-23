@@ -112,7 +112,7 @@ function doesReceiptIdentityMatch(
         && receipt.data.sessionId === mutation.sessionId
         && receipt.data.mutationId === mutation.mutationId
         && receipt.data.action === mutation.action
-        && (mutation.turnId === undefined || receipt.data.turnId === mutation.turnId)
+        && (!('turnId' in mutation) || mutation.turnId === undefined || receipt.data.turnId === mutation.turnId)
         && receipt.data.observedAt === mutation.observedAt;
 }
 
@@ -164,7 +164,7 @@ function buildUnsupportedDiagnostic(params: Readonly<{
         sessionId: params.mutation.sessionId,
         mutationId: params.mutation.mutationId,
         action: params.mutation.action,
-        ...(params.mutation.turnId ? { turnId: params.mutation.turnId } : {}),
+        ...('turnId' in params.mutation && params.mutation.turnId ? { turnId: params.mutation.turnId } : {}),
         socket: params.socket,
         http: params.http,
     };

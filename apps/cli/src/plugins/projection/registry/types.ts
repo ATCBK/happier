@@ -348,6 +348,7 @@ type ActionDefinitionV1NonExecutionFields = Pick<ActionDefinitionV1,
     | 'surfaces'
     | 'toolExposure'
     | 'contextualDefaults'
+    | 'sessionTarget'
     | 'inputHints'
     | 'outputSchema'
     | 'operation'

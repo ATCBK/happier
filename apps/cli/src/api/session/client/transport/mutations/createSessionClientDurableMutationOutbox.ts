@@ -1432,7 +1432,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
                     }),
                 ...(turn ? {
                     action: turn.action,
-                    ...(turn.turnId ? { turnId: turn.turnId } : {}),
+                    ...('turnId' in turn && turn.turnId ? { turnId: turn.turnId } : {}),
                     observedAt: turn.observedAt,
                 } : {}),
                 blockedMutationCount: blockedMutations.length,

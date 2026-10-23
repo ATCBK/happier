@@ -549,7 +549,9 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
         const endSeqs = [...userMessageSeqs,
           ...(typeof observedSeq === 'number' && Number.isSafeInteger(observedSeq) && observedSeq >= 0 ? [observedSeq] : []),
           ...(finalAssistantMessageSeq === null ? [] : [finalAssistantMessageSeq])];
-        if ((transcriptAdmissionFailure || mutation.action === 'fail' || mutation.action === 'cancel' || mutation.action === 'wait')
+        // Terminal mutations are turn-scoped; Session-scoped session_opened never anchors a turn.
+        if ('turnId' in mutation
+          && (transcriptAdmissionFailure || mutation.action === 'fail' || mutation.action === 'cancel' || mutation.action === 'wait')
           && (mutation.action === 'fail' || startSeqInclusive !== undefined || finalAssistantMessageSeq !== null)) {
           await enqueueTerminalMutation({
             v: mutation.v, sessionId: mutation.sessionId,

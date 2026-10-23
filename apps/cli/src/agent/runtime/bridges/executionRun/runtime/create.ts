@@ -287,13 +287,14 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                 const providerLaunchServices = opts.providerLaunch;
                 const modelSelection = opts.modelSelection;
                 if (providerLaunchServices && modelSelection?.providerConnectionId) {
-                    if (!accountSettingsSnapshot?.scopeKey) throw Object.assign(new Error('provider_connection_not_found'), { code: 'provider_connection_not_found' });
+                    const expectedAccountSettingsScopeKey = accountSettingsSnapshot?.scopeKey;
+                    if (!expectedAccountSettingsScopeKey) throw Object.assign(new Error('provider_connection_not_found'), { code: 'provider_connection_not_found' });
                     providerLaunch = await trace('provider_launch', () => providerLaunchServices.prepareLaunch({
                         selection: modelSelection, backendTarget: effectiveBackendTarget,
                         agentId: engineResolution.agentId, runId: String(opts.runId ?? '').trim(),
                         ...(opts.controllerOccurrenceId ? { controllerOccurrenceId: opts.controllerOccurrenceId } : {}),
                         connectedServices: connectedServicesSelection?.bindings ?? null,
-                        expectedAccountSettingsScopeKey: accountSettingsSnapshot.scopeKey,
+                        expectedAccountSettingsScopeKey,
                     }, signal));
                     if (providerLaunch.cleanupOnExit) providerResources.register(providerLaunch.cleanupOnExit);
                 } else providerLaunch = await trace('provider_launch', () => prepareExecutionRunProviderLaunch({

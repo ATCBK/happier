@@ -42,7 +42,8 @@ export function createCliProviderActionExecuteV1(params: Readonly<{
         const catalog = await prepareProviderConnectionsCatalogForCli({ expectedScopeKey: scopeKey,
           operationContext: params.operationContext, signal: context.signal });
         if (catalog.status !== 'ready') return { status: 'error', error: createProviderErrorV1('provider_catalog_unavailable', { machineId }) };
-        return params.projectModelsForAccount(request.input, context);
+        // The dispatch owner routes here only with the operand's exact Machine.
+        return params.projectModelsForAccount({ ...request.input, machineId }, context);
       }
       return params.callMachineAction({
       machineId, serverId: params.serverId, method, request: request.input, signal: context.signal,

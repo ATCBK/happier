@@ -628,6 +628,7 @@ export type SessionOptionOverrideRuleV1 = AgentModelOptionOverrideRule;
 export type Metadata = Readonly<Partial<RuntimeDescriptorMetadataCarrier>> & Readonly<SessionIdentityAdditions>
   & SessionCapabilityMetadataV1
   & Pick<NonNullable<SessionOwnerMetadataV1['system']>, 'attestedContext'>
+  & Pick<NonNullable<SessionOwnerMetadataV1['workspace']>, 'branch' | 'projectId' | 'workspaceId'>
   & Pick<NonNullable<SessionOwnerMetadataV1['runtime']>, 'allowedTools' | 'unlistedTools' | 'workspaceWrites' | 'agentRuntimeCapabilitiesV1' | 'agentRuntimeFacetsV1'>
   & Pick<SessionOwnerCompatibilityViewV1, 'actionConfirmationsV1'> & {
   path: string,
