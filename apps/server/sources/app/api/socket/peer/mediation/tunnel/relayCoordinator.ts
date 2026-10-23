@@ -4,8 +4,8 @@ import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, PeerTcpTunnelRelayEnvelopeSchema, t
 import type { Redis } from "ioredis";
 import type { Server, Socket } from "socket.io";
 
-import { getSocketRooms } from "@/app/api/socketRooms";
-import { readSocketRoomSnapshot } from '@/app/api/socket/socketRoomDiscovery';
+import { getMachineSocketRoom, getSocketRooms } from "@/app/api/socketRooms";
+import { readLocalSocketRoom, readSocketRoomSnapshot } from '@/app/api/socket/socketRoomDiscovery';
 import type { MachineSocketOwnerSnapshot } from '@/app/api/socket/machineSocketOwnershipRegistry';
 
 const ATTACH_EVENT = "happier:peer-tunnel:attach:v2";
@@ -611,7 +611,10 @@ export function createPeerTcpTunnelRelayCoordinator(input: Readonly<{
             // `serverCount()` in Socket.IO 0.3.1. Admission must reserve the
             // single-use grant while that adapter is recovering, so inspect the
             // canonical local socket map directly for this local-only branch.
-            const localExactSockets = [...input.io.sockets.sockets.values()].filter((socket) =>
+            const localCandidates = expectedSocketId === undefined
+                ? readLocalSocketRoom(input.io, getMachineSocketRoom(params.accountId, params.machineId))
+                : [input.io.sockets.sockets.get(expectedSocketId)].filter((socket): socket is Socket => socket !== undefined);
+            const localExactSockets = localCandidates.filter((socket) =>
                 socket.connected === true
                 && (expectedSocketId === undefined || socket.id === expectedSocketId)
                 && socket.data.userId === params.accountId

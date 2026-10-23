@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 
 import type { PeerTcpTunnelRelayEnvelope } from "@happier-dev/protocol";
 import type { Redis } from "ioredis";
-import type { Server, Socket } from "socket.io";
+import { Server, type Socket } from "socket.io";
 import { describe, expect, it, vi } from "vitest";
 
 import { getSocketRooms } from "@/app/api/socketRooms";
@@ -10,6 +10,58 @@ import { createMachineSocketOwnershipRegistry } from '@/app/api/socket/machineSo
 import { createPeerTcpTunnelRelayCoordinator } from "./relayCoordinator";
 
 describe("createPeerTcpTunnelRelayCoordinator", () => {
+    it.each(['memory', 'redis'] as const)("inspects only the exact Machine's local sockets in %s mode", async mode => {
+        const io = new Server();
+        const accountId = 'cost-account';
+        const machineId = 'cost-machine';
+        const inspectedSocketIds = new Set<string>();
+        const values = io.sockets.sockets.values.bind(io.sockets.sockets);
+        vi.spyOn(io.sockets.sockets, 'values').mockImplementation(function* () {
+            for (const socket of values()) { inspectedSocketIds.add(socket.id); yield socket; }
+        });
+        const get = io.sockets.sockets.get.bind(io.sockets.sockets);
+        vi.spyOn(io.sockets.sockets, 'get').mockImplementation(id => {
+            const socket = get(id);
+            if (socket) inspectedSocketIds.add(id);
+            return socket;
+        });
+        const addSocket = (id: string, targetMachineId: string) => {
+            const data = { userId: accountId, clientType: 'machine-scoped', machineId: targetMachineId };
+            // Socket.IO is the boundary; count identities read from its local inventory.
+            const socket = Object.assign(new EventEmitter(), {
+                id, connected: true,
+                data,
+                rooms: new Set(getSocketRooms({ userId: accountId, clientType: 'machine-scoped', machineId: targetMachineId })),
+            });
+            io.sockets.sockets.set(id, socket as unknown as Socket);
+            io.sockets.adapter.addAll(id, socket.rooms);
+            return socket;
+        };
+        for (let i = 0; i < 1000; i += 1) addSocket(`unrelated-${i}`, `unrelated-machine-${i}`);
+        const target = addSocket('cost-target', machineId);
+        const ownership = createMachineSocketOwnershipRegistry({ io, config: { enabled: false } });
+        await ownership.claimOwner({ accountId, machineId, socketId: target.id, owner: {} });
+        // Redis is the persistent boundary; grant reservation/commit and attachment stay real.
+        const redis = Object.assign(new EventEmitter(), {
+            status: 'ready', set: async () => 'OK', eval: async () => 1, disconnect: () => undefined,
+        });
+        const coordinator = createPeerTcpTunnelRelayCoordinator({ io, config: mode === 'memory'
+            ? { mode }
+            : { mode, createRelayAdmissionRedis: () => redis as unknown as Redis,
+                readMachineSocketOwner: ownership.readOwner } });
+        inspectedSocketIds.clear();
+        try {
+            expect(await coordinator.admit({ accountId, machineId, tunnelKey: 'cost-tunnel', grantId: 'cost-grant',
+                grantExpiresAt: Date.now() + 60_000, nowMs: Date.now(),
+                onMachineEnvelope: () => undefined, onMachineDisconnect: () => undefined,
+            })).toEqual({ status: 'attached' });
+            expect(inspectedSocketIds.size).toBe(1);
+            expect(inspectedSocketIds.has(target.id)).toBe(true);
+        } finally {
+            await coordinator.close();
+            await io.sockets.adapter.close();
+        }
+    });
     it("attaches only the installation admitted by the server, ignoring a still-connected predecessor", async () => {
         const accountId = 'installation-account';
         const machineId = 'installation-machine';
@@ -22,7 +74,8 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         const sockets = new Map([[stale.id, stale]]);
         const deliveredSocketIds: string[] = [];
         // Socket.IO is the network boundary; grant consumption and attachment remain real.
-        const io = Object.assign(new EventEmitter(), { sockets: { sockets }, to: (id: string) => ({ emit: () => { deliveredSocketIds.push(id); } }) });
+        const rooms = new Map([...stale.rooms].map(room => [room, new Set([stale.id])]));
+        const io = Object.assign(new EventEmitter(), { sockets: { sockets, adapter: { rooms } }, to: (id: string) => ({ emit: () => { deliveredSocketIds.push(id); } }) });
         const coordinator = createPeerTcpTunnelRelayCoordinator({ io: io as unknown as Server, config: { mode: 'memory' } });
         const request = {
             accountId, machineId, expectedInstallationId: 'current-installation', tunnelKey: 'installation-tunnel', grantId: 'installation-grant',
@@ -35,6 +88,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         try {
             expect(await coordinator.admit(request)).toEqual({ status: 'rejected', reason: 'machine_unavailable' });
             sockets.set(current.id, current);
+            for (const room of current.rooms) rooms.get(room)!.add(current.id);
             expect(await coordinator.admit(request)).toEqual({ status: 'attached' });
             expect(coordinator.routeOwnerEnvelope({ tunnelKey: request.tunnelKey, envelope })).toBe(true);
             expect(deliveredSocketIds).toEqual([current.id]);
@@ -52,7 +106,8 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
             once: vi.fn(), off: vi.fn(),
         } as unknown as Socket;
         const io = {
-            sockets: { sockets: new Map([[machineSocket.id, machineSocket]]) },
+            sockets: { sockets: new Map([[machineSocket.id, machineSocket]]),
+                adapter: { rooms: new Map([...machineSocket.rooms].map(room => [room, new Set([machineSocket.id])])) } },
             on: vi.fn(), off: vi.fn(),
             in: () => ({ local: { fetchSockets: async () => [machineSocket] } }),
             to: () => ({ emit: vi.fn() }),
@@ -117,6 +172,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         const io = {
             sockets: {
                 sockets: new Map([[machineSocketId, machineSocket]]),
+                adapter: { rooms: new Map([...machineSocket.rooms].map(room => [room, new Set([machineSocketId])])) },
             },
             on: vi.fn(),
             off: vi.fn(),
@@ -233,6 +289,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         const io = {
             sockets: {
                 sockets: new Map([[machineSocketId, machineSocket]]),
+                adapter: { rooms: new Map([...machineSocket.rooms].map(room => [room, new Set([machineSocketId])])) },
             },
             on: vi.fn(),
             off: vi.fn(),
@@ -353,6 +410,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         const io = {
             sockets: {
                 sockets: new Map([[machineSocketId, machineSocket]]),
+                adapter: { rooms: new Map([...machineSocket.rooms].map(room => [room, new Set([machineSocketId])])) },
             },
             on: vi.fn(),
             off: vi.fn(),
@@ -432,6 +490,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         const io = {
             sockets: {
                 sockets: new Map([[machineSocketId, machineSocket]]),
+                adapter: { rooms: new Map([...machineSocket.rooms].map(room => [room, new Set([machineSocketId])])) },
             },
             on: vi.fn(),
             off: vi.fn(),
@@ -636,6 +695,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         const io = {
             sockets: {
                 sockets: new Map([[machineSocketId, machineSocket]]),
+                adapter: { rooms: new Map([...machineSocket.rooms].map(room => [room, new Set([machineSocketId])])) },
             },
             on: vi.fn(),
             off: vi.fn(),
@@ -701,6 +761,7 @@ describe("createPeerTcpTunnelRelayCoordinator", () => {
         const io = {
             sockets: {
                 sockets: new Map([[machineSocketId, machineSocket]]),
+                adapter: { rooms: new Map([...machineSocket.rooms].map(room => [room, new Set([machineSocketId])])) },
             },
             on: vi.fn(),
             off: vi.fn(),
