@@ -41,3 +41,15 @@ export function admitInternalRouteHref(destination: string | HrefObject): Href {
     // Approved SDK boundary: Expo dispatch accepts admitted runtime paths beyond generated route names.
     return href as Href;
 }
+
+/** Preserve an admitted internal destination while qualifying its query. */
+export function withInternalRouteQueryParams(
+    destination: string,
+    params: Readonly<Record<string, string>>,
+): string {
+    admitInternalRouteHref(destination);
+    // The fixed base is only a URL-parser requirement; admission above forbids external paths.
+    const route = new URL(destination.trim(), 'https://internal.invalid');
+    for (const [key, value] of Object.entries(params)) route.searchParams.set(key, value);
+    return `${route.pathname}${route.search}${route.hash}`;
+}

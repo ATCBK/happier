@@ -340,7 +340,7 @@ describe('App RootLayout notifications', () => {
                 reason: expect.stringMatching(/\S/),
             } } });
         }
-        await vi.waitFor(() => expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_permission'));
+        await vi.waitFor(() => expect(routerBoundary.push).toHaveBeenCalledWith('/session/s_permission?serverId=srv_server_1'));
     });
     it('switches to a saved inactive Home before performing permission allow', async () => {
         await arrangeHomes([profile('srv_server_1', activeUrl), profile('srv_server_2', 'https://company.example.test')]);

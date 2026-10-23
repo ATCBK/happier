@@ -1947,8 +1947,12 @@ or closed-app display.
 Committed ready, assignment and source-qualified permission/user-action transitions schedule this Home leg.
 Authenticated runtime composition decides whether the rich sender owns an ordinary owner alert;
 an exact accepted personal one-shot remains the Home's responsibility. Request scheduling
-uses the original committed request identity and current source Turn, not opaque Agent-state
-changes or pending counts alone. Complete loaded and closed-app remote-alert validation remains
+carries the original committed request identity and the occurrence's captured source Turn,
+not opaque Agent-state changes or pending counts alone. Current development Home request events
+carry that optional Turn through the existing protocol and native readers. Legs carrying the
+same request and Turn share their presentation identity; a reused request id on a different
+Turn stays distinct. A turnless request keeps its existing request-only identity and is never
+rebound to the latest Turn. Complete loaded and closed-app remote-alert validation remains
 separate from the source-level checks.
 
 #### Session-context Follow authoring (development)

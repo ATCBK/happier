@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveAgentStateRequestCoverageOptions } from '@happier-dev/agents';
 import { accountSettingsParse } from '@happier-dev/protocol';
 import type { AgentState } from '@/api/types';
+import { configuration } from '@/configuration';
+import type { PermissionRequestPushSender } from '@/settings/notifications/permissionRequestPush';
 import { logger } from '@/ui/logger';
 import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { AgentStateRequestStore, isSameAgentStateRequestOccurrence, type PermissionResponseClaim } from './agentStateRequestStore';
@@ -183,6 +185,85 @@ describe('AgentStateRequestStore', () => {
             await new Promise(resolve => setImmediate(resolve));
             expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
         } finally { rejoined.dispose(); }
+    });
+    it('keeps a reused request retry live after the previous turn receives a late push acknowledgement', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-10-23T12:00:00Z'));
+        const session = new FakeSession();
+        let acknowledgeFirst!: (delivered: boolean) => void;
+        // External push delivery can acknowledge an earlier request after a replacement has failed.
+        const sendToAllDevicesAsync = vi.fn<PermissionRequestPushSender['sendToAllDevicesAsync']>()
+            .mockImplementationOnce(() => new Promise<boolean>(resolve => { acknowledgeFirst = resolve; }))
+            .mockResolvedValueOnce(false).mockResolvedValue(true);
+        const settings = notificationSettingsSnapshotFixture({});
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Late push acknowledgement]', getAccountSettings: () => settings,
+            getPushSender: () => ({ sendToAllDevicesAsync, readAccountSessionDeliveryMutedScopes: async () => [],
+                fetchSessionNotificationContext: async id => createSessionNotificationContextFixture(id) }),
+        });
+        const publication = { requestId: 'reused', toolName: 'Write', toolInput: {}, createdAt: Date.now() };
+        try {
+            await store.publishRequestAndWait({ ...publication, turnId: 'turn-a' });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+            expect(await store.completeRequest({ requestId: 'reused', status: 'approved' })).toBe(true);
+            await store.publishRequestAndWait({ ...publication, turnId: 'turn-b' });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(2);
+            acknowledgeFirst(true);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(session.agentState.requests!.reused).toMatchObject({ turnId: 'turn-b' });
+            expect(session.agentState.requests!.reused.pushNotifiedAt).toBeUndefined();
+            await vi.advanceTimersByTimeAsync(configuration.permissionRequestPushRetryDelaysMs[0]!);
+            expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(3);
+            expect(sendToAllDevicesAsync.mock.calls[2]?.[2]).toMatchObject({ requestId: 'reused', turnId: 'turn-b' });
+            expect(session.agentState.requests!.reused.pushNotifiedAt).toEqual(expect.any(Number));
+        } finally { store.dispose(); vi.useRealTimers(); }
+    });
+    it('does not stamp a replacement request when an earlier push marker reaches the state writer late', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-10-23T12:00:00Z'));
+        let deferWrites = false;
+        let applyNotificationWrite: (() => void) | undefined;
+        class DeferredNotificationSession extends FakeSession {
+            override updateAgentState(updater: (state: AgentState) => AgentState) {
+                if (!deferWrites) return super.updateAgentState(updater);
+                // Model the real Session client's queued asynchronous persistence boundary.
+                return new Promise<void>(resolve => {
+                    applyNotificationWrite = () => { this.agentState = updater(this.agentState); resolve(); };
+                });
+            }
+        }
+        const session = new DeferredNotificationSession();
+        const acknowledgements: Array<(delivered: boolean) => void> = [];
+        const sendToAllDevicesAsync = vi.fn<PermissionRequestPushSender['sendToAllDevicesAsync']>(
+            () => new Promise<boolean>(resolve => { acknowledgements.push(resolve); }));
+        const settings = notificationSettingsSnapshotFixture({});
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Late push marker]', getAccountSettings: () => settings,
+            getPushSender: () => ({ sendToAllDevicesAsync, readAccountSessionDeliveryMutedScopes: async () => [],
+                fetchSessionNotificationContext: async id => createSessionNotificationContextFixture(id) }),
+        });
+        const publication = { requestId: 'reused', toolName: 'Write', toolInput: {}, createdAt: Date.now() };
+        try {
+            await store.publishRequestAndWait({ ...publication, turnId: 'turn-a' });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(acknowledgements).toHaveLength(1);
+            deferWrites = true;
+            acknowledgements[0]!(true);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(applyNotificationWrite).toEqual(expect.any(Function));
+            deferWrites = false;
+            expect(await store.completeRequest({ requestId: 'reused', status: 'approved' })).toBe(true);
+            await store.publishRequestAndWait({ ...publication, turnId: 'turn-b' });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(acknowledgements).toHaveLength(2);
+            applyNotificationWrite!();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(session.agentState.requests!.reused).toMatchObject({ turnId: 'turn-b' });
+            expect(session.agentState.requests!.reused.pushNotifiedAt).toBeUndefined();
+            acknowledgements[1]!(true);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(session.agentState.requests!.reused.pushNotifiedAt).toEqual(expect.any(Number));
+        } finally { store.dispose(); vi.useRealTimers(); }
     });
     it('preserves a completed mirrored request even when it appears before the persistence updater runs', async () => {
         let state: AgentState = { requests: {}, completedRequests: {} };

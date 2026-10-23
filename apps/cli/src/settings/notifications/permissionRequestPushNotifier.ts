@@ -13,6 +13,7 @@ type RequestNotificationAdmission = Readonly<{
   turnId?: string;
   admittedRulePolicies?: readonly FollowPolicyV1[];
   isCurrent: () => boolean;
+  onNotifiedAt?: (notifiedAtMs: number) => void;
 }>;
 
 type Entry = {
@@ -37,7 +38,6 @@ export class PermissionRequestPushNotifier {
   private readonly maxRetryMs: number;
   private readonly maxEntries: number;
   private readonly nowMs: () => number;
-  private readonly onNotifiedAt: (permissionId: string, notifiedAtMs: number) => void;
   private readonly getRequestFollowEvent: (requestId: string) => FollowEventV1 | null | undefined;
   private readonly prepareRequestNotification?: (requestId: string) => Promise<RequestNotificationAdmission | null>;
 
@@ -55,7 +55,6 @@ export class PermissionRequestPushNotifier {
     maxRetryMs?: number;
     maxEntries?: number;
     nowMs?: () => number;
-    onNotifiedAt?: (permissionId: string, notifiedAtMs: number) => void;
     getRequestFollowEvent?: (requestId: string) => FollowEventV1 | null | undefined;
     prepareRequestNotification?: (requestId: string) => Promise<RequestNotificationAdmission | null>;
   }) {
@@ -72,7 +71,6 @@ export class PermissionRequestPushNotifier {
     // Clamp to 1 to avoid disabling pushes when configured to 0.
     this.maxEntries = Math.max(1, Math.floor(params.maxEntries ?? configuration.permissionRequestPushDedupeMaxEntries));
     this.nowMs = params.nowMs ?? (() => Date.now());
-    this.onNotifiedAt = params.onNotifiedAt ?? (() => {});
     this.getRequestFollowEvent = params.getRequestFollowEvent ?? (() => undefined);
     this.prepareRequestNotification = params.prepareRequestNotification;
   }
@@ -192,12 +190,13 @@ export class PermissionRequestPushNotifier {
     });
 
     const after = this.entries.get(permissionId) ?? null;
-    if (!after) return;
+    // Completion or replacement can retire this attempt while delivery is in flight.
+    if (after !== nextEntry) return;
 
     if (result.status === 'delivered') {
       setBoundedMap(this.entries, permissionId, { ...after, state: 'sent', timer: null }, this.maxEntries);
       try {
-        this.onNotifiedAt(permissionId, now);
+        admission?.onNotifiedAt?.(now);
       } catch {
         // ignore
       }

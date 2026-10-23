@@ -1,6 +1,6 @@
 import { createActivitySurfaceSessionRoute } from '@/activity/actions/activitySurfaceTargets';
 import { router } from 'expo-router';
-import { admitInternalRouteHref } from '@/utils/path/routeUtils';
+import { admitInternalRouteHref, withInternalRouteQueryParams } from '@/utils/path/routeUtils';
 import * as React from 'react';
 import { AppState, Platform } from 'react-native';
 
@@ -95,9 +95,10 @@ function resolveNotificationCommandRouteForVerifiedHome(command: ActivityInterac
             return machinePageHref({ door: 'rail', target: { machineId: command.machineId, serverId }, tab: command.tab });
         case 'openSession':
         case 'focusComposer':
-            return createActivitySurfaceSessionRoute(command.sessionId, serverId);
-        case 'executeAction':
-            return createActivitySurfaceSessionRoute(command.defaultSessionId, serverId);
+        case 'executeAction': {
+            const route = resolveNotificationCommandRoute(command);
+            return route ? withInternalRouteQueryParams(route, { serverId }) : null;
+        }
         default:
             return resolveNotificationCommandRoute(command);
     }
@@ -284,7 +285,11 @@ export function useNotificationResponseRouting(params: Readonly<{
         if (pending) {
             if (isNotificationServerActive(pending)) {
                 clearPendingNotificationNav();
-                router.push(admitInternalRouteHref(pending.route));
+                const admittedServerId = resolveAdmittedNotificationServerId(pending.serverId);
+                const route = admittedServerId
+                    ? withInternalRouteQueryParams(pending.route, { serverId: admittedServerId })
+                    : pending.route;
+                router.push(admitInternalRouteHref(route));
                 return;
             }
         }
@@ -444,20 +449,26 @@ export function useNotificationResponseRouting(params: Readonly<{
                 }
             }
 
+            // Every URL-addressed path reaching here has proved its Home is
+            // active. Capture that identity before permission acknowledgement.
+            const admittedServerId = resolveAdmittedNotificationServerId(serverId);
+            const admittedRoute = serverUrl && !serverId && admittedServerId
+                ? resolveNotificationCommandRouteForVerifiedHome(command, admittedServerId) ?? route
+                : route;
+
             const activeServerPermissionDecisionPayload = command.kind === 'executeAction'
                 && command.actionId === 'session.permission.respond'
                 ? readPermissionDecisionPayload(command.payload)
                 : null;
             if (command.kind === 'executeAction' && activeServerPermissionDecisionPayload) {
                 const { action, sessionId: actionSessionId, requestId: actionRequestId, turnId } = activeServerPermissionDecisionPayload;
-                const admittedServerId = resolveAdmittedNotificationServerId(serverId);
                 fireAndForget((async () => {
                     try {
                         await performPermissionAction({ serverId: admittedServerId, accountId: parsed.accountId, sessionId: actionSessionId, requestId: actionRequestId, turnId, action });
                     } catch {
                         console.warn('[notifications] Permission action requires in-app review');
                     }
-                    if (!cancellation.signal.aborted) router.push(admitInternalRouteHref(route));
+                    if (!cancellation.signal.aborted) router.push(admitInternalRouteHref(admittedRoute));
                 })(), { tag: 'RootLayout.notificationAction.activeServer' });
                 return;
             }
@@ -470,7 +481,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                 || command.kind === 'openWorkflowRun'
                 || command.kind === 'openMachine'
             ) {
-                router.push(admitInternalRouteHref(route));
+                router.push(admitInternalRouteHref(admittedRoute));
             }
         };
 

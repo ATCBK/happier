@@ -203,6 +203,8 @@ describe("Home remote alert submission (SQLite)", () => {
         // The real occurrence writer admits Account encryption currentness.
         await db.account.update({ where: { id: owner.id }, data: { encryptionMode: 'plain' } });
         await db.session.update({ where: { id: session.id }, data: { encryptionMode: 'plain' } });
+        await db.sessionShare.update({ where: { sessionId_sharedWithUserId: { sessionId: session.id, sharedWithUserId: follower.id } },
+            data: { accessLevel: 'edit', canApprovePermissions: true } });
         const token = await enrollRemoteAlerts(follower.id, accountSettingsWithRemoteAlerts());
         let expectedVersion = session.agentStateVersion;
         for (const turnId of ['turn-a', 'turn-b']) {

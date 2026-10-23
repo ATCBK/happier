@@ -26,9 +26,9 @@ describe('PermissionRequestPushNotifier', () => {
         },
       },
       getSettings: () => accountSettingsParse({}),
-      prepareRequestNotification: async () => ({ isCurrent: () => true,
+      prepareRequestNotification: async () => ({ isCurrent: () => true, onNotifiedAt,
         admittedRulePolicies: [{ preset: selected ? 'important' : 'quiet' }] }),
-      sessionId: 'retry-policy', logPrefix: '[test]', retryDelaysMs: [100], onNotifiedAt,
+      sessionId: 'retry-policy', logPrefix: '[test]', retryDelaysMs: [100],
     });
     try {
       notifier.notify({ permissionId: 'retry-question', toolName: 'AskUserQuestion', requestKind: 'user_action' });
@@ -250,7 +250,7 @@ describe('PermissionRequestPushNotifier', () => {
       retryDelaysMs: [0],
       maxRetryMs: 10_000,
       maxEntries: 10,
-      onNotifiedAt,
+      prepareRequestNotification: async () => ({ isCurrent: () => true, onNotifiedAt }),
     });
 
     notifier.notify({ permissionId: 'p1', toolName: 'Write' });
@@ -261,7 +261,7 @@ describe('PermissionRequestPushNotifier', () => {
 
     expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(requests).toHaveLength(1));
-    await vi.waitFor(() => expect(onNotifiedAt).toHaveBeenCalledWith('p1', Date.parse('2026-05-03T12:00:00.000Z')));
+    await vi.waitFor(() => expect(onNotifiedAt).toHaveBeenCalledWith(Date.parse('2026-05-03T12:00:00.000Z')));
     notifier.dispose();
   });
 
@@ -289,7 +289,7 @@ describe('PermissionRequestPushNotifier', () => {
       retryDelaysMs: [100, 200],
       maxRetryMs: 10_000,
       maxEntries: 10,
-      onNotifiedAt,
+      prepareRequestNotification: async () => ({ isCurrent: () => true, onNotifiedAt }),
     });
 
     notifier.notify({ permissionId: 'p1', toolName: 'Write', createdAtMs: 0 });

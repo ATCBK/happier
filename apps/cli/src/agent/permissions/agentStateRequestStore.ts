@@ -1612,18 +1612,22 @@ export class AgentStateRequestStore {
                 const policies = contribution?.sourceSessionId === session.sessionId
                     ? contribution.requests?.find(candidate => candidate.requestId === requestId)?.policies : undefined;
                 return { isCurrent, ...(request.turnId ? { turnId: request.turnId } : {}),
-                    ...(policies ? { admittedRulePolicies: policies } : {}) };
+                    ...(policies ? { admittedRulePolicies: policies } : {}),
+                    onNotifiedAt: (notifiedAtMs: number) => {
+                        updateAgentStateBestEffort(
+                            session,
+                            (currentState) => {
+                                if (!isSameAgentStateRequestOccurrence(currentState.requests?.[requestId], request)) return currentState;
+                                return applyAgentStateRequestPushNotifiedAt({ state: currentState, permissionId: requestId, notifiedAtMs });
+                            },
+                            this.logPrefix,
+                            'permission_request_push_notified_at',
+                        );
+                    },
+                };
             },
             sessionId: session.sessionId,
             logPrefix: this.logPrefix,
-            onNotifiedAt: (permissionId, notifiedAtMs) => {
-                updateAgentStateBestEffort(
-                    session,
-                    (currentState) => applyAgentStateRequestPushNotifiedAt({ state: currentState, permissionId, notifiedAtMs }),
-                    this.logPrefix,
-                    'permission_request_push_notified_at',
-                );
-            },
         });
 
         return this.permissionRequestPushNotifier;

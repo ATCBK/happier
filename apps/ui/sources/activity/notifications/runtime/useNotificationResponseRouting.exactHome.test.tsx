@@ -466,6 +466,27 @@ describe('useNotificationResponseRouting exact-Home permission dispatch', () => 
         expect(rpc.calls).toEqual([]);
     });
 
+    it('qualifies an old URL-only pending route without losing its suffix, query or hash', async () => {
+        const { homeA, setActiveServerId } = await setupHomes();
+        const { setPendingNotificationNav } = await import('@/sync/domains/pending/pendingNotificationNav');
+        await setActiveServerId(homeA.id);
+        await saveNotificationAccount(homeA);
+        await prepareNotificationRuntime();
+        setPendingNotificationNav({ serverUrl: homeA.serverUrl,
+            route: `/session/${SESSION_ID}/discussions/discussion-1?sourceSurface=notification&view=changes%2Ffiles&view=staged#comment-1` });
+        await mountRouting();
+        await waitFor(() => pushSpy.mock.calls.length === 1);
+        const href: unknown = pushSpy.mock.calls[0]?.[0];
+        if (typeof href !== 'string') throw new Error('Expected an admitted internal route');
+        const route = new URL(href, 'https://app.happier.dev');
+        expect(route.pathname).toBe(`/session/${SESSION_ID}/discussions/discussion-1`);
+        expect(route.searchParams.getAll('view')).toEqual(['changes/files', 'staged']);
+        expect(route.searchParams.get('sourceSurface')).toBe('notification');
+        expect(route.searchParams.getAll('serverId')).toEqual([homeA.id]);
+        expect(route.hash).toBe('#comment-1');
+        expect(rpc.calls).toEqual([]);
+    });
+
     it('opens an old pending Allow for review without replaying its decision', async () => {
         const { homeA, setActiveServerId } = await setupHomes();
         const { setPendingNotificationAction } = await import('@/sync/domains/pending/pendingNotificationAction');
@@ -474,7 +495,6 @@ describe('useNotificationResponseRouting exact-Home permission dispatch', () => 
         await prepareNotificationRuntime();
         setPendingNotificationAction({
             serverUrl: homeA.serverUrl,
-            serverId: homeA.id,
             sessionId: SESSION_ID,
             requestId: REQUEST_ID,
             action: 'allow',
@@ -483,6 +503,7 @@ describe('useNotificationResponseRouting exact-Home permission dispatch', () => 
         await mountRouting();
         await waitFor(() => pushSpy.mock.calls.length === 1);
         expect(rpc.calls).toEqual([]);
+        expect(pushSpy).toHaveBeenCalledWith(`/session/${SESSION_ID}?serverId=${encodeURIComponent(homeA.id)}`);
     });
 
     it('does not route or act on an unsaved Home when its notification address is unreachable', async () => {
