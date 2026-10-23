@@ -45,6 +45,7 @@ export type PermissionRequestCoordinatorCompletion<TResult> = Readonly<{
 export type PermissionRequestCoordinatorStore = Readonly<{
     publishRequest(params: Readonly<{
         requestId: string;
+        onOccurrenceAssigned?: (occurrenceId: string) => void;
         toolName: string;
         toolInput: unknown;
         createdAt: number;
@@ -62,7 +63,7 @@ export type PermissionRequestCoordinatorStore = Readonly<{
         allowedTools?: readonly string[] | undefined;
         updatedPermissions?: unknown;
         extraCompletedFields?: Readonly<Record<string, unknown>> | null;
-        fallback?: Readonly<{ toolName: string; toolInput: unknown; createdAt: number; kind?: string; source?: string }> | null;
+        fallback?: Readonly<{ occurrenceId?: string; toolName: string; toolInput: unknown; createdAt: number; kind?: string; source?: string }> | null;
         requireAck?: boolean;
         expectedOccurrenceId?: string;
         observedCompletion?: true;
@@ -87,6 +88,7 @@ type PendingPermissionWaiter<TResult> = {
 
 type PendingPermissionRequest<TResult> = {
     requestId: string;
+    occurrenceId?: string;
     toolName: string;
     toolInput: unknown;
     createdAt: number;
@@ -173,8 +175,12 @@ export class PermissionRequestCoordinator<TResult> {
 
         this.pendingRequests.set(request.requestId, entry);
         try {
+            const publishedEntry = entry;
             this.store.publishRequest({
                 requestId: entry.requestId,
+                // Retain the producer-assigned identity with this exact live entry, even
+                // when an asynchronous publication outlives its persisted projection.
+                onOccurrenceAssigned: (occurrenceId) => { publishedEntry.occurrenceId = occurrenceId; },
                 toolName: entry.toolName,
                 toolInput: entry.toolInput,
                 createdAt: entry.createdAt,
@@ -204,7 +210,7 @@ export class PermissionRequestCoordinator<TResult> {
         if (entry) {
             return {
                 requestId,
-                occurrenceId: this.store.readOutstandingRequest(requestId)?.occurrenceId,
+                occurrenceId: this.store.readOutstandingRequest(requestId)?.occurrenceId ?? entry.occurrenceId,
                 toolName: entry.toolName,
                 toolInput: entry.toolInput,
                 createdAt: entry.createdAt,
@@ -360,7 +366,7 @@ export class PermissionRequestCoordinator<TResult> {
                 : { requestId: context.requestId, ...completion.completedRequest, requireAck: params.requireAck,
                     expectedOccurrenceId: params.expectedOccurrenceId,
                     observedCompletion: params.observedCompletion,
-                    fallback: { toolName: context.toolName, toolInput: context.toolInput,
+                    fallback: { occurrenceId: context.occurrenceId, toolName: context.toolName, toolInput: context.toolInput,
                         createdAt: context.createdAt, kind: context.kind, source: context.source },
                 });
             if (entry && this.pendingRequests.get(context.requestId) !== entry) return false;
@@ -392,6 +398,7 @@ export class PermissionRequestCoordinator<TResult> {
             requestId: entry.requestId,
             ...completion.completedRequest,
             fallback: {
+                occurrenceId: entry.occurrenceId,
                 toolName: entry.toolName,
                 toolInput: entry.toolInput,
                 createdAt: entry.createdAt,

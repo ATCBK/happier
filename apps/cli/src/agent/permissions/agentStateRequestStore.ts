@@ -137,6 +137,7 @@ export class AgentStateRequestStore {
     publishRequest(params: Readonly<{
         requestId: string;
         occurrenceId?: string;
+        onOccurrenceAssigned?: (occurrenceId: string) => void;
         toolName: string;
         toolInput: unknown;
         createdAt: number;
@@ -188,6 +189,7 @@ export class AgentStateRequestStore {
                     return typeof params.updateState === 'function' ? params.updateState(currentState) : currentState;
                 }
                 requests[params.requestId] = entry;
+                params.onOccurrenceAssigned?.(entry.occurrenceId);
 
                 const nextState: AgentState = {
                     ...currentState,
@@ -230,7 +232,7 @@ export class AgentStateRequestStore {
         allowedTools?: readonly string[] | undefined;
         updatedPermissions?: unknown;
         extraCompletedFields?: Readonly<Record<string, unknown>> | null;
-        fallback?: Readonly<{ toolName: string; toolInput: unknown; createdAt: number; kind?: string; source?: string }> | null;
+        fallback?: Readonly<{ occurrenceId?: string; toolName: string; toolInput: unknown; createdAt: number; kind?: string; source?: string }> | null;
         requireAck?: boolean;
         expectedOccurrenceId?: string;
         /** An actual provider effect was observed, such as Claude PostToolUse. */
@@ -276,6 +278,7 @@ export class AgentStateRequestStore {
             const completedEntry = clonePlainObjectToNullProto(existing) ?? Object.create(null);
 
             if (!existing && params.fallback) {
+                if (typeof params.fallback.occurrenceId === 'string') completedEntry.occurrenceId = params.fallback.occurrenceId;
                 completedEntry.tool = params.fallback.toolName;
                 completedEntry.arguments = params.fallback.toolInput;
                 completedEntry.createdAt = params.fallback.createdAt;
