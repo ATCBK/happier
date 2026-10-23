@@ -35,6 +35,16 @@ feature needs; each entry's key is its local id.
 A control is the affordance; an attachment is what the draft ends up holding.
 They are separate local ids on purpose.
 
+In 0.3 development builds, a control can request an initial toolbar placement
+with `defaultPlacement: 'pinned'`. Omit it, or use `'overflow'`, for the + menu.
+This is a default, not a visibility guarantee: the person's device-local
+placement preference takes precedence. Actions keep their existing
+`composer.primary` and `composer.more` bindings; an Action with both appears
+only once, initially pinned. Controls and Actions with the same local id keep
+separate placement preferences. The optional Control field requires the
+matching development host and SDK; older strict manifest readers do not accept
+it.
+
 ```ts
 import {
   defineComposerAttachment,
@@ -116,6 +126,7 @@ export const { manifest, activate } = definePlugin({
       'add-ticket': defineComposerControl({
         label: 'Attach ticket',
         icon: 'file',
+        defaultPlacement: 'pinned',
         // Omitting `scopes` is the widest policy, not none. Name the scopes
         // whose messages can actually hold this attachment.
         scopes: ['session', 'newSession', 'pendingMessage'],
