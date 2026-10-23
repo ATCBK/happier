@@ -97,6 +97,12 @@ describe('Workflow storage boundary current slot', () => {
       .resolves.toMatchObject({ invocations: [newest.index] });
     await expect(storage.execute({ operation: 'invocations.list', runId, parentRecordIds: ['other-root'] }))
       .resolves.toMatchObject({ invocations: [storage.rowById('other-parent')!.index] });
+    await expect(storage.execute({ operation: 'invocations.list', runId, lifecycles: ['cancelled'] }))
+      .resolves.toEqual({ invocations: [], parentRevision: 1 });
+    await expect(storage.execute({ operation: 'invocations.list', runId, lifecycles: ['failed'] }))
+      .resolves.toEqual({ invocations: [newest.index], parentRevision: 1 });
+    await expect(storage.execute({ operation: 'invocations.list', runId, parentRecordId, lifecycles: ['failed'] }))
+      .resolves.toEqual({ invocations: [newest.index], parentRevision: 1 });
     await expect(storage.execute({ ...currentSlot, parentRecordId: 'missing-parent' })).resolves.toEqual({
       invocation: null, parentRevision: 1,
     });

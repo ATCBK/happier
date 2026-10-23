@@ -358,14 +358,13 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
         const after = decodeCursor(operation.cursor);
         const remaining = scanned.filter((row) => after === null || BigInt(positionOf(row)) > BigInt(after));
         const matching = remaining.filter((row) => !lifecycles || lifecycles.includes(row.index.lifecycle));
-        // Paging is keyed on the scanned slot, not the filtered result: the
-        // server advances past inspected slots even when they are filtered out,
-        // so an attention row can legitimately sit beyond the first page.
+        // The server filters history before LIMIT. Parent windows also fill
+        // the public page with matching newest slots, skipping superseded or
+        // nonmatching slots internally rather than exposing empty scan pages.
         const limit = Math.min(pageSize, typeof operation.limit === 'number' ? operation.limit : Number.MAX_SAFE_INTEGER);
-        const inspected = remaining.slice(0, limit);
-        const page = matching.filter((row) => inspected.includes(row));
-        const lastInspected = inspected.at(-1);
-        const hasMore = remaining.length > inspected.length;
+        const page = matching.slice(0, limit);
+        const lastReturned = page.at(-1);
+        const hasMore = matching.length > page.length;
         return {
           invocations: page.map((row) => row.index),
           parentRevision: revision,
@@ -373,7 +372,7 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
             keyCensus,
             progressEnvelopesByInvocationId: Object.fromEntries(page.map(row => [row.index.id, row.contentEnvelope])),
           } : {}),
-          ...(hasMore && lastInspected ? { nextCursor: encodeCursor(positionOf(lastInspected)) } : {}),
+          ...(hasMore && lastReturned ? { nextCursor: encodeCursor(positionOf(lastReturned)) } : {}),
         };
       }
       case 'invocations.fact': {
