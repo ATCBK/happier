@@ -102,7 +102,10 @@ In 0.3 development source, `hstack dev` automatically refreshes stale dependenci
 at startup and when dependency inputs change in watch mode. Refresh briefly stops
 only that Stack's Expo process. Pending source starts refuse refresh with
 `HAPPIER_DEPENDENCY_STACK_START_IN_PROGRESS` through service readiness; retry
-after the start completes. Running Stack runners and retained server/daemon
+after the start completes. Worker source tests and typechecks wait for a foreign
+start's readiness or failure cleanup, then recheck freshness. This wait releases
+dependency custody so the start can finish; a start never waits for itself.
+Running Stack runners and retained server/daemon
 processes keep running and do not block refresh. A successful refresh prints
 their Stack names and records `stacksNeedingRestart` in dependency readiness;
 restart listed Stacks at their owner's next boundary. Another Stack's Expo
