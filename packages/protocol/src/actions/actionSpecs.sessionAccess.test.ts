@@ -20,6 +20,7 @@ describe('Session access Action contracts', () => {
       expect(isSessionAccessActionId(id)).toBe(true);
       expect(PluginInvocableActionIdSchema.safeParse(id).success).toBe(true);
       expect(spec.executionPlacement).toBe('client');
+      expect(spec.cli?.acceptsServerId).toBe(true);
       expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
       expect(spec.inputSchema.safeParse(input).success).toBe(true);
       expect(spec.inputSchema.safeParse({ ...input, encryptedDataKey: 'caller-owned' }).success).toBe(false);

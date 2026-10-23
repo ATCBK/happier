@@ -10,9 +10,9 @@ import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.
 import { SessionDataKeyEnvelopeRecipientAccountIdV1Schema, SessionDataKeyEnvelopeSummaryV1Schema, SessionDataKeyRecipientUnavailableReasonV1Schema } from '../encryption/sessionDataKeyEnvelopes.js';
 
 /** Logical client intents; no caller-supplied key, envelope or metadata payload. */
-export const SessionAccessEncryptionPrepareInputV1Schema = lazyZodSchema(() => z.strictObject({ sessionId: asProtocolZod(SessionIdSchema) }));
+export const SessionAccessEncryptionPrepareInputV1Schema = lazyZodSchema(() => z.strictObject({ sessionId: asProtocolZod<string, string>(SessionIdSchema) }));
 export const SessionAccessEncryptionReprepareInputV1Schema = lazyZodSchema(() => z.strictObject({
-  sessionId: asProtocolZod(SessionIdSchema), recipientAccountId: SessionDataKeyEnvelopeRecipientAccountIdV1Schema,
+  sessionId: asProtocolZod<string, string>(SessionIdSchema), recipientAccountId: SessionDataKeyEnvelopeRecipientAccountIdV1Schema,
 }));
 export const SessionAccessEncryptionPrepareResultV1Schema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['complete', 'incomplete', 'scope_changed', 'not_required', 'session_data_key_unavailable']),
