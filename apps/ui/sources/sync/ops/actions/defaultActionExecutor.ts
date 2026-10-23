@@ -374,9 +374,8 @@ import {
   listSpawnConnectedServicesForActions,
   resolveSessionSpawnAgentInventorySelectionForActions,
   resolveAgentInventoryProbeTarget,
-  probeAgentModelsForActions,
-  type AgentInventoryProbeTarget,
 } from './agentInventoryActionDeps';
+import { probeAgentModelsForActions, type AgentInventoryProbeTarget } from './agentInventoryProbe';
 import { listMachinesForVoiceTool } from '@/voice/tools/actionImpl/machinesList';
 import { listServersForVoiceTool } from '@/voice/tools/actionImpl/serversList';
 import { listReviewEnginesForVoiceTool } from '@/voice/tools/actionImpl/reviewEnginesList';

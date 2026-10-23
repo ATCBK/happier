@@ -3,13 +3,12 @@ import { resolveActionBackendTargetSelection } from '@happier-dev/protocol/actio
 import type { BackendTargetRefV1 } from '@happier-dev/protocol/backends/targets/backendTargetRef';
 import type { AgentExecutionTargetV1, BackendTargetRefV2, PluginProjectionV2 } from '@happier-dev/protocol';
 import type { AgentInventoryProbeInput } from '@happier-dev/protocol/actions/actionSpecs';
-import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema, AgentConfigOptionsProbeObservationSchema, projectProbedConfigOptionDefinitions, type AgentModelsProbeObservation } from '@happier-dev/protocol/capabilities';
+import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema, AgentConfigOptionsProbeObservationSchema, projectProbedConfigOptionDefinitions } from '@happier-dev/protocol/capabilities';
 import type { ConnectedServicesProfileOption } from '@happier-dev/agents';
-import { projectUnexpectedActionFailureV1, type ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { getAgentCore, isBundledAgentId } from '@/agents/catalog/catalog';
-import { buildProviderCliCapabilityId } from '@/capabilities/cliCapabilityId';
-import { machineCapabilitiesInvoke, type MachineCapabilitiesInvokeResult } from '@/sync/ops/capabilities';
+import type { MachineCapabilitiesInvokeResult } from '@/sync/ops/capabilities';
+import { probeAgentInventory, type AgentInventoryProbeTarget } from './agentInventoryProbe';
 import { createFrontDoorActionExecute } from './frontDoorRuntimeActionExecutor';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -23,7 +22,6 @@ import {
     resolveProjectedConnectedAccountServiceKeys,
 } from '@/sync/domains/connectedServices/qualifiedConnectedAccountServiceOptions';
 import { resolveQualifiedConnectedAccountServiceKey } from '@/sync/domains/connectedServices/connectedServiceRegistry';
-import { NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS } from '@/components/sessions/new/modules/newSessionCapabilityProbeTimeoutMs';
 
 /**
  * The app client's `sessions.spawn.*` / `agents.*` inventory Action
@@ -38,19 +36,6 @@ import { NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS } from '@/components/sessions/n
  * Failure rules: an unknown Agent id or an unprobeable machine produces a typed
  * empty/unavailable answer, never bundled Codex/Claude substitutes.
  */
-
-export type AgentInventoryProbeTarget = Readonly<{
-    /** The runtime Agent id that names the machine capability (`cli.<id>`). */
-    agentId: string;
-    /**
-     * The V1 backend target carried to the probe, when the target can be
-     * expressed in that vocabulary at all. An external qualified Agent target
-     * (`agent:<pluginId>/<localId>`) has no V1 carrier form — the daemon
-     * resolves it from the capability id — so omitting the param is the
-     * contract, not a lost fact.
-     */
-    backendTargetParam: BackendTargetRefV1 | BackendTargetRefV2 | null;
-}>;
 
 function findProjectedAgentByIdentity(projection: PluginProjectionV2, identity: AgentExecutionTargetV1['identity']) {
     return Object.values(projection.agentsById).find((candidate) => (
@@ -128,50 +113,6 @@ export function resolveAgentInventoryProbeTarget(args: Readonly<{
     };
 }
 
-async function probeAgentInventory(
-    machineId: string,
-    target: AgentInventoryProbeTarget,
-    method: 'probeModels' | 'probeModes' | 'probeConfigOptions',
-    requestedServerId?: string,
-    probe?: AgentInventoryProbeInput,
-    signal?: AbortSignal,
-): Promise<Readonly<{ ok: true; result: Record<string, unknown> }> | Readonly<{ ok: false; failure: ActionExecuteFailure }>> {
-    const serverId = normalizeId(requestedServerId) || normalizeId(getActiveServerSnapshot()?.serverId);
-    const { transportTimeoutMs, ...capabilityParams } = probe ?? {};
-    const res = await machineCapabilitiesInvoke(
-        machineId,
-        {
-            id: buildProviderCliCapabilityId(target.agentId),
-            method,
-            params: {
-                timeoutMs: NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS,
-                ...capabilityParams,
-                ...(target.backendTargetParam ? { backendTarget: target.backendTargetParam } : {}),
-            },
-        },
-        { ...(serverId ? { serverId } : {}), ...(transportTimeoutMs ? { timeoutMs: transportTimeoutMs } : {}), signal },
-    );
-    if (!res.supported) return { ok: false, failure: {
-        ...(res.reason === 'outcomeUnknown' ? projectUnexpectedActionFailureV1(true) : {
-            ok: false as const,
-            errorCode: res.reason === 'not-supported' ? 'unsupported_method' : 'agent_inventory_probe_failed',
-            error: res.reason === 'not-supported' ? 'unsupported_method' : 'agent_inventory_probe_failed',
-        }),
-        details: { reason: res.reason, ...(res.requestDisposition ? { requestDisposition: res.requestDisposition } : {}) },
-    } };
-    const failed = (errorCode = 'agent_inventory_probe_failed'): Readonly<{ ok: false; failure: ActionExecuteFailure }> => ({ ok: false,
-        failure: { ok: false, errorCode, error: errorCode } });
-    if (!res.response.ok) return failed(res.response.error.code?.trim() || undefined);
-    const result = res.response.result;
-    if (!result || typeof result !== 'object' || Array.isArray(result)) return failed();
-    if (probe) {
-        const parsed = (method === 'probeModels' ? AgentModelsProbeObservationSchema
-            : method === 'probeModes' ? AgentSessionModesProbeObservationSchema : AgentConfigOptionsProbeObservationSchema).safeParse(result);
-        return parsed.success ? { ok: true, result: parsed.data } : failed();
-    }
-    return { ok: true, result: result as Record<string, unknown> };
-}
-
 /** Existing inventory Actions are the only public preflight transport front door. */
 export async function invokeAgentInventoryProbeAction(params: Readonly<{
     agentId: string;
@@ -214,26 +155,6 @@ export async function invokeAgentInventoryProbeAction(params: Readonly<{
         if (params.signal?.aborted) throw error;
         return { supported: false, reason: 'error' };
     }
-}
-
-/** Admitted native model transport, below the Action executor and shared cache. */
-export async function probeAgentModelsForActions(args: Readonly<{ machineId: string; serverId?: string; signal?: AbortSignal; probe: AgentInventoryProbeInput }>, target: AgentInventoryProbeTarget): Promise<Readonly<{
-    agentId: string;
-    items: readonly Readonly<{ modelId: string; label: string; description?: string }>[];
-    supportsFreeform?: boolean;
-    source: 'dynamic' | 'static' | 'unavailable' | 'preflight';
-    probeObservation?: AgentModelsProbeObservation;
-}> | ActionExecuteFailure> {
-    const probe = await probeAgentInventory(args.machineId, target, 'probeModels', args.serverId, args.probe, args.signal);
-    if (!probe.ok) return probe.failure;
-    const parsed = AgentModelsProbeObservationSchema.parse(probe.result);
-    return {
-        agentId: target.agentId,
-        items: parsed.availableModels.map(model => ({ modelId: model.id, label: model.name, ...(model.description ? { description: model.description } : {}) })),
-        supportsFreeform: parsed.supportsFreeform,
-        source: parsed.source ?? 'preflight',
-        probeObservation: parsed,
-    };
 }
 
 function readProbeSource(result: Record<string, unknown>): 'static' | 'dynamic' | 'unavailable' | null {
