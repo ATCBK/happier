@@ -45,6 +45,8 @@ it.each(['ui', 'agent', 'cli'] as const)('forwards approved sandbox recovery fro
 
 it.each([
     ['browser.context.capturePage', { browserSessionId: 'browser', viewId: 'view' }],
+    ['browser.context.attachToComposer', { browserSessionId: 'browser', viewId: 'view', contextId: 'context' }],
+    ['browser.context.attachToComposer', { browserSessionId: 'browser', viewId: 'view', contextId: 'context', source: undefined }],
     ['browser.recording.status', { recordingId: 'recording' }],
 ] as const)('routes daemon-owned non-command %s by its catalog schema', async (actionId, input) => {
     const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
@@ -53,6 +55,19 @@ it.each([
     const execute = createBrowserRuntimeActionExecutor({ executeOnMachine });
     expect(await execute({ actionId, input, context: { authority: 'present_user',
         externalActionTarget: { kind: 'machine', machineId: 'machine' } } })).toEqual(failure);
+});
+
+it('never falls back from a mounted page attachment to a Machine owner', async () => {
+    const { createBrowserRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+    const executeOnMachine = vi.fn();
+    const execute = createBrowserRuntimeActionExecutor({ executeOnMachine });
+    const input = { browserSessionId: 'browser', viewId: 'view', navigationGeneration: 0, source: 'activePage' };
+    const context = { surface: 'ui' as const, externalActionTarget: { kind: 'machine' as const, machineId: 'machine' } };
+    expect(await execute({ actionId: 'browser.context.attachToComposer', input, context }))
+        .toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+    expect(await execute({ actionId: 'browser.context.attachToComposer', input: { ...input, source: 'unknown' }, context }))
+        .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(executeOnMachine).not.toHaveBeenCalled();
 });
 
 const localPreviewTarget = {
@@ -1072,56 +1087,6 @@ describe('browser runtime action executor', () => {
             errorCode: 'runtime_action_disabled',
             error: 'runtime_action_disabled:browser:browser_context_unavailable',
         });
-    });
-
-    it('routes browser.context.annotation.* through the in-app annotation adapter front door', async () => {
-        const realMod = await import('./runtimeActionExecutor');
-        const dispatch = vi.fn(async (request: { kind: string }) => {
-            if (request.kind === 'start') {
-                return { status: 'started' as const, state: { marker: 'started' } as never };
-            }
-            if (request.kind === 'captureRegion') {
-                return {
-                    status: 'captured' as const,
-                    state: { marker: 'captured' } as never,
-                    attachmentId: 'annotation_attachment_1',
-                    contextId: 'browser_context_view_1_browserAnnotation_0_1',
-                };
-            }
-            return { status: 'unavailable' as const, reason: 'browser_context_annotation_inactive' };
-        });
-        const execute = realMod.createBrowserRuntimeActionExecutor({ annotation: { dispatch } });
-
-        await expect(execute(runtimeArgs({
-            actionId: 'browser.context.annotation.start',
-            input: { browserSessionId: 'browser_session_1', viewId: 'view_1' },
-        }))).resolves.toMatchObject({
-            v: 1,
-            actionId: 'browser.context.annotation.start',
-            status: 'started',
-        });
-
-        await expect(execute(runtimeArgs({
-            actionId: 'browser.context.annotation.captureRegion',
-            input: {
-                browserSessionId: 'browser_session_1',
-                viewId: 'view_1',
-                target: { kind: 'region', rect: { x: 1, y: 2, width: 30, height: 40 } },
-                styleIntent: 'callout',
-            },
-        }))).resolves.toMatchObject({
-            v: 1,
-            actionId: 'browser.context.annotation.captureRegion',
-            status: 'captured',
-            attachmentId: 'annotation_attachment_1',
-        });
-
-        expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ kind: 'start' }));
-        expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
-            kind: 'captureRegion',
-            target: { kind: 'region', rect: { x: 1, y: 2, width: 30, height: 40 } },
-            styleIntent: 'callout',
-        }));
     });
 
     it('fails closed for browser.context.annotation.* when no annotation adapter is registered', async () => {

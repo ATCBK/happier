@@ -457,14 +457,15 @@ export function createBrowserRuntimeActionExecutor(
         // `BrowserContextState` (mode machine + draft capture + composer attach) through the
         // annotation adapter, not a daemon producer. Routing it through this front-door leaf is what
         // makes the BrowserShell toolbar handlers AND an agent dispatch share one path (§12.20).
-        if (isBrowserAnnotationRuntimeAction(args.actionId)) {
+        if (isBrowserAnnotationRuntimeAction(args.actionId) || (args.actionId === 'browser.context.attachToComposer'
+            && typeof args.input === 'object' && args.input !== null && 'source' in args.input && args.input.source !== undefined)) {
             const parsed = parseRuntimeActionInput(args);
             if (!parsed.ok) return parsed.result;
             const annotationExecutor = createBrowserAnnotationRuntimeExecutor({
                 ...(input.annotation ? { adapter: input.annotation } : {}),
                 ...(input.resolveAnnotation ? { resolveAdapter: input.resolveAnnotation } : {}),
             });
-            return await annotationExecutor(args.actionId, parsed.input);
+            return await annotationExecutor(args.actionId, parsed.input, args.context.signal);
         }
         if (args.actionId === 'browser.recording.attachToComposer') {
             const parsed = parseRuntimeActionInput(args);

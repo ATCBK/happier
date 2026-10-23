@@ -1,6 +1,6 @@
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import { BrowserActiveTargetV1Schema, type BrowserActiveTargetV1 } from '@happier-dev/protocol/browser/events/activeTarget';
-import { BrowserAutomationCancelActiveResultV1Schema, BrowserAutomationActionResultV1Schema, BrowserAutomationActionKindV1Schema, isBrowserAutomationMutatingActionKind, type BrowserAutomationCancelActiveResultV1, type BrowserAutomationActionResultV1 } from '@happier-dev/protocol/browser/automation/v1';
+import { BrowserAutomationCancelActiveResultV1Schema, BrowserAutomationActionResultV1Schema, BrowserAutomationActionKindV1Schema, isBrowserAutomationMutatingActionKind, type BrowserAutomationCancelActiveResultV1, type BrowserAutomationActionRequestV1, type BrowserAutomationActionResultV1 } from '@happier-dev/protocol/browser/automation/v1';
 import { BrowserAutomationErrorCodeV1Schema, type BrowserAutomationErrorCodeV1 } from '@happier-dev/protocol/browser/automation/errors';
 import type { BrowserAgentPoint } from './copresence';
 import { redactBrowserAutomationActionResultDetails, redactBrowserAutomationTimelineDetails } from '@happier-dev/protocol/browser/automation/redaction';
@@ -32,6 +32,7 @@ export type BrowserAutomationRequest = Readonly<{
     actionKind: string;
     timeoutMs: number;
     payload?: Readonly<Record<string, unknown>>;
+    dialogResponse?: BrowserAutomationActionRequestV1['dialogResponse'];
 }>;
 
 export type BrowserAutomationResult = Readonly<{
@@ -490,6 +491,10 @@ export function createBrowserAutomationControlService(
             }
             if (request.navigationGeneration !== owner.navigationGeneration) {
                 return Promise.resolve(rejectAndRecord(request, owner, 'stale', 'stale_navigation'));
+            }
+            // UI page engines cannot answer browser dialogs. Reject before dispatching their action.
+            if (request.dialogResponse !== undefined) {
+                return Promise.resolve(rejectAndRecord(request, owner, 'unsupported', 'unsupported_action'));
             }
             if (!owner.supportedActions.includes(request.actionKind)) {
                 return Promise.resolve(rejectAndRecord(request, owner, 'unsupported', 'unsupported_action'));

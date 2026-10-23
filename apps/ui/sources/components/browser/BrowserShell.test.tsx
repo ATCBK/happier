@@ -39,6 +39,11 @@ import { createBrowserRuntimeActionExecutor } from '@/sync/domains/browser/actio
 import { browserControlActionId } from '@/sync/domains/browser/actions/controlActionId';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { readRegisteredBrowserContextAnnotationAdapter } from '@/sync/domains/browser/context/runtimeAnnotationRegistry';
+import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { ActionsSettingsV1Schema, isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
+import { isAgentInitiatedApprovalRequiredByDefault, isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
+import { createBrowserAnnotationCaptureProvider, startBrowserAnnotationMode } from '@/sync/domains/browser/context';
 
 const testState = vi.hoisted(() => ({
   useLocalServicePreviewState: vi.fn(),
@@ -431,6 +436,104 @@ async function createSimulatorPreviewShellState(): Promise<
 }
 
 describe('BrowserShell', () => {
+  it.each(['ui', 'agent'] as const)('admits mounted page and draft attachments from %s before capture, media or composer effects', async (surface) => {
+    const { BrowserShell } = await import('./BrowserShell');
+    const shellState = await createAnnotationCapableShellState();
+    const view = shellState.viewsById.view_1!;
+    const capabilities = { ...contextCapabilities, supportedContextKinds: ['browserPageReference', 'browserAnnotation'],
+      screenshot: { supported: true, requiresAttachmentUploads: true } } satisfies BrowserContextCapabilities;
+    const started = startBrowserAnnotationMode(createBrowserContextState(), { browserContextEnabled: true,
+      attachmentsUploadsEnabled: true, contextCapabilities: capabilities, adapterCapabilities: view.adapterCapabilities,
+      browserSessionId: view.browserSessionId, viewId: view.viewId, navigationGeneration: view.navigationGeneration, startedAtMs: 1 });
+    if (started.status !== 'started') throw new Error('annotation fixture must be available');
+    let contextState = started.state;
+    const captureScreenshot = vi.fn(async () => ({ ok: true as const,
+      snapshot: { bytes: new Uint8Array([1]), mimeType: 'image/png' as const, width: 20, height: 20, sizeBytes: 1 } }));
+    const registerMedia = vi.fn(() => ({ mediaId: 'media-parity', mediaKind: 'image' as const, width: 20, height: 20, sizeBytes: 1 }));
+    const machine = vi.fn(async () => ({ ok: false as const, errorCode: 'unexpected_machine', error: 'unexpected_machine' }));
+    let settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+      'browser.context.attachToComposer': { enabled: false }, 'browser.context.annotation.attachDraft': { enabled: false },
+    } });
+    const runtimeActionExecute = createBrowserRuntimeActionExecutor({ resolveAnnotation: readRegisteredBrowserContextAnnotationAdapter, executeOnMachine: machine });
+    const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+      runtimeActionExecute,
+      isActionEnabled: (actionId, context) => isActionEnabledByActionsSettings(actionId, settings, context),
+      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, settings, context),
+    }));
+    const execute = createFrontDoorRuntimeActionExecutor(executor);
+    function Harness() {
+      const [state, publish] = React.useState(contextState);
+      return <BrowserShell browserSessionId={view.browserSessionId} platform="web" state={shellState}
+        onCommand={vi.fn()} testID="browser-shell" browserContext={{ state, readState: () => contextState,
+          contextCapabilities: capabilities, attachmentsUploadsEnabled: true,
+          annotationCaptureProvider: createBrowserAnnotationCaptureProvider({ captureScreenshot, registerMedia }),
+          annotationRuntimeActionExecute: execute, onStateChange: next => { contextState = next; publish(next); }, nowMs: () => 2 }} />;
+    }
+    const screen = await renderScreen(<Harness />);
+    const adapter = readRegisteredBrowserContextAnnotationAdapter(view)!;
+    await act(async () => { await adapter.dispatch({ kind: 'addDraftRegion', rect: { x: 0, y: 0, width: 20, height: 20 } }); });
+    const initial = contextState;
+    const operations = [
+      { actionId: 'browser.context.attachToComposer', input: { browserSessionId: view.browserSessionId, viewId: view.viewId,
+          navigationGeneration: view.navigationGeneration, source: 'activePage' }, button: 'browser-shell-attach-page' },
+      { actionId: 'browser.context.annotation.attachDraft', input: { browserSessionId: view.browserSessionId, viewId: view.viewId,
+          navigationGeneration: view.navigationGeneration }, button: 'browser-shell-annotation-editor-attach' },
+    ] as const;
+    for (const operation of operations) {
+      if (surface === 'ui') await screen.pressByTestIdAsync(operation.button);
+      else expect(await executor.execute(operation.actionId, operation.input, { surface })).toMatchObject({ ok: false });
+      expect(contextState).toBe(initial);
+      expect(captureScreenshot).not.toHaveBeenCalled();
+      expect(registerMedia).not.toHaveBeenCalled();
+    }
+    await act(async () => {
+      expect(await executor.execute('browser.context.annotation.start', { browserSessionId: view.browserSessionId, viewId: view.viewId }, { surface }))
+        .toMatchObject({ ok: true });
+    });
+    settings = ActionsSettingsV1Schema.parse({ v: 1 });
+    if (surface === 'agent') {
+      const approvalsCreate = vi.fn(async () => ({ artifactId: 'browser-approval' }));
+      const approvalExecutor = createActionExecutor(createActionExecutorBoundaryFixture({
+        runtimeActionExecute,
+        isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context),
+        isApprovalExecutionOriginCurrent: async () => true,
+        approvalsCreate,
+        approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request: {
+          ...request, status: 'rejected', decision: { kind: 'reject', decidedAtMs: 3 },
+        } }),
+        approvalsUpdate: async () => ({ ok: true }),
+      }));
+      const beforeApproval = contextState;
+      for (const operation of operations) {
+        expect(await approvalExecutor.execute(operation.actionId, operation.input, { surface, serverId: 'server-1',
+          actionRequestId: `browser-request:${operation.actionId}`, defaultSessionId: 'session_1', defaultSessionMachineId: 'machine_1' }))
+          .toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+      }
+      expect(approvalsCreate).toHaveBeenCalledTimes(2);
+      expect(contextState).toBe(beforeApproval);
+      expect(captureScreenshot).not.toHaveBeenCalled();
+      expect(registerMedia).not.toHaveBeenCalled();
+    }
+    settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
+      'browser.context.attachToComposer': ['agent'], 'browser.context.annotation.attachDraft': ['agent'],
+    } });
+    for (const operation of operations) {
+      expect(resolveActionExecutionPlacementForInput(getActionSpec(operation.actionId), operation.input)).toBe('client');
+      expect(isAgentInitiatedApprovalRequiredByDefault(operation.actionId)).toBe(true);
+      if (surface === 'ui') await screen.pressByTestIdAsync(operation.button);
+      else await act(async () => {
+        const result = await executor.execute(operation.actionId, operation.input, { surface });
+        expect(result).toMatchObject({ ok: true });
+        if (result.ok) expect(getActionSpec(operation.actionId).outputSchema.safeParse(result.result).success).toBe(true);
+      });
+    }
+    expect(selectBrowserContextComposerAttachments(contextState)).toHaveLength(2);
+    expect(contextState.itemOrder.map(id => contextState.itemsById[id]!.kind)).toEqual(['browserPageReference', 'browserAnnotation']);
+    expect(captureScreenshot).toHaveBeenCalledTimes(1);
+    expect(registerMedia).toHaveBeenCalledTimes(1);
+    expect(machine).not.toHaveBeenCalled();
+  });
+
   it('recovers an ended agent stream through the existing current-tab open and close intents', async () => {
     const { BrowserShell } = await import('./BrowserShell');
     const state = await createShellState();

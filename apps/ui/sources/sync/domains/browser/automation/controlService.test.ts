@@ -1,5 +1,7 @@
 import { browserViewKey } from '@happier-dev/protocol';
+import { BrowserInjectedRuntimeResultMessageV1Schema } from '@happier-dev/protocol/browser/automation/v1';
 import { describe, expect, it } from 'vitest';
+import { createInjectedPageAutomationOwner } from '@/components/browser/adapters/automation/injectedPageRuntime';
 import type {
     BrowserAutomationRequest as AutomationRequest,
     BrowserAutomationResult as AutomationResult,
@@ -65,6 +67,60 @@ function createPendingResult(): Readonly<{
 }
 
 describe('browser automation control service', () => {
+    it('rejects dialog responses before evaluating the page and still permits a subsequent ordinary action', async () => {
+        const { createBrowserAutomationControlService } = await import('./controlService');
+        const service = createBrowserAutomationControlService({ nowMs: () => 1000 });
+        const listeners = new Set<(raw: string) => void>();
+        let pageEvaluations = 0;
+        const ordinaryRequest = createRequest({ actionKind: 'click' });
+        service.registerOwner(createInjectedPageAutomationOwner({
+            ownerId: 'injected-owner',
+            browserSessionId: ordinaryRequest.browserSessionId,
+            viewId: ordinaryRequest.viewId,
+            navigationGeneration: ordinaryRequest.navigationGeneration,
+            adapterKind: 'localPreview',
+            collectorId: 'collector',
+            nonce: 'nonce',
+            capabilityVersion: '1',
+            supportedActions: ['click'],
+            nowMs: () => 1000,
+            transport: {
+                subscribeToResults(listener) {
+                    listeners.add(listener);
+                    return () => { listeners.delete(listener); };
+                },
+                sendCommand(command) {
+                    pageEvaluations++;
+                    const { commandName: _commandName, payload: _payload, ...identity } = command;
+                    const result = BrowserInjectedRuntimeResultMessageV1Schema.parse({
+                        ...identity,
+                        kind: 'browser.injectedRuntime.result',
+                        ok: true,
+                        stale: false,
+                        fidelity: 'injectedPage',
+                        trusted: false,
+                        durationMs: 1,
+                        data: { clicked: true },
+                    });
+                    for (const listener of listeners) listener(JSON.stringify(result));
+                },
+            },
+        }));
+
+        const result = await service.executeAction({
+            ...ordinaryRequest,
+            dialogResponse: { kind: 'prompt', message: 'Enter a value', accept: true, promptText: 'Approved value' },
+        });
+        expect(result).toMatchObject({ status: 'unsupported', errorCode: 'unsupported_action' });
+        expect(pageEvaluations).toBe(0);
+        expect(service.getActionTimeline(ordinaryRequest)).toMatchObject([
+            { status: 'unsupported', reasonCode: 'unsupported_action' },
+        ]);
+
+        expect(await service.executeAction({ ...ordinaryRequest, automationRequestId: 'ordinary-after-dialog' }))
+            .toMatchObject({ status: 'succeeded', resultSummary: { clicked: true } });
+        expect(pageEvaluations).toBe(1);
+    });
     it('retains equal admitted active targets while publishing actual motion and rejecting malformed targets', async () => {
         const { createBrowserAutomationControlService } = await import('./controlService');
         const service = createBrowserAutomationControlService({ nowMs: () => 1000 });

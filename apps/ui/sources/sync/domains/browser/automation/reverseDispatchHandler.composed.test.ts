@@ -45,6 +45,15 @@ afterEach(() => {
 });
 
 describe('daemon to exact mounted UI browser Action', () => {
+  it('rejects dialog responses through the mounted Action route without clicking the page', async () => {
+    const mounted = mountView();
+    const result = await handleUiBrowserAutomationDispatchRequest({ v: 1, actionId: args.actionId,
+      input: { ...request, dialogResponse: { kind: 'confirm', message: 'Continue?', accept: true } },
+      authority: args.context.authority, sessionId: boundView.sessionId }, boundView);
+    expect(result).toMatchObject({ status: 'unsupported', errorCode: 'unsupported_action' });
+    expect(mounted.clicks()).toBe(0);
+  });
+
   it.each([true, false])('opens the mounted page through the real Machine-targeted Action with its canonical kindless input (automation=%s)', async withAutomation => {
     const mounted = mountView(undefined, withAutomation);
     const runtimeActionExecute = createDaemonRuntimeActionExecutor({ env: { NODE_ENV: 'test' },

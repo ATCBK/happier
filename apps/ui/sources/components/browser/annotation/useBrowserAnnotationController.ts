@@ -9,7 +9,6 @@ import type {
 import type { BrowserControlViewState } from '@/sync/domains/browser/control';
 import type { DesktopWebViewNativeAvailability } from '@/sync/domains/browser/adapters/desktopWebView';
 import {
-    attachActiveBrowserPageReference,
     countBrowserAnnotationDraftMarks,
     createBrowserContextAnnotationAdapter,
     createBrowserContextState,
@@ -70,6 +69,10 @@ function buildAnnotationRuntimeActionInput(
         case 'start':
         case 'cancel':
             return base;
+        case 'attachDraft':
+            return { ...base, navigationGeneration: view.navigationGeneration };
+        case 'attachPageReference':
+            return { ...base, navigationGeneration: view.navigationGeneration, source: 'activePage' };
         case 'captureRegion':
             return {
                 ...base,
@@ -199,26 +202,6 @@ export function useBrowserAnnotationController(input: Readonly<{
     const browserContextRef = React.useRef(browserContext);
     browserContextRef.current = browserContext;
 
-    const attachPageReference = React.useCallback(() => {
-        const context = browserContextRef.current;
-        if (!context) return;
-
-        const result = attachActiveBrowserPageReference({
-            state: context.readState?.() ?? context.state,
-            browserContextEnabled: context.enabled !== false,
-            contextCapabilities: context.contextCapabilities,
-            view: activeView,
-            capturedAtMs: context.nowMs?.() ?? Date.now(),
-        });
-
-        if (result.status === 'attached') {
-            context.onStateChange(result.state);
-            return;
-        }
-
-        context.onAttachUnavailable?.(result.reason);
-    }, [activeView]);
-
     // The in-app annotation capture provider. Prefer an explicitly-supplied provider; otherwise use
     // the desktop (Wry) native-snapshot producer when the active desktop engine advertises capture
     // support. iframe/RN engines have no first-party screenshot producer yet (12.20B) → no provider
@@ -314,6 +297,10 @@ export function useBrowserAnnotationController(input: Readonly<{
             context.onAttachUnavailable?.(reason);
         }
     }, [annotationAdapter]);
+
+    const attachPageReference = React.useCallback(() => {
+        void dispatchAnnotation({ kind: 'attachPageReference' });
+    }, [dispatchAnnotation]);
 
     const start = React.useCallback(() => {
         void dispatchAnnotation({ kind: 'start' });

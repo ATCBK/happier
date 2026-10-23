@@ -11,11 +11,11 @@ import { createNativeWebViewPageInfoDiagnosticEvent } from '@/components/browser
 import { buildBrowserAdapterCapabilities } from '@/sync/domains/browser/adapters/capabilities';
 import type { BrowserControlViewState } from '@/sync/domains/browser/control';
 import { selectBrowserDiagnosticsForView } from '@/sync/domains/browser/diagnostics/store';
-import type { BrowserDiagnosticsSnapshotClientResult } from '@/sync/domains/browser/diagnostics/machineRpc';
+import type { BrowserDiagnosticsSnapshotClientInput, BrowserDiagnosticsSnapshotClientResult } from '@/sync/domains/browser/diagnostics/machineRpc';
 
 import { useBrowserDiagnosticsRuntime as useRuntime, type UseBrowserDiagnosticsRuntimeInput } from './useBrowserDiagnosticsRuntime';
 import { createActionExecutor } from '@happier-dev/protocol';
-import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
+import { countTransportRequests, createActionExecutorBoundaryFixture } from '@/dev/testkit';
 import { createDefaultRuntimeActionExecutor } from '@/sync/ops/actions/defaultRuntimeActionExecutor';
 import { clearBrowserRuntimeControlRegistryForTests, registerBrowserRuntimeControlAdapter } from '@/sync/domains/browser/actions/runtimeControlRegistry';
 import { createBrowserControlState } from '@/sync/domains/browser/control/reducer';
@@ -774,6 +774,33 @@ describe('useBrowserDiagnosticsRuntime', () => {
         expect(projection.events).toEqual([
             expect.objectContaining({ eventId: 'evt_local_console_1' }),
         ]);
+    });
+
+    it('keeps one daemon snapshot acquisition across same-document view updates', async () => {
+        stubCryptoRandomUuid();
+        const signals: AbortSignal[] = [];
+        const transport = countTransportRequests(async (input: BrowserDiagnosticsSnapshotClientInput): Promise<BrowserDiagnosticsSnapshotClientResult> => {
+            if (input.signal) signals.push(input.signal);
+            return { ok: true, snapshot: createDaemonDiagnosticsSnapshot([createDaemonConsoleEvent()]) };
+        }, () => 'diagnostics.snapshot');
+        const view = createLocalPreviewView();
+        const hook = await renderHook(({ current }: { current: BrowserControlViewState }) => useBrowserDiagnosticsRuntime({
+            view: current, enabled: true, parentOrigin: 'https://app.happier.test',
+            daemonSnapshotClient: transport.request, daemonSnapshotRefreshIntervalMs: null,
+        }), { initialProps: { current: view } });
+
+        for (let arrival = 0; arrival < 20; arrival += 1) {
+            await hook.rerender({ current: { ...view, title: `Application ${arrival}`, loadingProgress: arrival / 20 } });
+        }
+        expect(transport.read()).toEqual({ 'diagnostics.snapshot': 1 });
+        expect(signals[0]?.aborted).toBe(false);
+        expect(selectBrowserDiagnosticsForView(hook.getCurrent()!.state, view).eventCount).toBe(1);
+
+        await hook.rerender({ current: { ...view, navigationGeneration: view.navigationGeneration + 1 } });
+        expect(transport.read()).toEqual({ 'diagnostics.snapshot': 2 });
+        expect(signals[0]?.aborted).toBe(true);
+        await hook.unmount();
+        expect(signals[1]?.aborted).toBe(true);
     });
 
     it('cancels daemon diagnostics refreshes on active view changes and unmount', async () => {

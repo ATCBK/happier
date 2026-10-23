@@ -5,6 +5,7 @@ import { resolveBrowserAnnotationCaptureCapability } from './annotationCaptureCa
 
 import {
     cancelActiveBrowserAnnotationMode,
+    attachActiveBrowserPageReference,
     startActiveBrowserAnnotationMode,
     attachActiveBrowserAnnotation,
     attachActiveBrowserAnnotationFromCaptureProvider,
@@ -38,6 +39,7 @@ import type {
     BrowserAnnotationAdapterRequest,
     BrowserAnnotationAdapterResult,
     BrowserContextAnnotationAdapter,
+    BrowserAnnotationDispatchTarget,
 } from './runtimeAnnotationExecutor';
 
 /**
@@ -90,8 +92,8 @@ function buildAttachmentId(contextId: string): string {
 }
 
 /**
- * Builds the canonical in-app annotation adapter. Each of the seven `browser.context.annotation.*`
- * actions maps to the existing `activeViewAttachment`/reducer owners; a successful capture/edit is
+ * Builds the canonical in-app annotation and page-attachment adapter. Each mounted context
+ * action maps to the existing `activeViewAttachment`/reducer owners; a successful capture/edit is
  * committed through `onStateChange` and the captured item's attachment id is returned to the caller
  * so the front-door result carries a real handle. This is the single owner the BrowserShell toolbar
  * handlers AND an agent dispatch both flow through (via the runtime executor front door).
@@ -117,11 +119,22 @@ export function createBrowserContextAnnotationAdapter(input: Readonly<{
     }
 
     return {
-        async dispatch(request: BrowserAnnotationAdapterRequest): Promise<BrowserAnnotationAdapterResult> {
+        async dispatch(request: BrowserAnnotationAdapterRequest, target?: BrowserAnnotationDispatchTarget): Promise<BrowserAnnotationAdapterResult> {
             const binding = input.resolveBinding();
             if (!binding.view) return viewUnavailable();
+            if (target && (target.signal?.aborted || binding.view.browserSessionId !== target.browserSessionId
+                || binding.view.viewId !== target.viewId
+                || (target.navigationGeneration !== undefined && binding.view.navigationGeneration !== target.navigationGeneration))) {
+                return { status: 'unavailable', reason: 'browser_context_annotation_stale' };
+            }
 
             switch (request.kind) {
+                case 'attachPageReference': {
+                    const result = attachActiveBrowserPageReference({ ...binding, capturedAtMs: binding.nowMs?.() ?? Date.now() });
+                    if (result.status !== 'attached') return { status: 'unavailable', reason: result.reason };
+                    input.onStateChange(result.state);
+                    return result;
+                }
                 case 'start': {
                     const captureCapability = resolveBrowserAnnotationCaptureCapability({
                         adapterKind: binding.view.adapterKind,
@@ -254,7 +267,7 @@ export function createBrowserContextAnnotationAdapter(input: Readonly<{
                     return { status: 'draftUpdated', state: next };
                 }
                 case 'attachDraft':
-                    return commitDraft(binding);
+                    return commitDraft(binding, target);
             }
         },
     };
@@ -266,6 +279,7 @@ export function createBrowserContextAnnotationAdapter(input: Readonly<{
      */
     async function commitDraft(
         binding: BrowserAnnotationAdapterBinding,
+        target?: BrowserAnnotationDispatchTarget,
     ): Promise<BrowserAnnotationAdapterResult> {
         if (!binding.view) return viewUnavailable();
         if (countBrowserAnnotationDraftMarks(binding.state, binding.view.viewId) < 1) {
@@ -277,7 +291,10 @@ export function createBrowserContextAnnotationAdapter(input: Readonly<{
         const capturedAtMs = binding.nowMs?.() ?? Date.now();
         const draft = readBrowserAnnotationDraft(binding.state, binding.view.viewId);
         if (!draft) return { status: 'unavailable', reason: 'browser_context_annotation_inactive' };
-        const resolveAdmission = createActiveBrowserAnnotationCaptureAdmission({ binding, resolveBinding: input.resolveBinding, draft });
+        const resolveCaptureAdmission = createActiveBrowserAnnotationCaptureAdmission({ binding, resolveBinding: input.resolveBinding, draft });
+        const resolveAdmission = (): BrowserContextUnavailableReason | null => target?.signal?.aborted
+            ? { reasonCode: 'browser_context_annotation_capture_unavailable', lifecycleState: 'adapterUnavailable', message: 'Browser annotation capture was cancelled.' }
+            : resolveCaptureAdmission();
         const initialDenial = resolveAdmission();
         if (initialDenial) return { status: 'unavailable', reason: initialDenial };
         const captured = await resolveDraftMedia(binding, capturedAtMs, resolveAdmission);

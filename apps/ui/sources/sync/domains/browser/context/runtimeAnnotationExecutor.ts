@@ -7,11 +7,12 @@ import type {
     BrowserContextState,
     BrowserContextUnavailableReason,
 } from './types';
+import { selectBrowserContextComposerAttachments } from './selectors';
 
 /**
- * The seven `browser.context.annotation.*` runtime actions are UI-state mutations against the
+ * The `browser.context.annotation.*` actions and mounted page attachment are mutations against the
  * canonical `BrowserContextState` reducer (start/cancel the mode machine, capture a region/element
- * draft, edit comment/stroke/style intent). They are NOT a daemon-producer dispatch — the live
+ * draft, edit comment/stroke/style intent, commit and page attachment). They are NOT a daemon-producer dispatch — the live
  * pixels flow through the in-app capture provider + attachment system. This leaf validates the
  * action input, then delegates to the adapter, which owns the actual reducer call + composer attach
  * through the existing `activeViewAttachment` owners. Mirrors the recording-attach executor pattern
@@ -20,12 +21,13 @@ import type {
  */
 export type BrowserAnnotationRuntimeActionId = Extract<
     RuntimeActionIdV1,
-    `browser.context.annotation.${string}`
+    `browser.context.annotation.${string}` | 'browser.context.attachToComposer'
 >;
 
 export type BrowserAnnotationAdapterRequest =
     | Readonly<{ kind: 'start' }>
     | Readonly<{ kind: 'cancel' }>
+    | Readonly<{ kind: 'attachPageReference' }>
     // `target` is optional: when omitted, the capture provider's own region (full-page snapshot) is
     // used; when supplied (a marquee selection), it overrides the provider target.
     | Readonly<{ kind: 'captureRegion'; target?: Extract<BrowserAnnotationTargetV1, { kind: 'region' }>; comment?: string; styleIntent?: BrowserAnnotationStyleIntentV1; stroke?: BrowserAnnotationStrokeV1 }>
@@ -66,6 +68,7 @@ export type BrowserAnnotationAdapterResult =
     | Readonly<{ status: 'updated'; state: BrowserContextState; contextId: string }>
     | Readonly<{ status: 'draftUpdated'; state: BrowserContextState }>
     | Readonly<{ status: 'committed'; state: BrowserContextState; annotationId: string; itemIds: readonly string[] }>
+    | Readonly<{ status: 'attached'; state: BrowserContextState; attachmentId: string }>
     | Readonly<{ status: 'unavailable'; reason: BrowserContextUnavailableReason | string }>;
 
 /**
@@ -73,7 +76,14 @@ export type BrowserAnnotationAdapterResult =
  * live view + capabilities + capture provider + `onStateChange` are in scope (BrowserShell host).
  */
 export type BrowserContextAnnotationAdapter = Readonly<{
-    dispatch(request: BrowserAnnotationAdapterRequest): Promise<BrowserAnnotationAdapterResult> | BrowserAnnotationAdapterResult;
+    dispatch(request: BrowserAnnotationAdapterRequest, target?: BrowserAnnotationDispatchTarget): Promise<BrowserAnnotationAdapterResult> | BrowserAnnotationAdapterResult;
+}>;
+
+export type BrowserAnnotationDispatchTarget = Readonly<{
+    browserSessionId: string;
+    viewId: string;
+    navigationGeneration?: number;
+    signal?: AbortSignal;
 }>;
 
 export type CreateBrowserAnnotationRuntimeExecutorInput = Readonly<{
@@ -107,6 +117,8 @@ const ANNOTATION_RUNTIME_ACTIONS = [
     { actionId: 'browser.context.annotation.attachComment', kind: 'attachComment' },
     { actionId: 'browser.context.annotation.attachStroke', kind: 'attachStroke' },
     { actionId: 'browser.context.annotation.attachStyleIntent', kind: 'attachStyleIntent' },
+    { actionId: 'browser.context.annotation.attachDraft', kind: 'attachDraft' },
+    { actionId: 'browser.context.attachToComposer', kind: 'attachPageReference' },
 ] as const satisfies readonly Readonly<{
     actionId: BrowserAnnotationRuntimeActionId;
     kind: BrowserAnnotationAdapterRequest['kind'];
@@ -127,7 +139,7 @@ export function resolveBrowserAnnotationRuntimeActionIdForRequest(
 export function isBrowserAnnotationRuntimeAction(
     actionId: RuntimeActionIdV1,
 ): actionId is BrowserAnnotationRuntimeActionId {
-    return ANNOTATION_ACTION_KINDS.has(actionId);
+    return actionId !== 'browser.context.attachToComposer' && ANNOTATION_ACTION_KINDS.has(actionId);
 }
 
 function readString(record: Readonly<Record<string, unknown>>, key: string): string | undefined {
@@ -180,6 +192,10 @@ function buildRequest(
             return { kind: 'start' };
         case 'cancel':
             return { kind: 'cancel' };
+        case 'attachDraft':
+            return { kind: 'attachDraft' };
+        case 'attachPageReference':
+            return record.source === 'activePage' ? { kind: 'attachPageReference' } : null;
         case 'captureRegion': {
             // A present target/stroke/styleIntent must be structurally valid; absent is allowed (the
             // capture provider's full-page snapshot). A present-but-malformed field → reject.
@@ -234,7 +250,7 @@ function buildRequest(
         }
         default:
             // The editor-session DRAFT request kinds (addDraftTarget/addDraftRegion/addDraftStroke/
-            // removeDraftTarget/setDraftComment/attachDraft) are dispatched directly by the in-page
+            // removeDraftTarget/setDraftComment) are dispatched directly by the in-page
             // overlay, never produced from a runtime action id, so they are not built here.
             return null;
     }
@@ -260,6 +276,13 @@ function serializeResult(
     if (result.status === 'updated') {
         return { v: 1, actionId, status: 'updated', contextId: result.contextId };
     }
+    if (result.status === 'committed') {
+        return { v: 1, actionId, status: 'committed', annotationId: result.annotationId, itemIds: result.itemIds };
+    }
+    if (result.status === 'attached') {
+        return selectBrowserContextComposerAttachments(result.state).find(attachment => attachment.attachmentId === result.attachmentId)
+            ?? disabledResult('browser_context_item_missing');
+    }
     return { v: 1, actionId, status: result.status };
 }
 
@@ -270,8 +293,8 @@ function serializeResult(
  */
 export function createBrowserAnnotationRuntimeExecutor(
     input: CreateBrowserAnnotationRuntimeExecutorInput,
-): (actionId: BrowserAnnotationRuntimeActionId, rawInput: unknown) => Promise<unknown> {
-    return async (actionId, rawInput) => {
+): (actionId: BrowserAnnotationRuntimeActionId, rawInput: unknown, signal?: AbortSignal) => Promise<unknown> {
+    return async (actionId, rawInput, signal) => {
         const record = readRecord(rawInput);
         if (!record) return invalidParametersResult;
         const browserSessionId = readString(record, 'browserSessionId');
@@ -280,13 +303,22 @@ export function createBrowserAnnotationRuntimeExecutor(
 
         const request = buildRequest(actionId, record);
         if (!request) return invalidParametersResult;
+        const navigationGeneration = record.navigationGeneration;
+        if ((request.kind === 'attachDraft' || request.kind === 'attachPageReference')
+            && (typeof navigationGeneration !== 'number' || !Number.isInteger(navigationGeneration) || navigationGeneration < 0)) {
+            return invalidParametersResult;
+        }
 
         const adapter = input.adapter ?? input.resolveAdapter?.({ browserSessionId, viewId }) ?? null;
         if (!adapter) {
             return disabledResult('browser_context_annotation_unavailable');
         }
 
-        const result = await adapter.dispatch(request);
+        const result = await adapter.dispatch(request, {
+            browserSessionId, viewId,
+            ...(typeof navigationGeneration === 'number' ? { navigationGeneration } : {}),
+            ...(signal ? { signal } : {}),
+        });
         return serializeResult(actionId, result);
     };
 }

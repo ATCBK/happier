@@ -9,6 +9,8 @@ import { createBrowserContextAnnotationAdapter } from './annotationAdapter';
 import { createBrowserContextState, markBrowserContextViewNavigation } from './state';
 import { createBrowserAnnotationCaptureProvider } from './captureProvider';
 import type { BrowserAnnotationCaptureProvider, BrowserContextState } from './types';
+import { createBrowserAnnotationRuntimeExecutor } from './runtimeAnnotationExecutor';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 const annotationCapabilities = {
     enabled: true,
@@ -79,6 +81,71 @@ function buildProvider(): BrowserAnnotationCaptureProvider {
 }
 
 describe('browser context annotation adapter', () => {
+    it('refuses a stale mounted view, navigation or cancelled draft before pixels or composer state', async () => {
+        let state = createBrowserContextState();
+        const view = buildView();
+        const captureScreenshot = vi.fn(async () => ({ ok: true as const,
+            snapshot: { bytes: new Uint8Array([1]), mimeType: 'image/png' as const, width: 20, height: 20, sizeBytes: 1 } }));
+        const registerMedia = vi.fn(() => ({ mediaId: 'media', mediaKind: 'image' as const }));
+        const adapter = createBrowserContextAnnotationAdapter({
+            resolveBinding: () => ({ state, view, browserContextEnabled: true, attachmentsUploadsEnabled: true,
+                contextCapabilities: annotationCapabilities, captureProvider: createBrowserAnnotationCaptureProvider({ captureScreenshot, registerMedia }) }),
+            onStateChange: next => { state = next; },
+        });
+        await adapter.dispatch({ kind: 'start' });
+        await adapter.dispatch({ kind: 'addDraftRegion', rect: { x: 0, y: 0, width: 20, height: 20 } });
+        const initial = state;
+        const execute = createBrowserAnnotationRuntimeExecutor({ adapter });
+        const input = { browserSessionId: view.browserSessionId, viewId: view.viewId, navigationGeneration: view.navigationGeneration };
+        for (const actionId of ['browser.context.annotation.attachDraft', 'browser.context.attachToComposer'] as const) {
+            const valid = actionId === 'browser.context.attachToComposer' ? { ...input, source: 'activePage' } : input;
+            const schema = getActionSpec(actionId).inputSchema;
+            expect(schema.safeParse({ ...valid, source: 'unknown' }).success).toBe(false);
+            expect(schema.safeParse({ ...valid, navigationGeneration: undefined }).success).toBe(false);
+            for (const wrong of [{ browserSessionId: 'other-session' }, { viewId: 'other-view' }, { navigationGeneration: 3 }]) {
+                expect(await execute(actionId, { ...valid, ...wrong })).toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+                expect(state).toBe(initial);
+            }
+            const cancellation = new AbortController();
+            cancellation.abort();
+            expect(await execute(actionId, valid, cancellation.signal)).toMatchObject({ ok: false });
+        }
+        expect(captureScreenshot).not.toHaveBeenCalled();
+        expect(registerMedia).not.toHaveBeenCalled();
+        expect(state).toBe(initial);
+    });
+
+    it('rechecks cancelled admitted draft capture before media upload', async () => {
+        let state = createBrowserContextState();
+        const view = buildView();
+        let completePixels!: () => void;
+        const pixels = new Promise<void>(resolve => { completePixels = resolve; });
+        const captureScreenshot = vi.fn(async () => {
+            await pixels;
+            return { ok: true as const, snapshot: { bytes: new Uint8Array([1]), mimeType: 'image/png' as const, width: 20, height: 20, sizeBytes: 1 } };
+        });
+        const registerMedia = vi.fn(() => ({ mediaId: 'media', mediaKind: 'image' as const }));
+        const adapter = createBrowserContextAnnotationAdapter({
+            resolveBinding: () => ({ state, view, browserContextEnabled: true, attachmentsUploadsEnabled: true,
+                contextCapabilities: annotationCapabilities, captureProvider: createBrowserAnnotationCaptureProvider({ captureScreenshot, registerMedia }) }),
+            onStateChange: next => { state = next; },
+        });
+        await adapter.dispatch({ kind: 'start' });
+        await adapter.dispatch({ kind: 'addDraftRegion', rect: { x: 0, y: 0, width: 20, height: 20 } });
+        const initial = state;
+        const cancellation = new AbortController();
+        const execute = createBrowserAnnotationRuntimeExecutor({ adapter });
+        const pending = execute('browser.context.annotation.attachDraft', {
+            browserSessionId: view.browserSessionId, viewId: view.viewId, navigationGeneration: view.navigationGeneration,
+        }, cancellation.signal);
+        expect(captureScreenshot).toHaveBeenCalledOnce();
+        cancellation.abort();
+        completePixels();
+        expect(await pending).toMatchObject({ ok: false });
+        expect(registerMedia).not.toHaveBeenCalled();
+        expect(state).toBe(initial);
+    });
+
     it.each(['captureRegion', 'attachDraft'] as const)('admits %s before pixels and rechecks before upload', async (kind) => {
         let state = createBrowserContextState();
         let uploadsEnabled = true;
