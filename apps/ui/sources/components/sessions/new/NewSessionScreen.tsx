@@ -17,6 +17,7 @@ import { NewBotDraftHeader } from '@/components/sessions/bots/NewBotDraftHeader'
 import type { NewSessionBotCreationModel } from '@/components/sessions/new/hooks/newSessionScreenModelTypes';
 import { NewSessionLaunchSurface } from '@/components/sessions/new/components/NewSessionLaunchSurface';
 import { useNewSessionScreenModel } from '@/components/sessions/new/hooks/useNewSessionScreenModel';
+import { useNewSessionDraftPresentation } from '@/components/sessions/new/hooks/useNewSessionDraftPresentation';
 import type { ExactTurnAutomationPrefill } from '@/components/automations/sessionLifecycle/exactTurnAutomationPrefill';
 import { NewSessionScreenPortalScope } from '@/components/sessions/new/navigation/newSessionContainedModalScreen';
 import {
@@ -53,11 +54,6 @@ import { useActiveServerAccountScope, useActiveServerAccountScopeLifetime, useSe
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
-import {
-    getSessionDraftSnapshot,
-    subscribeSessionDraft,
-    type SessionDraftSnapshot,
-} from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { useServerCredentialAccountScopeBindings, useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { areServerAccountScopesEqual, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
@@ -373,13 +369,7 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         kind: 'newSession' as const,
         draftId: draftIdentity.draftId,
     }), [draftIdentity.draftId]);
-    const subscribeDraft = React.useCallback((listener: () => void) => (
-        draftScope ? subscribeSessionDraft(draftScope, draftAddress, listener) : () => undefined
-    ), [draftAddress, draftScope]);
-    const getDraftSnapshot = React.useCallback((): SessionDraftSnapshot | null => (
-        draftScope ? getSessionDraftSnapshot(draftScope, draftAddress) : null
-    ), [draftAddress, draftScope]);
-    const exactDraft = React.useSyncExternalStore(subscribeDraft, getDraftSnapshot, getDraftSnapshot);
+    const exactDraft = useNewSessionDraftPresentation(draftScope, draftIdentity.draftId);
     React.useEffect(() => {
         if (draftIdentity.draftOrigin !== 'ordinary' || exactDraft?.materialized !== true) return;
         const pointerDelta = setNewSessionOrdinaryEntryDraftId(draftIdentity.draftId);
@@ -387,7 +377,7 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         if (getStorage().getState().settings.newSessionOrdinaryEntryDraftId === pointerDelta.newSessionOrdinaryEntryDraftId) return;
         getSyncSingleton().applySettings(pointerDelta, { expectedSettingsScope, source: 'ui' });
     }, [expectedSettingsScope, draftIdentity.draftId, draftIdentity.draftOrigin, exactDraft?.materialized]);
-    const launchUserAttemptId = exactDraft?.localSupplement.launchUserAttemptId ?? null;
+    const launchUserAttemptId = exactDraft?.launchUserAttemptId ?? null;
     const launchOperation = useActionOperationByRequestId(
         launchUserAttemptId,
         draftScope?.serverId ?? null,
@@ -450,7 +440,7 @@ function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
         () => buildSessionDraftSyncStatusBadge(exactDraft?.status ?? 'clean'),
         [exactDraft?.status],
     );
-    const authoringOriginValue = exactDraft?.localSupplement.newSessionLocalState?.authoringOrigin;
+    const authoringOriginValue = exactDraft?.authoringOrigin;
     const authoringOriginKey = authoringOriginValue === undefined ? null : JSON.stringify(authoringOriginValue);
     // The draft's Project origin keeps its identity until its stored value changes.
     const authoringOrigin = React.useMemo(() => {

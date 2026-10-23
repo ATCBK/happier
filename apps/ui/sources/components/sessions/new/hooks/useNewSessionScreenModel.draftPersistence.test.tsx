@@ -171,6 +171,7 @@ const saveNewSessionDraftMock = vi.hoisted(() => vi.fn());
 const clearNewSessionDraftMock = vi.hoisted(() => vi.fn());
 const loadNewSessionDraftMock = vi.hoisted(() => vi.fn(() => JSON.parse(JSON.stringify(persistedDraft))));
 const persistedDraftRevisionState = vi.hoisted(() => ({ value: 1 }));
+const useRealDraftRepository = vi.hoisted(() => ({ value: false }));
 const runTeamActionMock = vi.hoisted(() => vi.fn(async () => ({
     kind: 'failed' as const,
     failure: { kind: 'unreachable' as const, retryable: true, code: null },
@@ -657,15 +658,18 @@ function installNewSessionScreenModelStorageMock() {
 // while every assertion below continues to inspect the exact draft projected by
 // the real authoring model.
 vi.mock('@/components/sessions/composer/newSessionDraftRepositoryAdapter', async (importOriginal) => {
-    const actual = await importOriginal<any>();
+    const actual = await importOriginal<typeof import('@/components/sessions/composer/newSessionDraftRepositoryAdapter')>();
     return {
         ...actual,
-        readNewSessionDraftFromRepository: () => loadNewSessionDraftMock(),
-        readNewSessionDraftProjectionFromRepository: () => {
+        readNewSessionDraftFromRepository: (...args: Parameters<typeof actual.readNewSessionDraftFromRepository>) =>
+            useRealDraftRepository.value ? actual.readNewSessionDraftFromRepository(...args) : loadNewSessionDraftMock(),
+        readNewSessionDraftProjectionFromRepository: (...args: Parameters<typeof actual.readNewSessionDraftProjectionFromRepository>) => {
+            if (useRealDraftRepository.value) return actual.readNewSessionDraftProjectionFromRepository(...args);
             const draft = loadNewSessionDraftMock();
             return draft ? { draft, revision: persistedDraftRevisionState.value } : null;
         },
-        writeNewSessionAuthoringDraftToRepository: ({ draft }: { draft: unknown }) => saveNewSessionDraftMock(draft),
+        writeNewSessionAuthoringDraftToRepository: (...args: Parameters<typeof actual.writeNewSessionAuthoringDraftToRepository>) =>
+            useRealDraftRepository.value ? actual.writeNewSessionAuthoringDraftToRepository(...args) : saveNewSessionDraftMock(args[0].draft),
     };
 });
 
@@ -731,16 +735,6 @@ vi.mock('@/components/sessions/external/browse/resolveExternalSessionBrowseLocke
             : null,
     };
 });
-
-vi.mock('@/sync/domains/permissions/permissionDefaults', () => ({
-    readAccountPermissionDefaults: () => ({}),
-    resolveNewSessionDefaultPermissionMode: () => 'default',
-}));
-
-
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    normalizePermissionModeForAgentType: (mode: string) => mode,
-}));
 
 vi.mock('@/utils/system/fireAndForget', () => ({
     fireAndForget: (promise: Promise<unknown> | null | undefined) => {
@@ -841,10 +835,6 @@ vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
     useKeyboardHeight: () => 0,
 }));
 
-vi.mock('@/components/sessions/agentInput/inputMaxHeight', () => ({
-    computeNewSessionInputMaxHeight: () => 100,
-}));
-
 vi.mock('@/components/sessions/new/newSessionScreenStyles', () => ({
     newSessionScreenStyles: {},
 }));
@@ -892,6 +882,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
     });
 
     beforeEach(async () => {
+        useRealDraftRepository.value = false;
         resetAcpCatalogEngineForTests();
         resetAcpCatalogSnapshotsForTests();
         resetProfileCatalogEngineForTests();
@@ -1412,6 +1403,55 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(saveNewSessionDraftMock).toHaveBeenLastCalledWith(expect.objectContaining({
             input: 'hello wor',
         }));
+    });
+
+    it('keeps real repository keystrokes in the composer leaf and reads live launch text', async () => {
+        useRealDraftRepository.value = true;
+        const adapter = await vi.importActual<typeof import('@/components/sessions/composer/newSessionDraftRepositoryAdapter')>(
+            '@/components/sessions/composer/newSessionDraftRepositoryAdapter');
+        const scope = activeServerAccountScopeState.value;
+        const draftId = 'qbp2-real-typing';
+        if (!scope) throw new Error('Expected the typing fixture Account scope');
+        adapter.writeNewSessionDraftToRepository({ scope, draftId, materializationIntent: 'seeded', draft: {
+            input: persistedDraft.input, selectedMachineId: persistedDraft.selectedMachineId,
+            selectedPath: persistedDraft.selectedPath, selectedProfileId: null, selectedSecretId: null,
+            agentType: 'claude', permissionMode: 'yolo', acpSessionModeId: persistedDraft.acpSessionModeId,
+            updatedAt: persistedDraft.updatedAt,
+        } });
+        expect(adapter.readNewSessionDraftFromRepository({ scope, draftId })?.input).toBe('hello');
+        const { NewSessionComposerCard } = await import('../components/NewSessionComposerCard');
+        let model!: ReturnType<typeof useNewSessionScreenModel>;
+        let renders = 0;
+        function TypingScreen() {
+            model = useNewSessionScreenModel({ draftId });
+            renders += 1;
+            if (model.variant !== 'simple') throw new Error('Expected a mounted simple composer');
+            return React.createElement(NewSessionComposerCard, {
+                panelProps: model.simpleProps, layout: 'embedded', attachments: false, voiceAffordance: 'none',
+            });
+        }
+        const screen = await renderNewSessionProbe(TypingScreen);
+        await flushInteractionQueue();
+        const before = renders;
+        const readIntent = useCreateNewSessionArgsRef.current?.readLaunchIntentSignature;
+        if (typeof readIntent !== 'function' || model.variant !== 'simple') throw new Error('Expected a mounted composer');
+        const composer = model.simpleProps;
+        const signatureBefore = readIntent();
+        const text = 'hello twenty-two chars';
+        for (let index = 1; index <= text.length; index += 1) {
+            await act(async () => {
+                const editor = screen.findAllByTestId('new-session-composer-input').find(node =>
+                    typeof node.props.onChangeText === 'function' && typeof node.props.onStateChange === 'function');
+                if (!editor || typeof editor.props.onChangeText !== 'function') throw new Error('Expected mounted editor callbacks');
+                editor.props.onChangeText(text.slice(0, index));
+                editor.props.onStateChange?.({ text: text.slice(0, index), selection: { start: index, end: index } });
+            });
+        }
+        expect(composer.promptStore.getPrompt()).toBe(text);
+        expect(adapter.readNewSessionDraftFromRepository({ scope, draftId })?.input).toBe(text);
+        expect(composer.composerDocument?.captureSubmissionSnapshot()?.text).toBe(text);
+        expect(readIntent()).not.toBe(signatureBefore);
+        expect(renders - before).toBe(0);
     });
 
     it('hydrates and persists generic composer attachments through the New Session document owner', async () => {
@@ -2326,7 +2366,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
 
         expect(model?.simpleProps?.promptStore?.getPrompt()).toBe('Persisted prompt');
         expect(model?.simpleProps?.agentType).toBe('codex');
-        expect(model?.simpleProps?.permissionMode).toBe('acceptEdits');
+        expect(model?.simpleProps?.permissionMode).toBe('safe-yolo');
         expect(model?.simpleProps?.selectedPath).toBe('/repo/from-session');
         expect(model?.simpleProps?.machineName).toBe('Machine One');
         expect(model?.simpleProps?.resumeSessionId).toBe('');
@@ -2335,7 +2375,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
                 prompt: 'Persisted prompt',
                 displayText: 'Persisted prompt',
                 agentTarget: agentTarget('codex'),
-                permissionMode: 'acceptEdits',
+                permissionMode: 'safe-yolo',
                 modelSelection: expect.objectContaining({
                     ref: expect.objectContaining({ modelId: 'gpt-5' }),
                 }),
