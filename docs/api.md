@@ -1415,6 +1415,17 @@ edit may post, and owner/admin may manage. Mentions confer no access. Self-leave
 present person's direct grant; inherited access may remain, and an owner must transfer ownership
 or archive. Named-discussion absence and denial do not become an existence oracle.
 
+The existing messages GET and `discussion.read` Action accept either history paging or
+one exact `messageId` / `localId` selector. Exact selectors are mutually exclusive with
+each other and with `beforeSeq`, `afterSeq` and `limit`; `throughSeq` remains available
+and is enforced before message projection. A local ID selects only a message authored
+by the authenticated Account. No match returns an empty page; an inaccessible Discussion
+or unavailable selected source retains its existing typed refusal. Exact reads use the
+same current grant, stored-envelope, source-admission and client key-opening owners as
+ordinary reads, and never advance the private read cursor. These closed inputs move
+together with their consumers in undeployed 0.3; there is no older-development paging
+fallback for an exact lookup.
+
 For an existing Discussion's invitations and prospective grants, physical deletion
 of the anchored Session/original message is not an admission failure: no original
 source content or source grant is supplied. Live source existence is distinguished
