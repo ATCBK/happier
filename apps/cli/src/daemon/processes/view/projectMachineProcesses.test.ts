@@ -43,6 +43,15 @@ it('offers Start again only for the exact live root with a retained start owner'
     }
 });
 
+it('offers the next-message way back for a live Session without a service restart callback', () => {
+    const read = setup();
+    const answer = projectMachineProcesses(read, request, { accountId: 'owner', custodianAccountId: 'owner' }, options);
+    expect(answer.owners.find(row => row.owner.kind === 'session' && row.owner.sessionId === 'owner-session'))
+        .toHaveProperty('canStartAgain', true);
+    expect(answer.owners.find(row => row.owner.kind === 'happier')).toHaveProperty('canStartAgain', false);
+    expect(MachineProcessesAnswerV1Schema.safeParse(answer).success).toBe(true);
+});
+
 it('preserves existing tool and catalog display names beside native identity without enriching external rows', () => {
     const read = setup();
     const snapshot = { ...read.snapshot, rows: [

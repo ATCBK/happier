@@ -157,7 +157,9 @@ async function mount(
   transport.rpc.mockImplementation(async (rpc: Rpc) => {
     const reply = options.reply?.(rpc);
     if (reply !== undefined) return reply;
-    if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_LIST) return answer;
+    if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_LIST) return rpc.payload?.view === 'owners'
+      ? { ...answer, owners: answer.owners.map(owner => ({ ...owner, members: [] })) }
+      : answer;
     return new Promise(() => {});
   });
   const size: WidgetSizeV1 = options.size ?? 'medium';
@@ -210,6 +212,37 @@ afterEach(async () => {
 });
 
 describe('Using the most widget', () => {
+  it('stops and offers the way back from an owner-only Session without requesting its process tree', async () => {
+    const answer = createProcessesAnswer();
+    answer.owners = answer.owners.map(owner => ({ ...owner, members: [],
+      ...(owner.owner.kind === 'session' ? { root: { ref: 'runner', level: 'proven' as const }, canStartAgain: true } : {}) }));
+    const calls: Rpc[] = [];
+    const { screen } = await mount({ Body: MachineTopConsumersWidget, answer,
+      waitFor: 'widget.stop-o:session:refactor', reply: rpc => {
+        if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_STOP) {
+          calls.push(rpc);
+          return { status: 'ended', outcomes: [{ ref: 'runner', outcome: 'ended', freedBytes: 90 * 1024 * 1024 }] };
+        }
+        if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_START_AGAIN) {
+          calls.push(rpc);
+          return { status: 'already_wakes_on_next_message' };
+        }
+        return undefined;
+      } });
+    await act(async () => { await screen.pressByTestIdAsync('widget.stop-o:session:refactor'); });
+    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('widget.stopped')).not.toBeNull()); });
+    expect(calls[0]?.payload).toMatchObject({ targets: [{ ref: 'runner', expect: {
+      level: 'proven', owner: { kind: 'session', sessionId: 'refactor' },
+    } }] });
+    const undo = readPresentationNotice()?.undo;
+    expect(undo).toBeDefined();
+    await act(async () => { undo!.run(); });
+    await act(async () => { await vi.waitFor(() => expect(calls).toHaveLength(2)); });
+    expect(calls[1]).toMatchObject({ method: RPC_METHODS.MACHINES_PROCESSES_START_AGAIN, payload: { ref: 'runner' } });
+    expect(transport.rpc.mock.calls.filter(([rpc]) =>
+      (rpc as Rpc).method === RPC_METHODS.MACHINES_PROCESSES_LIST && (rpc as Rpc).payload?.view === 'tree')).toHaveLength(0);
+  });
+
   it('keeps a working session running until its explicit Ask-first Stop is approved', async () => {
     const calls: Rpc[] = [];
     const { screen, serverId } = await mount({ Body: MachineTopConsumersWidget, workingSession: true, askBeforeStop: true,

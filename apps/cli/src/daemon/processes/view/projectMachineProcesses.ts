@@ -143,23 +143,30 @@ export function projectMachineProcesses(read: ProcessOwnershipRead, request: Pro
             if (!item || !resolved.ownerEnded) continue;
             leftBehind.push({ ...processRow, level: 'left_behind', owner: resolved.owner, confirmedAtMs: item.confirmedAtMs });
         } else if (level === 'proven' || level === 'likely' || level === 'unknown') {
-            const stopping = read.roots.some(root => {
-                const native = index.byPid.get(root.pid);
-                return root.live && native && processOwnerKey(root.owner) === ownerKey && root.state === 'stopping' && equalProcessStart(root.start, native.start);
-            });
-            const owner: OwnerRowV1 = owners.get(ownerKey) ?? { rowId: ownerKey, owner: resolved.owner, state: stopping ? 'stopping' : 'running',
-                canStartAgain: read.roots.some(root => {
+            let owner = owners.get(ownerKey);
+            if (!owner) {
+                const roots = read.roots.filter(root => {
                     const native = index.byPid.get(root.pid);
-                    return root.live && !!root.startAgain && native && processOwnerKey(root.owner) === ownerKey
-                        && equalProcessStart(root.start, native.start);
-                }), members: [], totals: zero,
-                ...(displayIdentity && displayIdentity.accountId !== requester.custodianAccountId ? { requester: displayIdentity } : {}) };
-            if (!owners.has(ownerKey)) {
-                const root = read.roots.find(candidate => candidate.live && candidate.owner.kind === 'session'
-                    && processOwnerKey(candidate.owner) === ownerKey && index.byPid.has(candidate.pid)
-                    && equalProcessStart(candidate.start, index.byPid.get(candidate.pid)!.start));
-                const ceiling = root && options.readCeiling?.(root);
-                if (ceiling) owner.ceiling = ceiling;
+                    return root.live && native && processOwnerKey(root.owner) === ownerKey && equalProcessStart(root.start, native.start);
+                });
+                const root = roots.find(root => {
+                    const claim = ownership.get(root.pid);
+                    return claim?.owner && processOwnerKey(claim.owner) === ownerKey
+                        && equalProcessStart(root.start, claim.start)
+                        && (claim.level === 'proven' || claim.level === 'likely');
+                });
+                const rootClaim = root ? ownership.get(root.pid) : undefined;
+                owner = { rowId: ownerKey, owner: resolved.owner,
+                    state: roots.some(root => root.state === 'stopping') ? 'stopping' : 'running',
+                    // Sessions use the executor's next-message resume path, not a service launch callback.
+                    canStartAgain: roots.some(root => root.owner.kind === 'session' || !!root.startAgain),
+                    ...(root && rootClaim && (rootClaim.level === 'proven' || rootClaim.level === 'likely')
+                        ? { root: { ref: processRef(root.pid, rootClaim.start), level: rootClaim.level } } : {}),
+                    members: [], totals: zero,
+                    ...(displayIdentity && displayIdentity.accountId !== requester.custodianAccountId ? { requester: displayIdentity } : {}) };
+                const ceiling = roots.find(root => root.owner.kind === 'session');
+                const limit = ceiling && options.readCeiling?.(ceiling);
+                if (limit) owner.ceiling = limit;
             }
             owner.members.push(processRow);
             owners.set(ownerKey, owner);

@@ -47,6 +47,8 @@ function owner(
     state: 'running',
     totals: { memoryBytes, cpuPercent, processCount: members.length },
     members,
+    ...(members[0] && (members[0].level === 'proven' || members[0].level === 'likely')
+      ? { root: { ref: members[0].ref, level: members[0].level } } : {}),
     ...input,
   };
 }
