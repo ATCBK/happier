@@ -1,7 +1,7 @@
 import * as React from 'react';
 import {
   Button,
-  Popover,
+  Menu,
   Row,
   Stack,
   Status,
@@ -56,6 +56,14 @@ export type TriageEntryActionRefusalV1 = Readonly<{ kind: 'missing' | 'unavailab
 
 export type TriageReviewPreparationV1 = 'ready' | 'pending' | 'unsupported';
 
+/** One row of the header's More menu that is not a configured action. */
+export type TriageEntryOverflowItemV1 = Readonly<{
+  id: string;
+  label: string;
+  disabled?: boolean;
+  onPress: () => void;
+}>;
+
 export type TriageEntryActionControlsPropsV1 = Readonly<{
   /** The one aggregate action target; it reads `selection`, never `focus`. */
   target: TriageActionTargetV1;
@@ -73,10 +81,14 @@ export type TriageEntryActionControlsPropsV1 = Readonly<{
   /** Whether the reader opened this entry (their own pull request asks for Fix, someone else's for Review). */
   viewerIsAuthor: boolean;
   /**
-   * More things this entry can do that are not the one primary action: the header's overflow holds them after
-   * the entry's other actions (a walkthrough, the source's own write controls).
+   * More things this entry can do that are not the one primary action: the header's More menu lists them after the
+   * entry's other actions (a walkthrough, orchestration). Rows of the shared menu, never controls or a form.
    */
-  overflow?: React.ReactNode;
+  overflowItems?: readonly TriageEntryOverflowItemV1[];
+  /** A quiet control beside Ask that stays in sight (the source's own changes, which open `section`). */
+  beside?: React.ReactNode;
+  /** An inline section under the action row (the source's write form); forms never ride inside a menu. */
+  section?: React.ReactNode;
   /** Quiet context at the end of the action row (the entry's attention reason). */
   trailing?: React.ReactNode;
   /** Starts the action; resolves to a refusal when the press could start nothing. */
@@ -125,6 +137,8 @@ function isTriageActionBlockedV1(action: TriageActionV1, reviewPreparation: Tria
 }
 
 const NO_SELECTION_COPY = 'Select an entry to start a session from it.';
+const ACTION_ITEM_PREFIX = 'triage-action:';
+const EXTRA_ITEM_PREFIX = 'triage-more:';
 const NO_PREPARATION_COPY =
   'This source cannot prepare a review workspace, so actions that need one cannot start here.';
 
@@ -134,8 +148,6 @@ function TriageEntryActionButton(props: Readonly<{
   sourceInstanceId: TriageSourceInstanceIdV1;
   blocked: boolean;
   primary: boolean;
-  /** Inside the header's More: a quiet row-like control, not a second bordered button. */
-  inOverflow?: boolean;
   onPress: (request: TriageEntryActionRequestV1) => void;
 }>): React.ReactElement {
   const titleKey = readTriageActionTitleKeyV1(props.action);
@@ -143,7 +155,7 @@ function TriageEntryActionButton(props: Readonly<{
     <Button
       {...(titleKey === null ? {} : { titleKey })}
       title={props.action.label}
-      variant={props.primary ? 'primary' : props.inOverflow === true ? 'plain' : 'secondary'}
+      variant={props.primary ? 'primary' : 'secondary'}
       size="small"
       disabled={props.blocked}
       onPress={() => {
@@ -200,14 +212,16 @@ export function TriageEntryActionControls(
   // Beside the one filled action stays the one quiet question (Ask); every other action is one press behind More.
   const beside = offered.find((action) => action !== primary && readTriageActionIntentV1(action) === 'ask') ?? null;
   const overflowActions = offered.filter((action) => action !== primary && action !== beside);
-  const hasOverflow = overflowActions.length > 0 || (props.overflow !== undefined && props.overflow !== null);
+  const extraItems = props.overflowItems ?? [];
+  const hasOverflow = overflowActions.length > 0 || extraItems.length > 0;
   // The reason a control cannot start sits with that control: under the row when a blocked action is in sight,
-  // inside More when the blocked ones are all behind it, so the row never says "cannot" beside an action that can.
+  // as the subtitle of its own menu row when it waits behind More, so the row never says "cannot" beside an action
+  // that can.
   const isBlocked = (action: TriageActionV1 | null) => action !== null && isTriageActionBlockedV1(action, reviewPreparation);
   // Only a source that can never prepare a workspace owes the reader that sentence; a read still pending says nothing.
   const sourceCannotPrepare = reviewPreparation === 'unsupported';
   const blockedInRow = sourceCannotPrepare && (isBlocked(primary) || isBlocked(beside));
-  const blockedInOverflow = sourceCannotPrepare && !blockedInRow && overflowActions.some(isBlocked);
+  const preparationReasonLabel = text('plugins.triage.surface.session.preparationUnsupported', NO_PREPARATION_COPY);
   const preparationReason = (
     <Status
       tone="muted"
@@ -217,7 +231,7 @@ export function TriageEntryActionControls(
   );
   // A renamed control shows the person's own words in every locale; a still-shipped one keeps its translation.
   // `titleKey` is therefore resolved from the record, never stored in it.
-  const button = (action: TriageActionV1, onPress: (request: TriageEntryActionRequestV1) => void, inOverflow = false) => (
+  const button = (action: TriageActionV1, onPress: (request: TriageEntryActionRequestV1) => void) => (
     <TriageEntryActionButton
       key={action.actionId}
       action={action}
@@ -225,36 +239,54 @@ export function TriageEntryActionControls(
       sourceInstanceId={sourceInstanceId}
       blocked={isTriageActionBlockedV1(action, reviewPreparation)}
       primary={action.actionId === primaryActionId}
-      inOverflow={inOverflow}
       onPress={onPress}
     />
   );
   const moreLabel = text('plugins.triage.surface.detail.moreActions', 'More actions');
+  const actionItemId = (action: TriageActionV1) => `${ACTION_ITEM_PREFIX}${action.actionId}`;
+  const menuItems = [
+    ...overflowActions.map((action) => {
+      const titleKey = readTriageActionTitleKeyV1(action);
+      const blocked = isTriageActionBlockedV1(action, reviewPreparation);
+      return {
+        id: actionItemId(action),
+        label: titleKey === null ? action.label : text(titleKey, action.label),
+        ...(blocked ? { disabled: true } : {}),
+        ...(blocked && sourceCannotPrepare ? { subtitle: preparationReasonLabel } : {}),
+      };
+    }),
+    ...extraItems.map((item) => ({
+      id: `${EXTRA_ITEM_PREFIX}${item.id}`,
+      label: item.label,
+      ...(item.disabled === true ? { disabled: true } : {}),
+    })),
+  ];
+  const selectMenuItem = (id: string) => {
+    setMoreOpen(false);
+    const action = overflowActions.find((candidate) => actionItemId(candidate) === id);
+    if (action !== undefined) {
+      press({ action, entryRef, sourceInstanceId });
+      return;
+    }
+    extraItems.find((item) => `${EXTRA_ITEM_PREFIX}${item.id}` === id)?.onPress();
+  };
 
   return (
     <Stack gap="small">
       <Row gap="small" align="center" wrap>
         {primary === null ? null : button(primary, press)}
         {beside === null ? null : button(beside, press)}
+        {props.beside ?? null}
         {hasOverflow ? (
-          <Popover
+          <Menu
             open={moreOpen}
             onOpenChange={setMoreOpen}
             trigger={moreLabel}
             triggerIcon="more"
             triggerAccessibilityLabel={moreLabel}
-            placement="bottom"
-          >
-            <Stack gap="small">
-              {overflowActions.length === 0 ? null : (
-                <Stack gap="xsmall">
-                  {overflowActions.map((action) => button(action, (request) => { setMoreOpen(false); press(request); }, true))}
-                </Stack>
-              )}
-              {blockedInOverflow ? preparationReason : null}
-              {props.overflow}
-            </Stack>
-          </Popover>
+            items={menuItems}
+            onSelect={selectMenuItem}
+          />
         ) : null}
         {props.trailing === undefined || props.trailing === null ? null : (
           <Stack style={TRAILING_STYLE_V1}>{props.trailing}</Stack>
@@ -274,6 +306,7 @@ export function TriageEntryActionControls(
         />
       )}
       {blockedInRow ? preparationReason : null}
+      {props.section ?? null}
     </Stack>
   );
 }

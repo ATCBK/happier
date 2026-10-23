@@ -272,8 +272,13 @@ function TriageEntryScopedActionRegion(props: Readonly<{
   linkedSessionIds: readonly string[];
   /** Whether the reader opened this entry; it decides which action leads. */
   viewerIsAuthor: boolean;
-  /** The source's own write controls, held in the header's More rather than above the tabs (r0.42). */
+  /**
+   * The source's own write controls (merge, close, reviewers…). They stay one visible press away beside Ask and open
+   * as an inline section under the action row: a form never rides inside a menu.
+   */
   sourceActions?: React.ReactNode;
+  /** What the source calls itself ("GitHub"), naming that control. */
+  sourceLabel?: string | null;
   /** The entry's attention reason, at the far end of the action row. */
   attention?: React.ReactNode;
   /** Place the controls without moving the selected entry's pending action owner. */
@@ -318,6 +323,7 @@ function TriageEntryScopedActionRegion(props: Readonly<{
       ...(props.repository === undefined ? {} : { repository: props.repository }),
     });
   };
+  const [sourceChangesOpen, setSourceChangesOpen] = React.useState(false);
   const [comparisonFailed, setComparisonFailed] = React.useState(false);
   const [readingComparison, setReadingComparison] = React.useState(false);
   const reading = React.useRef(false);
@@ -422,21 +428,34 @@ function TriageEntryScopedActionRegion(props: Readonly<{
         reviewPreparation={props.reviewPreparation}
         onAction={onAction}
         trailing={props.attention}
-        overflow={props.workflowSubject === 'issue' && props.snapshot !== undefined
-          || props.workflowSubject === 'pullRequest' && props.comparisonRead !== undefined
-          || props.sourceActions !== undefined ? (
-            <>
-              {props.workflowSubject === 'issue' && props.snapshot !== undefined ? (
-                <Button titleKey="plugins.triage.surface.orchestrate.title" title="Orchestrate this"
-                  variant="plain" size="small" disabled={busy} onPress={editOrchestration} />
-              ) : null}
-              {props.workflowSubject === 'pullRequest' && props.comparisonRead !== undefined ? (
-                <Button titleKey="plugins.triage.surface.walkthrough" title="Walk through"
-                  variant="plain" size="small" disabled={readingComparison} onPress={walk} />
-              ) : null}
-              {props.sourceActions}
-            </>
-          ) : undefined}
+        overflowItems={[
+          ...(props.workflowSubject === 'issue' && props.snapshot !== undefined ? [{
+            id: 'orchestrate',
+            label: text('plugins.triage.surface.orchestrate.title', 'Orchestrate this'),
+            disabled: busy,
+            onPress: editOrchestration,
+          }] : []),
+          ...(props.workflowSubject === 'pullRequest' && props.comparisonRead !== undefined ? [{
+            id: 'walkthrough',
+            label: text('plugins.triage.surface.walkthrough', 'Walk through'),
+            disabled: readingComparison,
+            onPress: walk,
+          }] : []),
+        ]}
+        {...(props.sourceActions === undefined ? {} : {
+          beside: (
+            <Button
+              title={text('plugins.triage.surface.detail.sourceChanges', 'Change on {source}', {
+                source: props.sourceLabel ?? text('plugins.triage.surface.detail.sourceFallback', 'the source'),
+              })}
+              // Quiet beside the one filled action, open or closed; the section under the row is its state.
+              variant="secondary"
+              size="small"
+              onPress={() => setSourceChangesOpen((open) => !open)}
+            />
+          ),
+          section: sourceChangesOpen ? props.sourceActions : null,
+        })}
       /> : (
         <Stack gap="small">
           <Form.TextField labelKey="plugins.triage.surface.orchestrate.prompt" label="Orchestration prompt"
@@ -770,8 +789,8 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
   // state stay with useTriageEntryDetail, including when this mount retires.
   React.useLayoutEffect(() => { reportLinkedSessions(titledLinkedSessions, loadMoreLinkedSessions); }, [titledLinkedSessions, loadMoreLinkedSessions, reportLinkedSessions]);
   React.useLayoutEffect(() => () => { reportLinkedSessions([], null); }, [reportLinkedSessions]);
-  // The source's own write controls (merge, close, reviewers…): its `actions` panel, held in the header's More
-  // beside Triage's entry actions (r0.42) rather than as a form above the tabs.
+  // The source's own write controls (merge, close, reviewers…): its `actions` panel, one visible press away beside
+  // Ask ("Change on GitHub"), opening as an inline section under the action row. Never inside the More menu.
   const sourceActions = composition.kind === 'tabs' && declaredKind?.detailActions === true && entryMount !== null ? (
     <TriagePostMutationCompletionProvider onComplete={completePostMutation}>
       <TriageDetailPanelMount
@@ -1023,7 +1042,7 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       {...(reviewWorkspace === undefined ? {} : { reviewWorkspace })}
       reviewPreparation={reviewPreparation}
       viewerIsAuthor={viewerIsAuthor}
-      {...(sourceActions === undefined ? {} : { sourceActions })}
+      {...(sourceActions === undefined ? {} : { sourceActions, sourceLabel: header.sourceLabel })}
       {...(attention === undefined ? {} : { attention })}
     >{renderDetail}</TriageEntryScopedActionRegion>
   );

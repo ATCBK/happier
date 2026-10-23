@@ -79,7 +79,8 @@ describe('the mounted configured entry action controls', () => {
     // One filled primary; every other action is one press behind the header's More actions.
     await expect(fixture.queryByRole('button', { name: 'Architecture review' })).resolves.toBeUndefined();
     await fixture.press(await fixture.getByRole('button', { name: 'More actions' }));
-    await fixture.press(await fixture.getByRole('button', { name: 'Architecture review' }));
+    // More is the shared menu: its rows are menu items in the menu's own anatomy, never buttons or a form.
+    await fixture.press(await fixture.getByRole('menuitem', { name: 'Architecture review' }));
     expect(requests).toHaveLength(2);
     expect(requests[1]?.action.actionId).toBe('formal-review-two');
   });

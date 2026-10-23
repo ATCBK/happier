@@ -579,6 +579,13 @@ async function pressAction(shell: PluginUiTestkit, name: string): Promise<void> 
     await settle();
 }
 
+async function pressMenuItem(shell: PluginUiTestkit, name: string): Promise<void> {
+    await act(async () => {
+        await shell.press(await shell.getByRole('menuitem', { name }));
+    });
+    await settle();
+}
+
 afterEach(async () => {
     draftsOpened = 0;
     draftSeeds = [];
@@ -607,7 +614,7 @@ describe('the entry action controls on the mounted detail header', () => {
         });
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Walk through');
+        await pressMenuItem(shell, 'Walk through');
         expect(draftsOpened).toBe(1);
         for (const next of [!openedBeside, openedBeside]) {
             beside = next;
@@ -640,7 +647,7 @@ describe('the entry action controls on the mounted detail header', () => {
         });
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Walk through');
+        await pressMenuItem(shell, 'Walk through');
         await act(async () => { await shell.updatePageLocation(buildTriageRouteSubPathV1({
             ...TRIAGE_ROUTE_DEFAULT_LENS_V1, selection: SECOND_ENTRY_REF,
         })); });
@@ -679,7 +686,7 @@ describe('the entry action controls on the mounted detail header', () => {
         const shell = await mountShell(harness, hosted, () => new Promise((resolve) => { finishRecipe = resolve; }));
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Walk through');
+        await pressMenuItem(shell, 'Walk through');
         expect(draftsOpened).toBe(1);
         if (confirmed) {
             await act(async () => { finishRecipe(SETTLED_DRAFT); });
@@ -727,7 +734,7 @@ describe('the entry action controls on the mounted detail header', () => {
         await resize(1440);
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Walk through');
+        await pressMenuItem(shell, 'Walk through');
         expect(draftsOpened).toBe(1);
         expect(harness.startRequests).toHaveLength(0);
         await resize(390);
@@ -771,7 +778,7 @@ describe('the entry action controls on the mounted detail header', () => {
         const shell = await mountShell(harness, hosted);
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Walk through');
+        await pressMenuItem(shell, 'Walk through');
         expect(reads).toBe(1);
         // Re-admission temporarily withdraws the source descriptor while the same selected entry reloads.
         const { targetedContributions: _targeted, ...readingSurface } = shell.context.surface;
@@ -800,7 +807,7 @@ describe('the entry action controls on the mounted detail header', () => {
             await new Promise((_resolve, reject) => { failRead = reject; }) }));
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Walk through');
+        await pressMenuItem(shell, 'Walk through');
         const { targetedContributions: _targeted, ...readingSurface } = shell.context.surface;
         await act(async () => { await shell.updateSurface({ ...readingSurface, machineConnectionPending: true }); });
         await act(async () => { failRead(new Error('Source unavailable')); });
@@ -817,7 +824,7 @@ describe('the entry action controls on the mounted detail header', () => {
         const shell = await mountShell(harness);
         await openTheRow(shell);
         await pressAction(shell, 'More actions');
-        await pressAction(shell, 'Walk through');
+        await pressMenuItem(shell, 'Walk through');
         await act(async () => { await shell.updatePageLocation(buildTriageRouteSubPathV1({
             ...TRIAGE_ROUTE_DEFAULT_LENS_V1, selection: SECOND_ENTRY_REF,
         })); });
