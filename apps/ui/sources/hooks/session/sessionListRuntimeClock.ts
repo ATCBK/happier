@@ -64,7 +64,9 @@ export function createSessionListRuntimeClock(): SessionListRuntimeClock {
         }
         scheduledWakeAtMs = earliest;
         if (earliest === null) return;
-        const delayMs = Math.max(0, earliest - Date.now());
+        // JS timers overflow signed 32-bit delays to 1ms. Far-future label
+        // boundaries must wait in platform-sized chunks, not spin or expire early.
+        const delayMs = Math.min(2_147_483_647, Math.max(0, earliest - Date.now()));
         timeoutId = setTimeout(fire, delayMs);
     }
 

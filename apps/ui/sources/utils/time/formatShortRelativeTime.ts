@@ -47,24 +47,34 @@ export function formatShortRelativeTime(timestamp: number): string {
 }
 
 export function formatShortRelativeTimeAt(timestamp: number, nowMs: number): string {
+    return shortRelativeTimeDisplay(timestamp, nowMs).label;
+}
+
+/** Exact boundary of the same label, so an old row does not tick every minute. */
+export function readShortRelativeTimeRefreshAtMs(timestamp: number, nowMs: number): number | null {
+    return shortRelativeTimeDisplay(timestamp, nowMs).nextAtMs;
+}
+
+function shortRelativeTimeDisplay(timestamp: number, nowMs: number): Readonly<{ label: string; nextAtMs: number | null }> {
     const { deltaMs: diff, minutes, hours, days } = relativeTimeUnits(timestamp, nowMs);
-    if (diff < 0 || !Number.isFinite(diff)) return '';
+    if (!Number.isFinite(diff)) return { label: '', nextAtMs: null };
+    if (diff < 0) return { label: '', nextAtMs: timestamp };
 
     const seconds = Math.floor(diff / 1000);
-    if (seconds < 60) return 'now';
+    if (seconds < 60) return { label: 'now', nextAtMs: timestamp + 60_000 };
 
-    if (minutes < 60) return `${minutes}m`;
+    if (minutes < 60) return { label: `${minutes}m`, nextAtMs: timestamp + (minutes + 1) * 60_000 };
 
-    if (hours < 24) return `${hours}h`;
+    if (hours < 24) return { label: `${hours}h`, nextAtMs: timestamp + (hours + 1) * 3_600_000 };
 
-    if (days < 7) return `${days}d`;
+    if (days < 7) return { label: `${days}d`, nextAtMs: timestamp + (days + 1) * 86_400_000 };
 
     const weeks = Math.floor(days / 7);
-    if (weeks < 5) return `${weeks}w`;
+    if (weeks < 5) return { label: `${weeks}w`, nextAtMs: timestamp + (weeks + 1) * 7 * 86_400_000 };
 
     const months = Math.floor(days / 30);
-    if (months < 12) return `${months}mo`;
+    if (months < 12) return { label: `${months}mo`, nextAtMs: timestamp + (months + 1) * 30 * 86_400_000 };
 
     const years = Math.floor(days / 365);
-    return `${years}y`;
+    return { label: `${years}y`, nextAtMs: timestamp + (years + 1) * 365 * 86_400_000 };
 }

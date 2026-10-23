@@ -22,7 +22,7 @@ import { resolveSessionListOrderingPersistenceState } from './resolveSessionList
 import { SessionListHeaderItem } from './sessionListHeaderItem';
 import { SessionListRowViewModelBoundary } from './SessionListRowViewModelBoundary';
 import { SessionItem } from './SessionItem';
-import { resolveSessionListRowViewModelAdjacency } from './sessionListRowViewModels';
+import { resolveSessionListRowViewModelAdjacency, resolveSessionListUnscopedSelectionIsUnique } from './sessionListRowViewModels';
 import { useSessionListRenderModels } from './useSessionListRenderModels';
 import { useSessionListSearchTextByKey } from './useSessionListSearchTextByKey';
 import { useSessionListNavigationActions } from './useSessionListNavigationActions';
@@ -1521,6 +1521,10 @@ export function useSessionListViewStateFromPaneState(
         liveViewItems: renderModels.listItems,
     });
     const renderedListItems = frozenListProjection.viewItems;
+    const unscopedSelectionIsUnique = React.useMemo(() => (
+        !String(selectedSessionServerId ?? '').trim()
+        && resolveSessionListUnscopedSelectionIsUnique(renderedListItems, selectedSessionId)
+    ), [renderedListItems, selectedSessionId, selectedSessionServerId]);
     const sessionListItemBySelectionKey = React.useMemo(() => {
         const map = new Map<string, Extract<SessionListIndexItem, { type: 'session' }>>();
         for (const item of renderedListItems) {
@@ -2079,7 +2083,8 @@ export function useSessionListViewStateFromPaneState(
                 homeObservation={item.serverId ? homeObservations[item.serverId] ?? null : null}
                 audienceLabel={item.serverId ? renderModels.audience.labelsBySessionKey.get(audienceSessionAddressKey({ serverId: item.serverId, sessionId: item.sessionId })) : null}
                 item={item}
-                items={renderedListItems}
+                {...resolveSessionListRowViewModelAdjacency(renderedListItems, index)}
+                unscopedSelectionIsUnique={selectedSessionId === item.sessionId && unscopedSelectionIsUnique}
                 rowHeight={densityViewState.rowHeight}
                 dataActive={surfaceOwnership.dataActive}
                 dragEnabled={rowDragPolicy.canDrag}
@@ -2183,6 +2188,7 @@ export function useSessionListViewStateFromPaneState(
         surfaceOwnership.dataActive,
         getRowMoveActionHandlers,
         rowLabelByTreeRowId,
+        unscopedSelectionIsUnique,
     ]);
 
     const renderWorkflowRunItem = React.useCallback((item: Extract<SessionListIndexItem, { type: 'workflow_run' }>, index: number) => (

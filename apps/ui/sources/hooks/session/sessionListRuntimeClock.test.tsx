@@ -30,6 +30,22 @@ function useClockConsumer(params: {
 }
 
 describe('sessionListRuntimeClock', () => {
+    it('keeps distant display deadlines within the platform timer range without expiring them early', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const clock = createSessionListRuntimeClock();
+        const timers = vi.spyOn(globalThis, 'setTimeout');
+        const target = 1_000 + 40 * 86_400_000;
+        const status = await renderHook(() => useSessionListRuntimeDeadlineNowMs(
+            now => now < target ? target : null, true, clock));
+        try {
+            expect(timers.mock.calls.map(([, delay]) => delay)).toEqual([2_147_483_647]);
+            await flushHookEffects({ advanceTimersMs: 2_147_483_647, cycles: 1, turns: 2 });
+            expect(status.getCurrent()).toBe(1_000);
+            await flushHookEffects({ advanceTimersMs: target - Date.now(), cycles: 1, turns: 2 });
+            expect(status.getCurrent()).toBe(target);
+        } finally { await status.unmount(); timers.mockRestore(); }
+    });
     it('keeps settled Home row observers timer-free until a named consumer requests a deadline', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_000);

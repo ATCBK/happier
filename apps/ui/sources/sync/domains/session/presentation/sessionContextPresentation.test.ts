@@ -13,6 +13,7 @@ import {
     buildSessionContextFacts,
     projectSessionContextPresentation,
     resolveSessionContextLine,
+    readSessionHomeLastUpdatedRefreshAtMs,
 } from './sessionContextPresentation';
 
 function makeAwareness(params: Readonly<{
@@ -53,6 +54,12 @@ const VIEWER_SHARED_DIRECTLY: SessionViewerProjectionV1 = {
 };
 
 describe('sessionContextPresentation', () => {
+    it('schedules stale Home age changes without adding a freshness expiry to a reachable Home', () => {
+        expect(readSessionHomeLastUpdatedRefreshAtMs({ phase: 'offline', lastSuccessAt: 1_000 }, 91_000)).toBe(121_000);
+        expect(readSessionHomeLastUpdatedRefreshAtMs({ phase: 'error', lastSuccessAt: 1_000 }, 91_000)).toBe(121_000);
+        expect(readSessionHomeLastUpdatedRefreshAtMs({ phase: 'ready', lastSuccessAt: 1_000 }, 91_000)).toBeNull();
+        expect(readSessionHomeLastUpdatedRefreshAtMs({ phase: 'offline', lastSuccessAt: null }, 91_000)).toBeNull();
+    });
     it('uses the canonical Home label rather than a relay-derived profile or caller name', () => {
         const host = 'happier-agent-qa-orc.localhost:3017';
         const facts = buildSessionContextFacts({ address: { serverId: 'home-a', sessionId: 'session-1' }, homeName: host,

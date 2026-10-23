@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { formatRelativeTimeShort, formatShortRelativeTime, formatShortRelativeTimeAt, readRelativeTimeShortRefreshAtMs } from './formatShortRelativeTime';
+import { formatRelativeTimeShort, formatShortRelativeTime, formatShortRelativeTimeAt, readRelativeTimeShortRefreshAtMs, readShortRelativeTimeRefreshAtMs } from './formatShortRelativeTime';
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
@@ -25,6 +25,15 @@ describe('compact localized age display boundaries', () => {
 });
 
 describe('formatShortRelativeTime', () => {
+    it.each([-SECOND, 30 * SECOND, 59 * MINUTE, 23 * HOUR, 6 * DAY, 34 * DAY,
+        59 * DAY, 359 * DAY, 364 * DAY, 729 * DAY])('reports the exact next display change for age %s', age => {
+        const at = NOW - age;
+        const next = readShortRelativeTimeRefreshAtMs(at, NOW);
+        expect(next).not.toBeNull();
+        expect(next).toBeGreaterThan(NOW);
+        expect(formatShortRelativeTimeAt(at, next! - 1)).toBe(formatShortRelativeTimeAt(at, NOW));
+        expect(formatShortRelativeTimeAt(at, next!)).not.toBe(formatShortRelativeTimeAt(at, NOW));
+    });
     afterEach(() => {
         vi.useRealTimers();
     });

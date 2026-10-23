@@ -8,6 +8,8 @@ import {
     useSessionListRowRenderablesForItems,
 } from '@/sync/domains/state/storage';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { buildSessionListServerScopedRowKey } from '@/sync/domains/session/listing/sessionListKeyNormalization';
+import { sessionTagKey } from './sessionTagUtils';
 import type { TreeDropOverlaySharedValues } from '@/components/ui/treeDragDrop';
 
 import type { SessionAttentionStandingPolicy } from '@/sync/domains/session/organization/attentionStanding';
@@ -16,14 +18,12 @@ import { SessionListSessionItem } from './sessionListSessionItem';
 import { shouldReadLiveRowRenderables } from './sessionListRowRenderableFreeze';
 import {
     buildSessionListRowViewModel,
-    resolveSessionListRowViewModelAdjacency,
-    resolveSessionListUnscopedSelectionIsUnique,
+    readSessionListRowRefreshAtMs,
     type SessionReachableDisplay,
     type SessionListRowViewModel,
 } from './sessionListRowViewModels';
 import {
-    useSessionListRelativeNowMs,
-    useSessionListRuntimeNowMs,
+    useSessionListRuntimeDeadlineNowMs,
 } from '@/hooks/session/sessionListRuntimeClock';
 import type {
     UseSessionInlineDragStart,
@@ -69,7 +69,10 @@ export type SessionListRowViewModelBoundaryProps = Readonly<{
     /** The active Account scope whose drafts this row shows; the row observes its own draft. */
     draftScope: ServerAccountScope | null;
     item: Extract<SessionListIndexItem, { type: 'session' }>;
-    items: ReadonlyArray<SessionListIndexItem>;
+    isFirst: boolean;
+    isLast: boolean;
+    isSingle: boolean;
+    unscopedSelectionIsUnique: boolean;
     nativeContextMenuSessionKey: string | null;
     onDragCancel?: (event: UseSessionInlineDragCancelEvent) => void;
     onDragStart: UseSessionInlineDragStart;
@@ -127,11 +130,17 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
         ? liveRowRenderableByKey
         : frozenRowRenderableByKeyRef.current;
 
-    const relativeNowMs = useSessionListRelativeNowMs(props.dataActive);
-    // The row reads the SAME shared runtime clock as group placement. The
-    // list-level surface owns the single earliest-wake registration; rows
-    // subscribe to the shared timestamp without adding per-row effects.
-    const runtimeNowMs = useSessionListRuntimeNowMs(props.dataActive);
+    const rowKey = buildSessionListServerScopedRowKey(props.item.serverId, props.item.sessionId);
+    const session = rowKey ? rowRenderableByKey.get(rowKey) ?? null : null;
+    const standing = props.item.serverId
+        ? props.attentionStandingPolicy.overridesBySessionKey[sessionTagKey(props.item.serverId, props.item.sessionId)]
+        : undefined;
+    const reminderAtMs = typeof standing === 'object' ? standing.remindAt ?? null : null;
+    const readNextRefreshAtMs = React.useCallback((nowMs: number) => (
+        readSessionListRowRefreshAtMs({ session, reminderAtMs, homeObservation: props.homeObservation }, nowMs)
+    ), [session, reminderAtMs, props.homeObservation]);
+    const runtimeNowMs = useSessionListRuntimeDeadlineNowMs(readNextRefreshAtMs, props.dataActive);
+    const relativeNowMs = runtimeNowMs;
     const agentSwitchingEnabled = useFeatureEnabled('sessions.agentSwitching', {
         scopeKind: 'spawn',
         serverId: props.item.serverId ?? null,
@@ -151,14 +160,8 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
         }
         : undefined), [draftScope, hasDraft, sessionId]);
     const adjacency = React.useMemo(
-        () => resolveSessionListRowViewModelAdjacency(props.items, props.dataIndex),
-        [props.dataIndex, props.items],
-    );
-    const unscopedSelectionIsUnique = React.useMemo(
-        () => !String(props.selectedSessionServerId ?? '').trim()
-            && props.selectedSessionId === props.item.sessionId
-            && resolveSessionListUnscopedSelectionIsUnique(props.items, props.selectedSessionId),
-        [props.item.sessionId, props.items, props.selectedSessionId, props.selectedSessionServerId],
+        () => ({ isFirst: props.isFirst, isLast: props.isLast, isSingle: props.isSingle }),
+        [props.isFirst, props.isLast, props.isSingle],
     );
     const rowViewModel = React.useMemo<SessionListRowViewModel>(() => buildSessionListRowViewModel({
         audienceScopes: props.audienceScope ? new Map([[props.audienceScope.serverId, props.audienceScope]]) : undefined,
@@ -167,7 +170,7 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
             : undefined,
         item: props.item,
         adjacency,
-        unscopedSelectionIsUnique,
+        unscopedSelectionIsUnique: props.unscopedSelectionIsUnique,
         reachableSessionDisplay: props.reachableSessionDisplay,
         rowRenderableByKey,
         relativeNowMs,
@@ -213,7 +216,7 @@ export const SessionListRowViewModelBoundary = React.memo(function SessionListRo
         relativeNowMs,
         rowRenderableByKey,
         runtimeNowMs,
-        unscopedSelectionIsUnique,
+        props.unscopedSelectionIsUnique,
     ]);
 
     const sessionItem = (

@@ -12,7 +12,7 @@ import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { SessionListHomeObservation } from '@/sync/domains/session/listing/sessionListHomeObservation';
 import { formatSessionPath } from '@/utils/sessions/formatPathRelativeToHome';
-import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime';
+import { formatShortRelativeTimeAt, readShortRelativeTimeRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
 import { t } from '@/text';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 
@@ -265,6 +265,15 @@ export function buildSessionContextFacts(params: Readonly<{
  * "Last updated 18m ago", when the caller supplied a render clock and the Home actually succeeded
  * once. A Home that never succeeded has nothing to date, and a reachable Home needs no timestamp.
  */
+export function readSessionHomeLastUpdatedRefreshAtMs(
+    observation: SessionListHomeObservation | null | undefined,
+    nowMs: number,
+): number | null {
+    const freshness = resolveFreshness(observation);
+    if (freshness.state === 'current' || freshness.state === 'unknown' || freshness.lastSuccessAt === null) return null;
+    return readShortRelativeTimeRefreshAtMs(freshness.lastSuccessAt, nowMs);
+}
+
 export function resolveSessionHomeLastUpdatedLabel(
     freshness: Pick<SessionHomeFreshnessPresentation, 'state' | 'lastSuccessAt'>,
     nowMs: number | null | undefined,

@@ -30,7 +30,7 @@ import {
 } from '@/sync/domains/session/listing/sessionWorkspaceOrderStateV1';
 import { filterSessionListIndexByStorageKind } from '@/sync/domains/session/listing/filterSessionListIndexByStorageKind';
 import type { SessionListStorageFilter } from '@/sync/domains/session/sessionStorageKind';
-import { areSessionListIndexItemsEqual, type SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
+import { areSessionListIndexItemsEqual, buildSessionListIndexNodeId, type SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import {
     resolveFolderAwareSessionListSourceForLayout,
     resolveSessionFolderFocusScope,
@@ -139,17 +139,19 @@ function reuseStableVisibleSessionListIndex(
     previous: ReadonlyArray<SessionListIndexItem> | null | undefined,
     next: ReadonlyArray<SessionListIndexItem> | null,
 ): ReadonlyArray<SessionListIndexItem> | null {
-    if (!previous || !next || previous.length !== next.length) {
+    if (!previous || !next) {
         return next;
     }
 
-    let reusedAllItems = true;
+    const previousById = new Map(previous.map(item => [buildSessionListIndexNodeId(item), item]));
+    let reusedAllItems = previous.length === next.length;
     let reusedAnyItem = false;
     const out = next.map((nextItem, index) => {
-        const previousItem = previous[index];
+        const previousItem = previousById.get(buildSessionListIndexNodeId(nextItem));
         if (areSessionListIndexItemsEqual(previousItem, nextItem)) {
             reusedAnyItem = true;
-            return previousItem;
+            if (previousItem !== previous[index]) reusedAllItems = false;
+            return previousItem!;
         }
         reusedAllItems = false;
         return nextItem;

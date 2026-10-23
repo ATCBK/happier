@@ -1,5 +1,5 @@
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import type { SessionListHomeObservationByServerId } from '@/sync/domains/session/listing/sessionListHomeObservation';
+import type { SessionListHomeObservation, SessionListHomeObservationByServerId } from '@/sync/domains/session/listing/sessionListHomeObservation';
 import type {
     SessionListContextualSearchReason,
     SessionListIndexItem,
@@ -18,6 +18,7 @@ import { buildSessionListServerScopedRowKey } from '@/sync/domains/session/listi
 import {
     buildSessionContextFacts,
     projectSessionContextPresentation,
+    readSessionHomeLastUpdatedRefreshAtMs,
 } from '@/sync/domains/session/presentation/sessionContextPresentation';
 import {
     resolveSessionAttentionStanding,
@@ -27,7 +28,7 @@ import {
 } from '@/sync/domains/session/organization/attentionStanding';
 import type { WorkspaceDisplayEllipsizeMode } from '@/sync/domains/workspaces/workspaceDisplayPresentation';
 import { getSessionName, getSessionStatus, isUntitledSessionName, type SessionStatus, type SessionWorkingTextMode } from '@/utils/sessions/sessionUtils';
-import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime';
+import { formatShortRelativeTimeAt, readShortRelativeTimeRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
 import { LruMap } from '@/utils/cache/lruMap';
 import { t } from '@/text';
 import type { ExistingSessionDraftProjection } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
@@ -36,6 +37,7 @@ import { getTagsForSession, sessionTagKey } from './sessionTagUtils';
 import { readSessionListShellCacheMaxEntriesFromEnv } from './sessionListShellCacheConfig';
 import {
     readExternalAgentObservationPresentationInput,
+    resolveExternalAgentPresentationState,
     resolveExternalSessionRuntimePresentation,
     type ExternalSessionRuntimePresentation,
 } from '../presentation/externalSessionRuntimePresentation';
@@ -185,6 +187,29 @@ export type BuildSessionListRowViewModelInput = Readonly<{
     attentionStandingPolicy?: SessionAttentionStandingPolicy;
     existingDraft?: ExistingSessionDraftProjection | null;
 }>;
+
+/** Row-local deadline selection on the existing shared clock, not a per-row timer. */
+export function readSessionListRowRefreshAtMs(input: Readonly<{
+    session: SessionListRenderableSession | null;
+    reminderAtMs: number | null;
+    homeObservation?: SessionListHomeObservation | null;
+}>, nowMs: number): number | null {
+    const session = input.session;
+    const activityAt = session ? resolveSessionListRenderableMeaningfulActivityAt(session) : null;
+    const externalExpiryAtMs = session && readExternalSessionLink(session.metadata)
+        ? resolveExternalAgentPresentationState(readExternalAgentObservationPresentationInput(session.metadata), nowMs).nextExpiryAtMs
+        : null;
+    return resolveEarliestFreshnessAtMs(
+        resolveEarliestFreshnessAtMs(session ? resolveNextRuntimeFreshnessAtMs(session, nowMs) : null, externalExpiryAtMs),
+        resolveEarliestFreshnessAtMs(
+            resolveEarliestFreshnessAtMs(
+                activityAt !== null && activityAt > 0 ? readShortRelativeTimeRefreshAtMs(activityAt, nowMs) : null,
+                readSessionHomeLastUpdatedRefreshAtMs(input.homeObservation, nowMs),
+            ),
+            input.reminderAtMs !== null && input.reminderAtMs > nowMs ? input.reminderAtMs : null,
+        ),
+    );
+}
 
 export function buildSessionListRowViewModel(input: BuildSessionListRowViewModelInput): SessionListRowViewModel {
     const item = input.item;

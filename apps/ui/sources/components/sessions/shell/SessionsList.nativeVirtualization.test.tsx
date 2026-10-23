@@ -809,6 +809,74 @@ describe('SessionsList (native virtualization)', () => {
         expect(second.props.isLast).toBe(true);
     });
 
+    it('does not rederive existing rows when another group is admitted through the real store', async () => {
+        const rowModels = await import('./sessionListRowViewModels');
+        // Call-through observation of real row derivation, not an internal mock.
+        const derive = vi.spyOn(rowModels, 'buildSessionListRowViewModel');
+        const screen = await renderSessionsList();
+        const index = buildSessionListIndexFromViewData(mockVisibleSessionListViewData) ?? [];
+        const paneState = {
+            summary: { sessionsReady: true, sessionCount: 2 },
+            visibleSessionListIndex: index,
+            hasHiddenInactiveSessions: false, folderFocus: null,
+            folderFeatureEnabledServerIds: [], showLoading: false, showEmptyState: false,
+        } satisfies import('@/hooks/session/useVisibleSessionListPaneState').VisibleSessionListPaneState;
+        await screen.update(<NativeSessionsListView paneState={paneState} />);
+        await flushHookEffects();
+        derive.mockClear();
+        try {
+            let items = index;
+            for (let arrival = 0; arrival < 5; arrival++) {
+                const added = createSessionListRenderableSessionFixture({ ...sessionB, id: `another-group-session-${arrival}` });
+                const addedGroupKey = `another-group-${arrival}`;
+                const addedItems = buildSessionListIndexFromViewData([
+                    { type: 'header', title: 'Another group', headerKind: 'date', groupKey: addedGroupKey, serverId: 'srv_server_a' },
+                    { type: 'session', session: added, groupKey: addedGroupKey, groupKind: 'date', serverId: 'srv_server_a' },
+                ]) ?? [];
+                await act(async () => realStorage.getState().applyServerScopedSessionListRows('srv_server_a', [added],
+                    { source: 'ordinary', mode: 'append' }));
+                items = [...items, ...addedItems];
+                await screen.update(<NativeSessionsListView paneState={{ ...paneState,
+                    summary: { sessionsReady: true, sessionCount: 3 + arrival }, visibleSessionListIndex: items,
+                }} />);
+                await flushHookEffects();
+                expect(findSessionItem(screen, added.id)).toBeTruthy();
+            }
+            expect(derive.mock.calls.filter(([input]) => ['sess_a', 'sess_b'].includes(input.item.sessionId))).toHaveLength(0);
+            expect(findSessionItem(screen, 'sess_a')?.props.isFirst).toBe(true);
+            expect(findSessionItem(screen, 'sess_b')?.props.isLast).toBe(true);
+        } finally { derive.mockRestore(); await screen.unmount(); }
+    });
+
+    it('does not rederive settled rows for five unrelated shared-clock wakes', async () => {
+        const rowModels = await import('./sessionListRowViewModels');
+        const { sessionListRuntimeClock } = await import('@/hooks/session/sessionListRuntimeClock');
+        const derive = vi.spyOn(rowModels, 'buildSessionListRowViewModel');
+        const screen = await renderSessionsList();
+        const token = {};
+        try {
+            vi.useFakeTimers();
+            derive.mockClear();
+            for (let wake = 1; wake <= 5; wake++) {
+                sessionListRuntimeClock.requestWake(token, Date.now() + 1_000);
+                await flushHookEffects({ advanceTimersMs: 1_000, cycles: 1, turns: 2 });
+            }
+            expect(derive.mock.calls.filter(([input]) => ['sess_a', 'sess_b'].includes(input.item.sessionId))).toHaveLength(0);
+            await act(async () => realStorage.getState().applyServerScopedSessionListRows('srv_server_a', [{
+                ...sessionA, createdAt: Date.now() - 59_000,
+            }], { source: 'ordinary', mode: 'append' }));
+            derive.mockClear();
+            await flushHookEffects({ advanceTimersMs: 1_000, cycles: 1, turns: 2 });
+            expect(derive.mock.calls.map(([input]) => input.item.sessionId)).toEqual(['sess_a']);
+            expect(derive.mock.results[0]?.value.activityTimeLabel).toBe('1m');
+        } finally {
+            sessionListRuntimeClock.clearWake(token);
+            derive.mockRestore();
+            await screen.unmount();
+            vi.useRealTimers();
+        }
+    });
+
     it('keeps an explicitly expanded empty search input mounted across incidental blur', async () => {
         mockVisibleSessionListViewData = [
             {

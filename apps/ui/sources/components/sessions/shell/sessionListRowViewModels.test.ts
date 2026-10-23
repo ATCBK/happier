@@ -8,7 +8,7 @@ import { SESSION_OPTIMISTIC_PENDING_THINKING_MS } from '@/sync/domains/session/a
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { buildSessionListServerScopedRowKey } from '@/sync/domains/session/listing/sessionListKeyNormalization';
 import { t } from '@/text';
-import { buildSessionListRowViewModel, buildSessionListRowViewModels, resolveSessionListRowViewModelAdjacency } from './sessionListRowViewModels';
+import { buildSessionListRowViewModel, buildSessionListRowViewModels, resolveSessionListRowViewModelAdjacency, readSessionListRowRefreshAtMs } from './sessionListRowViewModels';
 
 function createRenderableSession(id: string): SessionListRenderableSession {
     return {
@@ -48,6 +48,19 @@ function rowKey(item: Pick<SessionListSessionIndexItem, 'serverId' | 'sessionId'
 }
 
 describe('buildSessionListRowViewModels', () => {
+    it('selects row-local age, runtime, reminder and stale Home deadlines', () => {
+        const now = 1_800_000_000_000;
+        const old = { ...createRenderableSession('deadline'), presence: 0, createdAt: now - 2 * 86_400_000 };
+        expect(readSessionListRowRefreshAtMs({ session: old, reminderAtMs: null }, now)).toBe(now + 86_400_000);
+        expect(readSessionListRowRefreshAtMs({ session: old, reminderAtMs: now + 500 }, now)).toBe(now + 500);
+        expect(readSessionListRowRefreshAtMs({ session: old, reminderAtMs: null,
+            homeObservation: { phase: 'offline', lastSuccessAt: now - 59_000 } }, now)).toBe(now + 1_000);
+        const fresh = { ...old, active: true, presence: 'online' as const, activeAt: now,
+            optimisticThinkingAt: now, pendingCount: 1 };
+        expect(readSessionListRowRefreshAtMs({ session: fresh, reminderAtMs: null }, now))
+            .toBe(now + SESSION_OPTIMISTIC_PENDING_THINKING_MS);
+        expect(readSessionListRowRefreshAtMs({ session: null, reminderAtMs: null }, now)).toBeNull();
+    });
     it('does not reuse a row view model when control-character-bearing tag tuples differ', () => {
         const item = { type: 'session', sessionId: 'tag-collision', serverId: 'server-a',
             storageKind: 'persisted', groupKey: 'group', groupKind: 'date' } satisfies SessionListIndexItem;
