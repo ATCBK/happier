@@ -71,6 +71,8 @@ export type VirtualizedListProps<T> = Readonly<{
     scrollEventThrottle?: number;
 
     onLayout?: (event: NativeSyntheticEvent<{ layout: { x: number; y: number; width: number; height: number } }>) => void;
+    /** Initial viewport rows and the recycler's initial scroll have completed layout. */
+    onLoad?: () => void;
     onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
     onScrollBeginDrag?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
     onScrollEndDrag?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;

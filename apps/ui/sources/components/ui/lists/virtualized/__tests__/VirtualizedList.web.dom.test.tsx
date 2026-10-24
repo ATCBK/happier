@@ -252,6 +252,41 @@ describe('VirtualizedList web DOM integration', () => {
         expect(window.getComputedStyle(content!).boxSizing).toBe('border-box');
     });
 
+    it('publishes measured content and viewport dimensions with a real web scroll event', async () => {
+        const onScroll = vi.fn();
+        const onContentSizeChange = vi.fn();
+        await act(async () => {
+            root.render(<div id="virtualized-list-host" style={{ display: 'flex', flexDirection: 'column', height: 400 }}>
+                <VirtualizedList
+                    data={Array.from({ length: 100 }, (_, index) => ({ id: `row-${index}` }))}
+                    estimatedItemSize={56}
+                    getFixedItemSize={() => 56}
+                    keyExtractor={item => item.id}
+                    renderItem={({ item }) => <div data-row-height="56">{item.id}</div>}
+                    onScroll={onScroll}
+                    onContentSizeChange={onContentSizeChange}
+                    recycleItems={false}
+                />
+            </div>);
+        });
+        await flushLegendWork();
+        const scrollElement = container.querySelector<HTMLElement>('[style*="overflow-y: auto"]');
+        expect(scrollElement).not.toBeNull();
+        await act(async () => {
+            scrollElement!.scrollTop = 250;
+            scrollElement!.dispatchEvent(new Event('scroll'));
+            await vi.runOnlyPendingTimersAsync();
+        });
+        expect(onScroll).toHaveBeenCalled();
+        const event = onScroll.mock.calls.at(-1)?.[0];
+        expect(event.nativeEvent.contentOffset.y).toBe(250);
+        expect(event.nativeEvent.layoutMeasurement.height).toBe(400);
+        expect(event.nativeEvent.contentSize.height).toBeGreaterThan(400);
+        // The web backend deliberately omits this native-only DOM prop;
+        // scroll consumers use the metrics the real event already publishes.
+        expect(onContentSizeChange).not.toHaveBeenCalled();
+    });
+
     it.each(['standalone', 'collection-rail'] as const)('fills a bounded %s host and mounts only a virtualized window', async (surface) => {
         const rows = Array.from({ length: 500 }, (_value, index): Row => ({
             id: `row-${index}`,

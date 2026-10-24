@@ -271,6 +271,34 @@ describe('DiffFilesListView', () => {
         expect(listProps.onContentSizeChange).toBeUndefined();
     });
 
+    it('drives the pane header shade only as the pane body (bounded), never as a list embedded in other content', async () => {
+        const { DiffFilesListView } = await import('./DiffFilesListView');
+        const { PaneHeaderScrollScope, PaneHeaderShade } = await import('@/components/appShell/panes/paneHeaderScroll');
+        const { StyleSheet } = await import('react-native');
+        const shadeOpacity = (screen: Awaited<ReturnType<typeof renderScreen>>) => {
+            const opacity = StyleSheet.flatten(screen.findHostByTestId('pane-header-shade')!.props.style)?.opacity as unknown;
+            return typeof opacity === 'number' ? opacity : (opacity as { __getValue(): number }).__getValue();
+        };
+        for (const layout of ['bounded', 'intrinsic'] as const) {
+            legendListMockState = null;
+            const onScroll = vi.fn();
+            const screen = await renderScreen(<PaneHeaderScrollScope>
+                <PaneHeaderShade />
+                <DiffFilesListView
+                    files={[{ key: 'k1', filePath: 'src/a.ts', added: 1, removed: 0, unifiedDiff: 'a\n' }]}
+                    expandedKeys={new Set()} onToggleExpanded={() => {}} canRenderInlineDiffs wrapLines showLineNumbers showPrefix
+                    virtualizeFileList virtualizedListLayout={layout} onScroll={onScroll}
+                />
+            </PaneHeaderScrollScope>);
+            const event = { nativeEvent: { contentOffset: { x: 0, y: 12 } } };
+            act(() => getLegendListProps().onScroll(event));
+            // The caller's own handler still sees every event.
+            expect(onScroll).toHaveBeenCalledWith(event);
+            expect(shadeOpacity(screen), layout).toBe(layout === 'bounded' ? 1 : 0);
+            await screen.unmount();
+        }
+    });
+
     it('composes the LegendList web fill style with the caller style when virtualized', async () => {
         const { DiffFilesListView } = await import('./DiffFilesListView');
         legendListMockState = null;

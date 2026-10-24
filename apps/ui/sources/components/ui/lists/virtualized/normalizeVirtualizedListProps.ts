@@ -34,6 +34,7 @@ export type NormalizedSharedListProps<T> = Readonly<{
     showsHorizontalScrollIndicator?: boolean;
     scrollEventThrottle?: number;
     onLayout?: VirtualizedListProps<T>['onLayout'];
+    onLoad?: VirtualizedListProps<T>['onLoad'];
     onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
     onScrollBeginDrag?: VirtualizedListProps<T>['onScrollBeginDrag'];
     onScrollEndDrag?: VirtualizedListProps<T>['onScrollEndDrag'];
@@ -108,6 +109,7 @@ export function normalizeVirtualizedListProps<T>(
             showsHorizontalScrollIndicator: props.showsHorizontalScrollIndicator,
             scrollEventThrottle: props.scrollEventThrottle,
             onLayout: props.onLayout,
+            onLoad: props.onLoad,
             onScroll: props.onScroll,
             onScrollBeginDrag: props.onScrollBeginDrag,
             onScrollEndDrag: props.onScrollEndDrag,

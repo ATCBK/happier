@@ -26,6 +26,7 @@ import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import type { DiffViewerBaseProps } from './diffViewerTypes';
 import { FindHighlightedText, sliceFindRanges } from '@/components/ui/text/FindHighlightedText';
 import { normalizeRepoPathParts } from '@/utils/path/normalizeRepoPathParts';
+import { PaneHeaderScrollIsolation, usePaneHeaderScrollSink } from '@/components/appShell/panes/paneHeaderScroll';
 
 export function diffFileDisplayPath(file: DiffFileEntry) {
     const { dir, name } = normalizeRepoPathParts({ fullPath: file.filePath ?? t('status.unknown') });
@@ -102,6 +103,7 @@ export type DiffFilesListViewProps = Readonly<{
     ListFooterComponent?: any;
     onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
     onLayout?: (event: LayoutChangeEvent) => void;
+    onLoad?: () => void;
     onContentSizeChange?: (width: number, height: number) => void;
     onViewableItemsChanged?: (info: any) => void;
     scrollEventThrottle?: number;
@@ -147,6 +149,7 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
         ListFooterComponent,
         onScroll,
         onLayout,
+        onLoad,
         onContentSizeChange,
         onViewableItemsChanged,
         scrollEventThrottle,
@@ -535,6 +538,8 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
     );
 
     return (
+        // Nothing inside a diff list (inline viewers, their own scroll roots) speaks for the pane's header.
+        <PaneHeaderScrollIsolation>
         <PierreScrollRootVirtualizerProvider>
             {shouldUseVirtualizedList ? (
                 <VirtualizedList<DiffFilesListViewItem>
@@ -551,8 +556,9 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
                     getItemType={getItemType}
                     ListHeaderComponent={ListHeaderComponent}
                     ListFooterComponent={ListFooterComponent}
-                    onScroll={onScroll}
+                    onScroll={handleScroll}
                     onLayout={onLayout}
+                    onLoad={onLoad}
                     onContentSizeChange={onContentSizeChange}
                     onViewableItemsChanged={onViewableItemsChanged}
                     scrollEventThrottle={scrollEventThrottle}
@@ -577,6 +583,7 @@ export const DiffFilesListView = React.forwardRef<DiffFilesListViewHandle, DiffF
                 </View>
             )}
         </PierreScrollRootVirtualizerProvider>
+        </PaneHeaderScrollIsolation>
     );
 });
 
