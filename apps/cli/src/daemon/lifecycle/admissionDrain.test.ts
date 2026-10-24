@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createDaemonAdmissionDrain, waitForDaemonAdmission } from './admissionDrain';
 
 describe('daemon admission drain', () => {
-    it('reopens unused-stop without clearing independent temporary refusal or plugin decisions', async () => {
+    it('reopens unused-stop without clearing independent temporary refusal', async () => {
         const drain = createDaemonAdmissionDrain();
         drain.beginTemporaryDrain();
         drain.beginUnusedStopDrain();
