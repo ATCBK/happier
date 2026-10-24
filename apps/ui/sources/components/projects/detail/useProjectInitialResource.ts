@@ -1,4 +1,7 @@
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { AppPaneContext, useOptionalAppPaneContext } from '@/components/appShell/panes/AppPaneContext';
+import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors';
+import { getOwnDetailsWorkspaceRecordEntry } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import * as React from 'react';
 import { useDestinationParams } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { readProjectFileRouteTarget, readProjectRouteCompanion, readProjectRouteStringParam, readProjectSelectedRouteResource, serializeProjectInitialResource } from './projectRouteState';
@@ -12,12 +15,19 @@ function resourceAdmissionKey(scopeId: string, resource: Parameters<typeof seria
 }
 
 /** Destination-owned admission of the initial resource carried by its route. */
-export function useProjectInitialResource(pane: AppPaneScopeApi, workspaceRef: WorkspaceRefV1 | null): boolean {
+export function useProjectInitialResource(pane: Pick<AppPaneScopeApi, 'scopeId' | 'openDetailsTab' | 'selectRightDestination'>,
+    workspaceRef: WorkspaceRefV1 | null): boolean {
+    const paneContext = React.useContext(AppPaneContext);
     const routerRef = useProjectRouteRouterRef();
     const params = useDestinationParams<Record<string, string | string[] | undefined>>();
     const fileTarget = readProjectFileRouteTarget(params);
     const commit = readProjectRouteStringParam(params.initialCommit);
     const tab = fileTarget ? createSessionPaneDetailsTab(fileTarget) : commit ? createProjectCommitDetailsTab(commit) : null;
+    const resourcePresence = useOptionalAppPaneContext(value => {
+        const details = value.state.scopes[pane.scopeId]?.details;
+        return { isOpen: details?.isOpen === true,
+            hasResource: Boolean(tab && details && getOwnDetailsWorkspaceRecordEntry(details.tabsByKey, tab.key)) };
+    });
     const canAdmit = workspaceRef !== null;
     const companion = React.useMemo(() => readProjectRouteCompanion({ right: params.right, rightDestination: params.rightDestination }),
         [params.right, params.rightDestination]);
@@ -44,11 +54,11 @@ export function useProjectInitialResource(pane: AppPaneScopeApi, workspaceRef: W
             return;
         }
         if (lastAdmitted.current === admissionKey) {
-            const details = pane.scopeState?.details;
+            const details = paneContext?.getSnapshot().state.scopes[pane.scopeId]?.details;
             // A closed resource must no longer address this destination. Otherwise an explicit
             // open of the same URL is indistinguishable from the route we already admitted.
-            if (details && (!details.isOpen || !details.tabs.some(candidate => candidate.key === tab.key))) {
-                const selected = readProjectSelectedRouteResource(details) ?? null;
+            if (details && (!resourcePresence?.isOpen || !resourcePresence.hasResource)) {
+                const selected = readProjectSelectedRouteResource(buildDetailsWorkspaceStateView(details)) ?? null;
                 // This tab is already selected. Projecting it must not replay opening side effects
                 // such as promoting its preview or resetting the reading anchor.
                 lastAdmitted.current = resourceAdmissionKey(pane.scopeId, selected);
@@ -60,6 +70,6 @@ export function useProjectInitialResource(pane: AppPaneScopeApi, workspaceRef: W
         pane.openDetailsTab(tab, { intent: fileTarget?.openAs ?? 'pinned' });
         // Retain the qualified resource in the destination URL across phone/Workspace projection.
         // Admission is idempotent while that resource remains in this mounted destination.
-    }, [admissionKey, canAdmit, pane.openDetailsTab, pane.scopeId, pane.scopeState?.details, routerRef]);
+    }, [admissionKey, canAdmit, pane.openDetailsTab, pane.scopeId, paneContext, resourcePresence?.isOpen, resourcePresence?.hasResource, routerRef]);
     return admissionKey !== null && lastAdmitted.current !== admissionKey;
 }

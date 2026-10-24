@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { Stack, useIsFocused, useLocalSearchParams, usePathname } from '@/components/appShell/workspace/destinationRoute';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { AppPaneContext } from '@/components/appShell/panes/AppPaneContext';
+import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors';
 import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { ProjectDetailScreen } from '@/components/projects/ProjectDetailScreen';
 import { buildProjectPaneScopeId } from './projectPaneScope';
@@ -34,7 +36,8 @@ export const ProjectDestinationBody = React.memo(() => {
     const surface = pageRoute?.surface ?? page;
     const showWorktrees = readProjectRouteStringParam(params.showWorktrees) === '1';
     const scopeId = useDestinationPaneScopeId(buildProjectPaneScopeId(workspaceRefId, workspaceRef?.serverId ?? serverId));
-    const pane = useAppPaneScope(scopeId);
+    const pane = useAppPaneScope(scopeId, () => null);
+    const paneContext = React.useContext(AppPaneContext);
     const resourcePending = useProjectInitialResource(pane, workspaceRef);
     const roots = useLocalSetting('projectLastActiveRootPathByWorkspaceRefId');
     const worktreeIds = useLocalSetting('projectLastActiveWorktreeIdByWorkspaceRefId');
@@ -56,6 +59,7 @@ export const ProjectDestinationBody = React.memo(() => {
     });
     const replaceSelection = React.useCallback((path: string, nextShowWorktrees = showWorktrees) => {
         if (!workspaceRef || !path.trim()) return;
+        const details = paneContext?.getSnapshot().state.scopes[scopeId]?.details;
         replaceProjectRouteSelection({
             router: routerRef.current,
             workspaceRefId,
@@ -63,13 +67,13 @@ export const ProjectDestinationBody = React.memo(() => {
             segment: page,
             surface,
             routeParams: params,
-            initialResource: readProjectSelectedRouteResource(pane.scopeState?.details) ?? (resourcePending ? undefined : null),
+            initialResource: readProjectSelectedRouteResource(details ? buildDetailsWorkspaceStateView(details) : null) ?? (resourcePending ? undefined : null),
             activeRootPath: path,
             defaultRootPath: workspaceRef.rootPath,
             activeWorktreeId: path === workspaceRef.rootPath ? null : findVisibleRepoWorktreeByPath(availableWorktrees, path)?.id ?? null,
             showWorktrees: nextShowWorktrees,
         });
-    }, [availableWorktrees, page, pane.scopeState?.details, params, resourcePending, routerRef, showWorktrees, surface, workspaceRef, workspaceRefId]);
+    }, [availableWorktrees, page, paneContext, scopeId, params, resourcePending, routerRef, showWorktrees, surface, workspaceRef, workspaceRefId]);
     const selectRootPath = React.useCallback((path: string) => replaceSelection(path), [replaceSelection]);
     React.useEffect(() => {
         if (!isFocused || !workspaceRef || !preferenceKeys) return;

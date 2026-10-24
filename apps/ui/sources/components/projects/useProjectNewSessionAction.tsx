@@ -6,6 +6,8 @@ import { SessionAuthoringOpenResultV1Schema, type PluginUiNewSessionSeedV1 } fro
 import { useLocalSearchParams, usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { AppPaneContext } from '@/components/appShell/panes/AppPaneContext';
+import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -36,20 +38,30 @@ export function useProjectNewSessionAction(input: Readonly<{
     const routeParams = useLocalSearchParams<Record<string, string | string[]>>();
     const pathname = usePathname();
     const scopeId = useDestinationPaneScopeId(buildProjectPaneScopeId(input.workspaceRef.id, input.workspaceRef.serverId));
-    const pane = useAppPaneScope(input.scopeId ?? scopeId);
+    const paneContext = React.useContext(AppPaneContext);
+    const pane = useAppPaneScope(input.scopeId ?? scopeId, scope => {
+        const details = scope ? buildDetailsWorkspaceStateView(scope.details) : null;
+        const selected = details?.tabs.find(tab => tab.key === details.activeTabKey);
+        return { detailsOpen: details?.isOpen, detailsPresent: Boolean(details?.tabs.length),
+            activeDetailsKey: details?.activeTabKey, activeDetailsKind: selected?.kind, activeDetailsResource: selected?.resource,
+            rightOpen: scope?.right.isOpen, rightTabId: scope?.right.activeTabId, selectedDestination: scope?.right.selectedDestination };
+    });
     const target = { serverId: input.workspaceRef.serverId, machineId: input.workspaceRef.machineId, rootPath: input.activeRootPath };
     const checkout = resolveProjectCheckoutWorkspaceRef(workspaceRefs, input.workspaceRef, input.activeRootPath);
     const page = input.page ?? resolveProjectCockpitRouteFromPathname(pathname)?.page ?? 'overview';
-    const details = pane.scopeState?.details;
-    const selectedCompanion = pane.scopeState?.right.selectedDestination;
-    const companion = pane.scopeState?.right.isOpen
-        ? selectedCompanion?.kind === 'plugin' ? selectedCompanion : pane.scopeState.right.activeTabId
+    const selectedCompanion = pane.scopeState.selectedDestination;
+    const companion = pane.scopeState.rightOpen
+        ? selectedCompanion?.kind === 'plugin' ? selectedCompanion : pane.scopeState.rightTabId
         : undefined;
-    const origin = React.useMemo(() => accountScope && checkout ? buildProjectNewSessionOrigin({ scope: accountScope,
-        workspace: workspaceAddressFromRefV1(checkout), page, routeParams,
-        resource: details?.tabs.length ? readProjectSelectedRouteResource(details) ?? null : undefined,
-        ...(companion ? { companion } : {}),
-    }) : null, [accountScope, checkout, companion, details, page, routeParams]);
+    const origin = React.useMemo(() => {
+        const current = paneContext?.getSnapshot().state.scopes[pane.scopeId]?.details;
+        const details = current ? buildDetailsWorkspaceStateView(current) : null;
+        return accountScope && checkout ? buildProjectNewSessionOrigin({ scope: accountScope,
+            workspace: workspaceAddressFromRefV1(checkout), page, routeParams,
+            resource: details?.tabs.length ? readProjectSelectedRouteResource(details) ?? null : undefined,
+            ...(companion ? { companion } : {}),
+        }) : null;
+    }, [accountScope, checkout, companion, paneContext, pane.scopeId, pane.scopeState, page, routeParams]);
     const targetKey = JSON.stringify([target.serverId, target.machineId, target.rootPath, origin]);
     const currentTargetKey = React.useRef(targetKey);
     currentTargetKey.current = targetKey;

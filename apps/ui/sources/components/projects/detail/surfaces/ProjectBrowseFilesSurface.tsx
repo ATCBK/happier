@@ -2,6 +2,7 @@ import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneSco
 import * as React from 'react';
 
 import { resolveOpenDetailsFilePath } from '@/components/workspaces/files/resolveOpenDetailsFilePath';
+import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors';
 
 import { WorkspaceCodeBrowserView, type WorkspaceCodeLocation } from '@/components/projects/files/code/WorkspaceCodeBrowserView';
 import { useRepositoryTreeBrowserState } from '@/hooks/workspaces/files/repositoryTreeBrowserState';
@@ -23,7 +24,10 @@ export const ProjectBrowseFilesSurface = React.memo((props: Readonly<{
     onNavigate?: (location: WorkspaceCodeLocation) => void;
     onOpenHistory?: (location: WorkspaceCodeLocation) => void;
 }>) => {
-    const pane = useAppPaneScope(props.scopeId);
+    const pane = useAppPaneScope(props.scopeId, scope => ({
+        files: scope?.right.tabState.files,
+        selectedPath: resolveOpenDetailsFilePath(scope ? buildDetailsWorkspaceStateView(scope.details) : null),
+    }));
     const { location, setLocation } = useRepositoryTreeBrowserState(tryBuildWorkspaceCacheKey(props.scope) ?? '');
     // Existing Code routes can restore a file page. New file activations enter the shared opener;
     // the Files companion keeps showing that file's containing folder.
@@ -40,9 +44,9 @@ export const ProjectBrowseFilesSurface = React.memo((props: Readonly<{
         machineId: props.scope.machineId, rootPath: props.scope.rootPath }),
     [props.scope.machineId, props.scope.rootPath, props.workspaceRef.id, props.workspaceRef.serverId]);
     const fileHref = React.useCallback((path: string) => buildWorkspaceFileLink({ target: fileLinkTarget, path }), [fileLinkTarget]);
-    const files = pane.scopeState?.right.tabState.files as { revealRequest?: Readonly<{ path: string }> } | undefined;
+    const files = pane.scopeState.files as { revealRequest?: Readonly<{ path: string }> } | undefined;
     // The row of the file open in Details stays selected while its tab is open (lab F1).
-    const selectedPath = resolveOpenDetailsFilePath(pane.scopeState?.details);
+    const selectedPath = pane.scopeState.selectedPath;
     return (
         <WorkspaceCodeBrowserView
             paneScopeId={props.scopeId}

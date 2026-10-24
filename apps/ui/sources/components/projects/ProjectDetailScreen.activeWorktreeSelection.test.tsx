@@ -36,6 +36,10 @@ const { ProjectRightPanel } = await import('./detail/ProjectRightPanel');
 const { ProjectCockpitShell } = await import('@/components/workspaceCockpit/project/ProjectCockpitShell');
 const { ProjectShellHeaderHost } = await import('./shell/ProjectShellHeaderHost');
 const { ProjectOverviewWidgets } = await import('./detail/ProjectOverviewWidgets');
+const { useProjectNewSessionAction } = await import('./useProjectNewSessionAction');
+const { useProjectRouteActions } = await import('./detail/useProjectRouteActions');
+const { useProjectInitialResource } = await import('./detail/useProjectInitialResource');
+const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
 const disposeActionLoader = await installRealActionExecutorModuleLoader();
 afterAll(disposeActionLoader);
 
@@ -90,6 +94,30 @@ function setPreferences(rootPath: string, worktreeId: string) {
         projectLastActiveWorktreeIdByWorkspaceRefId: { wr_1: worktreeId } } });
 }
 function selectionKey() { return `project-selection:v1:${JSON.stringify([runtime.serverId, 'wr_1'])}`; }
+it('keeps Project route and New Session owners asleep during deferred File drafts and dirty pin metadata', async () => {
+    let ownerRenders = 0;
+    const scopeId = buildProjectPaneScopeId('wr_1', runtime.serverId);
+    function ProjectRouteOwner() {
+        const pane = useAppPaneScope(scopeId, () => null);
+        useProjectInitialResource(pane, workspaceRef);
+        useProjectRouteActions({ workspaceRef, activeRootPath: '/repo', pane });
+        useProjectNewSessionAction({ workspaceRef, activeRootPath: '/repo', scopeId });
+        ownerRenders += 1;
+        return null;
+    }
+    await renderScreen(<runtime.Wrapper><ProjectRouteOwner /></runtime.Wrapper>);
+    await act(async () => runtime.pane.openDetailsTab({ key: 'file:src/a.ts', kind: 'file', title: 'a.ts',
+        resource: { kind: 'file', path: 'src/a.ts' } }, { intent: 'preview', present: false }));
+    ownerRenders = 0;
+    for (let index = 0; index < 20; index += 1) {
+        await act(async () => {
+            runtime.pane.patchDetailsTabState('file:src/a.ts', { accountId: 'account-a', isEditingFile: true,
+                editorOriginalHash: 'base-hash', editorText: `draft ${index}` }, { persist: false });
+            if (index === 0) runtime.pane.pinDetailsTab('file:src/a.ts', { persist: false });
+        });
+    }
+    expect(ownerRenders).toBe(0);
+});
 async function mount(props: Partial<React.ComponentProps<typeof ProjectDetailScreen>> = {}) {
     const screen = await renderScreen(<runtime.Wrapper><ProjectDetailScreen workspaceRefId="wr_1"
         serverId={runtime.serverId} page="context" {...props} /></runtime.Wrapper>);

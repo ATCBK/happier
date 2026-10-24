@@ -16,6 +16,8 @@ import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPa
 installSessionDetailsPanelNonRnModuleMocks();
 installDisconnectedServerSocketBoundary();
 const { WorkspaceDetailsPanel } = await import('./WorkspaceDetailsPanel');
+const { DetailsSplitWorkspace } = await import('@/components/appShell/panes/details/workspace/DetailsSplitWorkspace');
+const { createBrowserLaunchpadDetailsTab } = await import('@/components/browser/surfaces');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
 const { resolveBrowserViewTargetOpenTab } = await import('@/components/browser/surfaces/openBrowserTargetInWorkspace');
@@ -57,14 +59,34 @@ describe('WorkspaceDetailsPanel preview opening', () => {
                 workspaceRef={{ id: 'wr_preview', serverId: homes.homes.project!.id, machineId: 'm1', rootPath: '/repo', createdAtMs: 1 }}
                 scopeId="project:wr_preview" activeRootPath="/repo"
             /></AppPaneProvider>);
-            await act(async () => pane!.openDetailsTab(resolveBrowserViewTargetOpenTab({
+            const browserTab = resolveBrowserViewTargetOpenTab({
                 scope: 'workspaceDetails', platform: 'web',
-            }, resource.browserTarget!).tab));
+            }, resource.browserTarget!).tab;
+            await act(async () => pane!.openDetailsTab(browserTab, { intent: 'pinned' }));
             await flushHookEffects({ cycles: 20 });
             expect(screen.tree.findAllByType('iframe').some(frame => {
                 const src = new URL(frame.props.src);
                 return src.origin === new URL(accessUrl).origin && src.pathname === '/nested';
             }), screen.getTextContent()).toBe(true);
+            await act(async () => {
+                pane!.openDetailsTab({ key: 'file:src/a.ts', kind: 'file', title: 'a.ts',
+                    resource: { kind: 'file', path: 'src/a.ts' } }, { intent: 'preview', present: false });
+                pane!.setActiveDetailsTab(browserTab.key);
+            });
+            expect(pane!.scopeState?.details.activeTabKey).toBe(browserTab.key);
+            const renderTabContent = screen.findByType(DetailsSplitWorkspace).props.renderTabContent;
+            const renderStripActions = screen.findByType(DetailsSplitWorkspace).props.renderStripActions;
+            for (let index = 0; index < 20; index += 1) {
+                await act(async () => {
+                    pane!.patchDetailsTabState('file:src/a.ts', { accountId: 'project-account', isEditingFile: true,
+                        editorOriginalHash: 'base-hash', editorText: `draft ${index}` }, { persist: false });
+                    if (index === 0) pane!.pinDetailsTab('file:src/a.ts', { persist: false });
+                });
+            }
+            expect(screen.findByType(DetailsSplitWorkspace).props.renderTabContent).toBe(renderTabContent);
+            expect(screen.findByType(DetailsSplitWorkspace).props.renderStripActions).toBe(renderStripActions);
+            await screen.pressByTestIdAsync('workspace-details-open-browser');
+            expect(pane!.scopeState?.details.activeTabKey).toBe(createBrowserLaunchpadDetailsTab().key);
         } finally {
             await standardCleanup();
             await homes.dispose();

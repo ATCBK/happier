@@ -71,7 +71,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
     const lastActiveWorktreeIdByWorkspaceRefId = useLocalSetting('projectLastActiveWorktreeIdByWorkspaceRefId');
     const workspaceRef = useWorkspaceRefById(props.workspaceRefId, props.serverId);
     const scopeId = useDestinationPaneScopeId(buildProjectPaneScopeId(props.workspaceRefId, workspaceRef?.serverId ?? props.serverId));
-    const pane = useAppPaneScope(scopeId);
+    const pane = useAppPaneScope(scopeId, () => null);
     // The page's menus and Add surfaces float inside its own column (header and body), never over the sidebar.
     const pageColumnRef = React.useRef<View>(null);
     const workspaceRefs = useWorkspaceRefs();

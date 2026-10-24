@@ -33,7 +33,7 @@ export const ProjectTerminalSurface = React.memo((props: Readonly<{
     terminalInstanceId?: string; closeOnUnmount?: boolean;
     workspace?: WorkspaceAddressV1 | null;
 }>) => {
-    const pane = useAppPaneScope(props.scopeId);
+    const pane = useAppPaneScope(props.scopeId, () => null);
     const { theme } = useUnistyles();
     const deviceType = useDeviceType();
     const refs = useWorkspaceRefs();

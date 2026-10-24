@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { useLocalSearchParams, usePathname } from '@/components/appShell/workspace/destinationRoute';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
+import { AppPaneContext } from '@/components/appShell/panes/AppPaneContext';
+import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { resolveProjectCockpitRouteFromPathname } from '@/components/workspaceCockpit/project/projectCockpitState';
 import { createBrowserLaunchpadDetailsTab } from '@/components/browser/surfaces';
@@ -14,8 +16,9 @@ export function useProjectRouteActions(params: Readonly<{
     activeWorktreeId?: string | null;
     showWorktrees?: boolean;
     sourceSurface?: ProjectDetailsSourceSurface | null;
-    pane?: AppPaneScopeApi | null;
+    pane?: Pick<AppPaneScopeApi, 'scopeId' | 'openDetailsTab'> | null;
 }>) {
+    const paneContext = React.useContext(AppPaneContext);
     const routerRef = useProjectRouteRouterRef();
     const routeParams = useLocalSearchParams<Record<string, string | string[]>>();
     const pathname = usePathname();
@@ -27,6 +30,7 @@ export function useProjectRouteActions(params: Readonly<{
         workspaceRef?: WorkspaceRefV1;
     }>) => {
         const workspaceRef = input?.workspaceRef ?? params.workspaceRef;
+        const details = params.pane ? paneContext?.getSnapshot().state.scopes[params.pane.scopeId]?.details : null;
         return workspaceRef ? buildProjectRouteHref({
             workspaceRefId: workspaceRef.id,
             serverId: workspaceRef.serverId,
@@ -37,9 +41,9 @@ export function useProjectRouteActions(params: Readonly<{
             activeWorktreeId: input?.workspaceRef ? null : params.activeWorktreeId,
             showWorktrees: input?.showWorktrees ?? params.showWorktrees,
             sourceSurface: input?.sourceSurface ?? params.sourceSurface,
-            initialResource: params.pane ? readProjectSelectedRouteResource(params.pane.scopeState?.details) ?? null : undefined,
+            initialResource: params.pane ? readProjectSelectedRouteResource(details ? buildDetailsWorkspaceStateView(details) : null) ?? null : undefined,
         }) : '/projects';
-    }, [page, params.activeRootPath, params.activeWorktreeId, params.pane?.scopeState?.details, params.showWorktrees, params.sourceSurface, params.workspaceRef, routeParams]);
+    }, [page, paneContext, params.activeRootPath, params.activeWorktreeId, params.pane?.scopeId, params.showWorktrees, params.sourceSurface, params.workspaceRef, routeParams]);
     const navigateToSegment = React.useCallback((input: Readonly<{
         segment?: ProjectRouteSegment;
         showWorktrees?: boolean;

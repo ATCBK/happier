@@ -180,7 +180,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
 
     const openBrowserLaunchpadTab = React.useCallback(() => {
         pane.openDetailsTab(createBrowserLaunchpadDetailsTab(), { intent: 'pinned' });
-    }, [pane]);
+    }, [pane.openDetailsTab]);
     const workspaceSyncSelectedRefId = React.useCallback((summary: Parameters<typeof createWorkspaceSyncRelationshipDetailsTab>[0]) => {
         const selectedKey = tryBuildWorkspaceCacheKey({
             serverId: props.workspaceRef.serverId,
@@ -193,10 +193,10 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
     }, [effectiveRootPath, props.workspaceRef.id, props.workspaceRef.machineId, props.workspaceRef.serverId]);
     const openWorkspaceSyncConflicts = React.useCallback((summary: Parameters<typeof createWorkspaceSyncConflictDetailsTab>[0]) => {
         pane.openDetailsTab(createWorkspaceSyncConflictDetailsTab(summary, workspaceSyncSelectedRefId(summary)), { intent: 'pinned' });
-    }, [pane, workspaceSyncSelectedRefId]);
+    }, [pane.openDetailsTab, workspaceSyncSelectedRefId]);
     const openWorkspaceSyncDetails = React.useCallback((summary: Parameters<typeof createWorkspaceSyncRelationshipDetailsTab>[0]) => {
         pane.openDetailsTab(createWorkspaceSyncRelationshipDetailsTab(summary, workspaceSyncSelectedRefId(summary)), { intent: 'pinned' });
-    }, [pane, workspaceSyncSelectedRefId]);
+    }, [pane.openDetailsTab, workspaceSyncSelectedRefId]);
     const openWorkspaceSyncAddMachineForProject = React.useCallback(() => {
         openWorkspaceSyncAddMachine(selectedWorkspaceRef ?? {
             serverId: props.workspaceRef.serverId,
@@ -467,7 +467,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         iconButtonStyle,
         hasWorkspaceReviewCommentDrafts,
         openBrowserLaunchpadTab,
-        pane,
+        pane.openBottom,
         props.onRequestClose,
         props.renderHeaderActionsPrefix,
         props.workspaceRef.machineId,

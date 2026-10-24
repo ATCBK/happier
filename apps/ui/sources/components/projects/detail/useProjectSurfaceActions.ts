@@ -20,7 +20,7 @@ export function useProjectSurfaceActions(params: Readonly<{
     onRevealInFilesTreeNavigate?: () => void;
     onOpenChangesNavigate?: () => void;
 }>) {
-    const pane = useAppPaneScope(params.scopeId);
+    const pane = useAppPaneScope(params.scopeId, () => null);
     const { open: openWorkspaceFile } = useWorkspaceFileOpener();
     const { setPersistedReviewTabState } = useScmReviewTabState(JSON.stringify([
         params.workspaceRef.serverId, params.workspaceRef.machineId, params.activeRootPath,

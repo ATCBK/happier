@@ -26,16 +26,17 @@ export function useWorkspaceScmTabState(pane: PaneLike): Readonly<{
     const gitTabState = readGitTabState(pane.scopeState);
     const activeGitSubTab = (gitTabState?.activeSubTabId as GitSubTabId | null) ?? 'commit';
     const commitDraftMessage = typeof gitTabState?.commitMessageDraft === 'string' ? (gitTabState.commitMessageDraft as string) : '';
+    const setRightTabState = pane.setRightTabState;
 
     const setCommitDraftMessage = React.useCallback((value: string) => {
         const base = gitTabState ?? {};
-        pane.setRightTabState('git', { ...base, commitMessageDraft: value });
-    }, [gitTabState, pane]);
+        setRightTabState('git', { ...base, commitMessageDraft: value });
+    }, [gitTabState, setRightTabState]);
 
     const setActiveGitSubTab = React.useCallback((subTabId: GitSubTabId) => {
         const base = gitTabState ?? {};
-        pane.setRightTabState('git', { ...base, activeSubTabId: subTabId });
-    }, [gitTabState, pane]);
+        setRightTabState('git', { ...base, activeSubTabId: subTabId });
+    }, [gitTabState, setRightTabState]);
 
     return {
         activeGitSubTab,

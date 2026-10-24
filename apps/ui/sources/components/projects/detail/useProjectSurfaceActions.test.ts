@@ -56,8 +56,9 @@ describe('useProjectSurfaceActions', () => {
             expect(hook.getCurrent().pane.scopeState?.right.activeTabId).toBe('files');
             expect(hook.getCurrent().pane.scopeState?.right.tabState.files).toMatchObject({ revealRequest: { path: 'src/a.ts' } });
             expect(hook.getCurrent().pane.scopeState?.details.tabState['file:src/a.ts']).toEqual({ editorText: 'unsaved' });
+            const openChanges = hook.getCurrent().actions.openChanges;
             await act(async () => hook.getCurrent().pane.setRightTabState('git', { activeSubTabId: 'history', commitMessageDraft: 'keep me' }));
-            await act(async () => hook.getCurrent().actions.openChanges());
+            await act(async () => openChanges());
             expect(hook.getCurrent().pane.scopeState?.right.activeTabId).toBe('git');
             expect(hook.getCurrent().pane.scopeState?.right.tabState.git).toMatchObject({ activeSubTabId: 'commit', commitMessageDraft: 'keep me' });
             expect(hook.getCurrent().pane.scopeState?.details.tabState['file:src/a.ts']).toEqual({ editorText: 'unsaved' });
