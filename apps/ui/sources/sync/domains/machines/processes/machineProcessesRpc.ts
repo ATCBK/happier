@@ -1,6 +1,5 @@
 import { MachineProcessesAnswerV1Schema, MachineProcessesListInputV1Schema, MachineProcessesWatchInputV1Schema,
     MachineProcessesWatchResultV1Schema, type MachineProcessesAnswerV1, type MachineProcessesWatchResultV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
-import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createRpcCallError, readRpcErrorCode, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
@@ -11,7 +10,7 @@ export type MachineProcessesKey = Readonly<{ serverId?: string | null; machineId
     /** Captured credential/cache scope; never caller authority or an RPC payload field. */
     accountId?: string }>;
 export type MachineProcessesReadInput = MachineProcessesKey & Readonly<{ signal?: AbortSignal }>;
-export type MachineProcessesWatchInput = MachineProcessesReadInput & Readonly<{ since?: number }>;
+export type MachineProcessesWatchInput = MachineProcessesReadInput & Readonly<{ since?: number; historySince?: number }>;
 export type MachineProcessesRpcResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; reason: 'older_happier' | 'request_failed' | 'invalid_response' }>;
 
 let actionExecute: FrontDoorActionExecute | undefined;
@@ -44,9 +43,9 @@ export function fetchMachineProcessesViaMachineRpc(input: MachineProcessesReadIn
 }
 export function watchMachineProcessesViaMachineRpc(input: MachineProcessesWatchInput): Promise<MachineProcessesRpcResult<MachineProcessesWatchResultV1>> {
     const payload = MachineProcessesWatchInputV1Schema.parse({ machineId: input.machineId, scope: input.scope, view: input.view,
-        ...(input.since === undefined ? {} : { since: input.since }), ...(input.detailToken ? { detailToken: input.detailToken } : {}) });
+        ...(input.since === undefined ? {} : { since: input.since }), ...(input.historySince === undefined ? {} : { historySince: input.historySince }), ...(input.detailToken ? { detailToken: input.detailToken } : {}) });
     return read(input, () => machineRpcWithServerScope({ machineId: input.machineId, serverId: input.serverId,
         accountId: input.accountId, method: RPC_METHODS.DAEMON_PROCESSES_WATCH, payload,
-        ...(input.signal ? { signal: input.signal } : {}), timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000 }),
+        ...(input.signal ? { signal: input.signal } : {}) }),
     raw => MachineProcessesWatchResultV1Schema.safeParse(raw));
 }

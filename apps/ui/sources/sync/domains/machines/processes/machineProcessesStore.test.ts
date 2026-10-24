@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDeferred } from '@/dev/testkit';
-import type { MachineProcessesAnswerV1, MachineProcessesWatchResultV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
+import { MACHINE_PROCESS_HISTORY_WINDOW_MS, type MachineProcessesAnswerV1, type MachineProcessesWatchResultV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import { createMachineProcessesStore } from './machineProcessesStore';
 import type { MachineProcessesRpcResult, MachineProcessesWatchInput } from './machineProcessesRpc';
 import { selectMachineProcessesLeftBehind } from './selectMachineProcessesLeftBehind';
@@ -95,6 +95,45 @@ describe('machine process subscription and cleanup selection', () => {
         expect(watches.at(-1)?.input.signal?.aborted).toBe(false);
         resumed(); expect(watches.at(-1)?.input.signal?.aborted).toBe(true);
         store.reset();
+    });
+    it('asks for history newer than the series it holds and joins only that delta, keeping idle series and the hour window', async () => {
+        const sample = (capturedAtMs: number) => ({ capturedAtMs, memoryBytes: 10 });
+        const watches: Array<{ input: MachineProcessesWatchInput; response: ReturnType<typeof createDeferred<MachineProcessesRpcResult<MachineProcessesWatchResultV1>>> }> = [];
+        const store = createMachineProcessesStore({
+            snapshotClient: async () => ({ ok: true, value: answer(1000) }),
+            watchClient(input) {
+                const response = createDeferred<MachineProcessesRpcResult<MachineProcessesWatchResultV1>>();
+                watches.push({ input, response });
+                return response.promise;
+            },
+        });
+        const release = store.demand(key);
+        const arrive = async (index: number, at: number, history: NonNullable<MachineProcessesAnswerV1['history']>) => {
+            watches[index].response.resolve({ ok: true, value: { changed: true, answer: { ...answer(at), history } } });
+            await settle();
+        };
+        try {
+            await settle();
+            // Nothing held yet: the daemon answers the whole series.
+            expect(watches[0].input.historySince).toBeUndefined();
+            await arrive(0, 3000, { 'session:s': [sample(1000), sample(3000)], idle: [sample(2000)] });
+            const first = store.getState(key).answer!.history!;
+            expect(watches[1].input.historySince).toBe(3000);
+            await arrive(1, 5000, { 'session:s': [sample(5000)], idle: [] });
+            const second = store.getState(key).answer!.history!;
+            expect(second['session:s'].map(point => point.capturedAtMs)).toEqual([1000, 3000, 5000]);
+            expect(second.idle).toBe(first.idle);
+            expect(watches[2].input.historySince).toBe(5000);
+            // Even an idle series expires when another series advances the hour window.
+            const late = 5000 + MACHINE_PROCESS_HISTORY_WINDOW_MS - 1000;
+            await arrive(2, late, { 'session:s': [sample(late)], idle: [] });
+            const third = store.getState(key).answer!.history!;
+            expect(third['session:s'].map(point => point.capturedAtMs)).toEqual([5000, late]);
+            expect(third.idle).toEqual([]);
+            // A series the daemon stops listing is removed from the client too.
+            await arrive(3, late + 2000, { 'session:s': [] });
+            expect(Object.keys(store.getState(key).answer!.history!)).toEqual(['session:s']);
+        } finally { release(); store.reset(); }
     });
     it('takes the displayed filtered confirmed set once for refs, count and memory, then narrows that same set for cleanup', () => {
         const rows = answer().leftBehind;
