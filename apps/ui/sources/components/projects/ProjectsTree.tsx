@@ -27,7 +27,15 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
-import { projectsTreeRowSubtitle, type ProjectsTreeRow } from './projectsTreeRows';
+import {
+    applyProjectsTreeCheckoutFacts,
+    buildProjectsTreeRows,
+    projectsTreeCheckoutKey,
+    projectsTreeRowSubtitle,
+    type ProjectsTreeProject,
+    type ProjectsTreeRow,
+} from './projectsTreeRows';
+import { useProjectsTreeCheckoutFactsFor, type ProjectsTreeCheckoutFactsSource } from './useProjectsTreeCheckoutFacts';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 /**
@@ -96,6 +104,16 @@ function openTreeRow(row: ProjectsTreeRow, onOpenRef: (refId: string, address?: 
     else if (row.expandable) onToggle(row.key);
 }
 
+export type ProjectsTreeLiveCheckoutsInput = Readonly<{
+    source: ProjectsTreeCheckoutFactsSource;
+    /** The Projects the structural rows were built from, without checkout facts. */
+    projects: readonly ProjectsTreeProject[];
+    openRefId: string | null;
+    expandedKeys: ReadonlySet<string>;
+    collapsedKeys?: ReadonlySet<string>;
+}>;
+type ProjectsTreeLiveCheckouts = ProjectsTreeLiveCheckoutsInput & Readonly<{ projectsByKey: ReadonlyMap<string, ProjectsTreeProject> }>;
+
 export type ProjectsTreeHiddenItem = Readonly<{ key: string; title: string; subtitle: string; refId?: string; workspaceAddress?: WorkspaceAddressV1 }>;
 export type ProjectsTreeSavedItem = Readonly<{ key: string; title: string; subtitle?: string }>;
 
@@ -107,7 +125,12 @@ export type ProjectsTreeSavedItem = Readonly<{ key: string; title: string; subti
  */
 export const ProjectsTree = React.memo(function ProjectsTree(props: Readonly<{
     testID?: string;
+    /**
+     * Structural rows (membership, level, disclosure) when `live` is given; already-presented rows otherwise.
+     */
     rows: readonly ProjectsTreeRow[];
+    /** Live checkout facts per Project, read below the tree by each Project's own section. */
+    live?: ProjectsTreeLiveCheckoutsInput | null;
     onToggle: (key: string) => void;
     onOpenRef: (refId: string, address?: WorkspaceAddressV1) => void;
     /** A row's own menu (New session here, Save as a source, Hide project). */
@@ -130,59 +153,29 @@ export const ProjectsTree = React.memo(function ProjectsTree(props: Readonly<{
         onOpenRow: (row) => openTreeRow(row, onOpenRef, onToggle),
     });
     const disclosureColumn = props.rows.some((candidate) => candidate.expandable);
+    const liveInput = props.live;
+    const live = React.useMemo((): ProjectsTreeLiveCheckouts | null => liveInput ? {
+        ...liveInput,
+        projectsByKey: new Map(liveInput.projects.map((project) => [project.key, project] as const)),
+    } : null, [liveInput]);
+    const rowListProps: ProjectsTreeRowListProps = {
+        testID,
+        disclosureColumn,
+        getRowProps: keyboard.getRowProps,
+        renderRowMenu: props.renderRowMenu,
+        hrefForRef: props.hrefForRef,
+        onOpenRef,
+        onToggle,
+    };
     return (
         <View testID={testID} {...(Platform.OS === 'web' ? { role: 'tree' as const } : {})}>
-            {props.rows.map((row) => {
-                const leading = (
-                    <View style={styles.leading}>
-                        {disclosureColumn ? (
-                            // The shared turning chevron; the row itself toggles (parents disclose, leaves navigate).
-                            <HappierTreeDisclosure
-                                kind={row.expandable ? 'branch' : 'leaf'}
-                                expanded={row.expanded}
-                                color={theme.colors.text.tertiary}
-                                reducedMotion={reducedMotion}
-                            />
-                        ) : null}
-                        <Icon
-                            name={row.glyph === 'project' ? 'folder' : row.glyph === 'machine' ? 'desktop' : 'git-branch'}
-                            size={16}
-                            color={theme.colors.text.secondary}
-                        />
-                    </View>
-                );
-                const trailing = (
-                    <View style={styles.trailing}>
-                        {row.count != null ? <Text style={styles.count}>{String(row.count)}</Text> : null}
-                        {row.attention === 'needs-you' ? (
-                            <StatusDot testID={`${testID}-${row.key}-needs-you`} color={theme.colors.state.warning.foreground} size={6}
-                                accessibilityLabel={t('projects.checkouts.needsYou')} />
-                        ) : row.attention === 'working' ? (
-                            <ActivitySpinner size="small" color={theme.colors.text.tertiary} />
-                        ) : null}
-                        {props.renderRowMenu?.(row) ?? null}
-                    </View>
-                );
-                return (
-                    <CollectionNavigationRow
-                        key={row.key}
-                        testID={`${testID}-row-${row.key}`}
-                        href={row.refId ? props.hrefForRef?.(row.refId, row.workspaceAddress) ?? null : null}
-                        title={row.title}
-                        titleQualifier={row.titleQualifier}
-                        subtitle={projectsTreeRowSubtitle(row, t('projects.identity.newFromSession')) ?? undefined}
-                        subtitleMono={row.kind === 'checkout' && row.subtitle != null}
-                        leftElement={leading}
-                        selected={row.selected}
-                        dimmed={row.offline === true}
-                        indentPx={row.level * HAPPIER_TREE_ROW_METRICS.indentStepPx}
-                        treeItem={keyboard.getRowProps(row)}
-                        accessibilityLabel={row.titleQualifier ? `${row.title}, ${row.titleQualifier}` : row.title}
-                        rightElement={trailing}
-                        onPress={() => openTreeRow(row, onOpenRef, onToggle)}
-                    />
-                );
-            })}
+            {live ? (
+                projectRuns(props.rows).map((run) => (
+                    <ProjectsTreeLiveSection key={run[0]!.key} rows={run} live={live} rowList={rowListProps} />
+                ))
+            ) : (
+                <ProjectsTreeRowList rows={props.rows} {...rowListProps} />
+            )}
             {props.saved && props.saved.items.length > 0 ? (
                 <>
                     <CollectionListGroupLabel testID={`${testID}-saved`} title={t('projects.identity.savedNotOpen')} count={props.saved.items.length} />
@@ -258,6 +251,112 @@ export const ProjectsTree = React.memo(function ProjectsTree(props: Readonly<{
         </View>
     );
 });
+
+type ProjectsTreeRowListProps = Readonly<{
+    testID: string;
+    disclosureColumn: boolean;
+    getRowProps: ReturnType<typeof useProjectsTreeKeyboard>['getRowProps'];
+    renderRowMenu?: ((row: ProjectsTreeRow) => React.ReactNode) | null;
+    hrefForRef?: ((refId: string, address?: WorkspaceAddressV1) => string | null) | null;
+    onOpenRef: (refId: string, address?: WorkspaceAddressV1) => void;
+    onToggle: (key: string) => void;
+}>;
+
+/** The tree's rows as drawn: one shared row anatomy for every Project section. */
+function ProjectsTreeRowList(props: ProjectsTreeRowListProps & Readonly<{ rows: readonly ProjectsTreeRow[] }>) {
+    const { theme } = useUnistyles();
+    const reducedMotion = useReducedMotionPreference();
+    return (
+        <>
+            {props.rows.map((row) => {
+                const leading = (
+                    <View style={styles.leading}>
+                        {props.disclosureColumn ? (
+                            // The shared turning chevron; the row itself toggles (parents disclose, leaves navigate).
+                            <HappierTreeDisclosure
+                                kind={row.expandable ? 'branch' : 'leaf'}
+                                expanded={row.expanded}
+                                color={theme.colors.text.tertiary}
+                                reducedMotion={reducedMotion}
+                            />
+                        ) : null}
+                        <Icon
+                            name={row.glyph === 'project' ? 'folder' : row.glyph === 'machine' ? 'desktop' : 'git-branch'}
+                            size={16}
+                            color={theme.colors.text.secondary}
+                        />
+                    </View>
+                );
+                const trailing = (
+                    <View style={styles.trailing}>
+                        {row.count != null ? <Text style={styles.count}>{String(row.count)}</Text> : null}
+                        {row.attention === 'needs-you' ? (
+                            <StatusDot testID={`${props.testID}-${row.key}-needs-you`} color={theme.colors.state.warning.foreground} size={6}
+                                accessibilityLabel={t('projects.checkouts.needsYou')} />
+                        ) : row.attention === 'working' ? (
+                            <ActivitySpinner size="small" color={theme.colors.text.tertiary} />
+                        ) : null}
+                        {props.renderRowMenu?.(row) ?? null}
+                    </View>
+                );
+                return (
+                    <CollectionNavigationRow
+                        key={row.key}
+                        testID={`${props.testID}-row-${row.key}`}
+                        href={row.refId ? props.hrefForRef?.(row.refId, row.workspaceAddress) ?? null : null}
+                        title={row.title}
+                        titleQualifier={row.titleQualifier}
+                        subtitle={projectsTreeRowSubtitle(row, t('projects.identity.newFromSession')) ?? undefined}
+                        subtitleMono={row.kind === 'checkout' && row.subtitle != null}
+                        leftElement={leading}
+                        selected={row.selected}
+                        dimmed={row.offline === true}
+                        indentPx={row.level * HAPPIER_TREE_ROW_METRICS.indentStepPx}
+                        treeItem={props.getRowProps(row)}
+                        accessibilityLabel={row.titleQualifier ? `${row.title}, ${row.titleQualifier}` : row.title}
+                        rightElement={trailing}
+                        onPress={() => openTreeRow(row, props.onOpenRef, props.onToggle)}
+                    />
+                );
+            })}
+        </>
+    );
+}
+
+/** The structural rows (level 0 starts a Project) grouped per Project. */
+function projectRuns(rows: readonly ProjectsTreeRow[]): ProjectsTreeRow[][] {
+    const runs: ProjectsTreeRow[][] = [];
+    for (const row of rows) {
+        if (row.level === 0 || runs.length === 0) runs.push([row]);
+        else runs[runs.length - 1]!.push(row);
+    }
+    return runs;
+}
+
+/**
+ * One Project's rows with their live checkout facts. The section subscribes to its own checkouts' facts,
+ * so a change to one checkout re-renders this Project only; the tree above keeps membership, focus and
+ * keyboard order and is not involved.
+ */
+function ProjectsTreeLiveSection(props: Readonly<{
+    rows: readonly ProjectsTreeRow[];
+    live: ProjectsTreeLiveCheckouts;
+    rowList: ProjectsTreeRowListProps;
+}>) {
+    const { live } = props;
+    const project = live.projectsByKey.get(props.rows[0]!.key);
+    const keys = (project?.checkouts ?? []).map(projectsTreeCheckoutKey);
+    const facts = useProjectsTreeCheckoutFactsFor(live.source, keys);
+    const rows = project
+        ? buildProjectsTreeRows({
+            projects: [applyProjectsTreeCheckoutFacts(project, (_checkout, index) => facts[index] ?? null)],
+            openRefId: live.openRefId,
+            expandedKeys: live.expandedKeys,
+            collapsedKeys: live.collapsedKeys,
+        })
+        : props.rows;
+    return <ProjectsTreeRowList rows={rows} {...props.rowList} />;
+}
 
 /** The tree's leading anatomy: the disclosure column, then the row's glyph (`styles.leading`). */
 const TREE_LEADING_GAP_PX = 8;

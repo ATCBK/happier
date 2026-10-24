@@ -1,10 +1,11 @@
+import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createSessionListRenderableSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountWorkspaceRefV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { buildProjectAccountRowPhysicalKeyV1, ProjectAccountRowMutationRequestV1Schema, ProjectAccountWorkspaceRefV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { computeWorkspaceSyncPolicyDigest, WorkspaceSyncRelationshipV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { readNewSessionDraftProjectionFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { SessionAuthoringOpenResultV1Schema } from '@happier-dev/protocol/plugins/ui';
@@ -29,7 +30,14 @@ vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
 });
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({});
+});
 const { useProjectsListModel } = await import('./useProjectsListModel');
+const { ProjectsTree } = await import('./ProjectsTree');
+const { buildProjectsTreeRows } = await import('./projectsTreeRows');
+const { useProjectsTreeCheckoutFactsSource } = await import('./useProjectsTreeCheckoutFacts');
 const { useProjectRowCreationActions } = await import('./ProjectSaveAsSourceSheet');
 const { storage } = await import('@/sync/domains/state/storage');
 const { clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
@@ -70,7 +78,135 @@ afterEach(async () => {
     await disconnectActiveServerConnection(); await homes.reset();
 });
 
+describe('PF3 real Projects model → tree cost', () => {
+    async function mountTree() {
+        const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
+        storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
+        const workspaceRefs = Array.from({ length: 150 }, (_, index) => ({
+            id: index === 0 ? 'ref' : `ref-${index}`, serverId, machineId: machine.id,
+            rootPath: index === 0 ? '/repo' : `/repo-${index}`,
+            projectKey: index === 0 ? 'anchor' : `project-${index}`, createdAtMs: 1,
+        }));
+        applyProjectAccountRowsFixture(storage, { workspaceRefs });
+        const counts = { modelRenders: 0, treeCommits: 0, rowBodies: new Map<string, number>() };
+        const expandedKeys = new Set<string>();
+        const renderRowMenu = (row: { key: string }) => {
+            counts.rowBodies.set(row.key, (counts.rowBodies.get(row.key) ?? 0) + 1);
+            return null;
+        };
+        const onToggle = () => {};
+        let latestModel: ReturnType<typeof useProjectsListModel> | undefined;
+        function ModelTree() {
+            const model = useProjectsListModel();
+            latestModel = model;
+            counts.modelRenders += 1;
+            const source = useProjectsTreeCheckoutFactsSource(model.checkoutRefs);
+            const projects = model.treeProjects;
+            // Same consumed model/source/row composition as ProjectsColumn; no internal mocks.
+            const treeRows = React.useMemo(() => buildProjectsTreeRows({ projects, openRefId: null, expandedKeys }), [projects]);
+            const live = React.useMemo(() => ({ source, projects, openRefId: null, expandedKeys }), [source, projects]);
+            return <React.Profiler id="projects-tree" onRender={() => { counts.treeCommits += 1; }}>
+                <ProjectsTree rows={treeRows} live={live} onToggle={onToggle}
+                    onOpenRef={model.openTreeRef} renderRowMenu={renderRowMenu} />
+            </React.Profiler>;
+        }
+        await renderScreen(<ModelTree />);
+        expect(counts.rowBodies.size).toBe(150);
+        counts.modelRenders = 0;
+        counts.treeCommits = 0;
+        counts.rowBodies.clear();
+        return { counts, workspaceRefs, getModel: () => latestModel! };
+    }
+
+    it.each(['unrelated-session', 'other-home-reachability', 'unlisted-machine-success', 'reachable-machine-success'] as const)(
+        'keeps 150 Projects quiet for five %s arrivals', async kind => {
+            const { counts } = await mountTree();
+            const { recordMachineRequestSucceeded, recordMachineRequestFailed } =
+                await import('@/sync/domains/machines/reachability/machineReachability');
+            for (let index = 0; index < 5; index += 1) {
+                await act(async () => {
+                    if (kind === 'unrelated-session') {
+                        const row = createSessionListRenderableSessionFixture({ id: 'unrelated',
+                            active: true, activeAt: Date.now(), thinking: Boolean(index % 2),
+                            metadata: { machineId: 'machine', path: '/outside-the-tree' } });
+                        storage.setState({ sessionListRowsByServerId: { [serverId]: { unrelated: row } },
+                            sessionListRenderableDelta: { revision: index + 1, changedSessionIds: ['unrelated'], removedSessionIds: [], rebuiltSessionListIndex: false } });
+                    } else if (kind === 'other-home-reachability') {
+                        const input = { serverId: 'unrelated-home', accountId: 'unrelated-account', machineId: 'foreign', observedAtMs: Date.now() + index };
+                        if (index % 2) recordMachineRequestSucceeded(input);
+                        else recordMachineRequestFailed(input);
+                    } else {
+                        recordMachineRequestSucceeded({ serverId, accountId: 'account-a',
+                            machineId: kind === 'reachable-machine-success' ? 'machine' : `unlisted-${index}` });
+                    }
+                });
+            }
+            expect({ modelRenders: counts.modelRenders, treeCommits: counts.treeCommits,
+                rowBodyRenders: [...counts.rowBodies.values()].reduce((sum, value) => sum + value, 0) })
+                .toEqual({ modelRenders: 0, treeCommits: 0, rowBodyRenders: 0 });
+        },
+    );
+
+    // Rename, add and remove are rare, user-initiated events: they re-render the tree's sections
+    // rather than isolating the unaffected ones. Pins that the change itself still reaches the rows.
+    it.each(['rename', 'add', 'remove'] as const)('renders a structural %s of one Project', async kind => {
+        const { counts, workspaceRefs, getModel } = await mountTree();
+        const target = workspaceRefs[0]!;
+        const nextRefs = kind === 'rename' ? [{ ...target, label: 'Renamed Project' }, ...workspaceRefs.slice(1)]
+            : kind === 'remove' ? workspaceRefs.slice(1)
+                : [...workspaceRefs, { ...target, id: 'added', projectKey: 'added-project', rootPath: '/added' }];
+        const changedRef = kind === 'add' ? nextRefs[nextRefs.length - 1]! : target;
+        const changedKey = buildProjectAccountRowPhysicalKeyV1({ kind: 'workspace-ref', serverId, id: changedRef.id });
+        const previousRevisions = storage.getState().projectAccountRows!.revisionsByPhysicalKey;
+        await act(async () => { applyProjectAccountRowsFixture(storage, { workspaceRefs: nextRefs,
+            // Removal requires an explicit newer tombstone at the real admission owner;
+            // omission from a census must not erase a previously admitted row.
+            revisionsByPhysicalKey: { ...previousRevisions, [changedKey]: (previousRevisions[changedKey] ?? -1) + 1 },
+        }); });
+        const projects = getModel().treeProjects;
+        expect(projects).toHaveLength(kind === 'add' ? 151 : kind === 'remove' ? 149 : 150);
+        if (kind === 'rename') expect(projects.find(project => project.key === 'anchor')?.name).toBe('Renamed Project');
+        if (kind === 'remove') expect(projects.some(project => project.key === 'anchor')).toBe(false);
+        expect(counts.treeCommits).toBeGreaterThan(0);
+        const affectedKey = kind === 'add' ? 'added-project' : 'anchor';
+        if (kind !== 'remove') expect(counts.rowBodies.get(affectedKey)).toBe(1);
+        else expect(counts.rowBodies.has(affectedKey)).toBe(false);
+    });
+});
+
 describe('Projects model Action admission', () => {
+    it('does not render 150 unchanged Projects on five admitted Machine heartbeats', async () => {
+        const { observeMachinePresenceForTest } = await import('@/dev/testkit/harness/machinePresence');
+        const scope = { serverId, accountId: 'account-a' };
+        const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
+        storage.getState().applyMachines([machine], true, { sourceServerId: serverId });
+        observeMachinePresenceForTest(scope, [machine.id]);
+        // Include the admitted Home fixture's existing anchor: this cost case
+        // adds rows and does not test withdrawal of a previously admitted row.
+        const workspaceRefs = Array.from({ length: 150 }, (_, index) => ({
+            id: index === 0 ? 'ref' : `ref-${index}`, serverId, machineId: machine.id,
+            rootPath: index === 0 ? '/repo' : `/repo-${index}`,
+            projectKey: index === 0 ? 'anchor' : `project-${index}`, createdAtMs: 1,
+        }));
+        rows = workspaceRefs.map((ref): ProjectAccountRowV1 => {
+            const key = { kind: 'workspace-ref' as const, serverId, id: ref.id };
+            return { key, revision: 0, content: { t: 'plain', v: { key, value: ref } } };
+        });
+        applyProjectAccountRowsFixture(storage, { workspaceRefs });
+        let renders = 0;
+        const hook = await renderHook(() => { renders += 1; return useProjectsListModel(); });
+        expect(hook.getCurrent().treeProjects).toHaveLength(150);
+        const before = renders;
+        for (let index = 1; index <= 5; index += 1) {
+            await act(async () => {
+                storage.getState().applyMachines([{ ...machine, activeAt: machine.activeAt + index }], false, { sourceServerId: serverId });
+                observeMachinePresenceForTest(scope, [machine.id]);
+            });
+        }
+        expect(renders - before).toBe(0);
+        await hook.unmount();
+    });
+
     it('never dims a retained checkout as offline while its Machine presence is withdrawn', async () => {
         const { withdrawMachinePresenceForScope, captureMachinePresenceObservation } =
             await import('@/sync/domains/machines/reachability/machineReachability');
@@ -82,6 +218,14 @@ describe('Projects model Action admission', () => {
         expect(hook.getCurrent().treeProjects[0]?.checkouts[0]?.offline).toBeUndefined();
         await act(async () => captureMachinePresenceObservation(scope)([machine.id]));
         expect(hook.getCurrent().treeProjects[0]?.checkouts[0]?.offline).toBe(false);
+        const { recordMachineRequestFailed, recordMachineRequestSucceeded } =
+            await import('@/sync/domains/machines/reachability/machineReachability');
+        await act(async () => recordMachineRequestFailed({ ...scope, machineId: machine.id }));
+        expect(hook.getCurrent().treeProjects[0]?.checkouts[0]?.offline).toBe(true);
+        expect(hook.getCurrent().addFirstMachines).toEqual([]);
+        await act(async () => recordMachineRequestSucceeded({ ...scope, machineId: machine.id }));
+        expect(hook.getCurrent().treeProjects[0]?.checkouts[0]?.offline).toBe(false);
+        expect(hook.getCurrent().addFirstMachines.map(machine => machine.id)).toEqual(['machine']);
         await hook.unmount();
     });
 

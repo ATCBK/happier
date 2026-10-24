@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createSessionListRenderableSessionFixture } from '@/dev/testkit';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
@@ -28,6 +29,7 @@ installDisconnectedServerSocketBoundary();
 const folderSelection = vi.hoisted(() => ({ path: null as string | null }));
 const draftRecords = vi.hoisted(() => new Map<string, string>());
 const routerPushSpy = vi.hoisted(() => vi.fn());
+const phoneRowRenders = vi.hoisted(() => new Map<string, number>());
 let relationships: WorkspaceSyncRelationshipV1[] = [];
 let translationPrefixMock = '';
 
@@ -44,7 +46,13 @@ vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
         View: React.forwardRef((props: any, ref: any) => React.createElement('View', { ...props, ref }, props.children)),
-        Pressable: (props: any) => React.createElement('Pressable', props, props.children),
+        Pressable: (props: any) => {
+            // Count real row output at the native boundary; Item and its internal logic stay real.
+            if (typeof props.testID === 'string' && props.testID.startsWith('projects-list-item-')) {
+                phoneRowRenders.set(props.testID, (phoneRowRenders.get(props.testID) ?? 0) + 1);
+            }
+            return React.createElement('Pressable', props, props.children);
+        },
         Platform: { OS: 'web' },
         useWindowDimensions: () => ({ width: deviceTypeMock === 'phone' ? 390 : 1024, height: 844, scale: 1, fontScale: 1 }),
         Dimensions: { get: () => ({ width: deviceTypeMock === 'phone' ? 390 : 1024, height: 844, scale: 1, fontScale: 1 }),
@@ -198,6 +206,28 @@ describe('ProjectsListView', () => {
         relationships = [];
         routerPushSpy.mockReset();
         shownModals.length = 0;
+        phoneRowRenders.clear();
+    });
+
+    it('PF3 renders only the changed phone row among 150 Projects on one checkout fact change', async () => {
+        deviceTypeMock = 'phone';
+        const nowMs = Date.now();
+        machinesMock = [createMachine({ id: 'machine', host: 'Machine', activeAt: nowMs })];
+        workspaceRefsV1Mock = Array.from({ length: 150 }, (_, index) => ({
+            id: `ref-${index}`, serverId, machineId: 'machine', rootPath: `/repo-${index}`,
+            projectKey: `project-${index}`, createdAtMs: 1,
+        }));
+        const { ProjectsListView } = await import('./ProjectsListView');
+        const screen = await renderProjects(<ProjectsListView />);
+        expect(screen.findByTestId('projects-list-item-ref-149')).not.toBeNull();
+        expect(phoneRowRenders.size).toBe(150);
+        phoneRowRenders.clear();
+        const session = createSessionListRenderableSessionFixture({ id: 'session', active: true, activeAt: nowMs,
+            thinking: true, thinkingAt: nowMs, metadata: { machineId: 'machine', path: '/repo-0' } });
+        await act(async () => storage.setState({ sessionListRowsByServerId: { [serverId]: { session } },
+            sessionListRenderableDelta: { revision: 1, changedSessionIds: ['session'], removedSessionIds: [], rebuiltSessionListIndex: false } }));
+        expect(phoneRowRenders.get('projects-list-item-ref-0')).toBe(1);
+        expect([...phoneRowRenders.keys()].filter(key => key !== 'projects-list-item-ref-0').length).toBe(0);
     });
 
     it('keeps hidden Projects reachable through the phone Hidden group without rendering checkout leaves', async () => {

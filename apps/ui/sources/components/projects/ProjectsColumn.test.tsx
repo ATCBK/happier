@@ -5,6 +5,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { createSessionListRenderableSessionFixture } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -133,6 +134,29 @@ function workspaceRef(id: string, machineId: string, rootPath: string): Workspac
 }
 
 describe('ProjectsColumn', () => {
+    it('PF3 keeps the production column quiet for five unrelated Session arrivals with 150 Projects', async () => {
+        machinesMock = [createMachine({ id: 'machine', host: 'Machine', activeAt: Date.now() })];
+        workspaceRefsV1Mock = Array.from({ length: 150 }, (_, index) => ({
+            id: `ref-${index}`, serverId, machineId: 'machine', rootPath: `/repo-${index}`,
+            projectKey: `project-${index}`, createdAtMs: 1,
+        }));
+        const { ProjectsColumn } = await import('./ProjectsColumn');
+        let commits = 0;
+        const screen = await renderProjects(<React.Profiler id="projects-column" onRender={() => { commits += 1; }}>
+            <ProjectsColumn />
+        </React.Profiler>);
+        expect(screen.findByTestId('projects-column:tree-row-project-149')).not.toBeNull();
+        commits = 0;
+        for (let index = 0; index < 5; index += 1) {
+            const row = createSessionListRenderableSessionFixture({ id: 'unrelated', active: true,
+                activeAt: Date.now(), thinking: Boolean(index % 2),
+                metadata: { machineId: 'machine', path: '/outside-the-tree' } });
+            await act(async () => storage.setState({ sessionListRowsByServerId: { [serverId]: { unrelated: row } },
+                sessionListRenderableDelta: { revision: index + 1, changedSessionIds: ['unrelated'], removedSessionIds: [], rebuiltSessionListIndex: false } }));
+        }
+        expect(commits).toBe(0);
+    });
+
     it('does not call a Source "not open" until the Project rows have loaded', async () => {
         // While the census is still loading, every Source would look unopened; the saved group waits with the tree.
         workspaceRefsV1Mock = [];

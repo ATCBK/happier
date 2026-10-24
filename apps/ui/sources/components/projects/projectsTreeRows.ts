@@ -286,6 +286,31 @@ function folderName(rootPath: string): string {
 }
 
 /**
+ * Observed checkout facts folded into a Project built without them (`buildProjectsTreeProjects` yields
+ * folder labels, no branch and no attention). The one owner of how a fact reads on a row: the
+ * tree's Project sections and the phone list both call it with the facts they subscribed to.
+ */
+export function applyProjectsTreeCheckoutFacts(
+    project: ProjectsTreeProject,
+    factsOf: (checkout: ProjectsTreeCheckout, index: number) => ProjectsTreeCheckoutFacts | null,
+): ProjectsTreeProject {
+    let newFromSession = false;
+    const checkouts = project.checkouts.map((checkout, index): ProjectsTreeCheckout => {
+        const facts = factsOf(checkout, index);
+        if (!facts) return checkout;
+        if (facts.newFromSession) newFromSession = true;
+        return {
+            ...checkout,
+            label: facts.branch ?? checkout.label,
+            branch: facts.branch,
+            isWorktree: facts.isWorktree,
+            attention: facts.attention,
+        };
+    });
+    return { ...project, newFromSession, checkouts };
+}
+
+/**
  * The Project projection's groups (`projectProjectListV1`, in their order) as tree input: a Project is
  * named after its checkout the person sees first; each checkout keeps its exact ref.
  */
@@ -310,32 +335,31 @@ export function buildProjectsTreeProjects<TRef extends Readonly<{
             ? input.sources?.find(candidate => sourceIds.has(candidate.id)) ?? null
             : null;
         const teamId = source ? readSourceTeamId(source) : null;
-        let newFromSession = false;
+        const factsByRef = group.items.map(ref => input.checkoutFacts?.(ref) ?? null);
         const checkouts = group.items.map((ref): ProjectsTreeCheckout => {
             const machine = input.machine(ref.machineId);
-            const facts = input.checkoutFacts?.(ref) ?? null;
-            if (facts?.newFromSession) newFromSession = true;
             return {
                 refId: ref.id,
                 ...(ref.serverId ? { workspaceAddress: { serverId: ref.serverId, workspaceId: ref.id,
                     machineId: ref.machineId, rootPath: ref.rootPath } } : {}),
                 machineId: ref.machineId,
                 machineName: machine.name,
-                label: facts?.branch ?? folderName(ref.rootPath),
-                branch: facts?.branch ?? null,
-                isWorktree: facts?.isWorktree ?? null,
+                label: folderName(ref.rootPath),
+                branch: null,
+                isWorktree: null,
                 path: formatPathRelativeToHome(ref.rootPath, machine.homeDir ?? undefined),
-                attention: facts?.attention ?? null,
+                attention: null,
                 offline: machine.online === null ? undefined : !machine.online,
             };
         });
-        return [{
+        const project: ProjectsTreeProject = {
             key: group.projectKey.projectKey,
             name: first.label?.trim() ? input.projectName(first) : source?.name ?? input.projectName(first),
             teamLabel: teamId ? input.teamName?.(teamId) ?? null : null,
-            newFromSession,
+            newFromSession: false,
             checkouts,
-        }];
+        };
+        return [applyProjectsTreeCheckoutFacts(project, (_checkout, index) => factsByRef[index] ?? null)];
     });
 }
 

@@ -21,6 +21,7 @@ import { ProjectOpenResolutionCard, isProjectRowsPending, openProjectCandidate, 
 import { ProjectActionApprovalNotice } from './ProjectActionApprovalNotice';
 import { useProjectRowCreationActions } from './ProjectSaveAsSourceSheet';
 import { buildProjectsTreeRows, type ProjectsTreeRow } from './projectsTreeRows';
+import { useProjectsTreeCheckoutFactsSource } from './useProjectsTreeCheckoutFacts';
 import { workspaceAddressFromRefV1, type WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces';
 
 const NO_KEYS: ReadonlySet<string> = new Set();
@@ -57,9 +58,16 @@ export const ProjectsColumn = React.memo(function ProjectsColumn() {
         [...model.groups.projectGroups, ...model.groups.hiddenProjectGroups].flatMap((group) => group.items.map((ref) => [JSON.stringify(workspaceAddressFromRefV1(ref)), ref] as const)),
     ), [model.groups.hiddenProjectGroups, model.groups.projectGroups]);
     const projects = model.treeProjects;
+    // Structural rows only: a checkout's live facts are read by its Project's own tree section, so a fact
+    // change never re-renders this column or the other rows.
     const rows = React.useMemo(
         () => buildProjectsTreeRows({ projects, openRefId: openId, expandedKeys, collapsedKeys }),
         [collapsedKeys, expandedKeys, openId, projects],
+    );
+    const factsSource = useProjectsTreeCheckoutFactsSource(model.checkoutRefs);
+    const live = React.useMemo(
+        () => ({ source: factsSource, projects, openRefId: openId, expandedKeys, collapsedKeys }),
+        [collapsedKeys, expandedKeys, factsSource, openId, projects],
     );
     const toggle = React.useCallback((key: string) => {
         const open = rows.find((row) => row.key === key)?.expanded === true;
@@ -167,6 +175,7 @@ export const ProjectsColumn = React.memo(function ProjectsColumn() {
                 <ProjectsTree
                     testID="projects-column:tree"
                     rows={rows}
+                    live={live}
                     onToggle={toggle}
                     onOpenRef={openRef}
                     hrefForRef={hrefForRef}

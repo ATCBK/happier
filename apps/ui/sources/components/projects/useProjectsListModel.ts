@@ -26,12 +26,9 @@ import { ProjectVisibilitySetOutputV1Schema } from '@happier-dev/protocol/projec
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useProjectsSourcesComposition } from './useProjectsSourcesComposition';
-import { useProjectsTreeCheckoutFacts } from './useProjectsTreeCheckoutFacts';
-import { buildProjectsTreeHiddenItems, buildProjectsTreeProjects, projectsTreeCheckoutKey } from './projectsTreeRows';
-import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
+import { buildProjectsTreeHiddenItems, buildProjectsTreeProjects } from './projectsTreeRows';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
-import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
-import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceSummaries } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { resolveWorkspaceRefByAddress } from '@/sync/domains/workspaces/workspaceRefs';
 import { ActionApprovalRequestCreatedResultSchema, type ActionApprovalRequestCreatedResult,
     type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -53,10 +50,11 @@ export function useProjectsListModel() {
     const accountScope = selectActiveServerAccountScopeForServer(activeScope, activeServer.serverId);
     // The Machine inventory has arrived (or the account is synced and genuinely has none).
     const machinesReady = useIsDataReady() || allMachines.length > 0;
-    const presenceNowMs = useMachinePresenceNowMs(allMachines);
-    const reachabilityRevision = useMachineReachabilityRevision();
-    const addFirstMachines = React.useMemo(() => resolveMachineActionCandidates(accountScope, allMachines, { nowMs: presenceNowMs }),
-        [accountScope, allMachines, presenceNowMs, reachabilityRevision]);
+    // Subscribe to this Home's actual Machine facts, not the request revision of
+    // every Home. The presence owner also keeps grace expiry and recovery live.
+    const machinePresence = useMachinePresenceSummaries(activeServer.serverId, allMachines.map(machine => machine.id));
+    const addFirstMachines = React.useMemo(() => resolveMachineActionCandidates(accountScope, allMachines),
+        [accountScope, allMachines, machinePresence]);
 
     const workspaceRefsV1 = useWorkspaceRefs();
     const pinnedWorkspaceRefIdsV1 = usePinnedWorkspaceRefIds();
@@ -106,7 +104,6 @@ export function useProjectsListModel() {
         .flatMap(group => group.items), [groups.projectGroups, groups.hiddenProjectGroups]);
     const openedSourceIds = React.useMemo(() => new Set(treeRefs.flatMap(ref => ref.source ? [ref.source.sourceId] : [])), [treeRefs]);
     const composition = useProjectsSourcesComposition(openedSourceIds);
-    const checkoutFacts = useProjectsTreeCheckoutFacts(treeRefs);
     // One naming owner for every Machine the tree shows: listed Machines with the same name get the
     // suffix the pickers use, and a checkout on a Machine this Home no longer lists says so.
     const machineNames = React.useMemo(() => resolveMachineDisplayNames([
@@ -114,23 +111,23 @@ export function useProjectsListModel() {
         ...[...new Set(treeRefs.map(ref => ref.machineId))].filter(id => !machinesById.has(id)).map(id => ({ id, absence: 'unlisted' as const })),
     ]), [allMachines, machinesById, treeRefs]);
     const treeProjection = React.useMemo(() => {
+        const presenceById = new Map(allMachines.map((machine, index) => [machine.id, machinePresence[index]] as const));
         const project = (projectGroups: typeof groups.projectGroups) => buildProjectsTreeProjects({
             groups: projectGroups, projectName: resolveWorkspaceRefDisplayName,
             machine: machineId => {
                 const machine = machinesById.get(machineId);
-                const reachability = machine ? resolveMachineReachability(accountScope, machine, presenceNowMs) : 'unknown';
+                const reachability = accountScope ? presenceById.get(machineId)?.reachability ?? 'unknown' : 'unknown';
                 return { name: machineNames.get(machineId) ?? t('machine.unlistedMachine'), homeDir: machine?.metadata?.homeDir ?? null,
                     online: reachability === 'unknown' ? null : reachability === 'reachable' };
             },
             sources: composition.sources, teamName: composition.teamName,
-            checkoutFacts: ref => checkoutFacts.get(projectsTreeCheckoutKey({ refId: ref.id, workspaceAddress: workspaceAddressFromRefV1(ref) })) ?? null,
         });
         // Rows are named after their Machines: until the Machine inventory has loaded, any Machine would read as
         // "unlisted" and every path as absolute, so the tree waits (the column shows its quiet rows) instead of guessing.
         if (!machinesReady) return { treeProjects: [], hiddenTreeProjects: [], hiddenItems: [] };
         const hiddenTreeProjects = project(groups.hiddenProjectGroups);
         return { treeProjects: project(groups.projectGroups), hiddenTreeProjects, hiddenItems: buildProjectsTreeHiddenItems(hiddenTreeProjects) };
-    }, [checkoutFacts, composition.sources, composition.teamName, groups.hiddenProjectGroups, groups.projectGroups, machineNames, machinesById, machinesReady, presenceNowMs, accountScope, reachabilityRevision]);
+    }, [composition.sources, composition.teamName, groups.hiddenProjectGroups, groups.projectGroups, machineNames, machinesById, machinesReady, allMachines, machinePresence, accountScope]);
     const newSessionHere = React.useCallback(async (ref: WorkspaceRefV1): Promise<ActionExecuteResult> => {
         const lifetime = captureActiveServerAccountScopeLifetime();
         const retired = { ok: false as const, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
@@ -367,6 +364,8 @@ export function useProjectsListModel() {
         // Source would look unopened, so the group waits with the tree.
         saved: censusComplete && machinesReady ? composition.saved : null,
         ...treeProjection,
+        /** The refs behind `treeProjects`: what a reader of live checkout facts subscribes for. */
+        checkoutRefs: treeRefs,
         newSessionHere,
         saveAsSource,
         projectOpenResolution: openProject.resolution,
