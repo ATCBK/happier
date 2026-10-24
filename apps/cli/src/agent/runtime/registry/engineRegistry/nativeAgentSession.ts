@@ -177,7 +177,7 @@ import type { PluginExternalSessionsProviderOps } from '@/session/external/plugi
 import {
     getActiveAccountSettingsSnapshot,
     resolveActiveAccountConfiguredExternalSessionSourceRevision,
-    subscribeActiveAccountSettingsSnapshot,
+    subscribeActiveAccountConfiguredExternalSessionSourceRevision,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveNativeAgentSessionStateSharingPolicy } from './stateSharingPolicy';
 import {
@@ -5004,9 +5004,10 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                             params.agent.richDefinition?.definition.surfaces?.externalSession.sources, happierConfiguration.activeServerId),
                     subscribeAccountRevision: hostRuntimeParams.accountSettingsAuthority === 'session'
                         ? () => () => {}
-                        : (listener) => subscribeActiveAccountSettingsSnapshot(
-                            (_previous, next) => listener(resolveActiveAccountConfiguredExternalSessionSourceRevision(next,
-                                params.agent.richDefinition?.definition.surfaces?.externalSession.sources, happierConfiguration.activeServerId)),
+                        : (listener) => subscribeActiveAccountConfiguredExternalSessionSourceRevision(
+                            listener,
+                            params.agent.richDefinition?.definition.surfaces?.externalSession.sources,
+                            happierConfiguration.activeServerId,
                         ),
                     isCurrent: identity.isCurrent,
                     resolveAgentOccurrence: () => Object.freeze({

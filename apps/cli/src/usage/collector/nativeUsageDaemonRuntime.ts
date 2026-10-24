@@ -11,7 +11,7 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { acquireAuthoritativePluginRuntimeRegistryLease, tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
-import { getActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshotChanges } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { configuredExternalSessionSourceSettingsKeys, getActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsKeys } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { configuredExternalSessionSourcesUseConnectedProfiles } from '@/session/external/configuredSourceMaterializer';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 import type { DeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
@@ -54,6 +54,7 @@ export async function readNativeUsageAccountingAtAdmission(input: Parameters<typ
 export function createNativeUsageDaemonRuntime(input: NativeUsageDaemonRuntimeInput) {
     const lifetime = new AbortController();
     let discovered = false;
+    let sourceSettingsKeys: readonly string[] = [];
     const credentials = async () => {
         if (lifetime.signal.aborted || configuration.activeServerId !== input.authority.serverId) return null;
         const value = await input.readCredentials();
@@ -65,6 +66,9 @@ export function createNativeUsageDaemonRuntime(input: NativeUsageDaemonRuntimeIn
         if (!lease) return null;
         try {
             const agents = lease.registry.contributes.agents;
+            // Restored consent resumes through this boundary without a discovery request.
+            sourceSettingsKeys = configuredExternalSessionSourceSettingsKeys(agents.flatMap(agent =>
+                agent.richDefinition?.definition.surfaces?.externalSession.sources ?? []));
             const selected = agents.find(candidate => candidate.identity?.pluginId === agent.pluginId && candidate.identity.localId === agent.localId);
             if (!selected) return null;
             const catalogEntry = await readRegistryCatalogHook(lease.registry, selected.id, entry => entry);
@@ -110,6 +114,8 @@ export function createNativeUsageDaemonRuntime(input: NativeUsageDaemonRuntimeIn
             const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
             let agents: typeof lease.registry.contributes.agents;
             try { agents = lease.registry.contributes.agents; } finally { await lease.release(); }
+            sourceSettingsKeys = configuredExternalSessionSourceSettingsKeys(agents.flatMap(agent =>
+                agent.richDefinition?.definition.surfaces?.externalSession.sources ?? []));
             const account = configuredExternalSessionSourcesUseConnectedProfiles(agents)
                 ? await fetchAccountProfile({ token: auth.token, signal: lifetime.signal })
                 : { connectedServicesV2: [] };
@@ -213,7 +219,7 @@ export function createNativeUsageDaemonRuntime(input: NativeUsageDaemonRuntimeIn
         }).catch(report);
     };
     const unsubscribeRegistry = pluginReloadController.subscribe(refresh);
-    const unsubscribeSettings = subscribeActiveAccountSettingsSnapshotChanges(refresh);
+    const unsubscribeSettings = subscribeActiveAccountSettingsKeys(() => ({ settings: sourceSettingsKeys }), refresh);
     return {
         owner: { serverId: input.authority.serverId, machineId: input.authority.machineId,
             installationId: input.installationId, custodianAccountId: input.authority.accountId,

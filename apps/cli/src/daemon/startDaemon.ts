@@ -2953,6 +2953,7 @@ export async function startDaemon(
         invalidateConfiguredExternalSessionSources: () => {
           notifyActiveAccountConnectedServicesProjection(
             resolveAccountSettingsScopeKey(credentials),
+            notification.connectedServiceRefs,
           );
         },
         invalidateConnectedAccounts: () => {

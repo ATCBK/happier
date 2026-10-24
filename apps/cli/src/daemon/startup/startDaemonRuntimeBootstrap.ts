@@ -93,7 +93,7 @@ import type {
 } from '../connectedServices/requestAuth/prepareConnectedAccountRequestAuthForSpawn';
 import { resolveStackDebugDirectPeerStartServer } from './resolveStackDebugDirectPeerStartServer';
 import type { FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
-import { getActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshotChanges } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsKeys } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { warmActiveAccountSettingsSnapshotBestEffort } from '@/settings/accountSettings/warmActiveAccountSettingsSnapshot';
 import { getSessionNotificationTitle } from '@/agent/runtime/notifications/sessionNotificationContext';
@@ -437,13 +437,14 @@ export async function startDaemonConnectedServiceRuntime(
       true,
     );
   const connectedServiceRuntimeRegistry = params.connectedServiceRuntimeRegistry ?? new ConnectedServiceRuntimeRegistry();
-  const subscribeCoordinatorWake = (listener: () => void, invalidateInventory?: (event?: RequesterConnectedAccountObservation) => void): (() => void) => {
+  const subscribeCoordinatorWake = (listener: () => void, settingsKeys: readonly string[],
+    invalidateInventory?: (event?: RequesterConnectedAccountObservation) => void): (() => void) => {
     const onInventoryChanged = (event?: RequesterConnectedAccountObservation) => { invalidateInventory?.(event); listener(); };
     const cleanups = [
       connectedServiceRuntimeRegistry.subscribeTargetRegistrations(listener),
       params.subscribeConnectedAccountInvalidations?.(onInventoryChanged),
       params.subscribeAccountSettingsSnapshot?.(onInventoryChanged)
-        ?? (!params.accountSettingsSnapshot ? subscribeActiveAccountSettingsSnapshotChanges(() => onInventoryChanged()) : undefined),
+        ?? (!params.accountSettingsSnapshot ? subscribeActiveAccountSettingsKeys({ settings: settingsKeys }, () => onInventoryChanged()) : undefined),
       pluginReloadController.subscribe(() => onInventoryChanged()),
     ];
     return () => { for (const cleanup of cleanups) cleanup?.(); };
@@ -610,7 +611,7 @@ export async function startDaemonConnectedServiceRuntime(
     startRefreshLoop = (skipQualified) => { connectedServiceRefreshLoopHandle = startConnectedServiceRefreshLoop({
       enabled: true,
       tickMs: refreshTickMs,
-      subscribeWake: subscribeCoordinatorWake,
+      subscribeWake: listener => subscribeCoordinatorWake(listener, ['connectedServicesProviderStateSharingSettingsV1']),
       coordinator: { tickOnce: async () => {
         // Selected refresh reads and effects own their fresh authority checks;
         // an empty wake (including quota-owned qualified work) needs no proof.
@@ -943,7 +944,7 @@ export async function startDaemonConnectedServiceRuntime(
         enabled: true,
         runImmediately: true,
         tickMs: quotasTickMs,
-        subscribeWake: listener => subscribeCoordinatorWake(listener, event => coordinator.invalidateInventory(event)),
+        subscribeWake: listener => subscribeCoordinatorWake(listener, ['usageQuotaNotificationsV1'], event => coordinator.invalidateInventory(event)),
         coordinator: { tickOnce: async () => {
           if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return { nextAutomaticRunAfterMs: null };
           const operation = () => coordinator.tickOnce();

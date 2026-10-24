@@ -11,8 +11,7 @@ import { createProviderAccountUsageStore } from '../connectedServices/accountUsa
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../connectedServices/accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { observeConnectedServiceMaterializationPhase } from '../connectedServices/materialize/materializationPhase';
 import { logger } from '@/utils/logger';
-import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot,
-  subscribeActiveAccountSettingsSnapshotChanges } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { startDaemonConnectedServiceRuntime } from './startDaemonRuntimeBootstrap';
 import { createRequesterSessionControlRuntimeFixture } from '../testkit/requesterSessionControlRuntimeFixture';
 import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
@@ -40,7 +39,7 @@ describe('qualified Connected Account deadline composition', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(clock);
     setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 1,
-      loadedAtMs: clock, settingsSecretsReadKeys: [] });
+      loadedAtMs: clock, settingsSecretsReadKeys: [], scopeKey: 'deadline-account' });
     const reads = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
       if (url.includes('/v4/connect/qualified/credential?')) return { status: 200, data: await fixture.readCredential() };
       if (url.includes('/v4/connect/qualified/quotas?')) {
@@ -105,8 +104,6 @@ describe('qualified Connected Account deadline composition', () => {
               if (++listings === 2) await healthSettled;
               return profiles;
             },
-            accountSettingsSnapshot: getActiveAccountSettingsSnapshot,
-            subscribeAccountSettingsSnapshot: listener => subscribeActiveAccountSettingsSnapshotChanges(listener),
           });
           expect(runtime.connectedServiceQuotasLoopHandle === null).toBe(mode === 'health-only');
           await vi.waitFor(() => {
@@ -118,6 +115,29 @@ describe('qualified Connected Account deadline composition', () => {
         && typeof detail === 'object' && detail !== null && 'phase' in detail && detail.phase === 'established_snapshots'
         && 'status' in detail && detail.status === 'started');
       expect(initialPreparations).toHaveLength(1);
+      if (mode === 'both') {
+        const before = listings;
+        const refreshTicks = vi.spyOn(runtime!.connectedServiceRefreshCoordinator!, 'tickOnce');
+        const quotaTicks = vi.spyOn(runtime!.connectedServiceQuotasCoordinator!, 'tickOnce');
+        for (let index = 0; index < 25; index++) {
+          const current = getActiveAccountSettingsSnapshot()!;
+          setActiveAccountSettingsSnapshot({ ...current,
+            settingsVersion: current.settingsVersion + 1,
+            settings: accountSettingsParse({ analyticsOptOut: index % 2 === 0 }) });
+          await new Promise<void>(resolve => setImmediate(resolve));
+        }
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(listings).toBe(before);
+        expect(refreshTicks).not.toHaveBeenCalled();
+        expect(quotaTicks).not.toHaveBeenCalled();
+        const current = getActiveAccountSettingsSnapshot()!;
+        setActiveAccountSettingsSnapshot({ ...current, settingsVersion: current.settingsVersion + 1,
+          settings: accountSettingsParse({ usageQuotaNotificationsV1: { pace: true } }) });
+        await vi.waitFor(() => expect(listings).toBeGreaterThan(before));
+        expect(quotaTicks).toHaveBeenCalledOnce();
+        expect(refreshTicks).not.toHaveBeenCalled();
+        refreshTicks.mockRestore(); quotaTicks.mockRestore();
+      }
       // The optimization is not permission to reuse material at effect boundaries.
       expect(fixture.readCredential.mock.calls.length).toBeGreaterThan(1);
       if (mode === 'both') {
@@ -148,8 +168,8 @@ describe('qualified Connected Account deadline composition', () => {
         vi.setSystemTime(clock);
         // A real Account Settings publication, not a coordinator-private wake,
         // makes an opted-in background notification an observation consumer.
-        setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({ usageQuotaNotificationsV1: { pace: true } }),
-          settingsVersion: 2, loadedAtMs: clock, settingsSecretsReadKeys: [] });
+        setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, source: 'network', settings: accountSettingsParse({ usageQuotaNotificationsV1: { pace: true, depletion: true } }),
+          settingsVersion: getActiveAccountSettingsSnapshot()!.settingsVersion + 1, loadedAtMs: clock, settingsSecretsReadKeys: [] });
         await vi.waitFor(() => expect(requests.mock.calls.length).toBeGreaterThan(beforeOptIn));
         expect(healthWrites).toHaveLength(1);
       }
@@ -158,8 +178,9 @@ describe('qualified Connected Account deadline composition', () => {
       await runtime?.connectedServiceQuotasLoopHandle?.stop();
       expect(invalidations.size).toBe(0);
       const stoppedReads = reads.mock.calls.length;
-      setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 3,
-        loadedAtMs: clock, settingsSecretsReadKeys: [] });
+      setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}),
+        settingsVersion: getActiveAccountSettingsSnapshot()!.settingsVersion + 1,
+        loadedAtMs: clock, settingsSecretsReadKeys: [], scopeKey: 'deadline-account' });
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(reads).toHaveBeenCalledTimes(stoppedReads);
       phases.mockRestore(); requests.mockRestore(); writes.mockRestore(); health.mockRestore(); reads.mockRestore();

@@ -8,6 +8,7 @@ import {
   ExternalSessionRefSchema,
   PluginAgentContributionV2Schema,
   resolveExternalSessionOperationTimelineV1,
+  accountSettingsParse,
 } from '@happier-dev/protocol';
 
 import {
@@ -29,6 +30,8 @@ import {
 import { createExternalSessionHostOperationOwner } from './hostOperationOwner';
 import type { ExternalSessionFollowHostOperation } from './followHostOperation';
 import type { ExternalSessionExecutionSurface } from './providerOps';
+import { notifyActiveAccountConnectedServicesProjection, resetActiveAccountSettingsSnapshotForTests,
+  setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const mocks = vi.hoisted(() => ({
   ensureExternalSessionLink: vi.fn(),
@@ -815,6 +818,46 @@ describe('current-global External Sessions author binding', () => {
 });
 
 describe('current-global External Sessions takeover source resolution', () => {
+  it('keeps configured sources settled through unrelated projection notices and rebuilds on key retirement', async () => {
+    resetActiveAccountSettingsSnapshotForTests();
+    const snapshot = { source: 'network' as const, scopeKey: 'configured-account', settingsVersion: 1, loadedAtMs: 1,
+      settings: accountSettingsParse({}), settingsSecretsReadKeys: [new Uint8Array([1])] };
+    setActiveAccountSettingsSnapshot(snapshot);
+    const rawWake = vi.fn();
+    const unsubscribe = subscribeActiveAccountSettingsSnapshot(rawWake);
+    const validateSource = vi.fn<ExternalSessionExecutionSurface['validateSource']>(async ({ source }) => ({ ok: true, source }));
+    const surface: ExternalSessionExecutionSurface = {
+      validateSource,
+      listCandidates: async () => ({ candidates: [], nextCursor: null }),
+      pageTranscript: async () => ({ items: [], nextCursor: null, tailCursor: null, hasMore: false, truncated: false }),
+      readAfterTranscript: async () => ({ outcome: 'already_current' }),
+    };
+    const retirement = new AbortController();
+    const service = await createCurrentGlobalExternalSessionsAuthorService({
+      resolveCatalogEntry: async () => null,
+      agents: [configuredAgent],
+      readCredentials: async () => null,
+      resolveMachineId: () => null,
+      resolveAgentRuntime: () => ({ occurrenceId: 'configured-occurrence',
+        sourceCustody: { kind: 'development', registeredRootId: 'configured-source-root' },
+        retirementSignal: retirement.signal, isCurrent: () => true, surface }),
+      isCurrent: () => true,
+    });
+    try {
+      expect(validateSource).toHaveBeenCalledTimes(1);
+      validateSource.mockClear();
+      for (let notice = 0; notice < 20; notice++) {
+        notifyActiveAccountConnectedServicesProjection(snapshot.scopeKey, [{ pluginId: 'email.test', localId: 'imap-smtp' }]);
+      }
+      await service.authorService.capabilities();
+      expect(validateSource).not.toHaveBeenCalled();
+      expect(rawWake).not.toHaveBeenCalled();
+      setActiveAccountSettingsSnapshot({ ...snapshot, settingsVersion: 2, settingsSecretsReadKeys: [] });
+      await vi.waitFor(() => expect(validateSource).toHaveBeenCalledTimes(1));
+      expect(rawWake).toHaveBeenCalledTimes(1);
+    } finally { service.dispose(); unsubscribe(); resetActiveAccountSettingsSnapshotForTests(); }
+  });
+
   it('reports current link-admission availability in capabilities and candidate hints', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-current-global-capabilities-'));
     const hostOwner = createExternalSessionHostOperationOwner();
