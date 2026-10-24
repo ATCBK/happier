@@ -11,6 +11,7 @@ import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
 import type { ProjectSetupDecision } from './projectSetupConsentDecision';
 
 import { describeProjectCommandSource } from './projectScriptPresentation';
@@ -261,20 +262,22 @@ export const ProjectSetupScopeChoice = React.memo(function ProjectSetupScopeChoi
   props: Readonly<{ testID: string; scope: ProjectSetupScope; onChange: (scope: ProjectSetupScope) => void }>,
 ) {
   const { theme } = useUnistyles();
+  // A phone has the room for the three choices to share the width; a wide host keeps them compact.
+  const phone = useDeviceType() === 'phone';
   const tabs = React.useMemo(() => [
     { id: 'thisTime' as const, label: t('projects.scripts.setup.thisTime') },
     { id: 'untilChanged' as const, label: t('projects.scripts.setup.untilChanged') },
     { id: 'skip' as const, label: t('common.skip') },
   ], []);
   return (
-    <View style={styles.scope}>
+    <View style={[styles.scope, phone ? styles.scopePhone : null]}>
       <SegmentedTabBar
         role="radiogroup"
         accessibilityLabel={t('projects.scripts.setup.approve')}
         tabs={tabs}
         activeTabId={props.scope}
         onSelectTab={props.onChange}
-        segmentSizing="content"
+        segmentSizing={phone ? 'equal' : 'content'}
         testIDPrefix={`${props.testID}.scope`}
       />
       <Text
@@ -306,9 +309,10 @@ export const ProjectSetupReview = React.memo(function ProjectSetupReview(
   }>,
 ) {
   const { theme } = useUnistyles();
+  const phone = useDeviceType() === 'phone';
   const [scope, setScope] = React.useState<ProjectSetupScope>(props.initialScope ?? DEFAULT_PROJECT_SETUP_SCOPE);
   return (
-    <View testID={props.testID} style={styles.review}>
+    <View testID={props.testID} style={[styles.review, phone ? styles.reviewPhone : null]}>
       <Text style={[styles.body, { color: theme.colors.text.secondary }]}>
         {t('projects.scripts.setup.lead', { machine: props.machineName })}
       </Text>
@@ -344,6 +348,8 @@ const styles = StyleSheet.create(() => ({
     paddingRight: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
     paddingBottom: 16,
   },
+  // Phones give the review the whole row: the title column would only narrow the text.
+  reviewPhone: { paddingLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx },
   body: {
     ...Typography.default(),
     ...happierPageTextMetrics('rowDescription'),
@@ -374,6 +380,7 @@ const styles = StyleSheet.create(() => ({
     borderRadius: 10,
   },
   scope: { gap: 8, alignItems: 'flex-start' },
+  scopePhone: { alignItems: 'stretch' },
   actions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
