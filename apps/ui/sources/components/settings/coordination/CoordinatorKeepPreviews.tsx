@@ -4,8 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { AvatarGradient } from '@/components/ui/avatar/AvatarGradient';
 import { Icon } from '@/components/ui/icons/Icon';
-import { Eyebrow } from '@/components/ui/text/Eyebrow';
-import { sessionListStyles } from '@/components/sessions/shell/sessionListStyles';
+import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
 import { APP_RAIL_AVATAR_SIZE_PX, APP_RAIL_ICON_GLYPH_SIZE_PX, APP_RAIL_ITEM_SLOT_PX, APP_RAIL_WIDTH_PX } from '@/components/navigation/shell/appRail/appRailMetrics';
 import { PreviewRows, PreviewStage } from '@/components/settings/session/SessionListPreview';
 import { t } from '@/text';
@@ -41,14 +40,10 @@ export const CoordinatorKeepListPreview = React.memo(function CoordinatorKeepLis
     return <PreviewStage>
         {props.pinned ? <>
             <PreviewRows density="minimal" ids={[COORDINATOR_ID]} titles={[coordinator]} />
-            <View style={sessionListStyles.groupHeaderSection}>
-                <Eyebrow style={sessionListStyles.groupHeaderTitle}>~/happier</Eyebrow>
-            </View>
+            <CollectionListGroupLabel title="happier" mark={<Icon name="folder" size={13} />} />
             <PreviewRows density="minimal" ids={SAMPLE_IDS.slice(0, 2)} />
         </> : <>
-            <View style={sessionListStyles.groupHeaderSection}>
-                <Eyebrow style={sessionListStyles.groupHeaderTitle}>~/happier</Eyebrow>
-            </View>
+            <CollectionListGroupLabel title="happier" mark={<Icon name="folder" size={13} />} first />
             <PreviewRows density="minimal" ids={[SAMPLE_IDS[0], COORDINATOR_ID, SAMPLE_IDS[1]]} titles={[t('settingsSessionPages.preview.userMessage'), coordinator]} />
         </>}
     </PreviewStage>;
