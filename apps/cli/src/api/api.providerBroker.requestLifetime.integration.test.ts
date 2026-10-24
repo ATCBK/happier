@@ -4,8 +4,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import type { ProviderBrokerRequestAdmissionV1 } from '@happier-dev/protocol';
 import type { ProviderBrokerResourceTestRelayBindingV1 } from '@happier-dev/protocol';
+import { ProviderConnectionIdSchema, ProviderConnectionSecurityFingerprintV1Schema } from '@happier-dev/protocol';
 import { TEAM_CREDENTIAL_ACTION_PATHS_V1, type TeamCredentialResourceSummaryV1,
   type TeamCredentialResourceTestAdmissionV1 } from '@happier-dev/protocol/teams';
+
+import { createDeferred } from '@/testkit/async/deferred';
 
 import { ApiClient } from './api';
 import { runWithServerHttpBaseUrl } from './client/serverHttpBaseUrl';
@@ -50,8 +53,8 @@ const testBinding: ProviderBrokerResourceTestRelayBindingV1 = {
   v: 1, kind: 'resource_test', requestId: 'test-request-1', actorAccountId: 'custodian',
   teamId: 'team-1', resourceId: 'resource-1', expectedResourceRevision: 0,
   application: admission.authority.payload.application,
-  source: { v: 1, kind: 'provider_connection', connectionId: 'pc_source',
-    connectionSecurityFingerprint: 'connection-security:v1:source', credentialSlotId: 'apiKey' },
+  source: { v: 1, kind: 'provider_connection', connectionId: ProviderConnectionIdSchema.parse('pc_source'),
+    connectionSecurityFingerprint: ProviderConnectionSecurityFingerprintV1Schema.parse('connection-security:v1:source'), credentialSlotId: 'apiKey' },
 };
 const testAdmission: TeamCredentialResourceTestAdmissionV1 = {
   v: 1, binding: testBinding, brokerMachineId: 'broker', requestFacts: admission.requestFacts,
@@ -104,8 +107,8 @@ describe('Provider broker Home admission request lifetime', () => {
   });
 
   it('cancels a pending Home admission when the containing request is cancelled', async () => {
-    const received = Promise.withResolvers<void>();
-    const disconnected = Promise.withResolvers<void>();
+    const received = createDeferred();
+    const disconnected = createDeferred();
     const home = createServer((_request, response) => {
       response.once('close', () => disconnected.resolve());
       received.resolve();

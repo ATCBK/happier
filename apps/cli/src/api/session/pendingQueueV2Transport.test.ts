@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { DEFAULT_PENDING_REQUESTED_ACTION_V1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { SocketAckError } from '@/session/transport/shared/socketAck';
 
 import {
@@ -61,7 +62,8 @@ describe('pendingQueueV2Transport', () => {
         }));
         try {
             const result = enqueuePendingQueueV2MessageViaHttp({ token: 'token', sessionId: 'session',
-                body: { localId: 'retained-original', content: { t: 'plain', v: { role: 'user' } } } });
+                body: { localId: 'retained-original', content: { t: 'plain', v: { role: 'user' } },
+                    requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1 } });
             const observed = result.then(value => ({ value }), error => ({ error }));
             await vi.advanceTimersByTimeAsync(replyAfterMs);
             expect(await observed).toMatchObject({ value: { didWrite: true } });

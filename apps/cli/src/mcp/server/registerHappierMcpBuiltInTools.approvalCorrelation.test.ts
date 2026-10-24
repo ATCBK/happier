@@ -16,17 +16,21 @@ import { doesApprovalMatchToolCall, selectMatchingToolApprovalRequests } from '.
 import { listTranscriptApprovalArtifactsForSession } from '../../../../ui/sources/sync/domains/artifacts/approvalArtifacts';
 import { TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '../../../../ui/sources/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
 
+const CODEX_AGENT = CODEX_MANIFEST.contributes.agents?.[0];
+const CLAUDE_AGENT = CLAUDE_MANIFEST.contributes.agents?.[0];
+if (!CODEX_AGENT || !CLAUDE_AGENT) throw new Error('First-party Agent manifests must contribute their Agent');
+
 describe('MCP approval origin to stored transcript review', () => {
   it.each([
-    { label: 'Codex 0.162.1', definition: CODEX_MANIFEST.contributes.agents[0]!, meta: { callId: 'exec-owned-call', itemId: 'fc-distinct-item' }, correlated: true },
-    { label: 'Claude Code 2.1.304', definition: CLAUDE_MANIFEST.contributes.agents[0]!, meta: { 'claudecode/toolUseId': 'exec-owned-call' }, correlated: true },
-    { label: 'Codex with absent metadata', definition: CODEX_MANIFEST.contributes.agents[0]!, meta: undefined, correlated: false },
-    { label: 'Claude with absent metadata', definition: CLAUDE_MANIFEST.contributes.agents[0]!, meta: undefined, correlated: false },
-    { label: 'contribution without a key', definition: { ...CODEX_MANIFEST.contributes.agents[0]!, capabilities: {
-      ...CODEX_MANIFEST.contributes.agents[0]!.capabilities, tools: { delivery: 'native_mcp' as const },
+    { label: 'Codex 0.162.1', definition: CODEX_AGENT, meta: { callId: 'exec-owned-call', itemId: 'fc-distinct-item' }, correlated: true },
+    { label: 'Claude Code 2.1.304', definition: CLAUDE_AGENT, meta: { 'claudecode/toolUseId': 'exec-owned-call' }, correlated: true },
+    { label: 'Codex with absent metadata', definition: CODEX_AGENT, meta: undefined, correlated: false },
+    { label: 'Claude with absent metadata', definition: CLAUDE_AGENT, meta: undefined, correlated: false },
+    { label: 'contribution without a key', definition: { ...CODEX_AGENT, capabilities: {
+      ...CODEX_AGENT.capabilities, tools: { delivery: 'native_mcp' as const },
     } }, meta: { callId: 'must-not-infer-codex', 'claudecode/toolUseId': 'must-not-infer-claude' }, correlated: false },
-    { label: 'external contribution', definition: { ...CODEX_MANIFEST.contributes.agents[0]!, id: 'external', capabilities: {
-      ...CODEX_MANIFEST.contributes.agents[0]!.capabilities, tools: { delivery: 'native_mcp' as const, mcpToolCallIdMetaKey: 'acme.example/nativeCall' },
+    { label: 'external contribution', definition: { ...CODEX_AGENT, id: 'external', capabilities: {
+      ...CODEX_AGENT.capabilities, tools: { delivery: 'native_mcp' as const, mcpToolCallIdMetaKey: 'acme.example/nativeCall' },
     } }, meta: { 'acme.example/nativeCall': 'exec-owned-call', callId: 'foreign-field' }, correlated: true },
   ])('keeps the $label pending and declined review at its native call', async ({ definition, meta, correlated }) => {
     const admitted = PluginAgentContributionV2Schema.parse(definition);
@@ -74,7 +78,8 @@ describe('MCP approval origin to stored transcript review', () => {
         decision: { kind: 'reject', decidedAtMs: open.updatedAtMs + 1 } })]) {
         const header = buildApprovalRequestArtifactHeaderV1(approval);
         const selected = listTranscriptApprovalArtifactsForSession([{ id: 'approval-owned', header, title: header.title ?? null,
-          sessions: header.sessions, draft: header.draft, body: JSON.stringify(approval), headerVersion: 1, bodyVersion: 1,
+          sessions: Array.isArray(header.sessions) ? header.sessions.filter((value): value is string => typeof value === 'string') : undefined,
+          draft: typeof header.draft === 'boolean' ? header.draft : undefined, body: JSON.stringify(approval), headerVersion: 1, bodyVersion: 1,
           seq: 1, createdAt: 1, updatedAt: 1, isDecrypted: true }], { serverId: 'home-owned', sessionId: 'session-owned' },
         { settledPresentations: TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS });
         expect(selected).toHaveLength(1);

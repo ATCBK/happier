@@ -60,7 +60,7 @@ import { registerExecutionRunHandlers } from '@/rpc/handlers/executionRuns';
 import { createSessionRoleContext } from '@/session/roles/sessionRoleContext';
 import { createRoleSourceReader } from '@/session/roles/roleSources';
 import { createScopedRuntimeActionSettingsProvider } from '@/settings/scopedRuntimeActionSettingsProvider';
-import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
 const env = process.env;
@@ -161,7 +161,7 @@ function createProductionSessionDaemonExecutor(credentials: Parameters<typeof cr
         accountId: 'account-1', authentication: { kind: 'account', tokenEpoch: 0 },
         serverIdentityId: 'srv_test-home', machineId: target.machineId, custodianAccountId: 'account-1', installationId: 'fixture-installation',
         actionId: operation.actionId, requestId: operation.requestId, target, accountEncryptionMode: 'plain',
-        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: operation.requestId, target, input: operation.input }),
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(ExternalActionRequestEnvelopeSchema.parse({ v: 1, requestId: operation.requestId, target, input: operation.input })),
         sessionActionOrigin, sessionActionSource: { machineId: target.machineId, installationId: 'fixture-installation' },
       } }) };
     },
@@ -488,7 +488,7 @@ describe('createHappierMcpServer real host admission', () => {
     }) });
     const readRoleSources = createRoleSourceReader({});
     const sessionRoles = createSessionRoleContext({ readMetadata: () => createTestMetadata(),
-      readOrganization: async () => ({ manager: null, origin: null }), readRoleSources,
+      readOrganization: async () => ({}), readRoleSources,
       // The Session-scoped host consumes only its admitted Role projection.
       readAccountRoleOverrides: () => ({ status: 'ready', overrides: {} }),
     });
@@ -1065,7 +1065,7 @@ describe('createHappierMcpServer real host admission', () => {
         features: FeaturesResponseSchema.parse({ features: { sessions: { enabled: true } }, capabilities: {} }) }),
       enqueueSessionEventCommitted: async event => {
         committed.push(event);
-        return { persisted: true, localId: 'session-update-original' };
+        return { persisted: true, delivered: true, localId: 'session-update-original' };
       },
     }), {
       authorityScope: 'session', sessionCredentials: { token: 'session-token', encryption: null },
@@ -1296,7 +1296,7 @@ describe('createHappierMcpServer real host admission', () => {
     app.get(ACP_CATALOG_ROWS_ROUTE_V1, async () => ({ status: 'absent' }));
     const readRoleSources = createRoleSourceReader({});
     const sessionRoles = createSessionRoleContext({ readMetadata: () => createTestMetadata(), readRoleSources,
-      readOrganization: async () => ({ manager: null, origin: null }),
+      readOrganization: async () => ({}),
       readAccountRoleOverrides: () => ({ status: 'ready', overrides: {} }),
     });
     // Like ApiSessionClient, this carrier owns the transport on its prototype.

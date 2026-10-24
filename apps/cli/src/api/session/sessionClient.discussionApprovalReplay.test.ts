@@ -427,7 +427,7 @@ it.each([
           if (!startupPost)
             return executor.replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' });
           const ingress = startupFixture?.runtime.externalActionIngressOwner;
-          if (!ingress) throw new Error('Missing startup-composed approval executor');
+          if (!ingress?.executor.replayApprovedApprovalRequest) throw new Error('Missing startup-composed approval executor');
           return ingress.executor.replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' });
         };
         const result = await replay();
@@ -514,6 +514,7 @@ it.each([
           secondKeyResults.push(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
             request: markerSubstitution, approvedActionReplay: options?.approvedActionReplay,
           }, options));
+          if (opened.kind === 'workflow_result') throw new Error('Doc discussion fixture opened a workflow result');
           const changed = opened.kind === 'doc_passage_comment'
             ? { ...opened, content: { v: 1, parts: [{ t: 'text', text: 'Unreviewed comment' }] } }
             : { ...opened, proposal: { ...opened.proposal, after: 'Unreviewed replacement' } };
@@ -632,7 +633,7 @@ it.each([
         const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
           mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
         let nativeListener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
-        let abortRequested: (() => void | Promise<void>) | undefined;
+        let abortRequested: (() => void | Promise<void>) | null | undefined;
         let termination: ReturnType<typeof registerRunnerTerminationHandlers> | undefined;
         const cancel = vi.fn<NonNullable<AgentSessionRuntime['cancel']>>(async request => ({
           status: 'requested', turnId: request.turnId,

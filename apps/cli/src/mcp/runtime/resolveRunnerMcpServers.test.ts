@@ -519,7 +519,7 @@ describe('resolveRunnerMcpServers catalog admission', () => {
     const listenerStarted = createDeferred<void>();
     const releaseListener = createDeferred<void>();
     let listener: Server | undefined;
-    const emit = Server.prototype.emit;
+    const emit = Server.prototype.emit as (this: Server, event: string | symbol, ...args: unknown[]) => boolean;
     // The HTTP listener's OS completion is held; the real bridge, command
     // resolution, Account owner and SavedSecret materializer remain unmocked.
     vi.spyOn(Server.prototype, 'emit').mockImplementation(function (this: Server, event: string | symbol, ...args: unknown[]) {

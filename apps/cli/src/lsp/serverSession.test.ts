@@ -42,7 +42,7 @@ describe('language server session', () => {
                 await session.start();
                 const generation = session.status().generation;
                 const source = session.readProcessRoots()[0]!;
-                const retained = { ...source, start: { startTimeMs: 1 }, ownerCreatedAtMs: source.ownerCreatedAtMs! };
+                const retained = { ...source, start: { startTimeMs: 1 }, live: true, ownerCreatedAtMs: source.ownerCreatedAtMs! };
                 await owners.stopOwner(retained, {});
                 await protocols[0].wait();
                 expect(session.status().state).toBe('stopped');
@@ -61,7 +61,7 @@ describe('language server session', () => {
                 // A stale Start again must not stop a replacement generation.
                 expect(await owners.startOwner(retained, {})).toMatchObject({ status: 'refused' });
                 expect(protocols).toHaveLength(2);
-                const current = { ...session.readProcessRoots()[0]!, start: { startTimeMs: 2 }, ownerCreatedAtMs: 0 };
+                const current = { ...session.readProcessRoots()[0]!, start: { startTimeMs: 2 }, live: true, ownerCreatedAtMs: 0 };
                 await owners.stopOwner(current, {});
                 await session.close('a.ts');
                 await session.close('b.ts');
@@ -79,7 +79,7 @@ describe('language server session', () => {
             try {
                 await session.open({ path: 'a.ts', languageId: 'typescript', text: 'buffer', version: 1, unsaved: false });
                 await session.start();
-                const root = { ...session.readProcessRoots()[0]!, start: { startTimeMs: 1 }, ownerCreatedAtMs: 0 };
+                const root = { ...session.readProcessRoots()[0]!, start: { startTimeMs: 1 }, live: true, ownerCreatedAtMs: 0 };
                 await owners.stopOwner(root, {});
                 behavior.failInitialize = true;
                 expect(await owners.startOwner(root, {})).toMatchObject({ status: 'refused', reasonCode: 'start_failed' });

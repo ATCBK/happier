@@ -177,7 +177,7 @@ test.skipIf(process.platform === 'win32')('archive total limit survives the upda
         archiveExtractionLimits: { maxFileBytes: nextBinary.length, maxExpandedBytes: nextBinary.length + unusedResource.length - 1 },
       },
     };
-    const env = { HOME: root, HAPPIER_HOME_DIR: root, PATH: '' };
+    const env = { NODE_ENV: process.env.NODE_ENV, HOME: root, HAPPIER_HOME_DIR: root, PATH: '' };
     const installedPath = resolveAgentCliManagedCommandPathForRuntime(spec, { processEnv: env });
     await mkdir(dirname(installedPath), { recursive: true });
     await writeFile(installedPath, previousBinary, { mode: 0o755 });

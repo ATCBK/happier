@@ -266,7 +266,7 @@ describe('ApiSessionClient provider-input settlement', () => {
     const sendTurnPrompt = vi.fn(async () => { expect(activePending()).toEqual(['next-human-input']); });
     const runtime: PermissionModePromptLoopTurnOperations = {
       beginTurnLifecycle() {}, sendTurnPrompt, steerInFlightTurn: async () => {}, waitForTurnCompletion: async () => {},
-      subscribeRuntimeEvents: () => () => {}, respondToPermission: async () => {}, cancelTurn: async () => {},
+      subscribeRuntimeEvents: () => () => {}, respondToPermission: async () => ({ delivered: true as const }), cancelTurn: async () => {},
       readSessionIdentity: () => ({ sessionId: 'native-session' }), updateSessionRuntimeConfig: async () => {},
       resetOrDisposeRuntime: async () => {},
       prepareHostContext: async input => await reconcile(input),

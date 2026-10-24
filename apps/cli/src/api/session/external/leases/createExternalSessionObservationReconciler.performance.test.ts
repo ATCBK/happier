@@ -31,7 +31,7 @@ it.runIf(process.env.HAPPIER_RUN_OBSERVATION_MEMORY_BENCHMARK === '1')(
         try {
             for (const file of files) await writeFile(file, '{}\n');
             const baseline = await sample();
-            let individual = await register(false);
+            let individual: Pick<Awaited<ReturnType<typeof register>>, 'dispose'> = await register(false);
             const perFile = await sample();
             await individual.dispose(); individual = { dispose() {} };
             const released = await sample();
@@ -42,7 +42,8 @@ it.runIf(process.env.HAPPIER_RUN_OBSERVATION_MEMORY_BENCHMARK === '1')(
             const subscription = await reconciler.registerAccountingSource({
                 resource: { pluginId: 'fixture', agentLocalId: 'fixture', occurrenceId: '1', resourceKey: 'fixture' },
                 source: { kind: 'fixture' }, changeObservation: 'watch_file_changes',
-                watchFileChanges: inventory,
+                // The same discovered arrays, so the WeakRef proves the owner does not retain them.
+                watchFileChanges: { files: inventory.files as string[], topologyDirectories: inventory.topologyDirectories as string[] },
                 onChange: change => { changes.push(change.changedFile ?? change.reason); },
             });
             inventory = null;
@@ -146,7 +147,7 @@ it.runIf(process.env.HAPPIER_RUN_OBSERVATION_MEMORY_BENCHMARK === '1')(
         try {
             const baseline = await sample();
             const files = 10_000;
-            let subscription = await reconciler.registerAccountingSource({
+            let subscription: Pick<Awaited<ReturnType<typeof reconciler.registerAccountingSource>>, 'dispose'> = await reconciler.registerAccountingSource({
                 resource: { pluginId: 'fixture', agentLocalId: 'fixture', occurrenceId: '1', resourceKey: 'fixture' },
                 source: { kind: 'fixture' }, changeObservation: 'watch_file_changes',
                 watchFileChanges: { files: Array.from({ length: files }, (_, index) => join(directory, `${index}.jsonl`)) },

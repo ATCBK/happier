@@ -1753,7 +1753,7 @@ describe('ApiSessionClient pending queue materialization', () => {
             session: { waitForMetadataUpdate: signal => client.waitForMetadataUpdate(signal),
                 materializeNextPendingMessageSafely: options => client.materializeNextPendingMessageSafely(options),
                 getMetadataSnapshot: () => client.getMetadataSnapshot(),
-                hasPendingProviderInput: localId => client.hasPendingProviderInput(localId),
+                hasPendingProviderInput: () => { const state = client.getPendingQueueState(); return state.known && state.pendingCount > 0; },
                 reconcilePendingProviderInputCustodyBeforeMaterialization: () => client.reconcilePendingProviderInputCustodyBeforeMaterialization() },
             beforeCollectQueuedBatch: () => sync.flushPendingAfterStart(), refreshBeforeQueuedBatch: false, reconcileWhenEmpty: 'skip' });
         const controller = new AbortController();
@@ -1842,7 +1842,7 @@ describe('ApiSessionClient pending queue materialization', () => {
                 waitForMetadataUpdate: signal => client.waitForMetadataUpdate(signal),
                 materializeNextPendingMessageSafely: options => client.materializeNextPendingMessageSafely(options),
                 getMetadataSnapshot: () => client.getMetadataSnapshot(),
-                hasPendingProviderInput: localId => client.hasPendingProviderInput(localId),
+                hasPendingProviderInput: () => { const state = client.getPendingQueueState(); return state.known && state.pendingCount > 0; },
                 reconcilePendingProviderInputCustodyBeforeMaterialization: () => client.reconcilePendingProviderInputCustodyBeforeMaterialization(),
             },
             reconcileWhenEmpty: 'skip',

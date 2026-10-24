@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import fastify from 'fastify';
+import fastify, { type FastifyInstance } from 'fastify';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { PublicProfileOwnerReadV1Schema, PublicProfilePublishBodyV1Schema, DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 } from '@happier-dev/protocol/account/publicProfilePublication';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, PublicProfilePolicyV1Schema } from '@happier-dev/protocol/account/publicProfile';
@@ -11,7 +11,7 @@ import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createAccountServerActionDeps } from './accountServerActionDeps';
 
-let app: ReturnType<typeof fastify>;
+let app: FastifyInstance;
 let restore: () => void;
 beforeEach(() => {
   app = fastify();
