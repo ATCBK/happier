@@ -33,9 +33,15 @@ describe('AppShell projection source publication', () => {
     it('publishes selected origins only when the origin report changes, not on unrelated Machine reports', () => {
         const owner = createAppShellPluginUiProjectionPublication();
         const pluginId = 'acme.publication';
-        const origin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test', sourceRef: {
+        let originFactReads = 0;
+        const origin = new Proxy(Object.freeze(PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test', sourceRef: {
             machineId: 'machine', pluginId, sourceCustody: { kind: 'development', registeredRootId: 'publication-root' },
-        } });
+        } })), {
+            get(target, key, receiver) {
+                if (key === 'sourceRef') originFactReads++;
+                return Reflect.get(target, key, receiver);
+            },
+        });
         owner.publishSources({ accountLifetime: null, availabilityInputs: null, hostBundledUiEnabled: false,
             activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
             onlineMachineIds: ['machine'], selectableMachineIds: [] });
@@ -43,18 +49,25 @@ describe('AppShell projection source publication', () => {
         owner.publishMachineCurrentness('machine', null, currentness(model));
         owner.publishExecutionOrigin(pluginId, null, origin, [origin], true);
         const initial = owner.getSnapshot().pluginUiProjection;
-        const gets = vi.spyOn(Map.prototype, 'get');
+        expect(originFactReads).toBeGreaterThan(0);
+        originFactReads = 0;
+        let committedPublications = 0;
+        const stop = owner.subscribe(() => { committedPublications++; }, 'committed');
         try {
             for (let report = 0; report < 20; report++) {
+                const connectedAccountProjection = Object.freeze({ kind: 'loading' as const });
                 owner.publishMachineCurrentness('machine', null, {
-                    ...currentness(model), connectedAccountProjection: { kind: 'loading' },
+                    ...currentness(model), connectedAccountProjection,
                 });
                 expect(owner.getSnapshot().pluginUiProjection).toBe(initial);
+                expect(owner.getSnapshot().currentnessForActiveAccountByMachineId.get('machine')?.connectedAccountProjection)
+                    .toBe(connectedAccountProjection);
             }
-            // Reading a selection Map returns the origin itself, unlike the
-            // reports/candidates Maps. Observe the real composed path, not a mock.
-            expect(gets.mock.results.filter(result => result.type === 'return' && result.value === origin)).toHaveLength(0);
-        } finally { gets.mockRestore(); owner.dispose(); }
+            // Count reads of the real immutable source fact, not calls to an
+            // internal comparator. Unrelated reports cannot change its grouping.
+            expect(committedPublications).toBe(0);
+            expect(originFactReads).toBe(0);
+        } finally { stop(); owner.dispose(); }
     });
 
     it('keeps settled declarations quiet across cursor and observation-only Availability publications', () => {

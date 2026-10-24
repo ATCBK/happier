@@ -143,6 +143,8 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
     let unionMembers = NO_MEMBERS;
     let currentnessReports: ReadonlyMap<string, AppShellAccountScopedPluginUiCurrentnessReport> = new Map();
     let originReports: ReadonlyMap<string, AppShellAccountScopedPluginExecutionOriginReport> = new Map();
+    let groupedOriginReports = originReports;
+    let selectableByMachine: ReadonlyMap<string, readonly PluginMachineExecutionOriginV1[]> = new Map();
     let selections: PluginUiProjectionUnionOriginSelections = new Map();
     let explicitSelections: PluginUiProjectionUnionOriginSelections = new Map();
     let installedInput: InstalledPlugins | undefined;
@@ -176,6 +178,8 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
         currentnessReports = new Map();
         unionMembers = NO_MEMBERS;
         originReports = new Map();
+        groupedOriginReports = originReports;
+        selectableByMachine = new Map();
         selections = new Map();
         explicitSelections = new Map();
         installedInput = undefined;
@@ -262,7 +266,6 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
             if (nextIds.length !== pluginIds.length || nextIds.some((id, index) => id !== pluginIds[index])) pluginIds = Object.freeze(nextIds);
             modelBasis = nextModelBasis;
         }
-        const selectableByMachine = new Map<string, PluginMachineExecutionOriginV1[]>();
         const admitted = new Set(pluginIds);
         if ([...originReports.keys()].some(id => !admitted.has(id))) {
             originReports = new Map([...originReports].filter(([id]) => admitted.has(id)));
@@ -273,14 +276,21 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
                 explicitSelections = new Map([...explicitSelections].filter(([id]) => admitted.has(id)));
             }
         }
-        for (const [id, report] of originReports) {
-            if (!admitted.has(id) || report.accountLifetime !== accountLifetime || !isCurrent(report.accountLifetime)) continue;
-            for (const origin of report.selectableOrigins ?? []) {
-                const machineId = getPluginMachineExecutionOriginRef(origin).machineId;
-                const supplying = selectableByMachine.get(machineId) ?? [];
-                supplying.push(origin);
-                selectableByMachine.set(machineId, supplying);
+        // Machine presentation reports do not change the admitted origin facts.
+        // Publish their grouping only when its own source reports change.
+        if (groupedOriginReports !== originReports) {
+            const grouped = new Map<string, PluginMachineExecutionOriginV1[]>();
+            for (const [id, report] of originReports) {
+                if (!admitted.has(id) || report.accountLifetime !== accountLifetime || !isCurrent(report.accountLifetime)) continue;
+                for (const origin of report.selectableOrigins ?? []) {
+                    const machineId = getPluginMachineExecutionOriginRef(origin).machineId;
+                    const supplying = grouped.get(machineId) ?? [];
+                    supplying.push(origin);
+                    grouped.set(machineId, supplying);
+                }
             }
+            selectableByMachine = new Map([...grouped].map(([machineId, origins]) => [machineId, Object.freeze(origins)]));
+            groupedOriginReports = originReports;
         }
         const previousMembers = new Map(unionMembers.map(member => [member.machineId, member]));
         const nextMembers = targets.map(target => {
@@ -300,7 +310,7 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
                 unavailableReasonCode: current?.unavailableReasonCode, interactionEnabled: current?.interactionEnabled ?? false,
             };
             const old = previousMembers.get(target.machineId);
-            return old && arePluginUiProjectionUnionMembersEquivalent([old], [member]) ? old : member;
+            return old && (shallow(old, member) || arePluginUiProjectionUnionMembersEquivalent([old], [member])) ? old : member;
         });
         for (const id of machineMerges.keys()) if (!eligible.has(id)) machineMerges.delete(id);
         const members = arePluginUiProjectionUnionMembersEquivalent(unionMembers, nextMembers) ? unionMembers : Object.freeze(nextMembers);
