@@ -61,6 +61,8 @@ export type NewSessionEmbeddedHost = Readonly<{
 export type NewSessionCreationProfile = Readonly<{
     /** The authenticated host's document scope when it has no Account login. */
     draftScope?: ServerAccountScope;
+    /** The host owns only frame-local draft custody and must not read Account drafts. */
+    draftHydration?: 'local';
     /** The host binds the machine: no machine, profile or resume picker. */
     hostBindsMachine: true;
     /** The injected creation executor's bound target, independent of Account machine records. */

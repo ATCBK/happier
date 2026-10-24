@@ -315,6 +315,7 @@ export function NewSessionScreen(props: NewSessionScreenProps) {
         admissionRequest.assignedDraftId = draftId;
     }, [admissionRequest]);
     return <SessionDraftHydrationBoundary addresses={admissionRequest.addresses} lifetime={lifetime}
+        localScope={creationProfile?.draftHydration === 'local' ? draftScope : undefined}
         fallback={props.presentation === 'embedded' ? (
             <GlassSurface testID="new-session-draft-loading" finishRole="composer">
                 <ItemLoadStateRows state={{ kind: 'loading' }} rows={2} lines={1} accessibilityLabel={t('common.loading')} />

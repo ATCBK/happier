@@ -105,7 +105,7 @@ export function EmbeddedSessionNewChat(props: Readonly<{
     }, []);
     const creationProfile = React.useMemo<NewSessionCreationProfile>(() => ({
         hostBindsMachine: true,
-        ...(creation.draftScope ? { draftScope: creation.draftScope } : {}),
+        ...(creation.draftScope ? { draftScope: creation.draftScope, draftHydration: 'local' as const } : {}),
         ...(creation.machineId ? { machineId: creation.machineId } : {}),
         ...(creation.agentTargetKey ? { agentTargetKey: creation.agentTargetKey } : {}),
         ...(creation.allowedModels !== undefined ? { allowedModels: creation.allowedModels } : {}),
