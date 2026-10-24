@@ -568,6 +568,18 @@ export type DiscoveryActionResultById = {
                             aliases?: string[] | undefined;
                             description?: string | undefined;
                             contextWindowTokens?: number | undefined;
+                            inlineCompletion?: {
+                                operationId: string;
+                                tokenAccounting: 'utf8-bytes';
+                                promptOverheadTokens: number;
+                                outputTokens?: number | undefined;
+                                maxOutputTokens?: number | undefined;
+                                rawFimTemplate?: {
+                                    prefix: string;
+                                    suffix: string;
+                                    middle: string;
+                                } | undefined;
+                            } | undefined;
                             extendedContextModelId?: string | undefined;
                             modelOptions?: {
                                 id: string;
@@ -739,6 +751,18 @@ export type DiscoveryActionResultById = {
                                 aliases?: string[] | undefined;
                                 description?: string | undefined;
                                 contextWindowTokens?: number | undefined;
+                                inlineCompletion?: {
+                                    operationId: string;
+                                    tokenAccounting: 'utf8-bytes';
+                                    promptOverheadTokens: number;
+                                    outputTokens?: number | undefined;
+                                    maxOutputTokens?: number | undefined;
+                                    rawFimTemplate?: {
+                                        prefix: string;
+                                        suffix: string;
+                                        middle: string;
+                                    } | undefined;
+                                } | undefined;
                                 extendedContextModelId?: string | undefined;
                                 modelOptions?: {
                                     id: string;

@@ -243,6 +243,11 @@ export type SessionAuthoringActionInputById = {
                 };
             }[] | undefined;
         };
+    } | {
+        sourceSession: {
+            serverId: string;
+            sessionId: string;
+        };
     };
 };
 export type SessionAuthoringActionResultById = {

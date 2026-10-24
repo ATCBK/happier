@@ -2133,6 +2133,9 @@ export type ConnectedServicesConfigurationActionResultById = {
                     key: string;
                     fallback: string;
                 } | undefined;
+                ui?: {
+                    category: 'cloud-machines';
+                } | undefined;
                 usageIdentity?: {
                     providerId?: string | undefined;
                     requiredContext?: 'organization' | undefined;
