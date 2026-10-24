@@ -66,6 +66,7 @@ const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init
     return artifacts.handle(path + new URL(String(url)).search, init);
 } });
 const { ProjectDashboardHeader, projectDashboardRouteId } = await import('./ProjectDashboardHeader');
+const { useProjectDashboards } = await import('./useProjectDashboards');
 const { WidgetAreaLayoutBar } = await import('@/components/widgets/area/WidgetAreaLayoutBar');
 const { useProjectWidgetAreaBinding } = await import('@/components/widgets/area/useProjectWidgetAreaBinding');
 let disposeActionLoader: (() => void) | undefined;
@@ -108,6 +109,39 @@ async function renderReleaseSelected() {
 }
 
 describe('ProjectDashboardHeader', () => {
+    it('PF4 publishes only changed named-dashboard summaries after identical reads and a rename', async () => {
+        const surface = { serverId: runtime.serverId, accountId: 'account-a', owner: { kind: 'project' as const, projectId: 'pf4-project' } };
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'ui' as const, serverId: runtime.serverId, expectedAccountId: 'account-a' };
+        for (const layoutId of ['one', 'two']) expect(await executor.execute('widgets.area.layout.create', {
+            surface, layoutId, name: layoutId,
+        }, context)).toMatchObject({ ok: true });
+        let current!: ReturnType<typeof useProjectDashboards>;
+        const renders: string[] = [];
+        type Summary = ReturnType<typeof useProjectDashboards>['state']['dashboards'][number];
+        const Row = React.memo(({ summary }: { summary: Summary }) => { renders.push(summary.artifactId); return null; });
+        function Probe() {
+            current = useProjectDashboards({ serverId: runtime.serverId, projectKey: 'pf4-project' });
+            return <>{current.state.dashboards.map(summary => <Row key={summary.artifactId} summary={summary} />)}</>;
+        }
+        await renderScreen(<runtime.Wrapper><Probe /></runtime.Wrapper>);
+        await vi.waitFor(() => expect(current.state.status).toBe('ready'));
+        const before = current.state;
+        expect(before.dashboards).toHaveLength(3);
+        renders.length = 0;
+        await act(async () => { await current.reload(); });
+        expect({ sameState: current.state === before, sameRows: current.state.dashboards === before.dashboards,
+            renders: renders.length }).toEqual({ sameState: true, sameRows: true, renders: 0 });
+        const selected = before.dashboards.find(summary => summary.name === 'one')!;
+        await act(async () => { await current.rename(selected, 'Renamed'); });
+        await vi.waitFor(() => expect(current.state.dashboards.find(row => row.artifactId === selected.artifactId)?.name).toBe('Renamed'));
+        expect(current.state).not.toBe(before);
+        expect(renders).toEqual([selected.artifactId]);
+        for (const row of before.dashboards.filter(row => row.artifactId !== selected.artifactId)) {
+            expect(current.state.dashboards.find(next => next.artifactId === row.artifactId)).toBe(row);
+        }
+    });
     it('materializes the exact missing default only on Share, preserving its preset and ordinary document sharing', async () => {
         const show = vi.spyOn(Modal, 'show');
         try {

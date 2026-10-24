@@ -40,6 +40,19 @@ const LOADING_INVENTORY: ProjectDashboardsState = { status: 'loading', dashboard
 // subscribers. Retirement discards the weakly held observation and private names.
 const accountInventories = new WeakMap<ServerAccountScopeLifetime, Map<string, ProjectDashboardsState>>();
 
+/** The acknowledged list owns row identity by Artifact, independently of order. */
+function reconcileDashboardInventory(previous: ProjectDashboardsState, incoming: ProjectDashboardsState): ProjectDashboardsState {
+  const byId = new Map(previous.dashboards.map(row => [row.artifactId, row]));
+  const dashboards = incoming.dashboards.map(row => {
+    const retained = byId.get(row.artifactId);
+    return retained && sameStrictJsonValue(retained, row) ? retained : row;
+  });
+  const sameRows = dashboards.length === previous.dashboards.length
+    && dashboards.every((row, index) => row === previous.dashboards[index]);
+  if (sameRows && previous.status === incoming.status) return previous;
+  return { ...incoming, dashboards: sameRows ? previous.dashboards : dashboards };
+}
+
 /** A generic failure does not establish that a named-layout write never committed. */
 export function isWidgetAreaLayoutOutcomeUnknown(errorCode: string | undefined): boolean {
   return errorCode === undefined || errorCode === 'action_failed' || /timeout|network|unknown|disconnect|transport/i.test(errorCode);
@@ -186,11 +199,14 @@ export function useWidgetAreaLayouts(
       error: { code: outcome.errorCode, message: outcome.error ?? outcome.errorCode ?? '' },
     });
     if (authorityLost && surfaceKey) retained?.delete(surfaceKey);
-    if (parsed?.success && surfaceKey) retained?.set(surfaceKey, { status: 'ready', dashboards: parsed.data.layouts });
-    setInventory((previous) => ({ observation, state: parsed?.success
-      ? { status: 'ready', dashboards: parsed.data.layouts }
-      : { status: 'offline', dashboards: !authorityLost && previous.observation === observation ? previous.state.dashboards : [] },
-    }));
+    const ready: ProjectDashboardsState | null = parsed?.success ? { status: 'ready', dashboards: parsed.data.layouts } : null;
+    if (ready && surfaceKey) retained?.set(surfaceKey, reconcileDashboardInventory(retained.get(surfaceKey) ?? LOADING_INVENTORY, ready));
+    setInventory(previous => {
+      const baseline = previous.observation === observation ? previous.state : LOADING_INVENTORY;
+      const state = reconcileDashboardInventory(baseline, ready
+        ?? { status: 'offline', dashboards: !authorityLost ? baseline.dashboards : [] });
+      return previous.observation === observation && previous.state === state ? previous : { observation, state };
+    });
     return parsed?.success ? parsed.data.layouts : null;
   }, [interest, isCurrent, observation, run, surface, surfaceKey, retained]);
 
