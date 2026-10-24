@@ -19,7 +19,7 @@ import { createAuthenticatedFakeSocket, getSocketHandler } from '@/app/api/testk
 import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMutationResultV1Schema,
     deriveSessionMessageReplyReturnLocalIdV1, SessionMessageReplyProgressV1Schema, SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { enqueuePendingMessageByAuthenticatedMachine, updatePendingMessage, sendPendingDeliveryAsNew, deletePendingMessage, enqueuePendingMessage, discardPendingMessage,
-    materializeNextPendingMessage, settlePendingInputAdmission, resolveAcceptedPendingDelivery } from '@/app/session/pending/pendingMessageService';
+    materializeNextPendingMessage, settlePendingInputAdmission, resolveAcceptedPendingDelivery, blockPendingDelivery } from '@/app/session/pending/pendingMessageService';
 import type { SessionInputSettlementValidationV1 } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
 import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
 import { buildTrustedHostSessionInputAdmissionV1, withSessionInputRequestV1, withSessionInputAuthorityV1, settleSessionInputRequestV1,
@@ -46,13 +46,75 @@ const authentication = createPresentUserSessionAccessAuthentication();
 describe('original Session input reply custody', () => {
     let harness: LightSqliteHarness;
     beforeAll(async () => {
-        harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-n1-s3-reply-', initAuth: true, env: {
+        harness = await createLightSqliteHarness({ tempDirPrefix: 'happier-n1-s3-reply-', env: {
             HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional',
             HAPPIER_FEATURE_SHARING_SESSION__ENABLED: '1',
         } });
+        await auth.init();
         await getOrCreateServerIdentityId();
     }, 120_000);
     afterAll(async () => { await harness?.close(); });
+
+    it('reads one exact demand batch without substituting an unrelated original or disclosing a foreign Session', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const foreign = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const makeSession = (accountId: string) => db.session.create({ data: { accountId, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const target = await makeSession(account.id);
+        const hidden = await makeSession(foreign.id);
+        for (const session of [target, hidden]) await db.sessionMessage.create({ data: { sessionId: session.id, seq: 1,
+            localId: 'original', messageRole: 'user', content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Question' } } },
+            replyProgress: { v: 1, mode: 'wait', disposition: 'inline', outcome: { kind: 'pass' } } } });
+        await withAuthenticatedTestApp(app => registerSessionMessageRoutes(app), async app => {
+            const response = await app.inject({ method: 'POST', url: '/v2/sessions/messages/replies/read-batch',
+                headers: { 'x-test-user-id': account.id }, payload: { requests: [
+                    { sessionId: target.id, localId: 'original' }, { sessionId: target.id, localId: 'not-admitted' },
+                    { sessionId: hidden.id, localId: 'original' },
+                ] } });
+            expect(response.statusCode).toBe(200);
+            expect(response.json()).toMatchObject({ results: [
+                { sessionId: target.id, localId: 'original', reply: { status: 'available', progress: { outcome: { kind: 'pass' } } } },
+                { sessionId: target.id, localId: 'not-admitted', reply: { status: 'unavailable' } },
+                { sessionId: hidden.id, localId: 'original', reply: { status: 'unavailable' } },
+            ] });
+            const restricted = await app.inject({ method: 'POST', url: '/v2/sessions/messages/replies/read-batch',
+                headers: { 'x-test-user-id': account.id, 'x-test-auth-token-kind': 'api_token' },
+                payload: { requests: [{ sessionId: target.id, localId: 'original' }] } });
+            expect(restricted.statusCode).toBe(403);
+        });
+    });
+
+    it('keeps an idempotent composer source entry out of user input and turn admission even when targeting itself', async () => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const source = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const { projectSessionMessageInvocationV1, deriveSessionMessageInvocationLocalIdV1 } = await import('@happier-dev/protocol/sessions/messages/sessionMessageInvocationV1');
+        const invocation = projectSessionMessageInvocationV1({ serverId: 'home', localId: 'self-input', requestLocalId: 'self-input',
+            target: source.id, reply: 'return', result: { ok: true, result: { status: 'accepted', localId: 'self-input' } } });
+        await db.sessionMessage.create({ data: { sessionId: source.id, localId: 'self-input', seq: 1, messageRole: 'user',
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Original admitted input' } } } } });
+        await db.session.update({ where: { id: source.id }, data: { seq: 1 } });
+        const body = { localId: deriveSessionMessageInvocationLocalIdV1(invocation.localId), messageRole: 'event',
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: 'entry', data: {
+                type: 'message', message: 'Question', sessionMessageInvocationV1: invocation,
+            } } } } };
+        await withAuthenticatedTestApp(app => registerSessionMessageRoutes(app), async app => {
+            const write = () => app.inject({ method: 'POST', url: `/v2/sessions/${source.id}/messages`,
+                headers: { 'x-test-user-id': account.id }, payload: body });
+            expect((await write()).statusCode).toBe(200);
+            expect((await write()).statusCode).toBe(200);
+            invocation.targets[0]!.immediate.status = 'alreadyAccepted';
+            const retryUpdate = await write();
+            expect(retryUpdate.statusCode).toBe(200);
+            expect(retryUpdate.json()).toMatchObject({ didWrite: false, didUpdate: true });
+            const read = await app.inject({ method: 'GET', url: `/v2/sessions/${source.id}/messages/by-local-id/${encodeURIComponent(body.localId)}`,
+                headers: { 'x-test-user-id': account.id } });
+            expect(read.statusCode).toBe(200);
+            expect(read.json()).toMatchObject({ message: { messageRole: 'event', content: body.content } });
+        });
+        expect(await db.sessionMessage.count({ where: { sessionId: source.id } })).toBe(2);
+        expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: source.id, localId: 'self-input' } } })).messageRole).toBe('user');
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: source.id } })).toBe(0);
+        expect(await db.sessionTurn.count({ where: { sessionId: source.id } })).toBe(0);
+    });
 
     it.each(['pass', 'answer', 'cancelled'] as const)('retains a Workflow V2 %s at the original input through retirement and final replay', async outcomeKind => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
@@ -142,6 +204,59 @@ describe('original Session input reply custody', () => {
             expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: terminal })).toMatchObject({ ok: true });
             expect((await app.inject({ method: 'GET', url, headers })).json()).toMatchObject({ progress: { disposition: 'inline', outcome: expected } });
         });
+    });
+
+    it.each([
+        { reason: 'provider_rejected_before_acceptance', previouslyBlocked: false },
+        { reason: 'provider_unavailable_before_acceptance', previouslyBlocked: false },
+        { reason: 'provider_rejected_before_acceptance', previouslyBlocked: true },
+    ] as const)('settles only a definitive exact Workflow refusal before provider acceptance ($reason, retained block=$previouslyBlocked)', async ({ reason, previouslyBlocked }) => {
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), installationId: randomUUID(), accountId: account.id,
+            metadata: encodePlainMachineStoredContent({ host: 'host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
+            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER),
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] }, sessionMessageReply: { protocolVersions: [1] } },
+            operationProtocolCapabilitiesRevision: 1 } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.accessKey.create({ data: { accountId: account.id, machineId: machine.id, sessionId: session.id, data: 'encrypted' } });
+        const workflow = { purpose: 'invocation', runId: 'workflow-run', invocationRecordId: randomUUID() } as const;
+        const request = { v: 2, producer: 'workflow', caller: { kind: 'host' }, workflow, permission: {}, replyIntent: { mode: 'wait' } } as const;
+        const localId = deriveWorkflowSessionInputLocalIdV2(workflow);
+        expect(await enqueuePendingMessageByAuthenticatedMachine({ accountId: account.id,
+            sourceMachineId: machine.id, targetMachineId: machine.id, sessionId: session.id, localId,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Review the proposal' },
+                meta: withSessionInputRequest({}, request) } },
+            reply: { mode: 'wait' }, requestedAction: { v: 1, kind: 'enqueue' } })).toEqual({ status: 'accepted', localId });
+        const unrelated = { actorUserId: account.id, sessionId: session.id, localId: 'unrelated-ask', authentication };
+        expect(await enqueuePendingMessage({ ...unrelated, content: { t: 'plain', v: { text: 'Another input' } },
+            requestedAction: { v: 1, kind: 'enqueue' }, reply: { mode: 'wait' } })).toMatchObject({ ok: true });
+        if (previouslyBlocked) {
+            // Retained rows from the missing-settlement producer already carry
+            // the exact refusal, but have no C2 outcome to wake their observer.
+            await db.sessionPendingMessage.update({ where: { sessionId_localId: { sessionId: session.id, localId } },
+                data: { deliveryState: 'blocked', deliveryBlockedReason: reason } });
+            await db.session.update({ where: { id: session.id },
+                data: { pendingBlockedCount: { increment: 1 }, pendingVersion: { increment: 1 } } });
+        }
+        const block = () => blockPendingDelivery({ actorUserId: account.id, sessionId: session.id, localId, reason, authentication });
+        expect(await block()).toMatchObject({ ok: true, didUpdate: !previouslyBlocked });
+        await withAuthenticatedTestApp(registerSessionMessageRoutes, async app => {
+            const read = () => app.inject({ method: 'GET',
+                url: `/v2/sessions/${session.id}/messages/by-local-id/${encodeURIComponent(localId)}/reply`,
+                headers: { 'x-test-user-id': account.id } });
+            const response = await read();
+            expect(response.statusCode).toBe(200);
+            const progress = SessionMessageReplyProgressV1Schema.parse(response.json().progress);
+            expect(progress.workflow).toEqual(workflow);
+            expect(progress.acceptedTurnId).toBeUndefined();
+            expect(progress.outcome).toEqual(reason === 'provider_rejected_before_acceptance' ? { kind: 'failed' } : undefined);
+            expect(await block()).toMatchObject({ ok: true, didUpdate: false });
+            expect((await read()).json().progress).toEqual(response.json().progress);
+        });
+        expect((await db.sessionPendingMessage.findUniqueOrThrow({
+            where: { sessionId_localId: { sessionId: session.id, localId: unrelated.localId } },
+        })).replyProgress).not.toHaveProperty('outcome');
+        expect(await db.sessionTurn.count({ where: { sessionId: session.id } })).toBe(0);
     });
 
     it('preserves the human Ask root through a non-counting return and its next autonomous child', async () => {
@@ -238,6 +353,11 @@ describe('original Session input reply custody', () => {
             socket: requesterSocket as unknown as Socket };
         eventRouter.addConnection(bob.id, requesterConnection);
         onTestFinished(() => eventRouter.removeConnection(bob.id, requesterConnection));
+        const sourceSocket = createAuthenticatedFakeSocket({ id: randomUUID() });
+        const sourceConnection = { connectionType: 'session-scoped' as const, userId: bob.id, sessionId: source.id,
+            socket: sourceSocket as unknown as Socket };
+        eventRouter.addConnection(bob.id, sourceConnection);
+        onTestFinished(() => eventRouter.removeConnection(bob.id, sourceConnection));
         const humanOrigin = { sessionId: source.id };
         const request: SessionInputRequestV1 = { v: 1, producer: 'happierApp', caller: { kind: 'host' }, permission: {},
             replyIntent: { mode: 'return', humanOrigin } };
@@ -279,6 +399,11 @@ describe('original Session input reply custody', () => {
             expect(await resolveAcceptedPendingDelivery({ actorUserId: alice.id, sessionId: target.id, localId,
                 publisherAuthority, acceptedDelivery: encryptionMode === 'plain' ? { t: 'plain', v: { v: 1, acceptedAtMs: Date.now(), delivery: { kind: 'newTurn', turnId } } }
                     : { t: 'encrypted', c: 'accepted-human-question' }, acceptedTurn: { kind: 'newTurn', turnId } })).toMatchObject({ ok: true, didResolve: true });
+            // A held source row must learn that the original input entered a
+            // real turn, even before a terminal answer/pass exists.
+            await vi.waitFor(() => expect(sourceSocket.emit).toHaveBeenCalledWith('ephemeral', {
+                type: 'session-message-reply-pending-v1', v: 1, sessionId: target.id, requestLocalId: localId,
+            }));
             expect(await applySessionTurnMutation({ actorUserId: alice.id, authentication, mutation: { v: 1,
                 sessionId: target.id, turnId, mutationId: randomUUID(), action: 'complete', observedAt: Date.now(),
                 transcriptAnchors: { userMessageSeqs: [committed.seq] } } })).toMatchObject({ ok: true });

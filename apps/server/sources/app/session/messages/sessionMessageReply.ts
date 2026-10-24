@@ -73,8 +73,9 @@ async function writeOriginal(tx: Tx, original: Original, progress: SessionMessag
         : await tx.sessionMessage.updateMany({ where: { id: original.messageId, replyProgress: { equals: original.storedProgress } }, data });
     if (changed.count !== 1) throw new TransactionReplayRequiredError('session-input-reply-progress-changed');
     if (original.pendingId && original.messageId) await tx.sessionMessage.update({ where: { id: original.messageId }, data });
-    if (progress.outcome && (!original.progress.outcome
-        || progress.disposition === 'return_pending' && original.progress.disposition !== 'return_pending')) {
+    if (progress.acceptedTurnId !== original.progress.acceptedTurnId
+        || !isDeepStrictEqual(progress.outcome, original.progress.outcome)
+        || progress.disposition === 'return_pending' && original.progress.disposition !== 'return_pending') {
         afterTx(tx, async () => {
             try {
                 const session = await db.session.findUnique({ where: { id: original.sessionId }, select: { accountId: true } });
@@ -83,6 +84,15 @@ async function writeOriginal(tx: Tx, original: Original, progress: SessionMessag
                         sessionId: original.sessionId, requestLocalId: original.localId });
                     await eventRouter.emitEphemeral({ userId: session.accountId, payload,
                         recipientFilter: { type: 'all-interested-in-session', sessionId: original.sessionId } });
+                    const sourceSessionId = progress.humanOrigin?.sessionId ?? progress.sourceSession?.sourceSessionId;
+                    if (sourceSessionId && sourceSessionId !== original.sessionId) {
+                        const source = await db.session.findUnique({ where: { id: sourceSessionId }, select: { accountId: true } });
+                        // User-scoped UI sockets already receive the target
+                        // Account's hint. Only a different source Account needs
+                        // another publication; otherwise one change arrives twice.
+                        if (source && source.accountId !== session.accountId) await eventRouter.emitEphemeral({ userId: source.accountId, payload,
+                            recipientFilter: { type: 'all-interested-in-session', sessionId: sourceSessionId } });
+                    }
                     if (progress.disposition === 'return_pending' && original.targetMachineId) {
                         const machine = await inTx(tx => resolveMachineAdmissionInTx(tx, {
                             actorAccountId: session.accountId, machineId: original.targetMachineId!,
@@ -409,11 +419,16 @@ export async function isSessionInputSourceCurrentInTx(tx: Tx, accountId: string,
         sessionId: sourceSession.sourceSessionId, localId: sourceSession.sourceInputId,
     } }, select: { seq: true, targetExecutionRunId: true, acceptedTurnId: true } }) : null;
     if (sourceInput?.targetExecutionRunId && sourceInput.acceptedTurnId !== sourceSession.sourceTurnId) return false;
+    if (sourceInput?.acceptedTurnId && sourceInput.acceptedTurnId !== sourceSession.sourceTurnId) return false;
     const source = await tx.sessionTurn.findUnique({ where: { sessionId_turnId: {
         sessionId: sourceSession.sourceSessionId, turnId: sourceSession.sourceTurnId,
     } }, select: { transcriptAnchorsJson: true, session: { select: { accountId: true, archivedAt: true, account: { select: { status: true } } } } } });
     if (source) {
-        if (sourceSession.sourceInputId && !sourceInput?.targetExecutionRunId) {
+        // Accepted input custody binds ordinary native turns before their
+        // transcript anchors publish. Historical inputs without that binding
+        // still require the exact transcript correspondence below.
+        if (sourceSession.sourceInputId && !sourceInput?.targetExecutionRunId
+            && sourceInput?.acceptedTurnId !== sourceSession.sourceTurnId) {
             const anchors = parseStoredSessionTurnTranscriptAnchors(source.transcriptAnchorsJson);
             if (!sourceInput || !(anchors?.startUserMessageSeq === sourceInput.seq || anchors?.userMessageSeqs?.includes(sourceInput.seq))) return false;
         }
