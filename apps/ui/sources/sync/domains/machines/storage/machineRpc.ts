@@ -15,7 +15,6 @@ import {
 } from '@happier-dev/protocol/storage/storageV1';
 import { MachineResourcesPolicyMutationResultV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import type { MachineStorageActionId } from '@happier-dev/protocol/actions/specs/storage';
-import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { createRpcCallError, readRpcErrorCode, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
 import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -175,5 +174,5 @@ export function watchMachineStorageViaMachineRpc(input: MachineStorageWatchInput
         ...(input.serverId ? { serverId: input.serverId } : {}), ...(input.sinceRevision === undefined ? {} : { sinceRevision: input.sinceRevision }) });
     return result(input, () => machineRpcWithServerScope({ machineId: input.machineId, serverId: input.serverId,
         ...(input.expectedAccountId ? { accountId: input.expectedAccountId } : {}), method: RPC_METHODS.DAEMON_STORAGE_WATCH,
-        payload, ...(input.signal ? { signal: input.signal } : {}), timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000 }), raw => MachineStorageWatchResultV1Schema.safeParse(raw));
+        payload, ...(input.signal ? { signal: input.signal } : {}) }), raw => MachineStorageWatchResultV1Schema.safeParse(raw));
 }

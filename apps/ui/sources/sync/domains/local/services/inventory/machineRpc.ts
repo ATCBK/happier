@@ -10,7 +10,6 @@ import {
 } from '@happier-dev/protocol/local/services/inventory/v1';
 import { isRpcMethodNotFoundResult, RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { isMachineRpcTimeoutError, MACHINE_RPC_TIMEOUT_ERROR_CODE, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
-import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
@@ -77,10 +76,8 @@ export async function fetchLocalServiceInventorySnapshotViaMachineRpc(
 /**
  * Park on the daemon's inventory change producer.
  *
- * The call deliberately outlives the default RPC budget: it is a long poll, so its timeout is the
- * daemon's park window plus a round-trip margin, mirroring the plugin-UI resource watch that
- * already runs this shape over the same transport. The server forwards a caller-requested timeout
- * up to its own maximum, so no server-side registration is required.
+ * The daemon owns the park deadline. Omitted operation timeout uses the transport's
+ * caller/remote lifetime, while connection setup remains bounded and AbortSignal retires demand.
  */
 export async function watchLocalServiceInventorySnapshotViaMachineRpc(
     input: LocalServiceInventoryWatchClientInput,
@@ -101,7 +98,6 @@ export async function watchLocalServiceInventorySnapshotViaMachineRpc(
             accountId: input.accountId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH,
             payload,
-            timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000,
             ...(input.signal ? { signal: input.signal } : {}),
         });
         if (isRpcMethodNotFoundResult(raw)) {

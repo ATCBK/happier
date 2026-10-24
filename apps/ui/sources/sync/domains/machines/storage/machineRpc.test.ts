@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
-import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { MachineStoragePileResultV1Schema, MachineStoragePileSetInputV1Schema, PileApplyResultV1Schema, TrashEmptyResultV1Schema } from '@happier-dev/protocol/storage/storageV1';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -144,14 +143,13 @@ describe('storage Action and Machine RPC boundary', () => {
         }
     });
 
-    it('parks on canonical Machine RPC with its owning watch window and rejects malformed replies', async () => {
+    it('parks on canonical Machine RPC with caller cancellation and rejects malformed replies', async () => {
         const controller = new AbortController();
         boundary.rpc.mockResolvedValueOnce({ changed: false });
         expect(await watchMachineStorageViaMachineRpc({ ...key, sinceRevision: 3, signal: controller.signal })).toEqual({ ok: true, value: { changed: false } });
         expect(boundary.rpc).toHaveBeenLastCalledWith(expect.objectContaining({
             serverId: key.serverId, accountId: key.expectedAccountId, machineId: key.machineId, method: RPC_METHODS.DAEMON_STORAGE_WATCH,
             payload: { serverId: key.serverId, machineId: key.machineId, sinceRevision: 3 }, signal: controller.signal,
-            timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000,
         }));
         boundary.rpc.mockResolvedValueOnce({ changed: true });
         expect(await watchMachineStorageViaMachineRpc(key)).toEqual({ ok: false, reason: 'invalid_response' });

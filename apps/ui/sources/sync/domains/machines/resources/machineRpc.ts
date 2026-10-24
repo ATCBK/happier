@@ -8,7 +8,6 @@ import {
     type MachineVitalsWatchResultV1,
 } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 import { MachineVitalsHistoryV1Schema, type MachineVitalsHistoryV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
-import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { createRpcCallError, readRpcErrorCode, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { MachineVitalsActionId } from '@happier-dev/protocol/actions/specs/machineVitals';
@@ -73,9 +72,7 @@ export function watchMachineVitalsViaMachineRpc(input: MachineVitalsWatchInput):
     return read(input, () => machineRpcWithServerScope({ machineId: input.machineId, serverId: input.serverId,
         ...(input.expectedAccountId ? { accountId: input.expectedAccountId } : {}),
         method: RPC_METHODS.DAEMON_VITALS_WATCH, payload, ...(input.signal ? { signal: input.signal } : {}),
-        ...(input.onDispatched ? { onDispatched: input.onDispatched } : {}),
-        // The retained watch is transport demand, with its existing parking margin.
-        timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000 }), (raw) => MachineVitalsWatchResultV1Schema.safeParse(raw));
+        ...(input.onDispatched ? { onDispatched: input.onDispatched } : {}) }), (raw) => MachineVitalsWatchResultV1Schema.safeParse(raw));
 }
 
 export function fetchMachineVitalsHistoryViaMachineRpc(input: MachineVitalsHistoryReadInput): Promise<MachineResourceRpcResult<MachineVitalsHistoryV1>> {

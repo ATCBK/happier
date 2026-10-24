@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MACHINE_RPC_TIMEOUT_ERROR_CODE, RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
-import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MachineVitalsGetInputV1Schema, MachineVitalsSnapshotV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -34,18 +33,17 @@ it.each([true, false])('recovers demanded Vitals after consecutive transport dea
         memory: { reported: true, totalBytes: 100, availableBytes: 80, usedBytes: 20, pressure: { level: 'calm', source: 'psi' } },
         disk: { reported: true, volumes: [] }, network: { reported: true, rxBps: 12, txBps: 3 },
     }, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } });
-    const pending: Array<{ payload: unknown; signal?: AbortSignal; reply(value: unknown): void }> = [];
+    const pending: Array<{ payload: unknown; signal?: AbortSignal; reply(value: unknown): void; fail(): void }> = [];
     // Only the authenticated machine transport is replaced. Real Action admission, parsing,
     // error classification, resource state and the shared watch lifecycle remain composed.
     network.execute.mockImplementation((request: {
-        method: string; payload: unknown; timeoutMs?: number; signal?: AbortSignal; onDispatched?: () => void;
+        method: string; payload: unknown; signal?: AbortSignal; onDispatched?: () => void;
     }) => {
         if (request.method === RPC_METHODS.MACHINES_VITALS_GET) return Promise.resolve(initial);
         return new Promise<unknown>((resolve, reject) => {
-            const deadline = setTimeout(() => reject(new RpcError('Watch deadline elapsed', MACHINE_RPC_TIMEOUT_ERROR_CODE)), request.timeoutMs);
-            const finish = (value: unknown) => { clearTimeout(deadline); resolve(value); };
-            request.signal?.addEventListener('abort', () => { clearTimeout(deadline); reject(new Error('cancelled')); }, { once: true });
-            pending.push({ payload: request.payload, signal: request.signal, reply: finish });
+            request.signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+            pending.push({ payload: request.payload, signal: request.signal, reply: resolve,
+                fail: () => reject(new RpcError('Transport deadline elapsed', MACHINE_RPC_TIMEOUT_ERROR_CODE)) });
             request.onDispatched?.();
         });
     });
@@ -56,16 +54,16 @@ it.each([true, false])('recovers demanded Vitals after consecutive transport dea
     try {
         await vi.waitFor(() => expect(pending).toHaveLength(1));
         const held = store.getState(input);
-        const budget = MACHINE_WATCH_WINDOW_MS + 10_000;
         for (let attempt = 0; attempt < 3; attempt++) {
-            // Synchronous advancement delivers the deadline before promise continuations run,
-            // modelling a blocked renderer resuming with an overdue transport callback.
-            vi.advanceTimersByTime(attempt === 0 ? 60_000 : budget);
+            // Model a renderer stall, then a typed transport failure. The remote/transport
+            // boundary supplies failures; this client does not invent another deadline.
+            vi.advanceTimersByTime(60_000);
+            pending[attempt]!.fail();
             await vi.waitFor(() => expect(pending).toHaveLength(attempt + 2));
             expect(store.getState(input)).toMatchObject({ status: attempt === 0 ? 'slow' : 'error',
                 errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE, stale: true, snapshot: held.snapshot, summary: held.summary });
             expect(pending.at(-1)?.payload).toMatchObject({ sinceSampledAt: 60_000 });
-            expect(vi.getTimerCount()).toBe(1); // Only the currently parked transport deadline.
+            expect(vi.getTimerCount()).toBe(0); // One outstanding request, no client polling/deadline timer.
         }
         if (!changed) {
             pending.at(-1)!.reply({ changed: false });
@@ -81,7 +79,7 @@ it.each([true, false])('recovers demanded Vitals after consecutive transport dea
         const count = pending.length;
         release();
         expect(pending.at(-1)?.signal?.aborted).toBe(true);
-        await vi.advanceTimersByTimeAsync(budget * 2);
+        await vi.advanceTimersByTimeAsync(120_000);
         expect(pending).toHaveLength(count);
         expect(vi.getTimerCount()).toBe(0);
     } finally { release(); store.reset(); }
