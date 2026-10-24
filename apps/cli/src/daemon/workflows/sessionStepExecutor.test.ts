@@ -35,8 +35,20 @@ import { createInMemoryWorkflowCoordinatorStore } from './workflowCoordinator.te
 import type { WorkflowActionExecutor } from './coordinator';
 import { createCoordinatorWorkspaceResolver, verifyWorkflowWorkspaceCurrentness } from './resolveWorkflowWorkspace';
 import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { readSessionRolesV1, snapshotSessionRolesAtSpawnV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+import { accountSettingsParse } from '@happier-dev/protocol';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const spawnedSessionBirthMetadata = new Map<string, ReturnType<typeof buildCommittedLaunchMetadata>>();
+
+function installWorkflowRoleAccount(credentials: Readonly<{ token: string; encryption: null }>) {
+  resetActiveAccountSettingsSnapshotForTests();
+  setActiveAccountSettingsSnapshot({ scopeKey: resolveAccountSettingsScopeKey(credentials), source: 'network',
+    settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1, settingsSecretsReadKeys: [], loadedAtMs: Date.now(),
+    promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+}
 
 const readiness = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), request: vi.fn(), callMachineRpc: vi.fn() }));
 vi.mock('axios', () => ({ default: { get: readiness.get, post: readiness.post, request: readiness.request,
@@ -283,7 +295,7 @@ describe('workflow Session step executor', () => {
       execution: { agentTarget: reuseSelection.agentTarget }, workspace: { machineId: 'machine-1', directory: '/repo' },
     } as never)).rejects.toMatchObject({ code, details: { reason } });
   });
-  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
   beforeEach(() => {
     spawnedSessionBirthMetadata.clear();
     // HTTP and machine process launch are the external readiness boundaries;
@@ -365,6 +377,67 @@ describe('workflow Session step executor', () => {
     await expect(execute({ ...base, invocation: { ...base.invocation,
       execution: { kind: 'session_ready', sessionId: 'new-session' } } })).resolves.toEqual({ kind: 'completed', result: '' });
     expect(launches).toHaveLength(1);
+  });
+
+  it.each([false, true])('snapshots the complete lead Role set through Workflow leaf birth (selected=%s)', async selected => {
+    const launches = installSessionCreationTransport();
+    const credentials = { token: 'token', encryption: null };
+    const roles = resolveRolesSnapshotV1({ defaultEngine: { agentTargetKey: 'agent:happier.agent.claude/claude' } });
+    for (let index = 0; index < 5; index++) {
+      const roleId = `plugin:external.roles/role-${index}`;
+      roles[roleId] = { ...roles.builder!, roleId, instructions: `External Role ${index}`, workspaceWrites: 'deny' };
+    }
+    const leadRoles = { ...snapshotSessionRolesAtSpawnV1({ leadSessionId: 'prior-lead', roles, notes: 'Lead notes' }),
+      overrides: { builder: { roleId: 'builder', instructionsOverride: 'Session-specific builder' } } };
+    let roleCatalogReads = 0;
+    const read = readiness.get.getMockImplementation()!;
+    readiness.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v2/sessions/workflow-lead')) return { status: 200, data: { session: createSessionRecordFixture({
+        id: 'workflow-lead', encryptionMode: 'plain', machineId: 'machine-1', workDepth: 0,
+        metadata: JSON.stringify({ machineId: 'machine-1', path: '/repo', flavor: 'claude',
+          runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} }, work: { sessionRolesV1: leadRoles } }),
+      }) } };
+      if (url.includes('/v1/artifacts')) {
+        roleCatalogReads++;
+        expect(new URL(url).searchParams.get('kinds')).toBe(JSON.stringify(['role.v1']));
+        return { status: 200, data: { items: [], hasUnclassified: false } };
+      }
+      return read(url);
+    });
+    installWorkflowRoleAccount(credentials);
+    const machineAdmissionTransport = async () => { throw new Error('Inputless leaf must not enqueue'); };
+    const execute = createProductionWorkflowSessionStepExecutor({ credentials, machineId: 'machine-1', machineAdmissionTransport,
+      createFreshConversation: createProductionFreshWorkflowSessionConversation({ credentials, serverId: 'server-1',
+        machineId: 'machine-1', workDepth: 1, originRunId: 'workflow-run', originSessionId: 'workflow-lead', machineAdmissionTransport }),
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async ({ sessionId, machineId }) => ({ sessionId, machineId, directory: '/repo' }),
+      resolveFrozenRole: params => params.role,
+    });
+    try {
+      await expect(execute({ runId: 'workflow-run', invocationRecordId: 'leaf-invocation',
+        step: { kind: 'step', id: 'leaf', inputMode: 'none', document: { text: '', references: [], attachments: [] },
+          input: [], result: { kind: 'text' } },
+        invocation: { kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: 'leaf', scope: [] },
+          attempt: '0', logicalInvocationRecordId: 'logical-leaf' },
+        input: { text: '', references: [], attachments: [], values: [] },
+        execution: { conversation: { kind: 'fresh' }, agentTarget: { kind: 'agent',
+          identity: { pluginId: 'happier.agent.claude', localId: 'claude' } }, connectedServices: { v: 2, bindingsByServiceId: {} } },
+        ...(selected ? { role: { ...roles.builder!, instructions: 'Frozen Workflow pin', workspaceWrites: 'deny' } } : {}),
+        executionTarget: { kind: 'session' }, authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
+        workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
+        beforeInputAdmission: async () => {}, onInputAccepted: async () => { throw new Error('No input'); },
+        onSessionReady: async () => {},
+      })).resolves.toEqual({ kind: 'completed', result: '' });
+      expect(launches).toHaveLength(1);
+      const snapshot = readSessionRolesV1(spawnedSessionBirthMetadata.get('new-session'));
+      expect(snapshot?.inheritedFrom).toBe('workflow-lead');
+      expect(Object.keys(snapshot?.sessionRoles ?? {}).sort()).toEqual(Object.keys(roles).sort());
+      expect(snapshot?.notes).toBe('Lead notes');
+      expect(snapshot?.sessionRoles.builder).toMatchObject({ instructions: selected ? 'Frozen Workflow pin' : 'Session-specific builder' });
+      expect(snapshot?.roleId).toBe(selected ? 'builder' : undefined);
+      expect(roleCatalogReads).toBe(1);
+      for (let index = 0; index < 5; index++) expect(snapshot?.sessionRoles[`plugin:external.roles/role-${index}`]).toMatchObject(roles[`plugin:external.roles/role-${index}`]!);
+    } finally { resetActiveAccountSettingsSnapshotForTests(); }
   });
 
   it.each([false, true])('creates Workflow birth correspondence accepted by requester custody (miswired=%s)', async miswired => {
@@ -1786,14 +1859,16 @@ describe('workflow Session step executor', () => {
     const launches = installSessionCreationTransport();
     const originSessionId = 'c111111111111111111111111';
     const credentials = { token: 'token', encryption: null };
+    installWorkflowRoleAccount(credentials);
     const agentTarget = { kind: 'agent' as const,
       identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
     const connectedServices = { v: 2 as const, bindingsByServiceId: {
       'happier.agent.codex/openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: 'origin-non-default' },
     } };
     const read = readiness.get.getMockImplementation()!;
-    readiness.get.mockImplementation(async (url: string) => url.endsWith(`/v2/sessions/${originSessionId}`)
-      ? { status: 200, data: { session: createSessionRecordFixture({ id: originSessionId, active: true, encryptionMode: 'plain',
+    readiness.get.mockImplementation(async (url: string) => url.includes('/v1/artifacts')
+      ? { status: 200, data: { items: [], hasUnclassified: false } } : url.endsWith(`/v2/sessions/${originSessionId}`)
+      ? { status: 200, data: { session: createSessionRecordFixture({ id: originSessionId, active: true, encryptionMode: 'plain', workDepth: 0,
         metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), share: null,
         ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ v: 1,
           workspace: { machineId: 'machine-1', path: '/repo' },

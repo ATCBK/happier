@@ -1,5 +1,5 @@
 import type { StoredCredentials } from '@/persistence';
-import { parsePermissionIntentAlias } from '@happier-dev/agents';
+import { parsePermissionIntentAlias, resolveAgentExecutionTargetFromSessionMetadata } from '@happier-dev/agents';
 import { buildExecutionRunResultContractPrompt } from '@happier-dev/protocol/execution/runs/resultContract';
 import { WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS } from '@happier-dev/protocol/workflows/workflowV1';
 import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -69,6 +69,9 @@ import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protoco
 import type { WorkflowAcceptedOriginV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/selection/v1';
+import { readSessionRolesV1, snapshotSessionRolesAtSpawnV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import type { WorkflowConversationUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 function workflowSessionResumeOptions(selection: WorkflowStepExecutionSelection): NonNullable<Parameters<typeof requestInactiveSessionResume>[0]['incomingOptions']> {
@@ -397,6 +400,30 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
     const initialAccess: SessionInitialAccessDraftV1 | undefined = team
       ? { grants: [{ subject: { kind: 'team', teamId: team.id }, accessLevel: 'view', canApprovePermissions: false }] }
       : undefined;
+    let initialSessionRolesV1: SessionRolesV1 | undefined;
+    if (deps.originSessionId) {
+      const lead = await resolveWorkflowAuthorizedSession({ credentials: deps.credentials, sessionId: deps.originSessionId,
+        ...(signal ? { signal } : {}) });
+      if (!lead) throw new WorkflowSessionCompositionError('role_target_unavailable');
+      await bootstrapAccountSettingsContext({ credentials: deps.credentials, mode: 'blocking' });
+      const leadTarget = resolveAgentExecutionTargetFromSessionMetadata(lead.metadata);
+      const leadAgent = leadTarget ? resolveSessionCreationAgentTarget(leadTarget) : null;
+      // Use ordinary child admission's complete Role observation, including
+      // Account/plugin sources and the lead's per-field Session overrides.
+      const startContext = await createCliActionDeps({ token: deps.credentials.token, credentials: deps.credentials,
+        sessionId: deps.originSessionId, serverId: deps.serverId, serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+        rawSession: lead.target.rawSession, getCurrentSessionMetadata: () => lead.metadata,
+        getCurrentSessionBackendTarget: () => leadAgent?.backendTarget,
+      }).resolveAgentStartContext!({ surface: 'agent', defaultSessionId: deps.originSessionId,
+        callerPermissionMode: permissionMode ?? 'default', ...(signal ? { signal } : {}) });
+      if (!startContext) throw new WorkflowSessionCompositionError('role_target_unavailable');
+      initialSessionRolesV1 = snapshotSessionRolesAtSpawnV1({ leadSessionId: deps.originSessionId,
+        roles: { ...startContext.roles, ...(frozenRole ? { [frozenRole.roleId]: frozenRole } : {}) },
+        notes: readSessionRolesV1(lead.metadata)?.notes });
+    }
+    if (frozenRole) initialSessionRolesV1 = { ...(initialSessionRolesV1 ?? {
+      overrides: {}, sessionRoles: { [frozenRole.roleId]: frozenRole }, notes: '',
+    }), roleId: frozenRole.roleId };
     signal?.throwIfAborted();
     const request: CreateSpawnedSessionParams = {
       credentials: deps.credentials,
@@ -422,9 +449,7 @@ export function createProductionFreshWorkflowSessionConversation(deps: Readonly<
       ...(launch?.secretReferenceOverlay ? { secretReferenceOverlay: launch.secretReferenceOverlay } : {}),
       ...(launch?.memoryEnabled !== undefined ? { memoryEnabled: launch.memoryEnabled } : {}),
       workDepth: deps.workDepth + 1,
-      ...(frozenRole ? { initialSessionRolesV1: {
-        roleId: frozenRole.roleId, overrides: {}, sessionRoles: { [frozenRole.roleId]: frozenRole }, notes: '',
-      } } : {}),
+      ...(initialSessionRolesV1 ? { initialSessionRolesV1 } : {}),
       ...(launch?.title ? { initialTitle: launch.title } : initialTitle ? { initialTitle } : {}),
       backendTarget: resolvedAgent.backendTarget,
       agentTarget: selection.agentTarget ?? undefined,
