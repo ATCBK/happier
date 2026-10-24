@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 
-import { buildSourceRuntimeBundle, admitSourceRuntimeReload } from '../../build/build_source_runtime.mjs';
+import { buildSourceRuntimeBundle, admitSourceRuntimeReload, readSourceRuntimeInputConflict } from '../../build/build_source_runtime.mjs';
 import { exportSourceWebUi } from '../../build/build_source_web_ui.mjs';
 import { parseArgs } from '../../utils/cli/args.mjs';
 import { resolveSourceQaUiMode } from '../shared/borrowed_expo.mjs';
@@ -63,11 +63,26 @@ export async function prepareSourceRuntimeReload({ stackName, stackBaseDir, repo
         ? applyServerHostDatabaseProviderEnv({ serverComponentName: serverComponent, env: serverEnv })
         : applyEffectiveDbProviderEnv({ serverComponentName: serverComponent, env: serverEnv });
       const components = {};
-      if (connection.startServer && !placement?.target) components.server = await buildSourceRuntimeBundle({ repoDir,
-        stackBaseDir, pending, component: 'server', serverComponent, dbProvider, env: serverEnv, signal: pending.signal });
+      const prepareServer = () => buildSourceRuntimeBundle({ repoDir, stackBaseDir, pending, component: 'server',
+        serverComponent, dbProvider, env: serverEnv, signal: pending.signal });
+      if (connection.startServer && !placement?.target) components.server = await prepareServer();
       if (!placement?.daemonTarget && resolveStackDaemonStartRequested({ env, noDaemon: flags.has('--no-daemon') })) {
         components.daemon = await buildSourceRuntimeBundle({ repoDir, stackBaseDir, pending,
           component: 'daemon', env, signal: pending.signal });
+      }
+      if (components.server && components.daemon) {
+        const initialConflict = await readSourceRuntimeInputConflict({ stackBaseDir, replacements: components });
+        if (initialConflict) {
+          await log(`[reload] protocol input changed between component captures; rebuilding earlier server candidate (${initialConflict.conflictingInput})`);
+          components.server = await prepareServer();
+          const remainingConflict = await readSourceRuntimeInputConflict({ stackBaseDir, replacements: components });
+          if (remainingConflict) {
+            throw Object.assign(
+              new Error(`[source-bundle] protocol input ${remainingConflict.conflictingInput} changed again while converging replacement components; existing Stack lifecycle must retry preparation`),
+              { code: 'source_runtime_reload_retry_required', ...remainingConflict },
+            );
+          }
+        }
       }
       const ui = components.server && uiMode === 'export' ? await exportSourceWebUi({ repoDir, baseDir: sourceRoot,
         stackBaseDir, pending, env, signal: pending.signal }) : null;

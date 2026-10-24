@@ -297,14 +297,15 @@ async function main() {
     const sourceRoot = join(autostart.baseDir, 'source-runtime');
     await mkdir(sourceRoot, { recursive: true });
     const repoDir = getRepoDir(rootDir);
+    const requireCoherentSelection = serverRequested && localDaemonRequested;
     if (serverRequested) {
-      const built = await buildSourceRuntimeBundle({ repoDir, stackBaseDir:autostart.baseDir, component: 'server', serverComponent: serverComponentName, dbProvider, env: process.env, preparation: pendingSourceStart, signal:pendingSourceStart?.signal, reuseSelected: reuseSourceRuntime });
+      const built = await buildSourceRuntimeBundle({ repoDir, stackBaseDir:autostart.baseDir, component: 'server', serverComponent: serverComponentName, dbProvider, env: process.env, preparation: pendingSourceStart, signal:pendingSourceStart?.signal, reuseSelected: reuseSourceRuntime, requireCoherentSelection });
       serverLaunchSpec = resolveServerRuntimeLaunchSpec({ sourceRuntimeLaunch: built,
         migrationsEnabled: resolveServerMigrationsEnabled(process.env) });
       sourceRuntimeIdentities.server = { selected: built.identity, loaded: null };
     }
     if (localDaemonRequested) {
-      const built = await buildSourceRuntimeBundle({ repoDir, stackBaseDir:autostart.baseDir, component: 'daemon', env: process.env, preparation: pendingSourceStart, signal:pendingSourceStart?.signal, reuseSelected: reuseSourceRuntime });
+      const built = await buildSourceRuntimeBundle({ repoDir, stackBaseDir:autostart.baseDir, component: 'daemon', env: process.env, preparation: pendingSourceStart, signal:pendingSourceStart?.signal, reuseSelected: reuseSourceRuntime, requireCoherentSelection });
       cliLaunchSpec = resolveCliRuntimeLaunchSpec({ sourceRuntimeLaunch: built });
       sourceRuntimeEnv = applyCliRuntimeLaunchProvenanceEnv({ cliLaunchSpec });
       sourceRuntimeIdentities.daemon = { selected: built.identity, loaded: null };

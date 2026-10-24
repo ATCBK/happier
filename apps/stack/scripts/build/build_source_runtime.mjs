@@ -365,19 +365,63 @@ export async function withSourceBundlePublication({ stackBaseDir, outputDir, rec
     signal, errorLabel: 'source-bundle publication lock' });
 }
 
-async function readSelectedSourceRuntimeBundle({ stackBaseDir, component, required = true }) {
+async function readSourceRuntimeBundleRecord(entrypoint) {
+  return entrypoint
+    ? await readOptionalJson(join(resolve(dirname(entrypoint), '../../..'), 'source-bundle.json'))
+    : null;
+}
+
+async function readSelectedSourceRuntimeRecord({ stackBaseDir, component, required = true }) {
   const selected = await readOptionalJson(join(stackBaseDir, 'source-runtime', `selected-${component}.json`));
   if (!selected && !required) return null;
-  const record = selected?.entrypoint
-    ? await readOptionalJson(join(resolve(dirname(selected.entrypoint), '../../..'), 'source-bundle.json')) : null;
+  const record = await readSourceRuntimeBundleRecord(selected?.entrypoint);
   if (!record?.identity || record.entrypoint !== selected?.entrypoint || !existsSync(record.entrypoint)) {
     throw Object.assign(
       new Error(`[source-bundle] selected source ${component} bundle is unavailable; explicitly restart the Stack to select current source`),
       { code: 'source_bundle_unavailable' },
     );
   }
+  return record;
+}
+
+async function readSelectedSourceRuntimeBundle(options) {
+  const record = await readSelectedSourceRuntimeRecord(options);
+  if (!record) return null;
   const { reuseFingerprint, sourceInputDigests, inputIdentity, ...built } = record;
   return built;
+}
+
+function isProtocolSourceInput(path) {
+  return /^packages\/protocol\/src\/.*\.(?:[cm]?ts|tsx)$/.test(path) && !/\.d\.[cm]?ts$/.test(path);
+}
+
+export async function readSourceRuntimeInputConflict({ stackBaseDir, replacements = {} }) {
+  const records = {};
+  for (const component of ['server', 'daemon']) {
+    records[component] = replacements[component]
+      ? await readSourceRuntimeBundleRecord(replacements[component].entrypoint)
+      : await readSelectedSourceRuntimeRecord({ stackBaseDir, component, required: false });
+  }
+  if (!records.server || !records.daemon) return null;
+  const serverInputs = records.server.sourceInputDigests;
+  const daemonInputs = records.daemon.sourceInputDigests;
+  if (!serverInputs || !daemonInputs) return null;
+  const conflict = Object.keys(serverInputs).find(path => isProtocolSourceInput(path)
+    && Object.hasOwn(daemonInputs, path)
+    && (!serverInputs[path] || !daemonInputs[path] || serverInputs[path] !== daemonInputs[path]));
+  return conflict ? {
+    components: { server: records.server.identity, daemon: records.daemon.identity },
+    conflictingInput: conflict,
+  } : null;
+}
+
+async function assertSelectedSourceRuntimeInputCoherence({ stackBaseDir }) {
+  const conflict = await readSourceRuntimeInputConflict({ stackBaseDir });
+  if (!conflict) return;
+  throw Object.assign(
+    new Error(`[source-bundle] selected source server and daemon use conflicting protocol input ${conflict.conflictingInput}; restart with --restart to prepare one coherent Stack runtime`),
+    { code: 'source_runtime_input_skew', ...conflict },
+  );
 }
 
 async function publishSourceRuntimeBundle({stackBaseDir, bundleRoot, component, built, record, signal, reuseSelected, pendingRequestId}) {
@@ -447,14 +491,23 @@ export async function buildSourceRuntimeBundle(options) {
     const stackBaseDir = resolve(options.stackBaseDir);
     // Recovery and CLI commands read the pinned graph without consulting
     // moving source inputs or reserving source-build capacity.
-    const readSelected = () => readSelectedSourceRuntimeBundle({
-      stackBaseDir, component: options.component, required: selection !== 'if-available',
-    });
-    // The atomic selection already pins this immutable graph against reclamation.
-    // Dev starts its refresh only after startup; another Stack's producer must
-    // not hold up this pinned reader. Other selection consumers retain their
-    // existing publication/reclamation transaction.
-    let selectedBundle = options.devStartup ? await readSelected() : await withJsonOwnerFileLock(readSelected, {
+    const readSelected = async () => {
+      const record = await readSelectedSourceRuntimeRecord({
+        stackBaseDir, component: options.component, required: selection !== 'if-available',
+      });
+      if (!record) return null;
+      const { reuseFingerprint, sourceInputDigests, inputIdentity, ...built } = record;
+      return built;
+    };
+    // Read the component pair under the selection owner so a multi-component
+    // activation cannot be observed halfway through its atomic publication.
+    let selectedBundle = await withJsonOwnerFileLock(async () => {
+      const selected = await readSelected();
+      if (options.requireCoherentSelection === true) {
+        await assertSelectedSourceRuntimeInputCoherence({ stackBaseDir });
+      }
+      return selected;
+    }, {
       lockPath: join(dirname(stackBaseDir), 'source-bundles/publication.lock'), timeoutMs: Infinity,
       staleAfterMs: Infinity, signal: options.signal, errorLabel: 'source-bundle publication lock',
     });

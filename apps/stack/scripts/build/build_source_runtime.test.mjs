@@ -1523,7 +1523,15 @@ async function reloadFixtureGraph(t, source) {
   const daemon = { identity: 'candidate', runtimeDir, cliDir: runtimeDir, entrypoint: join(runtimeDir, 'src/index.mjs') };
   await writeFile(daemon.entrypoint, source);
   await writeFile(join(candidateRoot, 'source-bundle.json'), JSON.stringify(daemon));
-  const old = { entrypoint: '/incumbent/daemon.mjs' };
+  const incumbentRoot = fixture.path('incumbent');
+  const incumbentRuntimeDir = join(incumbentRoot, 'apps/cli');
+  const old = { entrypoint: join(incumbentRuntimeDir, 'src/index.mjs') };
+  await mkdir(dirname(old.entrypoint), { recursive: true });
+  await writeFile(old.entrypoint, 'export {};');
+  await writeFile(join(incumbentRoot, 'source-bundle.json'), JSON.stringify({
+    identity: 'incumbent', component: 'daemon', runtimeDir: incumbentRuntimeDir,
+    cliDir: incumbentRuntimeDir, entrypoint: old.entrypoint,
+  }));
   const selectedPath = join(sourceRoot, 'selected-daemon.json');
   await writeFile(selectedPath, JSON.stringify(old));
   const runtimePath = join(stackBaseDir, 'stack.runtime.json');
@@ -1533,6 +1541,209 @@ async function reloadFixtureGraph(t, source) {
   t.after(async () => { await pending.dispose(); await makeFixtureWritable(fixture.root); await fixture.cleanup(); });
   return { fixture, stackBaseDir, selectedPath, runtimePath, runtime, old, daemon, pending };
 }
+
+async function installCoherenceRuntimeBundle(fixture, {
+  name, component, sharedDigest, sharedPath = 'packages/protocol/src/shared.ts',
+}) {
+  const bundleRoot = fixture.path(`stacks/source-bundles/${name}`);
+  const runtimeDir = join(bundleRoot, 'apps', component === 'daemon' ? 'cli' : 'server');
+  const entrypoint = join(runtimeDir, component === 'daemon' ? 'src/index.mjs' : 'sources/main.mjs');
+  await mkdir(dirname(entrypoint), { recursive: true });
+  await writeFile(entrypoint, component === 'daemon' ? 'export {};' : reloadHttpServerSource);
+  const built = {
+    identity: name,
+    component,
+    runtimeDir,
+    entrypoint,
+    ...(component === 'daemon'
+      ? { cliDir: runtimeDir }
+      : { serverDir: runtimeDir, dbProvider: 'sqlite', env: { HAPPIER_DB_PROVIDER: 'sqlite' }, migration: { mode: 'disabled' } }),
+  };
+  await writeFile(join(bundleRoot, 'source-bundle.json'), JSON.stringify({
+    ...built,
+    sourceInputDigests: { [sharedPath]: sharedDigest },
+    inputIdentity: `${name}-inputs`,
+  }));
+  return built;
+}
+
+test('source startup refuses selected server and daemon bundles with conflicting shared inputs', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-selected-skew-' });
+  const stackBaseDir = fixture.path('stacks/qa');
+  const sourceRoot = join(stackBaseDir, 'source-runtime');
+  await mkdir(sourceRoot, { recursive: true });
+  const server = await installCoherenceRuntimeBundle(fixture, {
+    name: 'server-current', component: 'server', sharedDigest: 'current',
+  });
+  const daemon = await installCoherenceRuntimeBundle(fixture, {
+    name: 'daemon-stale', component: 'daemon', sharedDigest: 'stale',
+  });
+  await writeFile(join(sourceRoot, 'selected-server.json'), JSON.stringify({ entrypoint: server.entrypoint }));
+  await writeFile(join(sourceRoot, 'selected-daemon.json'), JSON.stringify({ entrypoint: daemon.entrypoint }));
+
+  await assert.rejects(
+    buildSourceRuntimeBundle({ stackBaseDir, component: 'server', reuseSelected: true,
+      requireCoherentSelection: true }),
+    error => error?.code === 'source_runtime_input_skew'
+      && error.components?.server === 'server-current'
+      && error.components?.daemon === 'daemon-stale'
+      && error.message.includes('--restart'),
+  );
+});
+
+test('source startup ignores non-protocol input drift between otherwise reusable selections', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-non-protocol-drift-' });
+  const stackBaseDir = fixture.path('stacks/qa');
+  const sourceRoot = join(stackBaseDir, 'source-runtime');
+  await mkdir(sourceRoot, { recursive: true });
+  const server = await installCoherenceRuntimeBundle(fixture, {
+    name: 'server-current', component: 'server', sharedDigest: 'older', sharedPath: 'apps/bootstrap/package.json',
+  });
+  const daemon = await installCoherenceRuntimeBundle(fixture, {
+    name: 'daemon-current', component: 'daemon', sharedDigest: 'newer', sharedPath: 'apps/bootstrap/package.json',
+  });
+  await writeFile(join(sourceRoot, 'selected-server.json'), JSON.stringify({ entrypoint: server.entrypoint }));
+  await writeFile(join(sourceRoot, 'selected-daemon.json'), JSON.stringify({ entrypoint: daemon.entrypoint }));
+
+  assert.equal((await buildSourceRuntimeBundle({ stackBaseDir, component: 'server', reuseSelected: true,
+    requireCoherentSelection: true })).identity, 'server-current');
+});
+
+test('daemon-only startup ignores an inactive stale local server selection', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-split-placement-' });
+  const stackBaseDir = fixture.path('stacks/qa');
+  const sourceRoot = join(stackBaseDir, 'source-runtime');
+  await mkdir(sourceRoot, { recursive: true });
+  const server = await installCoherenceRuntimeBundle(fixture, {
+    name: 'inactive-server', component: 'server', sharedDigest: 'stale',
+  });
+  const daemon = await installCoherenceRuntimeBundle(fixture, {
+    name: 'local-daemon', component: 'daemon', sharedDigest: 'current',
+  });
+  await writeFile(join(sourceRoot, 'selected-server.json'), JSON.stringify({ entrypoint: server.entrypoint }));
+  await writeFile(join(sourceRoot, 'selected-daemon.json'), JSON.stringify({ entrypoint: daemon.entrypoint }));
+
+  assert.equal((await buildSourceRuntimeBundle({ stackBaseDir, component: 'daemon', reuseSelected: true })).identity,
+    'local-daemon');
+});
+
+test('plain source start reuses a coherent older pinned pair while current protocol source has moved', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-coherent-last-green-' });
+  const repoDir = fixture.path('repo');
+  const protocolPath = join(repoDir, 'packages/protocol/src/shared.ts');
+  const stackBaseDir = fixture.path('stacks/qa');
+  const sourceRoot = join(stackBaseDir, 'source-runtime');
+  await mkdir(dirname(protocolPath), { recursive: true });
+  await mkdir(sourceRoot, { recursive: true });
+  await writeFile(protocolPath, 'export const version = "current";');
+  const server = await installCoherenceRuntimeBundle(fixture, {
+    name: 'server-last-green', component: 'server', sharedDigest: 'older-pinned',
+  });
+  const daemon = await installCoherenceRuntimeBundle(fixture, {
+    name: 'daemon-last-green', component: 'daemon', sharedDigest: 'older-pinned',
+  });
+  await writeFile(join(sourceRoot, 'selected-server.json'), JSON.stringify({ entrypoint: server.entrypoint }));
+  await writeFile(join(sourceRoot, 'selected-daemon.json'), JSON.stringify({ entrypoint: daemon.entrypoint }));
+
+  const selected = await buildSourceRuntimeBundle({ repoDir, stackBaseDir, component: 'server',
+    preparation: { prepareInBackground() {} }, requireCoherentSelection: true });
+  assert.equal(selected.identity, 'server-last-green');
+});
+
+test('deferred source restart publishes the server before its matching daemon companion', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-deferred-companion-' });
+  const stackBaseDir = fixture.path('stacks/qa');
+  const sourceRoot = join(stackBaseDir, 'source-runtime');
+  await mkdir(sourceRoot, { recursive: true });
+  const staleDaemon = await installCoherenceRuntimeBundle(fixture, {
+    name: 'daemon-stale', component: 'daemon', sharedDigest: 'stale',
+  });
+  const currentServer = await installCoherenceRuntimeBundle(fixture, {
+    name: 'server-current', component: 'server', sharedDigest: 'current',
+  });
+  const currentDaemon = await installCoherenceRuntimeBundle(fixture, {
+    name: 'daemon-current', component: 'daemon', sharedDigest: 'current',
+  });
+  await writeFile(join(sourceRoot, 'selected-daemon.json'), JSON.stringify({ entrypoint: staleDaemon.entrypoint }));
+
+  const serverPending = await beginPendingSourceStart({ stackBaseDir });
+  t.after(() => serverPending.dispose());
+  const serverAdmission = await admitSourceRuntimeReload({
+    stackBaseDir, components: { server: currentServer }, pending: serverPending,
+  });
+  await serverAdmission.activate();
+  assert.equal(
+    JSON.parse(await readFile(join(sourceRoot, 'selected-server.json'), 'utf8')).entrypoint,
+    currentServer.entrypoint,
+  );
+
+  const daemonPending = await beginPendingSourceStart({ stackBaseDir });
+  t.after(() => daemonPending.dispose());
+  const daemonAdmission = await admitSourceRuntimeReload({
+    stackBaseDir, components: { daemon: currentDaemon }, pending: daemonPending,
+  });
+  await daemonAdmission.activate();
+  assert.equal(
+    JSON.parse(await readFile(join(sourceRoot, 'selected-daemon.json'), 'utf8')).entrypoint,
+    currentDaemon.entrypoint,
+  );
+  assert.equal(
+    (await buildSourceRuntimeBundle({ stackBaseDir, component: 'server', reuseSelected: true })).identity,
+    'server-current',
+  );
+});
+
+test('fresh source restart converges when protocol source changes between server and daemon captures',
+  { timeout: 90000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-source-reload-converges-', registerCleanup: false });
+  t.after(async () => { await makeFixtureWritable(fixture.root); await fixture.cleanup(); });
+  const repoDir = await createReloadDaemonRepo(fixture, 'export const ready = true;');
+  const stackBaseDir = fixture.path('stacks/qa');
+  const serverDir = join(repoDir, 'apps/server');
+  await Promise.all(['sources', 'scripts', 'node_modules'].map(path => mkdir(join(serverDir, path), { recursive: true })));
+  await writeFile(join(serverDir, 'package.json'), JSON.stringify({
+    name: '@happier-dev/server', type: 'module', dependencies: { '@happier-dev/protocol': 'workspace:*' },
+  }));
+  await writeFile(join(serverDir, 'tsconfig.json'), '{}');
+  await writeFile(join(serverDir, 'sources/main.light.ts'), reloadHttpServerSource);
+  await writeFile(join(serverDir, 'scripts/migrate.sqlite.deploy.ts'), 'export async function runSqliteMigrationDeploy() {}');
+  await symlink(dirname(createRequire(import.meta.url).resolve('esbuild/package.json')), join(serverDir, 'node_modules/esbuild'),
+    process.platform === 'win32' ? 'junction' : 'dir');
+  const cliManifestPath = join(repoDir, 'apps/cli/package.json');
+  await writeFile(cliManifestPath, JSON.stringify({
+    ...JSON.parse(await readFile(cliManifestPath, 'utf8')),
+    dependencies: { '@happier-dev/protocol': 'workspace:*' },
+  }));
+  const protocolPath = join(repoDir, 'packages/protocol/src/shared.ts');
+  await mkdir(dirname(protocolPath), { recursive: true });
+  await writeFile(join(repoDir, 'packages/protocol/package.json'), JSON.stringify({
+    name: '@happier-dev/protocol', type: 'module', exports: { '.': { 'happier-source': './src/shared.ts' } },
+  }));
+  await writeFile(protocolPath, 'export const version = "server-capture";');
+  await writeFile(join(repoDir, 'package.json'), JSON.stringify({ workspaces: ['apps/*', 'packages/*'] }));
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
+  await installSourcePreparationInputs(repoDir, 'server');
+  await writeFile(join(repoDir, 'pnpm-workspace.yaml'), 'packages:\n  - apps/*\n  - packages/*\n');
+
+  let changed = false;
+  await prepareSourceRuntimeReload({ stackName: 'qa', stackBaseDir, repoDir, args: ['--no-ui'], onHost: true,
+    env: { ...process.env, HAPPIER_STACK_SERVER_COMPONENT: 'happier-server-light', HAPPIER_STACK_DAEMON: '1' },
+    onPhase: phase => {
+      if (!changed && phase.phase === 'preparing' && phase.component === 'daemon') {
+        changed = true;
+        fs.writeFileSync(protocolPath, 'export const version = "daemon-capture";');
+      }
+    } });
+
+  assert.equal(changed, true);
+  const sourceRoot = join(stackBaseDir, 'source-runtime');
+  const selected = await Promise.all(['server', 'daemon'].map(async component => {
+    const selection = JSON.parse(await readFile(join(sourceRoot, `selected-${component}.json`), 'utf8'));
+    return JSON.parse(await readFile(resolve(dirname(selection.entrypoint), '../../../source-bundle.json'), 'utf8'));
+  }));
+  assert.equal(selected[0].sourceInputDigests['packages/protocol/src/shared.ts'],
+    selected[1].sourceInputDigests['packages/protocol/src/shared.ts']);
+});
 
 test('completed source runtime lookup keeps publication custody through adoption', async t => {
   const graph = await reloadFixtureGraph(t, 'export {};');
