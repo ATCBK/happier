@@ -99,6 +99,7 @@ export type ProvidersActionInputById = {
         manualModels?: {
             id: string;
             name?: string | undefined;
+            reasoningEffortLevels?: ('low' | 'medium' | 'high' | 'xhigh' | 'max')[] | undefined;
         }[] | undefined;
     }, true>;
     readonly "providers.connections.enable_detected": {
@@ -689,6 +690,7 @@ export type ProvidersActionInputById = {
         models: {
             id: string;
             name?: string | undefined;
+            reasoningEffortLevels?: ('low' | 'medium' | 'high' | 'xhigh' | 'max')[] | undefined;
         }[];
     }, true>;
     readonly "providers.models.manual.remove": AccountOperand<{

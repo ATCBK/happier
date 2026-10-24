@@ -1191,6 +1191,37 @@ An Agent may declare a native credential source for that same catalog observatio
 
 A model-picker read waits for the demand it schedules only when a connection is **cold**: it has no catalog observation yet and would therefore contribute no row at all. Answering that read immediately would be a silently empty picker with nothing to follow it, because the projection response is the only completion signal the client has. A connection that already holds an observation—even an empty, stale, or failed one—renders from that observation and keeps its refresh advisory, so an unreachable endpoint never blocks a later read. Waiting does not change work ownership: the demand still goes to the one probe scheduler, which keeps its single-flight execution, admission concurrency, typed local-capacity refusal, and failure backoff. Demand the scheduler refuses for capacity is left for a later read; no caller retains a second queue for it.
 
+### Manual reasoning-effort declarations (0.3 development)
+
+In unreleased 0.3 development, a manual model can declare optional
+`reasoningEffortLevels`, for example `['low', 'medium', 'high']`. The shared
+Protocol reasoning-effort schema owns the closed level vocabulary. Author the
+declaration through `providers.models.manual.add` in each model entry, or the
+friendly CLI:
+
+```sh
+happier providers add-model <connection-id> --models custom-model --reasoning-effort-levels low,medium,high
+```
+
+The existing add operation also replaces the manual metadata for an existing
+model id; omitting `reasoningEffortLevels` on that update clears its declaration.
+The Account Provider Action writer persists it with the manual model; catalog
+merging remains owned by `packages/protocol/src/providers/catalog/merge.ts`.
+The merger fills absent reasoning facts with `reasoningControls: 'supported'`
+and the shared `reasoning_effort` option. Probe-reported reasoning facts and
+curated/static reasoning facts take precedence, including an explicit
+unsupported result. A model listed by a probe without reasoning facts can use
+the manual declaration. Without either source of evidence, reasoning controls
+remain unavailable. Each Agent filters the declared levels through its own
+supported-effort resolver.
+
+An Anthropic-compatible endpoint can supply the same evidence in each
+`/v1/models` row's `capabilities.effort`: `supported: true` plus supported tier
+objects such as `low: { supported: true }` and `high: { supported: true }`.
+An explicit `supported: false` reports no effort support. A manual declaration
+does not override this report or prove endpoint health or Agent compatibility.
+Tier declaration is currently authored through the Action or CLI.
+
 ## Session lifecycle
 
 At launch, Happier persists the structured model selection plus exact non-secret resolution metadata: connection revision, chosen protocol, `compatibilityFingerprint`, `bindingSecurityFingerprint`, and the materialization kind. It does not persist a transient compatibility status, a derived materialization fingerprint, or credentials in session metadata.

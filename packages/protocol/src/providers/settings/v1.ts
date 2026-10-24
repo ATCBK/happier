@@ -13,14 +13,20 @@ import { QualifiedConnectedAccountPurposeBindingTargetV1Schema } from '../../con
 import { canonicalizeFingerprintValue } from '../fingerprints.js';
 import { computeCanonicalDomainSeparatedDigest } from '../../crypto/canonicalDigest.js';
 import { ProviderModelConfirmationSourceKeyV1Schema } from '../compatibility/sourceFacts.js';
+import { ProviderReasoningEffortLevelsV1Schema } from '../catalog/reasoningEffort.js';
+export { PROVIDER_REASONING_EFFORT_LEVELS_V1, ProviderReasoningEffortLevelV1Schema, ProviderReasoningEffortLevelsV1Schema,
+  type ProviderReasoningEffortLevelV1 } from '../catalog/reasoningEffort.js';
 export { PROVIDER_SETTINGS_LIMITS_V1 } from './limits.js';
 
 export const ProviderManualModelV1Schema = lazyZodSchema(() => z.strictObject({
   id: ProviderModelIdSchema,
   name: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+  reasoningEffortLevels: z.optional(ProviderReasoningEffortLevelsV1Schema),
   addedAt: z.number().check(z.nonnegative()),
 }));
 export type ProviderManualModelV1 = z.infer<typeof ProviderManualModelV1Schema>;
+export const ProviderManualModelInputV1Schema = lazyZodSchema(() => z.omit(ProviderManualModelV1Schema, { addedAt: true }));
+export type ProviderManualModelInputV1 = z.infer<typeof ProviderManualModelInputV1Schema>;
 
 /** Migration addresses an existing retained identity, never a newly authored Profile. */
 export const ProviderMigrationSourceProfileIdSchema = ProfileRecordIdV1Schema;

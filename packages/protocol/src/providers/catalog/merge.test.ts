@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { ProviderManualModelV1Schema } from '../settings/v1.js';
+import type { ProviderCatalogProbeModelV1 } from './merge.js';
+import type { ProviderModelDescriptorV1 } from '../../models/descriptor.js';
 
 import {
   ProviderCatalogLimitError,
@@ -9,6 +12,41 @@ import {
 } from './merge.js';
 
 describe('provider catalog merge', () => {
+  it.each(['augment', 'probe-authoritative'] as const)('uses manual reasoning declarations only without source facts (%s)', (membershipPolicy) => {
+    const effort = (value: string) => ({ id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue: value,
+      options: [{ value, name: value }] });
+    const cases: ReadonlyArray<Readonly<{
+      id: string; declared?: boolean; probe?: Omit<ProviderCatalogProbeModelV1, 'id'>;
+      curated?: Omit<ProviderModelDescriptorV1, 'id' | 'name'>; expected?: string[]; support?: string;
+    }>> = [
+      { id: 'declared-only', declared: true, expected: ['low', 'high'], support: 'supported' },
+      { id: 'undeclared' },
+      { id: 'listed', declared: true, probe: {}, expected: ['low', 'high'], support: 'supported' },
+      { id: 'listed-undeclared', probe: {} },
+      { id: 'probe-wins', declared: true, probe: { capabilities: { reasoningControls: 'supported' }, modelOptions: [effort('max')] }, expected: ['max'], support: 'supported' },
+      { id: 'probe-unsupported', declared: true, probe: { capabilities: { reasoningControls: 'unsupported' } }, support: 'unsupported' },
+      { id: 'probe-option-only', declared: true, probe: { modelOptions: [effort('medium')] }, expected: ['medium'] },
+      { id: 'static-unsupported', declared: true, curated: { capabilities: { reasoningControls: 'unsupported' } }, probe: {}, support: 'unsupported' },
+      { id: 'static-supported', declared: true, curated: { capabilities: { reasoningControls: 'supported' }, modelOptions: [effort('medium')] }, probe: {}, expected: ['medium'], support: 'supported' },
+      { id: 'static-unclassified', declared: true, curated: { capabilities: { toolRoundTrips: 'supported' } }, probe: {}, expected: ['low', 'high'], support: 'supported' },
+      { id: 'probe-over-static', declared: true, curated: { capabilities: { reasoningControls: 'unsupported' } }, probe: { capabilities: { reasoningControls: 'supported' }, modelOptions: [effort('max')] }, expected: ['max'], support: 'supported' },
+    ];
+    const merged = mergeProviderCatalogV1({ membershipPolicy,
+      manualModels: cases.map(row => ProviderManualModelV1Schema.parse({ id: row.id, addedAt: 1,
+        ...(row.declared ? { reasoningEffortLevels: ['low', 'high'] } : {}) })),
+      staticModels: cases.flatMap(row => row.curated ? [{ id: row.id, name: row.id, ...row.curated }] : []),
+      probeState: { snapshot: { observedAt: 1, stale: false,
+        models: cases.flatMap(row => row.probe ? [{ id: row.id, ...row.probe }] : []) }, staleProbeModels: [] },
+    });
+    for (const row of cases) {
+      const descriptor = merged.rows.find(candidate => candidate.descriptor.id === row.id)!.descriptor;
+      expect(descriptor.capabilities?.reasoningControls, row.id).toBe(row.support);
+      expect(descriptor.modelOptions?.find(option => option.id === 'reasoning_effort')?.options?.map(option => option.value), row.id).toEqual(row.expected);
+    }
+    if (membershipPolicy === 'augment') {
+      expect(merged.rows.find(row => row.descriptor.id === 'static-unclassified')?.descriptor.capabilities?.toolRoundTrips).toBe('supported');
+    }
+  });
   it('names returned snapshot ids from contributed catalogs without importing their availability or model controls', () => {
     const merged = mergeProviderCatalogV1({
       staticModels: [], manualModels: [],

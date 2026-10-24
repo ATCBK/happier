@@ -2,6 +2,7 @@ import { CUSTOM_PROVIDER_AUTHORING_PROTOCOLS_V1, CustomProviderAuthoringProtocol
 import { CustomProviderTemplateV1Schema } from '@happier-dev/protocol/providers/connections/customTemplateV1';
 import { parseProviderManualModelInput } from '@happier-dev/protocol/providers/manualModelInput';
 import { ProviderModelIdSchema } from '@happier-dev/protocol/providers/ids';
+import { ProviderReasoningEffortLevelsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
 import { isProviderContributionAuthoringMachineRequiredV1 } from '@happier-dev/protocol/providers/connections/creationV1';
 import type { DaemonProviderContributionAuthoringPreviewV1 } from '@happier-dev/protocol/rpc';
 
@@ -28,7 +29,7 @@ const EDIT_FLAGS = new Set([
   '--machine', '--name', '--automatic-name', '--scope', '--endpoint-template', '--base-url', '--clear-endpoint', '--json',
 ]);
 const SECRET_FLAGS = new Set(['--machine', '--scope', '--saved-secret-id', '--json']);
-const MODEL_ADD_FLAGS = new Set(['--machine', '--models', '--json']);
+const MODEL_ADD_FLAGS = new Set(['--machine', '--models', '--reasoning-effort-levels', '--json']);
 const MODEL_REMOVE_FLAGS = new Set(['--machine', '--model', '--json']);
 
 function requireValue(value: string | null | undefined, label: string): string {
@@ -388,13 +389,21 @@ export async function executeProvidersCommand(
     assertOnlyAllowedFlags(args.slice(1), subcommand === 'add-model' ? MODEL_ADD_FLAGS : MODEL_REMOVE_FLAGS);
     const target = await resolveTarget(args.slice(1), deps);
     if (subcommand === 'add-model') {
+      const effortLevelsFlag = readFlag(args, '--reasoning-effort-levels');
+      const effortLevels = effortLevelsFlag === null ? undefined
+        : ProviderReasoningEffortLevelsV1Schema.safeParse(effortLevelsFlag.split(',').map(level => level.trim()));
+      if (effortLevels && !effortLevels.success) {
+        throw new ProviderCliError('invalid_arguments', '--reasoning-effort-levels requires unique supported reasoning tiers');
+      }
       const parsed = parseProviderManualModelInput(requireValue(readFlag(args, '--models'), '--models'));
       if (parsed.accepted.length === 0) {
         throw new ProviderCliError('provider_model_not_found', 'No valid manual model ids were provided', { rejected: parsed.rejected });
       }
       const result = await deps.mutateModelSettings({
         action: 'manualAdd', machineId: target.machineId, connectionId: target.connection.connectionId,
-        expectedConnectionRevision: target.connection.revision, models: parsed.accepted.map((id) => ({ id })),
+        expectedConnectionRevision: target.connection.revision, models: parsed.accepted.map((id) => ({ id,
+          ...(effortLevels?.success ? { reasoningEffortLevels: effortLevels.data } : {}),
+        })),
       });
       if (result.status === 'error') throwServiceError(result);
       return { ok: true, kind: 'providers_add_model', data: { ...serializeConnection(target.connection), accepted: parsed.accepted, rejected: parsed.rejected } };

@@ -168,6 +168,11 @@ Important details:
 - Manual ids are useful for compatible gateways, custom endpoints, or newly released models.
 - Manual models retain their provenance and may be favorited as exact structured selections.
 
+In unreleased 0.3 development, manual models can also carry an explicit
+[reasoning-effort declaration](/agents/provider-integrations#manual-reasoning-effort-in-03-development)
+when the endpoint supplies no reasoning facts. Adding a model id alone does not
+enable reasoning controls.
+
 ## Model-specific options
 
 Some models expose extra controls, such as thinking, reasoning, effort, or a Provider-specific mode.

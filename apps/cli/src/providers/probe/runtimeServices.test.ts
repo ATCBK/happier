@@ -1,6 +1,8 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { once } from 'node:events';
+import { createServer, type IncomingHttpHeaders } from 'node:http';
 import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import * as persistence from '@/persistence';
@@ -31,6 +33,7 @@ import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSe
 import { createDeferred } from '@/testkit/async/deferred';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import { normalizeCustomProviderTemplateV1 } from '@happier-dev/protocol/providers/connections/normalizeCustomTemplateV1';
 
 import { createRuntimeProviderServices } from './runtimeServices';
 import {
@@ -126,6 +129,55 @@ function grantedSettings(providerRegistry = registry) {
 }
 
 describe('runtime provider services', () => {
+  it('probes a no-auth Anthropic-compatible connection over HTTP without native login headers', async () => {
+    const requests: Array<{ path: string | undefined; headers: IncomingHttpHeaders }> = [];
+    const server = createServer((request, response) => {
+      requests.push({ path: request.url, headers: request.headers });
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'custom-anthropic-model' }] }));
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected HTTP test listener');
+      const endpointUrl = `http://127.0.0.1:${address.port}/v1`;
+      const template = normalizeCustomProviderTemplateV1({ name: 'No-auth Anthropic endpoint',
+        protocol: 'anthropic', baseUrl: endpointUrl, catalog: 'probe', modelsPath: '/v1/models' });
+      const emptyRegistry = { providersByContributionKey: new Map() };
+      const base = ProviderSettingsV1Schema.parse({ ...DEFAULT_PROVIDER_SETTINGS_V1,
+        connections: [{ v: 1, id: 'pc_no_auth', source: { kind: 'custom', template }, role: 'named',
+          displayName: template.name, displayNameMode: 'custom', revision: 0, createdAt: 1, updatedAt: 1 }],
+      });
+      const resolution = resolveProviderConnectionForMachine({ connectionId: 'pc_no_auth', machineId: 'machine-a',
+        providerSettings: base, registry: emptyRegistry,
+        dnsEvidenceByEndpointUrl: new Map([[endpointUrl, ['127.0.0.1']]]) });
+      if (resolution.status !== 'resolved') throw new Error('Expected no-auth custom connection');
+      const settings = ProviderSettingsV1Schema.parse({ ...base, machineGrants: [{ v: 1,
+        machineId: 'machine-a', connectionId: 'pc_no_auth', confirmedAt: 1,
+        endpointSetFingerprint: resolution.record.endpointSetFingerprint,
+        connectionSecurityFingerprint: resolution.record.connectionSecurityFingerprint,
+      }] });
+      const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-anthropic-no-auth-'));
+      temporaryPaths.push(happyHomeDir);
+      const snapshot = providerSnapshot(settings);
+      const services = createRuntimeProviderServices({ machineId: 'machine-a', happyHomeDir,
+        registry: emptyRegistry, getAccountSettingsSnapshot: () => snapshot,
+        featureGate: { isEnabled: () => true },
+      });
+      await expect(services.probe({ connectionId: 'pc_no_auth', machineId: 'machine-a' }))
+        .resolves.toMatchObject({ status: 'success', models: [{ id: 'custom-anthropic-model' }] });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.path).toBe('/v1/models');
+      expect(requests[0]!.headers.authorization).toBeUndefined();
+      expect(requests[0]!.headers['x-api-key']).toBeUndefined();
+      expect(requests[0]!.headers.cookie).toBeUndefined();
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+
   it.each(['models', 'probe'] as const)('reports transient Account catalog failure before %s without blaming the endpoint', async operation => {
     const credentials = { token: 'provider-catalog-transient', encryption: null };
     vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);

@@ -13,7 +13,7 @@ Manage model-provider connections.
   happier providers enable|disable <connection-id> [--machine <machine-id>]
   happier providers bind-secret <connection-id> --scope account|machine --saved-secret-id <id>
   happier providers unbind-secret|replace-secret <connection-id> --scope account|machine
-  happier providers add-model <connection-id> --models <newline-separated-ids>
+  happier providers add-model <connection-id> --models <newline-separated-ids> [--reasoning-effort-levels <comma-separated-tiers>]
   happier providers remove-model <connection-id> --model <model-id>
   happier providers probe|test|models <connection-id> [--machine <machine-id>]
   happier providers load-model <connection-id> --model <model-id> [--machine <machine-id>]

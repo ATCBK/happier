@@ -41,6 +41,45 @@ For an unlisted service, choose **Add custom provider** and select the compatibi
 
 The model appears only for Agents whose protocol and required capabilities are compatible. An unverified pairing may be shown as **Experimental** and require explicit confirmation; an incompatible pairing is not selectable.
 
+## Manual reasoning effort in 0.3 development
+
+In unreleased 0.3 development, you can declare the reasoning-effort tiers supported
+by a manually added model when its endpoint does not report them. Use the CLI:
+
+```sh
+happier providers add-model <connection-id> --models custom-model --reasoning-effort-levels low,medium,high
+```
+
+Running the command again for the same model id replaces its manual metadata;
+omitting `--reasoning-effort-levels` clears a previous declaration. Action
+callers can instead supply `reasoningEffortLevels` in each model entry of
+`providers.models.manual.add`. Tier declaration is currently authored through
+the Action or CLI. The selected Agent still filters these tiers to the levels
+it supports; declaring them does not verify the endpoint or make an incompatible
+Agent pairing available.
+
+For an Anthropic-compatible endpoint, its `/v1/models` response can report effort
+support directly on each model, for example:
+
+```json
+{
+  "id": "custom-model",
+  "capabilities": {
+    "effort": {
+      "supported": true,
+      "low": { "supported": true },
+      "high": { "supported": true }
+    }
+  }
+}
+```
+
+Endpoint-reported and curated/static reasoning facts take precedence over a
+manual declaration, including an explicit unsupported result. The declaration
+fills missing facts even if the endpoint lists the model without effort
+capabilities. With neither a declaration nor reported or curated support,
+Happier leaves reasoning-effort controls unavailable.
+
 ## Local routers and model servers
 
 Local endpoints are scoped to the target machine. Happier may detect a running process, but it confirms availability by probing the Provider's model API before showing it as connected.

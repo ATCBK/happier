@@ -45,6 +45,33 @@ function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CON
 }
 
 describe('shared Provider Account Action producer', () => {
+  it('round-trips manual reasoning declarations through Action registration, Account writer and catalog admission', async () => {
+    const row = accountRow();
+    // Exercise the registered Action after the host's existing approval flow.
+    const context = { surface: 'ui' as const, bypassApprovals: true };
+    const executor = createActionExecutor({ providerActionExecute: createProviderActionExecuteV1({
+      assertCurrent() {}, async rpc() { throw new Error('Account manual models must not use machine RPC'); },
+      async setDefault() { throw new Error('Manual models must not change defaults'); },
+      async readAccountCatalog() { throw new Error('Account writer owns this mutation'); }, account: row.execute,
+    }) });
+    const created = await executor.execute('providers.connections.create_custom', {
+      action: 'createCustom', connectionId: 'pc_effort', template: customTemplate, savedSecretId: null,
+      manualModels: [{ id: 'opaque', reasoningEffortLevels: ['low', 'high'] }], enable: false,
+    }, context);
+    expect(created.ok ? null : created).toBeNull();
+    expect(row.catalog.manualModelsByConnectionId.pc_effort).toEqual([{ id: 'opaque', addedAt: 10, reasoningEffortLevels: ['low', 'high'] }]);
+    const update = (models: unknown) => executor.execute('providers.models.manual.add', {
+      action: 'manualAdd', connectionId: 'pc_effort', expectedConnectionRevision: 0, models,
+    }, context);
+    expect(await update([{ id: 'opaque', name: 'Renamed', reasoningEffortLevels: ['medium', 'max'] }])).toMatchObject({ ok: true });
+    expect(row.catalog.manualModelsByConnectionId.pc_effort).toEqual([{ id: 'opaque', name: 'Renamed', addedAt: 10, reasoningEffortLevels: ['medium', 'max'] }]);
+    expect(parseProviderSettingsV1Narrow(row.catalog).settings.manualModelsByConnectionId.pc_effort).toEqual(row.catalog.manualModelsByConnectionId.pc_effort);
+    const writes = row.writes;
+    expect(await update([{ id: 'opaque', reasoningEffortLevels: ['unsupported-tier'] }])).toMatchObject({ ok: false });
+    expect(row.writes).toBe(writes);
+    expect(await update([{ id: 'opaque' }])).toMatchObject({ ok: true });
+    expect(row.catalog.manualModelsByConnectionId.pc_effort).toEqual([{ id: 'opaque', addedAt: 10 }]);
+  });
   it('requires explicit gateway contribution choice and never creates or reads a saved connection to choose', async () => {
     const row = accountRow();
     const definition = ProviderContributionV1Schema.parse(CLIPROXYAPI_PROVIDER_CONTRIBUTION);

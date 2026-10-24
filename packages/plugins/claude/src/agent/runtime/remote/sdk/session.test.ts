@@ -37,6 +37,8 @@ import {
 } from '../../../auth/services/cloud/refreshBridge.js';
 import { createSessionProviderInputOutcomeNormalizer } from '../../../../../../../../apps/cli/src/agent/runtime/session/input/providerInputOutcome.js';
 import { projectClaudeJsonlLineToDirectMessages } from '../../../transcripts/projection.js';
+import { mergeProviderCatalogV1 } from '@happier-dev/protocol/providers/catalog/merge';
+import { resolveClaudeEffortForModel, resolveClaudeEffortLevelsForProviderModel } from '../../reasoningEffort.js';
 
 type SessionParamsWithCredentials =
   Parameters<typeof bindClaudeAgentSdkFallbackSession>[0]['sessionParams'] & Readonly<{
@@ -4728,6 +4730,37 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       ]));
     } finally {
       await runtime.resetOrDisposeRuntime().catch(() => undefined);
+    }
+  });
+
+  it.each([true, false])('launches a custom Provider model with effort only when manually declared (%s)', async declared => {
+    const model = mergeProviderCatalogV1({
+      staticModels: [],
+      manualModels: declared
+        ? [{ id: 'custom-model', addedAt: 1, reasoningEffortLevels: ['low', 'high'] }]
+        : [{ id: 'custom-model', addedAt: 1 }],
+      probeState: { snapshot: null, staleProbeModels: [] },
+    }).rows[0]!.descriptor;
+    expect(resolveClaudeEffortLevelsForProviderModel(model)).toEqual(declared ? ['low', 'high'] : []);
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service,
+    });
+    // Native Session and execution-run openers resolve persisted intent before
+    // creating SDK operations; retain that real resolver in this composition.
+    const effort = resolveClaudeEffortForModel({ modelId: model.id, providerModel: model, effort: 'low' });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      initialModelId: model.id, providerModel: model, initialEffort: effort, supportsEffort: true,
+    });
+    try {
+      await operations.sendProviderTurnPrompt('first prompt');
+      await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
+      const args = exec.spawnClient.mock.calls[0]![0].launch.args;
+      if (declared) expect(args).toEqual(expect.arrayContaining(['--effort', 'low']));
+      else expect(args).not.toContain('--effort');
+    } finally {
+      await operations.disposeProviderSession('test_complete');
     }
   });
 

@@ -8,6 +8,7 @@ import {
   PROVIDER_SETTINGS_LIMITS_V1,
   ProviderSettingsLimitError,
   ProviderSettingsV1Schema,
+  ProviderManualModelV1Schema,
   ProviderSettingsMigrationPendingConflictV1Schema,
   assertProviderSettingsV1WithinLimits,
   parseProviderSettingsV1Narrow,
@@ -67,6 +68,17 @@ describe('SavedSecretSlotBindingsV1Schema', () => {
 });
 
 describe('ProviderSettingsV1Schema', () => {
+  it('admits explicit reasoning tiers and rejects malformed declarations while retaining undeclared records', () => {
+    const model = { id: 'custom', addedAt: 1, reasoningEffortLevels: ['low', 'high', 'max'] };
+    expect(ProviderManualModelV1Schema.parse(model)).toEqual(model);
+    expect(ProviderManualModelV1Schema.parse({ id: 'custom', addedAt: 1 })).toEqual({ id: 'custom', addedAt: 1 });
+    for (const reasoningEffortLevels of [[], ['high', 'high'], ['invented'], ['HIGH']]) {
+      expect(ProviderManualModelV1Schema.safeParse({ ...model, reasoningEffortLevels }).success).toBe(false);
+    }
+    const settings = { ...validSettings(), manualModelsByConnectionId: { pc_1: [model] } };
+    expect(ProviderSettingsV1Schema.parse(settings).manualModelsByConnectionId.pc_1).toEqual([model]);
+    expect(parseProviderSettingsV1Narrow(settings).settings.manualModelsByConnectionId.pc_1).toEqual([model]);
+  });
   it('round-trips source-scoped confirmations without accepting orphan saved-connection confirmations', () => {
     const connectedAccountTarget = { kind: 'group', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool-a' };
     const confirmation = { v: 1, connectionId: 'connected-source:catalog-a', connectedAccountTarget,

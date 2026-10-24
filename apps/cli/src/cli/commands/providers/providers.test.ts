@@ -1196,6 +1196,49 @@ describe('happier providers command domain', () => {
     });
   });
 
+  it('persists declared manual reasoning tiers through CLI Actions and updates the same model', async () => {
+    const h = harness();
+    await executeProvidersCommand(['add', contributionKey], h.deps);
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+      'providers.models.manual.add': ['cli'],
+    } });
+    const executor = createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
+      isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id, actionsSettings, context, undefined, undefined, input),
+      providerActionExecute: createProviderActionExecuteV1({
+        assertCurrent() {},
+        setDefault: async () => { throw new Error('Unexpected default mutation'); },
+        readAccountCatalog: async () => { throw new Error('Unexpected Team catalog read'); },
+        account: accountActionHost(h.persistence),
+        rpc: async () => { throw new Error('Manual models are Account-owned'); },
+      }),
+    });
+    const deps = routeProviderCliActions(h.deps,
+      (id, input) => executor.execute(id, input, { surface: 'cli', actionsSettings }));
+
+    await executeProvidersCommand([
+      'add-model', 'pc_1', '--models', 'custom-model', '--reasoning-effort-levels', 'low,high',
+    ], deps);
+    expect(settings(h.getRaw()).manualModelsByConnectionId.pc_1).toEqual([
+      { id: 'custom-model', addedAt: 100, reasoningEffortLevels: ['low', 'high'] },
+    ]);
+    await executeProvidersCommand([
+      'add-model', 'pc_1', '--models', 'custom-model', '--reasoning-effort-levels', 'medium,max',
+    ], deps);
+    expect(settings(h.getRaw()).manualModelsByConnectionId.pc_1).toEqual([
+      { id: 'custom-model', addedAt: 100, reasoningEffortLevels: ['medium', 'max'] },
+    ]);
+  });
+
+  it('rejects unknown manual reasoning tiers before writing model settings', async () => {
+    const h = harness();
+    await executeProvidersCommand(['add', contributionKey], h.deps);
+    await expect(executeProvidersCommand([
+      'add-model', 'pc_1', '--models', 'custom-model', '--reasoning-effort-levels', 'low,turbo',
+    ], h.deps)).rejects.toMatchObject({ code: 'invalid_arguments' });
+    expect(h.deps.mutateModelSettings).not.toHaveBeenCalled();
+  });
+
   it('refuses remote machine selectors before local provider services or DNS can run', async () => {
     const h = harness();
     await executeProvidersCommand(['add', contributionKey], h.deps);

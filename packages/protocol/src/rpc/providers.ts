@@ -40,7 +40,7 @@ import {
 import { PROVIDER_CATALOG_LIMITS_V1 } from '../providers/catalog/limits.js';
 import { ProviderCatalogProbeModelsV1Schema } from '../providers/catalog/merge.js';
 import { QualifiedConnectedAccountPurposeBindingV1Schema, QualifiedConnectedAccountPurposeBindingTargetV1Schema } from '../connect/connectedAccountPurposeBindings.js';
-import { PROVIDER_SETTINGS_LIMITS_V1 } from '../providers/settings/v1.js';
+import { PROVIDER_SETTINGS_LIMITS_V1, ProviderManualModelInputV1Schema } from '../providers/settings/v1.js';
 import {
   ProviderDiscoveryCandidateIdV1Schema,
   ProviderDiscoveryCandidateV1Schema,
@@ -541,10 +541,8 @@ export const DaemonProviderConnectionMutationRequestV1Schema = lazyZodSchema(() 
     template: CustomProviderTemplateV1Schema,
     savedSecretId: z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
     enable: z.boolean(),
-    manualModels: z._default(z.array(z.strictObject({
-      id: ProviderModelIdSchema,
-      name: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
-    })).check(z.maxLength(PROVIDER_CATALOG_LIMITS_V1.maxModelsPerConnection)), []),
+    manualModels: z._default(z.array(ProviderManualModelInputV1Schema)
+      .check(z.maxLength(PROVIDER_SETTINGS_LIMITS_V1.manualModelsPerConnection)), []),
   })).check(z.superRefine((value, ctx) => {
     const ids = new Set<string>();
     value.manualModels.forEach((model, index) => {
@@ -1100,15 +1098,11 @@ export function admitTeamCredentialSourceModelRowsV1(response: unknown):
 }
 
 const ProviderModelSettingsMutationBaseV1Schema = lazyZodSchema(() => z.object({ machineId: ProviderMachineIdSchema }));
-const ProviderManualModelMutationInputV1Schema = lazyZodSchema(() => z.strictObject({
-  id: ProviderModelIdSchema,
-  name: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
-}));
 export const DaemonProviderModelSettingsMutationRequestV1Schema = lazyZodSchema(() => z.discriminatedUnion('action', [
   (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderModelSettingsMutationBaseV1Schema, {
     action: z.literal('manualAdd'), connectionId: ProviderConnectionIdSchema,
     expectedConnectionRevision: z.number().check(z.int(), z.nonnegative()),
-    models: z.array(ProviderManualModelMutationInputV1Schema).check(z.minLength(1), z.maxLength(PROVIDER_SETTINGS_LIMITS_V1.manualModelsPerConnection)),
+    models: z.array(ProviderManualModelInputV1Schema).check(z.minLength(1), z.maxLength(PROVIDER_SETTINGS_LIMITS_V1.manualModelsPerConnection)),
   })).check(z.superRefine((value, ctx) => {
     const seen = new Set<string>();
     value.models.forEach((model, index) => {

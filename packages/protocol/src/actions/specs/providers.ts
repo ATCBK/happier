@@ -180,7 +180,7 @@ export const PROVIDER_ACTION_SPECS_V1 = [
   providerSpec('providers.models.refresh', 'Refresh Provider models',
     'Ask a Provider for its current list of models.', { danger: true, external: true }),
   providerSpec('providers.models.manual.add', 'Add Provider models by name',
-    'Add models the Provider does not list by itself.', {}),
+    'Add or update manual models, optionally declaring their supported reasoning effort tiers.', {}),
   providerSpec('providers.models.manual.remove', 'Remove added Provider model',
     'Remove a model you added by name.', {}),
   providerSpec('providers.models.visibility.set', 'Show or hide Provider model',

@@ -1,9 +1,15 @@
 import type { AgentModelOption } from '../../models/descriptor.js';
+import {
+  PROVIDER_REASONING_EFFORT_LEVELS_V1,
+  buildProviderReasoningModelOptions,
+  formatProviderReasoningEffortLevelLabel,
+  type ProviderReasoningEffortLevelV1,
+} from './reasoningEffort.js';
 
 type AnthropicModelOption = AgentModelOption;
 
-export const ANTHROPIC_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-export type AnthropicEffortLevel = (typeof ANTHROPIC_EFFORT_LEVELS)[number];
+export const ANTHROPIC_EFFORT_LEVELS = PROVIDER_REASONING_EFFORT_LEVELS_V1;
+export type AnthropicEffortLevel = ProviderReasoningEffortLevelV1;
 
 export function normalizeAnthropicModelDisplayName(nameRaw: unknown, fallback: string): string {
   const name = typeof nameRaw === 'string' ? nameRaw.trim() : '';
@@ -11,38 +17,15 @@ export function normalizeAnthropicModelDisplayName(nameRaw: unknown, fallback: s
   return prefixed?.[1]?.trim() || name || fallback.trim();
 }
 
-export function formatAnthropicEffortLevelLabel(level: AnthropicEffortLevel): string {
-  switch (level) {
-    case 'low': return 'Low';
-    case 'medium': return 'Medium';
-    case 'high': return 'High';
-    case 'xhigh': return 'XHigh';
-    case 'max': return 'Max';
-  }
-}
+export const formatAnthropicEffortLevelLabel = formatProviderReasoningEffortLevelLabel;
 
 export function buildAnthropicModelOptions(input: Readonly<{
   supportedLevels: readonly AnthropicEffortLevel[];
   defaultEffort?: AnthropicEffortLevel | null;
 }>): readonly AnthropicModelOption[] {
-  const supported = new Set(input.supportedLevels);
-  const levels = ANTHROPIC_EFFORT_LEVELS.filter((level) => supported.has(level));
-  if (levels.length === 0) return [];
+  const options = [...buildProviderReasoningModelOptions(input)];
 
-  const currentValue = input.defaultEffort && supported.has(input.defaultEffort)
-    ? input.defaultEffort
-    : supported.has('high')
-      ? 'high'
-      : levels[levels.length - 1]!;
-  const options: AnthropicModelOption[] = [{
-    id: 'reasoning_effort',
-    name: 'Thinking',
-    type: 'select',
-    currentValue,
-    options: levels.map((level) => ({ value: level, name: formatAnthropicEffortLevelLabel(level) })),
-  }];
-
-  if (supported.has('xhigh')) {
+  if (input.supportedLevels.includes('xhigh')) {
     options.push({
       id: 'ultracode',
       name: 'Ultracode',

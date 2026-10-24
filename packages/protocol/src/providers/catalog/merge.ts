@@ -12,6 +12,8 @@ import {
 import { PROVIDER_CATALOG_LIMITS_V1 } from './limits.js';
 import { QualifiedConnectedAccountPurposeV1Schema, type QualifiedConnectedAccountPurposeV1 } from '../../connect/connectedAccountPurposeIdentity.js';
 import { qualifiedPurposeKey } from '../../connect/connectedAccountPurposeBindings.js';
+import { buildProviderReasoningModelOptions } from './reasoningEffort.js';
+import type { AgentModelOption } from '../../models/descriptor.js';
 
 const ConnectedAccountPurposesSchema = z.array(QualifiedConnectedAccountPurposeV1Schema).check(z.superRefine((purposes, ctx) => {
   const keys = purposes.map(qualifiedPurposeKey);
@@ -241,6 +243,25 @@ export function mergeProviderCatalogV1(input: Readonly<{
 
   const emit = (id: string, descriptor: ProviderModelDescriptorV1, confidence: ProviderMergedCatalogRowV1['confidence']) => {
     const manual = manualById.get(id);
+    if (manual?.reasoningEffortLevels) {
+      // Explicit source facts (including unsupported) outrank a user's declaration.
+      // Dependent controls travel with their reasoning option, never with a losing source.
+      const isReasoningOption = (option: AgentModelOption) => option.id === 'reasoning_effort'
+        || option.overridesWhenOn?.optionIds.includes('reasoning_effort') === true;
+      const source = [probeById.get(id), staticById.get(id)].find(model => model
+        && (model.capabilities?.reasoningControls !== undefined || model.modelOptions?.some(isReasoningOption)));
+      const reasoningControls = source ? source.capabilities?.reasoningControls : 'supported';
+      const { reasoningControls: _previous, ...otherCapabilities } = descriptor.capabilities ?? {};
+      descriptor = {
+        ...descriptor,
+        capabilities: { ...otherCapabilities, ...(reasoningControls === undefined ? {} : { reasoningControls }) },
+        modelOptions: [
+          ...(descriptor.modelOptions?.filter(option => !isReasoningOption(option)) ?? []),
+          ...(source ? source.modelOptions?.filter(isReasoningOption) ?? []
+            : buildProviderReasoningModelOptions({ supportedLevels: manual.reasoningEffortLevels })),
+        ],
+      };
+    }
     rows.push({
       descriptor: { ...descriptor, name: manual?.name ?? resolveModelDisplayName(descriptor, modelNameCatalog) },
       sources: { manual: Boolean(manual), static: staticById.has(id), probe: probeById.has(id) },

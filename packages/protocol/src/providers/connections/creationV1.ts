@@ -2,7 +2,7 @@ import type { ProviderContributionV1 } from '../contributions/v1.js';
 import { canonicalizeProviderContributionKeyV1 } from '../contributionIdentityV1.js';
 import { compareProviderCanonicalStringsV1 } from '../canonicalOrderV1.js';
 import { createProviderErrorV1 } from '../errors.js';
-import type { ProviderSettingsV1 } from '../settings/v1.js';
+import type { ProviderSettingsV1, ProviderManualModelInputV1 } from '../settings/v1.js';
 import { addProviderConnectionV1, ensureDefaultProviderConnectionV1, bindProviderConnectionSecretV1,
   addOrUpdateProviderManualModelsV1 } from '../settings/operationsV1.js';
 import { ProviderConnectionV1Schema, type ProviderConnectionV1, type ProviderEndpointOverrideV1 } from './v1.js';
@@ -26,7 +26,7 @@ export function prepareProviderConnectionCreationV1(input: Readonly<{
   source: Readonly<{ kind: 'contribution'; contributionKey: string; definition: ProviderContributionV1; displayName: string | null }>
     | Readonly<{ kind: 'custom'; template: CustomProviderTemplateV1 }>;
   savedSecretId: string | null;
-  manualModels?: readonly Readonly<{ id: string; name?: string }>[];
+  manualModels?: readonly Readonly<ProviderManualModelInputV1>[];
   endpointOverrides?: Readonly<{ values: readonly ProviderEndpointOverrideV1[]; machineId?: string }>;
   now: number;
 }>): Readonly<{ settings: ProviderSettingsV1; connection: ProviderConnectionV1; created: boolean }> {

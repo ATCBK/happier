@@ -17,6 +17,7 @@ import {
   ProviderSettingsV1Schema,
   assertProviderSettingsV1WithinLimits,
   type ProviderSettingsV1,
+  type ProviderManualModelInputV1,
   ProviderManualModelV1Schema,
   ProviderExperimentalBindingConfirmationV1Schema,
   getProviderExperimentalConfirmationSourceKeyV1,
@@ -77,7 +78,7 @@ export function addOrUpdateProviderManualModelV1(
   settings: ProviderSettingsV1,
   input: Readonly<{
     connectionId: string;
-    model: Readonly<{ id: string; name?: string }>;
+    model: Readonly<ProviderManualModelInputV1>;
     addedAt: number;
   }>,
 ): ProviderSettingsV1 {
@@ -92,7 +93,7 @@ export function addOrUpdateProviderManualModelsV1(
   settings: ProviderSettingsV1,
   input: Readonly<{
     connectionId: string;
-    models: readonly Readonly<{ id: string; name?: string }>[];
+    models: readonly Readonly<ProviderManualModelInputV1>[];
     addedAt: number;
   }>,
 ): ProviderSettingsV1 {
