@@ -136,6 +136,23 @@ describe('negotiateMemorySearchV1', () => {
     summary: 'Retained transcript', score: 0.5,
   };
 
+  it.each(['project', 'documents'] as const)('preserves temporary %s support-probe failure until an explicit retry', async kind => {
+    const request = MemorySearchQueryV1Schema.parse({ ...query,
+      scope: kind === 'project' ? { type: 'project', projectRef: { serverId: 'home', projectKey: 'payments' } } : query.scope,
+      corpora: kind === 'documents' ? ['documents'] : ['sessions'] });
+    const failure = Object.assign(new Error('Discovery failed'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+    let probes = 0;
+    const readSupport = async () => { if (++probes === 1) throw failure; return true; };
+    const search = vi.fn(async () => ({ v: 1, ok: true, hits: [], documents: { state: 'ready' } }));
+    const input = { query: request, readProjectSearchSupport: readSupport, readDocumentSearchSupport: readSupport, search };
+    await expect(negotiateMemorySearchV1(input)).rejects.toBe(failure);
+    expect(probes).toBe(1);
+    expect(search).not.toHaveBeenCalled();
+    await expect(negotiateMemorySearchV1(input)).resolves.toMatchObject({ ok: true });
+    expect(probes).toBe(2);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses Project queries before dispatch unless the exact peer advertises support', async () => {
     const projectQuery = MemorySearchQueryV1Schema.parse({ ...query,
       corpora: ['sessions'],
@@ -202,7 +219,7 @@ describe('negotiateMemorySearchV1', () => {
     const result = await negotiateMemorySearchV1({
       query: { ...query, corpora: ['documents'] },
       readDocumentSearchSupport: async () => {
-        throw Object.assign(new Error('Missing status'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+        throw Object.assign(new Error('Missing status'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
       },
       search,
     });

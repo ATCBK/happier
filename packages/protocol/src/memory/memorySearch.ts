@@ -3,7 +3,7 @@ import { z } from 'zod/mini';
 import { ArtifactRevisionV1Schema } from '../artifacts/artifactActionsV1.js';
 import { PromptDocArtifactRefV1Schema } from '../prompts/library/promptArtifactRefsV1.js';
 import { MemoryTopicSummaryV1Schema } from '../prompts/library/memoryDocV1.js';
-import { RPC_ERROR_CODES, readRpcErrorCode } from '../rpc/errors.js';
+import { isRpcMethodNotFoundError } from '../rpc/errors.js';
 import { QualifiedProjectKeyV1Schema } from '../workspaces/workspaceRefV1.js';
 
 export const MemorySearchScopeSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
@@ -227,8 +227,7 @@ export async function negotiateMemorySearchV1(params: Readonly<{
       supported = await params.readProjectSearchSupport?.() === true;
     } catch (error) {
       params.signal?.throwIfAborted();
-      const code = readRpcErrorCode(error);
-      if (code !== RPC_ERROR_CODES.METHOD_NOT_AVAILABLE && code !== RPC_ERROR_CODES.METHOD_NOT_FOUND) throw error;
+      if (!isRpcMethodNotFoundError(error)) throw error;
     }
     params.signal?.throwIfAborted();
     if (!supported) return { v: 1, ok: false, errorCode: 'memory_project_scope_unsupported',
@@ -241,8 +240,7 @@ export async function negotiateMemorySearchV1(params: Readonly<{
       documentSearchSupported = await params.readDocumentSearchSupport() === true;
     } catch (error) {
       params.signal?.throwIfAborted();
-      const code = readRpcErrorCode(error);
-      if (code !== RPC_ERROR_CODES.METHOD_NOT_AVAILABLE && code !== RPC_ERROR_CODES.METHOD_NOT_FOUND) throw error;
+      if (!isRpcMethodNotFoundError(error)) throw error;
     }
     params.signal?.throwIfAborted();
     if (!documentSearchSupported && !requestedQuery.corpora?.includes('sessions')
