@@ -19,6 +19,10 @@ import {
     type ExternalSessionOperationProgressV1,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ApprovalRequestV1Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
+import { listTranscriptApprovalArtifactsForSession, type OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
+import { createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import { ToolCallsGroupUnitToolRowWithSessionCommon } from '../toolCalls/units/ToolCallsGroupUnitToolRow';
 
 import type { ChatListItem } from '@/components/sessions/chatListItems';
 
@@ -59,6 +63,7 @@ import { buildTranscriptRowShellSignature } from '@/components/sessions/transcri
 import { createReducer } from '@happier-dev/session-core/reducer';
 import type { NormalizedMessage } from '@happier-dev/session-core/raw';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 
 import { TranscriptRowShell } from '@/components/sessions/transcript/ChatListRows';
 import { PendingMessagesTranscriptBlock } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
@@ -200,6 +205,72 @@ describe('useTranscriptItemRenderer identity stability', () => {
         getStorage().setState({ machines: { 'machine-1': createMachineFixture({ id: 'machine-1' }) } });
     });
 
+    it('renders only the native-bound row on an approval arrival among 100 mounted tool rows', async () => {
+        const home = await serveSessionActionHome();
+        const store = getStorage();
+        const previous = store.getState();
+        const sessionId = 'row-host-approval-cost';
+        const target = { serverId: home.serverId, sessionId };
+        const messages = Array.from({ length: 100 }, (_, index) => createToolCallMessageFixture({
+            id: `message-${index}`, tool: { ...createToolCallMessageFixture().tool,
+                id: `native-${index}`, name: 'mcp__happier__action_execute', state: 'completed',
+                input: { actionId: 'session.list', input: {} }, result: { ok: true } },
+        }));
+        const artifacts = Array.from({ length: 13 }, (_, index) => {
+            const approval = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+                createdBy: { surface: 'agent', sessionId }, requestedSurface: 'agent',
+                actionId: 'session.list', actionArgs: {}, summary: 'List sessions',
+                origin: { kind: 'transcript_tool_call', sessionId, toolCallId: `native-${index}` } });
+            return { id: `row-host-approval-${index}`, isDecrypted: true as const, title: approval.summary,
+                header: buildApprovalRequestArtifactHeaderV1(approval, { legacyServerId: home.serverId }),
+                body: JSON.stringify(approval), headerVersion: 1, bodyVersion: 1, seq: index, createdAt: 1, updatedAt: 1 };
+        });
+        const toolMessageIds = messages.map(message => message.id);
+        const items = messages.map(message => ({ kind: 'tool-group-tool' as const,
+            id: `unit-${message.id}`, toolMessageId: message.id, toolMessageIds,
+            groupId: 'group', expanded: true, createdAt: 1, seq: message.seq ?? null }));
+        const messagesById = Object.fromEntries(messages.map(message => [message.id, message]));
+        const props = createRendererProps({ sessionId, messagesById,
+            toolRouteCommon: { messagesById, reducerState: createReducer() } });
+        const deps = { ...createRendererDeps(props), listData: items, itemsRef: createRef(items),
+            getMessageById: (id: string) => messagesById[id] ?? null };
+        function Rows(input: { approvals: readonly OpenApprovalArtifactForSession[]; reversed?: boolean }) {
+            const renderer = useTranscriptItemRenderer({ ...deps, props: { ...props, approvalRequests: input.approvals } });
+            return <>{(input.reversed ? [...items].reverse() : items).map((item, index) =>
+                <React.Fragment key={item.id}>{renderer.renderItem({ item, index })}</React.Fragment>)}</>;
+        }
+        // Call-through on React's actual memo render: no replacement row, matcher or approval policy.
+        const unit = ToolCallsGroupUnitToolRowWithSessionCommon as React.MemoExoticComponent<
+            React.FunctionComponent<React.ComponentProps<typeof ToolCallsGroupUnitToolRowWithSessionCommon>>>;
+        const render = vi.spyOn(unit, 'type');
+        let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        try {
+            store.getState().applySessions([createSessionFixture({ id: sessionId, serverId: home.serverId })]);
+            const approvals = listTranscriptApprovalArtifactsForSession(artifacts.slice(0, 12), target);
+            const view = (requests: readonly OpenApprovalArtifactForSession[], reversed = false) =>
+                <AppSessionTranscriptSourceProvider sessionId={sessionId}><Rows approvals={requests} reversed={reversed} /></AppSessionTranscriptSourceProvider>;
+            screen = await renderScreen(view(approvals));
+            expect(new Set(render.mock.calls.map(([input]) => input.message.id)).size).toBe(100);
+            render.mockClear();
+            const arrived = listTranscriptApprovalArtifactsForSession(artifacts, target);
+            await screen.update(view(arrived));
+            expect(render.mock.calls.map(([input]) => input.message.id)).toEqual(['message-12']);
+            expect(screen.tree.findAllByType(unit).find(row => row.props.message.id === 'message-12')?.props.approvalRequests)
+                .toEqual([arrived[12]]);
+            // Recycler position is not an association key; retained matches survive reorder/withdrawal.
+            render.mockClear();
+            await screen.update(view(arrived, true));
+            expect(render).not.toHaveBeenCalled();
+            await screen.update(view(approvals, true));
+            expect(render.mock.calls.map(([input]) => input.message.id)).toEqual(['message-12']);
+        } finally {
+            await screen?.unmount();
+            render.mockRestore();
+            store.setState(previous);
+            await home.dispose();
+        }
+    });
+
     it('does not rerender the row renderer for unrelated machine publications', async () => {
         let renders = 0;
         const deps = createRendererDeps(createRendererProps());
@@ -213,6 +284,69 @@ describe('useTranscriptItemRenderer identity stability', () => {
         } }));
         expect(renders).toBe(baseline);
         await hook.unmount();
+    });
+
+    it('keeps 100 mounted tool rows local across message batches and updates only the changed result', async () => {
+        const home = await serveSessionActionHome();
+        const store = getStorage();
+        const previous = store.getState();
+        const sessionId = 'row-host-message-cost';
+        const calls: NormalizedMessage[] = Array.from({ length: 100 }, (_, index) => ({
+            id: `call-${index}`, seq: index + 1, localId: null, createdAt: index + 1,
+            role: 'agent', isSidechain: false,
+            content: [{ type: 'tool-call', id: `native-${index}`, name: 'Bash', input: { command: `echo ${index}` },
+                description: null, uuid: `call-${index}`, parentUUID: null }],
+        }));
+        let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        // Observe React's real memo boundary; the row, live source and reducer all execute.
+        const unit = ToolCallsGroupUnitToolRowWithSessionCommon as React.MemoExoticComponent<
+            React.FunctionComponent<React.ComponentProps<typeof ToolCallsGroupUnitToolRowWithSessionCommon>>>;
+        const render = vi.spyOn(unit, 'type');
+        try {
+            store.getState().applySessions([createSessionFixture({ id: sessionId, serverId: home.serverId })]);
+            store.getState().applyMessages(sessionId, calls);
+            const initial = store.getState().sessionMessages[sessionId]!;
+            const toolMessageIds = initial.messageIdsOldestFirst;
+            const items = toolMessageIds.map(id => ({ kind: 'tool-group-tool' as const,
+                id: `unit-${id}`, toolMessageId: id, toolMessageIds, groupId: 'group', expanded: true,
+                createdAt: initial.messagesById[id]!.createdAt, seq: initial.messagesById[id]!.seq ?? null }));
+            const props = createRendererProps({ sessionId });
+            const deps = { ...createRendererDeps(props), listData: items, itemsRef: createRef(items),
+                getMessageById: (id: string) => store.getState().sessionMessages[sessionId]?.messagesById[id] ?? null };
+            function Rows() {
+                const source = useSessionTranscriptSource();
+                const messagesById = source.useMessagesById();
+                const reducerState = source.useReducerState();
+                const toolRouteCommon = React.useMemo(() => ({ messagesById, reducerState }), [messagesById, reducerState]);
+                const renderer = useTranscriptItemRenderer({ ...deps, toolRouteCommon,
+                    props: { ...props, messagesById, toolRouteCommon } });
+                return <>{items.map((item, index) =>
+                    <React.Fragment key={item.id}>{renderer.renderItem({ item, index })}</React.Fragment>)}</>;
+            }
+            screen = await renderScreen(<AppSessionTranscriptSourceProvider sessionId={sessionId}><Rows /></AppSessionTranscriptSourceProvider>);
+            expect(new Set(render.mock.calls.map(([input]) => input.message.id)).size).toBe(100);
+            render.mockClear();
+            await act(async () => {
+                store.getState().applyMessages(sessionId, [{ id: 'new-text', seq: 101, localId: null, createdAt: 101,
+                    role: 'agent', isSidechain: false,
+                    content: [{ type: 'text', text: 'Unrelated streaming batch', uuid: 'new-text', parentUUID: null }] }]);
+            });
+            expect(render.mock.calls.map(([input]) => input.message.id)).toEqual([]);
+            render.mockClear();
+            await act(async () => {
+                store.getState().applyMessages(sessionId, [{ id: 'result-12', seq: 102, localId: null, createdAt: 102,
+                    role: 'agent', isSidechain: false,
+                    content: [{ type: 'tool-result', tool_use_id: 'native-12', content: 'row-local result',
+                        is_error: false, uuid: 'result-12', parentUUID: null }] }]);
+            });
+            expect(render.mock.calls.map(([input]) => input.message.tool.id)).toEqual(['native-12']);
+            expect(render.mock.calls[0]?.[0].message.tool.result).toBe('row-local result');
+        } finally {
+            await screen?.unmount();
+            render.mockRestore();
+            store.setState(previous);
+            await home.dispose();
+        }
     });
 
     it('keeps renderItem identity when a fresh props object carries unchanged fields', async () => {

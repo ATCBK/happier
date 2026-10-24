@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createToolCallMessageFixture, renderScreen } from '@/dev/testkit';
-import type { ToolCallMessage } from "@happier-dev/session-core/messages";
+import { resolveMessageRouteIdForDisplay, type ToolCallMessage } from "@happier-dev/session-core/messages";
 import { installToolCallsGroupViewCommonModuleMocks } from '@/components/sessions/transcript/turns/toolCalls/toolCallsGroupViewTestHelpers';
 import { createTranscriptSessionCommonPropsFixture, flattenStyleProp } from './toolCallsGroupUnitsTestFixtures';
 
@@ -74,16 +74,19 @@ function makeSubAgentMessage(): ToolCallMessage {
 }
 
 async function renderToolRow(props: Record<string, unknown>) {
-    const rowProps = {
+    const { toolRouteCommon, ...common } = createTranscriptSessionCommonPropsFixture();
+    const input = {
         sessionId: 's1',
         groupId: 'toolCalls:t1:m1',
         metadata: null,
         interaction,
         message: createToolCallMessageFixture({ id: 'm1', createdAt: 1 }),
         expanded: true,
-        ...createTranscriptSessionCommonPropsFixture(),
+        ...common,
         ...props,
     } as React.ComponentProps<typeof ToolCallsGroupUnitToolRowWithSessionCommon>;
+    const rowProps = { ...input,
+        messageRouteId: resolveMessageRouteIdForDisplay({ message: input.message, ...toolRouteCommon }) };
     const { createTestSessionTranscriptSource, renderWithSessionTranscriptSource } = await import('@/dev/testkit');
     return renderWithSessionTranscriptSource(React.createElement(ToolCallsGroupUnitToolRowWithSessionCommon, rowProps), createTestSessionTranscriptSource({
         navigate: rowProps.interaction.canSendMessages ? vi.fn() : null,
@@ -106,7 +109,7 @@ describe('ToolCallsGroupUnitToolRow', () => {
         expect(screen.findByTestId('transcript-enter-wrapper')).not.toBeNull();
     });
 
-    it('renders cards tool rows through MessageView with the grouped layout context and forwarded commons', async () => {
+    it('renders cards tool rows through MessageView with the grouped layout context and resolved route', async () => {
         messageViewCalls.length = 0;
         const common = createTranscriptSessionCommonPropsFixture({
             toolChromeCommon: { toolViewTimelineChromeMode: 'cards' },
@@ -124,7 +127,7 @@ describe('ToolCallsGroupUnitToolRow', () => {
             forkCommon: common.forkCommon,
             messageDisplayCommon: common.messageDisplayCommon,
             toolChromeCommon: common.toolChromeCommon,
-            toolRouteCommon: common.toolRouteCommon,
+            toolRouteCommon: { messageRouteId: 'm1' },
         });
     });
 

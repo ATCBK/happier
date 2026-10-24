@@ -48,7 +48,7 @@ export const ToolCallsGroupUnitToolRow = React.memo(function ToolCallsGroupUnitT
             forkCommon={transcriptSessionCommon.fork}
             messageDisplayCommon={transcriptSessionCommon.messageDisplay}
             toolChromeCommon={transcriptSessionCommon.toolChrome}
-            toolRouteCommon={transcriptSessionCommon.toolRoute}
+            messageRouteId={resolveMessageRouteIdForDisplay({ message: props.message, ...transcriptSessionCommon.toolRoute })}
         />
     );
 });
@@ -57,12 +57,13 @@ export const ToolCallsGroupUnitToolRow = React.memo(function ToolCallsGroupUnitT
 // wrapper cannot span FlashList rows, so unit rows intentionally drop it: expansion
 // becomes row insertion/removal at the list level (per-row TranscriptEnterWrapper kept).
 export const ToolCallsGroupUnitToolRowWithSessionCommon = React.memo(function ToolCallsGroupUnitToolRowWithSessionCommon(
-    props: ToolCallsGroupUnitToolRowProps & TranscriptSessionCommonProps,
+    props: ToolCallsGroupUnitToolRowProps & Omit<TranscriptSessionCommonProps, 'toolRouteCommon'> & Readonly<{
+        messageRouteId: string;
+    }>,
 ) {
     const transcriptSource = useSessionTranscriptSource();
     const variant = resolveToolCallsGroupChromeVariant(props.toolChromeCommon);
     const chromeMode = toolCallsGroupChromeModeForVariant(variant);
-    const { messagesById, reducerState } = props.toolRouteCommon;
 
     const message = React.useMemo(
         () => resolveToolCallMessageForSession(props.message, props.interaction.permissionDisabledReason),
@@ -83,7 +84,7 @@ export const ToolCallsGroupUnitToolRowWithSessionCommon = React.memo(function To
         sidechainIds: previewSidechainIds,
     });
 
-    const nestedMessageId = resolveMessageRouteIdForDisplay({ message, messagesById, reducerState });
+    const nestedMessageId = props.messageRouteId;
     const toolPinAction = resolveToolRowPinAction({
         sessionId: props.sessionId,
         seq: message.seq ?? null,
@@ -125,7 +126,6 @@ export const ToolCallsGroupUnitToolRowWithSessionCommon = React.memo(function To
                                 forkCommon: props.forkCommon,
                                 messageDisplayCommon: props.messageDisplayCommon,
                                 toolChromeCommon: props.toolChromeCommon,
-                                toolRouteCommon: props.toolRouteCommon,
                             })}
                         </View>
                     </View>

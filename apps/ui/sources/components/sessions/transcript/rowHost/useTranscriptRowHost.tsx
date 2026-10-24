@@ -6,6 +6,8 @@ import { View } from 'react-native';
 import type { ExternalSessionOperationSharedPresentationV1 } from '@happier-dev/protocol';
 
 import type { Message, ToolCallMessage } from "@happier-dev/session-core/messages";
+import { resolveMessageRouteIdForDisplay } from '@happier-dev/session-core/messages';
+import { selectToolApprovalRequestsForMessages, useToolApprovalRequestsIndex } from '@/components/tools/shell/views/toolApprovalPromptMatching';
 import type { TranscriptListOrientation } from '@/components/sessions/transcript/listOrientation';
 import { resolveOlderNeighborRenderedIndex } from '@/components/sessions/transcript/listOrientation';
 import type { ChatListInternalProps, ChatTranscriptListItem } from '@/components/sessions/transcript/chatListTypes';
@@ -155,6 +157,8 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
         sessionServerId,
         toolChromeCommon,
     } = deps.props;
+    // Own stable, keyed approval selections where live messages become memoized row inputs.
+    useToolApprovalRequestsIndex(approvalRequests);
     // Editing is an event, not row data. A retained/recycled pending row must
     // invoke the current committed composer without invalidating every row
     // whenever SessionView publishes a new closure. Presence still changes the
@@ -673,7 +677,10 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
                 >
                     {(messages) => {
                         const message = messages[0];
-                        return message?.kind === 'tool-call' ? (
+                        if (message?.kind !== 'tool-call') return null;
+                        const messageId = resolveMessageRouteIdForDisplay({ message,
+                            messagesById: toolRouteCommon.messagesById, reducerState: toolRouteCommon.reducerState });
+                        return (
                             <ToolCallsGroupUnitToolRowWithSessionCommon
                                 sessionId={sessionId}
                                 groupId={item.groupId}
@@ -681,15 +688,16 @@ export function useTranscriptItemRenderer(deps: TranscriptItemRendererDeps) {
                                 interaction={interaction}
                                 message={message}
                                 expanded={item.expanded}
-                                approvalRequests={approvalRequests}
+                                approvalRequests={selectToolApprovalRequestsForMessages({ requests: approvalRequests,
+                                    sessionId, rowId: item.id, messages: [message], messageId })}
                                 messagePins={messagePins}
                                 onToggleToolPin={onToggleMessagePin}
                                 forkCommon={forkCommon}
                                 messageDisplayCommon={messageDisplayCommon}
                                 toolChromeCommon={toolChromeCommon}
-                                toolRouteCommon={toolRouteCommon}
+                                messageRouteId={messageId}
                             />
-                        ) : null;
+                        );
                     }}
                 </TranscriptLiveMessagesRowShell>
             );

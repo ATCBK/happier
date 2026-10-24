@@ -76,7 +76,7 @@ import {
   type TranscriptForkCommon,
   type TranscriptMessageDisplayCommon,
   type TranscriptToolChromeCommon,
-  type TranscriptToolRouteCommon,
+  type TranscriptMessageRouteCommon,
   useTranscriptSessionCommon,
 } from '@/components/sessions/transcript/transcriptSessionCommon';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
@@ -425,7 +425,7 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
   forkCommon: TranscriptForkCommon;
   messageDisplayCommon: TranscriptMessageDisplayCommon;
   toolChromeCommon: TranscriptToolChromeCommon;
-  toolRouteCommon: TranscriptToolRouteCommon;
+  toolRouteCommon: TranscriptMessageRouteCommon;
 }) {
   const transcriptSource = useSessionTranscriptSource();
   const sourceInteraction = transcriptSource.useInteraction();
@@ -538,7 +538,7 @@ function RenderBlock(props: {
   isForkAllowed: () => boolean;
   messageDisplayCommon: TranscriptMessageDisplayCommon;
   toolChromeCommon: TranscriptToolChromeCommon;
-  toolRouteCommon: TranscriptToolRouteCommon;
+  toolRouteCommon: TranscriptMessageRouteCommon;
 }): React.ReactElement | null {
   const transcriptSource = useSessionTranscriptSource();
   switch (props.message.kind) {
@@ -1526,7 +1526,7 @@ function ToolCallBlock(props: {
   historical?: boolean;
   messageDisplayCommon: TranscriptMessageDisplayCommon;
   toolChromeCommon: TranscriptToolChromeCommon;
-  toolRouteCommon: TranscriptToolRouteCommon;
+  toolRouteCommon: TranscriptMessageRouteCommon;
 }) {
   const message = React.useMemo(() => projectReviewToolMessage(props.message), [props.message]);
 	  const transcriptSource = useSessionTranscriptSource();
@@ -1542,9 +1542,9 @@ function ToolCallBlock(props: {
     sidechainIds: reviewSidechainIds,
   });
   const structuredPinHost = useRowActionHoverHost();
-  const messagesById = props.toolRouteCommon.messagesById;
-  const reducerState = props.toolRouteCommon.reducerState;
-  const toolRouteMessageId = resolveMessageRouteIdForDisplay({ message: props.message, messagesById, reducerState });
+  const toolRouteMessageId = 'messageRouteId' in props.toolRouteCommon
+    ? props.toolRouteCommon.messageRouteId
+    : resolveMessageRouteIdForDisplay({ message: props.message, ...props.toolRouteCommon });
   // Narrow after the live message and its displayed route are known. Doing this at the list
   // renderer would miss streaming inputs and repeat the route owner's reverse-index lookup.
   const approvalRequests = selectToolApprovalRequestsForMessages({ requests: props.approvalRequests,

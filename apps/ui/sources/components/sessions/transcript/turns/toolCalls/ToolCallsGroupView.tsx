@@ -229,7 +229,6 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
                                             forkCommon: props.forkCommon,
                                             messageDisplayCommon: props.messageDisplayCommon,
                                             toolChromeCommon: props.toolChromeCommon,
-                                            toolRouteCommon: props.toolRouteCommon,
                                         })}
                                     </View>
                                 </View>
@@ -272,7 +271,6 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
                                                     forkCommon: props.forkCommon,
                                                     messageDisplayCommon: props.messageDisplayCommon,
                                                     toolChromeCommon: props.toolChromeCommon,
-                                                    toolRouteCommon: props.toolRouteCommon,
                                                 })}
                                             </View>
                                         </View>

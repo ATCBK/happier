@@ -18,6 +18,12 @@ import type { TranscriptJumpTarget } from './viewport/jump/transcriptJumpTargetT
 installMessageViewCommonModuleMocks();
 installDisconnectedServerSocketBoundary();
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
+// Legend is the native recycler boundary; child projection, units and content remain real.
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
+    const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+    return createCapturingLegendListMock({ original }).module;
+});
 await loadSyncSingletonForTests();
 const { getStorage, useSessionPendingMessages } = await import('@/sync/domains/state/storage');
 const { createTranscriptFindModel } = await import('./find/useTranscriptFind');
@@ -29,12 +35,50 @@ const { AppSessionTranscriptSourceProvider } = await import('./source/appSession
 const { PendingMessagesTranscriptBlock } = await import('../pending/PendingMessagesTranscriptBlock');
 const { TranscriptFindSurface } = await import('./find/TranscriptFindSurface');
 const { revealTranscriptFindMatch } = await import('./find/revealTranscriptFindMatch');
+const { ChainTranscriptList } = await import('./ChainTranscriptList');
+const { TranscriptFindMessageProvider } = await import('./find/TranscriptFindContext');
 
 let environment: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 beforeEach(async () => { environment = await restoreServerAccountForTest({ serverUrl: 'http://find-tools.test' }); });
 afterEach(async () => { standardCleanup(); await environment.dispose(); });
 
 describe('MessageView tool Find identity', () => {
+    it('preserves stable server routes through real plain and structured child tool units', async () => {
+        getStorage().setState(state => ({ settings: { ...state.settings,
+            transcriptGroupingMode: 'turns', transcriptGroupToolCalls: true, transcriptShowToolCalls: true,
+            transcriptTurnToolCallsGroupStrategy: 'all_tools_in_turn',
+            toolViewTimelineChromeMode: 'activity_feed', transcriptToolCallsCollapsedPreviewCount: 2,
+        } }));
+        const messages: ToolCallMessage[] = [
+            { kind: 'tool-call', id: 'child-plain', realID: 'persisted-child-plain', localId: null, seq: 1, createdAt: 1,
+                tool: makeToolCall({ id: 'native-child-plain', name: 'Bash', state: 'completed',
+                    input: { command: 'pwd' }, result: '/workspace' }), children: [] },
+            { kind: 'tool-call', id: 'child-structured', realID: 'persisted-child-structured', localId: null, seq: 2, createdAt: 2,
+                tool: makeToolCall({ id: 'native-child-structured', name: 'Bash', state: 'completed',
+                    input: { command: 'review' }, result: 'Reviewed' }), children: [],
+                meta: { happier: { kind: 'review_findings.v1', payload: { findings: [] } } } },
+        ];
+        const source = createTestSessionTranscriptSource({ sessionId: 'child-routes', messages });
+        const screen = await renderWithSessionTranscriptSource(<ChainTranscriptList sessionId="child-routes"
+            datasetKey="child-route-dataset" messages={messages} metadata={null}
+            interaction={{ canSendMessages: true, canApprovePermissions: true }} />, source);
+        try {
+            const units = screen.findAllByType(ToolCallsGroupUnitToolRowWithSessionCommon);
+            expect(units).toHaveLength(2);
+            expect(units.map(unit => unit.props.messageRouteId)).toEqual([
+                'server:persisted-child-plain', 'server:persisted-child-structured',
+            ]);
+            // Both plain chrome and structured MessageView consume the same stable route,
+            // rather than silently falling back to their native tool id or undefined context.
+            const identities = screen.findAllByType(TranscriptFindMessageProvider)
+                .filter(node => messages.some(message => message.id === node.props.messageId));
+            expect(identities.map(node => [node.props.messageId, node.props.routeMessageId])).toEqual([
+                ['child-plain', 'server:persisted-child-plain'],
+                ['child-structured', 'server:persisted-child-structured'],
+            ]);
+        } finally { await screen.unmount(); }
+    });
+
     it('counts only landable transcript rows through pending crossover and reveals every counted tool mark', async () => {
         const sessionId = 'find-pending-crossover';
         const store = getStorage();
@@ -156,6 +200,7 @@ describe('MessageView tool Find identity', () => {
             {messages.map(message => <View key={message.id} testID={`find-tool:${message.id}`}>
                 {rowKind === 'message' ? <MessageView message={message} metadata={null} sessionId="s1" />
                     : rowKind === 'unit' ? <ToolCallsGroupUnitToolRowWithSessionCommon {...common}
+                        messageRouteId={buildMessageRouteId(message)}
                         message={message} metadata={null} sessionId="s1" groupId="tools" expanded interaction={interaction} />
                     : <ToolCallsGroupViewWithSessionCommon {...common} id="tools" status="completed"
                         toolMessages={[message]} metadata={null} sessionId="s1" expanded setExpanded={() => {}}

@@ -128,6 +128,12 @@ export type TranscriptToolRouteCommon = Readonly<{
     reducerState: ReducerState | null;
 }>;
 
+/** A grouped tool row already resolved its route before the memoized row boundary. */
+export type TranscriptMessageRouteCommon = TranscriptToolRouteCommon | Readonly<{
+    messageRouteId: string;
+    followDeliveryByLocalId?: never;
+}>;
+
 export type TranscriptSessionCommon = Readonly<{
     fork: TranscriptForkCommon;
     messageDisplay: TranscriptMessageDisplayCommon;

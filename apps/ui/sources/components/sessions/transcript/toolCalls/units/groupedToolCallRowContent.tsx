@@ -17,7 +17,6 @@ import type {
     TranscriptForkCommon,
     TranscriptMessageDisplayCommon,
     TranscriptToolChromeCommon,
-    TranscriptToolRouteCommon,
 } from '@/components/sessions/transcript/transcriptSessionCommon';
 
 import {
@@ -31,7 +30,7 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
     groupExpanded: boolean;
     metadata: Metadata | null;
     sessionId: string;
-    nestedMessageId: string | undefined;
+    nestedMessageId: string;
     forcePermissionPromptsInTranscript?: boolean;
     approvalRequests?: readonly OpenApprovalArtifactForSession[];
     messagePins?: readonly PersistedSessionMessagePinV1[];
@@ -41,7 +40,6 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
     forkCommon: TranscriptForkCommon;
     messageDisplayCommon: TranscriptMessageDisplayCommon;
     toolChromeCommon: TranscriptToolChromeCommon;
-    toolRouteCommon: TranscriptToolRouteCommon;
 }>): React.ReactNode {
     const approvalRequests = selectToolApprovalRequestsForMessages({ requests: params.approvalRequests,
         sessionId: params.sessionId, rowId: params.message.id, messages: [params.message], messageId: params.nestedMessageId });
@@ -64,7 +62,7 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
                 forkCommon={params.forkCommon}
                 messageDisplayCommon={params.messageDisplayCommon}
                 toolChromeCommon={params.toolChromeCommon}
-                toolRouteCommon={params.toolRouteCommon}
+                toolRouteCommon={{ messageRouteId: params.nestedMessageId }}
             />
         );
     }

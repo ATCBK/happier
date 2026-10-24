@@ -280,7 +280,7 @@ describe('ToolCallsGroupView (collapsed preview)', () => {
             forkCommon,
             messageDisplayCommon,
             toolChromeCommon,
-            toolRouteCommon,
+            toolRouteCommon: { messageRouteId: 'structured-tool' },
         });
     });
 

@@ -7,7 +7,7 @@ import { TranscriptSessionActivityLine } from './TranscriptSessionActivityLine';
 import { Platform, View } from 'react-native';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
-import type { Message } from "@happier-dev/session-core/messages";
+import { resolveMessageRouteIdForDisplay, type Message } from "@happier-dev/session-core/messages";
 import type { DiscardedPendingMessage, PendingMessage } from '@/sync/domains/state/storageTypes';
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
@@ -614,7 +614,7 @@ function ChainTranscriptListContent(props: ChainTranscriptListProps) {
                     forkCommon={transcriptSessionCommon.fork}
                     messageDisplayCommon={transcriptSessionCommon.messageDisplay}
                     toolChromeCommon={toolChromeCommon}
-                    toolRouteCommon={transcriptSessionCommon.toolRoute}
+                    messageRouteId={resolveMessageRouteIdForDisplay({ message: toolMessage, ...transcriptSessionCommon.toolRoute })}
                 />
             );
         }
