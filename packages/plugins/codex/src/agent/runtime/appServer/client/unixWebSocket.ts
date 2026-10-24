@@ -222,7 +222,26 @@ export async function connectCodexUnixWebSocketJsonRpc(params: Readonly<{
     params.signal.addEventListener('abort', () => socket.terminate(), { once: true });
   }
 
-  await connectionReady;
+  try {
+    await connectionReady;
+  } catch (cause) {
+    const error = asError(cause);
+    // Bun's HTTP adapter can emit a system code without a native syscall.
+    // Keep that absence explicit, rather than inventing a kernel observation.
+    if (!Object.hasOwn(error, 'syscall')) {
+      Object.defineProperty(error, 'syscall', { value: 'unavailable', enumerable: true });
+    }
+    // sun_path includes its terminating NUL: 104 bytes on Darwin, 108 on Linux.
+    // This is diagnostic classification, not another admission limit or retry.
+    const maximumPathBytes = process.platform === 'darwin' ? 103 : process.platform === 'linux' ? 107 : undefined;
+    Object.assign(error, {
+      transport: 'unixWebSocket',
+      ...(maximumPathBytes === undefined ? {} : {
+        socketPathLengthClass: Buffer.byteLength(params.socketPath) <= maximumPathBytes ? 'within_limit' : 'exceeds_limit',
+      }),
+    });
+    throw error;
+  }
 
   const client: PluginJsonRpcClient = {
     async request(method, requestParams, options) {

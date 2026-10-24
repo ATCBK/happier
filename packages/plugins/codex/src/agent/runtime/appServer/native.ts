@@ -53,7 +53,12 @@ import {
   readCanonicalCodexAgentRuntimeDescriptorV1,
   readExactCodexProviderSessionId,
 } from '../../../protocol/runtimeDescriptorV1.js';
-import { createCodexSharedAppServer, readCodexSharedAppServerStartupFailure, type CodexSharedAppServerStartupFailure } from './sharedServer.js';
+import {
+  createCodexSharedAppServer,
+  readCodexNativeTransportStartupFailure,
+  readCodexSharedAppServerStartupFailure,
+  type CodexSharedAppServerStartupFailure,
+} from './sharedServer.js';
 import { buildCodexExecutionRunBaseEnv } from '../../executionRuns/environment.js';
 import { assignInjectedServerKeys, buildCodexAppServerConfigOverrides, listCodexAppServerMcpServerNames } from './config/overrides.js';
 import {
@@ -387,23 +392,25 @@ function createSanitizedNativeStartupError(error: unknown): Error {
       : 'Codex cannot enforce the requested native tool policy for this configuration.';
     return new PluginError({ code: error.code, message: `${error.code}: ${message}` });
   }
-  const descriptor = error instanceof Error ? Object.getOwnPropertyDescriptor(error, 'code') : undefined;
+  const startupCause = error instanceof AggregateError ? error.errors[0] : error;
+  const descriptor = startupCause instanceof Error ? Object.getOwnPropertyDescriptor(startupCause, 'code') : undefined;
   const errorCode: unknown = descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  const nativeTransportFailure = readCodexNativeTransportStartupFailure(startupCause);
   const code = readAgentStartupFailureCode(errorCode)
     ?? (error instanceof TypeError ? 'agent_startup_invalid_state'
       : error instanceof Error && error.name === 'JsonRpcApplicationError' && typeof errorCode === 'number'
         ? 'agent_startup_rpc_rejected'
-      : typeof errorCode === 'string' && ['ENOENT', 'ENAMETOOLONG', 'EACCES', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE'].includes(errorCode)
+      : nativeTransportFailure
         ? 'agent_startup_transport_failed'
         : 'agent_startup_failed');
   // Shared startup cleanup can aggregate the original failure. Preserve that
-  // owner's closed diagnostic without copying either exception's raw cause.
-  const startupCause = error instanceof AggregateError ? error.errors[0] : error;
+  // owner's closed diagnostic, or a closed Node system-error identity, without
+  // copying either exception's raw cause, paths, addresses or values.
   const startupFailure = readCodexSharedAppServerStartupFailure(
     startupCause && typeof startupCause === 'object'
       ? (startupCause as Readonly<{ startupFailure?: unknown }>).startupFailure
       : undefined,
-  );
+  ) ?? nativeTransportFailure;
   const sanitized = new CodexAppServerStartupError(code,
     startupFailure ?? undefined);
   const classification = error instanceof Error

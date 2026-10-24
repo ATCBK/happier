@@ -551,6 +551,49 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
     }));
   });
 
+  it('publishes only allowlisted native transport errno facts', async () => {
+    const appServer = createAppServerSession();
+    runtimeModuleMocks.createCodexAppServerRuntime.mockReturnValueOnce(appServer.runtime);
+    runtimeModuleMocks.startCodexAppServerRuntime.mockRejectedValueOnce(Object.assign(
+      new Error('PRIVATE_NATIVE_TRANSPORT_SENTINEL'),
+      {
+        code: 'ECONNREFUSED',
+        syscall: 'spawn /private/bin/codex',
+        path: '/private/native/app-server.sock',
+        address: 'PRIVATE_NATIVE_ADDRESS_SENTINEL',
+      },
+    ));
+    const warn = vi.fn();
+    const context = {
+      signal: new AbortController().signal,
+      services: {
+        logger: { debug: vi.fn(), warn },
+        sessions: { current: { media: { registerSourceRoot: vi.fn() } } },
+        connectedAccounts: createConnectedAccountsFixture(),
+      },
+      session: { id: 'session-1', services: {} },
+      ui: { title: { set: vi.fn(async () => undefined) } },
+    } as unknown as AgentSessionRuntimeContext;
+
+    const rejection = await openCodexNativeAppServerSession({
+      kind: 'create', sessionId: 'session-1', cwd: '/tmp/codex',
+    }, context).then(() => null, error => error);
+
+    expect(rejection).toMatchObject({
+      code: 'agent_startup_transport_failed',
+      startupFailure: {
+        phase: 'native_system_error', reason: 'system_error', errnoCode: 'ECONNREFUSED', syscall: 'spawn',
+      },
+    });
+    expect(warn).toHaveBeenCalledWith('Codex native startup failed', expect.objectContaining({
+      startupFailure: expect.objectContaining({ errnoCode: 'ECONNREFUSED', syscall: 'spawn' }),
+    }));
+    expect(String(rejection)).not.toContain('PRIVATE_NATIVE_TRANSPORT_SENTINEL');
+    expect(JSON.stringify(rejection)).not.toContain('/private/native/app-server.sock');
+    expect(JSON.stringify(rejection)).not.toContain('/private/bin/codex');
+    expect(JSON.stringify(rejection)).not.toContain('PRIVATE_NATIVE_ADDRESS_SENTINEL');
+  });
+
   it('projects the explicitly supplied realtime conversation on the same native runtime object', () => {
     const appServer = createAppServerSession();
     const realtimeConversation: AgentSessionRealtimeConversation = {

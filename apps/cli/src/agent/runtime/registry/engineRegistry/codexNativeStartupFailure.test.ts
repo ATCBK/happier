@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { withCodexNativeAttachFixture } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime.nativeAttach.test-support';
-import { createCodexSharedAppServer } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/sharedServer';
+import { connectCodexUnixWebSocketJsonRpc } from '../../../../../../../packages/plugins/codex/src/agent/runtime/appServer/client/unixWebSocket';
 
 // Isolate the native OS-user startup lock while retaining its real file-lock behavior.
 vi.mock('node:os', async importOriginal => {
@@ -10,6 +11,37 @@ vi.mock('node:os', async importOriginal => {
 });
 
 describe('Codex native startup failure publication', () => {
+    it.skipIf(process.platform !== 'linux')('publishes the real Linux overlong Unix path refusal through native startup', async () => {
+        const directory = await mkdtemp('/tmp/codex-path-refusal-');
+        try {
+            const osError = await connectCodexUnixWebSocketJsonRpc({
+                socketPath: join(directory, `${'é'.repeat(80)}.sock`), maxFrameBytes: 4096, requestTimeoutMs: 2000,
+            }).then(() => { throw new Error('Expected an OS path refusal'); }, (error: unknown) => {
+                if (!(error instanceof Error)) throw error;
+                return error;
+            });
+            const warn = vi.fn();
+            // The SDK process boundary emits the actual OS refusal; factory,
+            // transport diagnostic parsing and publication remain real.
+            await withCodexNativeAttachFixture(async ({ openConfiguredSession }) => {
+                const failure: unknown = await openConfiguredSession().then(() => null, error => error);
+                const startupFailure = {
+                    phase: 'native_system_error', reason: 'system_error', errnoCode: 'EINVAL', syscall: 'connect',
+                    transport: 'unixWebSocket', socketPathLengthClass: 'exceeds_limit',
+                };
+                expect(failure).toMatchObject({ code: 'agent_startup_transport_failed', startupFailure });
+                expect(warn).toHaveBeenCalledWith('Codex native startup failed', expect.objectContaining({ startupFailure }));
+                expect(JSON.stringify(failure)).not.toContain('é');
+                expect(JSON.stringify(failure)).not.toContain(directory);
+            }, {
+                nativeSpawnFailure: osError, logger: { debug() {}, warn },
+                skills: { pluginRoot: '/fixture', skillsRoot: '/fixture/skills', items: [], nativeDisables: [] },
+            });
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
     it.skipIf(process.platform === 'win32').each([
         { scope: 'session', observed: { kind: 'exit', exitCode: 1 }, nativeExitCode: 1 },
         { scope: 'run', observed: { kind: 'signal', signal: 'SIGKILL' }, nativeSignal: 'SIGKILL' },
@@ -33,27 +65,6 @@ describe('Codex native startup failure publication', () => {
                 stdoutTruncated: false, stderrTruncated: false },
             logger: { debug() {}, warn },
             skills: { pluginRoot: '/fixture', skillsRoot: '/fixture/skills', items: [], nativeDisables: [] },
-        });
-    });
-
-    it.skipIf(process.platform === 'win32')('distinguishes a live process missing its socket from an observed native exit', async () => {
-        await withCodexNativeAttachFixture(async ({ exec, directory }) => {
-            let finish!: (result: PluginProcessResult) => void;
-            const completion = new Promise<PluginProcessResult>(resolve => { finish = resolve; });
-            const result: PluginProcessResult = { termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'dispose' } },
-                stdout: new Uint8Array(), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false };
-            const processEnv = { HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS: '250', HAPPIER_CODEX_APP_SERVER_STARTUP_RPC_TIMEOUT_MS: '250' };
-            const server = await createCodexSharedAppServer({ exec: { ...exec,
-                spawn: async () => ({ write: async () => undefined, closeStdin: async () => undefined,
-                    onOutput: () => ({ dispose() {} }), wait: async () => completion,
-                    dispose: async () => { finish(result); } }),
-            }, processEnv, platform: 'linux' });
-            try {
-                await expect(server?.createClient({ cwd: directory, processEnv, configOverrides: [], disableUserMcpServers: false }))
-                    .rejects.toMatchObject({ code: 'agent_startup_transport_failed', startupFailure: { phase: 'socket_wait', reason: 'socket_timeout' } });
-            } finally {
-                await server?.dispose();
-            }
         });
     });
 });

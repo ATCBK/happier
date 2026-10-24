@@ -7,7 +7,12 @@ import { dirname, join } from 'node:path';
 import { WebSocketServer } from 'ws';
 import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 
-import { createCodexSharedAppServer } from './sharedServer.js';
+import {
+  createCodexSharedAppServer,
+  readCodexNativeTransportStartupFailure,
+  readCodexSharedAppServerStartupFailure,
+} from './sharedServer.js';
+import { connectCodexUnixWebSocketJsonRpc } from './client/unixWebSocket.js';
 
 type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
 
@@ -20,6 +25,76 @@ vi.mock('node:os', async importOriginal => {
 describe('createCodexSharedAppServer', () => {
   beforeEach(async () => { osBoundary.home = await mkdtemp(join(tmpdir(), 'codex-startup-home-')); });
   afterEach(async () => { await rm(osBoundary.home, { recursive: true, force: true }); });
+  it.skipIf(!['darwin', 'linux'].includes(process.platform)).each(['within_limit', 'exceeds_limit'] as const)(
+    'retains safe endpoint context and native syscall through startup sanitization: %s', async lengthClass => {
+      const directory = await mkdtemp('/tmp/codex-connect-failure-');
+      try {
+        const error: unknown = await connectCodexUnixWebSocketJsonRpc({
+          // Multibyte names distinguish the OS's UTF-8 byte capacity from JS length.
+          socketPath: join(directory, lengthClass === 'exceeds_limit' ? `${'é'.repeat(60)}.sock` : 'missing.sock'),
+          maxFrameBytes: 4096, requestTimeoutMs: 2000,
+        }).catch((cause: unknown) => cause);
+        const failure = readCodexNativeTransportStartupFailure(error);
+        expect(failure).toEqual({
+          phase: 'native_system_error', reason: 'system_error',
+          errnoCode: expect.stringMatching(/^(ENOENT|ENAMETOOLONG|EINVAL)$/), syscall: 'connect',
+          transport: 'unixWebSocket', socketPathLengthClass: lengthClass,
+        });
+        expect(readCodexSharedAppServerStartupFailure(failure)).toEqual(failure);
+        expect(readCodexSharedAppServerStartupFailure({
+          ...failure, syscall: 'unavailable', socketPathLengthClass: 'PRIVATE_LENGTH_SENTINEL', path: directory,
+        })).toEqual({
+          phase: 'native_system_error', reason: 'system_error', errnoCode: failure?.errnoCode,
+          syscall: 'unavailable', transport: 'unixWebSocket',
+        });
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+  });
+
+  it.skipIf(process.platform === 'win32')('publishes distinct bindable Unix paths even with a long native home and TMPDIR', async () => {
+    const home = osBoundary.home;
+    const longHome = join(home, 'long-home-'.repeat(18));
+    await mkdir(longHome, { recursive: true });
+    osBoundary.home = longHome;
+    vi.stubEnv('TMPDIR', longHome);
+    const servers: NonNullable<Awaited<ReturnType<typeof createCodexSharedAppServer>>>[] = [];
+    const listener = createServer();
+    const result: PluginProcessResult = {
+      termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
+      stdout: new TextEncoder().encode('codex-cli 0.162.1'), stderr: new Uint8Array(),
+      stdoutTruncated: false, stderrTruncated: false,
+    };
+    // Only the executable/version OS boundary is replaced; directory ownership,
+    // endpoint construction, actual OS bind and cleanup use production logic.
+    const exec = {
+      systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'codex-cli' } }) },
+      run: async () => result,
+    } as unknown as ExecService;
+    try {
+      for (let index = 0; index < 2; index++) {
+        const server = await createCodexSharedAppServer({ exec, processEnv: { CODEX_HOME: longHome } });
+        if (!server) throw new Error('Expected Unix shared control');
+        servers.push(server);
+      }
+      expect(servers[0]!.endpoint).not.toBe(servers[1]!.endpoint);
+      const socketPath = servers[0]!.endpoint.slice('unix://'.length);
+      // Darwin sun_path has 104 bytes including its terminating NUL; Linux has 108.
+      expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(process.platform === 'darwin' ? 103 : 107);
+      await mkdir(dirname(socketPath), { mode: 0o700 });
+      await new Promise<void>((resolve, reject) => {
+        listener.once('error', reject);
+        listener.listen(socketPath, resolve);
+      });
+      expect(listener.listening).toBe(true);
+    } finally {
+      if (listener.listening) await new Promise<void>(resolve => listener.close(() => resolve()));
+      await Promise.all(servers.map(server => server.dispose()));
+      vi.unstubAllEnvs();
+      osBoundary.home = home;
+    }
+  });
+
   it.skipIf(process.platform === 'win32').each(['ready', 'abort', 'exit'] as const)(
     'observes native startup %s without imposing the RPC budget on backfill', async outcome => {
     const directory = await mkdtemp(join('/tmp', 'codex-backfill-'));
@@ -244,10 +319,18 @@ describe('createCodexSharedAppServer', () => {
     await server?.dispose();
   });
 
-  it('starts one private socket server and connects Happier clients over its WebSocket transport', async () => {
-    const processHandle = { dispose: vi.fn(async () => undefined) };
+  it('keeps one private socket server while its published socket becomes connectable', async () => {
+    const processHandle = {
+      dispose: vi.fn(async () => undefined),
+      wait: vi.fn(async () => await new Promise<PluginProcessResult>(() => undefined)),
+    };
     const spawn = vi.fn(async () => processHandle);
-    const createClient = vi.fn(async (params: unknown) => ({ params }));
+    const privatePath = '/private/native/app-server.sock';
+    const createClient = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('PRIVATE_CONNECT_SENTINEL'), {
+        code: 'ECONNREFUSED', syscall: 'connect', path: privatePath,
+      }))
+      .mockImplementationOnce(async (params: unknown) => ({ params }));
     const removeRuntimeDirectory = vi.fn(async () => undefined);
     const waitForSocket = vi.fn(async () => undefined);
     const server = await createCodexSharedAppServer({
@@ -296,6 +379,8 @@ describe('createCodexSharedAppServer', () => {
         realtimeConversationAdvertised: true,
       },
     }));
+    expect(createClient).toHaveBeenCalledTimes(2);
+    expect(spawn).toHaveBeenCalledTimes(1);
     await server?.dispose();
     expect(processHandle.dispose).toHaveBeenCalledTimes(1);
     expect(removeRuntimeDirectory).toHaveBeenCalledWith('/tmp/happier-codex-private');

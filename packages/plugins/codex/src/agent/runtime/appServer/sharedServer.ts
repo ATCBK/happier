@@ -23,7 +23,7 @@ type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService
 const SHARED_CONTROL_MIN_MINOR_UNIX = 131;
 
 type StartupFailureReason = 'process_exited' | 'process_observation_failed';
-export type CodexSharedAppServerStartupFailure = Readonly<{
+type CodexSharedAppServerProcessStartupFailure = Readonly<{
   phase: 'socket_wait';
   reason: StartupFailureReason;
   terminationKind?: PluginProcessResult['termination']['observed']['kind'];
@@ -33,11 +33,86 @@ export type CodexSharedAppServerStartupFailure = Readonly<{
   stderrPresent?: boolean;
   stderrTruncated?: boolean;
 }>;
+const NATIVE_TRANSPORT_ERROR_CODES = [
+  'ENOENT', 'ENAMETOOLONG', 'EINVAL', 'EACCES', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE',
+] as const;
+type NativeTransportErrorCode = typeof NATIVE_TRANSPORT_ERROR_CODES[number];
+const NATIVE_TRANSPORT_SYSCALLS = [
+  'access', 'connect', 'lstat', 'mkdir', 'open', 'read', 'realpath', 'rename', 'rmdir', 'spawn', 'stat', 'unlink', 'write',
+  'unavailable', // The runtime supplied no native syscall.
+] as const;
+type NativeTransportSyscall = typeof NATIVE_TRANSPORT_SYSCALLS[number];
+type CodexSharedAppServerTransportStartupFailure = Readonly<{
+  phase: 'native_system_error';
+  reason: 'system_error';
+  errnoCode: NativeTransportErrorCode;
+  syscall?: NativeTransportSyscall;
+  transport?: 'unixWebSocket';
+  socketPathLengthClass?: 'within_limit' | 'exceeds_limit';
+}>;
+export type CodexSharedAppServerStartupFailure =
+  | CodexSharedAppServerProcessStartupFailure
+  | CodexSharedAppServerTransportStartupFailure;
+
+function readOwnValue(value: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+}
+
+function readUnixSocketStartupContext(
+  value: object,
+): Pick<CodexSharedAppServerTransportStartupFailure, 'transport' | 'socketPathLengthClass'> {
+  if (readOwnValue(value, 'transport') !== 'unixWebSocket') return {};
+  const lengthClass = readOwnValue(value, 'socketPathLengthClass');
+  return {
+    transport: 'unixWebSocket' as const,
+    ...(lengthClass === 'within_limit' || lengthClass === 'exceeds_limit'
+      ? { socketPathLengthClass: lengthClass } : {}),
+  };
+}
+
+/** Extracts only closed Node system-error identity; paths, addresses and prose never cross the boundary. */
+export function readCodexNativeTransportStartupFailure(error: unknown): CodexSharedAppServerTransportStartupFailure | null {
+  const cause = error instanceof AggregateError ? error.errors[0] : error;
+  if (!(cause instanceof Error)) return null;
+  const code = readOwnValue(cause, 'code');
+  if (typeof code !== 'string' || !NATIVE_TRANSPORT_ERROR_CODES.includes(code as NativeTransportErrorCode)) return null;
+  const errnoCode = code as NativeTransportErrorCode;
+  const rawSyscall = readOwnValue(cause, 'syscall');
+  const normalizedSyscall = typeof rawSyscall === 'string' && rawSyscall.startsWith('spawn ')
+    ? 'spawn'
+    : rawSyscall;
+  const syscall = typeof normalizedSyscall === 'string'
+    && NATIVE_TRANSPORT_SYSCALLS.includes(normalizedSyscall as NativeTransportSyscall)
+    ? normalizedSyscall as NativeTransportSyscall
+    : undefined;
+  return Object.freeze({
+    phase: 'native_system_error', reason: 'system_error', errnoCode,
+    ...(syscall ? { syscall } : {}),
+    ...readUnixSocketStartupContext(cause),
+  });
+}
 
 /** Re-admits only closed process facts after an error crosses a bundle/module boundary. */
 export function readCodexSharedAppServerStartupFailure(value: unknown): CodexSharedAppServerStartupFailure | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Readonly<Record<string, unknown>>;
+  if (record.phase === 'native_system_error' && record.reason === 'system_error') {
+    const errnoCode = typeof record.errnoCode === 'string'
+      && NATIVE_TRANSPORT_ERROR_CODES.includes(record.errnoCode as NativeTransportErrorCode)
+      ? record.errnoCode as NativeTransportErrorCode
+      : null;
+    if (!errnoCode) return null;
+    const syscall = typeof record.syscall === 'string'
+      && NATIVE_TRANSPORT_SYSCALLS.includes(record.syscall as NativeTransportSyscall)
+      ? record.syscall as NativeTransportSyscall
+      : undefined;
+    return Object.freeze({
+      phase: 'native_system_error', reason: 'system_error', errnoCode,
+      ...(syscall ? { syscall } : {}),
+      ...readUnixSocketStartupContext(record),
+    });
+  }
   if (record.phase !== 'socket_wait'
     || (record.reason !== 'process_exited' && record.reason !== 'process_observation_failed')) return null;
   const terminationKind = record.terminationKind === 'exit'
@@ -59,6 +134,42 @@ export function readCodexSharedAppServerStartupFailure(value: unknown): CodexSha
     ...(typeof record.stderrPresent === 'boolean' ? { stderrPresent: record.stderrPresent } : {}),
     ...(typeof record.stderrTruncated === 'boolean' ? { stderrTruncated: record.stderrTruncated } : {}),
   });
+}
+
+function isRetryableNativeTransportStartupFailure(
+  failure: CodexSharedAppServerTransportStartupFailure,
+): boolean {
+  if (failure.syscall === 'connect') {
+    return failure.errnoCode === 'ENOENT'
+      || failure.errnoCode === 'ECONNREFUSED'
+      || failure.errnoCode === 'ECONNRESET'
+      || failure.errnoCode === 'ETIMEDOUT';
+  }
+  return (failure.syscall === 'read' || failure.syscall === 'write')
+    && (failure.errnoCode === 'ECONNRESET' || failure.errnoCode === 'EPIPE');
+}
+
+async function createInitialClientWhenReady(params: Readonly<{
+  createClient: () => Promise<DisposableCodexAppServerClient>;
+  process: PluginProcessHandle;
+  signal?: AbortSignal;
+}>): Promise<DisposableCodexAppServerClient> {
+  let result: PluginProcessResult | undefined;
+  let observationFailed = false;
+  void params.process.wait().then(value => { result = value; }, () => { observationFailed = true; });
+  while (true) {
+    params.signal?.throwIfAborted();
+    if (result) throw new CodexSharedAppServerStartupError('process_exited', result);
+    if (observationFailed) throw new CodexSharedAppServerStartupError('process_observation_failed');
+    try {
+      return await params.createClient();
+    } catch (error) {
+      if (params.signal?.aborted) throw error;
+      const failure = readCodexNativeTransportStartupFailure(error);
+      if (!failure || !isRetryableNativeTransportStartupFailure(failure)) throw error;
+      await delay(25, undefined, { signal: params.signal });
+    }
+  }
 }
 
 export class CodexSharedAppServerStartupError extends Error {
@@ -252,14 +363,18 @@ export async function createCodexSharedAppServer(params: Readonly<{
         );
         // A published socket is not native SQLite/skill initialization readiness.
         // Reuse this initialized connection for the first admitted runtime client.
-        initialClient = await dependencies.createClient({
-          exec: params.exec,
-          cwd: request.cwd,
-          processEnv: request.processEnv,
-          toolRestrictionRequired: request.toolRestrictionRequired,
-          toolRestrictionAllowedMcpServerKeys: request.toolRestrictionAllowedMcpServerKeys,
+        initialClient = await createInitialClientWhenReady({
+          process: serverProcess,
           signal: params.signal,
-          transport: { kind: 'unixWebSocket', socketPath, realtimeConversationAdvertised },
+          createClient: async () => await dependencies.createClient({
+            exec: params.exec,
+            cwd: request.cwd,
+            processEnv: request.processEnv,
+            toolRestrictionRequired: request.toolRestrictionRequired,
+            toolRestrictionAllowedMcpServerKeys: request.toolRestrictionAllowedMcpServerKeys,
+            signal: params.signal,
+            transport: { kind: 'unixWebSocket', socketPath, realtimeConversationAdvertised },
+          }),
         });
       } catch (error) {
         // Initialization failure must finish native shutdown before another
