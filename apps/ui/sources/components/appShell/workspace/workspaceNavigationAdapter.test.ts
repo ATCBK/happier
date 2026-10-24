@@ -103,6 +103,17 @@ function harness(
 }
 
 describe('workspace navigation adapter', () => {
+  it('replaces ordinary Machine previews while browsing the rail', () => {
+    const h = harness([], { serverId: 'home-a', accountId: 'alice' });
+    for (const machineId of ['machine-a', 'machine-b', 'machine-c']) {
+      expect(h.adapter.openHref(`/machines/${machineId}`)).toBe(true);
+      const machines = Object.values(h.state().tabs).filter(tab => tab.target.kind === 'machines');
+      expect(machines).toHaveLength(1);
+      expect(machines[0]).toMatchObject({ preview: true, pinned: false, target: { params: { id: machineId } } });
+      expect(Object.keys(h.state().tabs)).toHaveLength(2);
+    }
+  });
+
   it('retains the unpinned Machine page while the person goes through Settings to its other door', () => {
     const h = harness([], { serverId: 'home-a', accountId: 'alice' });
     h.adapter.openHref('/machines/machine-a?tab=processes');
@@ -112,6 +123,8 @@ describe('workspace navigation adapter', () => {
     h.adapter.openHref('/settings/machines/machine-a');
     expect(h.active().id).toBe(retainedId);
     expect(h.active().pinned).toBe(false);
+    expect(Object.values(h.state().tabs).filter(tab => tab.target.kind === 'machines'
+      || tab.target.params.id === 'machine-a')).toHaveLength(1);
   });
 
   it.each([

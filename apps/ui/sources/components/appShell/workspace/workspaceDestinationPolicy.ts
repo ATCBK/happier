@@ -50,6 +50,16 @@ export function workspaceDestinationNavigationIdentity(target: DestinationRef, c
         policy.scopeParams.map(key => [key, target.params[key] ?? null])]);
 }
 
+/** Preserve the Machine page while Settings supplies the path to its other door. */
+export function shouldRetainWorkspaceDestinationPreview(source: DestinationRef, target: DestinationRef, catalog: readonly CompactAppDestination[], scope?: ServerAccountScope | null): boolean {
+    if (target.kind !== 'settings') return false;
+    const sourceHref = hrefForDestinationRef(catalog, source);
+    const sourceRoute = sourceHref ? matchWorkspaceDestinationRoute(sourceHref) : null;
+    return Boolean(sourceRoute?.params.id && workspaceMachinePageRouteKey(sourceRoute.routeKey)
+        && workspaceDestinationNavigationIdentity(source, catalog, scope)
+            !== workspaceDestinationNavigationIdentity(target, catalog, scope));
+}
+
 /** Identity of an admitted merge, also used to validate retained and pending sync aliases. */
 export function workspaceDestinationAdmissionIdentity(target: DestinationRef, catalog: readonly CompactAppDestination[] = []): string {
     const navigationIdentity = workspaceDestinationNavigationIdentity(target, catalog);
