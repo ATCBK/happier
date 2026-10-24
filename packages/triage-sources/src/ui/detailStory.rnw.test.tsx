@@ -169,6 +169,19 @@ describe('the ask of a long change request', () => {
     ).resolves.toBeDefined();
   });
 
+  it('keeps the read state above the preview, so a failed read is never clipped into it', async () => {
+    await mount(() => (
+      <TriageDetailStory kind="ask" notice={<Text value="GitHub could not read the current description" />}>
+        <Text value="A pull request description several screens long." />
+      </TriageDetailStory>
+    ));
+    await measureAsk(4000);
+    const body = document.querySelector('[data-testid="triage-story-ask-body"]');
+    expect(body?.textContent).toContain('several screens long');
+    expect(body?.textContent).not.toContain('could not read');
+    expect(document.body.textContent).toContain('GitHub could not read the current description');
+  });
+
   it('shows a short ask whole, with nothing to open', async () => {
     const page = await mount(() => (
       <TriageDetailStory kind="ask">

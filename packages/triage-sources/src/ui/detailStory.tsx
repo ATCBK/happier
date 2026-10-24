@@ -18,9 +18,14 @@ const STORY_TITLES = Object.freeze({
  * `kind` is the entry's subject: a pull request asks, an issue reports, an error group
  * says what happened.
  */
-export function TriageDetailStory({ kind, children, changes, checks, trailing }: Readonly<{
+export function TriageDetailStory({ kind, children, notice, changes, checks, trailing }: Readonly<{
   kind?: keyof typeof STORY_TITLES | undefined;
   children: React.ReactNode;
+  /**
+   * The ask's own read state (a failed or retained read, with its Re-read), one line above the preview so it is
+   * never clipped into it and the description it previews stays readable.
+   */
+  notice?: React.ReactNode;
   /** Step ②: what changed for a change request, the spread for an error group. */
   changes?: React.ReactNode;
   checks?: React.ReactNode;
@@ -31,7 +36,11 @@ export function TriageDetailStory({ kind, children, changes, checks, trailing }:
     <Step marker={{ kind: 'number', value: 1 }}
       title={STORY_TITLES[kind].fallback}
       titleKey={STORY_TITLES[kind].key} trailing={trailing}>
-      <TriageTextPreview testID="triage-story-ask-body">{children}</TriageTextPreview>
+      {notice === undefined ? <TriageTextPreview testID="triage-story-ask-body">{children}</TriageTextPreview>
+        : <Stack gap="small">
+          {notice}
+          <TriageTextPreview testID="triage-story-ask-body">{children}</TriageTextPreview>
+        </Stack>}
     </Step>
     {changes}
     {checks}
