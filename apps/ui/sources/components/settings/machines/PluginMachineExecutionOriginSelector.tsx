@@ -25,7 +25,7 @@ import type {
 import { ServerScopedMachineSelector } from '@/components/sessions/new/components/ServerScopedMachineSelector';
 import { NewSessionMachineSelectionContent } from '@/components/sessions/new/components/NewSessionMachineSelectionContent';
 import { SelectionListFilterChip } from '@/components/ui/selectionList';
-import { Icon } from '@/components/ui/icons/Icon';
+import { ICON_SIZE, Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { t } from '@/text';
@@ -349,7 +349,7 @@ export function PluginMachineExecutionOriginSelectorView(props: Readonly<{
                 ...(props.compact ? {} : { note: t('settingsPlugins.surfaces.runOnAuto') }),
                 accessibilityHint: t('settingsPlugins.surfaces.runOnAutoHint'),
             } : {}),
-            icon: <Icon name="desktop" size={14} color={theme.colors.text.secondary} />,
+            icon: <Icon name="desktop" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />,
             ...(props.compact ? { iconOnly: true } : {}),
             muted: !current.selected,
             // Plugin availability does not establish Machine presence; an unknown Machine keeps no dot.

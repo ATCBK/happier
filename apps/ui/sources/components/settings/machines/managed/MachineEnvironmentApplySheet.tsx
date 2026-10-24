@@ -259,7 +259,7 @@ export function MachineEnvironmentApplySheet(
 function SheetStateLine(props: Readonly<{ children: React.ReactNode }>) {
   const { theme } = useUnistyles();
   const section = React.useMemo(() => ({
-    rowDividerColor: theme.colors.border.default,
+    rowDividerColor: theme.colors.border.subtle,
     rowInsetPx: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
   }), [theme]);
   return <HappierPageSectionContext.Provider value={section}>{props.children}</HappierPageSectionContext.Provider>;
