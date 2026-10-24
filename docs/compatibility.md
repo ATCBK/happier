@@ -69,6 +69,25 @@ row is backfilled from a current subscription or Session selection.
 - Do not keep aliases or adapters solely for an atomic internal rename/move whose old path never shipped.
 - The predecessor rule preserves observable wire/data/state behavior, not `../0.2`'s internal architecture.
 
+## Session PR watch integration (0.3 development)
+
+The new Channels Watch/update envelopes, optional binding-owned watch progress
+and optional Automation `prUpdate` evidence belong to unreleased 0.3 source.
+Automation producers preserve omitted evidence for existing occurrences; current
+readers validate supplied PR envelopes at the Channels boundary rather than
+interpreting arbitrary workflow JSON as trusted instructions. Existing authored
+literal workflows are not silently repaired or rewritten.
+
+The inspected moving predecessor is `../0.2` at
+`2bf968563bf2015455c0cd54bcc74e91f67891b9` (2026-10-24 recheck). Its relevant
+new Watch/binding/result paths and `automationResultDeliveryV1.ts` are absent,
+with no staged or unstaged changes at those paths. This is not a released
+mixed-version Watch contract and does not justify a second watch store, dual
+writer or undeployed-intermediate adapter. Retained link conversion remains
+with the existing source/Channels relation owners; this watch integration does
+not independently discard predecessor relationships. Package and composed
+runtime validation are still required before claiming completion.
+
 ## Composer inline references (0.3 development)
 
 This is an unreleased, one-way 0.3 format change. Current writers persist
@@ -111,6 +130,22 @@ do not get additional compatibility paths.
 
 ## Discussion attachments (0.3 development)
 
+The strict development Action inputs for create/post/reply accept optional
+`attachmentSources: [{blobId,path}]` on the invoking Machine. This operand is
+effect-bearing and cannot be ignored: unsupported hosts must refuse it, never
+post text while dropping selected files. Private publisher requests retain the
+sources through active-turn or approval verification; server publications omit
+the paths. The V1 upload metadata's optional closed `agent` arm binds the exact
+publication and byte framing to the existing installed Machine key, Home and
+Account. Its producer and server reader change together in this unreleased
+0.3 direct cut; older strict upload readers refuse the arm safely. Existing
+uploads without the arm and existing attachment content remain unchanged.
+
+For this extension, the clean relevant predecessor paths were inspected at
+`../0.2` HEAD `420e78875b59a5d50169d31497853c447498f470` on 2026-10-24. Its
+Discussion source/upload corridor is absent; no Session attachment contract is
+removed or rewritten by the new invoking-host operand.
+
 New Discussion writers use one strict `attachment` content arm containing the
 shared Session file/folder payload. Folder paths and empty directories are
 content, not Machine-local authority. Stored-content readers remain tolerant of
@@ -142,20 +177,26 @@ treated as supporting it, and a public-profile request must not normalize into
 the existing private Usage path or a generic Account-KV/Artifact write. Existing
 private recap inputs, seven styles and three formats retain their own support.
 
-Historical Accounts and Usage without eligibility evidence remain readable by
-their existing private owners. The approved public population excludes unknown
-and Team attribution; absence of older evidence is partial/unavailable public
-coverage, not proof of personal eligibility or a reason to rewrite history.
+Historical Accounts and Usage without ownership evidence remain readable by
+their existing private owners and count in the approved public population unless
+known Team evidence excludes them. Known Team usage means a Happier Team
+credential, a genuinely Team-owned Session, or a provider workspace plan proved
+by the connected-service owner. Unknown ownership, including API-key usage and
+imported native history, does not require personal-ownership proof or a history
+rewrite. Running-total residuals and turn-less rows count under the same
+reconciliation as private Usage.
 `UsageQuery.population` selects `public_eligible_personal` explicitly; omitted
 or explicit `all_personal_history` retains ordinary behavior. The canonical
 transport omits that default so older strict request parsers keep accepting
 ordinary reads. The new public selection is gated by `account.publicProfiles`;
 an unsupported server cannot silently fall back to the broader private query.
-The scoped accounting owner reconciles all baselines before excluding unknown,
-workspace-subscription and Team-credential contributions. Public detail uses
-the same exact admitted turns, not every turn in a mixed Session. Whole-Session
-message counts do not establish that membership and are omitted for this
-selection. Excluded history remains partial coverage.
+The scoped accounting owner reconciles all baselines before excluding known
+Team contributions through one eligibility predicate. Public detail uses the
+same eligible contributions and Session evidence, not every turn in a mixed
+Session. Whole-Session message counts do not establish that membership and are
+omitted for this selection. Excluding known Team usage defines the intended
+population; neither that exclusion nor unknown ownership alone makes coverage
+partial. Source-history evidence still determines completeness.
 
 Current Session ownership is Account-owned (`Session.accountId`); Team/Group
 grants and `primaryTeamId` authored context do not transfer that ownership.
@@ -240,6 +281,17 @@ deploys is claimed. Deployment provenance remains unverified.
 Additive schema does not establish safe old/new server writers sharing one
 database: an older writer bypasses intent and holds. Such coexistence is not
 claimed or implemented by this identity vertical.
+
+## Session viewer read projection (0.3 development)
+
+The Account-private `viewer` object in Session detail/list records is an
+additive-open read projection. Older clients drop unknown outer viewer facts;
+known fields and their nested read-state, relevance, attention, Follow and
+notification schemas remain strict. New required viewer facts therefore need
+the normal reader-first transition before the server emits them. This keeps an
+independently updated Home from blocking an older daemon's Session attach on a
+new presentation/read fact, without allowing unknown data to acquire access,
+routing, mutation or persistence meaning.
 
 ## Machine RPC method absence (0.3 development)
 
@@ -354,8 +406,12 @@ and Account-mode projections. The data compatibility obligation includes retaine
 Writes without kind remain accepted. Predecessor rows have null kind; earlier
 development rows can have only a coarse kind. An opaque header edit without a
 hint invalidates the previous classification; a body-only write retains it.
-Protocol's single extraction keeps the existing coarse family and the exact
-private `header.kind`, without extracting content, names or titles. Its stored
+Protocol's single extraction keeps the existing coarse family and normally the exact
+private `header.kind`, without extracting content, names or titles. Managed-Delete
+approval headers additionally derive a domain-separated subject key from the admitted
+Home and managed-Machine ids. Its indexed hint combines the approval kind with that
+key so accepted Delete retirement selects only the exact target; the private body and
+revision-fenced approval transition remain authoritative. Its stored
 form is `v1:<coarse>:<exact-or-empty>` in the existing nullable string column and
 Account/kind index. Read projections still expose coarse `kind`; `kindHint`
 presence distinguishes a canonical exact classification from a legacy row.
@@ -384,6 +440,13 @@ Adapters keep classification progress in `kindCoverage`, distinct from existing
 read/decryption `coverage`. A fully resolved legacy answer is readable-complete
 even while its server index remains partial; genuinely unavailable sources are
 still incomplete and retain their existing refusal behavior.
+Exact-kind HTTP responses in this undeployed, one-way 0.3 contract require the
+typed witness; the old Boolean alone cannot certify absence. The predecessor's
+unfiltered array response is unchanged, not an exact-kind compatibility shape.
+An exhausted scoped structural read may render retained locked rows and reconcile
+absent baseline members within its kinds without claiming readable completeness;
+unavailable/non-exhausted observations remain additive. Concurrent local changes
+retain the same captured-map admission and reconciliation fences as full reads.
 Equal labels are no-ops, and labels
 change neither private bytes, header/body content versions, nor Artifact recency
 and row sequence; discovery AccountChanges remain independent. Needed labels
@@ -752,6 +815,13 @@ visible. Foreign Homes retain the fallback until their accepted row key arrives.
 This is a development-source contract; retained database deployment and loaded
 runtime validation remain separate evidence.
 
+Project titles remain private Account content, separate from that row anchor.
+`projects.organization.update` edits or resets only the existing Project
+organization row's `label`, using its expected revision and preserving pin,
+visibility and context. A reset removes the organization override; it does not
+rename an accepted checkout. `projects.workspace.update` remains the exact
+checkout metadata operation, not a competing Project-title writer.
+
 Worker-copy classification uses optional creation provenance on the same Sync
 relationship: `worker_clean_copy` binds distinct source and target WorkspaceRefs
 to that relationship's endpoints. Retained provenance cannot be added, removed,
@@ -956,6 +1026,18 @@ the current prompt-stack authoring placement contract. Existing rows and
 captured duplication retain their stored placements through the row owner.
 
 ### Tolerant stored-data readers
+
+Collection filter records in 0.3 development are a narrowing-sensitive exception
+to dropping unknown stored fields. The canonical filter owner registers its
+stored-read projection with `json/storedReadSchema.ts`, so nested Follow rules,
+SessionTargets, Boards and saved spaces retain unknown core conditions and
+extension selections as opaque data. Known fields retain their validation.
+An unknown or list-only condition evaluates unavailable in an unsupported
+evaluator; a known miss still dominates. Effect dispatch requires a fresh match.
+Strict current writes reject unknown fields and daemon-rule writes reject
+list-only fields. Opaque stored conditions never become executable callbacks,
+access authority or a successful filter. These are development source contracts;
+no current-to-predecessor rollback writer is introduced.
 
 Development Session creation provenance retains earlier immutable recipes through
 the canonical recipe stored projection. A stored string directory becomes a path
@@ -1238,6 +1320,16 @@ Never-before-scanned present volumes need no prior client request to be schedule
 This unreleased input does not acquire a compatibility alias or a separate headless
 budget.
 
+Scan progress is an additive-open/drop presentation object inside the closed
+scan identity/target envelope. `progress.usedBytes` is optional: folder scans
+omit the unknown denominator, while whole-volume scans retain measured zero.
+The local index reader normalizes retained folder denominators before reads and
+resume; current writers omit them. This is an unreleased Storage V1 correction,
+not a second wire epoch or support for mixed 0.3 development intermediates.
+The clean relevant paths in `../0.2` at
+`3482a9101ebb7ee2983608ef0deb00831dfcb2e7` (2026-10-24) contain no Storage scan
+producer, reader or UI surface; no predecessor adapter is required.
+
 Settings extend the existing `metadata.resourcesPolicyV1.storage` section. Missing
 sections receive current defaults through the stored reader; writes remain strict
 minimal patches through the single daemon metadata-field CAS owner. Protected-folder
@@ -1389,6 +1481,31 @@ On 2026-10-08 the maintainer explicitly approved longer values and removal of
 unsupported lower bounds, accepting this older-client defaulting consequence.
 Current readers still accept settings within the released ranges; current
 writes preserve admitted values without a transition, shim or parallel policy.
+
+### Voice settings and transcript memory (development)
+
+Voice Agent preferences retain the selected Agent id, exact target key and
+qualified contribution identity. The unused selection-time
+`agentProjectionGeneration` observation is no longer persisted in 0.3
+development. Stored readers tolerate and drop that unknown field without
+changing the selected Agent; this removes no 0.2-created selection contract.
+
+The Voice transcript reset boundary lives in the Account KV row
+`voice:transcript-memory:v1`, through the existing mode-aware JSON/CAS owner.
+Forget advances this boundary only when remembering conversations is enabled;
+it applies to replay from every carrier in that Home/Account. Initialization
+reads the same row for transcript stamps and replay requests. Run/resume metadata
+clearing retains its existing bound-carrier scope, and ordinary Session history
+is preserved. No Account preference is written by Forget.
+
+The clean 0.2 predecessor at `420e78875b59a5d50169d31497853c447498f470`
+writes `voice.adapters.local_conversation.agent.transcript.epoch`. That field
+remains an inert retained source through unrelated preference edits and seeds
+an absent memory row. An existing row is authoritative, including after later
+resets; malformed memory fails closed. Current `voiceSettingsV1` preferences
+contain only `transcript.persistenceMode`. The legacy source reader remains
+until supported 0.2-created settings no longer need it; this is a one-way data
+upgrade, with no mixed-version reset writer or rollback contract.
 
 ### Voice presence settings (development)
 
@@ -3073,6 +3190,24 @@ body, validate its strict approval-family schema, and require every duplicated
 header field to agree before presenting or acting on it. A contradictory or
 unknown body/header combination fails closed.
 
+Managed-Machine Delete approvals duplicate only a domain-separated subject key
+for `(Home, managedId)` into that index. Accepted Delete retirement queries the
+existing Artifact index by this exact non-content key, then revalidates the body
+and uses the normal revision-fenced approval update. A transient refusal leaves
+the accepted Delete successful; the next accepted-delete/currentness transition
+retries the same lifecycle convergence without a timer or Inbox-side filter.
+
+Project Service Starts in 0.3 development use the existing private
+`approvalSubjectKey` header index to identify the SOURCE Machine/checkout before
+mounting body readers. This private Home/Account-scoped index hashes only Machine
+and checkout ids, contains no command or Service name, and grants no execution authority. A supplied hint must agree with
+the strict V2 body. Headers without this development hint remain readable;
+Project observation can reuse an already-admitted local body to select them,
+but does not hydrate unknown identities across the Account. Released V1 history
+and predecessor V1 writers are unchanged. A Service census shares demanded
+Devcontainer child facts only for that observation; reconnect or a real later
+observation reads them again, including after a failed read.
+
 This is an in-place development evolution, not a second approval store or a
 backfill requirement. Undeployed target/plugin approval schemas may be refined
 in place through the same Artifact owner. Released V1 bytes and readers remain
@@ -3256,7 +3391,51 @@ still accept its existing mutations, while mixed 0.2/0.3 components and reverse
 writes are unsupported. The existing receipt table records the new action; no
 persisted fields or database migration are introduced.
 
+The local UI spawn-setup projector retains `RPC_TRANSPORT_UNAVAILABLE` in the
+existing optional `launchError.rpcErrorCode` closed enum. This admits the
+existing transport code without changing a daemon producer; the prior timeout
+and `RPC_OUTCOME_UNKNOWN` values remain accepted.
+
 ## Plugin Platform direct-cut frontier
+
+### Project page author contract (0.3 development source)
+
+The development `appPage/project` extension retains manifest V2 and the Host UI
+context V1 vocabulary; these wire names are independent of package SemVer.
+Executable View declarations, policy expressions, qualified destinations, rich
+Project targets and `projects.pages.list` inputs/results are closed, including
+the accepted Source, repository and strict checkout shapes nested inside them.
+The Project target uses `projectKey` with optional qualified `source`, `checkout`,
+`repository` and observed `branch`; current-source Project mounts migrate together. Widget owner
+fields retain their own existing names through that same context adapter.
+
+Contextual Resource session/surface arms accept optional `target` using that
+same strict public target owner. Session targets add optional repository, branch
+and `headOid`, with an exact sessionId match on the Session Resource arm. Readers
+still accept prior contexts without target; global context is unchanged. New
+context facts do not become credential or effect authority. One declaration-owned
+`counts` binding can select an ordered labelled record from a dynamic JSON
+Resource; the old strict scalar `countResourceId` shape remains supported,
+mutually exclusively. These are coordinated development-source extensions, not
+new claims that an older strict host accepts their additional fields.
+
+The new target and repository policy fact cannot be safely ignored by an old
+host. Existing engine/toolchain and artifact `hostUiApiRange` admission must
+reject an unsupported declaration, never reinterpret it as an app page. The new
+host preserves target-less app shorthand and existing valid app URLs. No
+released old Project-context reader has been established, and current `dev` to
+the predecessor SDK rollback remains unsupported under the direct-cut ruling.
+
+Read-only source-frontier verification on 2026-10-24 resolved origin's immutable
+`cli-v0.2.17` and `server-v0.2.17` to
+`a2c45c86804b24e60ac0b76146a3ef36dfcaa15b`, and `ui-web-v0.2.19` to
+`63829e3cd6a8f1f48b10891af0c8b2313e51ac7e`. The prospective `../0.2` checkout
+was `2bf968563bf2015455c0cd54bcc74e91f67891b9`; its exact plugin/SDK/page/pinning
+corridor had no staged or unstaged changes. These observations establish a source
+basis, not deployed artifact support or a published SDK census. Package API
+regeneration, published SemVer review and loaded-platform certification remain
+separate checks; no compatibility shim or new epoch is inferred from missing
+publication evidence.
 
 The Plugin Platform simplification is a direct cut within the unreleased 0.3
 development line. The current working tree was rechecked on 2026-09-24 while
@@ -3418,7 +3597,15 @@ major may still export V1, and a later npm minor may make only V1-compatible
 additions. A public cross-plugin business protocol is a separately publishable
 package with any valid scoped or unscoped npm name ending in `-protocol` and
 explicit `/v1` and `/testing/v1` exports. Its npm scope identifies its author
-and grants no additional protocol authority. It contains schemas, types,
+and grants no additional protocol authority. One existing protocol-only package
+may also own several domains through explicit domain-versioned pairs such as
+`/ci/v1` with `/ci/testing/v1` and `/releases/v1` with
+`/releases/testing/v1`. Each pair names that domain's wire epoch and conformance
+fixtures; adding a domain does not rename or replace the existing `/v1` and
+`/testing/v1` epoch. A domain's incompatible evolution requires its own explicit
+epoch under the same rules above, independently of package SemVer.
+
+The package contains schemas, types,
 helpers, and conformance fixtures only—not host runtime, persistence, provider
 implementation, credential materialization, polling, or a private
 `@happier-dev/protocol` dependency—and it has no `latest`, `current`, or
@@ -3478,6 +3665,17 @@ their existing native readers on settlement. Finite setup retains its separate
 review/output custody. V1 continues omitting the service reference; the Start
 request and native result formats are unchanged. This is a development V2
 extension, not a new observation channel or a released mixed-version guarantee.
+
+V2 list can select `requestIdentity: { actionId, requestId }` for the newest
+retained host receipt in the admitted Account, Machine and optional Session
+scope. Selection precedes response projection and skips unrelated durable-domain
+reconciliation. Accepted manual Session creation uses this selector, then waits
+on the exact operation through the existing get owner. Both the request and
+nested identity remain closed; V1 rejects the selector and a client requiring it
+never falls back to an unfiltered predecessor inventory. The clean relevant
+`../0.2` paths were rechecked at `3482a9101ebb7ee2983608ef0deb00831dfcb2e7`;
+that predecessor registers V1 only. This development extension adds no retained
+data format or second operation owner.
 
 While the shared Action executor holds a blocking Ask, current operation progress
 uses `waiting_for_approval` and carries the existing `approval_request_created`
@@ -3670,13 +3868,13 @@ independently negotiated.
 This contraction changes live component admission, not readers for data created
 by 0.2; no persisted transfer format or data migration is introduced.
 
-### Android notification permission responses (0.3 development)
+### Mobile notification permission responses (0.3 development)
 
-Notification permission buttons reuse `session.permission.respond` with the notification's exact `(Session, turnId, requestId)` and saved Home/Account credentials. The shared Session response owner retains its existing void-success result and accepts structured success; explicit failures and malformed results reject. The ordinary Session UI still resolves transcript projections against its live pending request. The exact notification adapter preserves the notification's turn instead of replacing it with a newer loaded turn. The existing CLI turn-custody check remains the receiver authority. iOS uses the same exact-turn adapter while preserving its foreground Home-switch and navigation flow; retained pending-decision records supply review navigation only and cannot replay an answer.
+Notification permission buttons reuse `session.permission.respond` with the notification's exact `(Session, turnId, requestId)` and saved Home/Account credentials. The shared Session response owner retains its existing void-success result and accepts structured success; explicit failures and malformed results reject. The ordinary Session UI still resolves transcript projections against its live pending request. The exact notification adapter preserves the notification's turn instead of replacing it with a newer loaded turn. The existing CLI turn-custody check remains the receiver authority. Live iOS and Android responses use the same exact-turn adapter without switching the focused Home or navigating; retained pending-decision records supply review navigation only and cannot replay an answer.
 
-Remote request push preserves the producer's captured request turn through the existing notification content owner; device-local request notifications already carry that turn. Payloads without it cannot answer: live/headless Android callbacks record a generic review notice without navigation, while iOS callbacks open for review. The 0.2 source intent at `794937289f` and `c6a67110ed` uses an occurrence UUID and a separate permission operation. Those changes are unreleased at this port boundary: 0.3 uses its existing turn-bound contract rather than adding a UUID-to-turn conversion or another permission operation. This does not establish mixed 0.2/0.3 live-component support under the all-component upgrade policy.
+Remote request push preserves the producer's captured request turn through the existing notification content owner; device-local request notifications already carry that turn. Payloads without it cannot answer: live/background mobile callbacks record a generic review notice without navigation; cached launch responses provide review navigation only. The 0.2 source intent at `794937289f` and `c6a67110ed` uses an occurrence UUID and a separate permission operation. Those changes are unreleased at this port boundary: 0.3 uses its existing turn-bound contract rather than adding a UUID-to-turn conversion or another permission operation. This does not establish mixed 0.2/0.3 live-component support under the all-component upgrade policy.
 
-The existing native notification task handles Android action callbacks alongside Session-change wake reconciliation. Within the current JavaScript runtime, identical callbacks share work and retain only confirmed acknowledgements for the exact bound request; conflicting decisions cannot overwrite them, and every other settled outcome remains retryable. Live actions use a caller-owned scoped connection without changing the global network gate, focused Home, or ordinary socket pool. An unhandled cached launch response performs only safe review navigation; a permission response already consumed in the running app does not reopen after remount. Generic body-tap navigation keeps its existing hook lifetime, so a new live tap can navigate after remount. Only a generic presentation-recovery flag is persisted, not permission decisions or a replay journal. SDK 55 task support already belongs to the native application, so the source dependency and runtime-version bump do not apply. Native Android lifecycle validation remains outstanding; this is not a released-capability claim.
+The existing native notification task handles Android action callbacks alongside Session-change wake reconciliation. Equipped iOS builds retain the live native response completion until the claimed callback finishes or the OS expires its background execution. That custody is process-local, survives an in-process JavaScript reload, and does not turn a cached response into permission authority. iOS permission categories require authentication; SecureStore access stays `WHEN_UNLOCKED`, and `Answer` remains foreground. Within the current JavaScript runtime, identical callbacks share work and retain only confirmed acknowledgements for the exact bound request; conflicting decisions cannot overwrite them, and every other settled outcome remains retryable. Live actions use a caller-owned scoped connection without changing the global network gate, focused Home, or ordinary socket pool. An unhandled cached launch response performs only safe review navigation; a permission response already consumed in the running app does not reopen after remount. Generic body-tap navigation keeps its existing hook lifetime, so a new live tap can navigate after remount. Only a generic presentation-recovery flag is persisted, not permission decisions or a replay journal. Android SDK 55 task support already belongs to the native application. The iOS completion/claim/expiry extension requires the patched Expo native module in a fresh binary and a new non-publicdev `happierExpoRuntimeVersion` train; publicdev keeps its fingerprint policy. An installed binary without that API keeps foreground permission categories when registration reports unavailable. This fallback does not guarantee that later execution failure will foreground the app. End-to-end notification-action lifecycle and physical-device validation remain outstanding; this is not a released-capability claim.
 
 ### Request notification previews (development)
 
@@ -3736,6 +3934,12 @@ projection, preserving the existing required-write failure outcome before settle
 Native turns without a dispatched checkpoint binding and standalone Runs
 use the same publisher with provider evidence alone. Original tool rows remain separate
 evidence, unavailable checkpoints retain provider evidence, and empty turns emit no recap.
+At that join, the CLI checkpoint projection expands home-relative forms with its canonical
+path helper and uses the shared Protocol repository-path normalizer against the resolved
+Git root for both current and rename-source paths. Absolute Agent paths and relative Git
+paths therefore retain both observations under one root-relative identity; the existing
+merger selects content and statistics once. Separator normalization and sibling-prefix
+containment stay with the shared path owner, not a transcript/UI dedupe path.
 This changes new development-source publication, not previously stored transcript rows;
 loaded-runtime verification still requires the rebuilt host and a usable Agent turn.
 
