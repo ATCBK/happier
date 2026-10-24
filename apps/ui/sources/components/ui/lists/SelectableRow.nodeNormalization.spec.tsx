@@ -102,6 +102,23 @@ describe('SelectableRow node normalization', () => {
     });
   });
 
+  it('keeps a menu row to one subtitle line while its accessible name carries the whole purpose', async () => {
+    const { SelectableRow } = await import('./SelectableRow');
+    const purpose = 'Codex, OpenCode, oh-my-pi and Pi · Plus, Pro or Team';
+    const linesOf = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAllByType('Text')
+      .filter((node: any) => node.props?.children === purpose)
+      .map((node: any) => node.props.numberOfLines);
+
+    const menu = await renderScreen(<SelectableRow title="ChatGPT" subtitle={purpose} presentation="menu" onPress={() => {}} testID="menu-row" />);
+    expect(linesOf(menu)).toEqual([1]);
+    const label = menu.findAll((node: any) => node.props?.testID === 'menu-row' && typeof node.props?.accessibilityLabel === 'string')[0]?.props.accessibilityLabel;
+    expect(label).toContain(purpose);
+
+    // Other option rows (pickers, selection lists) keep their two-line description.
+    const option = await renderScreen(<SelectableRow title="ChatGPT" subtitle={purpose} onPress={() => {}} />);
+    expect(linesOf(option)).toEqual([2]);
+  });
+
   it('title-aligns left and right accessories when a subtitle is present', async () => {
     const { SelectableRow } = await import('./SelectableRow');
 

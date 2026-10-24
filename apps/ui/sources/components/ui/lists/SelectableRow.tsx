@@ -336,6 +336,8 @@ export const SelectableRow = React.forwardRef<React.ElementRef<typeof Pressable>
         ref={ref as React.Ref<HappierFocusable>}
         title={props.title}
         subtitle={props.subtitle}
+        // A menu is scanned, not read: one purpose line per row; the row's accessible name keeps the whole text.
+        subtitleLines={isMenu ? 1 : undefined}
         titleLeading={titleLeading}
         titleAccessory={titleAccessory}
         subtitleLeading={subtitleLeading}
