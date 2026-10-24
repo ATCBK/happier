@@ -7,8 +7,8 @@ import { SessionEffectiveNotificationV1Schema, type SessionEffectiveNotification
 import { ViewerReadStateV1Schema, type ViewerReadStateV1 } from './readState.js';
 import { SessionPersonalRelevanceV1Schema, type SessionPersonalRelevanceV1 } from './relevance.js';
 
-/** Account-private read projection; each nested fact has its own closed schema. */
-export const SessionViewerProjectionV1Schema = lazyZodSchema(() => z.strictObject({
+/** Account-private read projection; additive outer facts are safely dropped, while each known nested fact stays closed. */
+export const SessionViewerProjectionV1Schema = lazyZodSchema(() => z.object({
   readState: ViewerReadStateV1Schema,
   latestFailureSeq: z.nullable(z.number().check(z.int(), z.gte(0))),
   relevance: SessionPersonalRelevanceV1Schema,
