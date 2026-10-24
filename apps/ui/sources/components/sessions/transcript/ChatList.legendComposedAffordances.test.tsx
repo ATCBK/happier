@@ -149,12 +149,6 @@ describe('ChatList composed Legend affordances', () => {
                     approvalStatus: 'open',
                     sessionId: 'session-1',
                 },
-                title: 'Approve session list',
-                headerVersion: 1,
-                seq: 1,
-                createdAt: 1,
-                updatedAt: 1,
-                isDecrypted: true,
             },
             approval: {
                 v: 1,

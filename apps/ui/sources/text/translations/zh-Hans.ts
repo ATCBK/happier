@@ -7590,6 +7590,8 @@ export const zhHans: TranslationStructure = {
         agent_runtime_daemon_service_generation_not_current: "运行器的智能体代次已不是最新。请在目标机器上重试会话。",
         native_agent_privileged_effect_authority_unavailable: "运行器的 daemon 授权不可用。请检查目标机器，然后重试会话。",
         native_agent_privileged_effect_outcome_unknown: "无法确认运行器 daemon 的准备情况。重试前请检查会话和目标机器。",
+        daemon_draining: "目标机器正在暂时暂停新任务。准备就绪后，请重试会话。",
+        daemon_shutting_down: "Happier 正在目标机器上关闭。请在该机器上重新启动，然后重试会话。",
         skills_unavailable: "技能分发不可用。请检查目标机器，然后重试会话。",
         team_credential_provider_selection_not_current: "所选的 Team 提供商不可用。请检查 Team 的模型选择，然后重试会话。",
         teamCredential: "共享的 Team 凭据拒绝了该请求。",

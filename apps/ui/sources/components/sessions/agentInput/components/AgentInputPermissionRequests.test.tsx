@@ -112,12 +112,6 @@ describe('AgentInputPermissionRequests', () => {
                     artifact: {
                         id: 'approval-1',
                         header: { v: 1, kind: 'approval_request.v1', title: 'Approve', approvalStatus: 'open', sessionId: 's1' },
-                        title: 'Approve',
-                        headerVersion: 1,
-                        seq: 1,
-                        createdAt: 1,
-                        updatedAt: 1,
-                        isDecrypted: true,
                     },
                     approval: {
                         v: 1,
@@ -162,12 +156,6 @@ describe('AgentInputPermissionRequests', () => {
                     artifact: {
                         id: 'approval-1',
                         header: { v: 1, kind: 'approval_request.v1', title: 'Approve', approvalStatus: 'open', sessionId: 's1' },
-                        title: 'Approve',
-                        headerVersion: 1,
-                        seq: 1,
-                        createdAt: 1,
-                        updatedAt: 1,
-                        isDecrypted: true,
                     },
                     approval: {
                         v: 1,

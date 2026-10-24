@@ -1470,7 +1470,6 @@ const ConnectedAccountServiceController = React.memo(
                     id: entry.mode.id,
                     title: entry.mode.kind === 'oauthAuthorizationCode' ? t('connectedServicesSettings.methodBrowser')
                         : entry.mode.kind === 'oauthDeviceCode' ? t('connectedServicesSettings.methodCode')
-                            : setupPresentation && 'manualMethodTitleKey' in setupPresentation ? t(setupPresentation.manualMethodTitleKey)
                             : resolveConnectedAccountModeTitle(entry.mode, localizeServiceText),
                     recommended: entry.recommended,
                 })) : []}

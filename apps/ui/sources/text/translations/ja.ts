@@ -8210,6 +8210,8 @@ localTailscale: {
         agent_runtime_daemon_service_generation_not_current: "ランナーのエージェント世代が最新ではありません。対象のマシンでセッションを再試行してください。",
         native_agent_privileged_effect_authority_unavailable: "ランナーの daemon 権限を利用できません。対象のマシンを確認してから、セッションを再試行してください。",
         native_agent_privileged_effect_outcome_unknown: "ランナーの daemon の準備を確認できませんでした。再試行する前に、セッションと対象のマシンを確認してください。",
+        daemon_draining: "対象のマシンは新しい作業を一時的に停止しています。準備ができたらセッションを再試行してください。",
+        daemon_shutting_down: "対象のマシンで Happier を終了しています。そのマシンで再起動してから、セッションを再試行してください。",
         skills_unavailable: "スキルの配信を利用できません。対象のマシンを確認してから、セッションを再試行してください。",
         team_credential_provider_selection_not_current: "選択した Team のプロバイダーを利用できません。Team のモデル選択を確認してから、セッションを再試行してください。",
         teamCredential: "共有された Team の認証情報がリクエストを拒否しました。",

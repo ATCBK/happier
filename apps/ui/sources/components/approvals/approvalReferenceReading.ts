@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { t } from '@/text';
 import { storage, useArtifact, useMachineDisplayNamesById, useProjectAccountRows, useServerScopedMachine } from '@/sync/domains/state/storage';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
@@ -197,11 +198,11 @@ type ApprovalReferenceSources = {
     viewer: ReturnType<typeof useAccountSettingsScope>;
     ownHome: boolean;
     artifact?: DecryptedArtifact | null;
-    machine?: ReturnType<typeof useServerScopedMachine>;
+    machine?: Machine | null;
     managedMachine?: ManagedMachineV1;
-    managedEnrolledMachine?: ReturnType<typeof useServerScopedMachine>;
+    managedEnrolledMachine?: Machine | null;
     managedMachineLoading?: boolean;
-    sessionMachine?: ReturnType<typeof useServerScopedMachine>;
+    sessionMachine?: Machine | null;
     mcp?: ReturnType<typeof useMcpServerCatalogForServer>;
     registries?: Pick<ReturnType<typeof usePromptLibraryCatalogValue<'registry-sources'>>, 'value'>;
     project?: ProjectOrganizationRow | null;

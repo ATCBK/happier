@@ -31,6 +31,8 @@ export async function readSessionSnapshotForAuthority(params: Readonly<{
     prefetched?: SessionByIdPrefetchedRead;
     /** Interval consumers need an admitted projection, including a successful empty one. */
     requireTurns?: boolean;
+    /** Mode/key consumers need the Session, not its turn inventory. */
+    includeTurns?: boolean;
     signal?: AbortSignal;
     isCurrent?: () => boolean;
     accountCurrentnessSource?: ReturnType<typeof createOperationAccountCurrentnessSource>;
@@ -46,7 +48,7 @@ export async function readSessionSnapshotForAuthority(params: Readonly<{
             serverId: params.authority.scope.serverId,
             sessionId: params.sessionId,
             prefetched: params.prefetched,
-            includeTurnsProjection: params.requireTurns ? 'required' : undefined,
+            includeTurnsProjection: params.requireTurns ? 'required' : params.includeTurns,
             activeCredentials: credentials,
             activeRequest: params.authority.request,
             sessionDataKeys: new Map(),

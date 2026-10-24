@@ -31,7 +31,8 @@ async function withSourceTranscript<TResult>(input: SourceTranscriptScope, opera
 }
 
 /** Rejoin the exact previous submission before retrying; never enumerate today's selector membership. */
-export async function readSessionMessageInvocationForSubmit(input: SourceTranscriptScope & Readonly<{ localId: string }>) {
+export async function readSessionMessageInvocationForSubmit(input: SourceTranscriptScope & Readonly<{ localId: string }>):
+    Promise<Readonly<{ invocation: SessionMessageInvocationV1; text: string }> | null> {
     return withSourceTranscript(input, async ({ authority, guard, mode, encryption }) => {
         const localId = deriveSessionMessageInvocationLocalIdV1(input.localId);
         const response = await authority.request(`/v2/sessions/${encodeURIComponent(input.sessionId)}/messages/by-local-id/${encodeURIComponent(localId)}`,

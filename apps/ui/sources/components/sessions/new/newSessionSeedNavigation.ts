@@ -1,10 +1,12 @@
 import type { SessionNewSessionSeedOutcome } from '@happier-dev/protocol/plugins/ui';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { admitProjectAuthoringOrigin } from '@/components/projects/detail/projectRouteState';
+import type { NewSessionDraft } from '@/sync/domains/state/persistence';
 
 /** Page-host navigation adapter shared by semantic Host API and authoring Actions. */
 export async function openOrdinaryNewSessionSeed(params: Readonly<{
     seed: unknown;
+    configurationDraft?: NewSessionDraft;
     pluginId?: string;
     scope: ServerAccountScope;
     signal?: AbortSignal;
@@ -17,6 +19,7 @@ export async function openOrdinaryNewSessionSeed(params: Readonly<{
         ]);
         return seedAndOpenNewSession({
             seed: params.seed,
+            ...(params.configurationDraft ? { configurationDraft: params.configurationDraft } : {}),
             ...(params.pluginId ? { pluginId: params.pluginId } : {}),
             scope: params.scope,
             ...(params.signal ? { signal: params.signal } : {}),
@@ -27,6 +30,10 @@ export async function openOrdinaryNewSessionSeed(params: Readonly<{
                     pathname: '/new',
                     params: {
                         draftId,
+                        ...(params.configurationDraft ? {
+                            draftServerId: params.scope.serverId,
+                            draftAccountId: params.scope.accountId,
+                        } : {}),
                         ...(dataId === null ? {} : { dataId }),
                         ...(worktree === undefined ? {} : { worktree }),
                         ...(spawnServerId === undefined ? {} : { spawnServerId }),

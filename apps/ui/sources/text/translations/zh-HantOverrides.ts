@@ -6436,6 +6436,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
               agent_runtime_daemon_service_generation_not_current: "執行器的代理程式世代已不是最新。請在目標機器上重試工作階段。",
               native_agent_privileged_effect_authority_unavailable: "執行器的 daemon 授權無法使用。請檢查目標機器，然後重試工作階段。",
               native_agent_privileged_effect_outcome_unknown: "無法確認執行器 daemon 的準備情況。重試前請檢查工作階段和目標機器。",
+              daemon_draining: "目標機器正在暫時暫停新工作。準備就緒後，請重試工作階段。",
+              daemon_shutting_down: "Happier 正在目標機器上關閉。請在該機器上重新啟動，然後重試工作階段。",
               skills_unavailable: "技能派送無法使用。請檢查目標機器，然後重試工作階段。",
               team_credential_provider_selection_not_current: "所選的 Team 提供者無法使用。請檢查 Team 的模型選擇，然後重試工作階段。",
               teamCredential: "共用的 Team 憑證拒絕了該請求。",
