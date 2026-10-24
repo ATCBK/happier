@@ -5,6 +5,7 @@ import { createPluginUiResourceStore, pluginUiResourceReferenceKey, type PluginU
 import type {
     PluginUiResourceReference,
     PluginUiResourceSnapshot,
+    PluginUiResourceProjectionSnapshot,
 } from '@happier-dev/plugin-ui/hostApi';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 
@@ -271,15 +272,22 @@ export function createPluginDeclaredResourceStore(input: Omit<PluginContextualRe
         retire(code: string): void;
     }>>();
     let disposed = false;
-    const unavailableSnapshot = (code: string): PluginUiResourceSnapshot => Object.freeze({
+    const unavailableSnapshot = (code: string): PluginUiResourceProjectionSnapshot<never> => Object.freeze({
         freshness: 'unknown', pending: 'idle', subscription: 'ended', error: { code, message: code },
     });
     const surfaceRetired = unavailableSnapshot('plugin_surface_retired');
     const declarationWithdrawn = unavailableSnapshot('plugin_resource_not_found');
-    const unavailableEntry = (snapshot: PluginUiResourceSnapshot): PluginUiResourceEntry => Object.freeze({
+    const unavailableEntry = (snapshot: PluginUiResourceProjectionSnapshot<never>): PluginUiResourceEntry => Object.freeze<PluginUiResourceEntry>({
         getSnapshot: () => snapshot,
         subscribe: () => () => {},
         refresh: async () => snapshot,
+        select(_projection, selector) {
+            return Object.freeze({
+                getSnapshot: () => selector(snapshot),
+                subscribe: () => () => {},
+                refresh: async () => {},
+            });
+        },
     });
     // Resource hooks render failures as snapshots, not render-time exceptions.
     const failures = {
@@ -359,10 +367,10 @@ export function createPluginDeclaredResourceStore(input: Omit<PluginContextualRe
             // The underlying bytes/watch remain shared. Only this mount's
             // declaration authority is withdrawn; another consumer can retain
             // the shared entry without exposing it through this old facade.
-            let retired: PluginUiResourceSnapshot | null = null;
+            let retired: PluginUiResourceProjectionSnapshot<never> | null = null;
             const contract = declaration ? contractKey(declaration) : null;
             const subscriptions = new Set<Readonly<{ listener(): void; release(): void }>>();
-            const snapshot = (): PluginUiResourceSnapshot => {
+            const refusal = (): PluginUiResourceProjectionSnapshot<never> | null => {
                 if (retired) return retired;
                 if (disposed || !input.accountLifetime.isCurrent()) return surfaceRetired;
                 const currentDeclarations = readDeclarations();
@@ -371,9 +379,10 @@ export function createPluginDeclaredResourceStore(input: Omit<PluginContextualRe
                 // data now; committed reconciliation releases and notifies.
                 const admitted = contract === null ? !hasDeclaredNamespace && !isScopedNamespace(currentDeclarations)
                     : current && contractKey(current) === contract;
-                return admitted ? shared.getSnapshot() : declarationWithdrawn;
+                return admitted ? null : declarationWithdrawn;
             };
-            const entry: PluginUiResourceEntry = Object.freeze({
+            const snapshot = (): PluginUiResourceSnapshot => refusal() ?? shared.getSnapshot();
+            const entry: PluginUiResourceEntry = Object.freeze<PluginUiResourceEntry>({
                 getSnapshot: snapshot,
                 subscribe(listener, live) {
                     reconcile();
@@ -387,6 +396,28 @@ export function createPluginDeclaredResourceStore(input: Omit<PluginContextualRe
                     if (retired) return retired;
                     await shared.refresh();
                     return snapshot();
+                },
+                select(projection, selector) {
+                    // The shared owner decodes on demand, after this mount's
+                    // independent declaration authority is checked.
+                    const projected = shared.select(projection, current => current);
+                    const getSnapshot = () => {
+                        const unavailable = refusal();
+                        return unavailable ? selector(unavailable) : selector(projected.getSnapshot());
+                    };
+                    return Object.freeze({
+                        getSnapshot,
+                        subscribe(listener: () => void, live: boolean) {
+                            let previous = getSnapshot();
+                            return entry.subscribe(() => {
+                                const next = getSnapshot();
+                                if (Object.is(previous, next)) return;
+                                previous = next;
+                                listener();
+                            }, live);
+                        },
+                        refresh: async () => { await entry.refresh(); },
+                    });
                 },
             });
             entries.set(key, { localId: reference.localId, contract, entry,

@@ -22,6 +22,7 @@ export type BuildInjectedBrowserDiagnosticsScriptInput = InjectedBrowserDiagnost
      * the desktop child webview has neither a parent window nor a ReactNativeWebView bridge.
      */
     desktopIpcDelivery?: boolean;
+    presentationActive?: boolean;
     /**
      * DEV-2: the LOCAL owner's `browser.diagnostics` value-capture policy. When set, the in-page
      * console collector surfaces a length-capped (`INJECTED_CONSOLE_TEXT_MAX_LENGTH`) `text` rendering
@@ -754,6 +755,7 @@ export function buildInjectedBrowserDiagnosticsScript(
         } : {}),
         ...(input.desktopIpcDelivery ? {
             desktopIpcDelivery: true,
+            presentationActive: input.presentationActive !== false,
         } : {}),
         ...(input.ownerConsoleValueCapture ? {
             ownerConsoleValueCapture: true,

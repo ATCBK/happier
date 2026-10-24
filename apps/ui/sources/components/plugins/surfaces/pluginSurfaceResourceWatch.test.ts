@@ -312,7 +312,7 @@ describe('mounted plugin surface live resource invalidation (EU-4b)', () => {
         const client = createPluginContextualResourceWatchClient({ pluginId: 'acme.preview',
             resource: { machineId: 'machine-1', expectedCallerOccurrenceId: 'occurrence-7', store },
             subscriptionIdPrefix: 'shared-digest', transport: daemon.transport });
-        const events: ResourceSubscriptionEvent[] = [];
+        const events: Parameters<Parameters<typeof client.watchResource>[1]>[0][] = [];
         const entry = store.getEntry('live-status');
         let subscription: Readonly<{ dispose(): void }> | undefined;
         try {
