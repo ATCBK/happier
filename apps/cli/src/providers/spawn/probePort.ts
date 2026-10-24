@@ -205,6 +205,15 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
     scope?: ProviderProbeOperationScope,
   ): Promise<ProviderProbeHostAuthorizationResult> => {
     const operationScope = startProbeOperationScope(scope);
+    const readSnapshot = operationScope.getAccountSettingsSnapshot ?? getAccountSettingsSnapshot;
+    const resolveBindingIntent = operationScope.getAccountSettingsSnapshot
+      ? operationScope.resolveManagedPurposeBindingIntent
+      : operationScope.resolveManagedPurposeBindingIntent ?? input.resolveManagedPurposeBindingIntent;
+    const accountCurrent = async () => !operationScope.isAccountCurrent
+      || await awaitWithinProviderOperation(Promise.resolve(operationScope.isAccountCurrent()), operationScope.lifetime);
+    if (!await accountCurrent()) return { ok: false, error: createProviderErrorV1('provider_authorization_changed', {
+      connectionId: request.connectionId, machineId: request.machineId,
+    }) };
     let registry = operationScope.registry ?? input.registry;
     if (!registry && input.resolveRegistry) {
       try {
@@ -226,7 +235,7 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
       }
     }
     if (!registry) throw new TypeError('Provider probe authorization requires a contribution registry');
-    const snapshot = getAccountSettingsSnapshot();
+    const snapshot = readSnapshot();
     if (snapshot?.providerConnectionsCatalog?.status !== 'ready') {
       return {
         ok: false,
@@ -332,7 +341,7 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
       if (
         resolution.status !== 'resolved'
         || resolution.record.deployment.kind !== 'managedLocal'
-        || !input.resolveManagedPurposeBindingIntent
+        || !resolveBindingIntent
       ) {
         return {
           ok: false,
@@ -343,7 +352,6 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
         };
       }
       const { deployment } = resolution.record;
-      const resolveBindingIntent = input.resolveManagedPurposeBindingIntent;
       try {
         managedPurposeBindingResolution = await awaitAbortableWithinProviderOperation(
           signal => resolveManagedProviderPurposeBindingSnapshot({
@@ -365,8 +373,8 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
         };
       }
     }
-    const currentSnapshot = getAccountSettingsSnapshot();
-    if (currentSnapshot?.providerConnectionsCatalog?.status !== 'ready'
+    const currentSnapshot = readSnapshot();
+    if (!await accountCurrent() || currentSnapshot?.providerConnectionsCatalog?.status !== 'ready'
       || admittedSettingsBasis && (
         admittedSettingsBasis.scopeKey !== currentSnapshot.scopeKey
         || admittedSettingsBasis.settingsVersion > currentSnapshot.settingsVersion
@@ -446,11 +454,17 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
       if (!validation.ok) return validation;
       return { ok: true };
     },
-    resolveCredential: async (credentialRef) => resolveRuntimeProviderCredential({
-      credentialRef,
-      getAccountSettingsSnapshot,
-      ...(input.openTeamDirect ? { openTeamDirect: input.openTeamDirect } : {}),
-    }),
+    resolveCredential: async (credentialRef, scope) => {
+      if (scope?.isAccountCurrent && !await scope.isAccountCurrent()) return {
+        ok: false, error: createProviderErrorV1('provider_authorization_changed', {
+          connectionId: credentialRef.connectionId, machineId: credentialRef.machineId,
+        }),
+      };
+      return resolveRuntimeProviderCredential({ credentialRef,
+        getAccountSettingsSnapshot: scope?.getAccountSettingsSnapshot ?? getAccountSettingsSnapshot,
+        ...(input.openTeamDirect ? { openTeamDirect: input.openTeamDirect } : {}),
+      });
+    },
   });
 }
 

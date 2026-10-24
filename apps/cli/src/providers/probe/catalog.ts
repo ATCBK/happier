@@ -56,6 +56,7 @@ export type ProviderManagedCatalogRuntimePort<TTicket> = Readonly<{
     source: ProviderManagedCatalogSource;
     request: ProviderProbeAuthorizationRequest;
     ticket: TTicket;
+    operationScope?: ProviderProbeOperationScope;
     /** Exact Provider plugin activation occurrence that authorized the source. */
     expectedActivationOccurrenceId?: string;
     signal?: AbortSignal;
@@ -470,6 +471,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
           source: sources.first,
           request: firstAuthorization.request,
           ticket: firstAuthorization.ticket,
+          ...(operationScope ? { operationScope } : {}),
           ...(expectedActivationOccurrenceId === undefined
             ? {}
             : { expectedActivationOccurrenceId }),
@@ -828,7 +830,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
             },
             ...(credentialRef === null ? {} : {
               resolveCredential: async () => {
-                const resolution = await dependencies.authorization.resolveCredential(credentialRef);
+                const resolution = await dependencies.authorization.resolveCredential(credentialRef, operationScope);
                 if (!resolution.ok) throw new ProviderProbeCredentialResolutionError(resolution.error);
                 return resolution.lease;
               },

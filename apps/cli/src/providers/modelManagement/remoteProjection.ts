@@ -20,9 +20,9 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import type { ProviderRuntimeModelProjectionReader } from '../spawn/runtimeCatalog';
 import { logger } from '@/ui/logger';
 
-/** Transport only: the caller owns Home/Account admission and the target owns
- * source projection, compatibility, probing and managed consumer custody. */
-type AccountScopedProviderReadInput = Readonly<{
+/** Transport only: the caller owns Home/Account admission. The requested
+ * operation retains source observation or selected-worker compatibility. */
+export type AccountScopedProviderReadInput = Readonly<{
   serverUrl: string;
   readCredentials(): Promise<StoredCredentials | null>;
   readAccountSettingsSnapshot(): Promise<ActiveAccountSettingsSnapshot | null>;

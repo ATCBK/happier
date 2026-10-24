@@ -147,6 +147,12 @@ export function createProviderManagedCatalogRuntimePort(input: Readonly<{
         };
       }
       const ticket = launchInput.ticket;
+      const accountAuthority = launchInput.operationScope?.managedRuntimeAccount;
+      if (accountAuthority === null || (launchInput.operationScope?.getAccountSettingsSnapshot && !accountAuthority)) {
+        return { ok: false, error: createProviderErrorV1('provider_authorization_changed', {
+          connectionId: ticket.connectionId, machineId: ticket.machineId,
+        }) };
+      }
       const signal = launchInput.signal ?? new AbortController().signal;
       const scope = createProviderLaunchResourceScope();
       let authorizationCurrent = !signal.aborted;
@@ -227,8 +233,10 @@ export function createProviderManagedCatalogRuntimePort(input: Readonly<{
 
       let invocationServices: Awaited<ReturnType<typeof createInvocationServices>>;
       try {
+        const resolveSharedGateway = accountAuthority?.resolveSharedGateway ?? input.resolveSharedGateway;
         invocationServices = await createInvocationServices({
-          ...(input.resolveSharedGateway ? { sharedGateway: await input.resolveSharedGateway({
+          ...(accountAuthority ? { accountAuthority } : {}),
+          ...(resolveSharedGateway ? { sharedGateway: await resolveSharedGateway({
             connectionId: ticket.connectionId,
             consumerId: `catalogProbe:${randomUUID()}`,
             signal,

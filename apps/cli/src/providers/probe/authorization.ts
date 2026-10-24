@@ -17,6 +17,10 @@ import type {
 } from '../registry/types';
 import type { readProviderSettingsForCli } from '../settings/read';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { ResolveManagedProviderPurposeBindingIntent } from '../managed/resolvePurposeBindingSnapshot';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
+import type { ManagedProviderInvocationAccountAuthority } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import type { ResolveSharedManagedProviderGatewayBinding } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 
 /** One already-parsed Account settings generation owned by a bulk operation. */
 export type ProviderProbeAccountSettingsBasis = Readonly<{
@@ -34,6 +38,14 @@ export type ProviderProbeOperationScope = Readonly<{
   /** Fresh evidence owned by this immutable bulk operation, never a cache. */
   dnsEvidenceByConnectionId?: ReadonlyMap<string, ProviderEndpointDnsEvidence>;
   lifetime: ProviderOperationLifetime;
+  getAccountSettingsSnapshot?: () => ActiveAccountSettingsSnapshot | null;
+  resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
+  isAccountCurrent?: () => boolean | Promise<boolean>;
+  savedSecretOperationContext?: SavedSecretOperationContextV1 | null;
+  /** Null refuses explicit Account work without issued managed custody. */
+  managedRuntimeAccount?: (ManagedProviderInvocationAccountAuthority & Readonly<{
+    resolveSharedGateway: ResolveSharedManagedProviderGatewayBinding;
+  }>) | null;
 }>;
 
 export type ProviderProbeCredentialLease = Readonly<{
@@ -127,5 +139,5 @@ export type ProviderProbeAuthorizationPort<TTicket, TCredentialRef> = Readonly<{
     destination: AssessedProviderEndpoint,
     scope?: ProviderProbeOperationScope,
   ): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; error: ProviderErrorV1 }>>;
-  resolveCredential(reference: TCredentialRef): Promise<ProviderProbeCredentialResolution>;
+  resolveCredential(reference: TCredentialRef, scope?: ProviderProbeOperationScope): Promise<ProviderProbeCredentialResolution>;
 }>;

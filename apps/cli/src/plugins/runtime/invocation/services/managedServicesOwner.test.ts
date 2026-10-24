@@ -6342,6 +6342,33 @@ describe('managed-services SVC09 owner', () => {
         }
     });
 
+    it('attaches editor inference only to a running explicit Provider claim without establishing or reviving it', async () => {
+        const harness = createLifecycleHarness([], 'daemon');
+        let current = true;
+        const establish = vi.fn(async () => explicitStartOutcome());
+        const operation = {
+            operationId: 'existing-editor-source', pluginId: 'acme.providers',
+            contributionQualifiedId: 'acme.providers/providers/gateway', occurrenceId: 'provider-p',
+            purposeBindingsEqualityKey: 'binding-key-one', isCurrent: () => current,
+            revalidateRetainedCurrentness: async () => current, establish,
+        };
+        try {
+            expect(await harness.owner.runManagedProviderExplicitStart({ ...operation, existingOnly: true })).toEqual({ status: 'unavailable' });
+            expect(establish).not.toHaveBeenCalled();
+            expect(await harness.owner.runManagedProviderExplicitStart(operation)).toMatchObject({ status: 'established' });
+            const borrowed = await harness.owner.runManagedProviderExplicitStart({ ...operation, existingOnly: true });
+            expect(borrowed).toMatchObject({ status: 'established' });
+            expect(establish).toHaveBeenCalledOnce();
+            current = false;
+            if (borrowed.status === 'established') expect(borrowed.value.projection.isCurrent()).toBe(false);
+            expect(await harness.owner.runManagedProviderExplicitStart({ ...operation, existingOnly: true })).toEqual({ status: 'not_current' });
+            current = true;
+            await harness.owner.retireManagedProviderExplicitStart(operation);
+            expect(await harness.owner.runManagedProviderExplicitStart({ ...operation, existingOnly: true })).toEqual({ status: 'unavailable' });
+            expect(establish).toHaveBeenCalledOnce();
+        } finally { await harness.owner.dispose(); }
+    });
+
     it('joins pending and settled exact explicit Provider starts before launch authority', async () => {
         const harness = createLifecycleHarness([], 'daemon');
         const launchGate = deferred<void>();

@@ -3,7 +3,7 @@ import { projectProviderCatalogProbeModelDescriptorV1 } from '@happier-dev/proto
 import { DaemonProviderModelProjectionResponseV1Schema, type DaemonProviderModelProjectionRequestV1, type DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
-import { createAccountConnectionModelProjectionRequest, projectProviderBrokerApplication } from '../broker/applicationProjection';
+import { createAccountConnectionModelProjectionRequest } from '../broker/applicationProjection';
 import { createProviderManagedRuntimeDeclarationEqualityKeyV1, resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
 import { createProviderManagedProbeRequestFingerprintV1, createProviderProbeRequestFingerprintV1 } from '@happier-dev/protocol/providers/securityFingerprintsV1';
 import type { ProviderCatalogFingerprintV1, ProviderModelDescriptorV1, ProviderModelLoadStateV1, ProviderObservationAuthorizationFingerprintV1, ProviderRuntimeStateFileV1, ProviderSettingsV1, QualifiedConnectedAccountPurposeBindingsV1 } from '@happier-dev/protocol';
@@ -218,12 +218,12 @@ export async function resolveProviderRuntimeCatalogSelectionObservation(
       if (managedDeployment.managedRuntime.sharing !== 'connectionMachine'
         || !input.readModelProjection || !input.signal) throw unavailable();
       input.signal.throwIfAborted();
-      // The hub's canonical compatibility owner chooses the application. A
-      // probe endpoint protocol cannot choose an Agent binding protocol.
+      // The hub owns source membership and currentness. The selected worker's
+      // outer spawn authorization chooses its Agent application/compatibility.
       const response = DaemonProviderModelProjectionResponseV1Schema.parse(await input.readModelProjection(
-        createAccountConnectionModelProjectionRequest({ machineId: placement.machineId,
+        { ...createAccountConnectionModelProjectionRequest({ machineId: placement.machineId,
           connectionId: record.connectionId, expectedConnectionSecurityFingerprint: record.connectionSecurityFingerprint,
-          agentTargetKey: input.selection.ref.agentTargetKey, refreshPolicy: 'current_only' }), input.signal,
+          agentTargetKey: input.selection.ref.agentTargetKey, refreshPolicy: 'current_only' }), sourceCatalog: true }, input.signal,
       ));
       input.signal.throwIfAborted();
       if (response.status === 'error') throw response.error;
@@ -239,14 +239,7 @@ export async function resolveProviderRuntimeCatalogSelectionObservation(
       if (!primary) throw createProviderErrorV1('provider_model_not_found', { connectionId, machineId: placement.machineId });
       for (const row of selected) {
         if (row.ref.agentTargetKey !== input.selection.ref.agentTargetKey || row.ref.providerConnectionId !== connectionId
-          || row.descriptor.id !== row.ref.modelId || row.catalog.stale || !row.application) throw unavailable();
-        if (row.compatibility.result.status === 'incompatible') {
-          throw createProviderErrorV1('provider_incompatible_with_agent', { connectionId, machineId: placement.machineId });
-        }
-        const application = projectProviderBrokerApplication({ connection: record,
-          agentTargetKey: input.selection.ref.agentTargetKey, protocol: row.compatibility.result.selectedProtocol,
-          expectedApplication: row.application });
-        if (!application || !pluginJsonValuesEqual(application, row.application)) throw unavailable();
+          || row.descriptor.id !== row.ref.modelId || row.catalog.stale) throw unavailable();
       }
       return {
         model: ProviderModelDescriptorV1Schema.parse(primary.descriptor), loadState: primary.loadState,

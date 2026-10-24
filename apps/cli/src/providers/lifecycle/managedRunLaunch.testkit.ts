@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema, splitProviderSettingsV1, type ConnectedAccountPurposeDeclarationV1 } from '@happier-dev/protocol';
+import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema, splitProviderSettingsV1, type ConnectedAccountPurposeDeclarationV1, type ProviderModelLoadDescriptorV1 } from '@happier-dev/protocol';
 import { writeCommittedLocalPathPluginFixture } from '@/plugins/store/state.testkit';
 import { createLocalPathPluginDistributionIdentity, createPluginTrustRecord } from '@/plugins/store/install/trustIdentity';
 import { loadInstalledPlugins } from '@/plugins/discovery/load/installed';
@@ -21,6 +21,9 @@ import type { AgentProviderRequirementsV1 } from '@happier-dev/protocol/provider
  * supplied by each test; no authorization, registry or materializer is mocked. */
 export async function createManagedRunLaunchFixture(input: Readonly<{ directory?: string; happyHomeDir?: string; controller?: PluginReloadController; remote?: boolean; probeCatalog?: boolean; physicalGateway?: boolean; materializationUrl?: string; signedOutAgentCli?: boolean;
   catalogModels?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['catalogModels'];
+  modelLoad?: ProviderModelLoadDescriptorV1;
+  manualModelPolicy?: 'allowed' | 'catalog-only';
+  supportsFreeformModelIds?: boolean;
   includeBundledDeclarations?: boolean;
   activateAgent?: boolean;
   sessionRunnerFactoryModule?: string;
@@ -44,7 +47,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
     ...(input.holdResponseForInput ? { holdResponseForInput: input.holdResponseForInput } : {}),
     ...(input.upstreamUrl ? { upstreamUrl: input.upstreamUrl } : {}),
     ...(input.controller ? { controller: input.controller } : {}),
-    ...(input.probeCatalog ? { catalog: { source: 'static+probe' as const, manualModelPolicy: 'catalog-only' as const,
+    ...(input.probeCatalog ? { catalog: { source: 'static+probe' as const, manualModelPolicy: input.manualModelPolicy ?? 'catalog-only',
       staticModels: [{ id: 'example', name: 'Example' }], sourceRegistryVersion: 'fixture-registry:v1',
       probes: [{ endpointTemplateId: 'api', path: '/v1/models', parser: 'openai-models' as const }] } } : {}),
     credential: { kind: 'apiKey', required: false, slotId: 'apiKey', transports: [{ id: 'bearer',
@@ -83,15 +86,16 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
           credentialSupport: { supportsNoAuth: true, apiKeyTransports: [{ protocol: 'openai-responses',
             destination: { kind: 'httpHeader', names: 'anyValidated', formats: input.acceptedCredentialFormats ?? [input.runtimeCredentialHeader?.format ?? 'bearer'] } }] },
           authIsolation: { suppressConnectedServiceIds: [], ownedEnvKeys: ['RUN_PROVIDER_TOKEN'] },
-          materialization: 'spawnEnv', applyPolicy: 'restart_session', supportsFreeformModelIds: false } }],
-      ...(gateway ? {} : { providers: [{ v: 1, id: 'gateway', name: 'Gateway', kind: 'aggregator',
+          materialization: 'spawnEnv', applyPolicy: 'restart_session', supportsFreeformModelIds: input.supportsFreeformModelIds ?? false } }],
+      ...(gateway ? {} : { providers: [{ v: 1, id: 'gateway', name: 'Gateway', kind: input.modelLoad ? 'local' : 'aggregator',
+        ...(input.modelLoad ? { modelLoad: input.modelLoad } : {}),
         credential: { kind: 'apiKey', required: false, slotId: 'apiKey', transports: [{ id: 'bearer',
-          protocols: ['openai-responses'], uses: ['runtime'], destination: { kind: 'httpHeader', name: 'authorization', format: 'bearer' } }] },
+          protocols: ['openai-responses'], uses: input.modelLoad ? ['runtime', 'management'] : ['runtime'], destination: { kind: 'httpHeader', name: 'authorization', format: 'bearer' } }] },
         endpointTemplates: [{ id: 'responses', protocol: 'openai-responses', baseUrl: 'https://example.test/v1',
           capabilities: { streaming: 'supported', toolRoundTrips: 'supported', statefulResponses: 'supported', reasoningControls: 'supported' } }],
         catalog: input.probeCatalog
           ? { source: 'probe', sourceRegistryVersion: 'fixture-registry:v1', manualModelPolicy: 'catalog-only',
-              probes: [{ endpointTemplateId: 'responses', path: '/models', parser: 'openai-models' }] }
+              probes: [{ endpointTemplateId: 'responses', path: '/models', parser: input.modelLoad ? 'lmstudio-native-models' : 'openai-models' }] }
           : { source: 'static', manualModelPolicy: 'catalog-only', staticModels: [{ id: 'model-a', name: 'Model A' }] },
         managedRuntime: { kind: 'managed', sharing: 'connectionMachine', endpointTemplateIds: ['responses'] },
         compatibilityOverrides: [{ agentTargetKey, protocol: 'openai-responses', status: 'verified',
@@ -188,7 +192,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   }] });
   const resolution = resolveProviderConnectionForMachine({ connectionId: 'run-gateway', machineId,
     providerSettings: base, registry: contributes, dnsEvidenceByEndpointUrl: new Map() });
-  if (resolution.status !== 'resolved') throw new Error('Expected managed connection');
+  if (resolution.status !== 'resolved') throw new Error(`Expected managed connection: ${JSON.stringify(resolution)}`);
   const settings = ProviderSettingsV1Schema.parse({ ...base, machineGrants: [{ v: 1, connectionId: 'run-gateway', machineId,
     connectionSecurityFingerprint: resolution.record.connectionSecurityFingerprint,
     endpointSetFingerprint: resolution.record.endpointSetFingerprint, confirmedAt: 1 }] });

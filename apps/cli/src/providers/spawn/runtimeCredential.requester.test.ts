@@ -12,7 +12,7 @@ import { admitRuntimeProviderSavedSecret } from './runtimeCredential';
 
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
-it('admits a Provider shared secret through Bob private custody without publishing over Alice', async () => {
+it.each(['issued', 'missing'] as const)('admits a Provider shared secret only through issued Bob private custody without publishing over Alice (%s)', async custody => {
   const connectionId = ProviderConnectionIdSchema.parse('pc_gateway');
   const ref = 'happier:shared-secret:v1:bob-provider';
   const providerSettings = { ...DEFAULT_PROVIDER_SETTINGS_V1,
@@ -53,9 +53,17 @@ it('admits a Provider shared secret through Bob private custody without publishi
     authorization: { authorized: true, grantKind: 'account', grantFingerprint: 'grant', grantConfirmedAt: 1 },
     deployment: { kind: 'external' }, source: { kind: 'contribution', contributionKey: 'acme.gateway/gateway',
       pluginId: 'acme.gateway', provenance: 'external', definition } },
-    providerSettings, snapshot, getAccountSettingsSnapshot: operationContext.readSnapshot, operationContext,
+    providerSettings, snapshot, getAccountSettingsSnapshot: operationContext.readSnapshot,
+    operationContext: custody === 'issued' ? operationContext : null,
     lifetime: createProviderOperationLifetime({ wallTimeMs: 10_000 }),
   });
+  if (custody === 'missing') {
+    expect(result).toMatchObject({ ok: false, error: { code: 'provider_authorization_changed' } });
+    expect(reads).not.toHaveBeenCalled();
+    expect(featureReads).not.toHaveBeenCalled();
+    expect(getActiveAccountSettingsSnapshot()).toBe(alice);
+    return;
+  }
   if (!result.ok) throw new Error(`Requester Provider admission failed: ${result.error.code}`);
   expect(result).toMatchObject({ ok: true, snapshot: { savedSecretResources: [{ resourceId: 'bob-provider', materialStatus: 'ready' }] } });
   expect(getActiveAccountSettingsSnapshot()).toBe(alice);

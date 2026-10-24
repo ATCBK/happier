@@ -15,6 +15,7 @@ import type {
   ResolveManagedProviderPurposeBindingIntent,
 } from '@/providers/managed/resolvePurposeBindingSnapshot';
 import { DaemonProviderModelProjectionResponseV1Schema, type DaemonProviderModelProjectionRequestV1 } from '@happier-dev/protocol/rpc/providers';
+import { projectProviderModelSourceStateV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 
 import { resolveProviderConnectionForMachine } from '../registry';
 import {
@@ -564,7 +565,7 @@ describe('provider spawn runtime catalog bridge', () => {
     const readModelProjection = async (request: DaemonProviderModelProjectionRequestV1, signal: AbortSignal) => {
       signal.throwIfAborted();
       expect(request).toMatchObject({ machineId: 'machine-hub', agentTargetKey: 'agent:happier.agent.codex/codex',
-        includeDirectMaterialization: true,
+        includeDirectMaterialization: true, sourceCatalog: true,
         providerConnection: { connectionId, expectedConnectionSecurityFingerprint: authorizedResolution.record.connectionSecurityFingerprint } });
       expect(request).not.toHaveProperty('application');
       // The external hub RPC owns cold demand: a default read can acquire a
@@ -585,8 +586,9 @@ describe('provider spawn runtime catalog bridge', () => {
             application: { agentTargetKey: request.agentTargetKey, implementationIdentity: contribution.identity,
               endpointTemplateId: 'responses', protocol: 'openai-responses' },
             sources: { manual: false, static: false, probe: true }, confidence: 'probe',
-            compatibility: { result: { status: 'verified', selectedProtocol: 'openai-responses', evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-09' } },
-              compatibilityFingerprint: 'compatibility:v1:remote', confirmed: false },
+            compatibility: projectProviderModelSourceStateV1({ endpoint: {
+              id: 'responses', protocol: 'openai-responses', capabilities: endpointTemplate.capabilities,
+            } }, { id: 'managed-model', name: 'Managed model' }),
             endpointHealth: 'not_checked', catalog: { stale: projectionStale }, loadState: 'unknown', visibility: 'visible',
           }] }],
       });

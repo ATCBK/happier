@@ -1029,6 +1029,16 @@ export function resolveProviderSpawnAuthorization(
       if (!helperModel) {
         return { ok: false, error: createProviderErrorV1('provider_model_not_found', errorContext) };
       }
+      const helperCompatibility = resolveProviderModelCompatibility({ record, providerSettings,
+        agentTargetKey: input.agentTargetKey, support: adapter.support, model: helperModel,
+        adapterVersion: adapter.adapter.adapterVersion });
+      if (helperCompatibility.result.status === 'incompatible'
+        || helperCompatibility.result.selectedProtocol !== compatibilityResult.selectedProtocol) {
+        return { ok: false, error: createProviderErrorV1('provider_incompatible_with_agent', errorContext) };
+      }
+      if (helperCompatibility.result.status === 'experimental' && !helperCompatibility.confirmed) {
+        return { ok: false, error: createProviderErrorV1('provider_compatibility_unverified', errorContext) };
+      }
     }
     let prepared: AgentProviderBindingPrepared;
     try {

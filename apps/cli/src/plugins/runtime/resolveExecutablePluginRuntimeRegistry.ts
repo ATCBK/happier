@@ -559,6 +559,7 @@ export type ManagedProviderExplicitStartJoinResult =
     ManagedProviderExplicitStartOperationResult;
 
 export type ManagedProviderExplicitStartJoinInput = Readonly<{
+    existingOnly?: true;
     retirementGroup?: ManagedProviderExplicitStartOperationInput['retirementGroup'];
     identity: PluginContributionRef;
     purposeBindings: QualifiedConnectedAccountPurposeBindingsV1;
@@ -798,6 +799,7 @@ export type ResolvedExecutablePluginRuntimeRegistry = Readonly<{
         ref: PluginContributionRef,
     ): Promise<ResolvedProviderCatalogParsers | null>;
     createManagedProviderRuntimeInvocationServices?(input: Readonly<{
+        accountAuthority?: ManagedProviderInvocationAccountAuthority;
         identity: PluginContributionRef;
         purposeBindings: QualifiedConnectedAccountPurposeBindingsV1;
         operationClaim?: ManagedProviderRuntimeOperationClaim;
@@ -1796,6 +1798,13 @@ export type PluginRuntimeNetworkDependencies = Readonly<{
 }> & GlobalFetchRuntimeDependencies;
 
 export type PluginRuntimeMachineAdmissionTransport = CliActionMachineAdmissionTransport;
+
+/** Host-issued Account custody for one bounded managed Provider invocation. */
+export type ManagedProviderInvocationAccountAuthority = Readonly<{
+    readCredentials: typeof readStoredCredentials;
+    operationAuthority: ManagedProviderOperationAuthority;
+    connectedAccountsOwner: StablePluginConnectedAccountsOwner;
+}>;
 
 export async function resolveExecutablePluginRuntimeRegistry(
     params?: Readonly<{
@@ -6183,6 +6192,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
             return Object.freeze({ status: 'not_current' as const });
         }
         return await operationOwner.runManagedProviderExplicitStart({
+            ...(input.existingOnly ? { existingOnly: true as const } : {}),
             ...(sharedProvider ? { sharedProvider: true as const } : {}),
             ...(input.retirementGroup ? { retirementGroup: input.retirementGroup } : {}),
             operationId,
@@ -6284,6 +6294,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
     }
 
     type ManagedProviderInvocationPreparation = Readonly<{
+            accountAuthority?: ManagedProviderInvocationAccountAuthority;
             identity: PluginContributionRef;
             purposeBindings: QualifiedConnectedAccountPurposeBindingsV1;
             operationClaim?: Exclude<ManagedProviderRuntimeOperationClaim, { kind: 'sessionDemand' }>
@@ -6336,7 +6347,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 params?.resolveCurrentMachineExecutionOriginContext?.(
                     input.signal,
                 ).catch(() => null),
-                readSessionCredentials().catch(() => null),
+                (input.accountAuthority?.readCredentials ?? readSessionCredentials)().catch(() => null),
             ]);
             const sessionClaim = input.operationClaim?.kind === 'sessionDemand'
                 ? input.operationClaim
@@ -6527,13 +6538,14 @@ export async function resolveExecutablePluginRuntimeRegistry(
             ManagedProviderOperationAuthority['activate']
         >> | null = null;
         if (purposes.length > 0) {
-            if (!params?.managedProviderOperationAuthority) {
+            const authority = input.accountAuthority?.operationAuthority ?? params?.managedProviderOperationAuthority;
+            if (!authority) {
                 lifetime.complete();
                 return null;
             }
             try {
                 operationAuthority =
-                    await params.managedProviderOperationAuthority.activate({
+                    await authority.activate({
                         identity: input.identity,
                         operationId: operationClaimId,
                         purposes,
@@ -6598,6 +6610,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
         });
         const services = invocationServiceOwners
             .createManagedProviderRuntimeInvocationServices(seed, {
+                ...(input.accountAuthority ? { connectedAccountsOwner: input.accountAuthority.connectedAccountsOwner } : {}),
                 filesystemRoots: Object.freeze({
                     pluginData: join(
                         storePaths.storageDir,
@@ -6696,6 +6709,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
 
     async function createManagedProviderRuntimeInvocationServices(
         input: Readonly<{
+            accountAuthority?: ManagedProviderInvocationAccountAuthority;
             identity: PluginContributionRef;
             purposeBindings: QualifiedConnectedAccountPurposeBindingsV1;
             operationClaim?: ManagedProviderRuntimeOperationClaim;
@@ -7207,8 +7221,14 @@ export async function resolveExecutablePluginRuntimeRegistry(
         pluginId: string;
         signal?: AbortSignal;
     }>): PluginInvocationServicesSeed | null => {
-        const target = resolveExactActivationTarget(input.pluginId);
-        if (!target) return null;
+        // Descriptor-only plugins have admitted declarations and occurrences but
+        // no executable activation target. Settings consume that same authority.
+        const declarations = authoritativeContributes.pluginDeclarations?.filter(declaration => declaration.pluginId === input.pluginId);
+        const target = declarations?.length
+            ? declarations.length === 1 ? declarations[0] : null
+            : resolveExactActivationTarget(input.pluginId);
+        const occurrenceId = readCurrentPluginOccurrenceId(input.pluginId);
+        if (!target || !occurrenceId) return null;
         const signal = composePluginConsumerSignal(input.pluginId, input.signal);
         return Object.freeze({
             plugin: Object.freeze({
@@ -7219,7 +7239,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 id: 'settings',
                 qualifiedId: `${input.pluginId}/settings`,
             }),
-            occurrenceId: readCurrentPluginOccurrenceId(input.pluginId)!,
+            occurrenceId,
             correlationId: randomUUID(),
             surface: 'ui' as const,
             signal,

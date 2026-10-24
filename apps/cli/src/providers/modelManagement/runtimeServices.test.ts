@@ -26,6 +26,8 @@ import {
   type ProviderSettingsV1,
 } from '@happier-dev/protocol';
 import { TeamCredentialProviderModelCatalogEntryV1Schema, TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams';
+import { admitTeamCredentialSourceModelRowsV1 } from '@happier-dev/protocol/rpc/providers';
+import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 
@@ -445,6 +447,100 @@ describe('runtime provider model-management composition', () => {
   ): Promise<never> => {
     throw new Error('Unexpected model-settings effect');
   };
+
+  it('projects an admitted Connected Pool source without personal Provider catalog reads and refuses withdrawn sources', async () => {
+    const fixture = await createManagedRunLaunchFixture();
+    const base = createBrokerProviderRegistry();
+    const registry = { ...fixture.lease.registry, contributes: { ...fixture.lease.registry.contributes,
+      providersByContributionKey: new Map([...base.providersByContributionKey].map(([key, provider]) => [key, {
+        ...provider, definition: ProviderContributionV1Schema.parse({ ...provider.definition,
+          managedRuntime: { ...provider.definition.managedRuntime, connectedAccounts: [{
+            purpose: 'openai-upstream', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
+            endpointTemplateIds: ['cliproxyapi-openai-responses'], staticModels: [{ id: 'pool-model', name: 'Pool model' }],
+          }] },
+        }),
+      }])) } };
+    let sourceAvailable = true;
+    const unexpected = async (): Promise<never> => { throw new Error('No credential or mutation effect during source projection'); };
+    // Home target reads and the binding store are boundaries; purpose selection/currentness stay real.
+    const purposes = createConnectedAccountPurposeBindingOwner({
+      store: { read: async () => ({ v: 1, bindings: [] }), update: unexpected, subscribe: () => ({ dispose() {} }) },
+      selectTarget: unexpected, materializeAccount: unexpected, projectTargetAccounts: unexpected,
+      assertTargetAccountMaterializable: unexpected,
+      resolveTarget: async target => sourceAvailable && target.kind === 'group' ? {
+        account: { service: target.service, accountId: 'pool-account' }, displayName: 'Pool source',
+        group: { groupId: target.groupId, generation: 1 },
+      } : null,
+    });
+    let snapshotReads = 0;
+    const services = createRuntimeProviderModelManagementServices({ machineId: fixture.machineId,
+      featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => { snapshotReads += 1; return null; },
+      acquireRuntimeLease: async () => ({ ...fixture.lease, registry }),
+      resolveManagedPurposeBindingIntentSelection: purposes.resolveBindingIntentSelection,
+      modelSettingsMutation: unexpectedModelSettingsMutation });
+    const http = vi.spyOn(axios, 'get').mockRejectedValue(new Error('No personal catalog HTTP read for Connected Pool source'));
+    const rpc = new RpcHandlerManager({ scopePrefix: fixture.machineId, encryptionMode: 'plain', logger: () => {} });
+    registerMachineProviderRpcHandlers({ rpcHandlerManager: rpc, machineId: fixture.machineId,
+      featureGate: { isEnabled: () => true }, services: { ...services,
+        ...createRuntimeProviderConnectionServices({ machineId: fixture.machineId,
+          credentials: { token: 'pool-custodian', encryption: null }, featureGate: { isEnabled: () => true },
+          runtimeSummary: services.summary }),
+        ...createLegacyProfileMigrationRpcServices({ credentials: { token: 'pool-custodian', encryption: null } }),
+      } });
+    const application = { agentTargetKey: fixture.agentTargetKey,
+      implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
+      endpointTemplateId: 'cliproxyapi-openai-responses', protocol: 'openai-responses' as const };
+    const request = { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey,
+      sourceCatalog: true, refreshPolicy: 'current_only' as const, application,
+      connectedAccountTarget: { kind: 'group' as const,
+        service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool' } };
+    const eligibilityRequest = { machineId: fixture.machineId, teamId: 'team', resourceId: 'resource',
+      expectedResourceRevision: 1, scope: 'source_any' as const,
+      source: TeamCredentialSourceBindingV1Schema.parse({ v: 1, kind: 'connected_pool',
+        target: request.connectedAccountTarget, poolIncarnation: 'pool-incarnation' }) };
+    try {
+      const response = await rpc.invokeLocal(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, request);
+      expect(response).toMatchObject({ status: 'success', groups: [{ rows: [{ ref: { modelId: 'pool-model' }, application }] }] });
+      expect(admitTeamCredentialSourceModelRowsV1(response)).toMatchObject({ status: 'success', rows: [{
+        row: { ref: { modelId: 'pool-model' }, application }, sourceRevision: expect.any(String),
+      }] });
+      expect(snapshotReads).toBe(0);
+      expect(http).not.toHaveBeenCalled();
+      const eligibility = await services.resolveTeamCredentialBrokerEligibility(eligibilityRequest);
+      expect.soft(snapshotReads).toBe(0);
+      expect(eligibility).toEqual({ status: 'eligible' });
+
+      let accountCurrent = true;
+      const accountContext = {
+        getAccountSettingsSnapshot: (): never => { throw new Error('No personal Account snapshot read for source catalog'); },
+        resolveManagedPurposeBindingIntent: purposes.resolveBindingIntent,
+        resolveManagedPurposeBindingIntentSelection: purposes.resolveBindingIntentSelection,
+        signal: new AbortController().signal, isCurrent: () => accountCurrent,
+      };
+      await expect(services.projectModelsForAccount(request, accountContext)).resolves.toMatchObject({ status: 'success' });
+      await expect(services.projectModelsForAccount(request,
+        { ...accountContext, resolveManagedPurposeBindingIntentSelection: undefined }))
+        .resolves.toMatchObject({ status: 'error', error: { code: 'provider_catalog_unavailable' } });
+      accountCurrent = false;
+      await expect(services.projectModelsForAccount(request, accountContext))
+        .resolves.toMatchObject({ status: 'error', error: { code: 'provider_authorization_changed' } });
+
+      await expect(rpc.invokeLocal(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, request,
+        { rpcContext: { machineAdmission: { actorAccountId: 'recipient', custodianAccountId: 'custodian',
+          machineId: fixture.machineId, installationId: 'installation', role: 'use', encryptionMode: 'plain' } } }))
+        .resolves.toMatchObject({ status: 'error', error: { code: 'provider_authorization_changed' } });
+      sourceAvailable = false;
+      await expect(rpc.invokeLocal(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, request))
+        .resolves.toMatchObject({ status: 'error', error: { code: 'provider_catalog_unavailable' } });
+      await expect(services.resolveTeamCredentialBrokerEligibility(eligibilityRequest))
+        .resolves.toEqual({ status: 'unavailable', reason: 'source_unavailable' });
+      expect(snapshotReads).toBe(0);
+      expect(http).not.toHaveBeenCalled();
+      await expect(rpc.invokeLocal(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION,
+        { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey, refreshPolicy: 'current_only' }))
+        .resolves.toMatchObject({ status: 'error', error: { code: 'provider_settings_invalid' } });
+    } finally { await fixture.cleanup(); }
+  });
 
   it('resolves manual-model policy for a canonical-key connection through the registry', () => {
     const definition = ProviderContributionV1Schema.parse({

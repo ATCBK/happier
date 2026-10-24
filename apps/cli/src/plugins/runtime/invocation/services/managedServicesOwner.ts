@@ -2578,6 +2578,8 @@ export type ManagedProviderExplicitStartOperationResult =
     | Readonly<{ status: 'unavailable' }>;
 
 export type ManagedProviderExplicitStartOperationInput = Readonly<{
+    /** Borrow a current explicit Start claim; never establish, retire or revive it. */
+    existingOnly?: true;
     /** Only admitted shared Provider claims belong to controller custody. */
     sharedProvider?: true;
     operationId: string;
@@ -4563,7 +4565,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             if (!acceptsOperation()) {
                 return Object.freeze({ status: 'unavailable' as const });
             }
-            if (operationInput.retirementGroup) {
+            if (operationInput.retirementGroup && !operationInput.existingOnly) {
                 const retiring = [...semanticEntries.values()].filter(
                     (entry): entry is ManagedProviderExplicitStartOperationEntry => (
                         !isManagedServiceSemanticEntry(entry) && entry.terminal
@@ -4611,6 +4613,19 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             let existing = semanticEntries.get(entryKey);
             if (existing && isManagedServiceSemanticEntry(existing)) {
                 return Object.freeze({ status: 'unavailable' as const });
+            }
+            if (operationInput.existingOnly) {
+                if (!existing || existing.terminal) return Object.freeze({ status: 'unavailable' as const });
+                if (existing.occurrenceId !== occurrenceId || existing.purposeBindingsEqualityKey !== purposeBindingsEqualityKey
+                    || !readsCurrent(existing.isCurrent)) return Object.freeze({ status: 'not_current' as const });
+                if (existing.revalidateRetainedCurrentness && !await existing.revalidateRetainedCurrentness(operationInput.signal)) {
+                    return Object.freeze({ status: 'not_current' as const });
+                }
+                const value = await existing.establishment;
+                return acceptsOperation() && !existing.terminal && semanticEntries.get(entryKey) === existing
+                    && readsCurrent(existing.isCurrent) && readsCurrent(operationInput.isCurrent) && readsCurrent(value.projection.isCurrent)
+                    ? Object.freeze({ status: 'established' as const, value: projectManagedProviderExplicitStartJoin(value, operationInput) })
+                    : Object.freeze({ status: 'not_current' as const });
             }
             const retainedServices =
                 managedServiceEntriesForExplicitStartOperation({

@@ -54,6 +54,7 @@ import { prepareProviderConnectionImportV1 } from '@happier-dev/protocol/provide
 import { normalizeCustomProviderTemplateV1 } from '@happier-dev/protocol/providers/connections/normalizeCustomTemplateV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { DaemonProviderModelProjectionResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
+import { projectProviderModelSourceStateV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 
 import { resolveProviderConnectionForMachine } from '../registry';
 import { resolveProviderContributionRegistryView } from '../registry/contributions';
@@ -1493,7 +1494,8 @@ describe('provider spawn authorization resolver', () => {
       dnsEvidenceByEndpointUrl: new Map(),
       lease: lease(undefined, false, undefined, undefined, undefined, undefined, consumesHelpers),
       runtimeCatalogSnapshotExists: true,
-      runtimeAdditionalModelDescriptors: [{ id: 'probe-helper', name: 'Probe helper' }],
+      runtimeAdditionalModelDescriptors: [{ id: 'probe-helper', name: 'Probe helper',
+        capabilities: { toolRoundTrips: 'supported' } }],
       managedProviderRuntime: exactManagedProviderRuntime(),
       managedPurposeBindingSnapshot: {
         v: 1,
@@ -1637,24 +1639,21 @@ describe('provider spawn authorization resolver', () => {
       // The hub RPC is the system boundary; compatibility and admission remain real.
       readModelProjection: async (request, signal) => {
         signal.throwIfAborted();
-        expect(request).toMatchObject({ machineId: 'machine-hub', refreshPolicy: 'current_only' });
+        expect(request).toMatchObject({ machineId: 'machine-hub', refreshPolicy: 'current_only', sourceCatalog: true });
         const rows = [
           { id: 'model-a', name: 'Model A', capabilities: { toolRoundTrips: 'supported' as const } },
           { id: 'helper-model', name: 'Helper model', capabilities: {
             toolRoundTrips: helperState === 'incompatible' ? 'unsupported' as const : 'supported' as const,
           } },
         ].map((descriptor) => {
-          const compatibility = resolveProviderModelCompatibility({
-            record: resolution.record, providerSettings: settings, agentTargetKey: request.agentTargetKey,
-            support: agentProviderSupport(false), model: descriptor, adapterVersion: 3,
-          });
+          const compatibility = projectProviderModelSourceStateV1({ endpoint: {
+            id: 'responses', protocol: 'openai-responses', capabilities: sharedContribution.definition.endpointTemplates[0]!.capabilities,
+          } }, descriptor);
           return {
             ref: { agentTargetKey: request.agentTargetKey, providerConnectionId: connectionId, modelId: descriptor.id },
             descriptor, compatibility,
-            ...(compatibility.result.status !== 'incompatible' ? {
-              application: { agentTargetKey: request.agentTargetKey, implementationIdentity: sharedContribution.identity,
-                endpointTemplateId: 'responses', protocol: compatibility.result.selectedProtocol },
-            } : {}),
+            application: { agentTargetKey: request.agentTargetKey, implementationIdentity: sharedContribution.identity,
+              endpointTemplateId: 'responses', protocol: compatibility.result.selectedProtocol },
             sources: { manual: false, static: false, probe: true }, confidence: 'probe',
             endpointHealth: 'not_checked', catalog: { stale: descriptor.id === 'helper-model' && helperState === 'stale' },
             loadState: 'unknown', visibility: 'visible',
@@ -1672,7 +1671,8 @@ describe('provider spawn authorization resolver', () => {
       },
     });
     if (consumesHelpers) {
-      expect(result).toMatchObject({ ok: false, error: { code: 'provider_endpoint_unavailable' } });
+      expect(result).toMatchObject({ ok: false, error: { code: helperState === 'incompatible'
+        ? 'provider_incompatible_with_agent' : 'provider_endpoint_unavailable' } });
     } else {
       expect(result).toMatchObject({ ok: true, attempt: { authorization: {
         binding: { selection: { model: { id: 'model-a' } } },

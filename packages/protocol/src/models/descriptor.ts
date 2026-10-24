@@ -74,6 +74,17 @@ export const AgentModelOptionSchema = z.strictObject({
   overridesWhenOn: z.optional(AgentModelOptionOverrideRuleSchema),
 }) satisfies z.ZodMiniType<AgentModelOption>;
 
+/** Exact model/template evidence; chat compatibility alone never grants this operation. */
+export const ProviderModelInlineCompletionV1Schema = z.strictObject({
+  operationId: z.string().check(z.trim(), z.minLength(1)),
+  tokenAccounting: z.literal('utf8-bytes'),
+  outputTokens: z.optional(z.number().check(z.int(), z.positive())),
+  maxOutputTokens: z.optional(z.number().check(z.int(), z.positive())),
+  promptOverheadTokens: z.number().check(z.int(), z.nonnegative()),
+  rawFimTemplate: z.optional(z.strictObject({ prefix: z.string(), suffix: z.string(), middle: z.string() })),
+});
+export type ProviderModelInlineCompletionV1 = z.infer<typeof ProviderModelInlineCompletionV1Schema>;
+
 export type ProviderModelDescriptorV1 = Readonly<{
   id: string;
   name: string;
@@ -83,6 +94,7 @@ export type ProviderModelDescriptorV1 = Readonly<{
   aliases?: readonly string[];
   description?: string;
   contextWindowTokens?: number;
+  inlineCompletion?: ProviderModelInlineCompletionV1;
   extendedContextModelId?: string;
   modelOptions?: readonly AgentModelOption[];
   capabilities?: Readonly<{
@@ -99,6 +111,7 @@ export const ProviderModelDescriptorV1Schema = z.strictObject({
   aliases: z.optional(z.array(ProviderModelIdSchema).check(z.maxLength(64))),
   description: z.optional(z.string().check(z.maxLength(1024))),
   contextWindowTokens: z.optional(z.number().check(z.int(), z.positive(), z.maximum(100_000_000))),
+  inlineCompletion: z.optional(ProviderModelInlineCompletionV1Schema),
   extendedContextModelId: z.optional(ProviderModelIdSchema),
   modelOptions: z.optional(z.array(AgentModelOptionSchema).check(z.maxLength(64))),
   capabilities: z.optional(z.strictObject({
@@ -116,6 +129,62 @@ export const ProviderModelDescriptorV1Schema = z.strictObject({
     }
   }
 })) satisfies z.ZodMiniType<ProviderModelDescriptorV1>;
+
+/** Byte-level BPE cannot produce more tokens than UTF-8 bytes. Only a model
+ * producer that has proved that tokenizer may declare this conservative bound.
+ * This allocates context, not a guessed characters-per-token approximation. */
+export function budgetInlineCompletionContext(
+  model: ProviderModelDescriptorV1,
+  context: Readonly<{ prefix: string; suffix: string }>,
+  outputTokens = model.inlineCompletion?.outputTokens,
+): Readonly<{ prefix: string; suffix: string }> | null {
+  const operation = model.inlineCompletion;
+  const capacity = model.contextWindowTokens;
+  if (!operation || !capacity || !outputTokens || !Number.isSafeInteger(outputTokens) || outputTokens <= 0
+    || operation.maxOutputTokens !== undefined && outputTokens > operation.maxOutputTokens) return null;
+  const budget = capacity - outputTokens - operation.promptOverheadTokens;
+  if (budget <= 0) return null;
+  const take = (value: string, bytes: number, end: boolean) => {
+    let used = 0;
+    let boundary = end ? value.length : 0;
+    while (end ? boundary > 0 : boundary < value.length) {
+      const offset = end ? boundary - 1 : boundary;
+      const low = value.charCodeAt(offset);
+      const width = end
+        ? low >= 0xdc00 && low <= 0xdfff && offset > 0 && value.charCodeAt(offset - 1) >= 0xd800 && value.charCodeAt(offset - 1) <= 0xdbff ? 2 : 1
+        : (value.codePointAt(offset) ?? 0) > 0xffff ? 2 : 1;
+      const next = end ? value.slice(boundary - width, boundary) : value.slice(boundary, boundary + width);
+      const point = next.codePointAt(0) ?? 0;
+      let cost = 0;
+      for (const character of next) {
+        const value = character.codePointAt(0) ?? point;
+        cost += value <= 0x7f ? 1 : value <= 0x7ff ? 2 : value <= 0xffff ? 3 : 4;
+      }
+      if (used + cost > bytes) break;
+      used += cost;
+      boundary += end ? -width : width;
+    }
+    return { text: end ? value.slice(boundary) : value.slice(0, boundary), bytes: used };
+  };
+  let prefix = take(context.prefix, Math.ceil(budget / 2), true);
+  let suffix = take(context.suffix, budget - prefix.bytes, false);
+  prefix = take(context.prefix, budget - suffix.bytes, true);
+  suffix = take(context.suffix, budget - prefix.bytes, false);
+  return { prefix: prefix.text, suffix: suffix.text };
+}
+
+/** Connection generation preferences specialize the same descriptor consumed by
+ * source pickers and runtime inference; callers do not reconstruct this fact. */
+export function projectProviderModelGenerationSettings(
+  model: ProviderModelDescriptorV1,
+  settings: Readonly<{ maxTokens?: number | null }> | undefined,
+): ProviderModelDescriptorV1 {
+  if (!model.inlineCompletion || settings?.maxTokens == null) return model;
+  // Nonpositive retained settings are valid stored intent, but unusable for
+  // inference: do not publish an invalid descriptor or silently use a default.
+  if (settings.maxTokens <= 0) return { ...model, inlineCompletion: undefined };
+  return { ...model, inlineCompletion: { ...model.inlineCompletion, outputTokens: settings.maxTokens } };
+}
 
 export type AgentModelDescriptor = ProviderModelDescriptorV1;
 

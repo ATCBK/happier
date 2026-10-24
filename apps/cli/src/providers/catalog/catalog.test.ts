@@ -468,6 +468,8 @@ describe('provider catalog host assembly', () => {
     expect(assembled.rows.some((row) => row.ref.modelId === 'old-only')).toBe(false);
     expect(assembled.rows.find((row) => row.ref.modelId === 'current-only')?.presentation.loadState).toBe('unloaded');
     expect(assembled.staleRows.find((row) => row.ref.modelId === 'gone')?.presentation.loadState).toBe('unknown');
+    expect(assembled.staleRows.find((row) => row.ref.modelId === 'gone')?.presentation.catalog)
+      .toEqual({ stale: true, staleAt: 10 });
   });
 
   it('does not resurrect an obsolete probe snapshot when there is no current authorized catalog key', () => {
@@ -492,7 +494,7 @@ describe('provider catalog host assembly', () => {
       connection,
       providerSettings: settings(connection),
       runtimeState: runtimeState({
-        catalogs: [catalogRecord({ stale: true, models: [{ id: 'probe-stale' }] })],
+        catalogs: [catalogRecord({ stale: true, models: [{ id: 'probe-stale' }], staleModels: [{ id: 'gone' }] })],
         loads: [{
           key: {
             machineId: 'machine_a',
@@ -513,6 +515,8 @@ describe('provider catalog host assembly', () => {
     const row = assembled.rows.find((candidate) => candidate.ref.modelId === 'probe-stale');
     expect(row?.presentation.endpointHealth?.status).toBe('available');
     expect(row?.presentation.catalog).toEqual({ stale: true, observedAt: 10, staleAt: 20 });
+    expect(assembled.staleRows.find(candidate => candidate.ref.modelId === 'gone')?.presentation.catalog)
+      .toEqual({ stale: true, staleAt: 10 });
     expect(assembled.rows.every(
       (candidate) => candidate.presentation.loadState === 'unknown',
     )).toBe(true);

@@ -88,7 +88,10 @@ function catalogPresentation(
   staleRow: boolean,
 ): ProviderCatalogObservationPresentation {
   const snapshot = record?.state.snapshot ?? null;
-  if (staleRow) return { stale: true };
+  // Retained probe models became absent at the latest successful observation.
+  // Their last-seen time is unknown; unlike synthetic current intent, however,
+  // this row has a real source-owned absence observation.
+  if (staleRow) return { stale: true, ...(snapshot ? { staleAt: snapshot.observedAt } : {}) };
   if (!snapshot) return { stale: false };
   return snapshot.stale
     ? { stale: true, observedAt: snapshot.observedAt, staleAt: snapshot.staleAt }
@@ -176,6 +179,21 @@ function endpointHealthForRow(
   return state === undefined ? null : ProviderEndpointRuntimeStateV1Schema.parse(state);
 }
 
+/** Join model-produced purpose evidence to this connection's admitted slots. */
+export function projectProviderCatalogGatewaySlots(
+  connection: AssembleProviderConnectionCatalogInput['connection'],
+  model: Pick<ProviderMergedCatalogRowV1, 'connectedAccountPurposes'>,
+) {
+  const deployment = connection.deployment;
+  const observedPurposes = new Set(model.connectedAccountPurposes?.map(qualifiedPurposeKey));
+  return deployment.kind === 'managedLocal'
+    ? deployment.purposeBindingIntents.bindings.filter(binding => observedPurposes.has(qualifiedPurposeKey(binding.purpose))
+        && binding.purpose.consumer.pluginId === deployment.implementationIdentity.pluginId
+        && binding.purpose.consumer.localId === deployment.implementationIdentity.localId
+        && deployment.managedRuntime.connectedAccounts.some(declaration => declaration.purpose === binding.purpose.purpose))
+    : [];
+}
+
 function bindRow(input: Readonly<{
   hostInput: AssembleProviderConnectionCatalogInput;
   agentTargetKey: string;
@@ -191,17 +209,10 @@ function bindRow(input: Readonly<{
     catalog: input.catalog,
     loadState: input.loadState,
   };
-  const deployment = input.hostInput.connection.deployment;
   // The resolved connection already owns declaration/default admission. Join
   // only those admitted bindings to the model producer's exact slot evidence;
   // this display projection never chooses credentials or infers a vendor.
-  const observedPurposes = new Set(input.merged.connectedAccountPurposes?.map(qualifiedPurposeKey));
-  const gatewaySlots = deployment.kind === 'managedLocal'
-    ? deployment.purposeBindingIntents.bindings.filter(binding => observedPurposes.has(qualifiedPurposeKey(binding.purpose))
-        && binding.purpose.consumer.pluginId === deployment.implementationIdentity.pluginId
-        && binding.purpose.consumer.localId === deployment.implementationIdentity.localId
-        && deployment.managedRuntime.connectedAccounts.some(declaration => declaration.purpose === binding.purpose.purpose))
-    : [];
+  const gatewaySlots = projectProviderCatalogGatewaySlots(input.hostInput.connection, input.merged);
   return {
     ref: {
       agentTargetKey: input.agentTargetKey,
@@ -252,19 +263,16 @@ export function readProviderConnectionCatalogPresentation(
   });
 }
 
-export function assembleProviderConnectionCatalog(
-  input: AssembleProviderConnectionCatalogInput,
-): ProviderConnectionCatalog {
+/** Current intent recovery is shared by local and placed-source assembly;
+ * only the selected worker supplies its Agent's freeform capability. */
+export function projectProviderCatalogCurrentSelectionRecoveryRows(
+  input: Pick<AssembleProviderConnectionCatalogInput, 'agentTargetKey' | 'connection' | 'modelNameCatalog'
+    | 'currentSelectionForRecovery' | 'agentSupportsFreeformModelIds'> & Readonly<{
+      hasCatalogModel(modelId: string): boolean;
+    }>,
+): readonly ProjectedProviderCatalogPresentationRow[] {
   const catalog = catalogDeclaration(input.connection);
   const agentTargetKey = ProviderAgentTargetKeySchema.parse(input.agentTargetKey);
-  const projected = readProviderConnectionCatalogPresentation(input);
-  const bind = (row: ProjectedProviderCatalogPresentationRow) => bindRow({
-    hostInput: input,
-    agentTargetKey,
-    merged: row.row,
-    catalog: row.catalog,
-    loadState: row.loadState,
-  });
   const currentSelection = input.currentSelectionForRecovery;
   // The Session's current selection can be real without appearing in the merged
   // catalog. Retaining it here is what keeps the picker showing what the user
@@ -272,8 +280,7 @@ export function assembleProviderConnectionCatalog(
   const unrepresentedCurrentSelection = currentSelection !== undefined
     && currentSelection.agentTargetKey === agentTargetKey
     && currentSelection.providerConnectionId === input.connection.connectionId
-    && !projected.rows.some((row) => row.row.descriptor.id === currentSelection.modelId)
-    && !projected.staleRows.some((row) => row.row.descriptor.id === currentSelection.modelId)
+    && !input.hasCatalogModel(currentSelection.modelId)
     ? currentSelection
     : null;
   // Reason 1: authorization is unavailable, so the catalog cannot be observed at
@@ -315,7 +322,22 @@ export function assembleProviderConnectionCatalog(
         loadState: 'unknown',
       }]
     : [];
+  return recoveryRows;
+}
 
+export function assembleProviderConnectionCatalog(
+  input: AssembleProviderConnectionCatalogInput,
+): ProviderConnectionCatalog {
+  const catalog = catalogDeclaration(input.connection);
+  const agentTargetKey = ProviderAgentTargetKeySchema.parse(input.agentTargetKey);
+  const projected = readProviderConnectionCatalogPresentation(input);
+  const bind = (row: ProjectedProviderCatalogPresentationRow) => bindRow({
+    hostInput: input, agentTargetKey, merged: row.row, catalog: row.catalog, loadState: row.loadState,
+  });
+  const recoveryRows = projectProviderCatalogCurrentSelectionRecoveryRows({ ...input,
+    hasCatalogModel: modelId => projected.rows.some(row => row.row.descriptor.id === modelId)
+      || projected.staleRows.some(row => row.row.descriptor.id === modelId),
+  });
   return {
     agentTargetKey,
     connectionId: input.connection.connectionId,

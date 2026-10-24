@@ -6,7 +6,27 @@ import {
   ProviderModelDescriptorV1Schema,
   resolveModelStructuredOutputSupport,
   resolveModelDisplayName,
+  budgetInlineCompletionContext,
 } from './descriptor.js';
+
+describe('inline completion context budget', () => {
+  it('keeps nearest complete Unicode characters within the declared byte-token budget', () => {
+    const model = ProviderModelDescriptorV1Schema.parse({ id: 'base', name: 'Base', contextWindowTokens: 16,
+      inlineCompletion: { operationId: 'fim', tokenAccounting: 'utf8-bytes', outputTokens: 4, promptOverheadTokens: 2 } });
+    expect(budgetInlineCompletionContext(model, { prefix: 'distant🦊abc', suffix: 'def🦊distant' })).toEqual({ prefix: 'abc', suffix: 'def🦊' });
+    expect(budgetInlineCompletionContext(model, { prefix: 'x', suffix: 'abcdefghijk' })).toEqual({ prefix: 'x', suffix: 'abcdefghi' });
+    expect(budgetInlineCompletionContext({ id: 'unknown', name: 'Unknown' }, { prefix: 'secret', suffix: '' })).toBeNull();
+  });
+  it('budgets escaped chat context and refuses unknown output allowance and over-limit requests', () => {
+    const model = ProviderModelDescriptorV1Schema.parse({ id: 'chat', name: 'Chat', contextWindowTokens: 16,
+      inlineCompletion: { operationId: 'chat', tokenAccounting: 'utf8-bytes', outputTokens: 4, promptOverheadTokens: 2, maxOutputTokens: 4 } });
+    const context = budgetInlineCompletionContext(model, { prefix: '\\"\n\t', suffix: '\\"\n\t' })!;
+    const serializedBytes = new TextEncoder().encode(context.prefix).length + new TextEncoder().encode(context.suffix).length;
+    expect(serializedBytes).toBeLessThanOrEqual(10);
+    expect(budgetInlineCompletionContext(model, { prefix: 'valid', suffix: '' }, 5)).toBeNull();
+    expect(budgetInlineCompletionContext({ ...model, inlineCompletion: { ...model.inlineCompletion!, outputTokens: undefined } }, { prefix: 'valid', suffix: '' })).toBeNull();
+  });
+});
 
 describe('catalog model display names', () => {
   const catalog = [{ id: 'vendor-model', name: 'Vendor Model', aliases: ['vendor-model-snapshot'] }];

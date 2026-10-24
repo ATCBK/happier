@@ -13,7 +13,7 @@ import { resolveProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import type { ProviderCatalogDeclarationV1, ProviderBoundModelRef, ProviderConnectionId, ProviderCredentialTransportV1, ProviderBrokerApplicationBindingV1, ProviderModelDescriptorV1, ProviderWireProtocol, PersistedBackendTargetRefV2, ProviderRuntimeStateFileV1, ProviderSettingsV1 } from '@happier-dev/protocol';
 import { projectProviderConnectionBrokerApplication } from '@/providers/broker/providerConnectionCpxBridge';
-import type { DaemonProviderBindingStatusRequestV1, DaemonProviderBindingStatusResponseV1, DaemonProviderModelProjectionRefreshFailureV1, DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1, DaemonProviderTeamCredentialRequestPolicySupportV1, DaemonProviderTeamCredentialRequestPolicySupportRequestV1, DaemonProviderTeamCredentialRequestPolicySupportResponseV1, DaemonProviderModelSettingsMutationRequestV1, DaemonProviderModelSettingsMutationResponseV1, DaemonProviderTeamCredentialResourceTestCandidateRequestV1, DaemonProviderTeamCredentialResourceTestCandidateResponseV1, DaemonProviderTeamCredentialBrokerEligibilityRequestV1, DaemonProviderTeamCredentialBrokerEligibilityResponseV1 } from '@happier-dev/protocol/rpc/providers';
+import type { DaemonProviderBindingStatusRequestV1, DaemonProviderBindingStatusResponseV1, DaemonProviderModelProjectionRefreshFailureV1, DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1, DaemonProviderModelProjectionRowV1, DaemonProviderTeamCredentialRequestPolicySupportV1, DaemonProviderTeamCredentialRequestPolicySupportRequestV1, DaemonProviderTeamCredentialRequestPolicySupportResponseV1, DaemonProviderModelSettingsMutationRequestV1, DaemonProviderModelSettingsMutationResponseV1, DaemonProviderTeamCredentialResourceTestCandidateRequestV1, DaemonProviderTeamCredentialResourceTestCandidateResponseV1, DaemonProviderTeamCredentialBrokerEligibilityRequestV1, DaemonProviderTeamCredentialBrokerEligibilityResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import type { TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams';
 import { DaemonProviderModelProjectionResponseV1Schema, DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema, DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import type { ProviderContributionRegistryView, ProviderEndpointDnsEvidence } from '@/providers/registry';
@@ -44,6 +44,7 @@ import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/contro
 import { readLeasedAgentProviderBindingAdapter } from '@/plugins/runtime/providerBindings/adapter';
 import {
   assembleProviderConnectionCatalog,
+  projectProviderCatalogCurrentSelectionRecoveryRows,
   projectProviderCatalogForPicker,
 } from '@/providers/catalog';
 import type { ProviderConnectionCatalog } from '@/providers/catalog';
@@ -97,6 +98,7 @@ import {
 import { projectConnectedAccountCatalog, readConnectedAccountCatalogSources, type ResolveManagedProviderPurposeBindingIntentSelection } from './connectedAccountCatalog';
 import { resolveTeamCredentialModelCompatibility } from '@/providers/broker/teamCredentialModelCompatibility';
 import { readProviderConnectionSourceCatalog, projectProviderConnectionSourceCatalog } from './providerConnectionSourceCatalog';
+import type { AccountScopedProviderReadInput } from './remoteProjection';
 
 export type ProviderModelManagementFeatureGate = Readonly<{
   isEnabled(featureId: 'providers' | 'providers.localModelManagement'): boolean;
@@ -175,6 +177,9 @@ export type RuntimeProviderAccountModelProjectionContext = Readonly<{
   resolveManagedPurposeBindingIntentSelection?: ResolveManagedProviderPurposeBindingIntentSelection;
   signal: AbortSignal;
   isCurrent(): boolean | Promise<boolean>;
+  accountReadScope?: AccountScopedProviderReadInput;
+  savedSecretOperationContext?: import('@/settings/secrets/savedSecretOperationContext').SavedSecretOperationContextV1;
+  managedRuntimeAccount?: NonNullable<RuntimeProviderOperationScope['managedRuntimeAccount']>;
 }>;
 
 export type RuntimeProviderModelManagementServices = Readonly<{
@@ -372,6 +377,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       || request.sourceCatalog || request.sourceConnectionId || request.application || request.includeDirectMaterialization)) {
       return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
     }
+    const sourceProjection = Boolean(request.connectedAccountTarget && request.sourceCatalog);
     if (!input.featureGate.isEnabled('providers')) {
       return DaemonProviderModelProjectionResponseV1Schema.parse({
         status: 'error',
@@ -404,11 +410,21 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       && !accountContext.signal.aborted
     );
     let snapshot: Awaited<ReturnType<typeof readAdmittedSnapshot>> = null;
+    // Purpose/catalog admission can update another private catalog or its
+    // cleanup report. Only the captured settings and Provider authority can
+    // invalidate this projection's snapshot basis.
+    const isAccountSnapshotCurrent = () => {
+      if (!accountContext) return true;
+      const current = accountContext.getAccountSettingsSnapshot();
+      return current !== null && snapshot !== null && current.scopeKey === snapshot.scopeKey
+        && current.settingsVersion === snapshot.settingsVersion
+        && sameProviderConnectionsCatalogAuthority(snapshot.providerConnectionsCatalog, current.providerConnectionsCatalog);
+    };
     try {
       if (!await isAccountCurrent()) {
         return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
       }
-      if (!foreignRequester) snapshot = await awaitWithinProviderOperation(observeSnapshot
+      if (!foreignRequester && !sourceProjection) snapshot = await awaitWithinProviderOperation(observeSnapshot
         ? observeSnapshot(operationLifetime.signal) : readAdmittedSnapshot(accountContext, operationLifetime.signal), operationLifetime);
     } catch (error) {
       if (error instanceof ProviderOperationAbandonedError) {
@@ -416,7 +432,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       }
       throw error;
     }
-    if (!snapshot && !foreignRequester) {
+    if (!snapshot && !foreignRequester && !sourceProjection) {
       return { status: 'error', error: createProviderErrorV1('provider_settings_invalid', { machineId: request.machineId }) };
     }
     const pendingLease = input.acquireRuntimeLease
@@ -454,13 +470,17 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         const observation = await readProviderConnectionSourceCatalog({ machineId: request.machineId,
           source: request.providerConnection, snapshot, registry, runtime: sharedRuntime, lifetime: operationLifetime,
           ...(accountContext ? { accountScope: { getAccountSettingsSnapshot: accountContext.getAccountSettingsSnapshot,
-            resolveManagedPurposeBindingIntent: accountContext.resolveManagedPurposeBindingIntent } } : {}),
+            resolveManagedPurposeBindingIntent: accountContext.resolveManagedPurposeBindingIntent,
+            isAccountCurrent: accountContext.isCurrent,
+            savedSecretOperationContext: accountContext.savedSecretOperationContext ?? null,
+            managedRuntimeAccount: accountContext.managedRuntimeAccount ?? null } } : {}),
           resolveAddresses: input.resolveAddresses, refreshPolicy: request.refreshPolicy, forceRefresh: request.forceRefresh });
         if (observation.status === 'error') return observation;
-        if (!await isAccountCurrent() || accountContext && accountContext.getAccountSettingsSnapshot() !== snapshot) {
+        if (!await isAccountCurrent() || !isAccountSnapshotCurrent()) {
           return { status: 'error', error: createProviderErrorV1('provider_authorization_changed') };
         }
         const projected = projectProviderConnectionSourceCatalog({ observation, registry, request,
+          localModelManagementEnabled: input.featureGate.isEnabled('providers.localModelManagement'),
           delivery: request.includeDirectMaterialization ? 'direct' : 'brokered' });
         if (projected.status !== 'success' || !request.includeTeamCredentialRequestPolicySupport) return projected;
         return DaemonProviderModelProjectionResponseV1Schema.parse({ ...projected,
@@ -470,7 +490,6 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             }) ?? undefined : undefined,
           })) })) });
       }
-      const sourceProjection = Boolean(request.connectedAccountTarget && request.sourceCatalog);
       const agentId = sourceProjection ? null : resolveAgentRoutingIdForTarget(lease.registry.contributes, target);
       if (!agentId && !sourceProjection) {
         return {
@@ -524,25 +543,27 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
               endpointHealth: 'not_checked', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible' }],
           }], currentSelectionRecovery: null });
       }
-      if (!snapshot) return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
-      const settingsRead = readProviderSettingsForCli(snapshot);
       // A Connected Account/Pool catalog belongs to its declared upstream
       // purpose, independently of any saved Gateway configuration. Taking this
       // branch before connection resolution prevents a second competing
       // catalog, DNS work, or a managed-process probe for the same source.
+      // Source-only reads use purpose selection/currentness and declarations;
+      // an unrelated personal Provider catalog cannot admit or withhold them.
       if (request.connectedAccountTarget) {
-        const resolveSelection = accountContext?.resolveManagedPurposeBindingIntentSelection
-          ?? input.resolveManagedPurposeBindingIntentSelection;
+        const resolveSelection = accountContext
+          ? accountContext.resolveManagedPurposeBindingIntentSelection
+          : input.resolveManagedPurposeBindingIntentSelection;
         const unavailable = () => ({ status: 'error' as const,
           error: createProviderErrorV1('provider_catalog_unavailable', { machineId: request.machineId }) });
         if (!resolveSelection || request.providerConnection || request.sourceConnectionId) return unavailable();
         const projection = await awaitWithinProviderOperation(projectConnectedAccountCatalog({
           request, registry, ...(adapter ? { support: adapter.support, adapterVersion: adapter.adapter.adapterVersion } : {}),
-          providerSettings: settingsRead.settings, resolveSelection, signal: operationLifetime.signal,
+          providerSettings: snapshot ? readProviderSettingsForCli(snapshot).settings : DEFAULT_PROVIDER_SETTINGS_V1,
+          resolveSelection, signal: operationLifetime.signal,
         }), operationLifetime);
         if (projection.groups.length === 0
           || !await awaitWithinProviderOperation(projection.isCurrent(), operationLifetime) || !await isAccountCurrent()
-          || (accountContext && accountContext.getAccountSettingsSnapshot() !== snapshot)) return unavailable();
+          || (accountContext && !sourceProjection && !isAccountSnapshotCurrent())) return unavailable();
         return DaemonProviderModelProjectionResponseV1Schema.parse({
           status: 'success', agentTargetKey: request.agentTargetKey,
           groups: projection.groups.map(group => ({ ...group, rows: group.rows.map(row => {
@@ -555,6 +576,8 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           currentSelectionRecovery: null,
         });
       }
+      if (!snapshot) return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
+      const settingsRead = readProviderSettingsForCli(snapshot);
       if (!adapter) return { status: 'success', agentTargetKey: request.agentTargetKey, groups: [] };
       const modelNameCatalog = readProviderModelNameCatalog(registry);
       // Exact-source browse and launch admission must not resolve DNS, purpose
@@ -577,7 +600,11 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         registry,
         dnsEvidenceByConnectionId,
         ...(accountContext ? { getAccountSettingsSnapshot: accountContext.getAccountSettingsSnapshot,
-          resolveManagedPurposeBindingIntent: accountContext.resolveManagedPurposeBindingIntent } : {}),
+          resolveManagedPurposeBindingIntent: accountContext.resolveManagedPurposeBindingIntent,
+          isAccountCurrent: accountContext.isCurrent,
+          savedSecretOperationContext: accountContext.savedSecretOperationContext ?? null,
+          managedRuntimeAccount: accountContext.managedRuntimeAccount ?? null,
+          accountReadScope: accountContext.accountReadScope ?? null } : {}),
         ...(snapshot.scopeKey
           ? {
               accountSettingsBasis: {
@@ -662,6 +689,9 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             const demand = sourceKind === undefined || hasPickerDemand(connection.id, sourceKind);
             const placed = await awaitWithinProviderOperation(sharedRuntime.readPlacedModelProjection({
               ...request, sourceConnectionId: connection.id, mode: 'management',
+              favoriteSelections: [...(request.favoriteSelections ?? []),
+                ...(settingsRead.settings.defaultsByAgentTargetKey[request.agentTargetKey]?.ref
+                  ? [settingsRead.settings.defaultsByAgentTargetKey[request.agentTargetKey]!.ref] : [])],
               ...(!demand ? { refreshPolicy: 'current_only' as const } : {}),
             }, operationScope), operationLifetime);
             if (placed) {
@@ -824,18 +854,49 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           }
         }
         for (const placed of placedProjections.values()) {
-          for (const group of placed.groups) {
-            const connection = connectionsById.get(group.connectionId)!;
-            const sourceKind = connection.source.kind === 'custom' ? 'custom'
-              : getProviderContribution(registry, connection.source.contributionKey)!.definition.kind;
-            catalogs.push({ ...group, agentTargetKey: request.agentTargetKey, sourceKind,
-              authorization: group.authorization.authorized ? { authorized: true }
-                : { authorized: false, errorCode: group.authorization.error.code },
-              rows: group.rows.map(row => ({ ...row, ref: { ...row.ref, providerConnectionId: group.connectionId }, presentation: {
-                compatibility: row.compatibility, endpointHealth: null, catalog: row.catalog, loadState: row.loadState,
-              } })), staleRows: [],
-            });
-          }
+          const group = placed.groups[0];
+          if (!group) continue;
+          const connection = connectionsById.get(group.connectionId)!;
+          const resolved = resolveProviderConnectionForMachine({ connectionId: group.connectionId,
+            machineId: request.machineId, providerSettings: settingsRead.settings, registry,
+            dnsEvidenceByEndpointUrl: dnsEvidenceByConnectionId.get(group.connectionId)!,
+            ...(input.localCandidateUrlsByConnectionId ? { localCandidateUrlsByConnectionId: input.localCandidateUrlsByConnectionId } : {}),
+          });
+          if (resolved.status !== 'resolved') continue;
+          const record = resolved.record;
+          resolvedConnectionById.set(group.connectionId, record);
+          const sourceKind = record.source.kind === 'custom' ? 'custom' : record.source.definition.kind;
+          // A source-only response can offer the same model over several
+          // protocols. The worker's one compatibility owner chooses among
+          // them; ordinary presentation still has one group per connection.
+          const rowsByModelId = new Map(placed.groups.flatMap(source => source.rows.map(row => [row.ref.modelId, row] as const)));
+          const rows: Array<Pick<DaemonProviderModelProjectionRowV1,
+            'ref' | 'descriptor' | 'sources' | 'confidence' | 'gatewaySlots' | 'catalog' | 'loadState'>> = [...rowsByModelId.values()];
+          const recoveryRows = projectProviderCatalogCurrentSelectionRecoveryRows({ connection: record,
+            agentTargetKey: request.agentTargetKey, modelNameCatalog,
+            currentSelectionForRecovery: request.currentSelection,
+            agentSupportsFreeformModelIds: adapter.support.supportsFreeformModelIds,
+            hasCatalogModel: modelId => rowsByModelId.has(modelId),
+          });
+          rows.push(...recoveryRows.map(row => ({ ref: { agentTargetKey: request.agentTargetKey,
+            providerConnectionId: record.connectionId, modelId: row.row.descriptor.id },
+            descriptor: row.row.descriptor, sources: row.row.sources, confidence: row.row.confidence,
+            catalog: row.catalog, loadState: row.loadState })));
+          catalogs.push({ ...group, agentTargetKey: request.agentTargetKey, sourceKind,
+            authorization: group.authorization.authorized ? { authorized: true }
+              : { authorized: false, errorCode: group.authorization.error.code },
+            rows: rows.map(row => {
+              const compatibility = resolveProviderModelCompatibility({ record, providerSettings: settingsRead.settings,
+                agentTargetKey: request.agentTargetKey, support: adapter.support,
+                adapterVersion: adapter.adapter.adapterVersion, model: row.descriptor });
+              confirmedByRef.set(`${connection.id}\0${row.ref.modelId}`, compatibility.confirmed);
+              return { ref: row.ref, descriptor: row.descriptor, sources: row.sources, confidence: row.confidence,
+                ...(row.gatewaySlots ? { gatewaySlots: row.gatewaySlots } : {}),
+                presentation: { compatibility, endpointHealth: null, catalog: row.catalog, loadState: row.loadState } };
+            }), staleRows: [],
+          });
+          modelLoadProjectionByConnectionId.set(group.connectionId, { action: group.modelLoadAction,
+            preflightPolicy: group.modelLoadPreflightPolicy ?? null });
         }
         return { catalogs, modelLoadProjectionByConnectionId, confirmedByRef, resolvedConnectionById, pickerDemand, coldDemand };
       };
@@ -886,10 +947,6 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         settingsRead.settings.connections.map((connection) => [connection.id, connection] as const),
       );
       const groups = projection.groups.map((group) => {
-          const placed = placedProjections.get(group.connectionId)?.groups.find(candidate => candidate.connectionId === group.connectionId);
-          if (placed) return { ...placed, rows: group.rows.map(row => ({
-            ...placed.rows.find(candidate => candidate.ref.modelId === row.ref.modelId)!, visibility: row.visibility,
-          })) };
           const catalog = catalogByConnectionId.get(group.connectionId);
           if (!catalog) throw new TypeError('Projected Provider catalog is absent');
           const connection = connectionById.get(group.connectionId);
@@ -1068,7 +1125,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
           connectionDisplayNameMode: catalog.connectionDisplayNameMode }] : [];
       });
       if (accountContext && (!await isAccountCurrent()
-        || accountContext.getAccountSettingsSnapshot() !== snapshot)) {
+        || !isAccountSnapshotCurrent())) {
         return { status: 'error', error: createProviderErrorV1('provider_authorization_changed', { machineId: request.machineId }) };
       }
       return DaemonProviderModelProjectionResponseV1Schema.parse({
@@ -1231,8 +1288,8 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       return { status: 'unavailable', reason: 'source_unavailable' };
     }
     const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
-    // Eligibility is a current-observation read, not an explicit catalog
-    // refresh. The whole operation consumes one admitted Account observation.
+    // Saved Provider eligibility consumes one current catalog observation.
+    // Connected sources retain their purpose owner's independent currentness.
     const observation: {
       pending?: ReturnType<typeof readAdmittedSnapshot>;
       admitted?: ActiveAccountSettingsSnapshot | null;
@@ -1245,8 +1302,10 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
     const sourceSelection = input.resolveManagedPurposeBindingIntentSelection;
     const result = 'scope' in request
       ? await (async () => {
-          const snapshot = await observeSnapshot(signal);
-          if (!snapshot) return { status: 'unavailable' as const, reason: 'source_unavailable' as const };
+          const snapshot = request.source.kind === 'provider_connection' ? await observeSnapshot(signal) : null;
+          if (request.source.kind === 'provider_connection' && !snapshot) {
+            return { status: 'unavailable' as const, reason: 'source_unavailable' as const };
+          }
           const lease = await (input.acquireRuntimeLease ? input.acquireRuntimeLease()
             : acquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: input.happyHomeDir ?? configuration.happyHomeDir }));
           try {
@@ -1255,7 +1314,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
             if (request.source.kind === 'provider_connection') {
               const observation = await readProviderConnectionSourceCatalog({ machineId: request.machineId,
                 source: { connectionId: request.source.connectionId, expectedConnectionSecurityFingerprint: request.source.connectionSecurityFingerprint },
-                snapshot, registry, runtime: sharedRuntime, lifetime: createProviderOperationLifetime({ signal }),
+                snapshot: snapshot!, registry, runtime: sharedRuntime, lifetime: createProviderOperationLifetime({ signal }),
                 resolveAddresses: input.resolveAddresses, refreshPolicy: 'current_only' });
               return observation.status === 'success' && observation.presentation.rows.some(row => !row.catalog.stale)
                 ? { status: 'eligible' as const }
@@ -1278,7 +1337,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
         });
     // A cancelled joiner must not wait again for another caller's transport.
     const admitted = observation.admitted;
-    const current = (input.getAccountSettingsSnapshot ?? getActiveAccountSettingsSnapshot)();
+    const current = admitted ? (input.getAccountSettingsSnapshot ?? getActiveAccountSettingsSnapshot)() : null;
     if (admitted && (signal?.aborted || current?.scopeKey !== admitted.scopeKey
       || !input.getAccountSettingsSnapshot && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken
       || !sameProviderConnectionsCatalogAuthority(admitted.providerConnectionsCatalog, current?.providerConnectionsCatalog))) {
@@ -1301,7 +1360,8 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
       snapshot, registry, runtime: sharedRuntime, lifetime: createProviderOperationLifetime({ signal: request.signal }),
       resolveAddresses: input.resolveAddresses, refreshPolicy: 'current_only' });
     if (observation.status !== 'success') return null;
-    const projection = projectProviderConnectionSourceCatalog({ observation, registry, delivery: 'brokered', request: {
+    const projection = projectProviderConnectionSourceCatalog({ observation, registry, delivery: 'brokered',
+      localModelManagementEnabled: input.featureGate.isEnabled('providers.localModelManagement'), request: {
       machineId: request.machineId,
       agentTargetKey: request.application.agentTargetKey,
       application: request.application,
@@ -1650,7 +1710,7 @@ export function createRuntimeProviderModelManagementServices(input: Readonly<{
   };
 
   const projectModelsForAccount: RuntimeProviderModelManagementServices['projectModelsForAccount'] =
-    (request, context) => projectModels({ ...request, refreshPolicy: 'current_only' }, context);
+    (request, context) => projectModels({ ...request, refreshPolicy: request.forceRefresh ? undefined : 'current_only' }, context);
   return Object.freeze({
     probe: sharedRuntime.probe,
     probeDraft: sharedRuntime.probeDraft,

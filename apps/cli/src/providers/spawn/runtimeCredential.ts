@@ -25,7 +25,7 @@ export async function admitRuntimeProviderSavedSecret(input: Readonly<{
   snapshot: ActiveAccountSettingsSnapshot;
   getAccountSettingsSnapshot: () => ActiveAccountSettingsSnapshot | null;
   lifetime: ProviderOperationLifetime;
-  operationContext?: SavedSecretOperationContextV1;
+  operationContext?: SavedSecretOperationContextV1 | null;
 }>): Promise<Readonly<
   | { ok: true; snapshot: ActiveAccountSettingsSnapshot }
   | { ok: false; error: ProviderErrorV1 }
@@ -46,6 +46,9 @@ export async function admitRuntimeProviderSavedSecret(input: Readonly<{
     );
     if (ref === null || parseSavedSecretRefV1(ref).kind !== 'shared_resource') {
       return { ok: true, snapshot };
+    }
+    if (input.operationContext === null) {
+      return { ok: false, error: createProviderErrorV1('provider_authorization_changed', context) };
     }
     if (!snapshot.scopeKey) {
       return { ok: false, error: createProviderErrorV1('provider_authorization_changed', context) };
