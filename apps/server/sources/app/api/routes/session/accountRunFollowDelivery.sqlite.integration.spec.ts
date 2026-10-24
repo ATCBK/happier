@@ -5,7 +5,6 @@ import { decodeBase64 } from 'privacy-kit';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { NotificationChannelRecordV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
-import { readAccountNoticeArtifactV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
@@ -20,6 +19,7 @@ import { registerDiscussionRoutes } from '../discussions/registerDiscussionRoute
 import { createDiscussion, postDiscussionMessage } from '@/app/discussions/mutations';
 import { DISCUSSION_DEFAULT_PAGE_SIZE_V1 } from '@happier-dev/protocol/discussions/api';
 import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } from '@happier-dev/protocol/sessions/follow/changes';
 
 describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () => {
     let harness: LightSqliteHarness;
@@ -119,6 +119,10 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
                     expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { pushes.push(args); return true; } } })(input),
             });
             try {
+                const configurationBefore = await app.inject({ method: 'GET', url: '/v2/account/session-follows' });
+                expect(configurationBefore.statusCode).toBe(200);
+                const changeBefore = await db.accountChange.findFirst({ where: { accountId: receiver.id,
+                    kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID }, select: { cursor: true } });
                 await Promise.all([dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] }), dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] })]);
                 const notices = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.list());
                 expect(notices.items).toHaveLength(0);
@@ -132,6 +136,11 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
                     where: { discussionId_accountId: { discussionId, accountId: receiver.id } },
                 })).toEqual(readState);
                 expect((await db.accountSessionFollow.findFirstOrThrow({ where: { accountId: receiver.id } })).deliveredDiscussionSeq).toBe(posted.value.message.seq);
+                expect((await app.inject({ method: 'GET', url: '/v2/account/session-follows' })).json()).toEqual(configurationBefore.json());
+                // Private effect progress is not a changed Follow configuration:
+                // its coarse publication would re-demand every unrelated Run.
+                expect(await db.accountChange.findFirst({ where: { accountId: receiver.id,
+                    kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID }, select: { cursor: true } })).toEqual(changeBefore);
                 expect(await db.sessionPendingMessage.count({ where: agent ? { sessionId: agent.id } : {} })).toBe(0);
                 if (kind === 'human') {
                     const post = async (actorAccountId: string) => {
@@ -144,6 +153,8 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
                     const early = await post(author.id);
                     for (let index = 0; index < DISCUSSION_DEFAULT_PAGE_SIZE_V1 + 1; index++) await post(receiver.id);
                     const late = await post(author.id);
+                    const followChangeBeforeCatchup = await db.accountChange.findFirst({ where: { accountId: receiver.id,
+                        kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID }, select: { cursor: true } });
                     await dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] });
                     const caughtUp = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.list());
                     expect(caughtUp.items).toHaveLength(0);
@@ -155,6 +166,8 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
                         }))),
                     })]) });
                     expect((await db.accountSessionFollow.findFirstOrThrow({ where: { accountId: receiver.id } })).deliveredDiscussionSeq).toBe(late.seq);
+                    expect(await db.accountChange.findFirst({ where: { accountId: receiver.id,
+                        kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID }, select: { cursor: true } })).toEqual(followChangeBeforeCatchup);
                     await changeDeliveryMute({ accountId: receiver.id, receiver: { kind: 'account' }, scope: { kind: 'source', source }, authentication, operation: 'set' });
                     await post(author.id);
                     await dispatcher.dispatchAccountSourceRange({ discussionIds: [discussionId] });
@@ -250,6 +263,10 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
             try {
                 terminal = true;
                 await db.automationRun.update({ where: { id: run.id }, data: { state: terminalStatus, revision: 2 } });
+                const configurationBefore = await app.inject({ method: 'GET', url: '/v2/account/session-follows' });
+                expect(configurationBefore.statusCode).toBe(200);
+                const changeBefore = await db.accountChange.findFirst({ where: { accountId: account.id,
+                    kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID }, select: { cursor: true } });
                 const dispatch = () => entry === 'hint' ? dispatcher.dispatch({ original }) : dispatcher.dispatchAccountSourceRange(
                     kind === 'execution_run' ? { sourceSessionId: parent.id } : { workflowRunIds: [run.id] });
                 await Promise.all([dispatch(), dispatch()])
@@ -266,13 +283,15 @@ describe('Account Run Follow source to personal delivery (SQLite + HTTP)', () =>
                 }
                 if (expectedPushes) expect(pushes[0]?.[2]).toMatchObject({ followOriginal: original });
                 const notices = await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.list());
-                expect(notices.items).toHaveLength(1);
-                expect(readAccountNoticeArtifactV1((await runWithServerHttpBaseUrl(serverHttpBaseUrl, () => store.read(notices.items[0]!.artifactId)))!)).toMatchObject({
-                    notice: { topic: 'follow_update', follow: { original, event: { kind: terminalStatus === 'succeeded' ? 'finished' : 'failed_or_stopped' } } },
-                });
+                // Run Inbox entries come from their source owner; delivery
+                // acceptance must not create a second, never-settling notice.
+                expect(notices.items).toHaveLength(0);
                 const row = await db.accountSessionFollow.findFirstOrThrow({ where: { accountId: account.id } });
                 expect(kind === 'execution_run' ? row.deliveredExecutionRunTerminalEventId : row.deliveredWorkflowRunRevision)
                     .toBe(kind === 'execution_run' ? 'exact-terminal' : 2);
+                expect((await app.inject({ method: 'GET', url: '/v2/account/session-follows' })).json()).toEqual(configurationBefore.json());
+                expect(await db.accountChange.findFirst({ where: { accountId: account.id,
+                    kind: 'account', entityId: ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID }, select: { cursor: true } })).toEqual(changeBefore);
                 expect(await db.sessionPendingMessage.count({ where: { sessionId: parent.id } })).toBe(0);
                 expect(await changeDeliveryMute({ accountId: account.id, receiver: { kind: 'account' }, scope: { kind: 'source', source },
                     authentication: createPresentUserSessionAccessAuthentication({ env: {} }), operation: 'set' })).toMatchObject({ ok: true });
