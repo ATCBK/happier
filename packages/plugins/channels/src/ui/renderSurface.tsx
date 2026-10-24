@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useConversationProviderDisplayName, useConversationProviderDisplayNameResolver } from './providerDisplayName.js';
 import { useSessionCandidatePages, type SessionCandidate as BindingCreateSessionCandidate } from './useSessionCandidatePages.js';
 import { pluginUiTargetedContributionOperationKey } from '@happier-dev/plugin-sdk/ui';
 import type { AgentPermissionIntentV1 } from '@happier-dev/plugin-sdk/sessions';
@@ -54,7 +55,6 @@ import {
   type PluginUiFocusTarget,
   useExecutePluginAction,
   useLivePluginResource,
-  usePluginBrandDisplayName,
   usePluginBrandDisplayNameResolver,
   usePluginHostApi,
   usePluginTheme,
@@ -2819,7 +2819,7 @@ function ConversationDetail(props: Readonly<{
   const t = props.t;
   const navigation = useChannelsPageNavigation();
   const providerPluginId = connection?.providerPluginId;
-  const providerDisplayName = usePluginBrandDisplayName(providerPluginId)
+  const providerDisplayName = useConversationProviderDisplayName(providerPluginId)
     ?? t('plugins.channels.surface.providerFallback', 'Integration provider');
   const editFocusTarget = usePluginUiFocusTarget();
   const enablementFailure = props.enablementFailure?.bindingId === binding.bindingId
@@ -3262,12 +3262,12 @@ function formatProviderNameList(names: readonly string[]): string {
 }
 
 /**
- * The brand names of the conversation providers installed for this surface, so
+ * The names of the conversation providers installed for this surface, so
  * invitations never name a fixed list and a new provider (email) is never left out.
  */
 function useInstalledProviderNames(): readonly string[] {
   const surface = useSurfaceContext();
-  const resolveProviderName = usePluginBrandDisplayNameResolver();
+  const resolveProviderName = useConversationProviderDisplayNameResolver();
   return React.useMemo(() => {
     const contributions = surface.targetedContributions;
     const operations = contributions === undefined
@@ -3358,7 +3358,7 @@ function ConversationsIndexPage(props: Readonly<{
   t: Translate;
 }>): React.ReactElement {
   const { t } = props;
-  const resolveProviderName = usePluginBrandDisplayNameResolver();
+  const resolveProviderName = useConversationProviderDisplayNameResolver();
   const providerName = React.useCallback(
     (providerPluginId: string) => resolveProviderName(providerPluginId)
       ?? t('plugins.channels.surface.providerFallback', 'Integration provider'),
@@ -5744,7 +5744,7 @@ function BindingCreateJourney(props: Readonly<{
     [props.connections],
   );
   const currentConnection = availableConnections.find((connection) => connection.connectionId === connectionId);
-  const providerDisplayName = usePluginBrandDisplayName(currentConnection?.providerPluginId)
+  const providerDisplayName = useConversationProviderDisplayName(currentConnection?.providerPluginId)
     ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider');
   // The surface previews the binding the create writer will persist, so the
   // omitted-field policy comes from that one contract owner rather than a
@@ -6466,7 +6466,7 @@ function BindingCreateJourney(props: Readonly<{
 
   // Two bots can share a name across providers ("Happier QA Bot" on Discord and Telegram): each
   // option says which provider it talks through.
-  const resolveConnectionProviderName = usePluginBrandDisplayNameResolver();
+  const resolveConnectionProviderName = useConversationProviderDisplayNameResolver();
   const connectionOptions = availableConnections.map((connection) => {
     const providerName = resolveConnectionProviderName(connection.providerPluginId);
     return {
@@ -9925,7 +9925,7 @@ function ConnectionListRow(props: Readonly<{
   t: Translate;
 }>): React.ReactElement {
   const status = connectionStatus(props.connection, props.t);
-  const provider = usePluginBrandDisplayName(props.connection.providerPluginId)
+  const provider = useConversationProviderDisplayName(props.connection.providerPluginId)
     ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider');
   const label = connectionLabel(props.connection);
   const continuityDescriptions = connectionContinuityDescriptions(props.connection, props.t);
@@ -10004,7 +10004,7 @@ function ConnectionRow(props: Readonly<{
   const currentDraft = currentConnectionPolicyDraft(draft, props.connection);
   const updateUnavailable = props.connection.deletionState !== 'none';
   const mutationOutcomeUnknown = policyExecution.status === 'outcomeUnknown';
-  const provider = usePluginBrandDisplayName(props.connection.providerPluginId)
+  const provider = useConversationProviderDisplayName(props.connection.providerPluginId)
     ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider');
 
   const sourceChanged = connectionPolicyDraftSourceChanged(currentDraft, props.connection);
@@ -10845,7 +10845,7 @@ function ConnectionTransferProviderButton(props: Readonly<{
   onPress: (operation: ProviderSetupOperation) => Promise<void>;
   t: Translate;
 }>): React.ReactElement {
-  const providerDisplayName = usePluginBrandDisplayName(props.operation.contributor.pluginId)
+  const providerDisplayName = useConversationProviderDisplayName(props.operation.contributor.pluginId)
     ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider');
   const operationKey = pluginUiTargetedContributionOperationKey(props.operation);
   return (
@@ -10941,7 +10941,7 @@ function ConnectionTransferControls(props: Readonly<{
 }>): React.ReactElement | null {
   const hostApi = usePluginHostApi();
   const surface = useSurfaceContext();
-  const resolveProviderDisplayName = usePluginBrandDisplayNameResolver();
+  const resolveProviderDisplayName = useConversationProviderDisplayNameResolver();
   const prepareAction = useExecutePluginAction(
     CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
   );
@@ -12588,7 +12588,7 @@ function ProviderSetupButton(props: Readonly<{
   onPress: (operation: ProviderSetupOperation) => Promise<void>;
   t: Translate;
 }>): React.ReactElement {
-  const providerDisplayName = usePluginBrandDisplayName(props.operation.contributor.pluginId)
+  const providerDisplayName = useConversationProviderDisplayName(props.operation.contributor.pluginId)
     ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider');
   const testIdSuffix = `${props.operation.contributor.pluginId}-${props.operation.contributor.contributionId}`;
   // A navigation row: the provider's mark and name open its setup. The
@@ -12653,7 +12653,7 @@ function ProviderSetupPicker(props: Readonly<{
 }>): React.ReactElement | null {
   const hostApi = usePluginHostApi();
   const surface = useSurfaceContext();
-  const resolveProviderDisplayName = usePluginBrandDisplayNameResolver();
+  const resolveProviderDisplayName = useConversationProviderDisplayNameResolver();
   const prepareAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare);
   const createAction = useExecutePluginAction(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionCreate);
   // The incumbent generic present-user endpoint Action. The surface only
@@ -14678,7 +14678,7 @@ function SessionConversationRow(props: Readonly<{
 }>): React.ReactElement {
   const { t, row } = props;
   const { binding, connection } = row.presentation;
-  const resolveProviderDisplayName = usePluginBrandDisplayNameResolver();
+  const resolveProviderDisplayName = useConversationProviderDisplayNameResolver();
   const title = bindingEndpointLabel(binding, t);
   const subtitle = connection === undefined
     ? bindingAudienceLabel(binding.endpoint.audience, t)
@@ -14729,7 +14729,7 @@ function SessionConversationLinkControl(props: Readonly<{
   const { t } = props;
   const page = useOpenChannelsPage();
   const [open, setOpen] = React.useState(false);
-  const resolveProviderDisplayName = usePluginBrandDisplayNameResolver();
+  const resolveProviderDisplayName = useConversationProviderDisplayNameResolver();
   const bots = (props.connections ?? []).filter((connection) => connection.deletionState === 'none');
   const label = t('plugins.channels.session.link', 'Link a conversation');
   if (props.connections === null || bots.length <= 1) {

@@ -191,7 +191,7 @@ describe('Channels first-party provider composition', () => {
           resultSchema: roles.operations.messageDeliver.declaration.resultSchema.jsonSchema,
           surfaces: ['plugin'], dangerLevel: 'writesRemote', run: async () => ({ kind: 'notReady', reason: 'unsupported' }) },
       },
-      contributesTo: { 'happier.channels': { providers: { external: roles.contribute({ operations: {
+      contributesTo: { 'happier.channels': { providers: { external: roles.contribute({ descriptor: { v: 1, displayName: 'External channel' }, operations: {
         setup: roles.operations.setup.bind('inspect'), setupRemediation: roles.operations.setupRemediation.bind('repair'),
         connectionTest: roles.operations.connectionTest.bind('test'), messageDeliver: roles.operations.messageDeliver.bind('deliver'),
       } }) } } },

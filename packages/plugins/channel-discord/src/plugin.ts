@@ -415,6 +415,7 @@ function createDiscordPlugin() {
     'happier.channels': {
       providers: {
         'discord-provider': discordProviderProtocol.contribute({
+          descriptor: { v: 1, displayName: 'Discord' },
           operations: {
             setup: discordProviderOperations.setup.bind(DISCORD_CHANNEL_ACTION_IDS.setup),
             connectionTest: discordProviderOperations.connectionTest.bind(DISCORD_CHANNEL_ACTION_IDS.connectionTest),

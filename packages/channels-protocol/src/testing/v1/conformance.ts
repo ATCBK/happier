@@ -12,6 +12,7 @@ import {
     ConversationProvidersContributionPointV1,
     ConversationProvidersContributionProtocolV1,
 } from '../../v1/provider/contribution.js';
+import { ConversationProviderDescriptorV1Schema } from '../../v1/provider/descriptor.js';
 
 /** The canonical parsed action fields relevant to a Channels provider binding. */
 export type ConversationProviderActionDeclarationV1 = Readonly<{
@@ -120,8 +121,8 @@ export function checkConversationProviderContributionV1(
             `Channels provider contribution must declare protocol '${protocol.id}' version ${protocol.version}.`,
         );
     }
-    if (contribution.descriptor !== undefined) {
-        errors.push('Channels V1 provider contributions do not declare a descriptor.');
+    if (!ConversationProviderDescriptorV1Schema.safeParse(contribution.descriptor).success) {
+        errors.push('Channels V1 provider contributions require a valid display-name descriptor.');
     }
     if (contribution.surfaces !== undefined) {
         errors.push('Channels V1 provider contributions do not declare renderer surfaces.');

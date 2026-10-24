@@ -55,7 +55,7 @@ export const emailPlugin = definePlugin({
   contributesTo: {
     [EMAIL_CHANNEL_PLUGIN_ID]: { transports: { 'imap-smtp': imapSmtpTransportContribution } },
     [CONVERSATION_CORE_PLUGIN_ID_V1]: {
-      providers: { 'email-provider': providers.contribute({ operations: {
+      providers: { 'email-provider': providers.contribute({ descriptor: { v: 1, displayName: 'Email' }, operations: {
         setup: providers.operations.setup.bind(ids.setup),
         connectionTest: providers.operations.connectionTest.bind(ids.connectionTest),
         endpointResolve: providers.operations.endpointResolve.bind(ids.endpointResolve),

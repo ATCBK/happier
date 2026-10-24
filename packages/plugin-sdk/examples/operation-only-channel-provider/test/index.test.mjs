@@ -33,7 +33,7 @@ const deliveryInput = Object.freeze({
   linkPreviewPolicy: 'providerDefault',
 });
 
-test('binds public Channels roles without declaring a target, descriptor, or renderer', async () => {
+test('binds public Channels roles and provider presentation without declaring a target or renderer', async () => {
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
 
@@ -44,7 +44,7 @@ test('binds public Channels roles without declaring a target, descriptor, or ren
   for (const role of ['setup', 'connectionTest', 'messageDeliver', 'connectionStop']) {
     assert.match(source, new RegExp(`roles\\.${role}\\.bind\\(`, 'u'));
   }
-  assert.doesNotMatch(source, /\bdescriptor\s*:/u);
+  assert.deepEqual(manifest.contributes.targetedPluginContributions[0].descriptor, { v: 1, displayName: 'Acme Chat' });
   assert.doesNotMatch(source, /\brenderers\s*:/u);
 });
 

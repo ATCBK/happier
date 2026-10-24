@@ -37,14 +37,16 @@ import {
     ConversationProviderSetupRemediationResultV1Schema,
 } from './setup.js';
 import { ConversationAttachmentFetchInputV1Schema, ConversationAttachmentFetchResultV1Schema } from './attachments.js';
+import { ConversationProviderDescriptorV1Schema } from './descriptor.js';
 
 /**
- * The descriptor-free V1 provider role contract. Its arbitrary provider-local
+ * The V1 provider presentation and role contract. Its arbitrary provider-local
  * Action bindings are admitted by the generic target-owner lifecycle.
  */
 export const ConversationProvidersContributionProtocolV1 = defineContributionProtocol({
     id: CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_ID_V1,
     version: CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_VERSION_V1,
+    descriptor: ConversationProviderDescriptorV1Schema,
     operations: {
         setup: {
             required: true,

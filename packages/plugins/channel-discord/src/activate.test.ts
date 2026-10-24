@@ -115,6 +115,7 @@ describe('Discord Channel plugin activation', () => {
     try {
       expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions).toEqual([{
         id: 'discord-provider',
+        descriptor: { v: 1, displayName: 'Discord' },
         target: { pluginId: 'happier.channels', pointId: 'providers' },
         protocol: { id: 'happier.channels/providers', version: 1 },
         operations: DISCORD_CHANNEL_PROVIDER_OPERATIONS,

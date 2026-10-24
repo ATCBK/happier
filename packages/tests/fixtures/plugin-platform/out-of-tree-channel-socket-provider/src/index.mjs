@@ -820,6 +820,7 @@ const plugin = definePlugin({
     [CHANNELS_CORE_PLUGIN_ID]: {
       providers: {
         'fixture-socket': channelsProvidersV1.contribute({
+          descriptor: { v: 1, displayName: 'External socket' },
           operations: {
             setup: channelsProvidersV1.operations.setup.bind(PROVIDER_ACTION_IDS.setup),
             connectionTest: channelsProvidersV1.operations.connectionTest.bind(PROVIDER_ACTION_IDS.connectionTest),

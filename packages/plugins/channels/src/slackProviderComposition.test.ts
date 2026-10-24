@@ -97,7 +97,7 @@ async function slackJourney(options: Readonly<{ rateLimited?: boolean; disableAf
         consumed.push(request);
         return options.wrongDeliveryHandler ? testSlackConnection(request, context) : deliverSlackMessage(request, context);
       } },
-  }, contributesTo: { 'happier.channels': { providers: { native: ConversationProvidersContributionProtocolV1.contribute({ operations: {
+  }, contributesTo: { 'happier.channels': { providers: { native: ConversationProvidersContributionProtocolV1.contribute({ descriptor: { v: 1, displayName: 'Native test' }, operations: {
     setup: roles.setup.bind('setup'), connectionTest: roles.connectionTest.bind('inspect'), messageDeliver: roles.messageDeliver.bind('deliver'),
   } }) } } } });
   // Credential materialization is a genuine host boundary; no credential owner is duplicated.

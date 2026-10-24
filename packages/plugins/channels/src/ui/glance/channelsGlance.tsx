@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useConversationProviderDisplayNameResolver } from '../providerDisplayName.js';
 import type { RenderContext, RenderSurface } from '@happier-dev/plugin-sdk/ui';
 import {
   BrandMark,
@@ -10,7 +11,6 @@ import {
   LoadingState,
   NavigationList,
   defineUiSurface,
-  usePluginBrandDisplayNameResolver,
   usePluginHostApi,
   usePluginTranslation,
   useSurfaceContext,
@@ -53,7 +53,7 @@ export const CHANNELS_COLUMN_SEARCH_THRESHOLD = 8;
 export const CHANNELS_WIDGET_ROWS = 4;
 
 function useProviderName(t: Translate): (providerPluginId: string) => string {
-  const resolve = usePluginBrandDisplayNameResolver();
+  const resolve = useConversationProviderDisplayNameResolver();
   return React.useCallback(
     (providerPluginId: string) => resolve(providerPluginId)
       ?? t('plugins.channels.surface.providerFallback', 'Integration provider'),

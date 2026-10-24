@@ -4,7 +4,7 @@ This is the minimal maintained public cross-plugin reference. It consumes
 the maintained `@happier-dev/channels-protocol/v1` provider contract and binds
 the required roles to Actions owned by this plugin.
 
-It does not declare a target, descriptor, renderer, or UI. `happier.channels`
+It declares a provider display-name descriptor, with no target, renderer or UI. `happier.channels`
 and its `providers` contribution point are owned by Channels; the `acme`
 contribution id below is only this plugin's opaque local id. The package root
 exports both the cold `manifest` and the installable `activate(api)` binding for

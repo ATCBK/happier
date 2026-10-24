@@ -168,6 +168,7 @@ const { manifest: PROVIDER_SOCKET_SETUP_TEST_MANIFEST } = definePlugin({
     'happier.channels': {
       providers: {
         [SOCKET_PROVIDER_CONTRIBUTION_ID]: socketProviderProtocol.contribute({
+          descriptor: { v: 1, displayName: 'Socket test' },
           operations: {
             setup: socketProviderOperations.setup.bind(SOCKET_PROVIDER_ACTION_ID.setup),
             connectionTest: socketProviderOperations.connectionTest.bind(

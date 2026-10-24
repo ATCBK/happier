@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { PluginWebSocketConnection } from '@happier-dev/plugin-sdk/http';
 import { ConversationProviderSetupResultV1Schema } from '@happier-dev/channels-protocol/v1';
+import { assertConversationProviderContributionV1 } from '@happier-dev/channels-protocol/testing/v1';
+import { PLUGIN_MANIFEST } from './manifest.js';
 import { setupSlackChannels, testSlackConnection, resolveSlackEndpoint, resolveSlackPrincipal, deliverSlackMessage } from './slackActions.js';
 
 const credentialRef = { service: { pluginId: 'happier.channel.slack', localId: 'slack-bot' }, accountId: 'slack-test' };
@@ -43,6 +45,13 @@ function boundary(options: { foreignApp?: boolean; foreignUser?: boolean; direct
 }
 
 describe('Slack provider Actions', () => {
+  it('declares its provider name through the public Channels contribution contract', () => {
+    assertConversationProviderContributionV1(PLUGIN_MANIFEST);
+    expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions).toContainEqual(expect.objectContaining({
+      target: { pluginId: 'happier.channels', pointId: 'providers' },
+      descriptor: { v: 1, displayName: 'Slack' },
+    }));
+  });
   it('verifies both tokens through the shared hello proof and returns secret-free connection facts', async () => {
     const b = boundary();
     const result = ConversationProviderSetupResultV1Schema.parse(await setupSlackChannels({ credentialRef }, b.context));

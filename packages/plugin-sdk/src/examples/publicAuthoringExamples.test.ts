@@ -1117,7 +1117,9 @@ describe('public SDK authoring examples', { timeout: 60_000 }, () => {
         expect(source).toContain('CONVERSATION_CORE_PLUGIN_ID_V1');
         expect(source).not.toContain("'happier.channels'");
         expect(source).toContain('ConversationProvidersContributionProtocolV1.contribute({');
-        expect(source).not.toContain('descriptor:');
+        expect(module.manifest.contributes.targetedPluginContributions).toContainEqual(expect.objectContaining({
+            descriptor: { v: 1, displayName: 'Acme Chat' },
+        }));
         expect(source).not.toContain('renderers:');
 
         const support = JSON.parse(readFileSync(join(examplesRoot, 'authoring-support.json'), 'utf8')) as {

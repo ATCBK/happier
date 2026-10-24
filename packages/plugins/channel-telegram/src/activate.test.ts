@@ -138,6 +138,7 @@ describe('Telegram Channel plugin activation', () => {
     try {
       expect(PLUGIN_MANIFEST.contributes.targetedPluginContributions).toEqual([{
         id: 'telegram-provider',
+        descriptor: { v: 1, displayName: 'Telegram' },
         target: { pluginId: 'happier.channels', pointId: 'providers' },
         protocol: { id: 'happier.channels/providers', version: 1 },
         operations: TELEGRAM_CHANNEL_PROVIDER_OPERATIONS,

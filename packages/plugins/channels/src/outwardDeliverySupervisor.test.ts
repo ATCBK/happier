@@ -727,7 +727,7 @@ describe('Channels outward-delivery supervisor', () => {
           await context.services.http.request({ method: 'POST', url: 'https://external.example/send', redirect: 'error' });
           return { kind: 'delivered', providerMessageIds: ['external-receipt'] };
         } },
-    }, contributesTo: { 'happier.channels': { providers: { external: ConversationProvidersContributionProtocolV1.contribute({ operations: {
+    }, contributesTo: { 'happier.channels': { providers: { external: ConversationProvidersContributionProtocolV1.contribute({ descriptor: { v: 1, displayName: 'External test' }, operations: {
       setup: operations.setup.bind('setup'), connectionTest: operations.connectionTest.bind('test'), messageDeliver: operations.messageDeliver.bind('send'),
     } }) } } } });
     const provider = await createPluginTestkit({ manifest: plugin.manifest, module: plugin,

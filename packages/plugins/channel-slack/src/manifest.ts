@@ -118,7 +118,7 @@ function createSlackPlugin() {
         event: { pluginId: 'happier.channels', localId: 'connections-invalidated-v1' } } }, handler: () => supervisor?.invalidateConnections() },
     },
     backgroundServices: [{ declaration: { id: SLACK_SOCKET_BACKGROUND_SERVICE_ID, title: 'Slack Socket Mode supervisor' }, runner: context => current().run(context) }],
-    contributesTo: { 'happier.channels': { providers: { [SLACK_CHANNEL_PROVIDER_CONTRIBUTION_ID]: protocol.contribute({ operations: {
+    contributesTo: { 'happier.channels': { providers: { [SLACK_CHANNEL_PROVIDER_CONTRIBUTION_ID]: protocol.contribute({ descriptor: { v: 1, displayName: 'Slack' }, operations: {
       setup: roles.setup.bind(SLACK_CHANNEL_ACTION_IDS.setup), connectionTest: roles.connectionTest.bind(SLACK_CHANNEL_ACTION_IDS.connectionTest),
       endpointResolve: roles.endpointResolve.bind(SLACK_CHANNEL_ACTION_IDS.endpointResolve), principalResolve: roles.principalResolve.bind(SLACK_CHANNEL_ACTION_IDS.principalResolve),
       messageDeliver: roles.messageDeliver.bind(SLACK_CHANNEL_ACTION_IDS.messageDeliver), connectionStop: roles.connectionStop.bind(SLACK_CHANNEL_ACTION_IDS.connectionStop),

@@ -113,7 +113,7 @@ describe('Channels chunk producer to registered native-handler fixture seam', ()
       deliver: { title: 'Native delivery', surfaces: ['plugin'], dangerLevel: 'writesRemote',
         inputSchema: ConversationDeliveryInputV1Schema.jsonSchema, resultSchema: ConversationDeliveryResultV1Schema.jsonSchema,
         run(input, context) { const parsed = ConversationDeliveryInputV1Schema.parse(input); consumed.push(parsed); return deliverGithubChannelMessage(parsed, context); } },
-    }, contributesTo: { 'happier.channels': { providers: { native: ConversationProvidersContributionProtocolV1.contribute({ operations: {
+    }, contributesTo: { 'happier.channels': { providers: { native: ConversationProvidersContributionProtocolV1.contribute({ descriptor: { v: 1, displayName: 'Native test' }, operations: {
       setup: operations.setup.bind('setup'), connectionTest: operations.connectionTest.bind('test'), messageDeliver: operations.messageDeliver.bind('deliver'),
     } }) } } } });
     const connectedAccounts = { async materialize() { return { kind: 'httpHeaders', headers: { Authorization: 'Bearer native-fixture' } }; } } as unknown as PluginServices['connectedAccounts'];
@@ -291,7 +291,7 @@ describe('Channels chunk producer to registered native-handler fixture seam', ()
           } },
       },
       contributesTo: { 'happier.channels': { providers: {
-        native: ConversationProvidersContributionProtocolV1.contribute({ operations: {
+        native: ConversationProvidersContributionProtocolV1.contribute({ descriptor: { v: 1, displayName: 'Native test' }, operations: {
           setup: operations.setup.bind('prepare'), connectionTest: operations.connectionTest.bind('inspect'),
           messageDeliver: operations.messageDeliver.bind('deliver'),
         } }),

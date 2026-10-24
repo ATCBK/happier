@@ -52,7 +52,7 @@ async function resolveFixtureFile(input: Readonly<{ bytes: Uint8Array; mediaType
             base64: Buffer.from(files[Number(attachmentId.slice(5)) - 1]!.bytes).toString('base64') })) };
         } },
     },
-    contributesTo: { 'happier.channels': { providers: { files: ConversationProvidersContributionProtocolV1.contribute({ operations: {
+    contributesTo: { 'happier.channels': { providers: { files: ConversationProvidersContributionProtocolV1.contribute({ descriptor: { v: 1, displayName: 'Files test' }, operations: {
         setup: roles.setup.bind('setup'), connectionTest: roles.connectionTest.bind('probe'),
         messageDeliver: roles.messageDeliver.bind('deliver'), attachmentFetch: roles.attachmentFetch.bind('file'),
       } }) } } },

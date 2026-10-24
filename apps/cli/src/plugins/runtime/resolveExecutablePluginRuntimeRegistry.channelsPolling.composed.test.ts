@@ -15,7 +15,7 @@ const providerId = 'acme.checkpointed-mail';
 const home = { serverIdentityId: 'srv_background_poll', machineId: 'machine-background-poll' };
 
 describe('admitted Channels checkpoint supervisor caller provenance', () => {
-    it.each(['materialization', 'missing-origin', 'wrong-machine'] as const)(
+    it.each(['materialization', 'missing-origin', 'wrong-machine', 'missing-descriptor'] as const)(
         'runs the real supervisor through Actions and the installed provider with %s authority', async kind => {
             const state = new MemoryCollection();
             await state.put(createCurrentConversationConnectionFixture({
@@ -74,17 +74,24 @@ describe('admitted Channels checkpoint supervisor caller provenance', () => {
                             return { kind: 'checkpointOnly', checkpointAfterBatch: { baseline: 'mailbox-one' }, retryHint: { retryAfterMs: 60_000 } };
                         } },
                 },
-                contributesTo: { 'happier.channels': { providers: { 'mail-provider': protocol.contribute({ operations: {
+                contributesTo: { 'happier.channels': { providers: { 'mail-provider': protocol.contribute({ descriptor: { v: 1, displayName: 'Checkpointed mail' }, operations: {
                     setup: protocol.operations.setup.bind('prepare'),
                     connectionTest: protocol.operations.connectionTest.bind('inspect'),
                     messageDeliver: protocol.operations.messageDeliver.bind('send'),
                     observationsPoll: protocol.operations.observationsPoll.bind('receive'),
                 } }) } } },
             });
+            // Installed manifests are an external boundary; bypass author validation
+            // to prove the production target rejects a descriptor-less provider.
+            const providerManifest = structuredClone(provider.manifest);
+            if (kind === 'missing-descriptor') {
+                delete providerManifest.contributes.targetedPluginContributions[0]!.descriptor;
+            }
             const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
                 plugins: [core, provider].map(plugin => ({ manifest: plugin.manifest,
                     files: { 'daemon.mjs': 'export function activate() {}' },
                     instantiateCommittedModule: () => ({ activate: plugin.activate }),
+                    ...(plugin === provider ? { manifest: providerManifest } : {}),
                 })),
                 async resolveContributes(happyHomeDir) {
                     // Isolate this Channels declaration from bundled Channels.
@@ -104,6 +111,18 @@ describe('admitted Channels checkpoint supervisor caller provenance', () => {
                 },
             });
             try {
+                const admitted = fixture.registry.readAdmittedTargetedContributions?.({
+                    targetPluginId: 'happier.channels', pointId: 'providers',
+                    protocol: { id: protocol.id, version: protocol.version },
+                });
+                if (kind === 'missing-descriptor') {
+                    expect(admitted?.contributions).toEqual([]);
+                    expect(effects).toBe(0);
+                    return;
+                }
+                expect(admitted?.contributions).toEqual([expect.objectContaining({
+                    descriptor: { v: 1, displayName: 'Checkpointed mail' },
+                })]);
                 fixture.registry.startAdoptedBackgroundServices?.();
                 await vi.waitFor(async () => {
                     const connection = await state.get('connection-background-poll');

@@ -1170,6 +1170,35 @@ function createOfflineChannelStateFixture() {
 }
 
 describe('Channels mounted provider setup recovery', () => {
+  it('names an installed provider by its admitted descriptor in the setup picker', async () => {
+    const surfaceContext = createChannelsSurfaceContext();
+    Object.assign(surfaceContext.targetedContributions!.points[0]!.protocols[0]!.contributions[0]!, {
+      descriptor: { v: 1, displayName: 'Comet Chat' },
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'provider-name-instance', mountNonce: 'provider-name-mount' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext,
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        readResource: bindingResourceReader(),
+      },
+    });
+    try {
+      const picker = document.querySelector('[data-testid="channels-provider-setup-picker"]');
+      expect(picker?.textContent).toContain('Comet Chat');
+      await expect(fixture.getByRole('button', { name: 'Set up Comet Chat' })).resolves.toBeDefined();
+      await vi.waitFor(() => {
+        const connection = document.querySelector('[data-testid="channels-connection-connection-1"]');
+        expect(connection?.textContent).toContain('Comet Chat');
+      });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it.each(['empty provider snapshot', 'Account presentation without an occurrence'] as const)(
     'offers a next step instead of an empty surface with %s', async (scope) => {
     // A fresh Account, or a machine with no conversation integration enabled,

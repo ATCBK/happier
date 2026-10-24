@@ -81,6 +81,7 @@ const plugin = definePlugin({
     [CONVERSATION_CORE_PLUGIN_ID_V1]: {
       providers: {
         acme: ConversationProvidersContributionProtocolV1.contribute({
+          descriptor: { v: 1, displayName: 'Acme Chat' },
           operations: {
             setup: roles.setup.bind(actionIds.setup),
             connectionTest: roles.connectionTest.bind(actionIds.connectionTest),

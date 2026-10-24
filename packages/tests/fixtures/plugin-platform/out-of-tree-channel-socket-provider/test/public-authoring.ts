@@ -125,6 +125,7 @@ const publicTargetedContributionContributor = definePlugin({
         'happier.channels': {
             providers: {
                 'fixture-socket': publicTargetedProtocol.contribute({
+                  descriptor: { v: 1, displayName: 'External socket' },
                     operations: {
                         setup: publicTargetedProtocol.operations.setup.bind('fixture/setup'),
                         connectionTest: publicTargetedProtocol.operations.connectionTest.bind(

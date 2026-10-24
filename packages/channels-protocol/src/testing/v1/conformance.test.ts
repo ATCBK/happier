@@ -3,6 +3,7 @@ import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 import { describe, expect, it } from 'vitest';
 
 import { ConversationProvidersContributionProtocolV1 } from '../../v1/provider/contribution.js';
+import { ConversationProviderDescriptorV1Schema } from '../../v1/provider/descriptor.js';
 import {
     assertConversationProviderContributionV1,
     createConversationProviderSetupResultV1Fixture,
@@ -39,6 +40,7 @@ type MutableProviderManifest = {
             resultSchema?: unknown;
         }>;
         targetedPluginContributions: Array<{
+            descriptor?: unknown;
             operations: Record<string, string>;
             protocol: {
                 id: string;
@@ -116,6 +118,7 @@ function createExternalProviderManifest() {
             'happier.channels': {
                 providers: {
                     'comet-chat': ConversationProvidersContributionProtocolV1.contribute({
+                        descriptor: { v: 1, displayName: 'Comet Chat' },
                         operations: {
                             setup: providerOperations.setup.bind(EXTERNAL_ACTION_IDS.setup),
                             setupRemediation: providerOperations.setupRemediation.bind(
@@ -137,6 +140,22 @@ function mutableManifest(): MutableProviderManifest {
 }
 
 describe('Channels V1 provider-contribution conformance', () => {
+    it('drops unknown presentation fields while keeping the display name and version strict', () => {
+        expect(ConversationProviderDescriptorV1Schema.parse({
+            v: 1, displayName: 'Comet Chat', futurePresentation: { color: 'violet' },
+        })).toEqual({ v: 1, displayName: 'Comet Chat' });
+        for (const descriptor of [{ v: 1 }, { v: 1, displayName: '  ' }, { v: 1, displayName: 42 }, { v: 2, displayName: 'Comet Chat' }]) {
+            expect(ConversationProviderDescriptorV1Schema.safeParse(descriptor).success).toBe(false);
+        }
+    });
+
+    it('rejects a provider without its display-name descriptor', () => {
+        const manifest = mutableManifest();
+        delete manifest.contributes.targetedPluginContributions[0]!.descriptor;
+
+        expect(() => assertConversationProviderContributionV1(manifest)).toThrow();
+    });
+
     it('accepts a public, external-style provider with arbitrary local Action ids', () => {
         const manifest = createExternalProviderManifest();
 

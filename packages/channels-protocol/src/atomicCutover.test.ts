@@ -61,8 +61,8 @@ describe('Channels public protocol atomic cutover', () => {
             }],
         });
         const declaredProtocol = protocol.ConversationProvidersContributionPointV1.protocols[0];
-        expect(protocol.ConversationProvidersContributionProtocolV1).not.toHaveProperty('descriptor');
-        expect(declaredProtocol).not.toHaveProperty('descriptor');
+        expect(protocol.ConversationProvidersContributionProtocolV1.descriptor).toBe(protocol.ConversationProviderDescriptorV1Schema);
+        expect(declaredProtocol?.descriptor).toEqual(protocol.ConversationProviderDescriptorV1JsonSchema);
         expect(protocol.ConversationProvidersContributionPointV1.maxContributionsPerContributor).toBe(1);
         expect(Object.keys(declaredProtocol?.operations ?? {}).sort()).toEqual([
             'attachmentFetch',

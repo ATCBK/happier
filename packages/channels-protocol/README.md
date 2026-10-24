@@ -73,6 +73,12 @@ binding is the discovery mechanism. Channels never scans a global Action
 catalog, derives an Action id from a plugin id, imports provider code, or
 expects a registration callback.
 
+In unreleased 0.3 source, each V1 provider also declares
+`descriptor: { v: 1, displayName: 'Acme Chat' }` in its `.contribute()` input.
+Channels uses this admitted provider name throughout its UI; the plugin's own
+display name can describe the broader plugin. The descriptor is presentation
+only, uses the existing SDK descriptor mechanism, and drops unknown properties.
+
 Provider authors stay on public package seams: use
 `@happier-dev/channels-protocol/v1` together with public Plugin SDK entrypoints.
 Do not import `@happier-dev/protocol`, a Channels implementation path, or any
@@ -189,6 +195,7 @@ export const { manifest, activate } = definePlugin({
     'happier.channels': {
       providers: {
         acme: ConversationProvidersContributionProtocolV1.contribute({
+          descriptor: { v: 1, displayName: 'Acme Chat' },
           operations: {
             setup: roles.setup.bind(actionIds.setup),
             connectionTest: roles.connectionTest.bind(actionIds.connectionTest),
@@ -791,7 +798,7 @@ assertConversationProviderContributionV1(manifest);
 ```
 
 This calls the public SDK manifest parser, then checks exactly one
-`happier.channels/providers` V1 contribution, the required and optional role
+`happier.channels/providers` V1 contribution, its display-name descriptor, the required and optional role
 bindings, arbitrary same-plugin local Action ids, and each bound Action's
 input/result schema, surface, and danger level against the public role
 declarations. It is a source-level conformance check, not host admission: it

@@ -157,6 +157,11 @@ export {
     ConversationProvidersContributionPointV1,
     ConversationProvidersContributionProtocolV1,
 } from './contribution.js';
+export {
+    ConversationProviderDescriptorV1Schema,
+    ConversationProviderDescriptorV1JsonSchema,
+} from './descriptor.js';
+export type { ConversationProviderDescriptorV1 } from './descriptor.js';
 export type {
     ConversationOutboundTextLimitV1,
     ConversationProviderSetupOutcomeV1,
