@@ -104,11 +104,11 @@ function readSession(state: RowsState, address: SessionAddress): SessionLike | n
     return null;
 }
 
-function toneOf(state: string): SessionSwitcherRowTone {
-    if (state === 'thinking' || state === 'background_active' || state === 'resuming') return 'working';
-    if (state === 'action_required' || state === 'permission_required') return 'attention';
-    if (state === 'failed' || state === 'recoverable_unservable') return 'failed';
-    if (state === 'disconnected') return 'offline';
+function toneOf(status: Pick<ReturnType<typeof getSessionStatus>, 'bucket' | 'tone'>): SessionSwitcherRowTone {
+    if (status.tone === 'danger') return 'failed';
+    if (status.tone === 'attention') return 'attention';
+    if (status.bucket === 'working') return 'working';
+    if (status.bucket === 'offline') return 'offline';
     return 'quiet';
 }
 
@@ -153,7 +153,7 @@ export function readSessionSwitcherRows(params: Readonly<{
                 machineId: session ? resolveSessionMachineId(session.metadata as never) : null,
                 serverId: address.serverId,
                 icon: null,
-                status: status && status.shouldShowStatus ? { text: status.statusText, tone: toneOf(status.state) } : null,
+                status: status && status.shouldShowStatus ? { text: status.statusText, tone: toneOf(status) } : null,
                 timeLabel: activityAt > 0 ? formatShortRelativeTimeAt(activityAt, params.nowMs) : '',
                 excerpt: readExcerpt(params.state, address),
                 draft: draft?.listed && draft.preview ? draft.preview : null,
