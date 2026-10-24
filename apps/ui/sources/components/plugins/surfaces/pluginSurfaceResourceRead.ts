@@ -56,17 +56,23 @@ export type PluginSurfaceResourceBinding = Readonly<{
     read?: PluginSurfaceResourceReadTransport;
     /** Host-private shared owner; never accepted from a plugin request. */
     store?: PluginUiResourceStore;
+    /** The same contextual fallback owner, borrowed for read cancellation but not legacy watch admission. */
+    contextualFallbackStore?: PluginUiResourceStore;
+    /** Preserve fresh legacy protocol reads when their contextual store owns cancellation. */
+    refreshOnRead?: boolean;
     /** Private declaration-owner notification; no Resource bytes or plugin-authored policy. */
     onDeclaredNamespaceAdmission?: (listener: () => void) => () => void;
 }>;
 
 /** Hold static demand until admitted bytes are available or the read settles. */
-export function readPluginResourceStoreSnapshot(entry: PluginUiResourceEntry, signal?: AbortSignal): Promise<PluginUiResourceSnapshot> {
+export function readPluginResourceStoreSnapshot(entry: PluginUiResourceEntry, signal?: AbortSignal, refresh = false): Promise<PluginUiResourceSnapshot> {
     return new Promise((resolve, reject) => {
         let release = () => {};
         let settled = false;
-        const finish = (error?: Error): void => {
+        let refreshSettled = !refresh;
+        const finish = (error?: unknown): void => {
             if (settled) return;
+            if (!error && !refreshSettled) return;
             const snapshot = entry.getSnapshot();
             if (!error && snapshot.value === undefined && snapshot.pending !== 'idle') return;
             settled = true;
@@ -75,7 +81,14 @@ export function readPluginResourceStoreSnapshot(entry: PluginUiResourceEntry, si
             if (error) reject(error); else resolve(snapshot);
         };
         const abort = (): void => finish(Object.assign(new Error('Resource operation was aborted'), { code: 'plugin_resource_aborted' }));
+        // Refresh starts the existing entry's read before static demand joins
+        // it. Subscribing first would start one read and queue a second one.
+        const refreshed = refresh ? entry.refresh() : null;
         release = entry.subscribe(() => finish(), false);
+        if (refreshed) void refreshed.then(() => {
+            refreshSettled = true;
+            finish();
+        }, (error: unknown) => finish(error));
         signal?.addEventListener('abort', abort, { once: true });
         if (signal?.aborted) abort(); else finish();
         if (settled) release();
@@ -270,10 +283,11 @@ export function createPluginSurfaceResourceReadHandler(input: Readonly<{
         try {
         if (signal?.aborted) return resourceAbortPayload(input.isCurrent);
 
-        if (input.resource.store) {
+        const store = input.resource.store ?? input.resource.contextualFallbackStore;
+        if (store) {
             try {
-                const entry = input.resource.store.getEntry(reference);
-                await readPluginResourceStoreSnapshot(entry, signal);
+                const entry = store.getEntry(reference);
+                await readPluginResourceStoreSnapshot(entry, signal, input.resource.refreshOnRead === true);
                 if (signal?.aborted || input.isCurrent?.() === false) return resourceAbortPayload(input.isCurrent);
                 // The physical caller survives declaration updates. Authority
                 // may have withdrawn while the cached read yielded.

@@ -189,6 +189,56 @@ async function createMountedSurface(
 }
 
 describe('mounted plugin surface live resource invalidation (EU-4b)', () => {
+    it('hydrates and withdraws a contextual Machine watch without retiring an admitted Account watch', async () => {
+        const settled = createDeferred<ResourceContent>();
+        let progress: ((value: ResourceContent) => void) | undefined;
+        const content = (digest: string): ResourceContent => ({ contentType: 'application/json', digest,
+            bytes: new TextEncoder().encode('1') });
+        const store = createPluginUiResourceStore({ client: {
+            readResource: async (_resource, options) => {
+                progress = options?.onProgress;
+                progress?.(content(DIGEST_A));
+                return settled.promise;
+            },
+        } });
+        const daemon = createFakeDaemon();
+        const events: PluginUiResourceSubscriptionEventV1[] = [];
+        const handlers = createPluginSurfaceResourceWatchHandlers({ pluginId: 'acme.preview', hostResourceStore: store,
+            transport: daemon.transport, deliver: event => { events.push(event); } });
+        const reference = { hostRead: 'usage.query' as const, input: { queries: [{}] } };
+        const updateResource = (resource?: Readonly<{ machineId: string; serverId: string; expectedCallerOccurrenceId: string }>) => {
+            // Older owners have no in-place binding update; the observable
+            // Machine watch assertion below must refuse under that behavior.
+            if ('updateResource' in handlers && typeof handlers.updateResource === 'function') handlers.updateResource(resource);
+        };
+        try {
+            await expect(handlers.watchResource({ requestId: 'account-watch', method: 'watchResource',
+                payload: { subscriptionId: 'account-watch', resource: reference } })).resolves.toMatchObject({ digest: DIGEST_A });
+            const binding = { machineId: 'machine-1', serverId: 'server-1', expectedCallerOccurrenceId: 'machine-occurrence' };
+            updateResource(binding);
+            await expect(handlers.watchResource({ requestId: 'machine-watch', method: 'watchResource',
+                payload: { subscriptionId: 'machine-watch', resource: 'status' } })).resolves.toMatchObject({ digest: DIGEST_A });
+            await vi.waitFor(() => expect(daemon.nextSignals).toHaveLength(1));
+            updateResource(binding);
+            expect(daemon.nextSignals[0]!.aborted).toBe(false);
+            expect(daemon.opens).toHaveLength(1);
+            progress?.(content(DIGEST_B));
+            expect(events).toEqual([expect.objectContaining({ subscriptionId: 'account-watch', kind: 'invalidated', digest: DIGEST_B })]);
+            updateResource();
+            expect(daemon.nextSignals[0]!.aborted).toBe(true);
+            await expect(handlers.watchResource({ requestId: 'withdrawn-machine-watch', method: 'watchResource',
+                payload: { subscriptionId: 'withdrawn-machine-watch', resource: 'status' } })).resolves.toMatchObject({
+                code: 'unavailable', diagnostics: ['plugin_resource_transport_unavailable'],
+            });
+            progress?.(content(DIGEST_A));
+            expect(events).toEqual([
+                expect.objectContaining({ subscriptionId: 'account-watch', kind: 'invalidated', digest: DIGEST_B }),
+                expect.objectContaining({ subscriptionId: 'account-watch', kind: 'invalidated', digest: DIGEST_A }),
+            ]);
+            expect(store.getEntry(reference).getSnapshot().pending).toBe('initial');
+        } finally { settled.resolve(content(DIGEST_A)); handlers.dispose(); store.dispose(); }
+    });
+
     it('invalidates a host Resource when admitted progress moves before its read settles', async () => {
         const settled = createDeferred<ResourceContent>();
         let progress: ((value: ResourceContent) => void) | undefined;

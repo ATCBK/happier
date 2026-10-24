@@ -24,7 +24,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import { createMachineFixture, renderHook } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, renderHook, renderScreen } from '@/dev/testkit';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { log } from '@/log';
@@ -1449,7 +1449,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         await hook.unmount();
     });
 
-    it('keeps an equivalent targeted Resource context mounted but replaces it when its launch input changes', async () => {
+    it('keeps the physical caller while replacing only the targeted Resource view for changed launch input', async () => {
         const hook = await renderHook(
             (launchInput: PluginUiJsonValueV1) => {
                 const facts = {
@@ -1461,17 +1461,20 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             { initialProps: { reviewId: 'review-a' } },
         );
         const first = hook.getCurrent();
+        const firstStore = first.resourceStore;
 
         const same = await hook.rerender({ reviewId: 'review-a' });
 
         // A parent refresh must not replace the existing Resource watch just
         // because it reconstructed equivalent JSON input.
         expect(same).toBe(first);
+        expect(same.resourceStore).toBe(firstStore);
 
         const replacement = await hook.rerender({ reviewId: 'review-b' });
 
-        expect(replacement).not.toBe(first);
-        expect(first.isCurrent()).toBe(false);
+        expect(replacement).toBe(first);
+        expect(replacement.resourceStore).not.toBe(firstStore);
+        expect(first.isCurrent()).toBe(true);
         await hook.unmount();
     });
 
@@ -1511,6 +1514,33 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         controller.dispose();
     });
 
+    it('refreshes repeated legacy contextual protocol reads while retaining the existing Resource entry', async () => {
+        const initialBytes = 'e30=';
+        const refreshedBytes = 'eyJyZXZpc2lvbiI6Mn0=';
+        const read = vi.fn<PluginSurfaceResourceReadTransport>(async (_machineId, options) => ({ supported: true,
+            result: { ok: true, resource: options.resource, kind: 'asset', contentType: 'application/json',
+                digest: `sha256:${'a'.repeat(64)}`, bytesBase64: initialBytes } }));
+        const controller = createBoundPluginSurfaceController({ facts: { ...FACTS,
+            resourceContext: createTargetedSurfaceResourceContext({ reviewId: 'review-a' }),
+        }, binding: { readResource: read } });
+        const entry = controller.resourceStore!.getEntry('review-summary');
+        const release = entry.subscribe(() => {}, false);
+        try {
+            await vi.waitFor(() => expect(entry.getSnapshot().value).toBeDefined());
+            await expect(controller.hostApi.handleRequest(request('readResource', { resource: 'review-summary' })))
+                .resolves.toMatchObject({ bytesBase64: initialBytes });
+            read.mockClear();
+            read.mockImplementation(async (_machineId, options) => ({ supported: true,
+                result: { ok: true, resource: options.resource, kind: 'asset', contentType: 'application/json',
+                    digest: `sha256:${'b'.repeat(64)}`, bytesBase64: refreshedBytes } }));
+            await expect(controller.hostApi.handleRequest(request('readResource', { resource: 'review-summary' })))
+                .resolves.toMatchObject({ bytesBase64: refreshedBytes });
+            expect(read).toHaveBeenCalledTimes(1);
+            expect(controller.resourceStore!.getEntry('review-summary')).toBe(entry);
+            expect(new TextDecoder().decode(entry.getSnapshot().value!.bytes)).toBe('{"revision":2}');
+        } finally { release(); controller.dispose(); }
+    });
+
     it('fences a targeted Resource read that settles after same-mount launch input replacement', async () => {
         let settle: ((value: unknown) => void) | undefined;
         const read = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
@@ -1534,6 +1564,8 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(read).toHaveBeenCalledTimes(1);
 
         await hook.rerender({ reviewId: 'review-b' });
+        expect(hook.getCurrent()).toBe(original);
+        expect(original.isCurrent()).toBe(true);
         settle!({
             supported: true,
             result: {
@@ -1551,7 +1583,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         await hook.unmount();
     });
 
-    it('aborts an in-flight targeted Resource read when same-mount launch input replacement retires its controller', async () => {
+    it('aborts an in-flight unscoped contextual Resource read when input changes without retiring its controller', async () => {
         let resourceSignal: AbortSignal | undefined;
         const read: PluginSurfaceResourceReadTransport = async (_machineId, options) => {
             resourceSignal = options.signal;
@@ -1582,6 +1614,8 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
 
         await hook.rerender({ reviewId: 'review-b' });
 
+        expect(hook.getCurrent()).toBe(original);
+        expect(original.isCurrent()).toBe(true);
         expect(resourceSignal?.aborted).toBe(true);
         await expect(pending).resolves.toEqual({
             code: 'unavailable',
@@ -2398,6 +2432,56 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         });
     });
 
+    it('updates Connected Accounts navigation only on commit without replacing its physical caller', async () => {
+        const firstOpen = vi.fn(async () => undefined);
+        const secondOpen = vi.fn(async () => undefined);
+        let openConnectedAccounts = firstOpen;
+        let suspend = false;
+        let attempted = 0;
+        const pending = createDeferred<void>();
+        let current: ReturnType<typeof useBoundPluginSurfaceController> | undefined;
+        function Surface() {
+            current = useBoundPluginSurfaceController({ facts: FACTS, binding: { openConnectedAccounts } });
+            return null;
+        }
+        function Gate(): null {
+            if (suspend) { attempted += 1; throw pending.promise; }
+            return null;
+        }
+        const render = () => React.createElement(React.Suspense, { fallback: React.createElement('View', { testID: 'pending-navigation' }) },
+            React.createElement(Surface), React.createElement(Gate));
+        const screen = await renderScreen(render());
+        const first = current!;
+        const payload = { service: { pluginId: 'acme.accounts', localId: 'forge' } };
+        try {
+            openConnectedAccounts = secondOpen;
+            suspend = true;
+            await act(async () => {
+                let update: Promise<void> | undefined;
+                React.startTransition(() => { update = screen.update(render()); });
+                await update;
+            });
+            expect(attempted).toBeGreaterThan(0);
+            expect(screen.findHostByTestId('pending-navigation')).toBeNull();
+            await expect(first.hostApi.handleRequest(request('openConnectedAccounts', payload))).resolves.toBeNull();
+            expect(firstOpen).toHaveBeenCalledOnce();
+            expect(secondOpen).not.toHaveBeenCalled();
+            suspend = false;
+            openConnectedAccounts = firstOpen;
+            await screen.update(render());
+            expect(current).toBe(first);
+            openConnectedAccounts = secondOpen;
+            await screen.update(render());
+            expect(current).toBe(first);
+            await expect(first.hostApi.handleRequest(request('openConnectedAccounts', payload))).resolves.toBeNull();
+            expect(firstOpen).toHaveBeenCalledOnce();
+            expect(secondOpen).toHaveBeenCalledExactlyOnceWith(payload);
+        } finally {
+            await screen.unmount();
+            await act(async () => { pending.resolve(); });
+        }
+    });
+
     it('keeps locally served host methods when only the daemon binding is unavailable', async () => {
         const executeContributedAction = vi.fn();
         clipboard.getStringAsync.mockReset();
@@ -3045,6 +3129,46 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
 
         expect(viewerFactory).not.toHaveBeenCalled();
         expect(fileViewer.installedMethods).not.toContain('readComposer');
+    });
+
+    it('retires and disposes a whole controller unmounted while Suspense keeps its source current', async () => {
+        const suspended = createDeferred<void>();
+        let hidden = false;
+        let current: ReturnType<typeof useBoundPluginSurfaceController> | undefined;
+        const dispose = vi.fn();
+        const factory: BoundPluginSurfaceMountedHostApiHandlersFactory = () => ({ handlers: {}, dispose });
+        function Surface() {
+            current = useBoundPluginSurfaceController({ facts: FACTS, binding: { createMountedHostApiHandlers: factory } });
+            return null;
+        }
+        function Gate(): null {
+            if (hidden) throw suspended.promise;
+            return null;
+        }
+        const render = () => React.createElement(React.Suspense, { fallback: React.createElement('View', { testID: 'suspended-controller' }) },
+            React.createElement(Surface), React.createElement(Gate));
+        const screen = await renderScreen(render());
+        const controller = current!;
+        const retired = vi.fn();
+        const observation = controller.onRetire(retired);
+        onTestFinished(async () => {
+            observation.dispose();
+            controller.dispose();
+            await act(async () => { suspended.resolve(); });
+        });
+        expect(controller.isCurrent()).toBe(true);
+        hidden = true;
+        await screen.update(render());
+        expect(screen.findByTestId('suspended-controller')).toBeTruthy();
+        expect(CURRENT_ACCOUNT_LIFETIME.isCurrent()).toBe(true);
+        expect(controller.isCurrent()).toBe(true);
+        expect(retired).not.toHaveBeenCalled();
+        expect(dispose).not.toHaveBeenCalled();
+        await screen.unmount();
+        expect(CURRENT_ACCOUNT_LIFETIME.isCurrent()).toBe(true);
+        expect.soft(controller.isCurrent()).toBe(false);
+        expect.soft(retired).toHaveBeenCalledTimes(1);
+        expect(dispose).toHaveBeenCalledTimes(1);
     });
 
     it('updates mounted handler bundles without withdrawing an entered request or the physical controller', async () => {

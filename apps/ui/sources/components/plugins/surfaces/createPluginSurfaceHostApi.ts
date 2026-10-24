@@ -79,6 +79,12 @@ export type PluginSurfaceHostApiV1 = Readonly<{
     ) => PluginUiJsonValueV1 | Promise<PluginUiJsonValueV1>;
     /** Physical host readiness committed; resume calls held by this same facade. */
     notifyConnectionSettled?: () => void;
+    /** Host-private pre-invocation admission; nested Actions share this facade's waiter. */
+    waitForConnectionSettlement?: (
+        error: PluginUiHostApiErrorPayloadV1,
+        request: PluginUiHostApiRequestEnvelopeV1,
+        options?: PluginSurfaceHostApiRequestOptions,
+    ) => Promise<void> | null;
     /**
      * Retire whatever the installed handlers put in front of the user (§3.4:
      * feedback and confirmation retire with the surface). Idempotent, and absent
@@ -114,7 +120,10 @@ export type PluginSurfaceHostApiHandlers = Partial<
  * an Action result is always classified by provenance rather than its JSON
  * members (including a domain `{ code: 'timeout' }`).
  */
-const pluginSurfaceHostApiErrorPayloads = new WeakMap<object, PluginUiHostApiErrorPayloadV1>();
+const pluginSurfaceHostApiErrorPayloads = new WeakMap<object, Readonly<{
+    payload: PluginUiHostApiErrorPayloadV1;
+    connectionPendingEligible: boolean;
+}>>();
 
 /**
  * Creates a host-owned raw failure for direct host-local consumers. Its
@@ -125,6 +134,7 @@ export function createPluginSurfaceHostApiError(
     code: PluginUiHostApiErrorCodeV1,
     diagnostics: readonly string[] = [],
     message?: string,
+    options?: Readonly<{ connectionPendingEligible?: boolean }>,
 ): PluginUiJsonValueV1 {
     const payload = PluginUiHostApiErrorPayloadV1Schema.parse({
         code,
@@ -139,7 +149,7 @@ export function createPluginSurfaceHostApiError(
         ...(payload.message === undefined ? {} : { message: payload.message }),
         diagnostics: Object.freeze([...payload.diagnostics]),
     }) satisfies PluginUiJsonValueV1;
-    pluginSurfaceHostApiErrorPayloads.set(result, payload);
+    pluginSurfaceHostApiErrorPayloads.set(result, { payload, connectionPendingEligible: options?.connectionPendingEligible === true });
     return result;
 }
 
@@ -172,7 +182,7 @@ export function readPluginSurfaceHostApiErrorPayload(
     value: unknown,
 ): PluginUiHostApiErrorPayloadV1 | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    return pluginSurfaceHostApiErrorPayloads.get(value) ?? null;
+    return pluginSurfaceHostApiErrorPayloads.get(value)?.payload ?? null;
 }
 
 /**
@@ -295,11 +305,34 @@ export function createPluginSurfaceHostApi(
     const isMethodAvailable = input.isMethodAvailable;
     let disposed = false;
     const connectionWaiters = new Set<() => void>();
+    const waitForConnectionSettlement: NonNullable<PluginSurfaceHostApiV1['waitForConnectionSettlement']> = (error, request, options) => {
+        if (input.isConnectionPending?.(error, request) !== true) return null;
+        if (disposed || input.isCurrent?.() === false || options?.signal?.aborted) return Promise.resolve();
+        return new Promise<void>(resolve => {
+            const finish = () => {
+                connectionWaiters.delete(resume);
+                options?.signal?.removeEventListener('abort', finish);
+                resolve();
+            };
+            const resume = () => {
+                if (!disposed && input.isCurrent?.() !== false && input.isConnectionPending?.(error, request) === true) return;
+                finish();
+            };
+            connectionWaiters.add(resume);
+            options?.signal?.addEventListener('abort', finish, { once: true });
+        });
+    };
     const enrichUnavailable = (result: PluginUiJsonValueV1, request: PluginUiHostApiRequestEnvelopeV1,
         options?: PluginSurfaceHostApiRequestOptions): PluginUiJsonValueV1 | Promise<PluginUiJsonValueV1> => {
         const error = readPluginSurfaceHostApiErrorPayload(result);
         if (error?.code !== 'unavailable') return result;
-        const pending = input.isConnectionPending?.(error, request) === true;
+        // An entered Action may report the same diagnostic as a cold daemon
+        // gate. Only the dispatcher's exact pre-invocation signal permits
+        // replay here; nested continuations wait below their entered caller.
+        const eligible = request.method !== 'executeAction'
+            || (result !== null && typeof result === 'object'
+                && pluginSurfaceHostApiErrorPayloads.get(result)?.connectionPendingEligible === true);
+        const pending = eligible ? waitForConnectionSettlement(error, request, options) : null;
         // Only the controller's positive, pre-invocation readiness refusal can
         // enter this wait. Domain results and settled outages stay terminal.
         // The physical host wakes it on connection settlement; no polling or
@@ -308,23 +341,7 @@ export function createPluginSurfaceHostApi(
             if (disposed || input.isCurrent?.() === false) {
                 return createPluginSurfaceHostApiError('stale_surface', ['plugin_surface_retired']);
             }
-            return new Promise<PluginUiJsonValueV1>(resolve => {
-                const finish = (value: PluginUiJsonValueV1 | Promise<PluginUiJsonValueV1>) => {
-                    connectionWaiters.delete(resume);
-                    options?.signal?.removeEventListener('abort', abort);
-                    resolve(value);
-                };
-                const abort = () => finish(createPluginSurfaceHostApiError('unavailable', ['plugin_ui_invocation_aborted']));
-                const resume = () => {
-                    if (!disposed && input.isCurrent?.() !== false && input.isConnectionPending?.(error, request) === true) return;
-                    // Re-read current handlers and admission, including failure
-                    // and retirement, before invoking the requested operation.
-                    finish(Promise.resolve().then(() => handleRequest(request, options)));
-                };
-                if (options?.signal?.aborted) { abort(); return; }
-                connectionWaiters.add(resume);
-                options?.signal?.addEventListener('abort', abort, { once: true });
-            });
+            return pending.then(() => handleRequest(request, options));
         }
         const resolved = input.resolveUnavailableError?.(error, request) ?? error;
         return resolved === error ? result : createPluginSurfaceHostApiError(resolved.code, resolved.diagnostics, resolved.message);
@@ -363,7 +380,7 @@ export function createPluginSurfaceHostApi(
             return readAdmissionMethods().includes(releasedMethod.data)
                 ? enrichUnavailable(createPluginSurfaceHostApiError(
                     'unavailable',
-                    [`host_api_method_unavailable:${request.method}`],
+                    [`host_api_method_unavailable:${request.method}`], undefined, { connectionPendingEligible: true },
                 ), request, options)
                 : createPluginSurfaceHostApiError(
                     'unsupported_method',
@@ -398,6 +415,7 @@ export function createPluginSurfaceHostApi(
         },
         handleRequest,
         notifyConnectionSettled,
+        waitForConnectionSettlement,
         dispose: (): void => {
             if (disposed) return;
             disposed = true;

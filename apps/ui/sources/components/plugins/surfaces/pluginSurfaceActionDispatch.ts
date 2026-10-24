@@ -128,6 +128,7 @@ import {
 } from '@/sync/ops/machineContributionRegistryProjectionRevision';
 import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 import { createPluginSurfaceAccountActionServices } from './pluginSurfaceAccountActionServices';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 /** Exact producer-owned mounted binding, preserved only until RPC projection. */
 export type PluginSurfaceActionMountedBinding = DaemonPluginStructuredMessageActionMountedBinding;
@@ -318,6 +319,10 @@ export type DispatchPluginSurfaceActionInput = Readonly<{
     invocation?: PluginSurfaceUnMountedActionInvocation;
     /** Live daemon capability owned by the bound controller, never a new action owner. */
     isContributedActionAvailable?: () => boolean;
+    /** Reuse the mounted facade's connection settlement before a daemon invocation. */
+    settleContributedAction?: PluginSurfaceContributedActionSettlement;
+    /** Exact local refusal phase; never inherited by an entered caller's nested Action. */
+    onPreInvocationMachineRefusal?: () => void;
     signal?: AbortSignal;
     isCurrent?: () => boolean;
     /** Exact target-scoped admission handle retained host-private after form selection. */
@@ -333,6 +338,11 @@ type PluginSurfaceActionDispatchFailure = Extract<
     PluginSurfaceActionDispatchOutcome,
     Readonly<{ ok: false }>
 >;
+
+type PluginSurfaceContributedActionSettlement = (
+    identity: PluginContributionIdentityV1,
+    options: Readonly<{ signal?: AbortSignal; requestId?: string }>,
+) => Promise<Readonly<{ ok: true; binding: PluginSurfaceContributedActionBinding | undefined }> | PluginSurfaceActionDispatchFailure>;
 
 /** Keep the public failure envelope when an Action is called by plugin code. */
 function pluginActionDispatchFailureError(outcome: PluginSurfaceActionDispatchFailure): PluginError {
@@ -1187,12 +1197,13 @@ async function executeClientContributedAction(
                         serverId: input.contributedAction.serverId,
                     } } : {}),
                     execute: async (action, value, options) => {
-                        const nestedInput: DispatchPluginSurfaceActionInput = {
+                        let nestedInput: DispatchPluginSurfaceActionInput = {
                             callerPluginId: current.action.pluginId, callerSourceCustody: accountOrigin.sourceCustody,
                             action, input: value,
                             ...(input.hostAction ? { hostAction: input.hostAction } : {}),
                             ...(input.contributedAction ? { contributedAction: input.contributedAction } : {}),
                             ...(input.isContributedActionAvailable ? { isContributedActionAvailable: input.isContributedActionAvailable } : {}),
+                            ...(input.settleContributedAction ? { settleContributedAction: input.settleContributedAction } : {}),
                             clientAction: current.binding, pluginUiProjection: input.pluginUiProjection,
                             resolveContributedAction: input.resolveContributedAction,
                             invocationSurface: 'plugin', originSurface, invocation: clientActionInvocation(current),
@@ -1209,9 +1220,19 @@ async function executeClientContributedAction(
                             const declaration = readPluginAccountAvailability(accountLifetime.scope).readCurrentAccountExecution(nestedIdentity.pluginId);
                             const selectedAction = projected ?? (declaration.kind === 'available'
                                 ? declaration.manifest.contributes.actions?.find(candidate => candidate.id === nestedIdentity.localId) : null);
-                            if (selectedAction?.execution.target === 'daemon') throw createPluginActionHandlerNotStartedError({
-                                code: 'plugin_action_machine_required', message: 'This Action requires a selected online Machine',
-                            });
+                            if (selectedAction?.execution.target === 'daemon') {
+                                const readiness = await input.settleContributedAction?.(nestedIdentity, { signal: options.signal });
+                                if (readiness?.ok === false) throw pluginActionDispatchFailureError(readiness);
+                                if (readiness?.binding) nestedInput = { ...nestedInput, contributedAction: readiness.binding };
+                                const currentProjected = resolveProjectedContributedAction(nestedInput, nestedIdentity);
+                                if (projected && currentProjected && (currentProjected.execution.target !== 'daemon'
+                                    || currentProjected.occurrenceId !== projected.occurrenceId)) {
+                                    throw pluginActionDispatchFailureError(failure('stale_surface', 'plugin_ui_generation_retired'));
+                                }
+                                if (!nestedInput.contributedAction) throw createPluginActionHandlerNotStartedError({
+                                    code: 'plugin_action_machine_required', message: 'This Action requires a selected online Machine',
+                                });
+                            }
                         }
                         const outcome = await dispatchPluginSurfaceAction(nestedInput);
                         if (!outcome.ok) throw pluginActionDispatchFailureError(outcome);
@@ -1588,13 +1609,30 @@ async function executeContributedAction(
         ? resolveMountedPluginActionCaller(input)
         : null;
     if (hasMountedContribution && !caller) {
+        input.onPreInvocationMachineRefusal?.();
         return failure('unavailable', 'plugin_mounted_caller_unavailable');
     }
     if (caller && input.invocation) {
         return failure('invalid_payload', 'plugin_surface_action_invocation_ambiguous');
     }
 
-    const projectedAction = resolveProjectedContributedAction(input, identity);
+    let projectedAction = resolveProjectedContributedAction(input, identity);
+    // A retained declaration can precede the selected Machine's live projection
+    // and binding. Wait at that daemon boundary, never by replaying its already
+    // entered Account caller. The same resolver is read again after settlement.
+    const declaredAction = projectedAction ?? input.resolveContributedAction?.(identity);
+    if (!input.admissionOnly && declaredAction?.execution.target === 'daemon' && input.settleContributedAction) {
+        const readiness = await input.settleContributedAction(identity, { signal: input.signal, requestId: input.actionRequestId });
+        if (!readiness.ok) return readiness;
+        const stopped = preflightFailure(input);
+        if (stopped) return stopped;
+        input = { ...input, contributedAction: readiness.binding };
+        projectedAction = resolveProjectedContributedAction(input, identity);
+        if (projectedAction && (projectedAction.execution.target !== 'daemon'
+            || projectedAction.occurrenceId !== declaredAction.occurrenceId)) {
+            return failure('stale_surface', 'plugin_ui_generation_retired');
+        }
+    }
     if (!projectedAction) {
         return failure('unavailable', 'plugin_surface_action_projection_unavailable');
     }
@@ -1630,10 +1668,14 @@ async function executeContributedAction(
     }
 
     if (input.isContributedActionAvailable?.() === false) {
+        input.onPreInvocationMachineRefusal?.();
         return failure('unavailable', 'plugin_surface_contributed_action_unavailable');
     }
     const binding = input.contributedAction;
-    if (!binding) return failure('unavailable', 'plugin_surface_contributed_action_unavailable');
+    if (!binding) {
+        input.onPreInvocationMachineRefusal?.();
+        return failure('unavailable', 'plugin_surface_contributed_action_unavailable');
+    }
     if (caller?.materialization && caller.materialization.machineId !== binding.machineId) {
         return failure('unavailable', 'plugin_mounted_caller_unavailable');
     }
@@ -1755,6 +1797,7 @@ export type CreatePluginSurfaceActionDispatchHandlerInput = Readonly<{
     invocationSurface?: PluginSurfaceActionInvocationSurface;
     resolveContributedAction?: PluginSurfaceContributedActionDescriptorResolver;
     isContributedActionAvailable?: () => boolean;
+    settleContributedAction?: PluginSurfaceContributedActionSettlement;
     isCurrent?: () => boolean;
 }>;
 
@@ -1807,6 +1850,7 @@ export function createPluginSurfaceActionDispatchHandler(
         }
 
         const cancellation = mergeAbortSignals([input.lifetimeSignal, options?.signal]);
+        let connectionPendingEligible = false;
         const outcome = await dispatchPluginSurfaceAction({
             actionRequestId: request.requestId,
             callerPluginId: input.pluginId,
@@ -1831,12 +1875,14 @@ export function createPluginSurfaceActionDispatchHandler(
             ...(input.isContributedActionAvailable
                 ? { isContributedActionAvailable: input.isContributedActionAvailable }
                 : {}),
+            ...(input.settleContributedAction ? { settleContributedAction: input.settleContributedAction } : {}),
+            onPreInvocationMachineRefusal: () => { connectionPendingEligible = true; },
             ...(cancellation.signal ? { signal: cancellation.signal } : {}),
             ...(targetedOperation ? { targetedOperation } : {}),
             ...(selectedActionInput ? { selectedActionInput } : {}),
             ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
         }).finally(cancellation.dispose);
-        if (!outcome.ok) return createPluginSurfaceHostApiError(outcome.code, [outcome.reason], outcome.message);
+        if (!outcome.ok) return createPluginSurfaceHostApiError(outcome.code, [outcome.reason], outcome.message, { connectionPendingEligible });
         return outcome.result;
     };
 }
@@ -1852,6 +1898,18 @@ export function createPluginSurfaceActionDispatchHandler(
  * `openSurface`, so the method fails with a typed `unsupported_method` instead
  * of resolving after doing nothing — the installed set stays factual (UI-D02).
  */
+/** Committed optional Machine services; requester and Account lifetimes stay with the facade. */
+export type PluginSurfaceMachineHostApiBindings = Readonly<{
+    /** Existing selected routing, known even before its executable occurrence arrives. */
+    executionTarget?: Readonly<{ machineId: string; serverId: string | null }>;
+    contributedAction?: PluginSurfaceContributedActionBinding;
+    resource?: PluginSurfaceResourceBinding;
+    allowPluginResources?: boolean;
+    admissionMethods?: readonly PluginUiHostMethodV1[];
+    selectActionInput?: PluginSurfaceHostApiMethodHandler;
+    createOpenNewSession?: (executeSelectedOperation: PluginSurfaceHostApiMethodHandler) => PluginSurfaceHostApiMethodHandler;
+}>;
+
 export function createPluginSurfaceActionHostApi(input: Readonly<{
     surfaceContext: PluginUiSurfaceContextV1;
     /** Structural support projected by the canonical bound controller. */
@@ -1917,6 +1975,8 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
      */
     mountedHostApiHandlers?: PluginSurfaceHostApiHandlers;
     readMountedHostApiHandlers?: () => PluginSurfaceHostApiHandlers;
+    /** Updated only by the bound controller's existing committed binding owner. */
+    readMachineBindings?: () => PluginSurfaceMachineHostApiBindings;
     /** Retires effects owned by `mountedHostApiHandlers` with this same mount. */
     disposeMountedHostApiHandlers?: () => void;
     isCurrent?: () => boolean;
@@ -1967,10 +2027,18 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
         ...(input.interactionRequester ? { interactionRequester: input.interactionRequester } : {}),
         ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
     });
-    const resourceWatch = (input.resource || input.hostResourceStore) && input.resourceInvalidation
+    let machineBindings: PluginSurfaceMachineHostApiBindings = input.readMachineBindings?.() ?? {
+        ...(input.contributedAction ? { executionTarget: { machineId: input.contributedAction.machineId,
+            serverId: input.contributedAction.serverId ?? null } } : {}),
+        contributedAction: input.contributedAction, resource: input.resource,
+        allowPluginResources: input.resourceInvalidation?.allowPluginResources,
+        admissionMethods: input.admissionMethods, selectActionInput: input.selectActionInput,
+        createOpenNewSession: input.createOpenNewSession,
+    };
+    const resourceWatch = (machineBindings.resource || input.hostResourceStore || input.readMachineBindings) && input.resourceInvalidation
         ? createPluginSurfaceResourceWatchHandlers({
             pluginId: input.surfaceContext.pluginId,
-            ...(input.resource && input.resourceInvalidation.allowPluginResources !== false ? { resource: input.resource } : {}),
+            ...(machineBindings.resource && machineBindings.allowPluginResources !== false ? { resource: machineBindings.resource } : {}),
             ...(input.hostResourceStore ? { hostResourceStore: input.hostResourceStore } : {}),
             ...(input.isContributedActionAvailable ? { isDaemonAvailable: input.isContributedActionAvailable } : {}),
             deliver: input.resourceInvalidation.deliver,
@@ -1991,7 +2059,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
     const mountedDisposeHostResource: PluginSurfaceHostApiMethodHandler = (request, options) =>
         readMountedHandlers().disposeHostResource?.(request, options) ?? null;
     const resourceDisposeHostResource = resourceWatch?.disposeHostResource;
-    const executeAction = createPluginSurfaceActionDispatchHandler({
+    const createExecuteAction = (machine: PluginSurfaceMachineHostApiBindings) => createPluginSurfaceActionDispatchHandler({
         pluginId: input.surfaceContext.pluginId,
         ...(input.resourceLifetimeSignal ? { lifetimeSignal: input.resourceLifetimeSignal } : {}),
         ...(input.callerSourceCustody
@@ -2000,7 +2068,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
         contributionId: input.surfaceContext.contributionId,
         ...(input.callerBinding ? { callerBinding: input.callerBinding } : {}),
         ...(input.hostAction ? { hostAction: input.hostAction } : {}),
-        ...(input.contributedAction ? { contributedAction: input.contributedAction } : {}),
+        ...(machine.contributedAction ? { contributedAction: machine.contributedAction } : {}),
         ...(input.clientAction
             ? {
                 clientAction: {
@@ -2020,8 +2088,58 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
         ...(input.isContributedActionAvailable
             ? { isContributedActionAvailable: input.isContributedActionAvailable }
             : {}),
+        settleContributedAction: async (identity, options) => {
+            const requestedTarget = machine.executionTarget;
+            const request: PluginUiHostApiRequestEnvelopeV1 = { version: 1,
+                requestId: options.requestId ?? 'nested-action-admission', surface: input.surfaceContext,
+                method: 'executeAction', payload: { action: identity } };
+            await hostApi.waitForConnectionSettlement?.({ code: 'unavailable',
+                diagnostics: ['plugin_surface_contributed_action_unavailable'] }, request, { signal: options.signal });
+            if (options.signal?.aborted) return failure('unavailable', 'plugin_ui_invocation_aborted');
+            if (!hostAdmissionCurrent || input.isCurrent?.() === false) return failure('stale_surface', 'plugin_ui_generation_retired');
+            refreshMachineBindings();
+            const currentTarget = machineBindings.executionTarget;
+            if (requestedTarget && (!currentTarget || requestedTarget.machineId !== currentTarget.machineId
+                || (requestedTarget.serverId !== null && (currentTarget.serverId === null
+                    || !areServerProfileIdentifiersEquivalent(requestedTarget.serverId, currentTarget.serverId))))) {
+                return failure('stale_surface', 'plugin_ui_generation_retired');
+            }
+            // A selected Machine which finished admission with a genuine
+            // outage is not an absent selection. Preserve its canonical
+            // unavailable diagnostic so the facade can publish the target
+            // owner's classified failure, even before a binding ever arrived.
+            if (currentTarget && input.isContributedActionAvailable?.() === false) {
+                return failure('unavailable', 'plugin_surface_contributed_action_unavailable');
+            }
+            return { ok: true, binding: machineBindings.contributedAction };
+        },
         ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
     });
+    let executeCurrentAction = createExecuteAction(machineBindings);
+    const executeAction: PluginSurfaceHostApiMethodHandler = (request, options) => executeCurrentAction(request, options);
+    const createMachineHandlers = (machine: PluginSurfaceMachineHostApiBindings): PluginSurfaceHostApiHandlers => ({
+        ...(machine.resource || input.hostResourceStore ? { readResource: createPluginSurfaceResourceReadHandler({
+            pluginId: input.surfaceContext.pluginId,
+            ...(machine.resource ? { resource: machine.resource } : {}),
+            ...(input.hostResourceStore ? { hostResourceStore: input.hostResourceStore } : {}),
+            ...(input.isContributedActionAvailable ? { isDaemonAvailable: input.isContributedActionAvailable } : {}),
+            ...(input.resourceLifetimeSignal ? { lifetimeSignal: input.resourceLifetimeSignal } : {}),
+            ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
+        }) } : {}),
+        ...(resourceWatch && ((machine.resource && machine.allowPluginResources !== false) || input.hostResourceStore)
+            ? { watchResource: resourceWatch.watchResource } : {}),
+        ...(machine.selectActionInput ? { selectActionInput: machine.selectActionInput } : {}),
+        ...(machine.createOpenNewSession ? { openNewSession: machine.createOpenNewSession(executeAction) } : {}),
+    });
+    let machineHandlers = createMachineHandlers(machineBindings);
+    const refreshMachineBindings = () => {
+        const next = input.readMachineBindings?.();
+        if (!next || next === machineBindings) return;
+        machineBindings = next;
+        resourceWatch?.updateResource(next.allowPluginResources !== false ? next.resource : undefined);
+        executeCurrentAction = createExecuteAction(next);
+        machineHandlers = createMachineHandlers(next);
+    };
     const hostApiInput: Parameters<typeof createPluginSurfaceHostApi>[0] = {
         surfaceContext: input.surfaceContext,
         ...(input.admissionMethods ? { admissionMethods: input.admissionMethods } : {}),
@@ -2033,6 +2151,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
             ...localHostHandlers,
             executeAction,
             admitAction: async (request, options) => {
+                const contributedAction = machineBindings.contributedAction;
                 const payload = PluginUiExecuteActionRequestV1Schema.safeParse(request.payload);
                 if (!payload.success) return createPluginSurfaceHostApiError('invalid_payload');
                 const cancellation = mergeAbortSignals([input.resourceLifetimeSignal, options?.signal]);
@@ -2041,7 +2160,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
                         admissionOnly: true,
                         callerPluginId: input.surfaceContext.pluginId,
                         ...(input.hostAction ? { hostAction: input.hostAction } : {}),
-                        ...(input.contributedAction ? { contributedAction: input.contributedAction } : {}),
+                        ...(contributedAction ? { contributedAction } : {}),
                         ...(input.callerSourceCustody ? { callerSourceCustody: input.callerSourceCustody } : {}),
                         ...(input.callerBinding ? {
                             callerContributionLocalId: input.surfaceContext.contributionId,
@@ -2064,21 +2183,6 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
             },
             notify: feedback.notify,
             confirm: feedback.confirm,
-            ...(input.resource || input.hostResourceStore
-                ? {
-                    readResource: createPluginSurfaceResourceReadHandler({
-                        pluginId: input.surfaceContext.pluginId,
-                        ...(input.resource ? { resource: input.resource } : {}),
-                        ...(input.hostResourceStore ? { hostResourceStore: input.hostResourceStore } : {}),
-                        ...(input.isContributedActionAvailable ? { isDaemonAvailable: input.isContributedActionAvailable } : {}),
-                        ...(input.resourceLifetimeSignal
-                            ? { lifetimeSignal: input.resourceLifetimeSignal }
-                            : {}),
-                        ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
-                    }),
-                }
-                : {}),
-            ...(resourceWatch ? { watchResource: resourceWatch.watchResource } : {}),
             ...(input.openSurface
                 ? {
                     openSurface: createPluginSurfaceOpenSurfaceHandler(
@@ -2086,12 +2190,6 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
                         input.isCurrent,
                     ),
                 }
-                : {}),
-            ...(input.selectActionInput
-                ? { selectActionInput: input.selectActionInput }
-                : {}),
-            ...(input.createOpenNewSession
-                ? { openNewSession: input.createOpenNewSession(executeAction) }
                 : {}),
         },
         onDispose: () => {
@@ -2106,12 +2204,15 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
         const resourceResult = resourceDisposeHostResource ? await resourceDisposeHostResource(request) : null;
         return resourceResult ?? mountedResult;
     };
-    return createPluginSurfaceHostApi({ ...hostApiInput,
+    const hostApi = createPluginSurfaceHostApi({ ...hostApiInput,
+        get admissionMethods() { refreshMachineBindings(); return machineBindings.admissionMethods; },
         readHandlers: () => {
+            refreshMachineBindings();
             const mounted = readMountedHandlers();
-            return { ...mounted, ...hostApiInput.handlers,
+            return { ...mounted, ...hostApiInput.handlers, ...machineHandlers,
                 ...(resourceDisposeHostResource || mounted.disposeHostResource ? { disposeHostResource } : {}),
             };
         },
     });
+    return hostApi;
 }

@@ -535,9 +535,18 @@ export function createPluginSurfaceResourceWatchHandlers(input: Readonly<{
     /** Injected only so the pump's backoff is deterministic in tests. */
     delayMs?: (ms: number, signal: AbortSignal) => Promise<void>;
 }>) {
-    const owner = input.resource ? createContextualResourceWatchOwner({ ...input, resource: input.resource }) : null;
+    let resource = input.resource;
+    const createOwner = (binding: PluginContextualResourceBinding | undefined) => binding
+        ? createContextualResourceWatchOwner({ ...input, resource: binding }) : null;
+    let owner = createOwner(resource);
     const hostWatches = new Map<string, () => void>();
     return Object.freeze({
+        updateResource(next: PluginContextualResourceBinding | undefined): void {
+            if (next === resource) return;
+            owner?.dispose();
+            resource = next;
+            owner = createOwner(next);
+        },
         watchResource: async (
             request: PluginResourceHostRequest,
             options?: PluginSurfaceHostApiRequestOptions,
@@ -608,7 +617,10 @@ export function createPluginSurfaceResourceWatchHandlers(input: Readonly<{
             if (reference.pluginId !== input.pluginId) {
                 return errorPayload('unavailable', 'plugin_resource_not_found');
             }
-            if (!owner || input.isDaemonAvailable?.() === false) return errorPayload('unavailable', 'plugin_resource_transport_unavailable');
+            // One issued watch retains its admitted owner across awaits. A
+            // committed binding update may retire it, never redirect it.
+            const admittedOwner = owner;
+            if (!admittedOwner || input.isDaemonAvailable?.() === false) return errorPayload('unavailable', 'plugin_resource_transport_unavailable');
             if (input.isCurrent?.() === false) {
                 return errorPayload('unavailable', 'plugin_surface_retired');
             }
@@ -617,7 +629,7 @@ export function createPluginSurfaceResourceWatchHandlers(input: Readonly<{
             try {
                 if (signal?.aborted) return resourceAbortPayload(input.isCurrent);
                 const subscriptionId = parsed.data.subscriptionId;
-                const opened = await owner.open({
+                const opened = await admittedOwner.open({
                     subscriptionId,
                     resourceId: reference.localId,
                     deliver: input.deliver,
@@ -626,7 +638,7 @@ export function createPluginSurfaceResourceWatchHandlers(input: Readonly<{
                 if (signal?.aborted) return resourceAbortPayload(input.isCurrent);
                 if (!opened.ok) return errorPayload('unavailable', opened.reason);
                 if (input.isCurrent?.() === false) {
-                    owner.retire(subscriptionId);
+                    admittedOwner.retire(subscriptionId);
                     return resourceAbortPayload(input.isCurrent);
                 }
                 // The establishment result is the resynchronization baseline the

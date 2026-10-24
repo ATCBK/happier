@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useUiSurfaceOwnerLifetime } from '@/components/plugins/hostApi/useUiSurfaceOwnerLifetime';
 import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 import { createPluginWidgetAreaHostHandler } from './pluginWidgetAreaHost';
@@ -77,6 +78,7 @@ import {
     type PluginSurfaceContributedActionDescriptorResolver,
     type PluginSurfaceContributedActionTransport,
     type PluginSurfaceHostActionExecute,
+    type PluginSurfaceMachineHostApiBindings,
 } from './pluginSurfaceActionDispatch';
 import {
     createPluginSurfaceOpenSurfaceHandler,
@@ -263,9 +265,8 @@ export type BoundPluginSurfaceFacts = Readonly<{
     targetedContributions?: PluginUiTargetedContributionsV1 | null;
     /** Undefined is unknown; a present empty set is producer-complete. */
     resourceDeclarations?: PluginUiProjectionModel['resourcesById'];
-    /** Atomic current selection inputs; delivery is not a physical mount lifetime. */
-    readActionInputFacts?: () => Pick<BoundPluginSurfaceFacts,
-        'pluginProjectionById' | 'pluginUiProjection' | 'targetedContributions' | 'resourceDeclarations' | 'resolveContributedAction'>;
+    /** Current mounted facts; catalog-only readers may override a subset of the captured facts. */
+    readActionInputFacts?: () => Partial<BoundPluginSurfaceFacts>;
     /** Source-owned caller custody, including targets with no selectable Actions. */
     targetSourceCustody?: PluginUiTargetedContributionsV1['target']['sourceCustody'] | null;
     /**
@@ -408,6 +409,7 @@ export type BoundPluginSurfaceController = Readonly<{
     /** Reconcile representation updates under this physical caller's authority. */
     updateMountedBindings?: (input: Readonly<{
         createMountedHostApiHandlers?: BoundPluginSurfaceMountedHostApiHandlersFactory;
+        openConnectedAccounts?: PluginOpenConnectedAccountsHandler;
     }>) => boolean;
     /** Private approved descriptor; it never enters the public subscription result. */
     readLiveStreamViewing: (subscriptionId: string) => import('@happier-dev/protocol').DaemonPluginUiCaptureSourceDescriptorV1 | null;
@@ -554,7 +556,7 @@ function resolveDaemonBinding(facts: BoundPluginSurfaceFacts): Readonly<{
     const machineId = typeof facts.machineId === 'string' && facts.machineId.trim().length > 0
         ? facts.machineId
         : null;
-    const occurrenceId = (facts.daemonOccurrenceId ?? facts.occurrenceId)?.trim();
+    const occurrenceId = (facts.daemonOccurrenceId ?? (facts.accountExecutionOrigin ? undefined : facts.occurrenceId))?.trim();
     if (!machineId || !occurrenceId) {
         return null;
     }
@@ -618,6 +620,16 @@ function readCurrentAccountSurfaceSelection(facts: BoundPluginSurfaceFacts) {
     const selected = readPluginAccountAvailability(lifetime.scope).readCurrentAccountExecution(facts.pluginId);
     return selected.kind === 'available' && selected.custodyId === origin.custodyId
         && pluginSourceCustodyV1Equal(selected.sourceCustody, origin.sourceCustody) ? selected : null;
+}
+
+function readMachineAuthorityKey(facts: BoundPluginSurfaceFacts): string {
+    return stableJsonStringify([facts.machineId ?? null, facts.daemonOccurrenceId ?? null, facts.executionOrigin ?? null]);
+}
+
+function readMachineBindingsKey(facts: BoundPluginSurfaceFacts): string {
+    return stableJsonStringify([readMachineAuthorityKey(facts),
+        facts.resourceCapability?.readable === true, facts.resourceCapability?.dynamic === true,
+        serializeBoundPluginSurfaceResourceContext(facts.resourceContext)]);
 }
 
 function createBoundPluginSurfaceActionDispatcher(input: Readonly<{
@@ -833,9 +845,10 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const isInteractionCurrent = (): boolean => isCurrent()
         && (input.facts.isInteractionEnabled?.() ?? input.facts.interactionEnabled);
     const binding = input.binding;
-    const openConnectedAccounts = binding?.openConnectedAccounts
+    let mountedOpenConnectedAccounts = binding?.openConnectedAccounts;
+    let openConnectedAccounts = mountedOpenConnectedAccounts
         ? createPluginOpenConnectedAccountsHostApiHandler(
-            binding.openConnectedAccounts,
+            mountedOpenConnectedAccounts,
             isCurrent,
         )
         : undefined;
@@ -977,7 +990,12 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     // Addressing/occurrence are mount identity facts. Reachability is not: a
     // reconnect must make the existing facade capable again without replacing
     // its adapter or aborting an author-held signal.
-    const daemon = resolveDaemonBinding(input.facts);
+    const readActionInputFacts = (): BoundPluginSurfaceFacts => input.facts.readActionInputFacts
+        ? { ...input.facts, ...input.facts.readActionInputFacts() } : input.facts;
+    let machineBindingFacts = readActionInputFacts();
+    let machineAuthorityKey = readMachineAuthorityKey(machineBindingFacts);
+    let machineBindingsKey = readMachineBindingsKey(machineBindingFacts);
+    let daemon = resolveDaemonBinding(machineBindingFacts);
     // The generic executable index resolves client targets by exact occurrence,
     // executable target and execution origin without aggregate admission.
     const clientAction = {
@@ -1004,46 +1022,54 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         || (isInteractionCurrent() && ((canAdmitHostReads && (method === 'readResource' || method === 'watchResource'))
             || !isDaemonOwnedPluginSurfaceMethod(method) || isDaemonInteractionEnabled(false)))
     );
-    const resourceCapability = input.facts.resourceCapability;
-    const canReadResource = resourceCapability?.readable === true;
+    let canReadResource = machineBindingFacts.resourceCapability?.readable === true;
     // A dynamic capability without a readable snapshot is not a usable
     // subscription contract. The daemon owns exact-resource admission once
     // this selected-member gate has installed the transport.
-    const canWatchResource = canReadResource && resourceCapability?.dynamic === true;
-    const createOrdinaryResourceStore = () => createPluginUiResourceStore({
+    let canWatchResource = canReadResource && machineBindingFacts.resourceCapability?.dynamic === true;
+    const createOrdinaryResourceStore = () => {
+        const admittedDaemon = daemon;
+        const readable = canReadResource;
+        const watchable = canWatchResource;
+        const bindingsKey = machineBindingsKey;
+        const resourceContext = machineBindingFacts.resourceContext;
+        const current = () => bindingsKey === machineBindingsKey
+            && isInteractionCurrent() && isDaemonInteractionEnabled();
+        return createPluginUiResourceStore({
         pluginId: input.facts.pluginId,
         ...(accountLifetime ? { accountLifetime } : {}),
         client: {
             async readResource(resource, options) {
-                if (!canReadResource || !daemon || !isInteractionCurrent() || !isDaemonInteractionEnabled()) {
+                if (!readable || !admittedDaemon || !current()) {
                     throw Object.assign(new Error('Resource transport is unavailable'), { code: 'plugin_resource_transport_unavailable' });
                 }
                 return createPluginContextualResourceReadClient({
                     pluginId: input.facts.pluginId,
-                    resource: { machineId: daemon.machineId, serverId: daemon.serverId,
-                        expectedCallerOccurrenceId: daemon.expectedOccurrenceId,
-                        ...(input.facts.resourceContext ? { context: input.facts.resourceContext } : {}),
+                    resource: { machineId: admittedDaemon.machineId, serverId: admittedDaemon.serverId,
+                        expectedCallerOccurrenceId: admittedDaemon.expectedOccurrenceId,
+                        ...(resourceContext ? { context: resourceContext } : {}),
                         ...(binding?.readResource ? { read: binding.readResource } : {}) },
-                    isCurrent: () => isInteractionCurrent() && isDaemonInteractionEnabled(),
+                    isCurrent: current,
                 }).readResource(resource, options);
             },
-            ...(canWatchResource && daemon ? createPluginContextualResourceWatchClient({
+            ...(watchable && admittedDaemon ? createPluginContextualResourceWatchClient({
                 pluginId: input.facts.pluginId,
-                resource: { machineId: daemon.machineId, serverId: daemon.serverId,
-                    expectedCallerOccurrenceId: daemon.expectedOccurrenceId,
-                    ...(input.facts.resourceContext ? { context: input.facts.resourceContext } : {}) },
+                resource: { machineId: admittedDaemon.machineId, serverId: admittedDaemon.serverId,
+                    expectedCallerOccurrenceId: admittedDaemon.expectedOccurrenceId,
+                    ...(resourceContext ? { context: resourceContext } : {}) },
                 subscriptionIdPrefix: `surface-resource:${randomUUID()}`,
-                isCurrent: () => isInteractionCurrent() && isDaemonInteractionEnabled(),
+                isCurrent: current,
                 ...(binding?.watchResource ? { transport: binding.watchResource } : {}),
             }) : {}),
         },
-    });
+        });
+    };
     const readCompleteResourceDeclarations = () => {
-        const facts = input.facts.readActionInputFacts?.() ?? input.facts;
+        const facts = readActionInputFacts();
         if (facts.resourceDeclarations !== undefined) return facts.resourceDeclarations;
         return readCompletePluginUiResourceDeclarations(facts.pluginUiProjection, input.facts.pluginId, daemon?.expectedOccurrenceId);
     };
-    const declaredResourceStore = canReadResource && daemon && accountLifetime
+    const createDeclaredResourceStore = () => canReadResource && daemon && accountLifetime
         ? createPluginDeclaredResourceStore({ accountLifetime, pluginId: input.facts.pluginId,
             machineId: daemon.machineId, serverId: daemon.serverId ?? null,
             expectedCallerOccurrenceId: daemon.expectedOccurrenceId,
@@ -1053,8 +1079,10 @@ export function createBoundPluginSurfaceController(input: Readonly<{
                 return readCompleteResourceDeclarations() ?? EMPTY_PLUGIN_UI_PROJECTION.resourcesById;
             },
             ...(surfaceContext.sessionId ? { sessionId: surfaceContext.sessionId } : {}),
-            ...(input.facts.resourceContext?.kind === 'surface' ? { surfaceContext: input.facts.resourceContext } : {}) })
+            ...(machineBindingFacts.resourceContext?.kind === 'surface' ? { surfaceContext: machineBindingFacts.resourceContext } : {}) })
         : null;
+    let declaredResourceStore = createDeclaredResourceStore();
+    let ordinaryResourceStore: PluginUiResourceStore | null = null;
     // The mount lifetime, observable to the handlers: an action or resource read
     // that settles after disposal must not reach a retired surface (§3.1).
     const readHostActionContext = (): ActionExecutorContext | undefined => {
@@ -1092,11 +1120,17 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     // capabilities of this Account (r0.42). They share the mount's one
     // invalidation fan-out and its disposal, so they add no second channel.
     const mountLifetime = new AbortController();
-    const liveStreams = daemon && accountLifetime && !isOpenableContentViewer ? createPluginSurfaceLiveStreamOwner({
-        pluginId: surfaceContext.pluginId, occurrenceId: daemon.expectedOccurrenceId, machineId: daemon.machineId,
-        serverId: daemon.serverId ?? accountLifetime.scope.serverId, lifetimeSignal: mountLifetime.signal, isCurrent,
-        executeAction: (request, options) => hostApi.handleRequest(request, options),
-    }) : null;
+    const createLiveStreams = () => {
+        const target = daemon;
+        const authorityKey = readMachineAuthorityKey(readActionInputFacts());
+        return target && accountLifetime && !isOpenableContentViewer ? createPluginSurfaceLiveStreamOwner({
+            pluginId: surfaceContext.pluginId, occurrenceId: target.expectedOccurrenceId, machineId: target.machineId,
+            serverId: target.serverId ?? accountLifetime.scope.serverId, lifetimeSignal: mountLifetime.signal,
+            isCurrent: () => isCurrent() && authorityKey === readMachineAuthorityKey(readActionInputFacts()),
+            executeAction: (request, options) => hostApi.handleRequest(request, options),
+        }) : null;
+    };
+    let liveStreams = createLiveStreams();
     const sessionHandlers = accountLifetime && !isOpenableContentViewer
         ? createPluginSurfaceSessionHandlers({
             accountScope: accountLifetime.scope,
@@ -1107,12 +1141,18 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         : null;
     const mountedDisposeHostResource: PluginSurfaceHostApiMethodHandler = (request, options) =>
         readMountedHostApiHandlers().disposeHostResource?.(request, options) ?? null;
-    const storedImages = daemon && accountLifetime && !isOpenableContentViewer ? createPluginSurfaceStoredImageOwner({
-        pluginId: surfaceContext.pluginId, occurrenceId: daemon.expectedOccurrenceId, machineId: daemon.machineId,
-        serverId: daemon.serverId ?? accountLifetime.scope.serverId,
-        isCurrent, lifetimeSignal: mountLifetime.signal,
-        ...(binding?.readStoredImage ? { read: binding.readStoredImage } : {}),
-    }) : null;
+    const createStoredImages = () => {
+        const target = daemon;
+        const authorityKey = readMachineAuthorityKey(readActionInputFacts());
+        return target && accountLifetime && !isOpenableContentViewer ? createPluginSurfaceStoredImageOwner({
+            pluginId: surfaceContext.pluginId, occurrenceId: target.expectedOccurrenceId, machineId: target.machineId,
+            serverId: target.serverId ?? accountLifetime.scope.serverId,
+            isCurrent: () => isCurrent() && authorityKey === readMachineAuthorityKey(readActionInputFacts()),
+            lifetimeSignal: mountLifetime.signal,
+            ...(binding?.readStoredImage ? { read: binding.readStoredImage } : {}),
+        }) : null;
+    };
+    let storedImages = createStoredImages();
     const readHostApiMountedHandlers = (): PluginSurfaceHostApiHandlers => sessionHandlers
         ? {
             ...readMountedHostApiHandlers(),
@@ -1141,7 +1181,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     // daemon-backed Resource work. Replacements abort obsolete work rather than
     // merely withholding its eventual delivery.
     const targetedContributions = input.facts.targetedContributions;
-    const actionInputHost = {
+    const createActionInputHost = () => ({
         machineId: daemon?.machineId,
         machineDisplayName: input.facts.machineDisplayName ?? null,
         serverId: daemon?.serverId ?? null,
@@ -1150,9 +1190,9 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         accountLifetime,
         signal: mountLifetime.signal,
         isCurrent,
-    };
-    const readActionInputFacts = () => input.facts.readActionInputFacts?.() ?? input.facts;
-    const selectActionInput: PluginSurfaceHostApiMethodHandler | null = daemon
+    });
+    let actionInputHost = createActionInputHost();
+    const createSelectActionInput = (): PluginSurfaceHostApiMethodHandler | null => daemon
         ? (payload, options) => {
             const current = readActionInputFacts();
             return createPluginActionInputSelectionHostApiHandler({
@@ -1167,12 +1207,12 @@ export function createBoundPluginSurfaceController(input: Readonly<{
                 ...(current.resolveContributedAction
                     ? { resolveContributedAction: current.resolveContributedAction }
                     : {}),
-                host: actionInputHost,
+                host: { ...actionInputHost },
                 isCurrent,
             })(payload, options);
         }
         : null;
-    const createOpenNewSession = accountLifetime
+    const createOpenNewSessionBinding = () => accountLifetime
         ? (executeSelectedOperation: PluginSurfaceHostApiMethodHandler) => (
             createPluginOpenNewSessionHostApiHandler({
                 pluginId: input.facts.pluginId,
@@ -1195,15 +1235,15 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         execute: binding?.executeHostAction ?? (homeFamilyScope ? scopedHomeActionExecutor(homeFamilyScope) : createFrontDoorActionExecute()),
         get context() { return readHostActionContext(); },
     };
-    const resourceStore = accountLifetime && homeFamilyScope && callerBinding && hostAction.execute.prepare && !isOpenableContentViewer
+    const hostReadResourceStore = accountLifetime && homeFamilyScope && callerBinding && hostAction.execute.prepare && !isOpenableContentViewer
         ? createPluginSurfaceHostReadStore({
             isCurrent: isInteractionCurrent,
             lifetimeSignal: mountLifetime.signal,
             // Borrowed Account reads must not replace the ordinary Resource
             // path when an admitted projection has no shareable declarations.
-            // This is the provider's incumbent mount-local store, using the
-            // exact controller target and selected Resource capability.
-            declaredStore: declaredResourceStore ?? createOrdinaryResourceStore(),
+            // Account host-read entries stay incumbent while the optional
+            // Machine-backed declaration facade is admitted in place.
+            get declaredStore() { return declaredResourceStore ?? (ordinaryResourceStore ??= createOrdinaryResourceStore()); },
             async admit(reference, signal) {
                 const account = await captureLazyActionAccountContext(accountLifetime.scope.serverId, signal);
                 try {
@@ -1227,7 +1267,8 @@ export function createBoundPluginSurfaceController(input: Readonly<{
                     return getUsageQueryResourceStore(account).getEntry(reference);
                 } finally { account.dispose(); }
             },
-        }) : declaredResourceStore;
+        }) : null;
+    let resourceStore: PluginUiResourceStore | null = hostReadResourceStore ?? declaredResourceStore;
     // The one sentence for a Machine-owned part that cannot run now: it names this mount's Run-on
     // Machine and the next step. Every host method that refuses for that reason reuses it.
     const isMachineUnavailable = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): boolean => {
@@ -1268,7 +1309,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
                 ? { sentence: explained.sentence, managePluginId: input.facts.pluginId }
                 : { sentence: explained.sentence };
         }
-        const machineId = input.facts.machineId?.trim();
+        const machineId = machineBindingFacts.machineId?.trim();
         if (!machineId) {
             const kind = input.facts.executionOriginSelectionKind;
             if (kind === 'selectionRequired' || kind === 'conflict') return { sentence: t('settingsPlugins.targetSelection.selectionRequired') };
@@ -1296,18 +1337,55 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         describeUnavailable: reason => describeMachineUnavailable([reason]),
         hostAction,
     });
+    const createMachineApiBindings = (): PluginSurfaceMachineHostApiBindings => {
+        const target = daemon;
+        const declaredStore = declaredResourceStore;
+        const resourceContext = machineBindingFacts.resourceContext;
+        return Object.freeze({
+            ...(machineBindingFacts.machineId ? { executionTarget: {
+                machineId: machineBindingFacts.machineId, serverId: machineBindingFacts.serverId ?? null,
+            } } : {}),
+            admissionMethods: isOpenableContentViewer ? [] : PLUGIN_UI_HOST_METHODS_V1.filter(method => {
+                if (!isDaemonOwnedPluginSurfaceMethod(method)) return false;
+                if (method === 'readResource') return canReadResource;
+                if (method === 'watchResource') return canWatchResource;
+                return true;
+            }),
+            allowPluginResources: canWatchResource,
+            ...(target ? { contributedAction: {
+                machineId: target.machineId, serverId: target.serverId,
+                ...(surfaceContext.sessionId ? { sessionId: surfaceContext.sessionId } : {}),
+                ...(binding?.executeContributedAction ? { execute: binding.executeContributedAction } : {}),
+            } } : {}),
+            ...(target && canReadResource ? { resource: {
+                machineId: target.machineId, serverId: target.serverId,
+                expectedCallerOccurrenceId: target.expectedOccurrenceId,
+                ...(resourceContext === undefined ? {} : { context: resourceContext }),
+                ...(binding?.readResource ? { read: binding.readResource } : {}),
+                get store() { return declaredStore?.hasDeclaredNamespace() ? declaredStore : undefined; },
+                get contextualFallbackStore() {
+                    // Contextual reads belong to the existing Resource store
+                    // even before scoped declarations arrive, so replacing
+                    // their full input cancels them without retiring Actions.
+                    // Legacy watches keep their direct subscription owner.
+                    return resourceContext?.kind === 'surface' && !declaredStore?.hasDeclaredNamespace()
+                        ? declaredStore ?? (ordinaryResourceStore ??= createOrdinaryResourceStore()) : undefined;
+                },
+                get refreshOnRead() { return resourceContext?.kind === 'surface' && !declaredStore?.hasDeclaredNamespace(); },
+                ...(declaredStore ? { onDeclaredNamespaceAdmission: declaredStore.onDeclaredNamespaceAdmission } : {}),
+            } } : {}),
+            selectActionInput: createSelectActionInput() ?? undefined,
+            createOpenNewSession: createOpenNewSessionBinding() ?? undefined,
+        });
+    };
+    let machineApiBindings = createMachineApiBindings();
     const hostApi = createPluginSurfaceActionHostApi({
         pluginUiProjection: input.facts.pluginUiProjection,
         surfaceContext,
         // The generic host owns these methods even before an execution target
         // exists. Resource declarations retain their own capability ceiling;
         // opaque viewers retain only their concrete file binding's methods.
-        admissionMethods: isOpenableContentViewer ? [] : PLUGIN_UI_HOST_METHODS_V1.filter(method => {
-            if (!isDaemonOwnedPluginSurfaceMethod(method)) return false;
-            if (method === 'readResource') return canReadResource;
-            if (method === 'watchResource') return canWatchResource;
-            return true;
-        }),
+        readMachineBindings: () => machineApiBindings,
         ...(callerBinding?.sourceCustody ? { callerSourceCustody: callerBinding.sourceCustody } : targetedContributions
             ? { callerSourceCustody: targetedContributions.target.sourceCustody }
             : {}),
@@ -1331,57 +1409,24 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         isCurrent,
         resourceLifetimeSignal: mountLifetime.signal,
         hostAction,
-        ...(resourceStore && resourceStore !== declaredResourceStore ? { hostResourceStore: resourceStore } : {}),
-        ...((canWatchResource && daemon) || (resourceStore && resourceStore !== declaredResourceStore)
-            ? { resourceInvalidation: { deliver: deliverResourceInvalidation, allowPluginResources: canWatchResource,
+        ...(hostReadResourceStore ? { hostResourceStore: hostReadResourceStore } : {}),
+        ...(!isOpenableContentViewer
+            ? { resourceInvalidation: { deliver: deliverResourceInvalidation,
                 ...(binding?.watchResource ? { transport: binding.watchResource } : {}) } } : {}),
         ...(callerBinding ? { callerBinding } : {}),
         ...(input.facts.resolveContributedAction
             ? { resolveContributedAction: input.facts.resolveContributedAction }
             : {}),
         ...(clientAction ? { clientAction } : {}),
-        ...(daemon
-            ? {
-                contributedAction: {
-                    machineId: daemon.machineId,
-                    serverId: daemon.serverId,
-                    ...(surfaceContext.sessionId
-                        ? { sessionId: surfaceContext.sessionId }
-                        : {}),
-                    ...(binding?.executeContributedAction
-                        ? { execute: binding.executeContributedAction }
-                        : {}),
-                },
-                ...(canReadResource
-                    ? {
-                        resource: {
-                            machineId: daemon.machineId,
-                            serverId: daemon.serverId,
-                            expectedCallerOccurrenceId: daemon.expectedOccurrenceId,
-                            ...(input.facts.resourceContext === undefined
-                                ? {}
-                                : { context: input.facts.resourceContext }),
-                            ...(binding?.readResource ? { read: binding.readResource } : {}),
-                            get store() { return declaredResourceStore?.hasDeclaredNamespace() ? declaredResourceStore : undefined; },
-                            ...(declaredResourceStore ? { onDeclaredNamespaceAdmission: declaredResourceStore.onDeclaredNamespaceAdmission } : {}),
-                        },
-                    }
-                    : {}),
-                ...(binding?.openableContent
-                    ? { openableContent: binding.openableContent }
-                    : {}),
-            }
-            : {}),
+        ...(daemon && binding?.openableContent ? { openableContent: binding.openableContent } : {}),
         ...(binding?.openSurface ? { openSurface: binding.openSurface } : {}),
-        ...(selectActionInput ? { selectActionInput } : {}),
-        ...(createOpenNewSession ? { createOpenNewSession } : {}),
         readMountedHostApiHandlers: () => ({ ...readHostApiMountedHandlers(), ...(storedImages ? { readStoredImage: storedImages.readStoredImage } : {}), ...(widgetArea ? { widgetArea } : {}) }),
         ...(disposeHostApiMountedHandlers
             ? { disposeMountedHostApiHandlers: disposeHostApiMountedHandlers }
             : {}),
     });
     const dispatchStructuredAction = createBoundPluginSurfaceActionDispatcher({ surfaceContext, hostApi });
-    const actionInputController = daemon
+    const createActionInputController = () => daemon
         ? createPluginContributedActionController({
             resolveCurrent: () => {
                 const current = readActionInputFacts();
@@ -1394,6 +1439,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             },
         })
         : null;
+    let actionInputController = createActionInputController();
     // Declarative controls have no author-owned form. Omitted input borrows
     // the declared Action's existing no-invoke form owner; explicit input and
     // SDK executeAction requests keep their structured execution semantics.
@@ -1466,21 +1512,25 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     if (retired) parentRetirement?.dispose();
 
     let publishedResourceNamespaceKey: string | undefined;
+    let publishedDeclaredResourceStore: typeof declaredResourceStore;
     let publishedResourceStore: PluginUiResourceStore | undefined;
     return Object.freeze({
         surfaceContext,
         hostApi,
         get resourceStore() {
-            if (!resourceStore || !declaredResourceStore) return resourceStore ?? undefined;
+            const currentStore = resourceStore;
+            if (!currentStore || !declaredResourceStore) return currentStore ?? undefined;
             const namespaceKey = declaredResourceStore.readNamespaceKey();
-            if (!publishedResourceStore || publishedResourceNamespaceKey !== namespaceKey) {
+            if (!publishedResourceStore || publishedResourceNamespaceKey !== namespaceKey
+                || publishedDeclaredResourceStore !== declaredResourceStore) {
                 publishedResourceNamespaceKey = namespaceKey;
+                publishedDeclaredResourceStore = declaredResourceStore;
                 // Native hooks reacquire declaration-bound entries when their
                 // namespace changes. Bytes, admission and disposal remain with
                 // the incumbent store and this physical controller.
                 publishedResourceStore = Object.freeze({
-                    getEntry: resource => resourceStore.getEntry(resource),
-                    dispose: () => resourceStore.dispose(),
+                    getEntry: resource => currentStore.getEntry(resource),
+                    dispose: () => currentStore.dispose(),
                 } satisfies PluginUiResourceStore);
             }
             return publishedResourceStore;
@@ -1507,8 +1557,46 @@ export function createBoundPluginSurfaceController(input: Readonly<{
         dispose,
         clearCurrentUiContext,
         updateMountedBindings: next => {
+            if (!isCurrent()) return false;
+            let changed = false;
+            const currentFacts = readActionInputFacts();
+            const nextMachineBindingsKey = readMachineBindingsKey(currentFacts);
+            if (!isOpenableContentViewer && machineBindingsKey !== nextMachineBindingsKey) {
+                const nextAuthorityKey = readMachineAuthorityKey(currentFacts);
+                const authorityChanged = machineAuthorityKey !== nextAuthorityKey;
+                declaredResourceStore?.dispose();
+                ordinaryResourceStore?.dispose();
+                ordinaryResourceStore = null;
+                machineBindingFacts = currentFacts;
+                machineAuthorityKey = nextAuthorityKey;
+                machineBindingsKey = nextMachineBindingsKey;
+                daemon = resolveDaemonBinding(currentFacts);
+                canReadResource = currentFacts.resourceCapability?.readable === true;
+                canWatchResource = canReadResource && currentFacts.resourceCapability?.dynamic === true;
+                declaredResourceStore = createDeclaredResourceStore();
+                resourceStore = hostReadResourceStore ?? declaredResourceStore;
+                if (authorityChanged) {
+                    liveStreams?.dispose();
+                    storedImages?.dispose();
+                    liveStreams = createLiveStreams();
+                    storedImages = createStoredImages();
+                    actionInputHost = createActionInputHost();
+                    actionInputController = createActionInputController();
+                }
+                machineApiBindings = createMachineApiBindings();
+                // Commit the canonical handler map here, before the existing
+                // single refresh lets presentation read its new method set.
+                void hostApi.installedMethods;
+                changed = true;
+            }
+            if (mountedOpenConnectedAccounts !== next.openConnectedAccounts) {
+                mountedOpenConnectedAccounts = next.openConnectedAccounts;
+                openConnectedAccounts = mountedOpenConnectedAccounts
+                    ? createPluginOpenConnectedAccountsHostApiHandler(mountedOpenConnectedAccounts, isCurrent) : undefined;
+                changed = true;
+            }
             declaredResourceStore?.reconcile();
-            if (!isCurrent() || isOpenableContentViewer || mountedHandlerFactory === next.createMountedHostApiHandlers) return false;
+            if (isOpenableContentViewer || mountedHandlerFactory === next.createMountedHostApiHandlers) return changed;
             disposeMountedBundle();
             mountedHandlerFactory = next.createMountedHostApiHandlers;
             mountedHandlerBundle = mountedHandlerFactory?.({ isCurrent: isInteractionCurrent });
@@ -1539,6 +1627,18 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     // retain a controller whose captured dispatch binding was still absent.
     const accountCallerAdmitted = facts.accountExecutionOrigin
         ? resolvePluginSurfaceCallerBinding(facts) !== null : null;
+    const currentMachineAuthority = readMachineAuthorityKey(facts);
+    const machineAuthorityLifetime = React.useRef({
+        current: currentMachineAuthority, admitted: false, key: { authority: currentMachineAuthority },
+    });
+    const committedMachineAuthority = machineAuthorityLifetime.current;
+    // An abandoned render cannot replace the committed lifetime key. Initial
+    // optional binding delivery stays in place until actual admission; later
+    // replacement/withdrawal still proposes a new physical lifetime.
+    const renderedMachineAuthority = committedMachineAuthority.current === currentMachineAuthority
+        ? committedMachineAuthority
+        : { current: currentMachineAuthority, admitted: false,
+            key: committedMachineAuthority.admitted ? { authority: currentMachineAuthority } : committedMachineAuthority.key };
     const machineDisplayNameRef = React.useRef(facts.machineDisplayName);
     machineDisplayNameRef.current = facts.machineDisplayName;
     const executionOriginSelectionKindRef = React.useRef(facts.executionOriginSelectionKind);
@@ -1616,7 +1716,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             facts.placement,
             facts.platform,
             facts.channel,
-            facts.machineId,
+            facts.accountExecutionOrigin ? null : facts.machineId,
             facts.serverId,
             facts.sessionId,
             facts.targetAuthorityKey,
@@ -1624,14 +1724,13 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             // Custody facts, not that allocation, identify the controller.
             stableJsonStringify(facts.targetSourceCustody ?? null),
             facts.occurrenceId,
-            facts.daemonOccurrenceId,
+            facts.accountExecutionOrigin ? renderedMachineAuthority.key : facts.daemonOccurrenceId,
             stableJsonStringify(facts.accountExecutionOrigin ?? null),
             accountCallerAdmitted,
             facts.readCurrentUiContext,
-            stableJsonStringify(facts.executionOrigin ?? null),
-            facts.resourceCapability?.readable,
-            facts.resourceCapability?.dynamic,
-            serializeBoundPluginSurfaceResourceContext(facts.resourceContext),
+            facts.accountExecutionOrigin ? null : stableJsonStringify(facts.executionOrigin ?? null),
+            facts.accountExecutionOrigin ? null : facts.resourceCapability?.readable,
+            facts.accountExecutionOrigin ? null : facts.resourceCapability?.dynamic,
             facts.accountLifetime,
             facts.parentLifetime,
             facts.isHostCurrent,
@@ -1643,7 +1742,6 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             joinResourceScope(facts.resourceScope),
             binding?.executeHostAction,
             binding?.openSurface,
-            binding?.openConnectedAccounts,
             binding?.executeContributedAction,
             binding?.readResource,
             binding?.watchResource,
@@ -1653,32 +1751,32 @@ export function useBoundPluginSurfaceController(input: Readonly<{
         ],
     );
     React.useEffect(() => () => lendMachineNoticeRef.current?.(null), [controller]);
-    React.useInsertionEffect(() => (
-        // StrictMode replays layout effects without recreating this memoized
-        // controller. Insertion cleanup therefore only fences the exact
-        // controller; publication teardown waits for the safe layout phase.
-        () => controller.retire()
-    ), [controller]);
+    useUiSurfaceOwnerLifetime(controller);
     const [, refreshMountedBindings] = React.useReducer((revision: number) => revision + 1, 0);
+    const machineInteractionReady = facts.accountExecutionOrigin !== undefined && facts.accountExecutionOrigin !== null
+        && controller.canInteractWithDaemon();
     React.useLayoutEffect(() => {
-        if (controller.updateMountedBindings?.({ createMountedHostApiHandlers: binding?.createMountedHostApiHandlers })) {
+        const changed = controller.updateMountedBindings?.({ createMountedHostApiHandlers: binding?.createMountedHostApiHandlers,
+            openConnectedAccounts: binding?.openConnectedAccounts });
+        machineAuthorityLifetime.current = renderedMachineAuthority;
+        // A cached lease is not interaction admission. Remember the canonical
+        // controller's positive committed fact, and retain it through later
+        // readiness loss until the authority key itself changes.
+        if (facts.accountExecutionOrigin && controller.canInteractWithDaemon()) renderedMachineAuthority.admitted = true;
+        if (changed) {
             // The physical Host captured the previous presentation binding
             // during render. Read the new committed bundle once; the unchanged
             // factory on that render makes this update settle immediately.
             refreshMountedBindings();
         }
-    }, [controller, binding?.createMountedHostApiHandlers, facts.pluginUiProjection?.resourcesById, facts.resourceDeclarations]);
+    }, [controller, binding?.createMountedHostApiHandlers, binding?.openConnectedAccounts,
+        facts.pluginUiProjection?.resourcesById, facts.resourceDeclarations,
+        readMachineBindingsKey(facts), renderedMachineAuthority, machineInteractionReady]);
     React.useLayoutEffect(() => {
         // A mounted-handler factory runs during render to contribute its
         // methods, but external registration remains a committed layout
         // effect. The exact mounted bundle makes replayed activation idempotent.
         controller.activateMountedHostApiHandlers?.();
-        return () => {
-            // React runs insertion cleanup before layout cleanup for actual
-            // replacement and unmount. StrictMode replays only layout effects,
-            // so a current controller is not disposed by the simulated cleanup.
-            if (!controller.isCurrent()) controller.dispose();
-        };
     }, [controller]);
     const connectionPending = facts.isDaemonConnectionPending?.() === true;
     React.useLayoutEffect(() => {
