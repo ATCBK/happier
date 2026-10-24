@@ -23,6 +23,8 @@ export type MachinePageTabEntry = Readonly<{
     Body: React.ComponentType<MachinePageTabBodyProps>;
     /** Drawn at the end of the tab bar on wide layouts while this tab is open; phones keep it in the body. */
     BarAccessory?: React.ComponentType<MachinePageTabBarAccessoryProps>;
+    /** Core-only bodies may suspend while hidden. Bodies with arbitrary plugin regions retain their effects. */
+    suspendWhenHidden?: boolean;
     /** Reads this tab's params from the route query; unknown values fall back to the tab's defaults. */
     parseParams(raw: Readonly<Record<string, string | undefined>>): MachinePageTabParams;
 }>;
@@ -54,9 +56,9 @@ export function parseStorageParams(raw: Readonly<Record<string, string | undefin
 
 export const MACHINE_PAGE_TABS: readonly MachinePageTabEntry[] = [
     { id: 'overview', titleKey: 'machineDetailPage.tabs.overview', Body: MachineOverview, BarAccessory: MachineVitalsBarAccessory, parseParams: () => OVERVIEW_PARAMS },
-    { id: 'processes', titleKey: 'machineProcesses.tab', Body: MachineProcessesTab, parseParams: parseMachineProcessesParams },
-    { id: 'storage', titleKey: 'machineStorage.tab', Body: MachineStorageTab, BarAccessory: StorageTabBarAccessory, parseParams: parseStorageParams },
-    { id: 'guard', titleKey: 'machineGuard.tab', Body: GuardTab, BarAccessory: GuardBarAccessory, parseParams: parseGuardParams },
+    { id: 'processes', titleKey: 'machineProcesses.tab', Body: MachineProcessesTab, suspendWhenHidden: true, parseParams: parseMachineProcessesParams },
+    { id: 'storage', titleKey: 'machineStorage.tab', Body: MachineStorageTab, suspendWhenHidden: true, BarAccessory: StorageTabBarAccessory, parseParams: parseStorageParams },
+    { id: 'guard', titleKey: 'machineGuard.tab', Body: GuardTab, suspendWhenHidden: true, BarAccessory: GuardBarAccessory, parseParams: parseGuardParams },
 ];
 
 /**

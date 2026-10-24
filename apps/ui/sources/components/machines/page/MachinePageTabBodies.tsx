@@ -63,9 +63,7 @@ const RetainedTabBody = React.memo(function RetainedTabBody(props: Readonly<{
     const Body = props.entry.Body;
     return (
         <RetainedPanelSurface mode="content" isActive={props.active}
-            // Overview and the footer own Ask composers with arbitrary plugin regions.
-            // Only these core-owned bodies (including Guard's Agents/Activity) are plugin-free.
-            suspendWhenHidden={props.entry.id === 'processes' || props.entry.id === 'storage' || props.entry.id === 'guard'}
+            suspendWhenHidden={props.entry.suspendWhenHidden}
             testID={`machine-page-tab-body.${props.entry.id}`}>
             <Body {...props.body} params={props.params} barAccessoryShown={props.barAccessoryShown} />
         </RetainedPanelSurface>

@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { StyleSheet } from 'react-native';
 import { describe, expect, it } from 'vitest';
+import { act } from 'react-test-renderer';
+import { createStore } from 'zustand/vanilla';
+import { useStore } from 'zustand';
 
 import { renderScreen } from '@/dev/testkit';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
@@ -42,7 +45,8 @@ function TrackedAsk(props: Readonly<{ name: string }>) {
 }
 
 const tabs: readonly MachinePageTabEntry[] = (['overview', 'processes', 'storage'] as const).map(id => ({
-    id, titleKey: 'machineDetailPage.tabs.overview', Body: tabBody(id), parseParams: () => ({ id }) as MachinePageTabParams,
+    id, titleKey: 'machineDetailPage.tabs.overview', Body: tabBody(id), suspendWhenHidden: id !== 'overview',
+    parseParams: () => ({ id }) as MachinePageTabParams,
 }));
 
 function page(params: MachinePageTabParams) {
@@ -66,6 +70,37 @@ function hostDisplay(tree: Awaited<ReturnType<typeof renderScreen>>, testID: str
 }
 
 describe('MachinePageTabBodies', () => {
+    it.each([
+        { id: 'processes', suspendWhenHidden: false },
+        { id: 'overview', suspendWhenHidden: true },
+    ] as const)('follows the $id declaration when hidden instead of choosing policy by tab id', async ({ id, suspendWhenHidden }) => {
+        const store = createStore(() => ({ value: 0 }));
+        let renders = 0;
+        function LiveBody() {
+            const value = useStore(store, state => state.value);
+            renders += 1;
+            return React.createElement('DeclaredTabValue', { value });
+        }
+        const entry: MachinePageTabEntry = {
+            id, titleKey: 'machineDetailPage.tabs.overview', Body: LiveBody, suspendWhenHidden,
+            parseParams: () => ({ id }) as MachinePageTabParams,
+        };
+        const other = tabs.find(tab => tab.id === 'storage')!;
+        const render = (active: MachinePageTabEntry) => <MachinePageTabBodies
+            tabs={[entry, other]} active={{ entry: active, params: active.parseParams({}) }}
+            body={{ serverId: 'home-a', machineId: 'm1', machineName: 'Studio', online: true, setParams: () => {} }}
+            barAccessoriesInBar={false} footer={null} footerShown={false}
+        />;
+        const tree = await renderScreen(render(entry));
+        await tree.update(render(other));
+        renders = 0;
+        await act(async () => { store.setState({ value: 1 }); });
+        expect(renders).toBe(suspendWhenHidden ? 0 : 1);
+        await tree.update(render(entry));
+        expect(tree.findByType('DeclaredTabValue').props.value).toBe(1);
+        await tree.unmount();
+    });
+
     it('keeps a visited tab and its Ask composer mounted across a tab round-trip, hidden and quiet while another tab shows', async () => {
         counts.clear();
         const tree = await renderScreen(page({ id: 'overview' }));
