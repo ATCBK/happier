@@ -34,6 +34,33 @@ export type CodexSharedAppServerStartupFailure = Readonly<{
   stderrTruncated?: boolean;
 }>;
 
+/** Re-admits only closed process facts after an error crosses a bundle/module boundary. */
+export function readCodexSharedAppServerStartupFailure(value: unknown): CodexSharedAppServerStartupFailure | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Readonly<Record<string, unknown>>;
+  if (record.phase !== 'socket_wait'
+    || (record.reason !== 'process_exited' && record.reason !== 'process_observation_failed')) return null;
+  const terminationKind = record.terminationKind === 'exit'
+    || record.terminationKind === 'signal' || record.terminationKind === 'failed'
+    ? record.terminationKind : undefined;
+  const terminationRequestedBy = record.terminationRequestedBy === 'none'
+    || record.terminationRequestedBy === 'timeout' || record.terminationRequestedBy === 'abort'
+    || record.terminationRequestedBy === 'dispose'
+    ? record.terminationRequestedBy : undefined;
+  const nativeExitCode = Number.isSafeInteger(record.nativeExitCode) ? record.nativeExitCode as number : undefined;
+  const nativeSignal = typeof record.nativeSignal === 'string' && Object.hasOwn(constants.signals, record.nativeSignal)
+    ? record.nativeSignal : undefined;
+  return Object.freeze({
+    phase: 'socket_wait', reason: record.reason,
+    ...(terminationKind ? { terminationKind } : {}),
+    ...(terminationRequestedBy ? { terminationRequestedBy } : {}),
+    ...(nativeExitCode !== undefined ? { nativeExitCode } : {}),
+    ...(nativeSignal ? { nativeSignal } : {}),
+    ...(typeof record.stderrPresent === 'boolean' ? { stderrPresent: record.stderrPresent } : {}),
+    ...(typeof record.stderrTruncated === 'boolean' ? { stderrTruncated: record.stderrTruncated } : {}),
+  });
+}
+
 export class CodexSharedAppServerStartupError extends Error {
   readonly code = 'agent_startup_transport_failed';
   readonly startupFailure: CodexSharedAppServerStartupFailure;

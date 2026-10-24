@@ -53,7 +53,7 @@ import {
   readCanonicalCodexAgentRuntimeDescriptorV1,
   readExactCodexProviderSessionId,
 } from '../../../protocol/runtimeDescriptorV1.js';
-import { CodexSharedAppServerStartupError, createCodexSharedAppServer, type CodexSharedAppServerStartupFailure } from './sharedServer.js';
+import { createCodexSharedAppServer, readCodexSharedAppServerStartupFailure, type CodexSharedAppServerStartupFailure } from './sharedServer.js';
 import { buildCodexExecutionRunBaseEnv } from '../../executionRuns/environment.js';
 import { assignInjectedServerKeys, buildCodexAppServerConfigOverrides, listCodexAppServerMcpServerNames } from './config/overrides.js';
 import {
@@ -399,8 +399,13 @@ function createSanitizedNativeStartupError(error: unknown): Error {
   // Shared startup cleanup can aggregate the original failure. Preserve that
   // owner's closed diagnostic without copying either exception's raw cause.
   const startupCause = error instanceof AggregateError ? error.errors[0] : error;
+  const startupFailure = readCodexSharedAppServerStartupFailure(
+    startupCause && typeof startupCause === 'object'
+      ? (startupCause as Readonly<{ startupFailure?: unknown }>).startupFailure
+      : undefined,
+  );
   const sanitized = new CodexAppServerStartupError(code,
-    startupCause instanceof CodexSharedAppServerStartupError ? startupCause.startupFailure : undefined);
+    startupFailure ?? undefined);
   const classification = error instanceof Error
     ? sanitizeCodexAppServerRuntimeAuthClassification(
         (error as { runtimeAuthClassification?: unknown }).runtimeAuthClassification,

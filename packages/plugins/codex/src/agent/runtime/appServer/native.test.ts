@@ -502,6 +502,55 @@ describe('createCodexNativeAppServerSessionRuntime', () => {
     expect(JSON.stringify(rejection)).not.toContain(providerOwnPropertySentinel);
   });
 
+  it('preserves closed shared-server termination facts across a module boundary', async () => {
+    const appServer = createAppServerSession();
+    runtimeModuleMocks.createCodexAppServerRuntime.mockReturnValueOnce(appServer.runtime);
+    runtimeModuleMocks.startCodexAppServerRuntime.mockRejectedValueOnce(Object.assign(
+      new Error('PRIVATE_NATIVE_STDERR_SENTINEL'),
+      {
+        code: 'agent_startup_transport_failed',
+        startupFailure: {
+          phase: 'socket_wait',
+          reason: 'process_exited',
+          terminationKind: 'exit',
+          terminationRequestedBy: 'none',
+          nativeExitCode: 1,
+          stderrPresent: true,
+          stderrTruncated: false,
+          privateDetail: 'PRIVATE_STARTUP_FAILURE_SENTINEL',
+        },
+      },
+    ));
+    const warn = vi.fn();
+    const context = {
+      signal: new AbortController().signal,
+      services: {
+        logger: { debug: vi.fn(), warn },
+        sessions: { current: { media: { registerSourceRoot: vi.fn() } } },
+        connectedAccounts: createConnectedAccountsFixture(),
+      },
+      session: { id: 'session-1', services: {} },
+      ui: { title: { set: vi.fn(async () => undefined) } },
+    } as unknown as AgentSessionRuntimeContext;
+
+    const rejection = await openCodexNativeAppServerSession({
+      kind: 'create', sessionId: 'session-1', cwd: '/tmp/codex',
+    }, context).then(() => null, error => error);
+
+    expect(rejection).toMatchObject({
+      code: 'agent_startup_transport_failed',
+      startupFailure: {
+        phase: 'socket_wait', reason: 'process_exited', nativeExitCode: 1,
+      },
+    });
+    expect(String(rejection)).toContain('process_exited');
+    expect(String(rejection)).not.toContain('PRIVATE_NATIVE_STDERR_SENTINEL');
+    expect(JSON.stringify(rejection)).not.toContain('PRIVATE_STARTUP_FAILURE_SENTINEL');
+    expect(warn).toHaveBeenCalledWith('Codex native startup failed', expect.objectContaining({
+      startupFailure: expect.objectContaining({ reason: 'process_exited', nativeExitCode: 1 }),
+    }));
+  });
+
   it('projects the explicitly supplied realtime conversation on the same native runtime object', () => {
     const appServer = createAppServerSession();
     const realtimeConversation: AgentSessionRealtimeConversation = {
