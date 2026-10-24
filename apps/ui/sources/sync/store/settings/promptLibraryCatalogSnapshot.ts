@@ -20,6 +20,8 @@ type StoredSnapshot = Readonly<{ scope: ServerAccountScope; projection: PromptLi
 const snapshots = new Map<string, StoredSnapshot>();
 const receiptOrdering = createRowInventoryReceiptOrdering();
 const listeners = new Set<() => void>();
+const admissionLossReasons = ['account-mode-mismatch', 'encryption-material-unavailable', 'unauthorized', 'forbidden',
+    'account-not-found', 'account-inconsistent', 'invalid-stored-content'];
 const loading = Object.freeze({ status: 'loading', value: null, revision: 'absent', sourceSettingsVersion: null, stale: true } as const);
 export function subscribePromptLibraryCatalogSnapshots(listener: () => void): () => void {
     listeners.add(listener); return () => { listeners.delete(listener); };
@@ -109,8 +111,7 @@ export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, pro
         receiptOrdering.clearScope(scope);
         return;
     }
-    if (projection.catalog.status === 'unavailable' && ['account-mode-mismatch', 'encryption-material-unavailable',
-        'unauthorized', 'forbidden', 'account-not-found', 'account-inconsistent', 'invalid-stored-content'].includes(projection.catalog.reason)) {
+    if (projection.catalog.status === 'unavailable' && admissionLossReasons.includes(projection.catalog.reason)) {
         receiptOrdering.clearScope(scope);
     } else if (projection.catalog.status === 'ready' || projection.catalog.status === 'partial') {
         for (const row of projection.catalog.rows) receiptOrdering.retain(scope, row.record.key, row.revision);
@@ -122,9 +123,12 @@ export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, pro
     const values = new Map<PromptLibraryCatalogKeyV1, PromptLibraryCatalogValueSnapshot<PromptLibraryCatalogKeyV1>>();
     let changed = !previous;
     for (const key of PromptLibraryCatalogKeyV1Schema.options) {
-        const read = readPromptLibraryCatalogRecordV1({ catalog: projection.catalog, key, rawSettings: projection.rawSettings });
         const old = previous?.values.get(key);
-        if (changedKeys && !changedKeys.includes(key) && old) { values.set(key, old); continue; }
+        if (changedKeys && !changedKeys.includes(key)) {
+            if (old) values.set(key, old);
+            continue;
+        }
+        const read = readPromptLibraryCatalogRecordV1({ catalog: projection.catalog, key, rawSettings: projection.rawSettings });
         let next: PromptLibraryCatalogValueSnapshot<PromptLibraryCatalogKeyV1>;
         if (read.status === 'ready') {
             if (typeof old?.revision === 'number' && typeof read.revision === 'number' && old.revision > read.revision) {
@@ -135,10 +139,9 @@ export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, pro
             next = { status: 'ready', value, revision: read.revision,
                 sourceSettingsVersion: read.authority === 'inactive' ? projection.sourceSettingsVersion : null, stale: false };
         } else {
-            const withdraw = ['account-mode-mismatch', 'encryption-material-unavailable', 'unauthorized', 'forbidden',
-                'account-not-found', 'account-inconsistent', 'invalid-stored-content'].includes(read.reason);
+            const withdraw = admissionLossReasons.includes(read.reason);
             next = { status: read.reason === 'loading' ? 'loading' : 'unavailable', value: withdraw ? null : old?.value ?? null,
-                revision: old?.revision ?? 'absent', sourceSettingsVersion: projection.sourceSettingsVersion,
+                revision: old?.revision ?? 'absent', sourceSettingsVersion: old?.sourceSettingsVersion ?? null,
                 stale: true, reason: read.reason };
         }
         if (old && JSON.stringify(old) === JSON.stringify(next)) next = old;
@@ -169,19 +172,29 @@ export function beginPromptLibraryCatalogRowsLoad(scope: ServerAccountScope, key
 }
 export function applyPromptLibraryCatalogRowsSnapshot(scope: ServerAccountScope, keys: readonly PromptLibraryCatalogKeyV1[],
     projection: PromptLibraryCatalogProjection, current: boolean): void {
+    if (!current) return;
     const previous = getPromptLibraryCatalogSnapshot(scope);
-    const base = previous?.catalog;
+    const base = previous?.catalog.status === 'ready' || previous?.catalog.status === 'partial' ? previous.catalog : null;
     const incoming = projection.catalog;
-    if ((base?.status !== 'ready' && base?.status !== 'partial') || (incoming.status !== 'ready' && incoming.status !== 'partial')) {
+    if (incoming.status === 'unavailable' && (incoming.reason === 'scope-retired' || admissionLossReasons.includes(incoming.reason))) {
         // Admission loss withdraws the complete Account projection, even on a single-row read.
         applyPromptLibraryCatalogSnapshot(scope, projection, current);
         return;
     }
-    const rows = [...base.rows.filter(row => !keys.includes(row.record.key)), ...incoming.rows];
-    const tombstones = [...base.tombstones.filter(row => !keys.includes(row.key)), ...incoming.tombstones];
-    const diagnostics = [...base.diagnostics.filter(row => !keys.includes(row.key)), ...incoming.diagnostics];
+    if (incoming.status !== 'ready' && incoming.status !== 'partial') {
+        applyPromptLibraryCatalogSnapshot(scope, { ...projection, rawSettings: previous?.rawSettings ?? {},
+            sourceSettingsVersion: previous?.sourceSettingsVersion ?? 0 }, current, keys);
+        return;
+    }
+    const rows = [...(base?.rows ?? []).filter(row => !keys.includes(row.record.key)),
+        ...incoming.rows.filter(row => keys.includes(row.record.key))];
+    const tombstones = [...(base?.tombstones ?? []).filter(row => !keys.includes(row.key)),
+        ...incoming.tombstones.filter(row => keys.includes(row.key))];
+    const diagnostics = [...(base?.diagnostics ?? []).filter(row => !keys.includes(row.key)),
+        ...incoming.diagnostics.filter(row => keys.includes(row.key))];
+    // A demanded row cannot establish the exhaustive base or its retained Settings authority.
     applyPromptLibraryCatalogSnapshot(scope, { rawSettings: previous?.rawSettings ?? {}, sourceSettingsVersion: previous?.sourceSettingsVersion ?? 0, catalog: { ...base,
-        status: diagnostics.length ? 'partial' : 'ready', rows, tombstones, diagnostics } }, current, keys);
+        status: !base || diagnostics.length ? 'partial' : base.status, rows, tombstones, diagnostics } }, current, keys);
 }
 export function beginPromptLibraryCatalogLoad(scope: ServerAccountScope): void {
     const previous = getPromptLibraryCatalogSnapshot(scope);

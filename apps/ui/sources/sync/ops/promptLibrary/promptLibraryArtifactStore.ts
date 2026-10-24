@@ -271,7 +271,7 @@ export function createUiPromptLibraryArtifactStore(
       account?.assertCurrent();
       const scope = account?.accountLifetime.scope;
       // A selective read must not wait for an unrelated full inventory scan.
-      const filtered = options?.coarseKind !== undefined && account !== undefined;
+      const filtered = (options?.coarseKind !== undefined || options?.kinds !== undefined) && account !== undefined;
       let rows = scope ? readCompleteAccountArtifactInventory(scope) : null;
       if (!filtered && !rows && account && scope
         && areServerAccountScopesEqual(getActiveServerAccountScope(), scope)
@@ -284,17 +284,29 @@ export function createUiPromptLibraryArtifactStore(
         rows = readCompleteAccountArtifactInventory(scope);
       }
       if (account && rows) {
-        // Select pages with the existing header selector/cursor owner. An empty
-        // search requests local selection over this already complete inventory.
+        // The shared selector expects physical updated-desc pages, including
+        // cursor advancement, even when the headers are already admitted locally.
         const page = await listArtifactHeadersV1({
           options: { ...options, search: '' },
-          readPage: async pageOptions => ({
-            items: rows.map(artifact => ({ artifactId: artifact.id,
+          readPage: async pageOptions => {
+            const kinds = pageOptions?.kinds;
+            const selectedRows = rows.map(artifact => ({ artifactId: artifact.id,
               header: artifact.isDecrypted ? artifact.rawHeader ?? {} : {},
               createdAt: artifact.createdAt, updatedAt: artifact.updatedAt, access: artifact.access }))
-              .filter(item => !pageOptions?.coarseKind || deriveArtifactCoarseKindV1(item.header) === pageOptions.coarseKind),
-            coverage: 'complete',
-          }),
+              .filter(item => (!pageOptions?.coarseKind || deriveArtifactCoarseKindV1(item.header) === pageOptions.coarseKind)
+                && (!kinds || (typeof item.header.kind === 'string' && kinds.includes(item.header.kind))))
+              .sort((left, right) => right.updatedAt - left.updatedAt || right.artifactId.localeCompare(left.artifactId));
+            const index = pageOptions?.cursor
+              ? selectedRows.findIndex(item => account.encodeArtifactListCursor(item) === pageOptions.cursor) : -1;
+            if (pageOptions?.cursor && index < 0)
+              throw Object.assign(new Error('artifact_list_cursor_invalid'), { code: 'invalid_cursor' });
+            const items = selectedRows.slice(index + 1,
+              pageOptions?.limit === undefined ? undefined : index + 1 + pageOptions.limit);
+            const last = items.at(-1);
+            return { items, coverage: 'complete',
+              ...(last && index + 1 + items.length < selectedRows.length
+                ? { nextCursor: account.encodeArtifactListCursor(last) } : {}) };
+          },
           encodeCursor: item => account.encodeArtifactListCursor(item),
         });
         account.assertCurrent();

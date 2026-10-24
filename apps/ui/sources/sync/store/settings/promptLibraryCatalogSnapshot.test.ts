@@ -1,12 +1,78 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyPromptLibraryCatalogSnapshot, applyPromptLibraryCatalogAcknowledgedRecord, beginPromptLibraryCatalogLoad, getPromptLibraryCatalogValue, getPromptLibraryCatalogSnapshot,
     publishPromptLibrarySkillRulesDraft, resetPromptLibraryCatalogSnapshotsForTests, beginPromptLibraryCatalogRowsLoad,
-    subscribePromptLibraryCatalogSnapshots } from './promptLibraryCatalogSnapshot';
+    subscribePromptLibraryCatalogSnapshots, applyPromptLibraryCatalogRowsSnapshot } from './promptLibraryCatalogSnapshot';
 afterEach(resetPromptLibraryCatalogSnapshotsForTests);
 const scope = { serverId: 'home', accountId: 'account' };
 const catalog = { status: 'ready' as const, rows: [{ record: { key: 'folders' as const,
     value: { v: 1 as const, folders: [{ id: 'folder', name: 'Folder' }] } }, revision: 3 }], tombstones: [], diagnostics: [] };
 describe('Prompt library scoped publications', () => {
+    it('admits targeted rules during a full refresh without replacing sibling facts or claiming cold siblings', () => {
+        const projection = { catalog: { ...catalog, rows: [...catalog.rows, { revision: 4, record: {
+            key: 'registry-sources' as const, value: { v: 2 as const, sources: [], disabledSourceIds: [] },
+        } }] }, rawSettings: {}, sourceSettingsVersion: 7 };
+        const rules = { catalog: { ...catalog, rows: [{ revision: 2, record: {
+            key: 'skill-rules' as const, value: { v: 1 as const, rules: [] },
+        } }] }, rawSettings: {}, sourceSettingsVersion: 0 };
+        applyPromptLibraryCatalogSnapshot(scope, projection, true);
+        for (const reason of ['loading', 'unreachable', 'encryption-material-unavailable'] as const) {
+            beginPromptLibraryCatalogLoad(scope);
+            if (reason === 'unreachable') applyPromptLibraryCatalogSnapshot(scope, { ...projection,
+                catalog: { status: 'unavailable', reason } }, true);
+            const folders = getPromptLibraryCatalogValue(scope, 'folders');
+            const sources = getPromptLibraryCatalogValue(scope, 'registry-sources');
+            applyPromptLibraryCatalogRowsSnapshot(scope, ['skill-rules'], rules, true);
+            expect(getPromptLibraryCatalogValue(scope, 'folders')).toBe(folders);
+            expect(getPromptLibraryCatalogValue(scope, 'registry-sources')).toBe(sources);
+            expect(getPromptLibraryCatalogValue(scope, 'skill-rules')).toMatchObject({ status: 'ready', revision: 2 });
+        }
+        const cold = { ...scope, accountId: 'cold' };
+        applyPromptLibraryCatalogRowsSnapshot(cold, ['skill-rules'], rules, true);
+        expect(getPromptLibraryCatalogValue(cold, 'folders')).toMatchObject({ status: 'loading', value: null, sourceSettingsVersion: null });
+        // A real full response remains exhaustive, and a targeted tombstone deletes only its row.
+        applyPromptLibraryCatalogSnapshot(scope, projection, true);
+        const sources = getPromptLibraryCatalogValue(scope, 'registry-sources');
+        applyPromptLibraryCatalogRowsSnapshot(scope, ['folders'], { ...rules, catalog: { status: 'ready', rows: [],
+            tombstones: [{ key: 'folders', revision: 5 }], diagnostics: [] } }, true);
+        expect(getPromptLibraryCatalogValue(scope, 'folders')).toMatchObject({ revision: 5, value: { v: 1, folders: [] } });
+        expect(getPromptLibraryCatalogValue(scope, 'registry-sources')).toBe(sources);
+        applyPromptLibraryCatalogSnapshot(scope, { ...projection, catalog: { ...catalog, rows: [],
+            tombstones: [{ key: 'registry-sources', revision: 6 }] } }, true);
+        expect(getPromptLibraryCatalogValue(scope, 'registry-sources')).toMatchObject({ revision: 6, value: { sources: [] } });
+        applyPromptLibraryCatalogRowsSnapshot(scope, ['skill-rules'], { ...rules,
+            catalog: { status: 'unavailable', reason: 'unauthorized' } }, true);
+        expect(getPromptLibraryCatalogValue(scope, 'registry-sources').value).toBeNull();
+    });
+    it('does not replace an unchanged row source-version carrier during repeated catalog wakes', () => {
+        const sourceCatalog = { ...catalog, rows: [{ record: { key: 'registry-sources' as const,
+            value: { v: 2 as const, sources: [], disabledSourceIds: [] } }, revision: 3 }] };
+        const projection = { catalog: sourceCatalog, rawSettings: {}, sourceSettingsVersion: 7 };
+        applyPromptLibraryCatalogSnapshot(scope, projection, true);
+        let previous = getPromptLibraryCatalogValue(scope, 'registry-sources').sourceSettingsVersion;
+        let versionChanges = 0;
+        const off = subscribePromptLibraryCatalogSnapshots(() => {
+            const next = getPromptLibraryCatalogValue(scope, 'registry-sources').sourceSettingsVersion;
+            if (next !== previous) versionChanges++;
+            previous = next;
+        });
+        try {
+            for (let i = 0; i < 5; i++) {
+                beginPromptLibraryCatalogLoad(scope);
+                applyPromptLibraryCatalogSnapshot(scope, { ...projection,
+                    catalog: { status: 'unavailable', reason: 'unreachable' } }, true);
+                applyPromptLibraryCatalogSnapshot(scope, projection, true);
+            }
+            expect(versionChanges).toBe(0);
+            expect(getPromptLibraryCatalogValue(scope, 'registry-sources')).toMatchObject({ revision: 3, stale: false });
+            const inactiveScope = { ...scope, serverId: 'inactive-home' };
+            const inactive = { ...projection, catalog: { ...sourceCatalog, rows: [] } };
+            applyPromptLibraryCatalogSnapshot(inactiveScope, inactive, true);
+            beginPromptLibraryCatalogLoad(inactiveScope);
+            applyPromptLibraryCatalogSnapshot(inactiveScope, { ...inactive, sourceSettingsVersion: 8 }, true);
+            expect(getPromptLibraryCatalogValue(inactiveScope, 'registry-sources'))
+                .toMatchObject({ revision: 'absent', sourceSettingsVersion: 8, stale: false });
+        } finally { off(); }
+    });
     it('retains drafted rule values when only their read authority enters loading', () => {
         const projection = { catalog: { ...catalog, rows: [{ revision: 1, record: { key: 'skill-rules' as const,
             value: { v: 1 as const, rules: [] } } }] }, rawSettings: {}, sourceSettingsVersion: 1 };
