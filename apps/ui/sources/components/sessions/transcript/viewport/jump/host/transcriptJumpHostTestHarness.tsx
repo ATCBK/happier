@@ -6,6 +6,7 @@ import type { Message } from '@happier-dev/session-core/messages';
 import { createSessionFixture, createSessionMessagesFixture, renderHook } from '@/dev/testkit';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { getStorage } from '@/sync/domains/state/storageStore';
@@ -55,7 +56,7 @@ export async function restoreTranscriptJumpEnvironment(
     const connection = await restoreServerAccountForTest({
         serverUrl: 'http://transcript-jump-' + (++environmentSequence) + '.test',
         accountId: 'jump-account',
-        request: async (input, init) => {
+        request: createSessionReadBatchFetchBoundary(async (input, init) => {
             const url = new URL(String(input));
             if (url.pathname.endsWith('/messages')) return requestMessages(url);
             const snapshot = /^\/v2\/sessions\/([^/]+)$/.exec(url.pathname);
@@ -64,7 +65,7 @@ export async function restoreTranscriptJumpEnvironment(
                 features: { encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
             }));
             return boundary.request(input, init);
-        },
+        }),
     });
     getStorage().setState({
         sessions: Object.fromEntries(['s1', 's2', 'session-landing'].map(id => [id,

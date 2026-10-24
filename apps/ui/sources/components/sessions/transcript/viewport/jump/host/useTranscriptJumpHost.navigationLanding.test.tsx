@@ -5,13 +5,13 @@ import type { ChatTranscriptListItem } from '../../../chatListTypes';
 import { createSessionMessagesFixture, flushHookEffects, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { getStorage } from '@/sync/domains/state/storageStore';
 import type { TranscriptNavigationEntry } from '../../../navigation/transcriptNavigationTypes';
 import { clearTranscriptNavigationVisibilityStore, getTranscriptNavigationVisibilityStore } from '../../visibility/transcriptNavigationVisibilityStore';
 import type { restoreTranscriptJumpEnvironment as RestoreTranscriptJumpEnvironment } from './transcriptJumpHostTestHarness';
 import {
     applyTranscriptJumpHighlightForJumpResult,
     clearTranscriptJumpHighlight,
+    markTranscriptJumpHighlightPainted,
     readActiveTranscriptJumpHighlight,
     subscribeToTranscriptJumpHighlight,
     TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS,
@@ -19,6 +19,7 @@ import {
 
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+const { getStorage } = await import('@/sync/domains/state/storageStore');
 const { createTranscriptJumpHostTestHarness, createTranscriptJumpWebMetrics, restoreTranscriptJumpEnvironment } = await import('./transcriptJumpHostTestHarness');
 
 const SESSION_ID = 'session-landing';
@@ -64,7 +65,7 @@ describe('transcript jump landing owns the navigation anchor', () => {
         standardCleanup();
     });
 
-    it('starts the full highlight only when a landed DOM target is presented after the first-paint cover', async () => {
+    it('publishes a covered DOM landing when presented and starts expiry only after its row paints', async () => {
         vi.useFakeTimers();
         getStorage().getState().sessionMessages[SESSION_ID]!.reducerState.messageIds.set('source-answer', 'a2');
         const harness = createTranscriptJumpHostTestHarness({ sessionId: SESSION_ID, rows: ROWS, messages: MESSAGES });
@@ -88,6 +89,11 @@ describe('transcript jump landing owns the navigation anchor', () => {
             await hook.rerender(harness.props({ ...route, isTranscriptPresented: true }));
             expect(readActiveTranscriptJumpHighlight()).toMatchObject({ sessionAddress: address, routeMessageId: 'server:source-answer' });
             expect(publications).toHaveLength(1);
+            // The jump host reports the landing; the row separately acknowledges painting its cue.
+            await act(async () => { vi.advanceTimersByTime(TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS * 2); });
+            const highlight = readActiveTranscriptJumpHighlight();
+            expect(highlight).not.toBeNull();
+            markTranscriptJumpHighlightPainted(highlight!.token);
             await act(async () => { vi.advanceTimersByTime(TRANSCRIPT_JUMP_HIGHLIGHT_DURATION_MS - 1); });
             expect(readActiveTranscriptJumpHighlight()).not.toBeNull();
             await act(async () => { vi.advanceTimersByTime(1); });

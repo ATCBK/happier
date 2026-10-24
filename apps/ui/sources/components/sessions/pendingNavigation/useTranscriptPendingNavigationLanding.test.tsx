@@ -6,7 +6,7 @@ import type { TranscriptJumpResult } from '@/components/sessions/transcript/view
 
 // The socket boundary must be installed before any runtime consumer loads socket.io-client.
 installDisconnectedServerSocketBoundary();
-const { renderHook, renderScreen, standardCleanup, createSessionMessagesFixture, flushHookEffects } = await import('@/dev/testkit');
+const { renderHook, renderScreen, standardCleanup, createSessionFixture, createPlainSessionByIdResponseFixture, createSessionMessagesFixture, flushHookEffects } = await import('@/dev/testkit');
 const { createReducer } = await import('@happier-dev/session-core/reducer');
 const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
@@ -23,10 +23,10 @@ const { sync } = await import('@/sync/sync');
 afterEach(() => { clearPendingNavigationState(); standardCleanup(); });
 
 function sessionSnapshot(id: string) {
-    return Response.json({ session: { id, createdAt: 1, updatedAt: 10, seq: 10, active: true, activeAt: 10,
-        encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
-        metadataVersion: 1, metadata: JSON.stringify({ path: '/tmp', name: 'Older request' }),
-        agentStateVersion: 1, agentState: null, share: null } });
+    return Response.json(createPlainSessionByIdResponseFixture(createSessionFixture({
+        id, createdAt: 1, updatedAt: 10, seq: 10, active: true, activeAt: 10,
+        metadata: { path: '/tmp', host: 'fixture-host', name: 'Older request' },
+    })));
 }
 
 describe('Next landing through the mounted transcript jump host', () => {
