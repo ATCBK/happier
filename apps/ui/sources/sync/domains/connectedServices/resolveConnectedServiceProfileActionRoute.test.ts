@@ -55,9 +55,8 @@ describe('resolveConnectedServiceProfileActionRoute', () => {
             { serviceId: 'happier.agent.codex/openai-codex' },
             entries,
         )).toEqual({
-            pathname: '/(app)/settings/connected-services',
+            pathname: '/(app)/settings/connected-services/connect',
             params: {
-                connect: '1',
                 service: 'happier.agent.codex/openai-codex',
             },
         });

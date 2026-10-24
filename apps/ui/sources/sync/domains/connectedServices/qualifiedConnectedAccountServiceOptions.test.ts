@@ -54,7 +54,8 @@ describe('buildQualifiedConnectedAccountProfileOptionsByServiceId privacy', () =
         });
         expect(options[NOVEL_SERVICE_KEY]).toEqual([
             expect.objectContaining({ profileId: 'work', label: 'Work', providerEmail: 'wo•••@e•••.com' }),
-            expect.objectContaining({ profileId: 'backup', label: 'Connected service account', providerEmail: null }),
+            // P8 label contract: missing identity is named for its service, never a generic service.
+            expect.objectContaining({ profileId: 'backup', label: 'Reviewer Service account', providerEmail: null }),
         ]);
         // Agent actions and passive inventory consume raw structured facts, not device text:
         // a provider ID must not acquire the meaning of a saved user name there.
