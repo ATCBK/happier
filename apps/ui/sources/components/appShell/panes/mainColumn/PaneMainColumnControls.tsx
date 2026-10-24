@@ -1,4 +1,4 @@
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_ICON_BUTTON_SIZE, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { Animated, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -8,6 +8,7 @@ import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks
 import { SidebarCollapseIcon } from '@/components/navigation/shell/SidebarIcons';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { resolveIconButtonGlyphSize } from '@/components/ui/icons/iconButtonGlyphSize';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -70,7 +71,7 @@ export const PaneMainHideButton = React.memo(function PaneMainHideButton(
       icon={
         <SidebarCollapseIcon
           edge={edge}
-          size={props.glyphSize ?? 18}
+          size={props.glyphSize ?? resolveIconButtonGlyphSize(props.size ?? HAPPIER_ICON_BUTTON_SIZE)}
           color={props.color ?? theme.colors.text.secondary}
         />
       }

@@ -3,7 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPageRowFieldLayoutContext, HappierPressable, resolveHappierFocusRingVisible, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
-import { Icon } from '@/components/ui/icons/Icon';
+import { ICON_SIZE, Icon } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS, Popover } from '@/components/ui/popover';
@@ -44,7 +44,7 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
     const selected = filter.options?.find((option) => option.id === filter.selectedId) ?? null;
     const valueLabel = filter.valueLabel ?? selected?.label ?? '';
     const leading = filter.icon ?? selected?.icon
-        ?? (filter.onToggle && filter.selected ? <Icon name="check" size={12} color={theme.colors.text.primary} /> : null);
+        ?? (filter.onToggle && filter.selected ? <Icon name="check" size={ICON_SIZE.xs} color={theme.colors.text.primary} /> : null);
     const iconOnly = filter.iconOnly === true && leading !== null;
     const hasChooser = filter.renderPopoverContent !== undefined
         || (filter.options !== undefined && filter.options.length > 0 && filter.onChange !== undefined);
@@ -128,8 +128,8 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
                             } : null]}
                         />
                     ) : null}
-                    {canOpen && !iconOnly ? <Icon name={open ? 'caret-up' : 'caret-down'} size={12} color={theme.colors.text.secondary} /> : null}
-                    {clearable ? <Icon name="x" size={12} color={theme.colors.text.secondary} /> : null}
+                    {canOpen && !iconOnly ? <Icon name={open ? 'caret-up' : 'caret-down'} size={ICON_SIZE.xs} color={theme.colors.text.secondary} /> : null}
+                    {clearable ? <Icon name="x" size={ICON_SIZE.xs} color={theme.colors.text.secondary} /> : null}
                 </HappierPressable>
             </View>
             <Popover

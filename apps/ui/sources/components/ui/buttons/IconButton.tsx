@@ -14,6 +14,7 @@ import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedbac
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
+import { resolveIconButtonGlyphSize } from '@/components/ui/icons/iconButtonGlyphSize';
 import { visuallyHiddenStyle } from '@/components/ui/accessibility/visuallyHiddenStyle';
 
 import { DeferredAnchoredTooltip } from '@/components/ui/overlays/DeferredAnchoredTooltip';
@@ -121,7 +122,7 @@ export function IconButton(props: Readonly<{
      * changing the button's structure, so the pressable is not remounted and keeps its focus.
      */
     tooltipHidden?: boolean;
-    /** VISIBLE container square in px (icon scales with it). Default 28. */
+    /** VISIBLE container square in px; the glyph is the icon-scale step that fits it. Default 28. */
     size?: number;
     /**
      * Required physical press target while preserving the compact visual square.
@@ -205,7 +206,7 @@ export function IconButton(props: Readonly<{
             : theme.colors.button.secondary.tint;
 
     const size = props.size ?? DEFAULT_SIZE;
-    const iconSize = props.iconSize ?? Math.max(12, size - 10);
+    const iconSize = props.iconSize ?? resolveIconButtonGlyphSize(size);
     const variant = props.fill ? 'well' : props.variant ?? 'outlined';
     const fillColor = props.fill === 'danger'
         ? theme.colors.state.danger.background
