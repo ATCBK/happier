@@ -223,6 +223,44 @@ describe('the content winner of one folded entry', () => {
         expect(pressed?.attention).toBeNull();
     });
 
+    it('keeps scan summaries on detail arrival and replaces answered facts', () => {
+        const checks = { id: 'source/checks', importance: 'primary' as const,
+            value: { kind: 'status' as const, value: 'All passing', tone: 'success' as const } };
+        const count = { id: 'source/files', importance: 'secondary' as const,
+            value: { kind: 'number' as const, value: 17, format: 'plain' as const } };
+        const prior = { ...present({ sourceInstanceId: INSTANCE[0] }), outcome: testkitPresentOutcome({
+            snapshot: testkitSnapshot({ facts: [checks, count] }),
+        }) };
+        const before = fold({ observations: [prior] }).rows[0]!;
+        const read = { ...present({ sourceInstanceId: INSTANCE[0], observedAtMs: 2_000 }), outcome: testkitPresentOutcome({
+            snapshot: testkitSnapshot({ facts: [{ ...count, value: { kind: 'number', value: 0, format: 'plain' } }] }),
+        }) };
+        const after = foldTriagePostMutationObservation({ row: before, observation: read,
+            lanes: [lane(INSTANCE[0])], assembledAtMs: 2_000, keepViewerFacts: true });
+        expect(after?.content?.outcome.snapshot.facts).toEqual(expect.arrayContaining([
+            checks, { ...count, value: { kind: 'number', value: 0, format: 'plain' } },
+        ]));
+        // A post-write read replaces provider truth rather than retaining scan summaries.
+        const changed = foldTriagePostMutationObservation({ row: before, observation: read,
+            lanes: [lane(INSTANCE[0])], assembledAtMs: 2_000 });
+        expect(changed?.content?.outcome.snapshot.facts).not.toContainEqual(checks);
+    });
+
+    it('does not carry a missing scan summary across an explicitly changed PR head', () => {
+        const revision = { baseSha: 'base', headSha: 'head-before', nativeRevision: 'head-before' };
+        const prior = { ...present({ sourceInstanceId: INSTANCE[0] }), outcome: testkitPresentOutcome({
+            snapshot: testkitSnapshot({ reviewRevision: revision, facts: [{ id: 'source/checks', importance: 'primary',
+                value: { kind: 'status', value: 'All passing', tone: 'success' } }] }),
+        }) };
+        const before = fold({ observations: [prior] }).rows[0]!;
+        const read = { ...present({ sourceInstanceId: INSTANCE[0], observedAtMs: 2_000 }), outcome: testkitPresentOutcome({
+            snapshot: testkitSnapshot({ reviewRevision: { ...revision, headSha: 'head-after', nativeRevision: 'head-after' }, facts: [] }),
+        }) };
+        const after = foldTriagePostMutationObservation({ row: before, observation: read,
+            lanes: [lane(INSTANCE[0])], assembledAtMs: 2_000, keepViewerFacts: true });
+        expect(after?.content?.outcome.snapshot.facts).toEqual([]);
+    });
+
     it('keeps every active observing connection eligible when post-mutation attention changes', () => {
         const before = fold({
             observations: [

@@ -2,6 +2,7 @@ import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifes
 import type { TriageListInvocationErrorV1 } from '../actions/listEntriesProtocol.js';
 import {
     triageTaskStatusCategoryV1,
+    MAX_TRIAGE_ROW_FACTS_V1,
     type TriageEntryRefV1,
     type TriageSourceFailureV1,
     type TriageSourceScanEvidenceV1,
@@ -620,7 +621,7 @@ export function foldTriageListWindow(input: Readonly<{
     });
 }
 
-function keepPriorViewerFacts(input: Readonly<{
+function keepPriorSelectionFacts(input: Readonly<{
     row: TriageListRowV1;
     observation: CorpusQualifiedObservationV1;
 }>): CorpusQualifiedObservationV1 {
@@ -628,11 +629,25 @@ function keepPriorViewerFacts(input: Readonly<{
     const prior = input.row.observations.find(
         (candidate) => candidate.sourceInstanceId === input.observation.sourceInstanceId,
     )?.outcome;
-    if (read.kind !== 'present' || read.viewer.involvement.length > 0
-        || prior?.kind !== 'present' || prior.viewer.involvement.length === 0) {
-        return input.observation;
+    if (read.kind !== 'present' || prior?.kind !== 'present') return input.observation;
+    const viewer = read.viewer.involvement.length === 0 ? prior.viewer : read.viewer;
+    const oldHead = prior.snapshot.reviewRevision?.headSha;
+    const newHead = read.snapshot.reviewRevision?.headSha;
+    // A newly observed head invalidates a prior head's check/review summary.
+    if (oldHead !== undefined && newHead !== undefined && oldHead !== newHead) {
+        return { ...input.observation, outcome: { ...read, viewer } };
     }
-    return { ...input.observation, outcome: { ...read, viewer: prior.viewer } };
+    const facts = new Map(prior.snapshot.facts.map((fact) => [fact.id, fact]));
+    for (const fact of read.snapshot.facts) {
+        if (fact.value.kind !== 'detailOnly' || !facts.has(fact.id)) facts.set(fact.id, fact);
+    }
+    const rank = { primary: 0, secondary: 1, supplementary: 2 } as const;
+    const ordered = [...facts.values()].sort((left, right) => rank[left.importance] - rank[right.importance]);
+    return { ...input.observation, outcome: { ...read, viewer, snapshot: {
+        ...read.snapshot,
+        facts: ordered.slice(0, MAX_TRIAGE_ROW_FACTS_V1),
+        ...(ordered.length > MAX_TRIAGE_ROW_FACTS_V1 ? { projectionTruncated: true as const } : {}),
+    } } };
 }
 
 /**
@@ -651,6 +666,7 @@ export function foldTriagePostMutationObservation(input: Readonly<{
     /**
      * The read was only to open the entry. It states the revision's facts and no viewer facts (only a
      * list scan learns why an entry is the reader's), so the connection's earlier viewer facts stay.
+     * Its unanswered row facts also remain until the exact read supplies a value.
      * Absent after a press, where the read is the new truth.
      */
     keepViewerFacts?: boolean;
@@ -658,7 +674,7 @@ export function foldTriagePostMutationObservation(input: Readonly<{
     if (triageEntryRowKey(input.row.entryRef) !== triageEntryRowKey(input.observation.entryRef)) {
         return null;
     }
-    const observation = input.keepViewerFacts === true ? keepPriorViewerFacts(input) : input.observation;
+    const observation = input.keepViewerFacts === true ? keepPriorSelectionFacts(input) : input.observation;
     const retained: CorpusQualifiedObservationV1[] = input.row.observations
         .filter((observation) => observation.sourceInstanceId !== input.observation.sourceInstanceId)
         .map((observation) => ({ ...observation, entryRef: input.row.entryRef }));
