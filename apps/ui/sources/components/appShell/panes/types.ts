@@ -5,6 +5,8 @@ import type { PluginUiProjectionPhase } from '@/sync/domains/plugins/ui/usePlugi
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { WorkspaceFileOpenInput } from '@happier-dev/protocol/actions/workspaceActionFamily';
+import type { PluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
+import type { SelectedPaneDestinationV1 } from './model/selectedPaneDestination';
 
 export type PaneId = 'right' | 'details' | 'bottom';
 
@@ -65,6 +67,8 @@ export type PaneBuiltinAdapter = Readonly<{
 export type PaneRightSidebarAdapter = Readonly<{
     /** The catalog owner may retain its selected pane while offering no tab to open. */
     available?: boolean;
+    /** Command-time admission of an App panel selection; never execution authority or persisted state. */
+    readContinuingDestination?: (selection: SelectedPaneDestinationV1) => PluginUiDestinationBindingV1 | null;
     renderActionRail?: (context: Readonly<{ scopeId: PaneScopeId }>) => React.ReactNode;
     render: (context: Readonly<{ scopeId: PaneScopeId }>) => React.ReactNode;
 }>;

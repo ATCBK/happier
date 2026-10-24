@@ -21,6 +21,15 @@ import { usePanePresentation } from '@/components/appShell/panes/panePresentatio
 import { useOptionalDetailsTabOpener } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { createSessionPaneDetailsTab } from './url/sessionPaneUrlState';
 import { fileChangesComparisonOfScope } from '@/components/workspaces/files/file/changes/fileChangesScope';
+import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
+import { selectPluginSurfacePlacementsByDestination } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
+import { resolveRightSidebarPluginTabs } from '@/components/appShell/rightSidebar/rightSidebarPluginTabs';
+import { resolveRightSidebarTabSelection } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
+import { resolveSelectedPaneDestination } from '@/components/appShell/panes/model/resolveSelectedPaneDestination';
+import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
+import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 
 type SessionPaneScopedProps = Readonly<{ sessionId: string; scopeId: string }>;
 
@@ -67,7 +76,8 @@ export function useRegisterSessionPaneDriver(
     // The bottom pane exists only where the terminal docks there. A phone shows it as the Terminal
     // page, yet every cockpit scene mounts this scope's pane host, so a bottom pane a wider layout
     // left open would otherwise duplicate the terminal under Chat.
-    const bottomPaneAvailable = resolveSessionTerminalDockLocation(useDeviceType()) === 'bottom';
+    const deviceType = useDeviceType();
+    const bottomPaneAvailable = resolveSessionTerminalDockLocation(deviceType) === 'bottom';
     const presentPane = usePanePresentation();
     // The phone cockpit presents sidebar destinations as its own retained
     // scenes. Its Session chrome must not mount another copy as an overlay.
@@ -152,6 +162,29 @@ export function useRegisterSessionPaneDriver(
                 }) : null,
             },
             rightSidebarAdapter: {
+                readContinuingDestination: selection => {
+                    const lifetime = pluginRuntime.accountLifetime;
+                    if (!rightPaneAvailable || selection.kind !== 'plugin' || !lifetime?.isCurrent()
+                        || !areServerAccountScopesEqual(lifetime.scope, getActiveServerAccountScope())) return null;
+                    // Re-admit the selected identity from the one committed App catalog only on
+                    // an eligible navigation. Always-mounted drivers subscribe to no detail here.
+                    const projection = readCurrentAppShellPluginUiProjection({ scope: lifetime.scope, declarationsOnly: true });
+                    if (!projection) return null;
+                    const placements = selectPluginSurfacePlacementsByDestination(projection, selection.destination);
+                    const runtimeAdmission = { platform: pluginRuntime.platform,
+                        formFactor: resolvePluginUiRuntimeFormFactor({ deviceType }) };
+                    const tabs = resolveRightSidebarPluginTabs({ scope: 'app', placements,
+                        runtimeAdmission });
+                    const projectionPhase = readCurrentAppShellPluginUiProjection() === projection ? 'current' : 'establishing';
+                    const admitted = resolveRightSidebarTabSelection({ activeTabId: null, selectedDestination: selection,
+                        tabs, scope: 'app', projectionPhase });
+                    if (admitted.kind !== 'available' || admitted.tab.owner !== 'plugin') return null;
+                    const paneSelection = resolveSelectedPaneDestination({ container: 'rightSidebarTab', targetKind: 'app',
+                        projection, selectedDestination: selection, runtimeAdmission,
+                        projectionPhase: readPluginUiContributionOrigin(admitted.tab.placement)?.phase ?? projectionPhase });
+                    return paneSelection.kind === 'available' && paneSelection.placement === admitted.tab.placement
+                        ? paneSelection.placement.binding : null;
+                },
                 renderActionRail: () => React.createElement(SessionActionRail),
                 render: () => rightPaneAvailable ? React.createElement(SessionRightPanel, {
                     sessionId,
@@ -183,6 +216,7 @@ export function useRegisterSessionPaneDriver(
     }, [
         bottomPaneAvailable,
         detailsPaneEnabled,
+        deviceType,
         rightPaneAvailable,
         cockpitChrome,
         pluginRuntime.accountLifetime,

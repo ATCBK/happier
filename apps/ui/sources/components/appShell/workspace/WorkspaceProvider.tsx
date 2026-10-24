@@ -25,6 +25,9 @@ import { resolvePhoneWorkspaceTabHref } from './workspacePhoneProjection';
 import { useWorkspaceKeyboardShortcuts } from './useWorkspaceKeyboardShortcuts';
 import { WorkspaceRouteHostingContext } from './WorkspaceRouteHostingContext';
 import { useOptionalAppPaneFindSeedContext, useOptionalPaneDriverReader } from '../panes/AppPaneProvider';
+import { AppPaneContext } from '../panes/AppPaneContext';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { BROWSER_HISTORY_NAVIGATION_CHANGED } from '@/utils/navigation/browserHistoryNavigation';
@@ -80,6 +83,7 @@ export function WorkspaceProvider(props: Readonly<{
     const scope = useActiveServerAccountScope();
     const findSeedContext = useOptionalAppPaneFindSeedContext();
     const readPaneDriver = useOptionalPaneDriverReader();
+    const paneSubscription = React.useContext(AppPaneContext);
     const findHandoff = findSeedContext?.fileFindSeedHandoff;
     const scopeKey = scope ? JSON.stringify([scope.serverId, scope.accountId]) : null;
     // Browser history is authoritative even when readiness changes before Expo updates its mirror.
@@ -137,8 +141,8 @@ export function WorkspaceProvider(props: Readonly<{
         scopeKey: string | null; titles: Readonly<Record<string, WorkspaceDestinationTitle>>;
     }>>({ scopeKey, titles: {} });
     const destinationTitles = publishedTitles.scopeKey === scopeKey ? publishedTitles.titles : NO_DESTINATION_TITLES;
-    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles, readPaneDriver });
-    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles, readPaneDriver };
+    const latest = React.useRef({ owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles, readPaneDriver, paneSubscription });
+    latest.current = { owner, router, catalog: props.catalog, enabled: props.enabled, entry, phone, phoneTransport, hostsRoute, scope, scopeKey, phoneTabHref, findSeedContext, destinationTitles, readPaneDriver, paneSubscription };
     const publishDestinationTitle = React.useCallback((tabId: string, ref: DestinationRef, title: string | null) => {
         // The body may finish an effect after navigation. Its old identity must
         // never name the new destination retained under the same tab key.
@@ -208,6 +212,50 @@ export function WorkspaceProvider(props: Readonly<{
             getState: () => latest.current.owner.getState(),
             getCatalog: () => latest.current.catalog,
             getScope: () => latest.current.scope,
+            prepareOpen: (source, destination, options) => {
+                const facts = latest.current;
+                const account = facts.scope;
+                if (!mounted.initialized || (options.mode ?? 'preview') !== 'preview'
+                    || source.groupId !== destination.groupId
+                    || source.target.kind !== 'session' || destination.target.kind !== 'session'
+                    || source.target.params.id === destination.target.params.id || !account
+                    || !areServerAccountScopesEqual(account, getActiveServerAccountScope())
+                    || !Object.keys(destination.target.params).every(key => key === 'id' || key === 'serverId' || key === 'accountId')) return;
+                const sameAccount = (target: DestinationRef) => areServerProfileIdentifiersEquivalent(
+                    target.params.serverId ?? account.serverId, account.serverId)
+                    && (target.params.accountId ?? account.accountId) === account.accountId;
+                if (!sameAccount(source.target) || !sameAccount(destination.target)) return;
+                const state = facts.owner.getState();
+                if (state.focusedGroupId !== source.groupId || state.groups[source.groupId]?.activeTabId !== source.tabId) return;
+                const pane = facts.paneSubscription?.getSnapshot();
+                const sourceScopeId = createSessionPaneScopeId(source.target.params.id, account.serverId, source.tabId);
+                const destinationScopeId = createSessionPaneScopeId(destination.target.params.id, account.serverId, destination.tabId);
+                const right = pane?.state.scopes[sourceScopeId]?.right;
+                if (!pane || pane.state.activeScopeId !== sourceScopeId || !right?.isOpen
+                    || right.selectedDestination?.kind !== 'plugin' || pane.state.scopes[destinationScopeId]) return;
+                const selected = right.selectedDestination;
+                const binding = facts.readPaneDriver?.(sourceScopeId)?.rightSidebarAdapter?.readContinuingDestination?.(selected);
+                if (!binding || binding.targetKind !== 'app' || binding.container !== 'rightSidebarTab'
+                    || binding.destination.pluginId !== selected.destination.pluginId
+                    || binding.destination.localId !== selected.destination.localId) return;
+                // Continue only the selection intent, not tabState, launch input, instance identity or custody.
+                const selection = { kind: 'plugin' as const, destination: binding.destination };
+                return opened => {
+                    const current = latest.current;
+                    if (current.scopeKey !== facts.scopeKey
+                        || !areServerAccountScopesEqual(account, getActiveServerAccountScope())
+                        || opened.tabId !== destination.tabId || opened.groupId !== destination.groupId
+                        || !sameDestinationRef(opened.target, destination.target)) return;
+                    const currentState = current.owner.getState();
+                    if (currentState.focusedGroupId !== opened.groupId
+                        || currentState.groups[opened.groupId]?.activeTabId !== opened.tabId
+                        || !sameDestinationRef(currentState.tabs[opened.tabId].target, opened.target)) return;
+                    const currentPane = current.paneSubscription?.getSnapshot();
+                    if (!currentPane || currentPane.state.scopes[destinationScopeId]) return;
+                    currentPane.dispatch({ type: 'activateScope', scopeId: destinationScopeId,
+                        initialRight: { isOpen: true, activeTabId: null, selectedDestination: selection } });
+                };
+            },
             dispatch: (action) => {
                 const owner = latest.current.owner;
                 if (mounted.initialized) owner.dispatch(action);

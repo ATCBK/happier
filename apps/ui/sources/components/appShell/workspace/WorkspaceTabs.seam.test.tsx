@@ -47,6 +47,11 @@ vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({ confirmResult: true }).module;
 });
+// Locale loading is a platform boundary; this navigation seam does not test translation assets.
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: key => key });
+});
 // Portal placement and native measurement are platform boundaries; the tab menus remain real.
 vi.mock('@/components/ui/popover', async importOriginal => {
     const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
@@ -65,6 +70,18 @@ const loadWorkspaceProduction = () => Promise.all([
     import('./titleBar/workspaceBarGeometry'), import('@/keyboard/KeyboardShortcutProvider'),
     import('../panes/AppPaneProvider'), import('@/app/(app)/session/[id]/info'),
     import('../destinations/compactAppDestinationCatalog'), import('@/sync/ops/actions/frontDoorRuntimeActionExecutor'),
+    import('../panes/AppPaneScopeHost'), import('@/components/sessions/panes/useRegisterSessionPaneDriver'),
+    import('@/components/sessions/panes/SessionRightPanel'), import('../plugins/AppShellPluginUiProjection'),
+    import('../rightSidebar/appScopeRightSidebarNavigation'), import('@/dev/testkit/fixtures/pluginDeclarativeModelFixture'),
+    import('../../../../../../packages/plugins/inspector/src/manifest'), import('@happier-dev/protocol'),
+    import('@happier-dev/protocol/plugins/ui'), import('@/sync/domains/plugins/ui/projection'),
+    import('../panes/hooks/useAppPaneScope'), import('@/sync/domains/scope/activeServerAccountScope'),
+    import('@/sync/domains/plugins/ui/projectionUnion'),
+    import('@/components/sessions/shell/view/useSessionViewBootstrap'),
+    import('@/components/sessions/panes/url/sessionPaneUrlState'),
+    import('@/components/sessions/plugins/useSessionPluginRuntime'),
+    import('@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1'),
+    import('@/sync/domains/plugins/availability/projection'),
 ]);
 // Load the real route graph during collection, outside the behavior/hook deadline.
 const production = await (async () => {
@@ -89,6 +106,189 @@ afterEach(async () => {
 });
 
 describe('workspace tabs production composition', () => {
+    it.each([false, true])('retains an external app sidebar in the Inspector binding family through Session Search A to B to A (peer establishing: %s)', async peerEstablishing => {
+        const fixturePluginId = 'acme.sidebar-continuity';
+        const serverIdentityId = 'srv_sidebar_fixture';
+        restoreBrowserLocks = installBrowserStorageLockBoundary();
+        installDisconnectedServerSocketBoundary();
+        const homes = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workspace-sidebar.test',
+            accountId: 'alice', serverIdentityId, currentAccount: true }], route: () => undefined });
+        disposeHome = homes.dispose;
+        disconnectHome = await homes.restoreActiveConnection();
+        const [{ WorkspaceProvider }, , { DestinationInstanceHost }, , , { KeyboardShortcutProvider }, { AppPaneProvider }, ,
+            catalogModule, , { AppPaneScopeHost }, { useRegisterSessionPaneDriver },
+            { SessionRightSidebarProvider, SessionRightPanel }, { AppShellPluginUiProjectionValueProvider },
+            { useOpenAppRightSidebarTab }, { createPluginDeclarativeModelFixture }, inspector,
+            { PluginProjectionV2Schema }, { normalizePluginUiDestinationBindingV1 },
+            { normalizePluginUiProjection }, { useAppPaneScope }, { captureActiveServerAccountScopeLifetime },
+            { unionPluginUiProjections, readPluginUiContributionOrigin }, { useSessionViewBootstrap },
+            { parseSessionPaneUrlState }, { createSessionPaneSurfaceScope }, { PluginMachineExecutionOriginV1Schema },
+            { replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection }] = production;
+        const { storage } = await import('@/sync/domains/state/storage');
+        const initial = storage.getState();
+        const scope = initial.profileScope!;
+        const sessionA = 'reviewer-a';
+        const sessionB = 'reviewer-b';
+        const sessionC = 'reviewer-c';
+        const sessionD = 'reviewer-d';
+        storage.setState({ isDataReady: true });
+        storage.getState().applyLocalSettings({ appPaneScopesV1: {}, sessionsRightPaneDefaultOpen: false,
+            uiMultiPanePanelsEnabled: true }, { persist: false });
+        storage.getState().applySessions([sessionA, sessionB, sessionC, sessionD].map(id => createSessionFixture({ id, serverId: scope.serverId })));
+        const view = inspector.INSPECTOR_UI.views.find(candidate => candidate.id === inspector.INSPECTOR_APP_SURFACE_ID);
+        if (!view || view.container !== 'rightSidebarTab' || view.target.kind !== 'app') throw new Error('Inspector must retain its canonical app sidebar binding');
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId: fixturePluginId,
+            destinationId: view.id, rendererId: inspector.INSPECTOR_RENDERER_ID, container: view.container, target: view.target });
+        if (!binding) throw new Error('Inspector destination must be admitted by the public registry');
+        const occurrenceId = 'inspector-sidebar-fixture#1';
+        // This external, actionless package uses the actual Inspector's binding/scope family,
+        // not its activation or renderer. Real Inspector content/navigation remains INT's live gate.
+        const model = createPluginDeclarativeModelFixture({ pluginId: fixturePluginId,
+            localId: inspector.INSPECTOR_RENDERER_ID, occurrenceId,
+            document: { version: 1, root: { kind: 'text', text: 'Loaded app sidebar fixture' } } });
+        const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId, materializationRef: {
+            pluginId: fixturePluginId, machineId: 'machine-sidebar', materializationId: 'sidebar-fixture-installation' } });
+        const normalizedMachineProjection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            installedPackagesById: { [fixturePluginId]: { id: fixturePluginId, displayName: 'External sidebar fixture',
+                version: '1.0.0', enabled: true, occurrenceId, executionOrigin,
+                source: { kind: 'archive', locator: 'sidebar-fixture.zip' },
+                sourceCustody: { kind: 'managed', immutableGenerationId: 'sidebar-fixture-archive', installSource: 'archive' },
+                immutableGenerationId: 'sidebar-fixture-archive', declaresContributionPoints: false } },
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                inspector: { id: 'inspector', pluginId: fixturePluginId, occurrenceId, executionOrigin,
+                    contributionKind: 'surfacePlacement', descriptorId: view.id, binding, target: binding.target,
+                    renderer: { kind: 'declarative', contributionId: inspector.INSPECTOR_RENDERER_ID, model },
+                    display: { developerFallback: view.title.fallback },
+                    availability: { state: 'available', reason: 'available', diagnostics: [] }, headerActions: [] },
+            } } } }), 'web');
+        // As in the Host's actionless installed-page fixture, this is an admitted normalized
+        // package fact consistent with the empty Action/point maps, not a claimed wire derivation.
+        const machineProjection = Object.freeze({ ...normalizedMachineProjection, installedPackagesById: Object.freeze({
+            ...normalizedMachineProjection.installedPackagesById,
+            [fixturePluginId]: Object.freeze({ ...normalizedMachineProjection.installedPackagesById[fixturePluginId]!,
+                declaredExecution: Object.freeze({ daemonActions: false, contributionPoints: false }) }),
+        }) }) satisfies typeof normalizedMachineProjection;
+        expect(machineProjection.installedPackagesById[fixturePluginId]?.declaredExecution)
+            .toEqual({ daemonActions: false, contributionPoints: false });
+        const union = unionPluginUiProjections([
+            { machineId: 'machine-sidebar', serverId: scope.serverId, serverIdentityId, projection: machineProjection,
+                phase: 'current', interactionEnabled: true, selectableExecutionOrigins: [executionOrigin] },
+            ...(peerEstablishing ? [{ machineId: 'machine-pending', serverId: scope.serverId, projection: null,
+                phase: 'establishing' as const, interactionEnabled: false }] : []),
+        ], new Map([[fixturePluginId, executionOrigin]]));
+        const projection = union.pluginUiProjection;
+        if (!projection) throw new Error('The current Inspector declaration must survive the real App union');
+        expect(union.hasEstablishingMembers).toBe(peerEstablishing);
+        expect(readPluginUiContributionOrigin(Object.values(projection.surfacePlacementsById)[0])?.phase).toBe('current');
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        // A real loaded absence observation settles this external Machine requester without
+        // inventing Account custody or a ready-Machine policy. The Host owns no-point synthesis.
+        replacePluginAccountAvailabilityProjection({ scope,
+            snapshot: { availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [] } });
+        const runtime = { pluginUiProjection: machineProjection, pluginBrowserProjection: null, accountLifetime,
+            phase: 'current' as const, interactionEnabled: true, machineId: 'machine-sidebar', serverId: scope.serverId, platform: 'web' as const };
+        const shell = { ...runtime, pluginUiProjection: projection, phase: union.phase,
+            hasEstablishingMembers: union.hasEstablishingMembers,
+            clientExecutableActivation: { status: 'ready' as const },
+            reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} };
+        let navigation!: WorkspaceNavigationContextValue;
+        let pane!: ReturnType<typeof useAppPaneScope>;
+        let openInspector!: ReturnType<typeof useOpenAppRightSidebarTab>;
+        let currentSession = '';
+        function SessionPane({ sessionId }: Readonly<{ sessionId: string }>) {
+            currentSession = sessionId;
+            const scopeId = useRegisterSessionPaneDriver(sessionId, scope.serverId, undefined, runtime);
+            const paneSurfaceScope = React.useMemo(() => createSessionPaneSurfaceScope(sessionId, runtime), [sessionId]);
+            const current = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
+            pane = useSessionViewBootstrap({ sessionId, serverId: scope.serverId, paneScopeId: scopeId,
+                paneUrlState: parseSessionPaneUrlState(current.target.params), multiPaneEnabled: true,
+                sessionsRightPaneDefaultOpen: false, deviceType: 'tablet', sessionPath: null,
+                sessionAccepted: true, surfaceFocused: true, surfaceVisible: true, routeAnchor: true,
+                paneUrlSyncRouteActive: true }).pane;
+            openInspector = useOpenAppRightSidebarTab();
+            return <SessionRightSidebarProvider sessionId={sessionId} scopeId={scopeId}
+                paneSurfaceScope={paneSurfaceScope}>
+                <AppPaneScopeHost scopeId={scopeId} main={<React.Fragment />} />
+            </SessionRightSidebarProvider>;
+        }
+        route.pathname = `/session/${sessionA}`;
+        route.params = { id: sessionA, serverId: scope.serverId };
+        window.history.replaceState(null, '', `${route.pathname}?serverId=${encodeURIComponent(scope.serverId)}`);
+        const catalog = catalogModule.resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: true, workflows: false, friends: false } });
+        const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}><AppPaneProvider>
+            <AppShellPluginUiProjectionValueProvider value={shell}>
+                <WorkspaceProvider enabled catalog={catalog}>{owner => {
+                    navigation = owner;
+                    const current = owner.state.tabs[owner.state.groups[owner.state.focusedGroupId].activeTabId];
+                    return current.target.kind === 'session' ? <DestinationInstanceHost key={current.id}
+                        tabId={current.id} ref={current.target} pathname={`/session/${current.target.params.id}`}
+                        focused visible navigation={owner.navigationForTab(current.id)}>
+                        <SessionPane sessionId={current.target.params.id} />
+                    </DestinationInstanceHost> : null;
+                }}</WorkspaceProvider>
+            </AppShellPluginUiProjectionValueProvider>
+        </AppPaneProvider></KeyboardShortcutProvider>);
+        try {
+            await vi.waitFor(() => expect(currentSession).toBe(sessionA));
+            await act(async () => openInspector({ pluginId: fixturePluginId, localId: view.id }));
+            await vi.waitFor(() => expect(screen.getTextContent(),
+                `Initial physical Host refusal: ${String(screen.findByTestId('plugin-rn-ui-unavailable')?.props.diagnosticCode ?? 'none')}`)
+                .toContain('Loaded app sidebar fixture'));
+            expect(screen.findAllByType(SessionRightPanel)).toHaveLength(1);
+            for (const sessionId of [sessionB, sessionA]) {
+                await act(async () => { expect(navigation.openHref(`/session/${sessionId}?serverId=${encodeURIComponent(scope.serverId)}`)).toBe(true); });
+                await vi.waitFor(() => expect(currentSession).toBe(sessionId));
+                expect(pane.scopeState?.right.isOpen, `Session ${sessionId} must retain the app sidebar region`).toBe(true);
+                expect(pane.scopeState?.right.selectedDestination).toMatchObject({ kind: 'plugin',
+                    destination: { pluginId: fixturePluginId, localId: view.id } });
+                await vi.waitFor(() => expect(screen.getTextContent()).toContain('Loaded app sidebar fixture'));
+                expect(screen.findAllByType(SessionRightPanel)).toHaveLength(1);
+            }
+            // Retained destinations own their explicit state: a later incoming App panel
+            // must not reopen a deliberately closed B or replace B's selected built-in.
+            const retainCurrent = () => {
+                const state = navigation.state;
+                const retain = navigation.navigationForTab(state.groups[state.focusedGroupId].activeTabId).retainCurrent;
+                if (!retain) throw new Error('The registered destination navigation must support retaining its current tab');
+                retain();
+            };
+            await act(async () => retainCurrent());
+            const { invokeWorkspaceAction } = await import('./workspaceActionRuntime');
+            await act(async () => { expect(await invokeWorkspaceAction({ actionId: 'workspace.tabs.open', input: {
+                href: `/session/${sessionB}?serverId=${encodeURIComponent(scope.serverId)}`, mode: 'preview',
+            } })).toMatchObject({ ok: true }); });
+            await vi.waitFor(() => expect(currentSession).toBe(sessionB));
+            expect(pane.scopeState?.right.isOpen, 'Direct Action preview uses the same App panel continuity owner').toBe(true);
+            await act(async () => { retainCurrent(); pane.selectRightDestination({ kind: 'builtin', id: 'info' }); pane.closeRight(); });
+            for (const sessionId of [sessionA, sessionB]) {
+                await act(async () => { navigation.openHref(`/session/${sessionId}?serverId=${encodeURIComponent(scope.serverId)}`); });
+                await vi.waitFor(() => expect(currentSession).toBe(sessionId));
+            }
+            expect(pane.scopeState?.right.isOpen).toBe(false);
+            expect(pane.scopeState?.right.selectedDestination).toEqual({ kind: 'builtin', id: 'info' });
+            await act(async () => { navigation.openHref(`/session/${sessionA}?serverId=${encodeURIComponent(scope.serverId)}`); });
+            await vi.waitFor(() => expect(currentSession).toBe(sessionA));
+            expect(pane.scopeState?.right.isOpen).toBe(true);
+            await act(async () => { navigation.openHref(`/session/${sessionC}?serverId=${encodeURIComponent(scope.serverId)}`, { mode: 'newTab' }); });
+            await vi.waitFor(() => expect(currentSession).toBe(sessionC));
+            expect(pane.scopeState?.right.isOpen, 'An explicit independent tab does not inherit another pane selection').toBe(false);
+            expect(pane.scopeState?.right.selectedDestination).toBeNull();
+            await act(async () => { navigation.openHref(`/session/${sessionA}?serverId=${encodeURIComponent(scope.serverId)}`); });
+            await vi.waitFor(() => expect(currentSession).toBe(sessionA));
+            // The persisted selection grammar can carry an instance key which its current
+            // singleton binding refuses. Navigation must not rehabilitate it by dropping the key.
+            await act(async () => pane.selectRightDestination({ kind: 'plugin',
+                destination: { pluginId: fixturePluginId, localId: view.id }, instanceKey: 'legacy:sidebar-copy' }));
+            expect(pane.scopeState?.right.selectedDestination).toMatchObject({ instanceKey: 'legacy:sidebar-copy' });
+            expect(screen.getTextContent()).not.toContain('Loaded app sidebar fixture');
+            await act(async () => { navigation.openHref(`/session/${sessionD}?serverId=${encodeURIComponent(scope.serverId)}`); });
+            await vi.waitFor(() => expect(currentSession).toBe(sessionD));
+            expect(pane.scopeState?.right.isOpen, 'Invalid source intent must not seed a new Session sidebar').toBe(false);
+            expect(pane.scopeState?.right.selectedDestination).toBeNull();
+        } finally { await screen.unmount(); clearPluginAccountAvailabilityProjection(); storage.setState(initial, true); }
+    });
+
     it.each(['web', 'ios'] as const)('positions a Track file in the foreground Session pane without presenting on %s', async platform => {
         route.platform = platform;
         restoreBrowserLocks = installBrowserStorageLockBoundary();
@@ -121,6 +321,7 @@ describe('workspace tabs production composition', () => {
         let navigation!: WorkspaceNavigationContextValue;
         let track!: ReturnType<typeof useSessionTrack>;
         const presentations: unknown[] = [];
+        const placedFiles: string[] = [];
         const foregroundInput = document.createElement('input');
         function TrackEntry() {
             const scopeId = useRegisterSessionPaneDriver('tracked', scope.serverId);
@@ -166,10 +367,11 @@ describe('workspace tabs production composition', () => {
             const anchor = { kind: 'fileLine' as const, startLine: 14 };
             let opened: boolean | null = false;
             await act(async () => { opened = await opener.open({ kind: 'session', sessionId: 'tracked', serverId: scope.serverId,
-                path: 'main.ts' }, { intent: 'preview', present: false, anchor, anchorSource: 'file', origin: {
+                path: 'main.ts' }, { intent: 'preview', present: false, anchor, anchorSource: 'file', onOpened: () => placedFiles.push('main.ts'), origin: {
                     transcript: { sessionAddress: { serverId: scope.serverId, sessionId: 'tracked' }, routeMessageId: 'local:track', filePath: 'main.ts' },
                 } }); });
             expect(opened).toBe(true);
+            expect(placedFiles).toEqual(['main.ts']);
             const tab = pane.scopeState?.details.tabs.find(candidate => candidate.key === 'file:main.ts');
             expect(tab).toMatchObject({ isPreview: true, resource: { kind: 'file', path: 'main.ts', anchor } });
             expect(pane.scopeState?.details.activeTabKey).toBe('file:main.ts');
@@ -250,8 +452,9 @@ describe('workspace tabs production composition', () => {
             homes.replaceAccountSettings('home', { settings, version: 2 });
             await act(async () => { storage.getState().applySettingsForScope(scope, settings, 2); });
             await act(async () => { opened = await opener.open({ kind: 'session', sessionId: 'tracked', serverId: scope.serverId,
-                path: 'blocked.ts' }, { intent: 'preview', present: false }); });
+                path: 'blocked.ts' }, { intent: 'preview', present: false, onOpened: () => placedFiles.push('blocked.ts') }); });
             expect(opened).toBe(false);
+            expect(placedFiles).toEqual(['main.ts']);
             expect(pane.scopeState?.details.activeTabKey).toBe('file:tracked.ts');
         } finally { await screen.unmount(); foregroundInput.remove(); storage.setState(initial, true); }
     });

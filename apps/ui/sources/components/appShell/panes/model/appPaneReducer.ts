@@ -160,7 +160,8 @@ function createEmptyScopeState(initialRight?: InitialRightPaneState): PaneScopeS
         right: {
             isOpen: initialRight?.isOpen ?? false,
             activeTabId,
-            selectedDestination: activeTabId === null ? null : createBuiltinPaneDestination(activeTabId),
+            selectedDestination: initialRight?.selectedDestination
+                ?? (activeTabId === null ? null : createBuiltinPaneDestination(activeTabId)),
             tabState: {},
         },
         details: createEmptyPaneDetailsState(),

@@ -55,6 +55,9 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
     createId: () => string;
     onChange: () => void;
     resolveOpenHref?: (href: string) => string | null;
+    /** Capture source intent before a new destination replaces it; commit only after successful navigation. */
+    prepareOpen?: (source: WorkspaceNavigationEntry, destination: WorkspaceNavigationEntry,
+        options: WorkspaceOpenOptions) => ((opened: WorkspaceNavigationEntry) => void) | undefined;
 }>) {
     let history = createWorkspaceNavigationHistory();
     const resolveOpenTarget = (href: string): DestinationRef | null => {
@@ -208,6 +211,9 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                 ? Object.values(state.groups).find(group => group.tabIds.includes(options.tabId!))?.id : undefined) ?? state.focusedGroupId;
             const mode = options.mode ?? 'preview';
             const sourceTab = state.tabs[options.tabId ?? state.groups[openingGroupId].activeTabId];
+            const sourceEntry: WorkspaceNavigationEntry | undefined = sourceTab
+                ? { tabId: sourceTab.id, groupId: openingGroupId, target: sourceTab.target } : undefined;
+            let finishOpen: ((opened: WorkspaceNavigationEntry) => void) | undefined = undefined;
             const sourceHref = sourceTab?.preview ? hrefForDestinationRef(input.getCatalog(), sourceTab.target) : null;
             const sourceRoute = sourceHref ? matchWorkspaceDestinationRoute(sourceHref) : null;
             // Going through Settings replaces intermediate previews. Keep the Machine page itself
@@ -268,6 +274,8 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             } else if (options.tabId && state.tabs[options.tabId] && !keepSourceMachine) {
                 const group = Object.values(state.groups).find((item) => item.tabIds.includes(options.tabId!));
                 if (!group) return false;
+                finishOpen = sourceEntry
+                    ? input.prepareOpen?.(sourceEntry, { tabId: options.tabId, groupId: group.id, target }, options) : undefined;
                 input.dispatch({ type: 'setTarget', tabId: options.tabId, target });
                 if (mode === 'newTab') input.dispatch({ type: 'promoteTab', tabId: options.tabId });
                 input.dispatch({ type: 'activateTab', groupId: group.id, tabId: options.tabId });
@@ -297,11 +305,14 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                         retainSourceMachine();
                         input.dispatch(action);
                     } else {
+                        finishOpen = sourceEntry
+                            ? input.prepareOpen?.(sourceEntry, { tabId: tab.id, groupId: openingGroupId, target }, options) : undefined;
                         retainSourceMachine();
                         input.dispatch(openAction);
                     }
                 }
             }
+            finishOpen?.(focusedEntry());
             visit(options.replace, projectUrl, true);
             options.onOpened?.();
             return true;
