@@ -235,7 +235,7 @@ function legibleCompression(compression: number, dark: boolean, tone: GlassAtmos
 
 /**
  * The one owner of a glass surface's backdrop treatment. Named-preset Elements and floating surfaces
- * use the fixed-point model; picture-backed shell planes keep a dimming tone under their heavy coat.
+ * use the fixed-point model; picture-backed shell planes show the frosted picture under their coat.
  * Custom, Solid, Reduce Transparency and unbacked surfaces return null and paint exactly as set.
  */
 export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment = {}, ground: GlassBackdropGround | null = null, panel: GlassFloatingCoat = false): GlassBackdropMap | null {
@@ -261,9 +261,9 @@ export function resolveGlassBackdropMap(settings: GlassMaterialSettings, group: 
         // as the paint needs, keeping k exact without a neutral lift.
         return solveGlassFixedPoint(legibleCompression(dark ? compression : Math.min(compression, 1 - opacity), dark, picture ? environment.atmosphereTone : undefined, ground), opacity, ground);
     }
-    // Shell planes over a wallpaper carry most of their own paint; the tone only tames highlights.
-    return { tone: dark ? 'brightness(0.65) saturate(1.05)'
-        : 'invert(1) contrast(0.88) brightness(0.49) invert(1) saturate(1.05)', coat: null };
+    // Shell planes over a wallpaper are frosted picture under their coat, as in the atmosphere lab's G1
+    // (owner, 2026-10-24: the title bar shows the picture): light keeps it unwashed, dark only dims it.
+    return { tone: dark ? 'brightness(0.86) saturate(1.05)' : 'saturate(1.5)', coat: null };
 }
 
 /** The backdrop filter of `resolveGlassBackdropMap`, or '' when the surface keeps its exact paint. */
