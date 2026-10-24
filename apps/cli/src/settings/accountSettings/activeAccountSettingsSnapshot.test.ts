@@ -39,13 +39,112 @@ function snapshot(params: Readonly<{
 }
 
 const configuredExternalSessionSourceRevisions = activeAccountSettingsSnapshot as typeof activeAccountSettingsSnapshot & Readonly<{
-  notifyActiveAccountConnectedServicesProjection(scopeKey: string): void;
+  notifyActiveAccountConnectedServicesProjection(scopeKey: string,
+    connectedServiceRefs?: readonly Readonly<{ pluginId: string; localId: string }>[]): void;
   resolveActiveAccountConfiguredExternalSessionSourceRevision(
     snapshot: activeAccountSettingsSnapshot.ActiveAccountSettingsSnapshot | null,
   ): string;
 }>;
 
 describe('active account settings snapshot publication', () => {
+  it('retains Connected Account record identity when only its revision or cleanup changes', () => {
+    const base = snapshot({ scopeKey: 'connected-record-sharing', version: 1, timing: 'after_runtime_idle' });
+    const record = { key: 'configurations' as const, value: { v: 1 as const, entries: [] } };
+    setActiveAccountSettingsSnapshot({ ...base, connectedConfigurationCatalog: { status: 'ready', revision: 1, record } });
+    activeAccountSettingsSnapshot.commitActiveConnectedAccountCatalog({ scopeKey: base.scopeKey,
+      lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), key: 'configurations',
+      catalog: { status: 'ready', revision: 2, record: { ...record, value: { ...record.value } }, cleanup: { status: 'complete' } } });
+    const catalog = getActiveAccountSettingsSnapshot()?.connectedConfigurationCatalog;
+    expect(catalog?.status).toBe('ready');
+    if (catalog?.status === 'ready') expect(catalog.record).toBe(record);
+  });
+  it('shares each equal preference and raw key and admits zero scoped wakes for 25 unrelated writes', () => {
+    const base = { ...snapshot({ scopeKey: 'scoped-keys', version: 1, timing: 'after_runtime_idle' }),
+      rawSettings: { watched: { enabled: true }, unrelated: 0 } };
+    setActiveAccountSettingsSnapshot(base);
+    const listener = vi.fn();
+    const unsubscribe = activeAccountSettingsSnapshot.subscribeActiveAccountSettingsKeys({
+      settings: ['secrets'], rawSettings: ['watched'],
+    }, listener);
+    try {
+      for (let index = 0; index < 25; index++) {
+        setActiveAccountSettingsSnapshot({ ...base, settingsVersion: index + 2,
+          settings: accountSettingsParse({ secrets: base.settings.secrets, analyticsOptOut: index % 2 === 0 }),
+          rawSettings: { watched: { enabled: true }, unrelated: index + 1 } });
+        expect(getActiveAccountSettingsSnapshot()?.settings.secrets).toBe(base.settings.secrets);
+        expect(getActiveAccountSettingsSnapshot()?.rawSettings?.watched).toBe(base.rawSettings.watched);
+      }
+      expect(listener).toHaveBeenCalledTimes(0);
+      setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, settingsVersion: 27,
+        rawSettings: { watched: { enabled: false } } });
+      expect(listener).toHaveBeenCalledTimes(1);
+      setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, settingsVersion: 28, rawSettings: {} });
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally { unsubscribe(); }
+  });
+
+  it('keeps scoped listeners live for source, key material, Account retirement and selected facets', () => {
+    const base = snapshot({ scopeKey: 'scoped-lifetime', version: 1, timing: 'after_runtime_idle' });
+    setActiveAccountSettingsSnapshot(base);
+    const listener = vi.fn();
+    const unsubscribe = activeAccountSettingsSnapshot.subscribeActiveAccountSettingsKeys({
+      facets: ['connectedPurposeCatalog'],
+    }, listener);
+    try {
+      setActiveAccountSettingsSnapshot({ ...base, settingsVersion: 2, source: 'cache' });
+      expect(listener).toHaveBeenCalledTimes(1);
+      setActiveAccountSettingsSnapshot({ ...base, settingsVersion: 3, source: 'cache', settingsSecretsReadKeys: [new Uint8Array([1])] });
+      expect(listener).toHaveBeenCalledTimes(2);
+      clearActiveAccountSettingsSnapshot();
+      setActiveAccountSettingsSnapshot(base);
+      expect(listener).toHaveBeenCalledTimes(4);
+      activeAccountSettingsSnapshot.notifyActiveAccountConnectedServicesProjection(base.scopeKey);
+      expect(listener).toHaveBeenCalledTimes(4);
+      activeAccountSettingsSnapshot.commitActiveConnectedAccountCatalog({ scopeKey: base.scopeKey,
+        lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), key: 'purposes', catalog: { status: 'loading' } });
+      expect(listener).toHaveBeenCalledTimes(4);
+      activeAccountSettingsSnapshot.commitActiveConnectedAccountCatalog({ scopeKey: base.scopeKey,
+        lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), key: 'purposes',
+        catalog: { status: 'unavailable', reason: 'forbidden' } });
+      expect(listener).toHaveBeenCalledTimes(5);
+    } finally { unsubscribe(); }
+  });
+  it('routes settings publications only to consumers of changed keys and facets, retaining lifetime wakes', () => {
+    const initial = snapshot({ scopeKey: 'key-scoped', version: 1, timing: 'after_runtime_idle' });
+    setActiveAccountSettingsSnapshot(initial);
+    const quota = vi.fn();
+    const material = vi.fn();
+    const releaseQuota = activeAccountSettingsSnapshot.subscribeActiveAccountSettingsKeys(
+      { settings: ['usageQuotaNotificationsV1'] }, quota);
+    const releaseMaterial = activeAccountSettingsSnapshot.subscribeActiveAccountSettingsKeys(
+      { settings: ['secrets'], facets: ['connectedPurposeCatalog'] }, material);
+    const update = (patch: Partial<activeAccountSettingsSnapshot.ActiveAccountSettingsSnapshot>) => {
+      const current = getActiveAccountSettingsSnapshot()!;
+      setActiveAccountSettingsSnapshot({ ...current, ...patch, settingsVersion: current.settingsVersion + 1 });
+    };
+    try {
+      for (let i = 0; i < 25; i++) update({ settings: accountSettingsParse({ ...initial.settings,
+        sessionPendingQueueDeliveryTiming: i % 2 ? 'after_runtime_idle' : 'after_foreground_ready' }),
+        rawSettings: { unrelated: i } });
+      expect(quota).not.toHaveBeenCalled();
+      expect(material).not.toHaveBeenCalled();
+      update({ settings: accountSettingsParse({ ...initial.settings, usageQuotaNotificationsV1: { pace: true } }) });
+      expect(quota).toHaveBeenCalledOnce();
+      expect(material).not.toHaveBeenCalled();
+      activeAccountSettingsSnapshot.commitActiveConnectedAccountCatalog({ scopeKey: 'key-scoped',
+        lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), key: 'purposes',
+        catalog: { status: 'unavailable', reason: 'forbidden' } });
+      expect(material).toHaveBeenCalledOnce();
+      expect(quota).toHaveBeenCalledOnce();
+      update({ settingsSecretsReadKeys: [new Uint8Array([1])] });
+      update({ scopeKey: 'replacement' });
+      expect(quota).toHaveBeenCalledTimes(3);
+      expect(material).toHaveBeenCalledTimes(3);
+      clearActiveAccountSettingsSnapshot();
+      expect(quota).toHaveBeenCalledTimes(4);
+      expect(material).toHaveBeenCalledTimes(4);
+    } finally { releaseQuota(); releaseMaterial(); }
+  });
   it.each([undefined, { status: 'loading' as const }])('retains privately prepared catalogs across an unchanged source observation (%j)', promptLibraryCatalog => {
     const source = { ...snapshot({ scopeKey: 'session-source', version: 1, timing: 'after_runtime_idle' }), promptLibraryCatalog };
     const admitted: PromptLibraryCatalogSnapshotV1 = { status: 'ready', rows: [], tombstones: [], diagnostics: [] };
@@ -637,7 +736,7 @@ describe('active account settings snapshot publication', () => {
     unsubscribe();
   });
 
-  it('publishes network confirmation of a cached revision once without rebuilding unchanged settings', () => {
+  it('publishes network confirmation of a cached revision once while retaining unchanged preferences', () => {
     const cached = { ...snapshot({ scopeKey: 'scope-a', version: 4, timing: 'after_runtime_idle' }), source: 'cache' as const,
       rawSettings: { sessionPendingQueueDeliveryTiming: 'after_runtime_idle' } };
     setActiveAccountSettingsSnapshot(cached);
@@ -653,13 +752,34 @@ describe('active account settings snapshot publication', () => {
       expect(result.snapshot.settings).toBe(cached.settings);
       expect(result.snapshot.settingsSecretsReadKeys).toBe(cached.settingsSecretsReadKeys);
       expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(lifetime);
-      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledOnce();
       for (let i = 0; i < 20; i++) {
         expect(commitActiveAccountSettingsSnapshot({ ...confirmed, loadedAtMs: 3 + i }).didCommit).toBe(false);
       }
-      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledOnce();
       expect(commitActiveAccountSettingsSnapshot({ ...confirmed, settingsVersion: 3 }).didCommit).toBe(false);
       expect(getActiveAccountSettingsSnapshot()).toBe(result.snapshot);
+    } finally { unsubscribe(); }
+  });
+
+  it('advances equal parsed preference revisions without republishing, while preserving real changes', () => {
+    const initial = snapshot({ scopeKey: 'scope-equal-publication', version: 1, timing: 'after_runtime_idle' });
+    setActiveAccountSettingsSnapshot(initial);
+    const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+    const listener = vi.fn();
+    const unsubscribe = subscribeActiveAccountSettingsSnapshot(listener);
+    try {
+      for (let version = 2; version <= 21; version++) {
+        expect(commitActiveAccountSettingsSnapshot({ ...snapshot({ scopeKey: initial.scopeKey, version,
+          timing: 'after_runtime_idle' }), loadedAtMs: version * 10 }).didCommit).toBe(true);
+      }
+      expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(21);
+      expect(getActiveAccountSettingsSnapshot()?.settings).toBe(initial.settings);
+      expect(getActiveAccountSettingsSnapshotLifetimeToken()).toBe(lifetime);
+      expect(listener).not.toHaveBeenCalled();
+      setActiveAccountSettingsSnapshot(snapshot({ scopeKey: initial.scopeKey, version: 22, timing: 'after_foreground_ready' }));
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0]?.[0]?.settingsVersion).toBe(21);
     } finally { unsubscribe(); }
   });
 
@@ -705,14 +825,16 @@ describe('active account settings snapshot publication', () => {
   });
 
   it('publishes the canonical accepted snapshot after sharing unchanged same-Account values', () => {
-    setActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-a', version: 4, timing: 'after_runtime_idle' }));
+    const previous = snapshot({ scopeKey: 'scope-a', version: 4, timing: 'after_runtime_idle' });
+    setActiveAccountSettingsSnapshot(previous);
     const next = snapshot({ scopeKey: 'scope-a', version: 5, timing: 'after_foreground_ready' });
     const listener = vi.fn();
     const unsubscribe = subscribeActiveAccountSettingsSnapshot(listener);
     try {
       const committed = commitActiveAccountSettingsSnapshot(next);
       expect(committed.snapshot).toEqual(next);
-      expect(committed.snapshot.settings).toBe(next.settings);
+      expect(committed.snapshot.settings.sessionPendingQueueDeliveryTiming).toBe(next.settings.sessionPendingQueueDeliveryTiming);
+      expect(committed.snapshot.settings.secrets).toBe(previous.settings.secrets);
       expect(getActiveAccountSettingsSnapshot()).toBe(committed.snapshot);
       expect(listener.mock.calls[0]?.[1]).toBe(committed.snapshot);
     } finally { unsubscribe(); }
@@ -867,30 +989,90 @@ describe('active account settings snapshot publication', () => {
     expect(revision()).not.toBe(changedSource);
   });
 
-  it('publishes a Connected Services-only projection through the active source revision without changing Settings revision', () => {
+  it('does not publish Settings or invalidate configured sources for unrelated Connected Services notices', () => {
     const active = snapshot({ scopeKey: 'scope-a', version: 4, timing: 'after_runtime_idle' });
     setActiveAccountSettingsSnapshot(active);
+    const sources = [{ sourceKind: 'codexHome', instances: [{ kind: 'connectedServiceProfiles', serviceId: 'openai-codex',
+      fields: { serviceId: 'connectedServiceId', profileId: 'connectedServiceProfileId' } }] }];
     const sourceRevisionBefore =
       configuredExternalSessionSourceRevisions
-        .resolveActiveAccountConfiguredExternalSessionSourceRevision(active);
+        .resolveActiveAccountConfiguredExternalSessionSourceRevision(active, sources);
     const settingsRevisionBefore = resolveActiveAccountSettingsSnapshotRevision(active);
     const listener = vi.fn();
     const unsubscribe = subscribeActiveAccountSettingsSnapshot(listener);
 
-    configuredExternalSessionSourceRevisions
-      .notifyActiveAccountConnectedServicesProjection('scope-a');
+    try {
+      for (let notice = 0; notice < 20; notice++) {
+        configuredExternalSessionSourceRevisions.notifyActiveAccountConnectedServicesProjection('scope-a',
+          [{ pluginId: 'email.test', localId: 'imap-smtp' }]);
+        expect(activeAccountSettingsSnapshot.resolveActiveAccountConfiguredExternalSessionSourceRevision(active, sources))
+          .toBe(sourceRevisionBefore);
+      }
+      expect(listener).not.toHaveBeenCalled();
+      configuredExternalSessionSourceRevisions.notifyActiveAccountConnectedServicesProjection('scope-a',
+        [{ pluginId: 'happier.agent.codex', localId: 'openai-codex' }]);
+      expect(activeAccountSettingsSnapshot.resolveActiveAccountConfiguredExternalSessionSourceRevision(active, sources))
+        .not.toBe(sourceRevisionBefore);
+      expect(getActiveAccountSettingsSnapshot()).toBe(active);
+      expect(resolveActiveAccountSettingsSnapshotRevision(active)).toBe(settingsRevisionBefore);
+      expect(listener).not.toHaveBeenCalled();
+    } finally { unsubscribe(); }
+  });
 
-    expect(getActiveAccountSettingsSnapshot()).toBe(active);
-    expect(resolveActiveAccountSettingsSnapshotRevision(active)).toBe(settingsRevisionBefore);
-    expect(
-      configuredExternalSessionSourceRevisions
-        .resolveActiveAccountConfiguredExternalSessionSourceRevision(active),
-    ).not.toBe(sourceRevisionBefore);
-    expect(listener).toHaveBeenCalledWith(active, active);
+  it('publishes a preference change without withdrawing settled catalogs during in-flight refreshes', () => {
+    const providerConnectionsCatalog = { status: 'ready' as const, revision: 7, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 };
+    const remoteHostCatalog = { status: 'ready' as const, revision: 4, hosts: [], diagnostics: [] };
+    setActiveAccountSettingsSnapshot({ ...snapshot({ scopeKey: 'scope-a', version: 1, timing: 'after_runtime_idle' }),
+      providerConnectionsCatalog, remoteHostCatalog });
+    const bound = { scopeKey: 'scope-a', lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
+    const publications: (activeAccountSettingsSnapshot.ActiveAccountSettingsSnapshot | null)[] = [];
+    const unsubscribe = subscribeActiveAccountSettingsSnapshot((_previous, next) => publications.push(next));
+    try {
+      activeAccountSettingsSnapshot.beginActiveProviderConnectionsCatalogRefresh(bound);
+      activeAccountSettingsSnapshot.beginActiveRemoteHostCatalogRefresh(bound);
+      commitActiveAccountSettingsSnapshot(snapshot({ scopeKey: 'scope-a', version: 2, timing: 'after_foreground_ready' }));
+      expect(publications).toHaveLength(1);
+      expect(publications[0]?.settings.sessionPendingQueueDeliveryTiming).toBe('after_foreground_ready');
+      expect(publications[0]?.providerConnectionsCatalog).toBe(providerConnectionsCatalog);
+      expect(publications[0]?.remoteHostCatalog).toBe(remoteHostCatalog);
+      expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toEqual({ status: 'loading' });
+      expect(getActiveAccountSettingsSnapshot()?.remoteHostCatalog).toEqual({ status: 'loading' });
+      activeAccountSettingsSnapshot.commitActiveProviderConnectionsCatalog({ ...bound, catalog: { ...providerConnectionsCatalog } });
+      activeAccountSettingsSnapshot.commitActiveRemoteHostCatalog({ ...bound, catalog: { ...remoteHostCatalog } });
+      expect(publications).toHaveLength(1);
+      commitActiveAccountSettingsSnapshot({ ...snapshot({ scopeKey: 'scope-a', version: 3, timing: 'after_foreground_ready' }),
+        settingsSecretsReadKeys: [new Uint8Array([1])] });
+      expect(publications).toHaveLength(2);
+      expect(publications[1]?.providerConnectionsCatalog).toEqual({ status: 'loading' });
+      expect(publications[1]?.remoteHostCatalog).toEqual({ status: 'loading' });
+      expect(activeAccountSettingsSnapshot.commitActiveProviderConnectionsCatalog({ ...bound, catalog: providerConnectionsCatalog })).toBe(false);
+    } finally { unsubscribe(); }
+  });
 
-    configuredExternalSessionSourceRevisions
-      .notifyActiveAccountConnectedServicesProjection('scope-b');
-    expect(listener).toHaveBeenCalledTimes(1);
-    unsubscribe();
+  it('notifies only configured source subscribers consuming the changed service, including recovery', () => {
+    const active = snapshot({ scopeKey: 'scope-a', version: 1, timing: 'after_runtime_idle' });
+    setActiveAccountSettingsSnapshot(active);
+    const sources = [{ sourceKind: 'codexHome', instances: [{ kind: 'connectedServiceProfiles', serviceId: 'openai-codex',
+      fields: { serviceId: 'service', profileId: 'profile' } }] }];
+    const connected = vi.fn();
+    const local = vi.fn();
+    const unsubscribeConnected = activeAccountSettingsSnapshot.subscribeActiveAccountConfiguredExternalSessionSourceRevision(connected, sources);
+    const unsubscribeLocal = activeAccountSettingsSnapshot.subscribeActiveAccountConfiguredExternalSessionSourceRevision(local);
+    try {
+      activeAccountSettingsSnapshot.notifyActiveAccountConnectedServicesProjection('scope-b');
+      activeAccountSettingsSnapshot.notifyActiveAccountConnectedServicesProjection('scope-a', []);
+      activeAccountSettingsSnapshot.notifyActiveAccountConnectedServicesProjection('scope-a', [{ pluginId: 'other.codex', localId: 'openai-codex' }]);
+      activeAccountSettingsSnapshot.notifyActiveAccountConnectedServicesProjection('scope-a', [{ pluginId: 'happier.voice.openai', localId: 'openai' }]);
+      expect(connected).not.toHaveBeenCalled();
+      activeAccountSettingsSnapshot.notifyActiveAccountConnectedServicesProjection('scope-a', [{ pluginId: 'happier.agent.codex', localId: 'openai-codex' }]);
+      expect(connected).toHaveBeenCalledTimes(1);
+      expect(connected).toHaveBeenLastCalledWith(activeAccountSettingsSnapshot.resolveActiveAccountConfiguredExternalSessionSourceRevision(active, sources));
+      activeAccountSettingsSnapshot.notifyActiveAccountConnectedServicesProjection('scope-a');
+      expect(connected).toHaveBeenCalledTimes(2);
+      expect(local).not.toHaveBeenCalled();
+      unsubscribeConnected();
+      activeAccountSettingsSnapshot.notifyActiveAccountConnectedServicesProjection('scope-a');
+      expect(connected).toHaveBeenCalledTimes(2);
+    } finally { unsubscribeConnected(); unsubscribeLocal(); }
   });
 });
