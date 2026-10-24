@@ -21,6 +21,8 @@ import { AutomationTriggerIdSchema, AutomationTriggerRevisionSchema } from './au
 import { AutomationPullRequestTriggerSchema } from './automationTriggerDefinition.js';
 import { SessionIdSchema } from '../sessions/idsV1.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
+import type { JsonValue } from '../json/strictJsonValue.js';
+import { defineProtocolJsonValue } from '../plugins/actions/protocolComposableSchema.js';
 
 export { AutomationIdV1Schema };
 export type { AutomationIdV1 } from './automationIdV1.js';
@@ -142,6 +144,8 @@ export const AutomationConversationAdmitInputV1Schema = lazyZodSchema(() => z.st
       context.addIssue({ code: "custom", message: 'Conversation text exceeds its UTF-8 byte limit' });
     }
   })),
+  /** Opaque source-admitted PR evidence; only a declared exact-name workflow input consumes it. */
+  prUpdate: z.optional(asProtocolZod(defineProtocolJsonValue<JsonValue>())),
   resultDelivery: AutomationConversationResultDeliveryV1Schema,
   hostEvidence: z.optional(AutomationConversationScopedTriggerEvidenceV1Schema),
 }));

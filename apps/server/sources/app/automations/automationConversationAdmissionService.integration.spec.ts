@@ -5,6 +5,8 @@ import {
     signAccountContentKeyBindingV1,
     MAX_NON_TERMINAL_EVENT_CONVERSATION_RUNS_PER_ACCOUNT,
     AutomationConversationAdmitInputV1Schema,
+    AutomationConversationOccurrenceEvidenceV1Schema,
+    AutomationStoredContentEnvelopeV1Schema,
     AutomationTriggerIdSchema,
     automationReplyHandoffIdForRunV1,
     buildAutomationConversationOccurrenceEvidenceV1,
@@ -13,6 +15,7 @@ import {
     deriveAutomationOccurrenceKeyV1,
     deriveAutomationOccurrenceTriggerEvidenceEqualityTagV1,
     normalizePluginReleaseFactsV1,
+    openAccountScopedBlobCiphertext,
     openAutomationConversationReplyContextStoredEnvelopeV1,
     parseAutomationRunExecutionRecipeV1,
     parseAutomationStoredDefinitionExecutionRecipeV1,
@@ -26,6 +29,7 @@ import {
     type AutomationConversationResultDeliveryV1,
     type AutomationConversationScopedTriggerEvidenceV1,
     type PluginJsonValueV2,
+    type JsonValue,
 } from "@happier-dev/protocol";
 
 import { db } from "@/storage/db";
@@ -318,6 +322,7 @@ function encryptedConversationHostEvidence(params: Readonly<{
     resultDelivery?: AutomationConversationResultDeliveryV1;
     scopedTrigger?: AutomationConversationScopedTriggerEvidenceV1;
     occurrenceId?: string;
+    prUpdate?: JsonValue;
 }>) {
     const resultDelivery = params.resultDelivery ?? { kind: "none" };
     const input = conversationInput({ resultDelivery });
@@ -333,6 +338,7 @@ function encryptedConversationHostEvidence(params: Readonly<{
         },
         sender: params.scopedTrigger === undefined ? input.sender : { principalId: params.scopedTrigger.observationActorPrincipalId },
         text: params.text ?? input.text,
+        ...(params.prUpdate === undefined ? {} : { prUpdate: params.prUpdate }),
         resultDelivery,
         hostEvidence: params.scopedTrigger,
     });
@@ -516,7 +522,7 @@ describe("Automation Conversation admission database boundary", () => {
 
     it.each([
         ['prComment', 'plain'], ['ciFailed', 'plain'], ['prComment', 'e2ee'], ['ciFailed', 'e2ee'],
-    ] as const)('admits %s writers in %s and retains one newest queued occurrence per trigger', async (triggerKind, mode) => {
+    ] as const)('admits %s writers in %s and retains every distinct queued occurrence per trigger', async (triggerKind, mode) => {
         const account = mode === 'e2ee' ? await configureE2eeAccount() : undefined;
         const scopedTrigger: AutomationConversationScopedTriggerEvidenceV1 = {
             bindingId: BINDING_ID, sessionId: 'session-scoped-pr', triggerId: AutomationTriggerIdSchema.parse('trigger-scoped-pr'), triggerRevision: 0, triggerKind,
@@ -527,6 +533,10 @@ describe("Automation Conversation admission database boundary", () => {
         const binding = { v: 1 as const, automationId: AUTOMATION_ID, triggerId: scopedTrigger.triggerId,
             triggerRevision: 0, triggerKind };
         const definition = { kind: triggerKind, pullRequest: scopedTrigger.pullRequest };
+        const prUpdate = { v: 1, bindingId: BINDING_ID, sessionId: scopedTrigger.sessionId,
+            pullRequest: scopedTrigger.pullRequest, head: { sha: 'head-42', ref: 'feature/pr-loop' },
+            events: [{ kind: 'comment', id: 'comment-7', revision: '1', occurredAt: 1,
+                author: { principalId: 'github:user:7', kind: 'person' }, body: 'The complete original review body' }] };
         const envelope = account ? sealAutomationTriggerDefinitionStoredEnvelopeV1({ mode: 'e2ee',
             material: account.snapshot.material, randomBytes: (length) => new Uint8Array(length).fill(17), binding, definition })
             : sealAutomationTriggerDefinitionStoredEnvelopeV1({ mode: 'plain', binding, definition });
@@ -535,13 +545,13 @@ describe("Automation Conversation admission database boundary", () => {
         const admit = async (evidence: AutomationConversationScopedTriggerEvidenceV1, occurrenceId = 'scoped-pr-first',
             sender: unknown = { principalId: evidence.observationActorPrincipalId }) => {
             if (!account) return await admitPlainAutomationConversationV1({ accountId: ACCOUNT_ID, caller,
-                input: { ...conversationInput({ resultDelivery: { kind: 'none' } }), occurrenceId, sender, hostEvidence: evidence } });
+                input: { ...conversationInput({ resultDelivery: { kind: 'none' } }), occurrenceId, sender, prUpdate, hostEvidence: evidence } });
             // The real admission host fetches currentness for each new effect;
             // admitting the previous occurrence advanced the Account sequence.
             const { seq: version } = await db.account.findUniqueOrThrow({ where: { id: ACCOUNT_ID }, select: { seq: true } });
             return await admitEncryptedAutomationConversationV1({ accountId: ACCOUNT_ID, caller,
                 hostEvidence: encryptedConversationHostEvidence({ account: { ...account,
-                    accountCurrentness: { ...account.accountCurrentness, version } }, nonceSeed: 19, scopedTrigger: evidence, occurrenceId }) });
+                    accountCurrentness: { ...account.accountCurrentness, version } }, nonceSeed: 19, scopedTrigger: evidence, occurrenceId, prUpdate }) });
         };
         for (const [repositoryWriteAccess, reason] of [[null, 'repositoryWriteAccessUnknown'], [false, 'repositoryWriteAccessDenied']] as const) {
             expect(await admit({ ...scopedTrigger, actor: { ...scopedTrigger.actor, repositoryWriteAccess } })).toEqual({
@@ -578,11 +588,19 @@ describe("Automation Conversation admission database boundary", () => {
         expect(await admit(scopedTrigger, 'scoped-pr-second')).toMatchObject({ kind: 'admitted', checkpointSafe: true });
         const runs = await db.automationRun.findMany({ where: { triggerId: scopedTrigger.triggerId } });
         expect(runs).toHaveLength(2);
-        expect(runs.find((run) => run.id === first.runId)).toMatchObject({ state: 'skipped', errorCode: 'superseded_by_newer_occurrence' });
-        expect(runs.filter((run) => run.state === 'queued')).toHaveLength(1);
+        expect(runs.find((run) => run.id === first.runId)).toMatchObject({ state: 'queued', errorCode: null });
+        expect(runs.filter((run) => run.state === 'queued')).toHaveLength(2);
+        for (const run of runs) {
+            const stored = AutomationStoredContentEnvelopeV1Schema.parse(JSON.parse(run.triggerEvidenceEnvelope!));
+            const opened = stored.t === 'plain' ? stored.v : account === undefined ? null : openAccountScopedBlobCiphertext({
+                kind: 'automation_trigger_evidence', material: account.snapshot.material, ciphertext: stored.c,
+            })?.value;
+            expect(AutomationConversationOccurrenceEvidenceV1Schema.parse(opened).input).toMatchObject({ prUpdate });
+            if (account) expect(JSON.stringify(run)).not.toContain('The complete original review body');
+        }
     });
 
-    it('keeps scoped Conversation work outside Account capacity while retaining its newest pending occurrence', async () => {
+    it('keeps scoped Conversation work outside Account capacity while retaining distinct pending occurrences', async () => {
         const unscopedAutomationId = 'automation-unscoped-capacity';
         await db.automation.create({ data: { id: unscopedAutomationId, accountId: ACCOUNT_ID, name: 'Unscoped capacity',
             targetType: 'execution_run', templateCiphertext: strictConversationRunRecipe(), templateVersion: 3,
@@ -616,8 +634,8 @@ describe("Automation Conversation admission database boundary", () => {
             .resolves.toMatchObject({ kind: 'admitted' });
         await expect(admitScoped('scoped-capacity-second')).resolves.toMatchObject({ kind: 'admitted' });
         await expect(db.automationRun.findUniqueOrThrow({ where: { id: first.runId }, select: { state: true, errorCode: true } }))
-            .resolves.toEqual({ state: 'skipped', errorCode: 'superseded_by_newer_occurrence' });
-        expect(await db.automationRun.count({ where: { triggerId: scopedTrigger.triggerId, state: 'queued' } })).toBe(1);
+            .resolves.toEqual({ state: 'queued', errorCode: null });
+        expect(await db.automationRun.count({ where: { triggerId: scopedTrigger.triggerId, state: 'queued' } })).toBe(2);
     });
 
     beforeAll(async () => {

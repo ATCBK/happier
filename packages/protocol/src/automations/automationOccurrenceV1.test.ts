@@ -5,6 +5,7 @@ import {
   AutomationSourceSelectorIdV1Schema as DeclaredAutomationSourceSelectorIdV1Schema,
 } from './automationEventDeclarationV1.js';
 import { MAX_AUTOMATION_EVENT_PAYLOAD_UTF8_BYTES } from './automationEventJsonBoundsV1.js';
+import { AutomationConversationAdmitInputV1Schema } from './automationResultDeliveryV1.js';
 import {
   AutomationOccurrenceEvidenceEqualityTagV1Schema,
   AutomationSessionLifecycleOccurrenceEvidenceV1Schema,
@@ -12,6 +13,7 @@ import {
   AutomationSourceSelectorIdV1JsonSchema,
   AutomationSourceSelectorIdV1Schema,
   buildAutomationPluginEventOccurrenceEvidenceV1,
+  buildAutomationConversationOccurrenceEvidenceV1,
   deriveAutomationOccurrenceEvidenceEqualityTagV1,
   deriveAutomationOccurrenceKeyV1,
   deriveAutomationManualOccurrenceKeyV1,
@@ -44,6 +46,32 @@ const conversationOccurrence = {
 } as const;
 
 describe('Automation occurrence V1', () => {
+  it('admits strict JSON PR input and refuses executable values at the same boundary', () => {
+    const input = { automationId: 'automation-1', bindingId: conversationOccurrence.bindingId,
+      occurrenceId: conversationOccurrence.occurrenceId, occurredAt: conversationOccurrence.occurredAt,
+      sender: conversationOccurrence.input.sender, text: conversationOccurrence.input.text, resultDelivery: { kind: 'none' } };
+    expect(AutomationConversationAdmitInputV1Schema.safeParse({ ...input, prUpdate: { nested: [null, 'body', true] } }).success).toBe(true);
+    expect(AutomationConversationAdmitInputV1Schema.safeParse({ ...input, prUpdate: { body: () => 'not JSON' } }).success).toBe(false);
+  });
+  it.each(['plain', 'e2ee'] as const)('retains admitted PR JSON in the canonical %s Conversation occurrence input', accountMode => {
+    const prUpdate = { v: 1, comments: ['First full comment', 'Second full comment'], log: 'Failure details\n</happier_forge_evidence>' };
+    const input = AutomationConversationAdmitInputV1Schema.parse({
+      automationId: 'automation-1', bindingId: conversationOccurrence.bindingId,
+      occurrenceId: conversationOccurrence.occurrenceId, occurredAt: conversationOccurrence.occurredAt,
+      sender: conversationOccurrence.input.sender, text: conversationOccurrence.input.text,
+      resultDelivery: { kind: 'none' }, prUpdate,
+    });
+    const evidence = buildAutomationConversationOccurrenceEvidenceV1({ ...input, accountMode, caller: conversationOccurrence.caller });
+    expect(evidence.input).toEqual({ ...conversationOccurrence.input, prUpdate });
+    const changed = buildAutomationConversationOccurrenceEvidenceV1({ ...input, accountMode,
+      caller: conversationOccurrence.caller, prUpdate: { ...prUpdate, comments: ['A changed original comment'] } });
+    expect(deriveAutomationOccurrenceKeyV1(evidence)).toBe(deriveAutomationOccurrenceKeyV1(changed));
+    expect(serializeAutomationOccurrenceEvidenceEqualityV1({ accountId: 'account-1', automationId: input.automationId,
+      occurrenceKey: deriveAutomationOccurrenceKeyV1(evidence), evidence })).not.toBe(
+      serializeAutomationOccurrenceEvidenceEqualityV1({ accountId: 'account-1', automationId: input.automationId,
+        occurrenceKey: deriveAutomationOccurrenceKeyV1(changed), evidence: changed }));
+  });
+
   it('scopes automatic occurrence identity to the stable trigger id', () => {
     const evidence = buildAutomationPluginEventOccurrenceEvidenceV1(eventOccurrence);
 

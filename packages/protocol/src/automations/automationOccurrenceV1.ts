@@ -51,6 +51,7 @@ import {
 } from './automationSessionLifecycle.js';
 import { AutomationRunLifecycleOccurrenceEvidenceV1Schema } from './automationRunLifecycle.js';
 import { WorkflowRunIdV1Schema } from '../workflows/workflowIdsV1.js';
+import type { JsonValue } from '../json/strictJsonValue.js';
 
 export {
   AutomationSourceSelectorIdV1JsonSchema,
@@ -290,6 +291,7 @@ export function buildAutomationConversationOccurrenceEvidenceV1(params: Readonly
   caller: AutomationConversationAdmissionCallerIdentityV1;
   sender: unknown;
   text: string;
+  prUpdate?: JsonValue;
   resultDelivery: AutomationConversationResultDeliveryV1;
   hostEvidence?: AutomationConversationScopedTriggerEvidenceV1;
 }>): AutomationConversationOccurrenceEvidenceV1 {
@@ -304,6 +306,7 @@ export function buildAutomationConversationOccurrenceEvidenceV1(params: Readonly
     input: {
       sender: params.sender,
       text: params.text,
+      ...(params.prUpdate === undefined ? {} : { prUpdate: params.prUpdate }),
     },
     replyContextIdentity: deriveAutomationConversationReplyContextIdentityV1({
       accountMode: params.accountMode,

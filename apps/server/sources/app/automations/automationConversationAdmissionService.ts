@@ -200,6 +200,7 @@ function buildConversationEvidence(params: Readonly<{
         },
         sender: params.input.sender,
         text: params.input.text,
+        ...(params.input.prUpdate === undefined ? {} : { prUpdate: params.input.prUpdate }),
         resultDelivery: params.input.resultDelivery,
         hostEvidence: params.input.hostEvidence,
     });

@@ -398,7 +398,13 @@ async function insertPreparedAutomationRunTx(params: Readonly<{
 }>): Promise<AutomationRunAdmissionResult> {
     const { request, cause, executionInputEnvelope, workflowDefinitionEnvelope, automation } = params.admission;
     const triggerId = cause.kind === "manual" ? undefined : cause.triggerId;
-    if (automation.scopeSessionId !== null && triggerId) {
+    // PR feedback and CI failures are distinct immutable occurrences, including
+    // while the Session is busy. Other scoped triggers keep their existing
+    // latest-pending policy. The scoped correspondence was admitted above;
+    // encrypted event bodies are never inspected to choose this policy.
+    const preservesPullRequestOccurrences = cause.kind === "conversation"
+        && request.scopedConversationTrigger !== undefined;
+    if (automation.scopeSessionId !== null && triggerId && !preservesPullRequestOccurrences) {
         const pending = await params.tx.automationRun.findMany({
             where: { accountId: params.accountId, triggerId, state: "queued" }, select: { id: true, workflowCustodyState: true },
         });
