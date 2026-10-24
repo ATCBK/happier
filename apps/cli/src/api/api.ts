@@ -1553,9 +1553,10 @@ export class ApiClient {
       serverId,
       serverHttpBaseUrl: resolveServerHttpBaseUrl(),
       capturedHomeIdentity: resolveServerProfileHomeIdentityId(serverId),
-      resolveServerFeaturesSnapshot: () => this.getCachedServerFeaturesSnapshot?.(),
+      // Ordinary runners own their connection snapshot; daemon clients may inject theirs.
+      resolveServerFeaturesSnapshot: () => client.getServerFeaturesSnapshot(),
     });
-    return new ApiSessionClient(this.credential.token, session, {
+    const client: ApiSessionClient = new ApiSessionClient(this.credential.token, session, {
       transport: createAccountSessionClientTransport(this.credential.token),
       metadataAuthority: sessionOptions.metadataAuthority
         ?? { kind: 'owner', credentials: this.credential, readCurrentCredentials: readStoredCredentials },
@@ -1586,6 +1587,7 @@ export class ApiClient {
       initialRegisteredSessionStateFieldMutations: sessionOptions.initialRegisteredSessionStateFieldMutations,
       durableMutationDeliveryInitiallyActive: sessionOptions.durableMutationDeliveryInitiallyActive,
     });
+    return client;
   }
 
   machineSyncClient(

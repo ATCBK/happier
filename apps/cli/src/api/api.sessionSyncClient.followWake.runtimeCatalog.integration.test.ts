@@ -17,6 +17,11 @@ import { CURRENT_MACHINE_OPERATION_PROTOCOL_CAPABILITIES_V1 } from './apiMachine
 import type { ApiSessionClient } from './session/sessionClient';
 import { configuration } from '@/configuration';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { SessionInputRequestV1Schema, SessionInputAdmissionReceiptV1Schema, withSessionInputRequest } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1, SessionPendingAdmissionSettlementRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 
 const { mockIo, readStoredCredentialsMock } = vi.hoisted(() => ({
   mockIo: vi.fn(),
@@ -38,6 +43,7 @@ describe('ApiClient ordinary Session Follow wake wiring', () => {
   beforeEach(() => {
     vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
     mockIo.mockReset();
+    resetActiveAccountSettingsSnapshotForTests();
     readStoredCredentialsMock.mockReset().mockResolvedValue({
       token: 'ordinary-account-token',
       encryption: null,
@@ -54,28 +60,65 @@ describe('ApiClient ordinary Session Follow wake wiring', () => {
     vi.unstubAllGlobals();
   });
 
-  it('binds the production captured-Home Discussion check-in reader into an ordinary Session client', async () => {
+  it.each(['daemon', 'session'] as const)('admits an addressed Discussion input using the %s feature owner through the production Session composition', async featureOwner => {
+    const credentials = { token: 'ordinary-account-token', encryption: null } as const;
+    const features = FeaturesResponseSchema.parse({ features: {
+      sessions: { enabled: true, autonomousExchange: { enabled: true }, conversations: { enabled: true } },
+      sharing: { enabled: true, session: { enabled: true } },
+    }, capabilities: { session: { pendingInput: { protocolVersion: 1 } } } });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(features)));
+    const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 3, participantSessionId: 'check-in-destination' };
+    const request = SessionInputRequestV1Schema.parse({ v: 1, producer: 'sessionAction', caller: { kind: 'host' },
+      sourceSession: { sourceSessionId: 'source-session', sourceTurnId: 'source-turn', sourceInputId: 'source-input', via: 'mcp' },
+      discussionAddressing: addressing, replyIntent: { mode: 'return' }, permission: { requestedPermissionCeiling: 'read-only' } });
+    const receipt = SessionInputAdmissionReceiptV1Schema.parse({ v: 1, issuer: 'authenticatedMachine', discussionAddressing: addressing,
+      admittedTarget: { homeId: configuration.activeServerId, accountId: 'owner', sessionId: 'check-in-destination', machineId: 'machine', installationId: 'installation' } });
+    const original = { id: 'original', seq: 1, localId: 'discussion-original', messageRole: 'user', createdAt: 1, updatedAt: 1,
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Answer this Discussion question' }, meta: withSessionInputRequest({}, request) } },
+      inputAdmissionReceipt: receipt };
+    vi.mocked(axios.get).mockImplementation(async url => String(url).includes('/messages/by-local-id/')
+      ? { status: 200, data: { message: original } }
+      : String(url).includes('/delivery-mutes') ? { status: 200, data: { scopes: [] } }
+        : String(url).includes('/v1/access-keys/') ? { status: 200, data: { accessKey: 'ordinary-machine-access' } }
+          : { status: 404, data: {} });
+    const decisions: unknown[] = [];
     const userSocket = createApiSessionSocketStub({ id: 'check-in-user' });
-    const sessionSocket = createApiSessionSocketStub({ id: 'check-in-session' });
+    const sessionSocket = createApiSessionSocketStub({ id: 'check-in-session', emitWithAck: (event, payload) => {
+      if (event !== SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1) return { ok: true };
+      const settlement = SessionPendingAdmissionSettlementRequestV1Schema.parse(payload);
+      decisions.push(settlement.decision);
+      return { v: 1, result: { status: 'accepted', localId: settlement.localId } };
+    } });
     bindApiSessionSocketSequenceMock(mockIo, [userSocket, sessionSocket]);
-    const api = await ApiClient.create({ token: 'ordinary-account-token', encryption: null });
-    api.setServerFeaturesSnapshotProvider(() => ({ status: 'ready', features: FeaturesResponseSchema.parse({
-      features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
-    }) }));
+    const api = await ApiClient.create(credentials);
+    if (featureOwner === 'daemon') api.setServerFeaturesSnapshotProvider(() => ({ status: 'ready', features }));
+    const beforeConnect = readSessionFollowWakeInvalidationGeneration();
     client = api.sessionSyncClient(createMockSession({ id: 'check-in-destination', encryptionMode: 'plain',
-      metadataLayoutVersion: 1, metadata: { v: 1 }, agentState: null }));
-    const reader: unknown = Reflect.get(client, 'readDiscussionAutonomousCheckIn');
-    expect(reader).toBeTypeOf('function');
-    if (typeof reader !== 'function') throw new Error('Production Discussion reader missing');
-    const request = vi.spyOn(axios, 'request').mockResolvedValue({ status: 200, data: {
+      metadataLayoutVersion: 1, metadata: { v: 1, machineId: 'machine' }, agentState: null }), { durableMutationDeliveryInitiallyActive: false });
+    await vi.waitFor(() => expect(sessionSocket.connected).toBe(true));
+    await vi.waitFor(() => expect(client?.getServerFeaturesSnapshot()?.status).toBe('ready'));
+    await vi.waitFor(() => expect(readSessionFollowWakeInvalidationGeneration()).toBe(beforeConnect + 1));
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+    const discussionRead = vi.spyOn(axios, 'request').mockResolvedValue({ status: 200, data: {
       discussionId: 'discussion', settings: { coordination: { autonomousCheckIn: { afterTurns: null } } },
     } });
-    expect(await reader({ serverId: configuration.activeServerId, discussionId: 'discussion' })).toEqual({ afterTurns: null });
-    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+    const featureReads = vi.mocked(fetch).mock.calls.length;
+    const input = { localId: original.localId, discussionAddressing: addressing, signal: new AbortController().signal };
+    const outcome = await client.reconcileSessionInputForProviderDispatch(input);
+    expect({ outcome, discussionReads: discussionRead.mock.calls.length, settlements: decisions.length })
+      .toEqual({ outcome: 'admitted', discussionReads: 1, settlements: 1 });
+    expect(decisions).toEqual([expect.objectContaining({ kind: 'admit', validation: expect.objectContaining({ autonomousCheckIn: { afterTurns: null } }) })]);
+    expect(discussionRead).toHaveBeenCalledOnce();
+    expect(discussionRead).toHaveBeenCalledWith(expect.objectContaining({
       url: expect.stringContaining('/v1/discussions/discussion/settings'),
       headers: expect.objectContaining({ Authorization: 'Bearer ordinary-account-token' }),
     }));
-    expect(await reader({ serverId: 'another-home', discussionId: 'discussion' })).toBeNull();
+    // A real unreadable policy must still fail closed, without submitting a new settlement.
+    discussionRead.mockResolvedValue({ status: 503, data: {} });
+    expect(await client.reconcileSessionInputForProviderDispatch(input)).toBe('outcomeUnknown');
+    expect(decisions).toHaveLength(1);
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(featureReads);
   });
 
   it('backs advertised wake support with exact Session invalidation and reconnect consumers when V2 changes are disabled', async () => {
