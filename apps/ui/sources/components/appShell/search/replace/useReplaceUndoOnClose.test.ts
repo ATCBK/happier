@@ -104,7 +104,7 @@ describe('useReplaceUndoOnClose', () => {
       },
     });
     homes.answer(scope.serverId, '/v1/machines', { body: [boundary.machine] });
-    for (const path of ['/v1/actions/workspace.files.replace/execution-authorization', '/v1/actions/workspace.files.replace']) {
+    for (const path of ['/v1/machines/read-batch', '/v1/actions/workspace.files.replace/execution-authorization', '/v1/actions/workspace.files.replace']) {
       homes.answer(scope.serverId, path, { select: async (_body, request) => {
         const response = await boundary.handle(new URL(request.url), request.init);
         if (!response) throw new Error('Unhandled replacement Action request');
