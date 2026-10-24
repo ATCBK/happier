@@ -67,6 +67,7 @@ export const StatusBar = Object.assign(function StatusBar(_props: StatusBarProps
 
 export const Dimensions = {
     get: () => ({ width: 800, height: 600, scale: 2, fontScale: 1 }),
+    addEventListener: (_event: 'change', _listener: () => void) => ({ remove: () => {} }),
 } as const;
 
 export const PixelRatio = {
@@ -84,6 +85,10 @@ export const Platform = {
 } as const;
 export const I18nManager = {
     isRTL: false,
+    getConstants: () => ({ isRTL: false, doLeftAndRightSwapInRTL: true }),
+} as const;
+export const UIManager = {
+    getViewManagerConfig: (_name: string) => null,
 } as const;
 export const AppState = {
     currentState: 'active',
@@ -104,6 +109,8 @@ export const BackHandler = {
 export const Linking = {
     canOpenURL: async () => true,
     openURL: async () => {},
+    getInitialURL: async (): Promise<string | null> => null,
+    addEventListener: (_eventName: 'url', _listener: (event: { url: string }) => void) => ({ remove: () => {} }),
 } as const;
 function flattenStyle(style: any): any {
     if (style == null) return style;
@@ -153,6 +160,10 @@ export function useAnimatedValue(initialValue: number): AnimatedValue {
 
 export const Animated = {
     Value: AnimatedValue as any,
+    add: (left: number | Readonly<{ __getValue(): number }>, right: number | Readonly<{ __getValue(): number }>) => ({
+        __getValue: () => (typeof left === 'number' ? left : left.__getValue())
+            + (typeof right === 'number' ? right : right.__getValue()),
+    }),
     subtract: (left: number | Readonly<{ __getValue(): number }>, right: number | Readonly<{ __getValue(): number }>) => ({
         __getValue: () => (typeof left === 'number' ? left : left.__getValue())
             - (typeof right === 'number' ? right : right.__getValue()),

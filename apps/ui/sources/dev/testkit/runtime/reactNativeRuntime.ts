@@ -110,7 +110,7 @@ export async function createReactNativeNativeRuntime(
             baseAnimated as PlainObject,
             animatedOverrides as PlainObject | undefined,
         ),
-        I18nManager: { isRTL: false, ...(restOverrides.I18nManager as PlainObject | undefined) },
+        I18nManager: { ...stub.I18nManager, ...(restOverrides.I18nManager as PlainObject | undefined) },
         Platform: mergeObjectsPreservingDescriptors(
             basePlatform as PlainObject,
             (platformOverrides as PlainObject | undefined) ?? undefined,
