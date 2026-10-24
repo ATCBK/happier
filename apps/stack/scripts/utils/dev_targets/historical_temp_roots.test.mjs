@@ -207,6 +207,25 @@ test('owner-supplied staging candidates reuse historical custody and retain mapp
   assert.throws(() => reapHistoricalTempRoots(parent, proc, { candidateNames: ['../mapped-output'] }), /candidate/);
 });
 
+test('dry-run measures verified eligible roots without deleting or changing their bytes', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-retention-measurement-' });
+  const parent = join(root, 'cache'), proc = join(root, 'proc');
+  const candidate = join(parent, 'happier-obsolete');
+  await mkdir(candidate, { recursive: true });
+  await mkdir(proc);
+  await writeFile(join(candidate, 'data'), 'x'.repeat(8192));
+  const old = new Date(Date.now() - 48 * 3600000);
+  await utimes(join(candidate, 'data'), old, old);
+  await utimes(candidate, old, old);
+  const result = reapHistoricalTempRoots(parent, proc, { dryRun: true });
+  assert.equal(result.reclaimedRoots, 0);
+  assert.equal(result.reclaimableRoots, 1);
+  await access(candidate);
+  const removed = reapHistoricalTempRoots(parent, proc);
+  assert.equal(result.reclaimableBytes, removed.reclaimedBytes);
+  assert.equal(removed.reclaimedRoots, 1);
+});
+
 test('count-retention owners can reclaim recent unheld candidates while retaining another uid', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-count-retention-' });
   const parent = join(root, 'cache'), proc = join(root, 'proc');

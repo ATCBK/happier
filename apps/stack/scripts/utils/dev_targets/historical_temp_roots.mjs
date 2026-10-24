@@ -121,9 +121,10 @@ function hasUser(directory, tree, references) {
 }
 
 export function reapHistoricalTempRoots(tempParent, procRoot = '/proc', {
-  candidateNames, ownerUid = process.getuid(), minimumAgeMs = historicalAgeMs,
+  candidateNames, ownerUid = process.getuid(), minimumAgeMs = historicalAgeMs, dryRun = false, retainCandidate,
 } = {}) {
-  const result = { reclaimedBytes: 0, reclaimedRoots: 0, retainedRoots: 0, observationUnavailable: null };
+  const result = { reclaimedBytes: 0, reclaimedRoots: 0, retainedRoots: 0, observationUnavailable: null,
+    reclaimableBytes: 0, reclaimableRoots: 0 };
   const parent = realpathSync(tempParent);
   const cutoff = Date.now() - minimumAgeMs;
   const candidates = [];
@@ -172,10 +173,13 @@ export function reapHistoricalTempRoots(tempParent, procRoot = '/proc', {
       // replacement inode never inherits this candidate's deletion authority.
       const current = inspectTree(directory, new Set(), ownerUid);
       if (identity(current.info) !== identity(tree.info) || current.newestMtimeMs >= cutoff || current.ownedRootActive
-        || hasUser(directory, current, processReferences(procRoot, ownerUid))) {
+        || hasUser(directory, current, processReferences(procRoot, ownerUid)) || retainCandidate?.(directory)) {
         result.retainedRoots++;
         continue;
       }
+      result.reclaimableRoots++;
+      result.reclaimableBytes += current.bytes;
+      if (dryRun) continue;
       rmSync(directory, { recursive: true });
       result.reclaimedRoots++;
       result.reclaimedBytes += current.bytes;
