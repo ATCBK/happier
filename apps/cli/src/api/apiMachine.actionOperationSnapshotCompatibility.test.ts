@@ -98,6 +98,39 @@ describe('Action operation snapshot producer compatibility', () => {
     await publisher(failed);
     expect(emit).not.toHaveBeenCalled();
   });
+  it('collapses queued revisions to the terminal snapshot instead of delivering stale progress first', async () => {
+    const accountId = 'plain-account';
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    let releaseModeRead: (() => void) | undefined;
+    const modeRead = new Promise<void>(resolve => { releaseModeRead = resolve; });
+    const get = vi.spyOn(axios, 'get').mockImplementationOnce(async () => {
+      await modeRead;
+      return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+    }).mockResolvedValue({ status: 200, data: { mode: 'plain', updatedAt: 1 } });
+    const publishContent = vi.fn();
+    const publisher = createActionOperationSnapshotPublisher({ resolveAccountId: async () => accountId,
+      serverBaseUrl: 'https://home.example', readCredentials: async () => ({ token, encryption: null }), publishContent });
+    const accepted: ActionOperationSnapshotV1 = { version: 1, operationId: 'power', revision: 1,
+      actionId: 'machines.managed.power.set', state: 'accepted', scope: { accountId, machineId: 'controller' },
+      title: 'Suspend', createdAt: 1, cancellation: 'supported' };
+    const running: ActionOperationSnapshotV1 = { ...accepted, revision: 2, state: 'running', startedAt: 2 };
+    const progress: ActionOperationSnapshotV1 = { ...running, revision: 3,
+      progress: { kind: 'phase', phase: 'managed.intent.native-effect', label: 'Applying native machine intent' } };
+    const succeeded: ActionOperationSnapshotV1 = { ...progress, revision: 4, state: 'succeeded', settledAt: 4,
+      result: { managedId: 'managed' } };
+
+    const publications = [publisher(accepted), publisher(running), publisher(progress), publisher(succeeded)];
+    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    expect(publishContent).not.toHaveBeenCalled();
+    releaseModeRead!();
+    await Promise.all(publications);
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(publishContent.mock.calls.map(([content]) => content.t === 'plain' ? content.v : null)).toEqual([
+      projectActionOperationSnapshotForV1Reader(accepted),
+      projectActionOperationSnapshotForV1Reader(succeeded),
+    ]);
+  });
   it('publishes rich owner observations through the closed predecessor reader without changing current custody', async () => {
     const accountId = 'account-a';
     const token = `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;

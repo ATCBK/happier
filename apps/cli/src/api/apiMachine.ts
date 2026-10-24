@@ -543,39 +543,78 @@ export function createActionOperationSnapshotPublisher(input: Readonly<{
     readCredentials: typeof readStoredCredentials;
     publishContent(content: import('@happier-dev/protocol/actions/operations/v1').ActionOperationRevisionEphemeralV1['content']): void;
 }>) {
-    let pending = Promise.resolve();
-    return (snapshot: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1): Promise<void> => {
-        pending = pending.then(async () => {
-            const credentials = await input.readCredentials().catch(() => null);
-            if (!credentials) return;
-            const accountId = await input.resolveAccountId();
-            if (!accountId || snapshot.scope.accountId !== accountId || readAccountIdFromToken(credentials.token) !== accountId) {
+    type Snapshot = import('@happier-dev/protocol/actions').ActionOperationSnapshotV1;
+    const queued = new Map<string, Snapshot>();
+    let draining: Promise<void> | null = null;
+    const publishBatch = async (snapshots: readonly Snapshot[]): Promise<void> => {
+        const credentials = await input.readCredentials().catch(() => null);
+        if (!credentials) return;
+        const accountId = await input.resolveAccountId();
+        if (!accountId || readAccountIdFromToken(credentials.token) !== accountId) {
+            logger.warn('Withheld Action operation snapshot because the credential Account differs from the machine connection Account');
+            return;
+        }
+        const admitted = snapshots.filter(snapshot => snapshot.scope.accountId === accountId);
+        if (admitted.length !== snapshots.length) {
+            logger.warn('Withheld Action operation snapshot because the credential Account differs from the machine connection Account');
+        }
+        if (admitted.length === 0) return;
+        const accountMode = await readAccountEncryptionModeOnce({ scope: { token: credentials.token, serverBaseUrl: input.serverBaseUrl }, request: () => axios.get(
+            `${input.serverBaseUrl.replace(/\/+$/, '')}/v1/account/encryption`, {
+                headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${credentials.token}` },
+                timeout: resolveConnectedServicesServerApiTimeoutMs(), validateStatus: () => true,
+            },
+        ) });
+        if (accountMode.kind !== 'resolved') return;
+        const currentCredentials = await input.readCredentials().catch(() => null);
+        if (!isDeepStrictEqual(currentCredentials, credentials)) {
+            if (currentCredentials && readAccountIdFromToken(currentCredentials.token) !== accountId) {
                 logger.warn('Withheld Action operation snapshot because the credential Account differs from the machine connection Account');
-                return;
             }
-            const accountMode = await readAccountEncryptionModeOnce({ scope: { token: credentials.token, serverBaseUrl: input.serverBaseUrl }, request: () => axios.get(
-                `${input.serverBaseUrl.replace(/\/+$/, '')}/v1/account/encryption`, {
-                    headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${credentials.token}` },
-                    timeout: resolveConnectedServicesServerApiTimeoutMs(), validateStatus: () => true,
-                },
-            ) });
-            if (accountMode.kind !== 'resolved') return;
-            const currentCredentials = await input.readCredentials().catch(() => null);
-            if (!isDeepStrictEqual(currentCredentials, credentials)) return;
-            if (accountMode.mode === 'plain') {
+            return;
+        }
+        if (accountMode.mode === 'plain') {
+            for (const snapshot of admitted) {
                 input.publishContent({ t: 'plain', v: projectActionOperationSnapshotForV1Reader(snapshot) });
-                return;
             }
-            if (!credentials.encryption) return;
-            const material = credentials.encryption.type === 'legacy'
-                ? { type: 'legacy' as const, secret: credentials.encryption.secret }
-                : { type: 'dataKey' as const, machineKey: credentials.encryption.machineKey };
+            return;
+        }
+        if (!credentials.encryption) return;
+        const material = credentials.encryption.type === 'legacy'
+            ? { type: 'legacy' as const, secret: credentials.encryption.secret }
+            : { type: 'dataKey' as const, machineKey: credentials.encryption.machineKey };
+        for (const snapshot of admitted) {
             input.publishContent({ t: 'encrypted', c: sealAccountScopedBlobCiphertext({
                 kind: 'action_operation_snapshot', material, payload: projectActionOperationSnapshotForV1Reader(snapshot),
                 randomBytes: (length) => new Uint8Array(randomBytes(length)),
             }) });
-        }).catch((error) => logger.warn('Failed to publish Action operation snapshot', { error: serializeAxiosErrorForLog(error) }));
-        return pending;
+        }
+    };
+    const drain = async (): Promise<void> => {
+        while (queued.size > 0) {
+            const batch = [...queued.values()];
+            queued.clear();
+            try {
+                await publishBatch(batch);
+            } catch (error) {
+                logger.warn('Failed to publish Action operation snapshot', { error: serializeAxiosErrorForLog(error) });
+            }
+        }
+    };
+    const ensureDrain = (): Promise<void> => {
+        if (draining) return draining;
+        draining = drain().then(async () => {
+            draining = null;
+            // A revision queued between the drain's final empty check and this
+            // continuation belongs to the same publication promise.
+            if (queued.size > 0) await ensureDrain();
+        });
+        return draining;
+    };
+    return (snapshot: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1): Promise<void> => {
+        const queuedSnapshot = queued.get(snapshot.operationId);
+        if (!queuedSnapshot || snapshot.revision > queuedSnapshot.revision) queued.set(snapshot.operationId, snapshot);
+        return ensureDrain();
     };
 }
 
