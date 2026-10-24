@@ -1,7 +1,11 @@
-import type { ComponentType, ReactElement, ReactNode } from 'react';
+import { useState, type ComponentType, type ReactElement, type ReactNode } from 'react';
 import { View } from 'react-native';
 
+import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
 import { HAPPIER_SPACE_STEPS } from '../../environment/spacing.js';
+
+/** A returned answer longer than this many lines of its body text is clipped behind Show more. */
+const RETURNED_ANSWER_BODY_LINES = 8;
 
 /** How the asked session ended its answer: it answered, passed, or returned no answer. */
 export type HappierReturnedAnswerOutcome =
@@ -69,8 +73,17 @@ export type HappierReturnedAnswerQuoteProps = Readonly<{
     secondaryText: string;
     danger: string;
     border: string;
+    /** The card's in-flow fill (the host's inset surface); without it the quote is a rail only. */
+    surface?: string;
   }>;
-  space?: Readonly<Record<'s2' | 's6' | 's8' | 's12', number>>;
+  /** The card's corner; defaults to the shared card step. */
+  radius?: number;
+  /**
+   * Bounds a long answer to a few lines of the caller's body text (`lineHeight`) with a Show more /
+   * Show less control under it. The full answer stays reachable; an answer that fits is drawn whole.
+   */
+  collapse?: Readonly<{ lineHeight: number; showMore: string; showLess: string }>;
+  space?: Readonly<Record<'s2' | 's6' | 's8' | 's10' | 's12', number>>;
 }>;
 
 /**
@@ -99,8 +112,10 @@ export function HappierReturnedAnswerQuote(
         alignSelf: 'stretch',
         borderLeftWidth: 2,
         borderLeftColor: colors.border,
-        paddingLeft: space.s12,
-        paddingVertical: space.s2,
+        borderRadius: props.radius ?? HAPPIER_RADIUS_V1.xl,
+        backgroundColor: colors.surface,
+        paddingHorizontal: space.s12,
+        paddingVertical: space.s10,
         gap: space.s6,
         minWidth: 0,
       }}
@@ -112,25 +127,35 @@ export function HappierReturnedAnswerQuote(
             {props.answerer}
           </Text>
         </View>
-        <Text
-          role="meta"
-          color={failed ? colors.danger : colors.secondaryText}
-          numberOfLines={1}
-          testID={id('outcome')}
-        >
-          {labels.outcome[props.outcome]}
-        </Text>
+        <View style={{ flexShrink: 0 }}>
+          <Text
+            role="meta"
+            color={failed ? colors.danger : colors.secondaryText}
+            testID={id('outcome')}
+          >
+            {labels.outcome[props.outcome]}
+          </Text>
+        </View>
         <View style={{ flex: 1 }} />
         {props.onOpenAnswerer ? (
-          <Action
-            label={labels.open}
-            onPress={props.onOpenAnswerer}
-            testID={id('open')}
-          />
+          <View style={{ flexShrink: 0 }}>
+            <Action
+              label={labels.open}
+              onPress={props.onOpenAnswerer}
+              testID={id('open')}
+            />
+          </View>
         ) : null}
       </View>
       {props.children ? (
-        <View style={{ minWidth: 0 }}>{props.children}</View>
+        <ReturnedAnswerBody
+          collapse={props.collapse}
+          Action={Action}
+          gap={space.s6}
+          testID={id('body')}
+        >
+          {props.children}
+        </ReturnedAnswerBody>
       ) : null}
       <View style={row}>
         {props.informationMark}
@@ -158,6 +183,50 @@ export function HappierReturnedAnswerQuote(
           row={row}
           testID={id('questionState')}
         />
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The answer, drawn whole when it fits a few lines of its body text and clipped to them when it does not.
+ * The clip applies from the first paint, until the answer is measured, so a long answer never paints full length
+ * first and shrinks on arrival.
+ */
+function ReturnedAnswerBody(
+  props: Readonly<{
+    collapse: HappierReturnedAnswerQuoteProps['collapse'];
+    Action: ComponentType<HappierReturnedAnswerQuoteActionProps>;
+    gap: number;
+    testID?: string;
+    children: ReactNode;
+  }>,
+): ReactElement {
+  const { collapse, Action } = props;
+  const [expanded, setExpanded] = useState(false);
+  const [naturalHeight, setNaturalHeight] = useState(0);
+  if (!collapse) return <View style={{ minWidth: 0 }}>{props.children}</View>;
+  const maxHeight = RETURNED_ANSWER_BODY_LINES * collapse.lineHeight;
+  const overflowing = naturalHeight > maxHeight;
+  return (
+    <View style={{ minWidth: 0, gap: props.gap }}>
+      <View
+        testID={props.testID}
+        style={expanded ? { minWidth: 0 } : { minWidth: 0, maxHeight, overflow: 'hidden' }}
+      >
+        <View onLayout={(event) => setNaturalHeight(event.nativeEvent.layout.height)}>
+          {props.children}
+        </View>
+      </View>
+      {overflowing ? (
+        <View style={{ alignSelf: 'flex-start' }}>
+          <Action
+            label={expanded ? collapse.showLess : collapse.showMore}
+            expanded={expanded}
+            onPress={() => setExpanded((value) => !value)}
+            testID={props.testID ? `${props.testID}.fold` : undefined}
+          />
+        </View>
       ) : null}
     </View>
   );

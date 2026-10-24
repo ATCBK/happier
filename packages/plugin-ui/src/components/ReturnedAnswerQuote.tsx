@@ -36,8 +36,13 @@ export function ReturnedAnswerQuote(props: ReturnedAnswerQuoteProps): ReactEleme
   const theme = usePluginTheme();
   const translate = usePluginTranslation();
   return <HappierReturnedAnswerQuote {...props} Text={QuoteText} Action={QuoteAction}
+    collapse={{
+      lineHeight: theme.typography.reading.lineHeight,
+      showMore: translate(`${KEY}.showMore`, 'Show more'),
+      showLess: translate(`${KEY}.showLess`, 'Show less'),
+    }}
     informationMark={<Icon name="info" size="small" tone="secondary" />}
-    colors={{ text: theme.colors.text, secondaryText: theme.colors.secondaryText, danger: theme.colors.danger, border: theme.colors.divider }}
+    colors={{ text: theme.colors.text, secondaryText: theme.colors.secondaryText, danger: theme.colors.danger, border: theme.colors.divider, surface: theme.colors.surface }}
     labels={{
       outcome: {
         answer: translate(`${KEY}.outcome.answer`, 'answered'),
