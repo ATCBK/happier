@@ -177,7 +177,8 @@ describe('ToolFullView as the tool-details page', () => {
       expect(headerOutcome(screen)).toBe(toolActionOutcomeLabel('refused'));
       const visible = collectHostText(screen.tree).join('\n');
       expect(visible).toContain(`approvals.status.${disposition}`);
-      expect(visible).toContain('toolView.actionOutcome.refusedReason');
+      // A person's rejection or a cancel is not Happier refusing the call: the row says only the request's outcome.
+      expect(visible).not.toContain('toolView.actionOutcome.refusedReason');
       expect(visible).not.toContain('toolView.approvalRequested.title');
       expect(visible).not.toContain('toolView.approvalRequested.description');
       const link = screen.tree.root.findAll((node) => node.props.testID === 'tool-details-approval-request'
