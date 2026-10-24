@@ -329,8 +329,11 @@ An explicitly required status report keeps its live invocation in the existing
 blocking approval flow until the write executes or approval is refused. The
 shared SDK Actions adapter joins identical in-flight reports from the same
 source service and cancellation lifetime, so repeated wakes observe the same
-pending approval. A returned report acknowledges publication, not merely an
-approval request. Refusals return to the source's existing recovery cadence.
+pending approval. A returned report acknowledges an accepted status, not merely
+an approval request. After currentness admission, equal source or catalog facts
+do not advance their status revision or publish an Account-change wake. New
+occurrence timestamps, counter deltas and changed reporter or status facts still
+publish. Refusals return to the source's existing recovery cadence.
 
 In 0.3 development source, an `approval_stale` failure retains the failed
 authority or custody fact as `execution.details.reason` on its approval Artifact.
