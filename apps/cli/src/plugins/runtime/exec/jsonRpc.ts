@@ -191,7 +191,7 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
     const requestHandlers = new Map<string, JsonRpcRequestHandlerV1>();
     const notificationHandlers = new Map<string, JsonRpcNotificationHandlerV1>();
     const notificationSubscribers = new Set<(message: Readonly<{ method: string; params?: unknown }>) => void | Promise<void>>();
-    const maxFrameBytes = params.maxFrameBytes ?? DEFAULT_JSON_RPC_MAX_FRAME_BYTES;
+    const maxFrameBytes = params.maxFrameBytes;
     let nextId = 1;
     let disposedError: Error | null = null;
     let detachLineReader: () => void = () => undefined;
@@ -217,7 +217,7 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
             return false;
         }
         const encoded = JSON.stringify(nextMessage);
-        if (Buffer.byteLength(encoded, 'utf8') > maxFrameBytes) {
+        if (maxFrameBytes !== undefined && Buffer.byteLength(encoded, 'utf8') > maxFrameBytes) {
             throw createFrameSizeError(maxFrameBytes, readStderrPreview());
         }
         await params.write(params.framing === 'contentLength'
@@ -402,7 +402,7 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
         if (line.trim().length === 0) {
             return;
         }
-        if (Buffer.byteLength(line) > maxFrameBytes) {
+        if (maxFrameBytes !== undefined && Buffer.byteLength(line) > maxFrameBytes) {
             rejectOversizedFrame(line, maxFrameBytes);
             return;
         }

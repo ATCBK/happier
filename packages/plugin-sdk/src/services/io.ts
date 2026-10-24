@@ -186,7 +186,15 @@ export type PluginLoopbackWebSocketClientSpec =
         maxFrameBytes: number;
     }>;
 export type PluginProtocolClientSpec =
-    | Readonly<{ kind: 'jsonRpc'; launch: PluginExecSpawnRequest; framing: 'jsonLines' | 'contentLength'; maxFrameBytes: number; requestTimeoutMs?: number; cancellationMethod?: string }>
+    | Readonly<{
+        kind: 'jsonRpc';
+        launch: PluginExecSpawnRequest;
+        framing: 'jsonLines' | 'contentLength';
+        /** An explicit caller-owned frame budget; omitted means no payload-size cap. */
+        maxFrameBytes?: number;
+        requestTimeoutMs?: number;
+        cancellationMethod?: string;
+    }>
     | Readonly<{ kind: 'jsonStream'; launch: PluginExecSpawnRequest; maxFrameBytes: number }>
     | Readonly<{ kind: 'framedBytes'; launch: PluginExecSpawnRequest; framing: 'lengthPrefix' | 'contentLength'; maxFrameBytes: number }>
     | PluginLoopbackWebSocketClientSpec;

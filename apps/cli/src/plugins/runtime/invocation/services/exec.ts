@@ -1693,7 +1693,9 @@ export function createStablePluginExecService(params: Readonly<{
         options?: { signal?: AbortSignal },
     ): Promise<PluginProtocolClientHandle> {
         try {
-            if (!Number.isSafeInteger(spec.maxFrameBytes) || spec.maxFrameBytes <= 0) {
+            if (spec.maxFrameBytes === undefined
+                ? spec.kind !== 'jsonRpc'
+                : !Number.isSafeInteger(spec.maxFrameBytes) || spec.maxFrameBytes <= 0) {
                 return fail('plugin_exec_invalid_limit', 'maxFrameBytes must be a positive safe integer');
             }
             if (spec.kind === 'jsonRpc' && spec.requestTimeoutMs !== undefined && (

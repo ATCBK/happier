@@ -29,7 +29,6 @@ describe('SVC08 public exec contract', () => {
             kind: 'jsonRpc',
             launch: { executable: { kind: 'systemTool', id: 'fixture.tool' } },
             framing: 'jsonLines',
-            maxFrameBytes: 1024,
         }).then((handle) => handle.client);
         expectTypeOf<ReturnType<typeof compileAuthor>>().toEqualTypeOf<Promise<PluginJsonRpcClient>>();
 

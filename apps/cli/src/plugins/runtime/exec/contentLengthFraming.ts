@@ -1,5 +1,4 @@
 const HEADER_TERMINATOR = Buffer.from('\r\n\r\n', 'ascii');
-const MAX_HEADER_BYTES = 8 * 1024;
 
 export function encodeContentLengthFrame(frame: Uint8Array): Buffer {
     return Buffer.concat([
@@ -12,7 +11,7 @@ export function attachContentLengthFrameReader(
     stream: NodeJS.ReadableStream,
     onFrame: (frame: Uint8Array) => void,
     options: Readonly<{
-        maxFrameBytes: number;
+        maxFrameBytes?: number;
         onError(error: Error): void;
         onTrailingPartialFrame(frame: Uint8Array): void;
     }>,
@@ -43,24 +42,25 @@ export function attachContentLengthFrameReader(
 
     const readHeader = (): boolean => {
         const terminatorIndex = buffer.indexOf(HEADER_TERMINATOR);
-        if (terminatorIndex < 0) {
-            if (buffer.byteLength > MAX_HEADER_BYTES) fail('Content-length frame header exceeded its size limit');
+        if (terminatorIndex < 0) return false;
+        const header = buffer.subarray(0, terminatorIndex);
+        if (header.some((byte) => byte > 0x7f)) {
+            fail('Content-length frame header must use ASCII encoding');
             return false;
         }
-        if (terminatorIndex > MAX_HEADER_BYTES) {
-            fail('Content-length frame header exceeded its size limit');
-            return false;
-        }
-        const lines = buffer.subarray(0, terminatorIndex).toString('ascii').split('\r\n');
-        const lengths = lines
-            .map((line) => /^content-length\s*:\s*([0-9]+)\s*$/iu.exec(line)?.[1])
-            .filter((value): value is string => value !== undefined);
+        const lines = header.toString('ascii').split('\r\n');
+        const lengths = lines.filter((line) => /^content-length\s*:/iu.test(line));
         if (lengths.length !== 1) {
             fail('Content-length frame requires exactly one Content-Length header');
             return false;
         }
-        const length = Number(lengths[0]);
-        if (!Number.isSafeInteger(length) || length < 0 || length > options.maxFrameBytes) {
+        const lengthMatch = /^content-length\s*:\s*([0-9]+)\s*$/iu.exec(lengths[0]!);
+        const length = lengthMatch ? Number(lengthMatch[1]) : Number.NaN;
+        if (!Number.isSafeInteger(length) || length < 0) {
+            fail('Content-length frame requires a non-negative safe integer length');
+            return false;
+        }
+        if (options.maxFrameBytes !== undefined && length > options.maxFrameBytes) {
             fail(`Content-length frame exceeded the configured size limit (${options.maxFrameBytes} bytes)`);
             return false;
         }

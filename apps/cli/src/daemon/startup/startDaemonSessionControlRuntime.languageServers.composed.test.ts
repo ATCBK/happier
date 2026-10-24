@@ -6,7 +6,6 @@ import { join, resolve } from 'node:path';
 import type { PluginProtocolClientHandle } from '@happier-dev/plugin-sdk/exec/protocol-clients';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createStablePluginExecService } from '@/plugins/runtime/invocation/services/exec';
-import { DEFAULT_JSON_RPC_MAX_FRAME_BYTES } from '@/plugins/runtime/exec/jsonRpc';
 import { readSupervisedPluginProcessIdForHost } from '@/plugins/runtime/exec/processSupervisor';
 import { configureLanguageServerHost, disposeLanguageServerHost, getLanguageServerHost } from '@/lsp/languageServerHost';
 import { readProcessOwnershipBootTimeMs } from '@/daemon/processes/roots/listHappierProcessRoots';
@@ -46,7 +45,7 @@ it('projects admitted language-server custody through the real requester resolve
                 resolveExecutable: async () => ({ command: process.execPath, args: [resolve('src/lsp/__fixtures__/languageServer.cjs'), log] }),
                 resolvePath: async () => rootPath });
             handle = await exec.clients.spawn({ kind: 'jsonRpc', framing: 'contentLength', cancellationMethod: '$/cancelRequest',
-                maxFrameBytes: DEFAULT_JSON_RPC_MAX_FRAME_BYTES, launch: { executable: input.definition.executable, cwd: rootPath } });
+                launch: { executable: input.definition.executable, cwd: rootPath } });
             return handle;
         } });
         // These are authenticated Home / host-private Action boundary facts,

@@ -75,7 +75,6 @@ describe('cleanupAndShutdown', () => {
             const { configureLanguageServerHost, getLanguageServerHost, disposeLanguageServerHost } = await import('@/lsp/languageServerHost');
             const { createResolvedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
             const { createStablePluginExecService } = await import('@/plugins/runtime/invocation/services/exec');
-            const { DEFAULT_JSON_RPC_MAX_FRAME_BYTES } = await import('@/plugins/runtime/exec/jsonRpc');
             const { readSupervisedPluginProcessIdForHost } = await import('@/plugins/runtime/exec/processSupervisor');
             const { isPidAlive } = await import('@/testkit/process/spawn');
             const log = join(homeDir, 'messages.jsonl');
@@ -97,7 +96,7 @@ describe('cleanupAndShutdown', () => {
                     resolvePath: async () => homeDir,
                 });
                 const handle = await service.clients.spawn({ kind: 'jsonRpc', framing: 'contentLength',
-                    maxFrameBytes: DEFAULT_JSON_RPC_MAX_FRAME_BYTES, cancellationMethod: '$/cancelRequest',
+                    cancellationMethod: '$/cancelRequest',
                     launch: { executable: input.definition.executable, cwd: homeDir } });
                 handles.push(handle);
                 return handle;

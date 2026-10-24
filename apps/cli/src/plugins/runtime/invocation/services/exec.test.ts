@@ -1524,11 +1524,14 @@ describe('createStablePluginExecService', () => {
         expect(release).toHaveBeenCalledTimes(1);
     });
 
-    it('rejects invalid protocol limits before launching a child process', async () => {
+    it.each([
+        { kind: 'jsonRpc', framing: 'jsonLines' },
+        { kind: 'jsonStream' },
+    ] as const)('rejects invalid $kind protocol limits before launching a child process', async (spec) => {
         const service = createService();
 
         await expect(service.clients.spawn({
-            kind: 'jsonStream',
+            ...spec,
             launch: { executable },
             maxFrameBytes: 0,
         })).rejects.toMatchObject({ code: 'plugin_exec_invalid_limit', execLaunch: 'notStarted', data: { execLaunch: 'notStarted' } });
@@ -1579,7 +1582,7 @@ describe('createStablePluginExecService', () => {
         });
     });
 
-    it('returns the JSON-RPC client selected by the literal protocol spec kind', async () => {
+    it('round-trips multi-MiB JSON-RPC through the supervised service without a frame budget', async () => {
         const service = createService();
         const handle = await service.clients.spawn({
             kind: 'jsonRpc',
@@ -1595,11 +1598,14 @@ describe('createStablePluginExecService', () => {
                 ].join('')],
             },
             framing: 'jsonLines',
-            maxFrameBytes: 4096,
         });
 
-        await expect(handle.client.request('fixture/echo', { value: 7 })).resolves.toEqual({ value: 7 });
-        await handle.dispose();
+        try {
+            const payload = { text: 'λ'.repeat(1024 * 1024 + 1) };
+            await expect(handle.client.request('fixture/echo', payload)).resolves.toEqual(payload);
+        } finally {
+            await handle.dispose();
+        }
         expect((await handle.wait()).termination.requestedBy).toEqual({ kind: 'dispose', reason: 'caller' });
     });
 
