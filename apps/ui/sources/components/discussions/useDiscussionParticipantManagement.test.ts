@@ -6,6 +6,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { DiscussionInviteRequestV1Schema, DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { DiscussionAccessGrantMutationResponseV1Schema, DiscussionLeaveResponseV1Schema } from '@happier-dev/protocol/discussions/access';
 import { DiscussionModelParticipantLaunchV1Schema } from '@happier-dev/protocol/discussions/modelParticipantLaunch';
+import { DiscussionErrorResponseV1Schema } from '@happier-dev/protocol/discussions/api';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { resolveSessionModelLabel } from '@/sync/domains/models/modelOptions';
@@ -70,6 +71,58 @@ function modelParticipant(serverId: string, participantSlotId = 'retained-slot',
     return { participant: { kind: 'model' as const, participantSlotId }, launch,
         sessionId, answerPolicy: 'when_addressed' as const, createdAt: 1 };
 }
+
+it('re-admits equal rosters without loading or publishing unchanged participants, while policy, membership and revocation stay current', async () => {
+    const f = await fixture();
+    const { publishMountedDiscussionChanges } = await import('@/sync/domains/discussions/discussionChangeWatch');
+    const rows = Array.from({ length: 1000 }, (_, index) => ({ participant: { kind: 'session' as const, sessionId: `session-${index}` },
+        answerPolicy: 'when_addressed' as const, createdAt: 1 }));
+    f.setParticipants(rows);
+    await act(async () => { await f.hook.getCurrent().refresh(); });
+    const baseline = f.hook.getCurrent().roster!;
+    let rosterPublications = 0;
+    const statuses: string[] = [];
+    const unsubscribe = f.hook.subscribe(() => {
+        const value = f.hook.getCurrent();
+        statuses.push(value.status);
+        if (value.roster !== baseline) rosterPublications++;
+    });
+    const invalidate = (cursor: number, discussionId = baseline.discussionId) => publishMountedDiscussionChanges({
+        serverId: f.serverId, accountId: 'alice', changes: [{ kind: 'discussion', entityId: discussionId, cursor, changedAt: cursor, hint: null }],
+    });
+    const reads = () => homes.requestsFor(`${f.path}/participants`).length;
+    try {
+        const before = reads();
+        await act(async () => invalidate(1, 'other-discussion'));
+        expect(reads()).toBe(before);
+        for (let cursor = 1; cursor <= 8; cursor++) {
+            await act(async () => invalidate(cursor));
+            await vi.waitFor(() => expect(reads()).toBe(before + cursor));
+            await vi.waitFor(() => expect(f.hook.getCurrent().status).toBe('ready'));
+        }
+        expect(statuses).not.toContain('loading');
+        expect(rosterPublications).toBe(0);
+        unsubscribe();
+        f.setParticipants([{ ...rows[1]!, answerPolicy: 'reads_only' }, rows[0]!]);
+        f.setOwner('bob');
+        await act(async () => invalidate(10));
+        await vi.waitFor(() => expect(f.hook.getCurrent().roster?.ownerAccountId).toBe('bob'));
+        const changed = f.hook.getCurrent().roster!;
+        expect(changed.access).toBe('admin');
+        expect(changed.participants).toHaveLength(2);
+        expect(changed.participants[0]?.answerPolicy).toBe('reads_only');
+        expect(changed.participants[1]).toBe(baseline.participants[0]);
+        expect(changed.grants).toBe(baseline.grants);
+        homes.answer(f.serverId, `${f.path}/participants`, { status: 403,
+            body: DiscussionErrorResponseV1Schema.parse({ error: 'discussion_read_denied' }) });
+        await act(async () => invalidate(11));
+        await vi.waitFor(() => expect(f.hook.getCurrent().status).toBe('error'));
+        expect(f.hook.getCurrent().roster).toBeNull();
+    } finally {
+        unsubscribe();
+        await f.hook.unmount();
+    }
+});
 
 it('does not restore a removed participant when an older invalidation read arrives late', async () => {
     const f = await fixture();

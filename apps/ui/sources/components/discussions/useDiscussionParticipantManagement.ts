@@ -11,8 +11,31 @@ import type { SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/cre
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { resolveExecutableModelParticipantDisplay } from '@/components/sessions/authoring/useExecutableParticipantLabel';
 import { watchMountedDiscussions } from '@/sync/domains/discussions/discussionChangeWatch';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 type Participant = DiscussionParticipantsListResponseV1['participants'][number];
+function retainRosterRows<T>(previous: T[], incoming: T[], key: (row: T) => string): T[] {
+    const byKey = new Map(previous.map(row => [key(row), row]));
+    const rows = incoming.map(row => {
+        const known = byKey.get(key(row));
+        return known !== undefined && sameStrictJsonValue(known, row) ? known : row;
+    });
+    return rows.length === previous.length && rows.every((row, index) => row === previous[index]) ? previous : rows;
+}
+
+/** Admitted roster rows keep their identity across fresh reads and membership reordering. */
+function reconcileRoster(previous: DiscussionParticipantsListResponseV1, incoming: DiscussionParticipantsListResponseV1): DiscussionParticipantsListResponseV1 {
+    const participants = retainRosterRows(previous.participants, incoming.participants, row => row.participant.kind === 'session'
+        ? `session:${row.participant.sessionId}` : `model:${row.participant.participantSlotId}`);
+    const grants = retainRosterRows(previous.grants, incoming.grants, row => {
+        const principal = row.principal;
+        return JSON.stringify(principal.kind === 'account' ? [principal.kind, principal.accountId]
+            : principal.kind === 'team' ? [principal.kind, principal.teamId] : [principal.kind, principal.teamId, principal.groupId]);
+    });
+    return participants === previous.participants && grants === previous.grants
+        && previous.ownerAccountId === incoming.ownerAccountId && previous.access === incoming.access
+        && previous.discussionId === incoming.discussionId ? previous : { ...incoming, participants, grants };
+}
 type PolicyParticipant = Parameters<DiscussionRepository['setParticipantPolicy']>[0]['participant'];
 type RemovedParticipant = Parameters<DiscussionRepository['removeParticipant']>[0]['participant'];
 type Intent =
@@ -81,7 +104,8 @@ export function useDiscussionParticipantManagement(input: Readonly<{
     const latestRead = React.useRef<ReturnType<DiscussionRepository['participants']> | null>(null);
     const refresh = React.useCallback(async (signal?: AbortSignal) => {
         if (!isCurrent() || !accountLifetime || signal?.aborted) return;
-        setLoad({ accountLifetime, discussionId, status: 'loading', errorCode: null });
+        setLoad(previous => previous?.accountLifetime === accountLifetime && previous.discussionId === discussionId
+            && previous.errorCode === null ? previous : { accountLifetime, discussionId, status: 'loading', errorCode: null });
         const read = repository.participants(discussionId, signal);
         latestRead.current = read;
         try {
@@ -89,8 +113,14 @@ export function useDiscussionParticipantManagement(input: Readonly<{
             // An earlier read cannot undo a newer membership/policy admission.
             if (latestRead.current !== read || !isCurrent() || signal?.aborted) return;
             if (outcome.kind === 'succeeded') {
-                setProjection({ accountLifetime, discussionId, roster: outcome.value });
-                setLoad({ accountLifetime, discussionId, status: 'ready', errorCode: null });
+                setProjection(previous => {
+                    const sameDiscussion = previous?.accountLifetime === accountLifetime && previous.discussionId === discussionId;
+                    const roster = sameDiscussion ? reconcileRoster(previous.roster, outcome.value) : outcome.value;
+                    return sameDiscussion && roster === previous.roster ? previous : { accountLifetime, discussionId, roster };
+                });
+                setLoad(previous => previous?.accountLifetime === accountLifetime && previous.discussionId === discussionId
+                    && previous.status === 'ready' && previous.errorCode === null ? previous
+                    : { accountLifetime, discussionId, status: 'ready', errorCode: null });
             } else {
                 if (repository.getSnapshot().threads[discussionId]?.status === 'revoked') setProjection(null);
                 setLoad({ accountLifetime, discussionId, status: 'error', errorCode: outcome.kind === 'failed' ? outcome.errorCode : 'approval_request_created' });
