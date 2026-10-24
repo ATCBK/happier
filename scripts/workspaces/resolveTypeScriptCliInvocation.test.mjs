@@ -98,6 +98,48 @@ test('runner checks, recovers incrementally and switches to Microsoft without sh
   assert.ok(existsSync(fixture.path('check.tsbuildinfo')));
 });
 
+test('first-party plugin typechecks reject existing undeclared package subpaths before shipping', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-plugin-export-boundary-' });
+  const runner = fileURLToPath(new URL('./runTypeScriptCli.mjs', import.meta.url));
+  const packageName = '@happier-dev/devplug-export-contract';
+  const dependency = fixture.path('node_modules', packageName);
+  await mkdir(join(dependency, 'src'), { recursive: true });
+  await writeFile(join(dependency, 'package.json'), JSON.stringify({
+    name: packageName, type: 'module',
+    exports: { './public': { types: './src/public.ts', default: './src/public.ts' } },
+  }));
+  await writeFile(join(dependency, 'src/public.ts'), 'export const value: number = 1;\n');
+  await writeFile(join(dependency, 'src/private.ts'), 'export const value: number = 2;\n');
+  await mkdir(fixture.path('src'));
+  for (const plugin of ['channels', 'channel-email']) {
+    const authored = JSON.parse(await readFile(new URL(`../../packages/plugins/${plugin}/tsconfig.json`, import.meta.url), 'utf8'));
+    const config = {
+      ...authored,
+      compilerOptions: { ...authored.compilerOptions, types: [], incremental: false,
+        rootDir: './src', outDir: './dist', tsBuildInfoFile: undefined },
+      files: ['src/index.ts'], include: [], exclude: [],
+    };
+    assert.equal(config.compilerOptions.moduleResolution, 'Bundler');
+    await writeFile(fixture.path('tsconfig.json'), JSON.stringify(config));
+    for (const compiler of ['auto', 'microsoft']) {
+      const check = () => spawnSync(process.execPath, [runner, '--noEmit', '-p', 'tsconfig.json', '--pretty', 'false'], {
+        cwd: fixture.root, encoding: 'utf8',
+        env: { ...process.env, HAPPIER_TYPESCRIPT_COMPILER: compiler },
+      });
+      await writeFile(fixture.path('src/index.ts'), `export { value } from '${packageName}/public';\n`);
+      const declared = check();
+      assert.ifError(declared.error);
+      assert.equal(declared.status, 0, `${plugin}/${compiler}: ${declared.stdout}\n${declared.stderr}`);
+      await writeFile(fixture.path('src/index.ts'), `export { value } from '${packageName}/private';\n`);
+      const undeclared = check();
+      assert.ifError(undeclared.error);
+      assert.equal(undeclared.status, 2, `${plugin}/${compiler}: ${undeclared.stdout}\n${undeclared.stderr}`);
+      assert.match(undeclared.stdout, /src\/index\.ts\(1,23\): error TS2307/);
+      assert.match(undeclared.stdout, new RegExp(`${packageName}/private`));
+    }
+  }
+});
+
 test('compiler leaf uses the package admission policy instead of escalating CLI to the UI envelope', () => {
   const workspaceDir = fileURLToPath(new URL('../../', import.meta.url));
   for (const component of ['cli', 'ui', 'server']) {
