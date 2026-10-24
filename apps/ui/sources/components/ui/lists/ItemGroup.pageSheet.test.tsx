@@ -245,7 +245,7 @@ function rowSeams(screen: Screen, rowTestIds: readonly string[]): Array<{ start:
     });
 }
 
-describe('Page row seams start at the text and stop at the trailing inset (P7-R2)', () => {
+describe('Page row seams start at the text and run to the sheet trailing edge (P7-R2)', () => {
     it('insets every seam of a section that reserves the leading column at its titles, mixed icon and plain rows alike', async () => {
         const { ItemGroup, Item, ListPresentationProvider } = await loadModules();
         const { PAGE_LIST_METRICS } = await import('./pageListMetrics');
@@ -265,8 +265,8 @@ describe('Page row seams start at the text and stop at the trailing inset (P7-R2
         );
         const inset = PAGE_LIST_METRICS.rowPaddingHorizontalPx;
         const text = inset + PAGE_LIST_METRICS.rowLeadingColumnPx + PAGE_LIST_METRICS.rowLeadingGapPx;
-        expect(rowSeams(screen, ['row-a', 'row-b', 'row-c'])).toEqual([{ start: text, end: inset }, { start: text, end: inset }, null]);
-        expect(rowSeams(screen, ['row-d', 'row-e'])).toEqual([{ start: inset, end: inset }, null]);
+        expect(rowSeams(screen, ['row-a', 'row-b', 'row-c'])).toEqual([{ start: text, end: 0 }, { start: text, end: 0 }, null]);
+        expect(rowSeams(screen, ['row-d', 'row-e'])).toEqual([{ start: inset, end: 0 }, null]);
     });
 
     it('lays an index section flat on the page: no card fill, lip or grounding, the same text-inset seams', async () => {
@@ -287,7 +287,7 @@ describe('Page row seams start at the text and stop at the trailing inset (P7-R2
         expect(paints.some((style) => style.borderBottomColor === theme.colors.edge.surface)).toBe(false);
         expect(paints.some((style) => style.boxShadow === theme.colors.shadowCard.boxShadow)).toBe(false);
         const inset = PAGE_LIST_METRICS.rowPaddingHorizontalPx;
-        expect(rowSeams(screen, ['row-a'])).toEqual([{ start: inset, end: inset }]);
+        expect(rowSeams(screen, ['row-a'])).toEqual([{ start: inset, end: 0 }]);
         expect(rowDividers(screen, ['row-a'])).toEqual([theme.colors.border.subtle]);
     });
 });
