@@ -330,8 +330,8 @@ export function buildTranscriptRowShellSignature(params: Readonly<{
         // F-P2 (2026-08-10): HEIGHT-bearing presentation only, not visible-state. The J/D2 fix above
         // stopped serializing the record and keyed on `getPendingMessageVisualState(...).kind`
         // instead — but that kind is a STATUS, and the chrome it selects splits in two: the status
-        // chip is `position: 'absolute'` (`pendingAffordanceChip`) and cannot move the row at all,
-        // while `blockedDeliveryNotice` is in flow. In THIS repository the chip is the only thing the
+        // chip paints one constant line on the action band (`pendingStatusRow`) whatever the state, so it
+        // cannot move the row, while `blockedDeliveryNotice` is in flow and varies. In THIS repository the chip is the only thing the
         // other states select — the whole `queuedReason` vocabulary is painted INSIDE that chip — so
         // a plain send (`saving → send_unconfirmed → queued → delivering`) moved this key several
         // times with the painted box byte-identical, and every move deleted the row's measured size
