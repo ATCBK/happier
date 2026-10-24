@@ -52,6 +52,7 @@ import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAre
 import { BaseModal } from '@/modal/components/BaseModal';
 import { ModalCardFrame } from '@/modal/components/card/ModalCardFrame';
 import { FloatingOverlaySheetContext } from '@/components/ui/overlays/FloatingOverlay';
+import { GlassOpenedLayer } from '@/components/ui/glass/GlassSurface';
 
 const ViewWithWheel = View as unknown as React.ComponentType<ViewProps & { onWheel?: any }>;
 
@@ -2003,8 +2004,9 @@ function AnchoredPopover(props: PopoverProps) {
 
     // A repeated native geometry measurement can revisit this component without changing
     // the public layout. Keep the content render tied to that layout, not the measurement.
+    // The popover is a floating layer opened over its anchor's surface, never in that surface's flow.
     const renderedChildren = React.useMemo(() => shouldRender
-        ? children({ ...computed, maxWidth: contentMaxWidth, requestClose })
+        ? <GlassOpenedLayer>{children({ ...computed, maxWidth: contentMaxWidth, requestClose })}</GlassOpenedLayer>
         : null, [children, computed, contentMaxWidth, requestClose, shouldRender]);
     const content = shouldRender ? (
         <EscapeLayerProvider layer={escapeLayer}>

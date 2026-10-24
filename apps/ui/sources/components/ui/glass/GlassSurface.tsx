@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, StyleSheet, View, type StyleProp, type ViewStyle, type ViewProps } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { HappierMaterialRoleProvider, HappierSurfaceGradientLayer, happierSurfaceGradientWebStyle, happierSurfaceFinishLift, resolveHappierSurfaceFinish, type HappierSurfaceGradient, type HappierSurfaceFinishRole, type HappierMaterialSurfaceRender } from '@happier-dev/plugin-ui/presentation';
+import { HappierMaterialRoleProvider, HappierOpenedLayer, HappierSurfaceGradientLayer, happierSurfaceGradientWebStyle, happierSurfaceFinishLift, resolveHappierSurfaceFinish, type HappierSurfaceGradient, type HappierSurfaceFinishRole, type HappierMaterialSurfaceRender } from '@happier-dev/plugin-ui/presentation';
 import { resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
 
@@ -25,9 +25,25 @@ const withMaterialOpacity = (color: string, opacity: number) => parseThemeColor(
 
 // The containing material owns its plane. Lists inside a floating surface inherit that paint
 // instead of covering only the body with an opaque fill and leaving separate header/footer bands.
-const GlassSurfaceGroupContext = React.createContext<Readonly<{ group: GlassSurfaceGroup; finish: boolean; translucent: boolean; cleared: boolean }> | null>(null);
+// `openedOver` marks a floating layer opened from inside this surface (a popover, a menu, a field's
+// choices). React context still flows through the layer's portal, but the layer is not in this surface's
+// flow: its first surface stands on its own paint instead of inheriting this one.
+const GlassSurfaceGroupContext = React.createContext<Readonly<{ group: GlassSurfaceGroup; finish: boolean; translucent: boolean; cleared: boolean; openedOver?: true }> | null>(null);
 export function useContainingGlassSurfaceGroup(): GlassSurfaceGroup | null {
     return React.useContext(GlassSurfaceGroupContext)?.group ?? null;
+}
+
+/**
+ * The boundary of a floating layer opened from inside a surface (the popover owner places it). A surface
+ * directly in the layer is never nested in the opener's material, whatever it asks: it paints its own floating material (solid over another
+ * floating surface, so glass never stacks on glass), and surfaces inside it nest in it as usual.
+ */
+export function GlassOpenedLayer(props: Readonly<{ children: React.ReactNode }>): React.ReactNode {
+    const containing = React.useContext(GlassSurfaceGroupContext);
+    const opened = React.useMemo(() => containing ? { ...containing, openedOver: true as const } : null, [containing]);
+    // The public material plane (plugin surfaces) takes the same boundary, so its finish follows suit.
+    const layer = <HappierOpenedLayer>{props.children}</HappierOpenedLayer>;
+    return opened ? <GlassSurfaceGroupContext.Provider value={opened}>{layer}</GlassSurfaceGroupContext.Provider> : layer;
 }
 
 /**
@@ -108,6 +124,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     const styleBackground = readSurfaceStyleProperty(props.style, 'backgroundColor');
     const borderRadius = readSurfaceStyleProperty(props.style, 'borderRadius');
     const containingSurface = React.useContext(GlassSurfaceGroupContext);
+    const nested = props.nested === true && containingSurface?.openedOver !== true;
     // Sidebar- and chrome-held Elements (the sidebar's list sheets) sit one quiet step above their plane
     // in the page colour; the card lift belongs to Elements on the page.
     const shellHeld = group === 'card' && (containingSurface?.group === 'sidebar' || containingSurface?.group === 'chrome');
@@ -120,7 +137,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     const environment = shellUnbacked
         ? { ...runtimeEnvironment, atmosphereBehind: 'none' as const, desktopWindow: false, nativeWindowMaterialLive: false } : runtimeEnvironment;
     const finishRole = props.finishRole === undefined ? (group === 'floating' ? 'floating' : null) : props.finishRole;
-    const inheritsFinish = props.nested === true && containingSurface?.group === group && containingSurface?.finish === true;
+    const inheritsFinish = nested && containingSurface?.group === group && containingSurface?.finish === true;
     const gradient = finishRole ? (props.gradient === undefined
         ? resolveThemeSurfaceFinish(theme, finishRole, undefined, inheritsFinish)
         : resolveHappierSurfaceFinish({ role: finishRole, gradients: { [finishRole]: props.gradient }, nested: inheritsFinish })) : null;
@@ -162,7 +179,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     // A floating surface opened from inside another (Inputs over the Run now panel, a select in a dialog)
     // has controls behind it, not atmosphere: under every named preset it stands on its own floating paint
     // rather than blurring them into a haze (glass is never stacked on glass). A Custom table applies as set.
-    const overFloating = group === 'floating' && props.nested !== true && containingSurface?.group === 'floating'
+    const overFloating = group === 'floating' && !nested && containingSurface?.group === 'floating'
         && readGlassPreset(settings) !== 'custom';
     const enabled = props.enabled !== false && !overFloating;
     const capability = !enabled || props.atmosphereCoat === 'opaque' || (transparentPlane && Platform.OS !== 'web')
@@ -177,7 +194,7 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
             settings,
             surfaceGroup: group,
         });
-    const inheritsTranslucentMaterial = props.nested === true && containingSurface?.group === group && containingSurface?.translucent === true && material.opacity < 1 && enabled;
+    const inheritsTranslucentMaterial = nested && containingSurface?.group === group && containingSurface?.translucent === true && material.opacity < 1 && enabled;
 
     let nativeBackdrop: React.ReactNode = null;
     if (!inheritsTranslucentMaterial && capability === 'liquidGlass') {
@@ -268,19 +285,19 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     const paint = props.plane === true
         // The same CSS-to-RN-web boundary as the functional surface's backdrop below.
         ? { ...glassSurfacePlaneBackdropStyle(settings, group, theme.dark, effectiveEnvironment, props.atmosphereCoat),
-            backgroundColor: glassSurfaceBackgroundColor(solidColor, group, props.nested, true, props.atmosphereCoat ? material.opacity : undefined) } as unknown as ViewStyle
+            backgroundColor: glassSurfaceBackgroundColor(solidColor, group, nested, true, props.atmosphereCoat ? material.opacity : undefined) } as unknown as ViewStyle
         : inheritsTranslucentMaterial ? { backgroundColor: 'transparent' }
         : capability === 'webBlur'
         // `createBackdropWebStyle` returns web `CSSProperties` (backdrop-filter + -webkit- prefix +
         // tint); cast to the RN-web `ViewStyle` at this web boundary.
         ? createBackdropWebStyle({
-            backgroundColor: glassSurfaceBackgroundColor(tintColor, group, group === 'card' ? false : props.nested, false, panelCoatOpacity),
+            backgroundColor: glassSurfaceBackgroundColor(tintColor, group, group === 'card' ? false : nested, false, panelCoatOpacity),
             blurPx: props.blurIntensity === undefined ? GLASS_BLUR_RADIUS_PX[material.blur as keyof typeof GLASS_BLUR_RADIUS_PX] : Math.round(intensity / 5),
             surfaceGroup: group,
             backdropTone: inheritsTranslucentMaterial ? undefined : backdropTone,
         }) as unknown as ViewStyle
         : { backgroundColor: !enabled || (group === 'card' && material.opacity === 1) ? solidColor
-            : glassSurfaceBackgroundColor(group === 'card' ? tintColor : solidColor, group, group === 'card' ? false : props.nested, false) };
+            : glassSurfaceBackgroundColor(group === 'card' ? tintColor : solidColor, group, group === 'card' ? false : nested, false) };
     return (
         <View {...viewProps} style={[props.style, { backgroundColor: 'transparent' }, finishLift, backedInkStyle]}>
             {/* Native View types omit RN-web's dataSet; this branch is the web boundary. */}

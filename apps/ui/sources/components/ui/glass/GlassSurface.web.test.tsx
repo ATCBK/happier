@@ -820,6 +820,32 @@ describe('web glass material', () => {
             expect(paints().length).toBeGreaterThanOrEqual(1);
         }
     });
+    it('paints a surface opened over a translucent dialog (a field\'s choices) on its own floating paint, even when it asks to be nested', async () => {
+        const { GlassMaterialSettingsProvider } = await import('./useGlassMaterialSettings');
+        const { glassPresetMaterials } = await import('./glassMaterial');
+        const { GlassOpenedLayer, renderThemeMaterialSurface } = await import('./GlassSurface');
+        const { HappierSurface } = await import('@happier-dev/plugin-ui/presentation');
+        const { lightTheme } = await import('@/theme');
+        const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
+            <GlassSurface surfaceGroup="floating" floatingRole="panel">
+                <DraftInput />
+                {/* The popover portal keeps the dialog's React context; the layer boundary is all that separates them. */}
+                <GlassOpenedLayer>
+                    <HappierSurface testID="choices" materialRole="floating" nested renderMaterialSurface={renderThemeMaterialSurface}>{null}</HappierSurface>
+                    <GlassSurface testID="menu" surfaceGroup="floating" nested>{null}</GlassSurface>
+                </GlassOpenedLayer>
+            </GlassSurface>
+        </GlassMaterialSettingsProvider>);
+        // The dialog itself stays glass.
+        expect(screen.findAll(hasBackdrop)).toHaveLength(1);
+        for (const id of ['choices', 'menu']) {
+            const surface = screen.findAll(node => typeof node.type === 'string' && node.props.testID === id)[0]!;
+            const paint = surface.findAll(node => typeof node.type === 'string' && node.props.dataSet?.happyGlassBackdrop === 'true')[0]!;
+            // Its own opaque floating paint: never the dialog's (transparent) coat, never glass stacked on glass.
+            expect(flattenTestStyle(paint.props.style)?.backgroundColor).toBe(lightTheme.colors.edge.floatingFill);
+            expect(hasBackdrop(paint)).toBe(false);
+        }
+    });
     it('lets secondary action ink sit on the containing translucent material instead of an opaque slab', async () => {
         const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
         const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
