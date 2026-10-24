@@ -2,7 +2,9 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { computerTargetKeyV1, type ComputerAccessV1 } from '@happier-dev/protocol/computer/v1';
+import { HappierRadioMark } from '@happier-dev/plugin-ui/presentation';
 
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Switch } from '@/components/ui/forms/Switch';
@@ -145,6 +147,7 @@ function TargetRows(props: Readonly<{
     testID: string;
 }>): React.ReactElement | null {
     const { theme } = useUnistyles();
+    const presentationTheme = usePluginUiTheme(theme);
     if (props.entries.length === 0) return null;
     return (
         <ItemGroup
@@ -185,11 +188,7 @@ function TargetRows(props: Readonly<{
                         rightElement={props.mark === 'check' ? (
                             selected ? <Icon name="check" size={ICON_SIZE.md} color={theme.colors.text.primary} /> : undefined
                         ) : (
-                            <Icon
-                                name={selected ? 'radio-button' : 'circle'}
-                                size={ICON_SIZE.md}
-                                color={selected ? theme.colors.accent.blue : theme.colors.text.tertiary}
-                            />
+                            <HappierRadioMark selected={selected} theme={presentationTheme} />
                         )}
                         onPress={() => props.onSelect(key)}
                         showChevron={false}
