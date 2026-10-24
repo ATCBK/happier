@@ -125,6 +125,27 @@ describe('Linux machine vitals reader', () => {
         expect(MachineVitalsSampleV1Schema.safeParse(second.sample).success).toBe(true);
     });
 
+    it('does not re-read non-directory bind mounts as volumes during a settled minute', async () => {
+        const f = await fixture();
+        await f.put('/etc/hosts', '127.0.0.1 localhost\n');
+        await f.put('/proc/self/mountinfo', [
+            '1 0 8:1 / / rw - ext4 /dev/sda rw',
+            '2 1 8:2 / /data rw - ext4 /dev/sdb rw',
+            '3 1 8:3 /container/hosts /etc/hosts rw - ext4 /dev/sdc rw',
+            '',
+        ].join('\n'));
+        const capacityReads: string[] = [];
+        const reader = createLinuxMachineVitalsReader({ root: f.root, homePath: '/home/cua', statfs: async path => {
+            capacityReads.push(path);
+            return { bsize: 4096, blocks: 1000, bfree: 500, bavail: 400, files: 100, ffree: 50 };
+        } });
+
+        for (let sample = 0; sample < 30; sample++) await reader.read(input(sample * 2000));
+
+        expect(capacityReads.filter(path => path.endsWith('/etc/hosts')),
+            'non-directory volume capacity reads per settled minute').toHaveLength(0);
+    });
+
     it('does not charge reclaimable cache against resident apps and kernel in the used-memory composition', async () => {
         const f = await fixture();
         await f.put('/proc/meminfo', 'MemTotal: 100000 kB\nMemAvailable: 70000 kB\nMemFree: 20000 kB\nBuffers: 2000 kB\nCached: 45000 kB\nSReclaimable: 5000 kB\nAnonPages: 27000 kB\nShmem: 1000 kB\nSlab: 6000 kB\nKernelStack: 100 kB\nPageTables: 400 kB\n');
@@ -303,6 +324,7 @@ describe('Linux machine vitals reader', () => {
 
     it('deduplicates mounts by device and uses unprivileged bytes, reserved bytes and inode exhaustion', async () => {
         const f = await fixture();
+        await Promise.all(['/data', '/home/alice2'].map(path => mkdir(join(f.root, path), { recursive: true })));
         await f.put('/proc/self/mountinfo', '1 0 8:1 / / rw - ext4 /dev/sda rw\n2 1 8:1 / /bind rw - ext4 /dev/sda rw\n3 1 8:2 / /data rw - ext4 /dev/sdb rw\n4 1 8:2 /homes /home rw - ext4 /dev/sdb rw\n5 1 8:3 / /home/alice2 rw - ext4 /dev/sdc rw\n');
         const reader = createLinuxMachineVitalsReader({ root: f.root, homePath: '/home/alice', statfs: async () => ({ bsize: 4096, blocks: 100, bfree: 30, bavail: 20, files: 50, ffree: 0 }) });
         const result = await reader.read(input(0));
@@ -316,6 +338,7 @@ describe('Linux machine vitals reader', () => {
 
     it('excludes read-only and ISO mounts from capacity warnings without hiding a writable bind of the same device', async () => {
         const f = await fixture();
+        await mkdir(join(f.root, '/writable-data'), { recursive: true });
         await f.put('/proc/self/mountinfo', [
             '1 0 8:1 / / rw - ext4 /dev/sda rw',
             '2 1 11:0 / /mnt/lima-cidata ro - iso9660 /dev/sr0 ro',

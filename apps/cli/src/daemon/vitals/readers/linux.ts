@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { access, readFile, readdir, readlink, statfs as readStatfs } from 'node:fs/promises';
+import { access, lstat, readFile, readdir, readlink, statfs as readStatfs } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import { endianness, homedir } from 'node:os';
 
@@ -171,6 +171,10 @@ export function createLinuxMachineVitalsReader(options: LinuxMachineVitalsReader
                 || /^(?:proc|sysfs|devtmpfs|devpts|tmpfs|cgroup2?|securityfs|debugfs|tracefs|pstore|mqueue|hugetlbfs|configfs|fusectl|autofs|squashfs|iso9660|udf|nsfs|ramfs|rpc_pipefs|nfs4?|cifs|smb3)$/u.test(mount.kind)) continue;
             if (mount.mount !== '/' && (!mount.source.startsWith('/dev/') || mount.mount.startsWith('/sys/') || mount.mount.startsWith('/proc/') || mount.mount.startsWith('/dev/'))) continue;
             try {
+                // Docker exposes files such as /etc/hosts as writable device-backed
+                // mounts. They have capacity facts, but they are not volumes and
+                // cannot own Storage roots such as .happier-trash-<uid>.
+                if (!(await lstat(at(mount.mount))).isDirectory()) continue;
                 const stats = await statfs(at(mount.mount));
                 seen.add(mount.device);
                 result.push({ id: mount.device, label: mount.mount, mount: mount.mount, totalBytes: stats.blocks * stats.bsize,
