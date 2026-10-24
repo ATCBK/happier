@@ -232,6 +232,15 @@ async function inspectActionTypeMapCache({ cachePath, outputPath }) {
   return { hit: false, record, failureFingerprint };
 }
 
+/** One input-currentness rule for every preparation path. */
+function preparedInputsUnchanged(prepared) {
+  for (const [path, expectedDigest] of prepared.inputDigests ?? []) {
+    const current = ts.sys.readFile(path);
+    if (current === undefined || digest(current) !== expectedDigest) return false;
+  }
+  return true;
+}
+
 export async function runCachedActionTypeMap({ cachePath, outputPath, derive, publish = async ({ output }) => {
   await writeFileIfChanged(outputPath, output);
 }, withDerivationLock = async (operation) => await operation(), mode = '--write' }) {
@@ -274,13 +283,7 @@ export async function runCachedActionTypeMap({ cachePath, outputPath, derive, pu
     }
     // Writers complete one coherent snapshot before checking live currentness.
     // Checks and cache admission still reject stale results.
-    const inputsUnchanged = () => {
-      for (const [path, expectedDigest] of prepared.inputDigests ?? []) {
-        const current = ts.sys.readFile(path);
-        if (current === undefined || digest(current) !== expectedDigest) return false;
-      }
-      return true;
-    };
+    const inputsUnchanged = () => preparedInputsUnchanged(prepared);
     const inputPaths = [...new Set(prepared.inputPaths)].sort();
     const initiallyCurrent = prepared.stale !== true && inputsUnchanged();
     if (mode === '--check' && !initiallyCurrent) {
@@ -534,7 +537,12 @@ export async function runActionTypeMapWithWorkspaceLock({
   if (prepare !== prepareActionTypeMap || publish !== publishPreparedActionTypeMap) {
     return await withDerivationLock(async (lockContext) => {
       const prepared = await prepare(mode);
-      return await publishWithWorkspaceLock(prepared, lockContext);
+      const assertInputsCurrent = () => {
+        if (prepared.stale === true || !preparedInputsUnchanged(prepared)) {
+          throw new Error('Action type map inputs changed; generation is stale relative to current source. Run generation again.');
+        }
+      };
+      return await publishWithWorkspaceLock(prepared, { ...lockContext, assertInputsCurrent });
     });
   }
   return await runCachedActionTypeMap({

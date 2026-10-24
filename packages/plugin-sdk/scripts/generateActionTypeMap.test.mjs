@@ -523,6 +523,32 @@ test('Action map finishes every snapshot output before reporting inputs stale or
   }
 });
 
+for (const mode of ['--check', '--write']) {
+  test(`injected Action map preparation receives the same input-currentness guard (${mode})`, async (t) => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'happier-action-injected-guard-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const lockPath = resolve(directory, 'workspace.lock');
+    const inputPath = resolve(directory, 'input.ts');
+    writeFileSync(inputPath, 'export const value = 1;\n');
+    const inputDigest = createHash('sha256').update(readFileSync(inputPath, 'utf8')).digest('hex');
+    let observed;
+    await runActionTypeMapWithWorkspaceLock({
+      mode, lockPath, env: {},
+      prepare: () => ({ output: 'current', inputPaths: [inputPath], inputDigests: [[inputPath, inputDigest]] }),
+      publish: (_mode, _prepared, context) => {
+        context.assertOwned();
+        observed = context.assertInputsCurrent;
+        assert.equal(typeof observed, 'function');
+        observed();
+        writeFileSync(inputPath, 'export const value = 2;\n');
+        assert.throws(() => observed(), /inputs changed/);
+        return 'published';
+      },
+    });
+    assert.equal(typeof observed, 'function');
+  });
+}
+
 test('Action checks finish without acquiring a busy workspace publication lock', async (t) => {
   const directory = mkdtempSync(resolve(tmpdir(), 'happier-action-check-lock-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -558,7 +584,10 @@ for (const mode of ['--write', '--check']) {
           publish: async () => 'external-completed',
         });
         operations.push(external.catch(() => {}));
-        await waitingForParent;
+        await Promise.race([
+          waitingForParent,
+          external.then(() => assert.fail('external contender completed before waiting for its parent')),
+        ]);
 
         let inheritedWaited;
         const blockedByContender = new Promise((resolveWaited) => {
