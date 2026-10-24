@@ -13,10 +13,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   usePluginHostApi,
   useLivePluginResource,
+  useLivePluginResourceProjection,
   usePluginResource,
   usePluginUiEphemeralSharedScope,
   type PluginUiEphemeralSharedScope,
   type PluginUiResourceSnapshot,
+  type PluginUiResourceProjection,
+  type PluginUiResourceProjectionSnapshot,
 } from './index.js';
 import {
   PluginHostApiProvider,
@@ -132,6 +135,96 @@ function deferred<T>() {
 }
 
 describe('plugin host API hooks', () => {
+  it('shares typed ingress across mounted consumers without rendering unchanged selected status', async () => {
+    type Model = Readonly<{ status: Readonly<{ state: string }>; checkedAt: number }>;
+    const makeContent = (state: string, checkedAt: number): ResourceContent => ({ contentType: 'application/json',
+      digest: `${state}:${checkedAt}`, bytes: new TextEncoder().encode(JSON.stringify({ state, checkedAt })) });
+    let current = makeContent('running', 1);
+    const decode = vi.fn((content: ResourceContent, previous: Model | undefined): Model => {
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(content.bytes));
+      if (!parsed || typeof parsed !== 'object' || !('state' in parsed) || typeof parsed.state !== 'string'
+        || !('checkedAt' in parsed) || typeof parsed.checkedAt !== 'number') throw new Error('Invalid model');
+      return { status: previous?.status.state === parsed.state ? previous.status : { state: parsed.state }, checkedAt: parsed.checkedAt };
+    });
+    const projection: PluginUiResourceProjection<Model> = { decode };
+    const selectStatus = (snapshot: PluginUiResourceProjectionSnapshot<Model>) => snapshot.value?.status;
+    const host = createHostApiStub({ readResource: vi.fn(async () => current),
+      watchResource: vi.fn(async () => ({ admittedDigest: current.digest, dispose() {} })) });
+    const base = createPluginUiResourceStore({ client: host.api });
+    const store = { ...base, requiresMachine: () => false };
+    let result!: ReturnType<typeof useLivePluginResourceProjection<Model, Model['status'] | undefined>>;
+    const renders = [0, 0];
+    function Probe({ id, enabled }: { id: number; enabled: boolean }) {
+      const selected = useLivePluginResourceProjection(resourceRef, projection, snapshot => selectStatus(snapshot), { enabled });
+      if (id === 0) result = selected;
+      renders[id] = renders[id]! + 1;
+      return null;
+    }
+    const render = (enabled: boolean) => <PluginHostApiProviderInternal hostApi={host.api} resourceStore={store}>
+      <Probe id={0} enabled={enabled} /><Probe id={1} enabled={enabled} />
+    </PluginHostApiProviderInternal>;
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = createRenderer(render(false)); });
+    await act(async () => { await result.refresh(); });
+    expect(host.api.readResource).not.toHaveBeenCalled();
+    expect(host.api.watchResource).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
+    await act(async () => { tree.update(render(true)); });
+    expect(host.api.readResource).toHaveBeenCalledTimes(1);
+    expect(host.api.watchResource).toHaveBeenCalledTimes(1);
+    expect(decode).toHaveBeenCalledTimes(1);
+    const admitted = result.value;
+    const baseline = [...renders];
+    current = makeContent('running', 2);
+    await act(async () => { await result.refresh(); });
+    expect(decode).toHaveBeenCalledTimes(2);
+    expect(result.value).toBe(admitted);
+    expect(renders).toEqual(baseline);
+    const capturedResult = result;
+    current = makeContent('passed', 3);
+    await act(async () => {
+      await capturedResult.refresh();
+      // A retained event handler reads this store now, not its captured render value.
+      expect(capturedResult.value).toBe(admitted);
+      expect(capturedResult.getSnapshot()?.state).toBe('passed');
+      expect(host.api.readResource).toHaveBeenCalledTimes(3);
+      expect(host.api.watchResource).toHaveBeenCalledTimes(1);
+    });
+    expect(result.value?.state).toBe('passed');
+    expect(renders).toEqual(baseline.map(value => value + 1));
+    await act(async () => { base.dispose(); });
+    expect(result.value).toBeUndefined();
+    expect(capturedResult.getSnapshot()).toBeUndefined();
+    expect(host.api.readResource).toHaveBeenCalledTimes(3);
+  });
+  it('defers disabled demand and admits Account Resources without a Machine', async () => {
+    const host = createHostApiStub();
+    const base = createPluginUiResourceStore({ pluginId: resourceRef.pluginId,
+      client: { readResource: host.api.readResource, watchResource: host.api.watchResource } });
+    const store = { ...base, requiresMachine: () => false };
+    let result!: ReturnType<typeof useLivePluginResource>;
+    function Probe({ enabled }: { enabled: boolean }) {
+      result = useLivePluginResource(resourceRef, { enabled });
+      return null;
+    }
+    const render = (enabled: boolean) => <PluginUiHostReadinessProviderInternal hostApi={host.api}
+      context={createSurfaceContext({ machineConnectionPending: true, machineExecutionReady: false })}>
+      <PluginHostApiProviderInternal hostApi={host.api} resourceStore={store}><Probe enabled={enabled} /></PluginHostApiProviderInternal>
+    </PluginUiHostReadinessProviderInternal>;
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = createRenderer(render(false)); });
+    await act(async () => { await result.refresh(); });
+    expect(host.api.readResource).not.toHaveBeenCalled();
+    expect(host.api.watchResource).not.toHaveBeenCalled();
+    await act(async () => { tree.update(render(true)); });
+    expect(host.api.readResource).toHaveBeenCalledTimes(1);
+    const admitted = result.resource.value;
+    await act(async () => { tree.update(render(false)); });
+    await act(async () => { await result.refresh(); });
+    expect(host.api.readResource).toHaveBeenCalledTimes(1);
+    expect(result.resource.value).toBe(admitted);
+    base.dispose();
+  });
   it('distinguishes Machine admission from settled loading and preserves legacy context omission', async () => {
     const host = createHostApiStub();
     let answer: ReturnType<typeof usePluginHostReadiness> | undefined;
@@ -183,8 +276,14 @@ describe('plugin host API hooks', () => {
   ] satisfies ReadonlyArray<{ kind: string; reference: Parameters<PluginUiHostApi['readResource']>[0] }>)
   ('holds automatic and manual Resource reads until its requester is admitted ($kind)', async ({ reference }) => {
     const host = createHostApiStub();
+    const projection: PluginUiResourceProjection<ResourceContent> = { decode: content => content };
     let result!: ReturnType<typeof usePluginResource>;
-    function Probe() { result = usePluginResource(reference); return null; }
+    let projected!: ReturnType<typeof useLivePluginResourceProjection<ResourceContent, PluginUiResourceSnapshot>>;
+    function Probe() {
+      result = usePluginResource(reference);
+      projected = useLivePluginResourceProjection(reference, projection, snapshot => snapshot);
+      return null;
+    }
     const render = (requesterExecutionReady: boolean) => (
       <PluginUiHostReadinessProviderInternal hostApi={host.api} context={createSurfaceContext({
         machineConnectionPending: false, machineExecutionReady: true, requesterExecutionReady,
@@ -193,11 +292,90 @@ describe('plugin host API hooks', () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => { tree = createRenderer(render(false)); });
     expect(host.api.readResource).not.toHaveBeenCalled();
-    await act(async () => { await result.refresh(); });
+    expect(result.resource).toMatchObject({ pending: 'idle', error: { code: 'unavailable' } });
+    expect(projected.value).toEqual(result.resource);
+    await act(async () => { await result.refresh(); await projected.refresh(); });
     expect(host.api.readResource).not.toHaveBeenCalled();
     await act(async () => { tree.update(render(true)); });
     expect(host.api.readResource).toHaveBeenCalledTimes(1);
     expect(result.resource.value).toBeDefined();
+    expect(projected.value).toEqual(result.resource);
+  });
+
+  it('presents readiness before raw and typed Resource selection and reacquires once', async () => {
+    const host = createHostApiStub();
+    type Model = Readonly<{ status: string }>;
+    const decode = vi.fn((content: ResourceContent): Model => {
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(content.bytes));
+      if (!parsed || typeof parsed !== 'object' || !('status' in parsed) || typeof parsed.status !== 'string') {
+        throw new Error('Invalid status');
+      }
+      return { status: parsed.status };
+    });
+    const projection: PluginUiResourceProjection<Model> = { decode };
+    let result!: ReturnType<typeof useLivePluginResource>;
+    let projected!: ReturnType<typeof useLivePluginResourceProjection<Model, PluginUiResourceProjectionSnapshot<Model>>>;
+    function Probe() {
+      result = useLivePluginResource(resourceRef);
+      projected = useLivePluginResourceProjection(resourceRef, projection, snapshot => snapshot);
+      return null;
+    }
+    const render = (pending: boolean, ready: boolean) => (
+      <PluginUiHostReadinessProviderInternal hostApi={host.api} context={createSurfaceContext({
+        machineConnectionPending: pending, machineExecutionReady: ready,
+      })}><PluginHostApiProvider hostApi={host.api}><Probe /></PluginHostApiProvider></PluginUiHostReadinessProviderInternal>
+    );
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = createRenderer(render(true, false)); });
+    expect(result.resource).toMatchObject({ pending: 'initial' });
+    expect(projected.value).toMatchObject({ pending: 'initial' });
+    expect(result.resource.error).toBeUndefined();
+    expect(projected.value.error).toBeUndefined();
+    expect(host.api.readResource).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
+
+    await act(async () => { tree.update(render(false, false)); });
+    expect(result.resource).toMatchObject({ pending: 'idle', error: { code: 'unavailable' } });
+    expect(projected.value).toMatchObject({ pending: 'idle', freshness: 'unknown', error: { code: 'unavailable' } });
+    await act(async () => { await result.refresh(); await projected.refresh(); });
+    expect(host.api.readResource).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
+
+    await act(async () => { tree.update(render(false, true)); });
+    const retained = result.resource.value;
+    const retainedModel = projected.value.value;
+    expect(retained).toBeDefined();
+    expect(retainedModel).toEqual({ status: 'ready' });
+    expect(result.resource).toMatchObject({ pending: 'idle', freshness: 'fresh' });
+    expect(projected.value).toMatchObject({ pending: 'idle', freshness: 'fresh' });
+    expect(result.resource.error).toBeUndefined();
+    expect(projected.value.error).toBeUndefined();
+    expect(host.api.readResource).toHaveBeenCalledTimes(1);
+    expect(decode).toHaveBeenCalledTimes(1);
+
+    await act(async () => { tree.update(render(true, false)); });
+    expect(result.resource).toMatchObject({ pending: 'refresh' });
+    expect(projected.value).toMatchObject({ pending: 'refresh' });
+    expect(result.resource.value).toBe(retained);
+    expect(projected.value.value).toBe(retainedModel);
+
+    await act(async () => { tree.update(render(false, false)); });
+    expect(result.resource).toMatchObject({ pending: 'idle', freshness: 'stale', error: { code: 'unavailable' } });
+    expect(projected.value).toMatchObject({ pending: 'idle', freshness: 'stale', error: { code: 'unavailable' } });
+    expect(result.resource.value).toBe(retained);
+    expect(projected.value.value).toBe(retainedModel);
+    await act(async () => { await result.refresh(); await projected.refresh(); });
+    expect(host.api.readResource).toHaveBeenCalledTimes(1);
+
+    await act(async () => { tree.update(render(false, true)); });
+    expect(result.resource).toMatchObject({ pending: 'idle', freshness: 'fresh' });
+    expect(projected.value).toMatchObject({ pending: 'idle', freshness: 'fresh' });
+    expect(result.resource.error).toBeUndefined();
+    expect(projected.value.error).toBeUndefined();
+    expect(result.resource.value).toBe(retained);
+    expect(projected.value.value).toBe(retainedModel);
+    expect(host.api.readResource).toHaveBeenCalledTimes(2);
+    expect(decode).toHaveBeenCalledTimes(1);
   });
 
   it('shares an injected Resource owner across mounts without disposing it on one unmount', async () => {

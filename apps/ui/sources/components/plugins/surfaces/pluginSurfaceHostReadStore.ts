@@ -1,9 +1,9 @@
 import { PluginUiHostReadReferenceV1Schema, type PluginUiHostReadReferenceV1 } from '@happier-dev/protocol/plugins/ui/client';
 import { pluginUiResourceReferenceKey, type PluginUiResourceEntry, type PluginUiResourceStore } from '@happier-dev/plugin-ui/advanced';
-import type { PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
+import type { PluginUiResourceProjection, PluginUiResourceProjectionSnapshot } from '@happier-dev/plugin-ui/hostApi';
 
-const UNADMITTED: PluginUiResourceSnapshot = Object.freeze({ freshness: 'unknown', pending: 'idle', subscription: 'unsupported' });
-const ADMITTING: PluginUiResourceSnapshot = Object.freeze({ freshness: 'unknown', pending: 'initial', subscription: 'establishing' });
+const UNADMITTED: PluginUiResourceProjectionSnapshot<never> = Object.freeze({ freshness: 'unknown', pending: 'idle', subscription: 'unsupported' });
+const ADMITTING: PluginUiResourceProjectionSnapshot<never> = Object.freeze({ freshness: 'unknown', pending: 'initial', subscription: 'establishing' });
 
 /** Permission-only mount facade. Authorized values and all read/watch work stay in the Account store. */
 export function createPluginSurfaceHostReadStore(input: Readonly<{
@@ -16,6 +16,9 @@ export function createPluginSurfaceHostReadStore(input: Readonly<{
     let disposed = false;
     const current = () => !disposed && !input.lifetimeSignal.aborted && input.isCurrent();
     return Object.freeze({
+        requiresMachine(resource) {
+            return typeof resource !== 'string' && 'hostRead' in resource ? false : input.declaredStore?.requiresMachine?.(resource) ?? true;
+        },
         getEntry(resource) {
             const parsed = PluginUiHostReadReferenceV1Schema.safeParse(resource);
             if (!parsed.success) {
@@ -80,6 +83,26 @@ export function createPluginSurfaceHostReadStore(input: Readonly<{
                     const admitted = await ensureAdmission();
                     if (admitted && current()) await admitted.refresh();
                     return entry.getSnapshot();
+                },
+                select<T, Selected>(projection: PluginUiResourceProjection<T>,
+                    selector: (snapshot: PluginUiResourceProjectionSnapshot<T>) => Selected) {
+                    const getSnapshot = () => {
+                        if (!current()) refuse('plugin_surface_retired');
+                        return admitted && source ? source.select(projection, selector).getSnapshot() : selector(permissionSnapshot);
+                    };
+                    return Object.freeze({
+                        getSnapshot,
+                        subscribe(listener: () => void, live: boolean) {
+                            let previous = getSnapshot();
+                            return entry.subscribe(() => {
+                                const next = getSnapshot();
+                                if (Object.is(previous, next)) return;
+                                previous = next;
+                                listener();
+                            }, live);
+                        },
+                        async refresh() { await entry.refresh(); },
+                    });
                 },
             });
             permissions.set(key, { entry, dispose() { refuse('plugin_surface_retired'); notify(); subscriptions.clear(); } });

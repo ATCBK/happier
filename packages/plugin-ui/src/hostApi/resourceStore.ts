@@ -13,6 +13,8 @@ import {
 } from '../presentation/content/renderableImage.js';
 
 export type PluginUiResourceReference = Parameters<PluginUiHostApi['readResource']>[0];
+/** Same-process producers invalidate without acquiring bytes to manufacture a digest hint. */
+type PluginUiResourceClientEvent = ResourceSubscriptionEvent | Readonly<{ kind: 'invalidated'; digest?: undefined }>;
 
 /**
  * The smallest client boundary the mounted Resource store needs. Surface host
@@ -31,7 +33,8 @@ export type PluginUiResourceClient = Readonly<{
    * Contextual app clients may attach the daemon's admitted digest to the
    * disposable. The public Host API deliberately need not synthesize it.
    */
-  watchResource?: (...args: Parameters<PluginUiHostApi['watchResource']>) => Promise<
+  watchResource?: (resource: PluginUiResourceReference, listener: (event: PluginUiResourceClientEvent) => void,
+    options?: Parameters<PluginUiHostApi['watchResource']>[2]) => Promise<
     Disposable & Readonly<{ admittedDigest?: string }>
   >;
   /**
@@ -73,6 +76,8 @@ export function createPluginUiHostApiResourceClient(
 
 export type PluginUiResourceError = Readonly<{
   code?: string;
+  /** Preserve the producer's retry decision when a host joins this read. */
+  retryable?: boolean;
   /**
    * Host-provided machine-readable detail for a generic public error code.
    * For example, the mounted `unavailable` envelope distinguishes an
@@ -96,6 +101,21 @@ export type PluginUiResourceSnapshot = Readonly<{
   subscription: 'unsupported' | 'establishing' | 'live' | 'reconnecting' | 'ended';
 }>;
 
+/** Keep one descriptor identity for consumers sharing the same admitted model. */
+export type PluginUiResourceProjection<T> = Readonly<{
+  decode(content: ResourceContent, previous: T | undefined): T;
+}>;
+
+export type PluginUiResourceProjectionSnapshot<T> = Readonly<Omit<PluginUiResourceSnapshot, 'value'> & {
+  value?: T;
+}>;
+
+export type PluginUiResourceSelection<T> = Readonly<{
+  getSnapshot(): T;
+  subscribe(listener: () => void, live: boolean): () => void;
+  refresh(): Promise<void>;
+}>;
+
 /** The artifact-local currentness facade consumed by this mounted Resource store. */
 export type PluginUiResourceAccountLifetime = Readonly<{
   isCurrent(): boolean;
@@ -107,10 +127,14 @@ export type PluginUiResourceEntry = Readonly<{
   subscribe(listener: () => void, live: boolean): () => void;
   /** Settles after this requested canonical reread, including failure or retirement. */
   refresh(): Promise<PluginUiResourceSnapshot>;
+  select<T, Selected>(projection: PluginUiResourceProjection<T>,
+    selector: (snapshot: PluginUiResourceProjectionSnapshot<T>) => Selected): PluginUiResourceSelection<Selected>;
 }>;
 
 export type PluginUiResourceStore = Readonly<{
   getEntry(resource: PluginUiResourceReference): PluginUiResourceEntry;
+  /** Host-private declaration placement; omission preserves daemon admission. */
+  requiresMachine?: (resource: PluginUiResourceReference) => boolean;
   dispose(): void;
 }>;
 
@@ -118,6 +142,7 @@ type MutableEntry = {
   readonly key: string;
   readonly resource: PluginUiResourceReference;
   readonly listeners: Set<() => void>;
+  readonly projections: Map<object, Readonly<{ update(snapshot: PluginUiResourceSnapshot): void; getSnapshot(): unknown }>>;
   snapshot: PluginUiResourceSnapshot;
   subscriberCount: number;
   liveSubscriberCount: number;
@@ -194,7 +219,7 @@ export function pluginUiResourceReferenceLabel(reference: PluginUiResourceRefere
 
 function readError(error: unknown): PluginUiResourceError {
   const candidate = error && typeof error === 'object'
-    ? error as Readonly<{ code?: unknown; diagnostics?: unknown; message?: unknown }>
+    ? error as Readonly<{ code?: unknown; diagnostics?: unknown; message?: unknown; retryable?: unknown }>
     : null;
   // React Native adapters carry the bounded codes directly, while the
   // hosted-web SDK client preserves them in typed `PluginDiagnosticData`
@@ -211,6 +236,7 @@ function readError(error: unknown): PluginUiResourceError {
     : [];
   return Object.freeze({
     ...(typeof candidate?.code === 'string' ? { code: candidate.code } : {}),
+    ...(typeof candidate?.retryable === 'boolean' ? { retryable: candidate.retryable } : {}),
     ...(diagnostics.length > 0 ? { diagnostics: Object.freeze(diagnostics) } : {}),
     message: typeof candidate?.message === 'string'
       ? candidate.message
@@ -271,13 +297,14 @@ function sameError(
 ): boolean {
   return left === right || (
     left?.code === right?.code
+    && left?.retryable === right?.retryable
     && left?.message === right?.message
     && left?.diagnostics?.length === right?.diagnostics?.length
     && left?.diagnostics?.every((diagnostic, index) => diagnostic === right?.diagnostics?.[index]) !== false
   );
 }
 
-function sameSnapshot(left: PluginUiResourceSnapshot, right: PluginUiResourceSnapshot): boolean {
+function sameSnapshot<T>(left: PluginUiResourceProjectionSnapshot<T>, right: PluginUiResourceProjectionSnapshot<T>): boolean {
   return left.value === right.value
     && left.digest === right.digest
     && left.freshness === right.freshness
@@ -303,6 +330,8 @@ export function createPluginUiResourceStore(input: Readonly<{
   client: PluginUiResourceClient;
   accountLifetime?: PluginUiResourceAccountLifetime | null;
   pluginId?: string;
+  /** Host-private dependency release at this entry's existing demand/retirement boundary. */
+  onDemandEnd?: (resource: PluginUiResourceReference) => void;
 }>): PluginUiResourceStore {
   const accountLifetime = input.accountLifetime ?? null;
   const pluginId = input.pluginId ?? null;
@@ -326,7 +355,56 @@ export function createPluginUiResourceStore(input: Readonly<{
   function publish(entry: MutableEntry, next: PluginUiResourceSnapshot): void {
     if (sameSnapshot(entry.snapshot, next)) return;
     entry.snapshot = Object.freeze(next);
+    // Reset withdrawn baselines even if no consumer reads the refusal. Author
+    // decoders run only on snapshot demand, after a facade checks admission.
+    if (entry.snapshot.value === undefined) {
+      for (const projection of entry.projections.values()) projection.update(entry.snapshot);
+    }
     for (const listener of [...entry.listeners]) listener();
+  }
+
+  function getProjection<T>(entry: MutableEntry, projection: PluginUiResourceProjection<T>) {
+    const existing = entry.projections.get(projection);
+    if (existing) {
+      // The descriptor identity associates its value type with this entry's cell.
+      return existing as Readonly<{ getSnapshot(): PluginUiResourceProjectionSnapshot<T> }>;
+    }
+    let attemptedContent: ResourceContent | undefined;
+    let value: T | undefined;
+    let decodeError: PluginUiResourceError | undefined;
+    let sourceSnapshot: PluginUiResourceSnapshot | undefined;
+    let snapshot: PluginUiResourceProjectionSnapshot<T> = Object.freeze({ freshness: 'unknown', pending: 'initial', subscription: 'unsupported' });
+    const cell = {
+      getSnapshot() {
+        cell.update(entry.snapshot);
+        return snapshot;
+      },
+      update(next: PluginUiResourceSnapshot): void {
+        if (next === sourceSnapshot) return;
+        sourceSnapshot = next;
+        if (next.value === undefined) {
+          attemptedContent = undefined;
+          value = undefined;
+          decodeError = undefined;
+        } else if (next.value !== attemptedContent) {
+          attemptedContent = next.value;
+          try {
+            value = projection.decode(next.value, value);
+            decodeError = undefined;
+          } catch (error) {
+            decodeError = readError(error);
+          }
+        }
+        const { value: _bytes, ...dimensions } = next;
+        const projected = { ...dimensions, ...(value === undefined ? {} : { value }),
+          ...(!decodeError || next.error ? {} : { error: decodeError,
+            freshness: value === undefined ? 'unknown' as const : 'stale' as const }),
+        };
+        if (!sameSnapshot(snapshot, projected)) snapshot = Object.freeze(projected);
+      },
+    };
+    entry.projections.set(projection, cell);
+    return cell;
   }
 
   function settleRefreshWaiters(entry: MutableEntry, queued = false, code?: string): void {
@@ -381,7 +459,7 @@ export function createPluginUiResourceStore(input: Readonly<{
     entry.watch = null;
     entry.watchEstablishing = false;
     try {
-      watch?.dispose();
+      void Promise.resolve(watch?.dispose()).catch(() => {});
     } catch {
       // The mounted host owns transport cleanup; a local failure cannot retain
       // a stale entry or prevent Account retirement.
@@ -400,6 +478,7 @@ export function createPluginUiResourceStore(input: Readonly<{
     entry.readController?.abort();
     entry.readController = null;
     stopWatch(entry, false);
+    input.onDemandEnd?.(entry.resource);
     if (clearValue) {
       publish(entry, Object.freeze({
         freshness: 'unknown',
@@ -423,6 +502,7 @@ export function createPluginUiResourceStore(input: Readonly<{
     entry.readQueuedExpectedDigest = null;
     clearRereadRetry(entry);
     stopWatch(entry, true);
+    input.onDemandEnd?.(entry.resource);
     settleRefreshWaiters(entry, false, 'plugin_resource_aborted');
     settleRefreshWaiters(entry, true, 'plugin_resource_aborted');
   }
@@ -630,7 +710,7 @@ export function createPluginUiResourceStore(input: Readonly<{
     }, delayMs);
   }
 
-  function receiveWatchEvent(entry: MutableEntry, event: ResourceSubscriptionEvent): void {
+  function receiveWatchEvent(entry: MutableEntry, event: PluginUiResourceClientEvent): void {
     if (!isEntryCurrent(entry)) return;
     if (event.kind === 'invalidated') {
       const retainsFreshSnapshot = (
@@ -679,6 +759,13 @@ export function createPluginUiResourceStore(input: Readonly<{
           : {}),
         message: event.diagnostics.join(', ') || 'Plugin UI resource watch ended.',
       }), 'ended');
+    if (event.kind === 'error' && event.code === 'expired_resource' && entry.liveSubscriberCount > 0) {
+      // The producer withdrew this read authority while the Resource remains
+      // demanded. Its old bytes are already cleared; acquire the replacement
+      // through the ordinary watch/read admission, whose refusals settle here.
+      startWatch(entry);
+      requestRead(entry, 'initial');
+    }
   }
 
   function scheduleWatchOpenRetry(entry: MutableEntry): void {
@@ -725,13 +812,16 @@ export function createPluginUiResourceStore(input: Readonly<{
     entry.watchController = controller;
     void watchResource(
       entry.resource,
-      (event) => { receiveWatchEvent(entry, event); },
+      (event) => {
+        if (controller.signal.aborted || entry.watchController !== controller) return;
+        receiveWatchEvent(entry, event);
+      },
       { signal: controller.signal },
     ).then(
       (watch) => {
         if (!isEntryCurrent(entry) || controller.signal.aborted || entry.liveSubscriberCount === 0) {
           try {
-            watch.dispose();
+            void Promise.resolve(watch.dispose()).catch(() => {});
           } catch {
             // A late establishment cannot make the retired store current.
           }
@@ -739,7 +829,6 @@ export function createPluginUiResourceStore(input: Readonly<{
         }
         clearWatchRetry(entry);
         entry.watch = watch;
-        entry.watchController = null;
         entry.watchEstablishing = false;
         publish(entry, { ...entry.snapshot, subscription: 'live' });
         // Establishment is a level-triggered resync boundary. Re-read current
@@ -747,11 +836,13 @@ export function createPluginUiResourceStore(input: Readonly<{
         // the admitted daemon digest, so an already-fresh matching snapshot
         // needs no duplicate read; generic Host APIs retain the unconditional
         // re-sync because they do not expose that fact.
+        // A settled nonretryable baseline instead waits for a producer signal;
+        // successful watch admission cannot make that refused read current.
         const snapshotAlreadyMatchesAdmission = !entry.reading
           && watch.admittedDigest !== undefined
           && entry.snapshot.freshness === 'fresh'
           && entry.snapshot.digest === watch.admittedDigest;
-        if (!snapshotAlreadyMatchesAdmission) {
+        if (!snapshotAlreadyMatchesAdmission && entry.snapshot.error?.retryable !== false) {
           requestRead(
             entry,
             entry.snapshot.value === undefined ? 'initial' : 'refresh',
@@ -798,6 +889,7 @@ export function createPluginUiResourceStore(input: Readonly<{
       key,
       resource: canonicalResource,
       listeners: new Set(),
+      projections: new Map(),
       snapshot: initialSnapshot(),
       subscriberCount: 0,
       liveSubscriberCount: 0,
@@ -831,7 +923,7 @@ export function createPluginUiResourceStore(input: Readonly<{
         entry = createEntry(canonicalResource, key);
         entries.set(key, entry);
       }
-      return Object.freeze({
+      const facade: PluginUiResourceEntry = Object.freeze({
         getSnapshot: () => entry!.snapshot,
         subscribe(listener: () => void, live: boolean): () => void {
           if (!isEntryCurrent(entry!)) return () => {};
@@ -897,7 +989,25 @@ export function createPluginUiResourceStore(input: Readonly<{
             requestRead(entry!, entry!.snapshot.value === undefined ? 'initial' : 'refresh');
           });
         },
+        select<T, Selected>(projection: PluginUiResourceProjection<T>,
+          selector: (snapshot: PluginUiResourceProjectionSnapshot<T>) => Selected): PluginUiResourceSelection<Selected> {
+          const getSnapshot = () => selector(getProjection(entry!, projection).getSnapshot());
+          return Object.freeze({
+            getSnapshot,
+            subscribe(listener: () => void, live: boolean): () => void {
+              let previous = getSnapshot();
+              return facade.subscribe(() => {
+                const next = getSnapshot();
+                if (Object.is(previous, next)) return;
+                previous = next;
+                listener();
+              }, live);
+            },
+            refresh: async () => { await facade.refresh(); },
+          });
+        },
       });
+      return facade;
     },
     dispose(): void {
       if (disposed) return;

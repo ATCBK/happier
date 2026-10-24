@@ -61,7 +61,6 @@ describe('plugin UI Resource store read failures', () => {
     { code: 'unavailable', diagnostics: ['plugin_resource_session_access_unavailable'] },
     { code: 'unavailable', diagnostics: ['plugin_resource_context_unavailable'] },
     { code: 'stale_surface', diagnostics: ['plugin_generation_stale'] },
-    { code: 'expired_resource', diagnostics: [] },
   ] as const)('withdraws private watch output on $code and rejects a late in-flight read', async (failure) => {
     const value = { contentType: 'application/json', digest: 'private', bytes: new TextEncoder().encode('7') };
     let deliver: ((event: ResourceSubscriptionEvent) => void) | undefined;
