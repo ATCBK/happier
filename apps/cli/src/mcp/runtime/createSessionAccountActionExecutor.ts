@@ -111,6 +111,10 @@ export function createSessionAccountActionExecutor(params: Readonly<{
         && (actionId === 'action.options.resolve' || actionId === 'agents.backends.list'
           || actionId === 'agents.models.list' || actionId === 'agents.config_options.list'
           || actionId === 'agents.session_modes.list');
+      // Project work and its retained operations/output use the credentialed
+      // exact-Machine owner. A restricted runner has only Session transport.
+      const projectMachineAction = !params.hasAccountAuthority && executionPlacement === 'machine'
+        && (actionId.startsWith('projects.') || ACTION_ID_FAMILIES_V1.operation_output.some(id => id === actionId));
       // Origin-required RPCs use the existing source-daemon custody channel,
       // including cross-Session question answers. Own questions stay with the
       // bound request store and its same canonical host-witness origin.
@@ -118,7 +122,7 @@ export function createSessionAccountActionExecutor(params: Readonly<{
         && !(actionId === 'session.needs_you.raise' && requestedSessionId === params.client.sessionId);
       if (!builtIn.success || (executionPlacement !== 'account'
         && executionPlacement !== 'client'
-        && !sessionRead && !persistedRead && !sessionLifecycle && !nativeInventoryRead && !sessionOriginRpc && !needsSessionTargetTransport
+        && !sessionRead && !persistedRead && !sessionLifecycle && !nativeInventoryRead && !projectMachineAction && !sessionOriginRpc && !needsSessionTargetTransport
         && builtIn.data !== 'session.spawn_new'
         // Admission inspects the executing Machine's workspace and plugin
         // runtime before sealing Account storage; a Session runner has neither.

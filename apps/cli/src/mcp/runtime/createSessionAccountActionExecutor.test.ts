@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createSessionAccountActionExecutor } from './createSessionAccountActionExecutor';
+import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
 import { configuration } from '@/configuration';
 import { NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionBoundaryError';
 import { hashProcessCommand } from '@/daemon/sessionRegistry';
@@ -43,6 +44,10 @@ describe('Session MCP Account routing', () => {
   });
 
   it.each([
+    ...listActionSpecs().filter(spec => spec.executionPlacement === 'machine'
+      && (spec.id.startsWith('projects.') || spec.id.startsWith('action.operations.'))).map(spec => ({
+        actionId: spec.id, input: JSON.parse(spec.examples?.mcp?.argsExample ?? spec.examples?.voice?.argsExample ?? '{}'), uncertain: false,
+      })),
     { actionId: 'notifications.notify_me' as const, input: { message: 'Notify' }, uncertain: false },
     { actionId: 'notifications.notify_me' as const, input: { message: 'Notify' }, uncertain: true },
     { actionId: 'session.list' as const, input: {}, uncertain: false },
