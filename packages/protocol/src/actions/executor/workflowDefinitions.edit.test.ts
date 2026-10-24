@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createWorkflowDefinitionActions, type WorkflowDefinitionArtifactOperations } from './workflowDefinitions.js';
 import { WorkflowDefinitionV1Schema } from '../../workflows/workflowV1.js';
+import { WorkflowDefinitionEditOpV1Schema } from '../../workflows/workflowDefinitionEditV1.js';
+import { resolveRoleSelectionV1 } from '../../prompts/roles/resolveRoleSelectionV1.js';
 
 function harness() {
     const definitionId = 'definition-1';
@@ -27,6 +29,17 @@ function harness() {
 }
 
 describe('the shared definition edit owner', () => {
+  it('saves workflow-local roles through the same edit owner and resolves external engines without another role model', async () => {
+    const { owner, update, definitionId, revision } = harness();
+    const role = { roleId: 'workflow_reviewer', name: 'Security reviewer', instructions: 'Review the change',
+      engine: { agentTargetKey: 'agent:acme.review/reviewer' }, runsAs: { kind: 'background_run', intent: 'task' } };
+    const result = await owner.edit({ definitionId, expectedRevision: revision,
+      ops: [WorkflowDefinitionEditOpV1Schema.parse({ kind: 'upsert_role', role })] });
+    expect(result.definition.roles).toEqual([role]);
+    expect(JSON.parse(update.mock.calls[0]![0].body).definition.roles).toEqual([role]);
+    expect(resolveRoleSelectionV1({ roleId: role.roleId, workflowRoles: result.definition.roles }))
+      .toMatchObject({ ok: true, selection: { ...role, changedAt: 'workflow' } });
+  });
   it('atomically edits the opened definition and keeps its private metadata', async () => {
     const { owner, update, read, definitionId, definition, revision, metadata } = harness();
     const result = await owner.edit({ definitionId, expectedRevision: revision,
