@@ -98,7 +98,13 @@ demand once per Account/application before asynchronous Action admission and dra
 one shared discovery page sequence, while the server qualifies every Team independently.
 Each set-shaped page retains the original `teams.credentials.entitled.list` Action's
 settings, approval and provenance admission, including one Ask-first request for the
-whole Team set. A Home that
+whole Team set. In 0.3 development source, Team reads retain their original invocation
+through the shared Action approval waiter: approval delivers the result to the current
+caller, while denial or cancellation preserves the exact non-retryable refusal.
+Recorded `approval_stale` refusals retain their validated reasons, including
+`credential_expired`; expiry remains owned by the approval authority. The
+catalog loader still owns demand currentness; a late result cannot revive a catalog
+after its final observer leaves, and application sets remain separate. A Home that
 does not serve discovery returns the existing unsupported condition. Finite exact-resource
 probes keep their own per-Team page walk. Model controls come from the exact
 source descriptor through the shared picker, including Team rows. Catalog visibility

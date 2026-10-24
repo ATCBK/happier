@@ -122,8 +122,8 @@ describe('Team credential resource observations', () => {
             const requests = home.requestsFor(DISCOVER);
             expect(requests).toHaveLength(2);
             expect(requests.map(request => request.input)).toEqual(expect.arrayContaining([
-                { teamIds: addresses.map(target => target.teamId) },
-                { teamIds: addresses.map(target => target.teamId), application },
+                expect.objectContaining({ teamIds: addresses.map(target => target.teamId) }),
+                expect.objectContaining({ teamIds: addresses.map(target => target.teamId), application }),
             ]));
         } finally { releases.forEach(release => release()); }
     });

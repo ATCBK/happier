@@ -4,6 +4,7 @@ import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protoco
 
 import { createDeferred, renderHook, standardCleanup, teamSummaryFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
@@ -210,17 +211,23 @@ describe('Account-scoped Team credential catalog demand', () => {
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-ada' };
         const addresses = Array.from({ length: 6 }, (_, index) => ({ serverId: scope.serverId, teamId: `team-${index}` }));
         const releases = addresses.map(address => observeTeamCredentialResourceCatalog(scope, address));
-        await waitForHomeGovernance(() => {
-            for (const address of addresses) expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.status).toBe('error');
-        });
-        expect(home.requestsFor(DISCOVER)).toHaveLength(0);
-        expect(home.requestsFor(LIST)).toHaveLength(0);
-        for (const address of addresses) expect(getTeamCredentialResourceCatalogSnapshot(scope, address)?.selectionCurrent).toBe(false);
-        expect(home.artifacts(serverId).list()).toHaveLength(1);
-        const artifact = home.artifacts(serverId).list()[0]!;
-        expect(JSON.parse(home.artifacts(serverId).readPlainBody(artifact.id)!)).toMatchObject({
-            actionId: 'teams.credentials.entitled.list', actionArgs: { teamIds: addresses.map(address => address.teamId) },
-        });
-        releases.forEach(release => release());
+        try {
+            await waitForHomeGovernance(() => expect(home.artifacts(serverId).list()).toHaveLength(1));
+            expect(home.requestsFor(DISCOVER)).toHaveLength(0);
+            expect(home.requestsFor(LIST)).toHaveLength(0);
+            for (const address of addresses) expect(getTeamCredentialResourceCatalogSnapshot(scope, address))
+                .toMatchObject({ status: 'loading', selectionCurrent: false });
+            const artifact = home.artifacts(serverId).list()[0]!;
+            expect(JSON.parse(home.artifacts(serverId).readPlainBody(artifact.id)!)).toMatchObject({
+                actionId: 'teams.credentials.entitled.list', actionArgs: { teamIds: addresses.map(address => address.teamId) },
+            });
+            expect(await decideApprovalAsInbox(serverId, artifact.id, 'reject')).toMatchObject({ ok: true });
+            await waitForHomeGovernance(() => {
+                for (const address of addresses) expect(getTeamCredentialResourceCatalogSnapshot(scope, address))
+                    .toMatchObject({ status: 'error', selectionCurrent: false, error: { code: 'approval_rejected' } });
+            });
+            expect(catalogRequests()).toHaveLength(0);
+            expect(home.artifacts(serverId).list()).toHaveLength(1);
+        } finally { releases.forEach(release => release()); }
     });
 });
