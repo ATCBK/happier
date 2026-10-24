@@ -1,5 +1,6 @@
 import type { SavedSecretCatalogEntryV1 } from '@happier-dev/protocol';
 
+import type { CollectionRowStatus } from '@/components/ui/lists/collection/CollectionStatusGlyph';
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { t } from '@/text';
 
@@ -13,6 +14,19 @@ export function sharedSecretStatusLabel(status: SavedSecretCatalogEntryV1['mater
         case 'access_removed': return t('secrets.catalog.status.access_removed');
         case 'deleted': return t('secrets.catalog.status.deleted');
         case 'update_required': return t('secrets.catalog.status.update_required');
+    }
+}
+
+/** The status glyph a secret's material status draws in a collection row; a ready secret draws none. */
+export function sharedSecretRowStatus(status: SavedSecretCatalogEntryV1['materialStatus']): CollectionRowStatus | null {
+    switch (status) {
+        case 'ready': return null;
+        case 'preparing_encrypted_access': return 'stale';
+        case 'recipient_mode_unsupported': return 'review';
+        case 'temporarily_unavailable': return 'offline';
+        case 'access_removed': return 'revoked';
+        case 'deleted': return 'off';
+        case 'update_required': return 'update';
     }
 }
 

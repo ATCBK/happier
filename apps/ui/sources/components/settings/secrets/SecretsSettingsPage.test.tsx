@@ -222,6 +222,23 @@ describe('SecretsSettingsPage', () => {
         expect(onDeleteCorruptShared).toHaveBeenCalledWith(owner);
     });
 
+    it('says a secret\'s trouble with the shared status glyph, not a dot and a word in the line', async () => {
+        const removed = ownedEntry({ materialStatus: 'access_removed' });
+        const recipient = ownedEntry({ ref: 'happier:shared-secret:v1:shared-b', relationship: 'recipient', materialStatus: 'update_required' });
+        const ready = ownedEntry({ ref: 'happier:shared-secret:v1:shared-c', name: 'Staging key' });
+        const { screen } = await renderPage({ personalSecrets: [], sharedEntries: [removed, recipient, ready],
+            resolveSharedReference: ref => ({ ref, kind: 'shared_resource',
+                status: ref === removed.ref ? 'access_removed' : ref === recipient.ref ? 'update_required' : 'ready' }) as never });
+        const glyph = (ref: string) => screen.findAll(node => node.props.testID === `saved-secret:${ref}:status` && node.props.status !== undefined)[0];
+        expect(glyph(removed.ref)?.props.status).toBe('revoked');
+        expect(glyph(recipient.ref)?.props.status).toBe('update');
+        expect(glyph(removed.ref)?.props.label).toBe('secrets.catalog.status.access_removed');
+        const header = screen.findAll(row => row.props.testID === `saved-secret:${removed.ref}:header` && typeof row.props.subtitle === 'string')[0];
+        expect(header?.props.subtitle).not.toContain('secrets.catalog.status.access_removed');
+        expect(header?.props.subtitleLeading).toBeUndefined();
+        expect(glyph(ready.ref)).toBeUndefined();
+    });
+
     it('opens the access editor inside the secret\'s own row, and the create editor in a draft row', async () => {
         const accessElement = <React.Fragment key="access"><AccessProbe /></React.Fragment>;
         const { screen } = await renderPage({

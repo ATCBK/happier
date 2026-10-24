@@ -11,7 +11,7 @@ import {
     getAccountEncryptionModeScopeKey,
     subscribeAccountEncryptionModeCacheInvalidation,
 } from '@/sync/api/account/apiAccountEncryptionMode';
-import { sharedSecretProvenanceSegments, sharedSecretStatusLabel } from '@/components/secrets/savedSecretRowCopy';
+import { sharedSecretProvenanceSegments, sharedSecretRowStatus, sharedSecretStatusLabel } from '@/components/secrets/savedSecretRowCopy';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -29,7 +29,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { t } from '@/text';
-import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
+import { CollectionStatusGlyph, type CollectionRowStatus } from '@/components/ui/lists/collection/CollectionStatusGlyph';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useNavigation } from '@/components/appShell/workspace/destinationRoute';
 import { useUnsavedDraftNavigationGuard } from '@/utils/navigation/useUnsavedDraftNavigationGuard';
@@ -524,12 +524,10 @@ const OwnedSharedSecretRow = React.memo(function OwnedSharedSecretRow(props: Rea
     const beginEdit = (mode: 'rename' | 'rotate') => { void runGuardedNavigation(() => { props.onBeginEdit?.(); setEditing(mode); }); };
     const name = entry.name ?? t('secrets.catalog.unavailableName');
     const storage = storageLabel(entry.encryptionMode);
-    const troubled = status !== 'ready';
     const summary = [
         kindLabel(entry.kind),
         storage,
         audienceSummary(entry),
-        troubled ? sharedSecretStatusLabel(status) : null,
     ].filter((part): part is string => Boolean(part)).join(' · ');
     // Conversion rewrites the resource's content through the same update a rotation uses, so it is
     // offered exactly where a rotation is, out of the row's known current mode, and only where the
@@ -551,8 +549,8 @@ const OwnedSharedSecretRow = React.memo(function OwnedSharedSecretRow(props: Rea
                     testID={`saved-secret:${entry.ref}:header`}
                     title={name}
                     subtitle={summary}
-                    subtitleLeading={troubled ? <View style={collectionListStyles.troubleDot} /> : undefined}
-                    accessibilityLabel={[name, t('secrets.catalog.relationship.owner'), summary].join(', ')}
+                    rightElement={secretStatusGlyph(entry.ref, sharedSecretRowStatus(status), sharedSecretStatusLabel(status))}
+                    accessibilityLabel={[name, t('secrets.catalog.relationship.owner'), summary, ...statusWords(status)].join(', ')}
                     showChevron={false}
                 />
             )}
@@ -613,21 +611,29 @@ function RecipientSecretRow(props: Readonly<{
 }>) {
     const { entry, status } = props;
     const name = entry.name ?? t('secrets.catalog.unavailableName');
-    const troubled = status !== 'ready';
-    const provenance = sharedSecretProvenanceSegments(entry);
-    const summary = [...provenance, ...(troubled ? [sharedSecretStatusLabel(status)] : [])].join(' · ');
+    const summary = sharedSecretProvenanceSegments(entry).join(' · ');
     return (
         <Item
             testID={`saved-secret:${entry.ref}`}
             title={name}
             subtitle={summary}
             subtitleLines={0}
-            subtitleLeading={troubled ? <View style={collectionListStyles.troubleDot} /> : undefined}
-            accessibilityLabel={[name, t('secrets.catalog.relationship.recipient'), summary].join(', ')}
+            rightElement={secretStatusGlyph(entry.ref, sharedSecretRowStatus(status), sharedSecretStatusLabel(status))}
+            accessibilityLabel={[name, t('secrets.catalog.relationship.recipient'), summary, ...statusWords(status)].join(', ')}
             mode="info"
             showChevron={false}
         />
     );
+}
+
+/** A troubled secret's status in its row's end slot: icon only, the word in the tooltip (P8); a ready secret has none. */
+function secretStatusGlyph(ref: string, status: CollectionRowStatus | null, label: string): React.ReactNode {
+    return status ? <CollectionStatusGlyph testID={`saved-secret:${ref}:status`} status={status} label={label} /> : undefined;
+}
+
+/** The status word an assistive reader still hears, since the sighted row draws only the glyph. */
+function statusWords(status: SavedSecretCatalogEntryV1['materialStatus']): readonly string[] {
+    return status === 'ready' ? [] : [sharedSecretStatusLabel(status)];
 }
 
 /** A secret the Home cannot read: informational, with the owner's delete as the only repair. */
@@ -645,7 +651,6 @@ function CorruptSecretRow(props: Readonly<{
             testID={props.testID}
             title={name}
             subtitle={status}
-            subtitleLeading={<View style={collectionListStyles.troubleDot} />}
             accessibilityLabel={[
                 name,
                 props.relationship === 'owner'
@@ -657,13 +662,21 @@ function CorruptSecretRow(props: Readonly<{
             showChevron={false}
             rightElementOutsidePressable={Boolean(props.onDelete)}
             rightElement={props.onDelete ? (
-                <DeleteButton testID={props.deleteTestID ?? `${props.testID}:delete`} disabled={props.disabled} onPress={props.onDelete} />
-            ) : undefined}
+                <View style={stylesheet.endSlot}>
+                    <CollectionStatusGlyph status="failed" label={status} />
+                    <DeleteButton testID={props.deleteTestID ?? `${props.testID}:delete`} disabled={props.disabled} onPress={props.onDelete} />
+                </View>
+            ) : <CollectionStatusGlyph status="failed" label={status} />}
         />
     );
 }
 
 const stylesheet = StyleSheet.create(() => ({
+    endSlot: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
     actions: {
         flexDirection: 'row',
         flexWrap: 'wrap',
