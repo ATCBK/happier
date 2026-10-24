@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 
 import { parseKeyboardCommands, renderKeyboardReferenceMarkdown } from './generateKeyboardReference.mjs';
 
-test('preserves browser and desktop-host availability in shortcut projections', () => {
-  const commands = parseKeyboardCommands(`export const commands = [
+test('projects mapped space ordinals and their OS/host scopes from the real registry', async () => {
+  const source = await readFile(new URL('../../ui/sources/keyboard/commands.ts', import.meta.url), 'utf8');
+  const commands = await parseKeyboardCommands(source);
+  assert.equal(commands.has('sessionList.space.select1'), true);
+  assert.deepEqual(commands.get('sessionList.space.select9'), [
+    { key: 'Ctrl+9', scope: 'macOS' },
+    { key: 'Alt+9', scope: 'Windows, Linux desktop' },
+  ]);
+});
+
+test('preserves browser and desktop-host availability in shortcut projections', async () => {
+  const commands = await parseKeyboardCommands(`export const defaultKeyboardCommands = [
     {
       id: 'session.pending.next',
       defaultBindings: [
@@ -27,7 +37,7 @@ test('documents Search independent gating and account-synced shortcut preference
   try {
     const commandsPath = join(root, 'commands.ts');
     const settingsPath = join(root, 'accountSettings.ts');
-    await writeFile(commandsPath, `export const commands = [
+    await writeFile(commandsPath, `export const defaultKeyboardCommands = [
     {
       id: 'commandPalette.open',
       defaultBinding: { binding: 'Alt+K' },

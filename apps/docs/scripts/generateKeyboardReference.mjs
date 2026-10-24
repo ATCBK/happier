@@ -8,14 +8,14 @@
  * not what the registry says on any platform; a generated page cannot repeat
  * that mistake.
  *
- * Commands are parsed from source because `apps/ui` is an Expo app with path
- * aliases and is not importable from a plain Node script. `parseKeyboardCommands`
- * throws if it finds nothing, so a shape change fails here rather than
- * publishing an empty table.
+ * The command registry is a pure TypeScript module with type-only imports. Read
+ * its actual exported declarations, including mapped ordinals, rather than
+ * reconstructing a second registry from source formatting.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..');
@@ -50,6 +50,10 @@ const GROUPS = [
       'sessions.selection.extendDown': 'Extend the selection down',
       'sessions.selection.selectAll': 'Select every session',
       'sessions.selection.clear': 'Clear the selection',
+      'sessionList.filter.open': 'Open list filters',
+      ...Object.fromEntries(Array.from({ length: 9 }, (_, index) => [
+        `sessionList.space.select${index + 1}`, `Select space ${index + 1}`,
+      ])),
     },
   },
   {
@@ -67,8 +71,6 @@ const GROUPS = [
   {
     title: 'Reading the transcript',
     commands: {
-      'transcript.message.next': 'Next message',
-      'transcript.message.previous': 'Previous message',
       'transcript.scroll.top': 'Jump to the top',
       'transcript.scroll.bottom': 'Jump to the live tail',
       'transcript.scroll.pageUp': 'Page up',
@@ -97,31 +99,39 @@ const GROUPS = [
   },
 ];
 
-export function parseKeyboardCommands(source) {
+export async function parseKeyboardCommands(source) {
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    reportDiagnostics: true,
+  });
+  const errors = (compiled.diagnostics ?? []).filter(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error);
+  if (errors.length) throw new Error(ts.formatDiagnosticsWithColorAndContext(errors, {
+    getCanonicalFileName: path => path, getCurrentDirectory: () => REPO, getNewLine: () => '\n',
+  }));
+  // Only the repository's pure declaration module is evaluated; type imports disappear.
+  const module = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputText).toString('base64')}`);
+  const registry = module.defaultKeyboardCommands;
+  if (!Array.isArray(registry) || registry.length === 0) throw new Error('keyboard commands.ts exported no commands');
   const commands = new Map();
-  for (const block of source.split(/\n {4}\{\n/)) {
-    const id = /id: '([^']+)'/.exec(block);
-    if (!id) continue;
+  const platformLabels = { macos: 'macOS', windows: 'Windows', linux: 'Linux', ios: 'iOS', android: 'Android' };
+  for (const command of registry) {
+    if (typeof command.id !== 'string') throw new Error('keyboard command has no identity');
     const bindings = [];
-    // `defaultBinding: { binding: 'X' }` or a `defaultBindings: [...]` array
-    // whose members may be scoped by platform.
-    for (const entry of block.split(/\{\s*binding:/).slice(1)) {
-      const key = /^\s*'([^']+)'/.exec(entry);
-      if (!key) continue;
-      const platforms = /platforms:\s*\[([^\]]*)\]/.exec(entry);
-      const blocked = /blockedSurfaces:\s*\[([^\]]*)\]/.exec(entry);
-      const webHost = /webHost:\s*'(browser|desktop)'/.exec(entry);
+    for (const binding of command.defaultBindings ?? (command.defaultBinding ? [command.defaultBinding] : [])) {
+      const platforms = binding.platforms ?? [];
+      const blocked = binding.blockedSurfaces ?? [];
+      const operatingSystems = platforms.filter(platform => platform !== 'web').map(platform => platformLabels[platform]).join(', ');
       let scope = null;
-      if (platforms && platforms[1].includes('web')) scope = 'web';
-      else if (blocked && blocked[1].includes('web')) scope = 'everywhere else';
-      if (webHost && scope !== 'everywhere else') {
-        scope = scope === 'web' ? webHost[1] : `${webHost[1]} and native`;
+      if (platforms.includes('web') || blocked.includes('native')) scope = 'web';
+      else if (blocked.includes('web')) scope = 'everywhere else';
+      if (binding.webHost && scope !== 'everywhere else') {
+        scope = scope === 'web' ? binding.webHost : `${binding.webHost} and native`;
       }
-      bindings.push({ key: key[1], scope });
+      if (operatingSystems) scope = scope ? `${operatingSystems} ${scope}` : operatingSystems;
+      bindings.push({ key: binding.binding, scope });
     }
-    commands.set(id[1], bindings);
+    commands.set(command.id, bindings);
   }
-  if (commands.size === 0) throw new Error('keyboard commands.ts parsed to zero commands');
   return commands;
 }
 
@@ -152,7 +162,7 @@ export async function renderKeyboardReferenceMarkdown({
   commandsPath = COMMANDS,
   settingsPath = SETTINGS,
 } = {}) {
-  const commands = parseKeyboardCommands(readFileSync(commandsPath, 'utf8'));
+  const commands = await parseKeyboardCommands(readFileSync(commandsPath, 'utf8'));
   const settings = readFileSync(settingsPath, 'utf8');
   const paletteOn = readDefault(settings, 'commandPaletteEnabled');
   const shortcutsOn = readDefault(settings, 'keyboardShortcutsV2Enabled');
