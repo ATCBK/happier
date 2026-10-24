@@ -123,11 +123,23 @@ export const HAPPIER_COLLECTION_LIST_METRICS = Object.freeze({
   rowRadius: HAPPIER_RADIUS_V1.md,
   /**
    * A navigation row: one line on the compact list step, its glyph in a fixed leading column so
-   * titles align whatever the glyph's shape. These are core's compact `Item` values (36 tall on pointer
-   * platforms, the dense row of the spacing rhythm; glyph box 20 on the web, 18 on iOS; 10 to the
-   * title), which core navigation rows draw with.
+   * titles align whatever the glyph's shape. These are core's compact `Item` values (32 tall on pointer
+   * platforms, the lab's dense pointer row (`clflat`, P4 §4.5); glyph box 20 on the web, 18 on iOS; 10 to
+   * the title), which core navigation rows draw with. Touch platforms keep their own floor.
    */
-  rowMinHeight: 36,
+  rowMinHeight: 32,
+  /**
+   * A described row: the navigation row with one quiet context line under its title (a pool's service and
+   * active account, a skill's description). One shape for every column, never a per-column height.
+   */
+  describedRowMinHeight: 44,
+  /**
+   * A disclosure tree in a column (a service and its accounts): the caret's box and its gap to the parent's
+   * mark. A disclosed child carries no mark and starts on the parent's title edge
+   * ({@link resolveHappierCollectionTreeChildIndentPx}).
+   */
+  treeCaretBox: 12,
+  treeCaretGap: 4,
   rowGlyphBox: Platform.OS === 'ios' ? 18 : 20,
   rowGlyphGap: 10,
   /** The header's title row (title, count, the header action's 30px icon buttons). */
@@ -174,7 +186,8 @@ export const HAPPIER_COLLECTION_LIST_TEXT: Readonly<Record<HappierCollectionList
   count: collectionTextStep('body'),
   // The line under the title (whose list, who sees it): the quiet body step.
   subtitle: collectionTextStep('body'),
-  groupTitle: collectionTextStep('meta', 'semiBold'),
+  // A navigation column's group label is quiet (lab `clflat` `.ls-h`): medium, so the rows under it lead.
+  groupTitle: collectionTextStep('meta', 'medium'),
   // A group label inside a page section's sheet is a sub-heading between the section title and its
   // rows (the event a set of triggers answers): a step above the rows' description, in the text tone,
   // so it reads as a heading rather than a quiet column label.
@@ -199,6 +212,15 @@ export const COLLECTION_RAIL_MIN_WIDTH_PX = Math.ceil(
       + HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox,
   ),
 );
+
+/**
+ * How far a disclosed child row is indented so its title starts on its parent's title edge: the parent's
+ * caret, the caret's gap, the mark's box and the mark's gap to the title.
+ */
+export function resolveHappierCollectionTreeChildIndentPx(): number {
+  const M = HAPPIER_COLLECTION_LIST_METRICS;
+  return M.treeCaretBox + M.treeCaretGap + M.rowGlyphBox + M.rowGlyphGap;
+}
 
 /** A row's content inset (its own horizontal padding inside the gutter), plus a disclosure indent. */
 export function resolveHappierCollectionListRowPadding(indentPx = 0): Readonly<{ paddingLeft: number; paddingRight: number }> {
@@ -334,6 +356,7 @@ const groupLabelMarkStyle: ViewStyle = { width: 16, height: 16, alignItems: 'cen
 const groupLabelDisclosureStyle: HappierPortableStyle = { ...groupLabelLeadStyle, gap: 4, alignSelf: 'stretch' };
 const groupLabelDisclosureMarkStyle: ViewStyle = { ...groupLabelMarkStyle, marginRight: 4 };
 const groupLabelSpacerStyle: ViewStyle = { flex: 1, minWidth: 8 };
+const groupLabelEndCountStyle: ViewStyle = { marginRight: M.contentInset - M.rowInset };
 const groupLabelActionsStyle: ViewStyle = { flexDirection: 'row', alignItems: 'center', gap: 2 };
 const groupLabelActionsHiddenStyle: ViewStyle = { opacity: 0 };
 const groupLabelChevronStyle: HappierPortableStyle = { width: 16, height: 16, alignItems: 'center', justifyContent: 'center' };
@@ -538,7 +561,13 @@ export function HappierCollectionListGroupLabel(props: Readonly<{
         {/* With a trailing state the count stays with its title ("Skills 6 … Loaded when used"); alone it is the end column. */}
         {props.count !== undefined && (props.trailing != null || props.countPlacement === 'title') ? <Text role="groupCount" {...(props.countTestID === undefined ? {} : { testID: props.countTestID })}>{props.count}</Text> : null}
       </View>
-      {props.count !== undefined && props.trailing == null && props.countPlacement !== 'title' ? <Text role="groupCount" {...(props.countTestID === undefined ? {} : { testID: props.countTestID })}>{props.count}</Text> : null}
+      {props.count !== undefined && props.trailing == null && props.countPlacement !== 'title' ? (
+        // The end column is the rows' trailing text edge, where their counts end; the label's own padding stops
+        // at the gutter for its hover actions.
+        <View style={pageSection || props.presentation === 'menu' ? null : groupLabelEndCountStyle}>
+          <Text role="groupCount" {...(props.countTestID === undefined ? {} : { testID: props.countTestID })}>{props.count}</Text>
+        </View>
+      ) : null}
       {props.trailing ?? null}
     </View>
   );
