@@ -13,7 +13,7 @@ import { inReadSnapshot, inTx } from "@/storage/inTx";
 import { readTeamOperationAuthenticationFromRequest } from "@/app/teams/actorContext";
 import { admitManagedAcquire } from "./managedAcquire";
 import { submitManagedAcquire, reportManagedAcquire, createManagedBootstrapCredential, requireManagedEnrollmentInTx, admitManagedControl, submitManagedIntent, reportManagedIntent, admitManagedPolicy, prepareManagedPolicy, requireManagedPolicyPurposeInTx } from "./managedMutations";
-import { ManagedMachineError, readManagedMachineInTx, requireCurrentManagedMachineInTx, projectManagedMachineInTx, projectManagedMachinesInTx, requireManagedControllerInTx, sameManagedInput, readManagedCurrentRequestId } from "./managedRows";
+import { ManagedMachineError, readManagedMachineInTx, requireCurrentManagedMachineInTx, projectManagedMachineInTx, projectManagedMachinesInTx, requireManagedControllerInTx, sameManagedInput, readManagedCurrentRequestId, readManagedAdmissionState } from "./managedRows";
 import { getManagedMachine, listManagedMachines, cancelManagedCreation } from "./managedRead";
 import { readManagedWakeTargets } from './managedWake';
 import { markPendingActivationFailed } from '@/app/session/pending/pendingMessageService';
@@ -108,7 +108,7 @@ export function registerManagedMachineRoutes(app: Fastify): void {
         async (request, reply) => respond(reply, () => skipManagedMachineSetup({ actorAccountId: request.userId, input: request.body })));
     app.post('/v1/machines/managed/controller/policies', { preHandler: app.authenticate, schema: { body: ManagedPolicyCensusInputV1Schema, response: { 200: ManagedPolicyCensusOutputV1Schema } } }, async (request, reply) => respond(reply, async () => {
         const { homeId, controller, proof } = request.body;
-        const machines = await inReadSnapshot(async tx => {
+        const census = await inReadSnapshot(async tx => {
             await requireManagedControllerInTx(tx, { homeId, controller, custodianAccountId: request.userId });
             const current = await tx.machine.findUniqueOrThrow({ where: { id: controller.machineId } });
             if (!current.installationPublicKey || !verifyMachineInstallationProof({ payload: { version: 1, machineId: controller.machineId,
@@ -118,10 +118,16 @@ export function registerManagedMachineRoutes(app: Fastify): void {
                 controllerMachineId: controller.machineId, controllerInstallationId: controller.installationId,
                 archivedAt: null, OR: [{ allocation: 'bound', creationState: 'active' },
                     { allocation: { in: ['bound', 'may-exist'] }, creationState: 'canceled', desired: 'delete', desiredWhen: 'now' }] } });
-            return projectManagedMachinesInTx(tx, rows);
+            const retentionContinuations = rows.flatMap(row => {
+                const admitted = readManagedAdmissionState(row.admittedInput);
+                return admitted.submittedEffect && admitted.currentAdmission?.kind === 'policy'
+                    && admitted.currentAdmission.request.purpose.kind === 'retention'
+                    ? [{ managedId: row.id, requestId: admitted.submittedEffect.requestId }] : [];
+            });
+            return { machines: await projectManagedMachinesInTx(tx, rows), retentionContinuations };
         });
         const { targets } = await readManagedWakeTargets({ actorAccountId: request.userId, request: { homeId, controller } });
-        return { machines, targets };
+        return { ...census, targets };
     }));
     app.post('/v1/machines/managed/controller/prepare-policy', { preHandler: app.authenticate, schema: { body: ManagedPolicyAdmissionInputV1Schema, response: { 200: ManagedControllerMachineOutputV1Schema } } }, async (request, reply) => respond(reply, async () => {
         const verified = await requireManagedPolicyRequest(request, '/v1/machines/managed/controller/prepare-policy', request.body, 'admit');

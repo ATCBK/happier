@@ -27,6 +27,7 @@ import { resolveMachineAccessInTx } from '@/app/machines/machineAccess';
 import { createAuthenticatedRouteRequest } from '@/app/api/testkit/requestFixtures';
 import { machinesRoutes } from '@/app/api/routes/machines/machinesRoutes';
 import { ManagedAdmissionOutputV1Schema, ManagedControllerMachineOutputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ManagedPolicyCensusOutputV1Schema } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 
 describe("managed acquisition durable authority", () => {
     let harness: LightSqliteHarness;
@@ -208,6 +209,52 @@ describe("managed acquisition durable authority", () => {
         expect(await inTx(tx => readManagedResourceDependenciesInTx(tx, {
             kind: 'connected-account', accountId: account.id, ref: { ...accounts[0]!, accountId: 'unrelated' },
         }))).toEqual([]);
+    });
+
+    it('projects only Home-admitted retention continuations, preserving manual rows in the census', async () => {
+        const homeId = `srv_${'a'.repeat(32)}`;
+        const account = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const keys = tweetnacl.sign.keyPair();
+        const controller = { machineId: crypto.randomUUID(), installationId: crypto.randomUUID() };
+        await db.machine.create({ data: { id: controller.machineId, accountId: account.id, metadata: '{}',
+            installationId: controller.installationId, installationPublicKey: keys.publicKey } });
+        const provider = { pluginId: 'fixture.compute', localId: 'vm' };
+        const expected: Array<{ managedId: string; requestId: string }> = [];
+        const ids: string[] = [];
+        for (const kind of ['control', 'policy'] as const) for (const intent of ['stop', 'suspend'] as const) {
+            const requestId = crypto.randomUUID();
+            const row = await db.managedMachine.create({ data: { homeId, custodianAccountId: account.id,
+                controllerMachineId: controller.machineId, controllerInstallationId: controller.installationId,
+                admittedActionRequestId: crypto.randomUUID(), admittedInput: {}, allocation: 'bound', creationState: 'active',
+                launch: { provider, schemaVersion: 1, name: 'Guest', choices: {} },
+                resource: { contributionRef: provider, schemaVersion: 1, value: {} },
+                desired: intent, desiredWhen: 'now', intentRevision: 1,
+                retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' }, wakeOnAcceptedMessage: true } });
+            const correlation = { homeId, managedId: row.id, controller, expectedIntentRevision: 1, requestId };
+            await db.managedMachine.update({ where: { id: row.id }, data: { admittedInput: {
+                currentAdmission: kind === 'policy' ? { kind, request: { ...correlation, purpose: { kind: 'retention' } } }
+                    : { kind, request: { action: 'machines.managed.power.set', requestId,
+                        input: { homeId, managedId: row.id, intent, when: 'now', expectedRevision: 0 } } },
+                submittedEffect: { ...correlation, intent },
+            } } });
+            ids.push(row.id);
+            if (kind === 'policy') expected.push({ managedId: row.id, requestId });
+        }
+        const app = fastify().withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+        app.decorate('authenticate', async (request: FastifyRequest) => { request.userId = account.id; });
+        registerManagedMachineRoutes(app);
+        try {
+            const response = await app.inject({ method: 'POST', url: '/v1/machines/managed/controller/policies', payload: {
+                homeId, controller, proof: createManagedPolicyCensusProofV1({ homeId, controller,
+                    custodianAccountId: account.id, privateKey: keys.secretKey }),
+            } });
+            expect(response.statusCode, response.body).toBe(200);
+            const census = ManagedPolicyCensusOutputV1Schema.parse(response.json());
+            expect(census.machines.map(machine => machine.id).sort()).toEqual(ids.sort());
+            expect(census).toHaveProperty('retentionContinuations', expect.arrayContaining(expected));
+            expect(response.json().retentionContinuations).toHaveLength(expected.length);
+        } finally { await app.close(); }
     });
 
     it('includes canceled pending native cleanup in the current controller census before Machine binding', async () => {

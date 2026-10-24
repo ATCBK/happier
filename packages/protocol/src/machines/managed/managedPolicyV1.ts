@@ -34,7 +34,13 @@ export type ManagedPolicyPurposeV1 = z.infer<typeof ManagedPolicyPurposeV1Schema
 export const ManagedPolicyAdmissionInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ManagedControllerCurrentnessV1Schema, { purpose: ManagedPolicyPurposeV1Schema })));
 export type ManagedPolicyAdmissionInputV1 = z.infer<typeof ManagedPolicyAdmissionInputV1Schema>;
 export const ManagedPolicyCensusInputV1Schema = lazyZodSchema(() => z.strictObject({ homeId: z.string().check(z.minLength(1)), controller: ManagedControllerV1Schema, proof: MachineInstallationProofV1Schema }));
-export const ManagedPolicyCensusOutputV1Schema = lazyZodSchema(() => z.strictObject({ machines: z.array(ManagedMachineV1Schema), targets: z.array(ManagedWakeTargetV1Schema) }));
+export const ManagedPolicyCensusOutputV1Schema = lazyZodSchema(() => z.strictObject({
+  machines: z.array(ManagedMachineV1Schema), targets: z.array(ManagedWakeTargetV1Schema),
+  /** Home's current policy admission owns these pending effects; intent equality is not provenance. */
+  retentionContinuations: z.optional(z.array(z.strictObject({
+    managedId: z.string().check(z.minLength(1)), requestId: z.string().check(z.minLength(1)),
+  }))),
+}));
 export function createManagedPolicyCensusProofV1(input: Readonly<{ homeId: string; controller: ManagedControllerV1; custodianAccountId: string; privateKey: string | Uint8Array }>) {
   return signMachineInstallationProof({ payload: { version: 1, machineId: input.controller.machineId, installationId: input.controller.installationId,
     accountId: input.custodianAccountId, managedPolicyCensus: { homeId: input.homeId } }, privateKey: input.privateKey });
