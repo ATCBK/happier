@@ -89,8 +89,10 @@ export async function listAutomationDefinitions(
     if (query.workflowDefinitionId !== undefined) search.set('workflowDefinitionId', query.workflowDefinitionId);
     if (query.scopeSessionId !== undefined) search.set('scopeSessionId', query.scopeSessionId);
     if (query.scope !== undefined) search.set('scope', query.scope);
-    const raw = await readAutomationApiJson(`/v3/automations?${search.toString()}`, {
-        headers: getAutomationAuthHeaders(credentials),
+    const selectedPage = query.workflowDefinitionIds !== undefined;
+    const raw = await readAutomationApiJson(selectedPage ? '/v3/automations/query' : `/v3/automations?${search.toString()}`, {
+        headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: selectedPage }),
+        ...(selectedPage ? { method: 'POST', body: JSON.stringify(query) } : {}),
     }, { includeAuth: false }, context, context?.request ?? serverFetch, credentials);
     return AutomationDefinitionListResponseSchema.parse(raw);
 }

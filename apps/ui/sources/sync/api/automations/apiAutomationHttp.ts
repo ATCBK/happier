@@ -55,7 +55,7 @@ export async function readAutomationApiJson(path: string, init: RequestInit, opt
     const retirement = context.accountLifetime?.onRetire(() => abort.abort());
     const cancellation = mergeAbortSignals([init.signal ?? undefined, context.invocationSignal, abort.signal]);
     try {
-        const result = await automationReads.run(JSON.stringify([bindingKey, path]),
+        const result = await automationReads.run(JSON.stringify([bindingKey, path, init.method ?? 'GET', init.body ?? null]),
             signal => transport.read(path, { ...init, signal }, options, readAutomationJsonOrThrow),
             { scope, signal: cancellation.signal });
         context.assertCurrent?.();
