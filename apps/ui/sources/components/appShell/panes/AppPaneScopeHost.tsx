@@ -354,14 +354,18 @@ function PluginAppPaneSurface(props: Readonly<{
 
 const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Readonly<{ paneAdapter: ResolvedPaneAdapter | null }>) => {
     const enclosingNavigationBinding = usePluginSurfaceDestinationNavigationBinding();
-    const { dispatch, scopeState, overlayFocusReturnOwner } = useAppPaneContext(value => ({
+    const { dispatch, right, bottom, detailsOpen, detailsOpenedFrom, mainHidden, overlayFocusReturnOwner } = useAppPaneContext(value => ({
         dispatch: value.dispatch,
-        scopeState: value.state.scopes[props.scopeId],
+        right: value.state.scopes[props.scopeId]?.right,
+        bottom: value.state.scopes[props.scopeId]?.bottom,
+        detailsOpen: value.state.scopes[props.scopeId]?.details.isOpen === true,
+        detailsOpenedFrom: value.state.scopes[props.scopeId]?.details.openedFrom ?? null,
+        mainHidden: value.state.scopes[props.scopeId]?.mainHidden === true,
         overlayFocusReturnOwner: value.overlayFocusReturnOwner,
     }));
-    const pane = useAppPaneScope(props.scopeId);
+    const pane = useAppPaneScope(props.scopeId, () => null);
     const deviceType = useDeviceType();
-    const appProjection = useAppShellPluginUiProjection(value => scopeState?.right.selectedDestination?.kind === 'plugin'
+    const appProjection = useAppShellPluginUiProjection(value => right?.selectedDestination?.kind === 'plugin'
         ? value.pluginUiProjection : null);
     const screenFocused = useDestinationFocus();
     // Activation reads the current creation input; resizing or changing preferences
@@ -377,9 +381,8 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
         return () => dispatch({ type: 'releaseScope', scopeId: props.scopeId });
     }, [dispatch, props.scopeId, screenFocused]);
 
-    const rightOpen = Boolean(scopeState?.right.isOpen);
-    const detailsOpen = Boolean(scopeState?.details.isOpen);
-    const bottomOpen = Boolean(scopeState?.bottom?.isOpen);
+    const rightOpen = Boolean(right?.isOpen);
+    const bottomOpen = Boolean(bottom?.isOpen);
     const paneAdapter = props.paneAdapter;
     const showActionRail = useAppPaneActionRailVisible(props.scopeId, paneAdapter?.rightSidebarAdapter ?? null);
     const detailsPaneEnabled = paneAdapter?.detailsPaneEnabled !== false;
@@ -390,7 +393,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
     const effectiveDetailsOpen = arrangement === 'editor' || (destinationOwnsDetails
         ? destinationDetails !== null
         : detailsPaneEnabled ? detailsOpen : false);
-    const mainHiddenPreference = scopeState?.mainHidden === true;
+    const mainHiddenPreference = mainHidden;
     const resolveMainHidden = React.useCallback((layout: ResolvedPaneLayout) => (
         props.mainColumn !== undefined && mainHiddenPreference && layout.kind !== 'single'
         && (rightOpen || effectiveDetailsOpen)
@@ -438,24 +441,24 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
         container: 'rightPane',
         scope: paneSurfaceScope,
         projection: paneProjection,
-        selectedDestination: scopeState?.right.selectedDestination,
+        selectedDestination: right?.selectedDestination,
         runtimeAdmission,
-    }), [paneProjection, paneSurfaceScope, runtimeAdmission, scopeState?.right.selectedDestination]);
+    }), [paneProjection, paneSurfaceScope, runtimeAdmission, right?.selectedDestination]);
     const rightSidebarSelection = React.useMemo(() => resolveScopedPaneDestination({
         container: 'rightSidebarTab',
         scope: paneSurfaceScope,
         projection: paneProjection,
         appProjection,
-        selectedDestination: scopeState?.right.selectedDestination,
+        selectedDestination: right?.selectedDestination,
         runtimeAdmission,
-    }), [appProjection, paneProjection, paneSurfaceScope, runtimeAdmission, scopeState?.right.selectedDestination]);
+    }), [appProjection, paneProjection, paneSurfaceScope, runtimeAdmission, right?.selectedDestination]);
     const bottomSelection = React.useMemo(() => resolveScopedPaneDestination({
         container: 'bottomPane',
         scope: paneSurfaceScope,
         projection: paneProjection,
-        selectedDestination: scopeState?.bottom.selectedDestination,
+        selectedDestination: bottom?.selectedDestination,
         runtimeAdmission,
-    }), [paneProjection, paneSurfaceScope, runtimeAdmission, scopeState?.bottom.selectedDestination]);
+    }), [paneProjection, paneSurfaceScope, runtimeAdmission, bottom?.selectedDestination]);
 
     const rightPaneBuiltinAdapter = paneAdapter?.rightPaneBuiltinAdapter ?? null;
     const rightSidebarAdapter = paneAdapter?.rightSidebarAdapter ?? null;
@@ -667,7 +670,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
     // is unavailable. Only a known binding for another container proceeds to
     // the direct right-pane resolver; otherwise retain the selected tab's own
     // tombstone reason rather than recasting it as a container mismatch.
-    const selectedRightDestinationIsSidebarTab = scopeState?.right.selectedDestination?.kind === 'plugin'
+    const selectedRightDestinationIsSidebarTab = right?.selectedDestination?.kind === 'plugin'
         && (
             rightSidebarSelection.kind === 'available'
             || rightSidebarSelection.kind === 'unresolved'
@@ -694,7 +697,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
                     ? <PluginReactNativeUnavailable diagnostics={[rightSelection.reason]} />
                     : renderBuiltinPane({
                         adapter: rightPaneBuiltinAdapter,
-                        selectedDestination: scopeState?.right.selectedDestination,
+                        selectedDestination: right?.selectedDestination,
                         scopeId: props.scopeId,
                     });
     const detailsPane = destinationOwnsDetails
@@ -716,7 +719,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
                 ? <PluginReactNativeUnavailable diagnostics={[bottomSelection.reason]} />
                     : renderBuiltinPane({
                         adapter: bottomPaneBuiltinAdapter,
-                        selectedDestination: scopeState?.bottom.selectedDestination,
+                        selectedDestination: bottom?.selectedDestination,
                         scopeId: props.scopeId,
                     });
 
@@ -776,7 +779,7 @@ const AppPaneScopeHostContent = React.memo((props: AppPaneScopeHostProps & Reado
             rightPlacement={rightOpen ? rightPlacement : 'side'}
             detailsOpen={effectiveDetailsOpen}
             destinationOwnsDetails={destinationOwnsDetails}
-            detailsOpenedFrom={scopeState?.details.openedFrom ?? null}
+            detailsOpenedFrom={detailsOpenedFrom}
             bottomOpen={bottomOpen}
             arrangement={arrangement}
             mainHidden={props.mainColumn !== undefined && mainHiddenPreference}

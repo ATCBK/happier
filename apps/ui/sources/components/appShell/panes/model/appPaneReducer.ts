@@ -66,7 +66,8 @@ export type PaneScopeState = Readonly<{
 }>;
 
 /** Used only when activation creates a scope; retained state always wins. */
-export type InitialRightPaneState = Readonly<Pick<PaneScopeState['right'], 'isOpen' | 'activeTabId'>>;
+export type InitialRightPaneState = Readonly<Pick<PaneScopeState['right'], 'isOpen' | 'activeTabId'>
+    & Partial<Pick<PaneScopeState['right'], 'selectedDestination'>>>;
 
 export type AppPaneState = Readonly<{
     activeScopeId: string | null;

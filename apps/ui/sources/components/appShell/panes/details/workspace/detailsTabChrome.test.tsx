@@ -39,7 +39,7 @@ describe('Details unsaved tab chrome', () => {
         const hook = await renderHook(() => useDetailsTabUnsavedKeys(pinTab));
         const chrome = hook.getCurrent().chromeFor('file:a');
         await act(async () => chrome.setUnsaved(true));
-        expect(pinTab).toHaveBeenCalledWith('file:a');
+        expect(pinTab).toHaveBeenCalledWith('file:a', { persist: false });
         expect(hook.getCurrent().unsavedKeys.has('file:a')).toBe(true);
         await act(async () => chrome.setUnsaved(true));
         expect(pinTab).toHaveBeenCalledTimes(1);

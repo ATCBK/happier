@@ -91,7 +91,7 @@ export function useDetailsTabChrome(): DetailsTabChromeApi {
  * The group's record of unsaved tabs. It changes only when a tab's fact flips, so the strip
  * re-renders on an edit's first keystroke and on save, never per keystroke.
  */
-export function useDetailsTabUnsavedKeys(pinTab: (tabKey: string) => void): Readonly<{
+export function useDetailsTabUnsavedKeys(pinTab: (tabKey: string, options?: Readonly<{ persist?: boolean }>) => void): Readonly<{
     unsavedKeys: ReadonlySet<string>;
     chromeFor: (tabKey: string) => DetailsTabChromeApi;
 }> {
@@ -107,7 +107,7 @@ export function useDetailsTabUnsavedKeys(pinTab: (tabKey: string) => void): Read
             setUnsaved: (unsaved) => {
                 if (reportedUnsaved === unsaved) return;
                 reportedUnsaved = unsaved;
-                if (unsaved) pinTabRef.current(tabKey);
+                if (unsaved) pinTabRef.current(tabKey, { persist: false });
                 setUnsavedKeys((current) => {
                     if (current.has(tabKey) === unsaved) return current;
                     const next = new Set(current);

@@ -5,11 +5,13 @@ import { createBuiltinPaneDestination } from '../model/selectedPaneDestination';
 import * as React from 'react';
 import { Platform } from 'react-native';
 import { useAppPaneContext, useOptionalAppPaneContext } from '../AppPaneProvider';
+import { AppPaneContext } from '../AppPaneContext';
 import { usePaneOverlayFocusReturnRef } from './usePaneOverlayFocusReturnRef';
 import type { DetailsTab } from '../model/appPaneReducer';
 import { useLocalSetting } from '@/sync/domains/state/storage';
 import { resolveDetailsTabOpenAs, type LastPreviewOpen } from './resolveDetailsTabOpenAs';
 import { buildDetailsWorkspaceStateView } from '../details/workspace/detailsWorkspaceSelectors';
+import { getOwnDetailsWorkspaceRecordEntry } from '../details/workspace/detailsWorkspaceTypes';
 import type {
     DetailsWorkspaceAxis,
     DetailsWorkspaceOverlayState,
@@ -80,9 +82,9 @@ export type AppPaneScopeApi = {
         intent?: 'default' | 'pinned' | 'preview';
         restoreSourceOnRehydrate?: boolean;
     }>) => void;
-    setDetailsTabState: (tabKey: string, nextState: unknown) => void;
-    patchDetailsTabState: (tabKey: string, patch: Readonly<Record<string, unknown>>) => void;
-    pinDetailsTab: (tabKey: string) => void;
+    setDetailsTabState: (tabKey: string, nextState: unknown, options?: Readonly<{ persist?: boolean }>) => void;
+    patchDetailsTabState: (tabKey: string, patch: Readonly<Record<string, unknown>>, options?: Readonly<{ persist?: boolean }>) => void;
+    pinDetailsTab: (tabKey: string, options?: Readonly<{ persist?: boolean }>) => void;
     unpinDetailsTab: (tabKey: string) => void;
     closeDetails: () => void;
     /** The host-owned full-bleed Details workspace overlay. */
@@ -117,25 +119,19 @@ function getScopeState(scopeState: PaneScopeState | null): AppPaneScopeStateView
 
 /** The registered driver and scope API share one Details admission/presentation owner. */
 export function useOptionalDetailsTabOpener(scopeId: string): AppPaneScopeApi['openDetailsTab'] | null {
-    const context = useOptionalAppPaneContext(value => ({
-        dispatch: value.dispatch,
-        details: value.state.scopes[scopeId]?.details,
-    }));
+    const subscription = React.useContext(AppPaneContext);
+    const context = useOptionalAppPaneContext(value => ({ dispatch: value.dispatch }));
     const dispatch = context?.dispatch;
     const presentPane = usePanePresentation();
     const detailsPaneTabsBehavior = useLocalSetting('detailsPaneTabsBehavior');
     const paneRegion = usePaneRegion();
     const lastPreviewOpenRef = React.useRef<LastPreviewOpen | null>(null);
-    const detailsTabsRef = React.useRef<ReadonlyArray<{ key: string; isPreview: boolean; isPinned: boolean }> | null>(null);
-    const details = context?.details;
-    React.useEffect(() => {
-        detailsTabsRef.current = details ? buildDetailsWorkspaceStateView(details).tabs : null;
-    }, [details]);
     const openDetailsTab = React.useCallback<AppPaneScopeApi['openDetailsTab']>((tab, options) => {
         if (!dispatch) return;
         const intent = options?.intent ?? 'default';
         const behavior = detailsPaneTabsBehavior === 'persistent' ? 'persistent' : 'preview';
-        const existingTab = (detailsTabsRef.current ?? []).find(candidate => candidate.key === tab.key) ?? null;
+        const details = subscription?.getSnapshot().state.scopes[scopeId]?.details;
+        const existingTab = details ? getOwnDetailsWorkspaceRecordEntry(details.tabsByKey, tab.key) ?? null : null;
         const decision = resolveDetailsTabOpenAs({
             detailsPaneTabsBehavior: behavior, intent,
             platform: Platform.OS === 'web' ? 'web' : 'native', nowMs: Date.now(), tabKey: tab.key,
@@ -145,22 +141,26 @@ export function useOptionalDetailsTabOpener(scopeId: string): AppPaneScopeApi['o
         lastPreviewOpenRef.current = decision.nextLastPreviewOpen;
         dispatch({ type: 'openDetailsTab', scopeId, tab, openAs: decision.openAs, origin: options?.origin ?? paneRegion });
         if (options?.present !== false) presentPane?.({ scopeId, pane: 'details', tab });
-    }, [detailsPaneTabsBehavior, dispatch, paneRegion, presentPane, scopeId]);
+    }, [detailsPaneTabsBehavior, dispatch, paneRegion, presentPane, scopeId, subscription]);
     return dispatch ? openDetailsTab : null;
 }
 
-export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
-    const { scope, dispatch, overlayFocusReturnOwner, persistenceFailed } = useAppPaneContext(value => ({
-        scope: value.state.scopes[scopeId] ?? null,
+export function useAppPaneScope<T>(scopeId: string, selector: (scope: PaneScopeState | null) => T): Omit<AppPaneScopeApi, 'scopeState'> & { scopeState: T };
+export function useAppPaneScope(scopeId: string): AppPaneScopeApi;
+export function useAppPaneScope<T>(scopeId: string, selector?: (scope: PaneScopeState | null) => T) {
+    const subscription = React.useContext(AppPaneContext);
+    const { dispatch, overlayFocusReturnOwner, persistenceFailed } = useAppPaneContext(value => ({
         dispatch: value.dispatch,
         overlayFocusReturnOwner: value.overlayFocusReturnOwner,
         persistenceFailed: value.persistenceFailed,
     }));
-    const scopeState = React.useMemo(() => getScopeState(scope), [scope]);
+    const selected = useAppPaneContext(value => {
+        const scope = value.state.scopes[scopeId] ?? null;
+        return selector ? selector(scope) : scope;
+    });
+    const scopeState = React.useMemo(() => selector ? selected : getScopeState(selected as PaneScopeState | null), [selected, selector]);
     const presentPane = usePanePresentation();
     const openDetailsTab = useOptionalDetailsTabOpener(scopeId)!;
-    const selectedRightDestinationRef = React.useRef(scopeState?.right.selectedDestination ?? null);
-    selectedRightDestinationRef.current = scopeState?.right.selectedDestination ?? null;
     const rightOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'right');
     const detailsOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'details');
     const bottomOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'bottom');
@@ -180,10 +180,11 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     }, [recordNativeFocusTarget]);
 
     const openRight = React.useCallback((options?: Readonly<{ tabId?: string; present?: boolean }>) => {
-        if (options?.tabId) selectedRightDestinationRef.current = createBuiltinPaneDestination(options.tabId);
+        const destination = options?.tabId ? createBuiltinPaneDestination(options.tabId)
+            : subscription?.getSnapshot().state.scopes[scopeId]?.right.selectedDestination ?? null;
         dispatch({ type: 'openRight', scopeId, tabId: options?.tabId });
-        if (options?.present !== false) presentPane?.({ scopeId, pane: 'right', destination: selectedRightDestinationRef.current });
-    }, [dispatch, presentPane, scopeId]);
+        if (options?.present !== false) presentPane?.({ scopeId, pane: 'right', destination });
+    }, [dispatch, presentPane, scopeId, subscription]);
 
     const closeRight = React.useCallback(() => {
         dispatch({ type: 'closeRight', scopeId });
@@ -191,13 +192,11 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
 
     const setRightTab = React.useCallback((tabId: string) => {
         const destination = createBuiltinPaneDestination(tabId);
-        selectedRightDestinationRef.current = destination;
         dispatch({ type: 'setRightTab', scopeId, tabId });
         presentPane?.({ scopeId, pane: 'right', destination });
     }, [dispatch, presentPane, scopeId]);
 
     const selectRightDestination = React.useCallback((destination: SelectedPaneDestinationV1) => {
-        selectedRightDestinationRef.current = destination;
         dispatch({ type: 'selectRightDestination', scopeId, destination });
         presentPane?.({ scopeId, pane: 'right', destination });
     }, [dispatch, presentPane, scopeId]);
@@ -226,11 +225,11 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         dispatch({ type: 'setBottomTabState', scopeId, tabId, nextState });
     }, [dispatch, scopeId]);
 
-    const setDetailsTabState = React.useCallback((tabKey: string, nextState: unknown) => {
-        dispatch({ type: 'setDetailsTabState', scopeId, tabKey, nextState });
+    const setDetailsTabState = React.useCallback<AppPaneScopeApi['setDetailsTabState']>((tabKey, nextState, options) => {
+        dispatch({ type: 'setDetailsTabState', scopeId, tabKey, nextState, ...options });
     }, [dispatch, scopeId]);
-    const patchDetailsTabState = React.useCallback((tabKey: string, patch: Readonly<Record<string, unknown>>) => {
-        dispatch({ type: 'patchDetailsTabState', scopeId, tabKey, patch });
+    const patchDetailsTabState = React.useCallback<AppPaneScopeApi['patchDetailsTabState']>((tabKey, patch, options) => {
+        dispatch({ type: 'patchDetailsTabState', scopeId, tabKey, patch, ...options });
     }, [dispatch, scopeId]);
 
     const replaceDetailsTab = React.useCallback((tabKey: string, tab: DetailsTab, options?: Readonly<{
@@ -249,8 +248,8 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         });
     }, [dispatch, scopeId]);
 
-    const pinDetailsTab = React.useCallback((tabKey: string) => {
-        dispatch({ type: 'pinDetailsTab', scopeId, tabKey });
+    const pinDetailsTab = React.useCallback<AppPaneScopeApi['pinDetailsTab']>((tabKey, options) => {
+        dispatch({ type: 'pinDetailsTab', scopeId, tabKey, ...options });
     }, [dispatch, scopeId]);
 
     const unpinDetailsTab = React.useCallback((tabKey: string) => {

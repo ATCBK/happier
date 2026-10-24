@@ -196,6 +196,21 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
     }));
     const [persistenceFailed, setPersistenceFailed] = useState(false);
     const stateRef = useRef(state);
+    const persistedScopesRef = useRef<AppPaneState['scopes'] | null>(null);
+    // Reducer intents own persistence. Transient draft/dirty publications must
+    // not serialize local settings from a passive effect after every edit.
+    const persistScopes = React.useCallback((scopes: AppPaneState['scopes']) => {
+        if (persistedScopesRef.current === scopes) return;
+        const appPaneScopesV1 = serializePersistedPaneScopes(scopes);
+        try {
+            getStorage().getState().applyLocalSettings({ appPaneScopesV1 }, { source: 'ui' });
+            persistedScopesRef.current = scopes;
+            setPersistenceFailed(false);
+        } catch (error) {
+            if (!(error instanceof LocalSettingsPersistenceError)) throw error;
+            setPersistenceFailed(true);
+        }
+    }, []);
     const driversRef = useRef<Map<PaneScopeId, PaneDriver>>(new Map());
     const [fileFindSeedHandoff] = useState(createFileFindSeedHandoff);
     const homeProfilesGeneration = useServerProfilesGeneration();
@@ -273,6 +288,9 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         }
         stateRef.current = nextState;
         setState(nextState);
+        if (action.type !== 'mergePersistedScopes' && !('persist' in action && action.persist === false)) {
+            persistScopes(nextState.scopes);
+        }
         notifySessionTerminalWorkspaceChanged();
         if (action.type === 'terminalWorkspace') {
             const command = action.command;
@@ -288,7 +306,7 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
                 driversRef.current.get(action.scopeId)?.onTerminalWorkspaceReveal?.({ tabId: tab.id, terminalId });
             }
         }
-    }, [overlayFocusReturnOwner, readPaneAccountScope]);
+    }, [overlayFocusReturnOwner, persistScopes, readPaneAccountScope]);
     const [driverRegistryVersion, setDriverRegistryVersion] = useState(0);
 
     React.useLayoutEffect(() => {
@@ -329,18 +347,10 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
     React.useEffect(() => {
         if (Object.keys(persistedScopes).length === 0) return;
         dispatch({ type: 'mergePersistedScopes', scopes: persistedScopes });
-    }, [dispatch, persistedScopes]);
-
-    React.useEffect(() => {
-        const appPaneScopesV1 = serializePersistedPaneScopes(state.scopes);
-        try {
-            getStorage().getState().applyLocalSettings({ appPaneScopesV1 }, { source: 'ui' });
-            setPersistenceFailed(false);
-        } catch (error) {
-            if (!(error instanceof LocalSettingsPersistenceError)) throw error;
-            setPersistenceFailed(true);
-        }
-    }, [state.scopes]);
+        // Hydration is also the canonical normalization checkpoint for legacy
+        // pane shapes and invalid inherited group references.
+        persistScopes(stateRef.current.scopes);
+    }, [dispatch, persistedScopes, persistScopes]);
 
     const registerDriver = React.useCallback((driver: PaneDriver) => {
         driversRef.current.set(driver.scopeId, driver);

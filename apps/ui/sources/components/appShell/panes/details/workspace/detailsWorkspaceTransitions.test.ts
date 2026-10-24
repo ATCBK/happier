@@ -22,6 +22,16 @@ function openFile(state: ReturnType<typeof createEmptyPaneDetailsState>, name: s
 }
 
 describe('Details tab group transitions', () => {
+    it('publishes a real preview pin once and leaves an already-pinned tab unchanged', () => {
+        const preview = applyOpenDetailsTab(createEmptyPaneDetailsState(), {
+            tab: { key: 'file:a', kind: 'file', title: 'a', resource: { path: 'a' } }, openAs: 'preview',
+        });
+        const pinned = applyPinDetailsTab(preview, 'file:a');
+        expect(pinned).not.toBe(preview);
+        expect(pinned.tabsByKey['file:a']).toMatchObject({ isPinned: true, isPreview: false });
+        for (let index = 0; index < 20; index += 1) expect(applyPinDetailsTab(pinned, 'file:a')).toBe(pinned);
+    });
+
     it('keeps a dirty file pinned when unpin is followed by opening another preview', () => {
         const draft = { accountId: 'alice', isEditingFile: true, editorOriginalHash: 'base', editorText: 'unsaved' };
         let state = applyOpenDetailsTab(createEmptyPaneDetailsState(), {

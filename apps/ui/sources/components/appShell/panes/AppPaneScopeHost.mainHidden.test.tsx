@@ -41,6 +41,29 @@ function Harness(props: Readonly<{ detailsOpen: boolean; unnamed?: boolean; unav
 }
 
 describe('AppPaneScopeHost main column', () => {
+    it('does not rebuild unrelated pane mounts for draft bytes or dirty pin metadata', async () => {
+        let pane!: ReturnType<typeof useAppPaneScope>;
+        let rightBuilds = 0;
+        function Control() { pane = useAppPaneScope('app'); return null; }
+        const right = { destinationIds: ['git'], render: () => { rightBuilds += 1; return <div />; } };
+        const screen = await renderScreen(<AppPaneProvider><Control /><AppPaneScopeHost scopeId="app"
+            main={<div />} rightPaneBuiltinAdapter={right} /></AppPaneProvider>);
+        try {
+            await act(async () => pane.openRight({ tabId: 'git' }));
+            await act(async () => pane.openDetailsTab({ key: 'file:a.ts', kind: 'file', title: 'a.ts', resource: { kind: 'file', path: 'a.ts' } }, { intent: 'preview' }));
+            const before = rightBuilds;
+            expect(before).toBeGreaterThan(0);
+            for (let index = 0; index < 20; index += 1) {
+                await act(async () => pane.patchDetailsTabState('file:a.ts', { accountId: 'alice', isEditingFile: true, editorText: `draft${index}` }, { persist: false }));
+            }
+            await act(async () => pane.pinDetailsTab('file:a.ts', { persist: false }));
+            expect(rightBuilds - before).toBe(0);
+            await act(async () => pane.closeRight());
+            await act(async () => pane.openRight({ tabId: 'git' }));
+            expect(rightBuilds).toBeGreaterThan(before);
+        } finally { await screen.unmount(); }
+    });
+
     it('lets only the focused app destination offer an arrangement when multi-pane is enabled', async () => {
         storage.getState().applyLocalSettings({ uiMultiPanePanelsEnabled: false }, { source: 'ui' });
         await renderScreen(<AppPaneProvider><AppPaneScopeHost scopeId="app" arrangement="honour"

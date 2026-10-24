@@ -424,7 +424,7 @@ export function applySetDetailsTabState(
 
 export function applyPinDetailsTab(details: PaneDetailsState, tabKey: string): PaneDetailsState {
     const tab = getOwnDetailsWorkspaceRecordEntry(details.tabsByKey, tabKey);
-    if (!tab) return details;
+    if (!tab || (tab.isPinned && !tab.isPreview)) return details;
     return {
         ...details,
         tabsByKey: {

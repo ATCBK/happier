@@ -20,6 +20,27 @@ function PaneWrapper(props: React.PropsWithChildren) {
 }
 
 describe('useAppPaneScope identity', () => {
+    it('does not render a selected Right pane for File draft and pin publications in the same scope', async () => {
+        let commands!: AppPaneScopeApi;
+        let commits = 0;
+        function Commands() { commands = useAppPaneScope(SCOPE_ID); return null; }
+        function Right() { useAppPaneScope(SCOPE_ID, scope => scope?.right ?? null); return null; }
+        const screen = await renderScreen(<AppPaneProvider><Commands /><React.Profiler id="right" onRender={() => { commits += 1; }}><Right /></React.Profiler></AppPaneProvider>);
+        const { act } = await import('react-test-renderer');
+        try {
+            await act(async () => commands.openRight({ tabId: 'git' }));
+            await act(async () => commands.openDetailsTab({ key: 'file:a.ts', kind: 'file', title: 'a.ts', resource: { kind: 'file', path: 'a.ts' } }, { intent: 'preview' }));
+            const before = commits;
+            for (let index = 0; index < 20; index += 1) {
+                await act(async () => commands.patchDetailsTabState('file:a.ts', { accountId: 'alice', isEditingFile: true, editorText: `draft ${index}` }));
+            }
+            await act(async () => commands.pinDetailsTab('file:a.ts'));
+            expect(commits - before).toBe(0);
+            await act(async () => commands.setRightTab('find'));
+            expect(commits - before).toBe(1);
+        } finally { await screen.unmount(); }
+    });
+
     it('observes registration and withdrawal of its own driver while retaining a null selection for unrelated drivers', async () => {
         const harness = await renderHook(() => useAppPaneContext(value => ({
             driver: value.getDriver(SCOPE_ID), registerDriver: value.registerDriver,
