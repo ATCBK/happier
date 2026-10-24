@@ -120,10 +120,7 @@ export async function readAccountPluginSkills(input: AccountPluginSkillRead): Pr
   await assertCurrent();
   const selected: ReadOnlySkillV1[] = [];
   for (const [skillId, rows] of supplies) {
-    const pluginId = rows.find(row => row.skill?.provenance.kind === 'plugin')?.skill?.provenance;
-    const knownPluginId = pluginId?.kind === 'plugin' ? pluginId.pluginId : getPluginMachineExecutionOriginRef(rows[0]!.origin!).pluginId;
-    const result = resolvePluginContentSuppliesV1({ supplies: rows.map(value => ({ ...value, value })),
-      selectedOrigin: input.settings?.machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId[knownPluginId] ?? null });
+    const result = resolvePluginContentSuppliesV1({ supplies: rows.map(value => ({ ...value, value })) });
     if (result.kind !== 'ready') {
       if (availableOnly) continue;
       return unavailable();

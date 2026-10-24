@@ -153,7 +153,10 @@ describe('Account plugin skill sources', () => {
           provenance: { ...skill.provenance, occurrenceId: 'retired-occurrence' } })) : pluginSkills } : current };
     } }));
     const read = () => runWithServerHttpBaseUrl(base, () => readAccountPluginSkills({ credentials,
-      settings: accountSettingsParse({}), serverHttpBaseUrl: base }));
+      settings: accountSettingsParse({ machineAdministrationSelectionsV1: { v: 1,
+        pluginExecutionOriginsByPluginId: { [pluginId]: { ...origin, materializationRef: {
+          machineId: 'retired-source', pluginId, materializationId: 'retired-installation',
+        } } } } }), serverHttpBaseUrl: base }));
     try {
       emptyAccountCensus = true;
       // The original requester Account has no source. Unrelated packages on
