@@ -65,6 +65,7 @@ async function main() {
   for (const target of targets) {
     const compiledPath = join(tempDir, `hstack-${target.os}-${target.arch}${target.exeExt}`);
     await compileBunBinary({
+      repoRoot,
       entrypoint,
       bunTarget: target.bunTarget,
       outfile: compiledPath,

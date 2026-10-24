@@ -125,6 +125,7 @@ async function patchRunnerPackageVersion(repoRoot, nextVersion) {
 async function buildRunnerPayload({ repoRoot, shellDir, entrypoint, target, version, tempDir }) {
   const corePath = join(tempDir, `happier-runner-core-${target.os}-${target.arch}${target.exeExt}`);
   await compileBunBinary({
+    repoRoot,
     entrypoint,
     bunTarget: target.bunTarget,
     outfile: corePath,
