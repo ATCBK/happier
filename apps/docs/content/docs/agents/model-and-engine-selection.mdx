@@ -75,7 +75,7 @@ See [Account Provider setup](/agents/provider-integrations#account-setup-in-03-d
 for connection configuration without a machine. The live refresh behavior below
 still runs from the selected machine.
 
-## Child choices in 0.3 development
+## Source visibility and changes in 0.3 development
 
 The unreleased model-picker integration distinguishes a source's discovery visibility
 from its permission to run models. Aggregators default to hidden from ordinary browsing;
@@ -91,9 +91,11 @@ the chip reads **Next via …**, the send button reads **Continue via …**, and
 happens until you send. Sending restarts the Agent on that source and continues the
 same conversation. Before sending, use the cancel control beside the armed
 send button to un-arm the change and keep the applied model and source; picking
-the current model again also cancels it. The
-Account-wide visibility control is still being integrated, so this is not yet a
-released Settings workflow.
+the current model again also cancels it. In a Provider connection's development
+settings, **Show in model picker** saves that connection's Account-wide visibility
+choice for every Agent. These controls are not yet a released Settings workflow.
+
+## Child choices in 0.3 development
 
 The unreleased child-session integration lets an attached delegate, plan, review
 or conversation inherit the model and source actually running in its parent

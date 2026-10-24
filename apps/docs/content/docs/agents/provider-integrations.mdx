@@ -54,9 +54,10 @@ Running the command again for the same model id replaces its manual metadata;
 omitting `--reasoning-effort-levels` clears a previous declaration. Action
 callers can instead supply `reasoningEffortLevels` in each model entry of
 `providers.models.manual.add`. Tier declaration is currently authored through
-the Action or CLI. The selected Agent still filters these tiers to the levels
-it supports; declaring them does not verify the endpoint or make an incompatible
-Agent pairing available.
+the Action or CLI. Effort controls appear only when the selected Agent can apply
+the selected model's declared tiers. Anthropic API compatibility alone does not
+enable Claude Code's Ultracode control. Declaring tiers does not verify the
+endpoint or make an incompatible Agent pairing available.
 
 For an Anthropic-compatible endpoint, its `/v1/models` response can report effort
 support directly on each model, for example:
@@ -75,7 +76,7 @@ support directly on each model, for example:
 ```
 
 Endpoint-reported and curated/static reasoning facts take precedence over a
-manual declaration, including an explicit unsupported result. The declaration
+manual declaration, including explicit unsupported or unknown controls. The declaration
 fills missing facts even if the endpoint lists the model without effort
 capabilities. With neither a declaration nor reported or curated support,
 Happier leaves reasoning-effort controls unavailable.
@@ -104,10 +105,17 @@ per vendor; each pool remains single-vendor. Choosing another pool replaces that
 vendor's slot. Clearing a pool's use removes only the slot it still owns, and
 does not change the other vendor selections.
 
-To start, open **Connected services**: the **Gateways** group offers **Add gateway**
-when you have none, which creates one and opens it. On a pool, turning on **Use in
-other agents** before any gateway exists creates **Main gateway** with that pool
-already chosen for its vendor. Neither needs a computer to be online.
+To start, open **Connected services** and choose **Add gateway** in **Gateways**.
+This opens an unsaved draft. On a pool, choosing **Use in other agents** before
+any gateway exists opens the same draft with that pool selected for its vendor.
+Choose the vendor slots and placement, then select **Create** to save through the
+existing approval policy. Opening or discarding the draft creates no connection.
+Neither entry needs a computer to be online.
+
+If a saved slot's account or pool becomes unavailable, its chooser retains the
+selection and shows why it needs attention. Choose an available target or clear
+the slot; Happier does not silently choose another credential. Saving a slot
+does not prove it can be used at runtime.
 
 Gateway configuration distinguishes the session's machine from an explicitly
 chosen hub machine. Saving a hub does not prove it is online, and describes where
