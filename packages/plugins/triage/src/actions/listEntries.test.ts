@@ -386,6 +386,96 @@ const finishedWalk: TriageAdmittedOperationExecutorV1 = async () => ({
 });
 
 describe('the aggregate list coverage claim', () => {
+    it.each([
+        ['refused', new PluginError({ code: 'plugin_action_caller_unavailable', retryable: false }),
+            'plugin_action_caller_unavailable'],
+        ['unknown', new PluginError({ code: 'plugin_action_outcome_unknown', retryable: false }),
+            'plugin_action_outcome_unknown'],
+        ['unclassified', new Error('private invocation outcome'), 'triage/scanInvocationRejected'],
+    ] as const)('keeps %s source outcomes distinct from a successful empty walk', async (_kind, refusal, code) => {
+        const { collections, control } = createTestkitCorpusCollections();
+        control.sourceInstances.seed(toCorpusStoredValue(configuredRow({
+            instanceTag: paddedInstanceTag('a'), sourceInstanceId: INSTANCE_ID, configuredAtMs: 1,
+        })));
+        const admitted: TriageAdmittedSourceV1 = {
+            ...ADMITTED_SOURCE,
+            descriptor: {
+                ...ADMITTED_SOURCE.descriptor,
+                scopeUnit: { singularLabel: 'Project', pluralLabel: 'Projects' },
+            },
+            operations: {
+                ...ADMITTED_SOURCE.operations,
+                // Only the real host can mint an admitted execution handle.
+                listScopeUnits: {} as NonNullable<TriageAdmittedSourceV1['operations']['listScopeUnits']>,
+            },
+        };
+        let unavailable = true;
+        let scopeReads = 0;
+        let scans = 0;
+        let releaseScan = (): void => {};
+        const firstScan = new Promise<void>((resolve) => { releaseScan = resolve; });
+        const limits: number[] = [];
+        const store = createTriageListWindowStore({
+            readEntries: async (input) => {
+                limits.push(input.limit);
+                return TriageListEntriesResultV1Schema.parse(await listTriageEntries(input, {
+                    sourceInstances: collections.sourceInstances,
+                    readAdmittedSources: async () => [admitted],
+                    executeScopeUnits: async () => {
+                        scopeReads += 1;
+                        if (unavailable) throw refusal;
+                        return { kind: 'page', status: 'complete', selection: { kind: 'all' }, units: [] };
+                    },
+                    executeScan: async () => {
+                        scans += 1;
+                        if (scans === 1) await firstScan;
+                        if (unavailable) throw refusal;
+                        return { kind: 'complete', observations: [], evidence: { kind: 'walkFinished' } };
+                    },
+                    nowMs: () => 1000,
+                }));
+            },
+            nowMs: () => 1000,
+        });
+
+        const refreshing = store.refresh('view');
+        await vi.waitFor(() => expect(scans).toBe(1));
+        expect(store.getSnapshot().pending).toBe('initial');
+        expect(store.getSnapshot().window).toBeUndefined();
+        releaseScan();
+        await refreshing;
+        const snapshot = store.getSnapshot();
+        expect(limits).toEqual([0, MAX_TRIAGE_LIST_WINDOW_ROWS_V1]);
+        expect({ scopeReads, scans }).toEqual({ scopeReads: 2, scans: 1 });
+        expect(snapshot.configuredSources[0]?.scope?.projection).toEqual({
+            kind: 'failed', failure: { class: 'unknown', code: 'scope_projection_unavailable' },
+        });
+        expect(snapshot.window?.rows).toEqual([]);
+        expect(snapshot.window?.coverage).toBe('partial');
+        expect(snapshot.window?.lanes[0]).toMatchObject({
+            health: { kind: 'unavailable', error: { code } }, exhausted: false,
+        });
+        const state = resolveTriageListShellState(snapshot);
+        expect(state.kind).toBe('window');
+        if (state.kind !== 'window') throw new Error('Expected an incomplete window');
+        expect(state.failure?.sources[0]).toMatchObject({ sourceInstanceId: INSTANCE_ID, code });
+        expect(JSON.stringify(snapshot)).not.toContain('private invocation outcome');
+
+        unavailable = false;
+        await store.refresh('manual');
+        const recovered = store.getSnapshot();
+        expect(limits).toEqual([0, MAX_TRIAGE_LIST_WINDOW_ROWS_V1, 0, MAX_TRIAGE_LIST_WINDOW_ROWS_V1]);
+        expect({ scopeReads, scans }).toEqual({ scopeReads: 4, scans: 2 });
+        expect(recovered.window?.rows).toEqual([]);
+        expect(recovered.window?.coverage).toBe('complete');
+        expect(recovered.unreadableSources).toBeUndefined();
+        const recoveredState = resolveTriageListShellState(recovered);
+        expect(recoveredState.kind).toBe('window');
+        if (recoveredState.kind !== 'window') throw new Error('Expected a completed empty window');
+        expect(recoveredState.failure).toBeNull();
+        store.dispose();
+    });
+
     it('does not publish a provider result after its configured row is removed during the scan', async () => {
         const { collections, control } = createTestkitCorpusCollections();
         const seeded = control.sourceInstances.seed(toCorpusStoredValue(configuredRow({
@@ -629,6 +719,44 @@ function seedInstances(
 }
 
 describe('the aggregate list continuation set', () => {
+    it('starts both post-provider currentness reads before either boundary settles', async () => {
+        const { collections, control } = createTestkitCorpusCollections();
+        const ids = seedInstances(control, 1);
+        let releaseConfiguration = (): void => {};
+        const configurationPending = new Promise<void>(resolve => { releaseConfiguration = resolve; });
+        let markPostReadStarted = (): void => {};
+        const postReadStarted = new Promise<void>(resolve => { markPostReadStarted = resolve; });
+        let configurationReads = 0;
+        let admissionReads = 0;
+        const result = listTriageEntries({ v: 1, sources: { kind: 'selected', sourceInstanceIds: ids },
+            limit: 10, order: 'newest' }, {
+            // Only the persistent-store boundary is held; configuration
+            // decoding, source admission and the aggregate remain real.
+            sourceInstances: { query: async (...args) => {
+                configurationReads++;
+                if (configurationReads === 2) {
+                    markPostReadStarted();
+                    await configurationPending;
+                }
+                return collections.sourceInstances.query(...args);
+            } },
+            readAdmittedSources: async () => { admissionReads++; return [ADMITTED_SOURCE]; },
+            executeScan: async () => ({ kind: 'complete', observations: [], evidence: { kind: 'walkFinished' } }),
+            nowMs: () => 1000,
+        });
+        try {
+            await postReadStarted;
+            // Initial admission plus the independent post-provider fence.
+            // Neither fence may serialize its start behind the other's I/O.
+            expect(admissionReads).toBe(2);
+        } finally {
+            releaseConfiguration();
+            await result;
+        }
+        expect(configurationReads).toBe(2);
+        expect((await result).configuredSources.map(source => source.sourceInstanceId)).toEqual(ids);
+    });
+
     it('reports one frontier per walked connection rather than one for the whole request', async () => {
         const { collections, control } = createTestkitCorpusCollections();
         const [first, second] = seedInstances(control, 2);

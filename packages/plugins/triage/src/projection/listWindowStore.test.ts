@@ -571,6 +571,24 @@ function createHarness(options: Readonly<{
 }
 
 describe('the mounted PRs & Issues window store', () => {
+    it('retries a previously demanded initial read when the reader changes the lens after enumeration failed', async () => {
+        const harness = createHarness();
+        const store = createTriageListWindowStore({ readEntries: harness.readEntries, nowMs: () => harness.clock.nowMs });
+        try {
+            harness.state.enumerationRejected = true;
+            await store.refresh('view');
+            expect(store.getSnapshot().error).toBeDefined();
+            expect(harness.actionInputs).toHaveLength(1);
+            harness.state.enumerationRejected = false;
+            store.setLens({ ...TRIAGE_LIST_DEFAULT_LENS_V1, query: 'Middle' });
+            // A failed first demand is not a never-demanded cold window.
+            expect(harness.actionInputs.filter(input => input.limit === 0)).toHaveLength(2);
+            await vi.waitFor(() => expect(store.getSnapshot().pending).toBe('idle'));
+            expect(store.getSnapshot().error).toBeUndefined();
+            expect(store.getSnapshot().window?.rows.map(row => row.entryRef.entryId)).toEqual(['3']);
+        } finally { store.dispose(); }
+    });
+
     it('changes the displayed instance lens while keeping every configured lane acquired', async () => {
         const harness = createHarness({ sameSourceForB: true, scanA: async (input) => ({
             kind: 'complete', evidence: { kind: 'walkFinished' },

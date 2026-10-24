@@ -360,12 +360,14 @@ export async function assembleTriageListPass(
      * changed. No durable scan generation is needed: compare the two canonical
      * identities at this one result boundary and discard only stale lanes.
      */
-    const currentConfigured = input.limit === 0 && configuredScopes.size === 0
-        ? null
-        : await readActiveConfiguredSourceRows(deps.sourceInstances, options);
-    const currentAdmittedByQualifiedId = input.limit === 0 && configuredScopes.size === 0
-        ? admittedByQualifiedId
-        : indexTriageAdmittedSourcesV1(await deps.readAdmittedSources(options));
+    // Both independent authorities fence the settled provider work. Start
+    // them together, as at initial admission, rather than serializing I/O.
+    const [currentConfigured, currentAdmittedByQualifiedId] = input.limit === 0 && configuredScopes.size === 0
+        ? [null, admittedByQualifiedId] as const
+        : await Promise.all([
+            readActiveConfiguredSourceRows(deps.sourceInstances, options),
+            deps.readAdmittedSources(options).then(indexTriageAdmittedSourcesV1),
+        ]);
     const initialSourceInstanceIds = new Set(
         configuredRows.map((row) => row.configured.instance.sourceInstanceId),
     );

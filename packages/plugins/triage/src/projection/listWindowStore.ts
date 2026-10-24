@@ -1517,7 +1517,10 @@ export function createTriageListWindowStore(deps: Readonly<{
             }
             if (window !== null) rebuild();
             publish();
-            if (acquisitionChanged) {
+            // A cold consumer binds its lens before any named page demand.
+            // A failed initial demand still needs the reader's replacement;
+            // only a never-demanded cold window stays passive.
+            if (acquisitionChanged && (window !== null || pending !== 'idle' || error !== null)) {
                 scheduler.trigger();
             }
         },
