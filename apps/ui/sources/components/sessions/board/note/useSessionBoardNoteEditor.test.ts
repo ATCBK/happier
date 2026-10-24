@@ -12,7 +12,7 @@ import {
 // and importing it from there silently yields `undefined`, which would size the
 // "oversized" fixture at zero characters and pass against any implementation.
 import { MAX_PLUGIN_DECLARATIVE_DOCUMENT_RESOURCE_BYTES_V1 } from '@happier-dev/protocol';
-import { renderHook } from '@/dev/testkit';
+import { act, renderHook } from '@/dev/testkit';
 import type {
     SessionBoardActionOutcome,
     SessionBoardActionsPort,
@@ -122,6 +122,53 @@ function createUnknownCreateRecovery(item: SessionSurfaceItemV1): SessionBoardAc
 }
 
 describe('useSessionBoardNoteEditor', () => {
+    it('refuses an unconfirmed snapshot before persistence and retries the retained note after confirmation', async () => {
+        const actions = recordingActions();
+        let confirmed = false;
+        const hook = await renderHook(() => useSessionBoardNoteEditor({
+            sessionId: 'session-1', itemId: 'item-1', expectedItemRevision: null,
+            initialTitle: 'Plan', initialBody: 'draft', reachable: true, actions: actions.port,
+            placement: { tabId: 'overview', tabTitle: 'Overview', width: 'medium' },
+            flushBody: async () => { if (!confirmed) throw new Error('snapshot_unconfirmed'); return 'final native draft'; },
+        }));
+        await act(async () => { await expect(hook.getCurrent().save()).resolves.toBe(false); });
+        await hook.rerender();
+        expect(actions.upserts).toHaveLength(0);
+        expect(hook.getCurrent().status.kind).toBe('failed');
+        expect(hook.getCurrent().body).toBe('draft');
+        expect(hook.getCurrent().canSave).toBe(true);
+        confirmed = true;
+        await act(async () => { expect(await hook.getCurrent().save()).toBe(true); });
+        expect(noteBodyOf(actions.upserts[0]!.item)).toBe('final native draft');
+        await hook.unmount();
+    });
+
+    it('retains an acknowledged revision when the post-save snapshot is unconfirmed', async () => {
+        const actions = recordingActions();
+        const onSaved = vi.fn();
+        let flushes = 0;
+        const hook = await renderHook(() => useSessionBoardNoteEditor({
+            sessionId: 'session-1', itemId: 'item-1', expectedItemRevision: null,
+            initialTitle: 'Plan', initialBody: 'submitted draft', reachable: true, actions: actions.port,
+            placement: { tabId: 'overview', tabTitle: 'Overview', width: 'medium' }, onSaved,
+            flushBody: async () => {
+                flushes += 1;
+                if (flushes === 2) throw new Error('snapshot_unconfirmed');
+                return flushes === 1 ? 'submitted draft' : 'newer native draft';
+            },
+        }));
+        await act(async () => { await expect(hook.getCurrent().save()).resolves.toBe(false); });
+        await hook.rerender();
+        expect(actions.upserts).toHaveLength(1);
+        expect(hook.getCurrent().expectedRevision).toBe('item-1');
+        expect(hook.getCurrent().status.kind).toBe('failed');
+        expect(onSaved).toHaveBeenCalledWith(expect.anything(), 'item-1', false);
+        await act(async () => { expect(await hook.getCurrent().save()).toBe(true); });
+        expect(actions.upserts[1]?.expectedItemRevision).toBe('item-1');
+        expect(noteBodyOf(actions.upserts[1]!.item)).toBe('newer native draft');
+        await hook.unmount();
+    });
+
     it('preserves every non-content item field while editing a note', () => {
         const current = SessionSurfaceItemV1Schema.parse({
             v: 1,

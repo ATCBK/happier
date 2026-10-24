@@ -133,16 +133,16 @@ export function SessionBoardNoteEditorCard(props: SessionBoardNoteEditorCardProp
     const guard = React.useMemo<ActiveUnsavedChangesGuard>(() => ({
         isDirtyRef: editor.dirtyRef,
         requestDecision,
+        prepareGuard: editor.flushToContinuity,
         onSave: () => save(),
         tag: 'SessionBoardNoteEditorCard',
-    }), [editor.dirtyRef, requestDecision, save]);
+    }), [editor.dirtyRef, editor.flushToContinuity, requestDecision, save]);
 
     const prepareGuard = editor.flushToContinuity;
 
     const runGuardedTransition = React.useCallback(async (transition: () => void | Promise<void>): Promise<boolean> => {
-        await prepareGuard();
         return await Promise.resolve(runUnsavedChangesGuard(guard, transition));
-    }, [guard, prepareGuard]);
+    }, [guard]);
 
     React.useEffect(() => {
         props.onGuardChange?.(runGuardedTransition);

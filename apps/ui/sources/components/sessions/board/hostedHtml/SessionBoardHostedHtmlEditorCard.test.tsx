@@ -71,6 +71,23 @@ const revision3 = 'ssr1.AAAACHN5c3JlY18zAAAAAw';
 const revision4 = 'ssr1.AAAACHN5c3JlY180AAAABA';
 
 describe('SessionBoardHostedHtmlEditorCard', () => {
+    it('keeps hosted HTML mounted when preparation cannot confirm its final snapshot', async () => {
+        const onCancel = vi.fn();
+        const guard = { current: null as ((transition: () => void) => Promise<boolean>) | null };
+        const screen = await renderScreen(<SessionBoardHostedHtmlEditorCard
+            sessionId="session-1" itemId="interactive-1" expectedItemRevision="rev-2"
+            initialTitle="Dashboard" initialHtml="<main>base</main>" reachable actions={baseActions}
+            onCancel={onCancel} onSaved={vi.fn()} onGuardChange={next => { guard.current = next; }}
+        />);
+        editorHarness.flushPendingChange.mockRejectedValueOnce(new Error('snapshot_unconfirmed'));
+        expect(guard.current).not.toBeNull();
+        await expect(guard.current!(onCancel)).resolves.toBe(false);
+        expect(onCancel).not.toHaveBeenCalled();
+        expect(decisionHarness.request).not.toHaveBeenCalled();
+        expect(screen.findByTestId('session-board-hosted-html-editor')).not.toBeNull();
+        await screen.unmount();
+    });
+
     afterEach(() => standardCleanup());
 
     beforeEach(() => {

@@ -340,18 +340,24 @@ export function useSessionBoardItemEditor<TInvalid extends string>(
         committed = result ? readSessionBoardUpsertItemRevision(result) : null,
     ): Promise<boolean> => {
         if (!isCurrentDraft()) return false;
-        await flushToContinuity();
+        let settledStatus: Status = { kind: 'editing' };
+        try {
+            await flushToContinuity();
+        } catch (error) {
+            settledStatus = { kind: 'failed', error: error instanceof Error ? error.message : String(error) };
+        }
         if (!isCurrentDraft()) return false;
         draft.update({
             baseline: { title: committedTitle, text: committedText },
             ...(committed !== null ? { expectedRevision: committed } : {}),
-            status: { kind: 'editing' },
+            status: settledStatus,
         });
         // Text typed after submission is a newer draft against the revision that just
         // committed, not text the save carried. The editor keeps it and reports that the
         // draft has not settled so its host does not close over unsaved work.
         const current = draft.getSnapshot();
-        const draftSettled = current.title === committedTitle && current.text === committedText;
+        const draftSettled = settledStatus.kind !== 'failed'
+            && current.title === committedTitle && current.text === committedText;
         inputRef.current.onSaved?.(result, committed, draftSettled);
         return draftSettled;
     }, [draft, flushToContinuity, inputRef, isCurrentDraft]);
@@ -369,7 +375,12 @@ export function useSessionBoardItemEditor<TInvalid extends string>(
         // Flush first, then read: the debounced surface publishes the final
         // keystroke during the flush, and only the value it holds afterwards is
         // the text this person meant to save.
-        await flushToContinuity();
+        try {
+            await flushToContinuity();
+        } catch (error) {
+            if (isCurrentDraft()) updateStatus({ kind: 'failed', error: error instanceof Error ? error.message : String(error) });
+            return false;
+        }
         if (!isCurrentDraft()) return false;
         const current = inputRef.current;
         const state = draft.getSnapshot();

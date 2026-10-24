@@ -91,6 +91,24 @@ describe('SessionBoardNoteEditorCard', () => {
         alertRequested.mockClear();
     });
 
+    it('keeps a note mounted when its final embedded snapshot cannot be confirmed', async () => {
+        const onCancel = vi.fn();
+        const guard = { current: null as ((transition: () => void) => Promise<boolean>) | null };
+        const screen = await renderScreen(<SessionBoardNoteEditorCard
+            sessionId="session-1" itemId="note-1" expectedItemRevision="rev-1"
+            initialTitle="Plan" initialBody="base" reachable actions={actions} onCancel={onCancel}
+            onGuardChange={next => { guard.current = next; }}
+        />);
+        editorHarness.value = 'Pending native edit';
+        editorHarness.flushPendingChange.mockRejectedValueOnce(new Error('snapshot_unconfirmed'));
+        expect(guard.current).not.toBeNull();
+        await expect(guard.current!(onCancel)).resolves.toBe(false);
+        expect(onCancel).not.toHaveBeenCalled();
+        expect(alertRequested).not.toHaveBeenCalled();
+        expect(screen.findByTestId('session-board-note-editor')).not.toBeNull();
+        await screen.unmount();
+    });
+
     it('does not prompt to discard when the final embedded edit restored the saved Note', async () => {
         const onCancel = vi.fn();
         const screen = await renderScreen(
