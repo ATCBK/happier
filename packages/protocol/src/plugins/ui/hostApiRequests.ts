@@ -67,6 +67,7 @@ import {
 } from '../../sessions/awareness/projectionV1.js';
 import { ProjectKeyV1Schema } from '../../workspaces/workspaceRefV1.js';
 import { PluginUiNewSessionSeedOriginV1Schema } from './newSessionSeedOrigin.js';
+import { VoiceTrackedSessionAddressV1Schema } from '../../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { InboxItemAttentionTypeV1Schema } from '../../sessions/follow/sessionFollowPolicyV1.js';
 import { PluginUiIconTokenV1Schema } from '../contributions/ui/tokens.js';
 export { PluginUiNewSessionSeedOriginV1Schema, StoredPluginUiNewSessionSeedOriginV1Schema,
@@ -739,9 +740,10 @@ export const SessionNewSessionSeedOutcomeSchema = lazyZodSchema(() => z.union([
 ]));
 export type SessionNewSessionSeedOutcome = z.infer<typeof SessionNewSessionSeedOutcomeSchema>;
 
-export const SessionAuthoringOpenV1Schema = lazyZodSchema(() => z.strictObject({
-  seed: PluginUiNewSessionSeedV1Schema,
-}));
+export const SessionAuthoringOpenV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ seed: PluginUiNewSessionSeedV1Schema }),
+  z.strictObject({ sourceSession: VoiceTrackedSessionAddressV1Schema }),
+]));
 export type SessionAuthoringOpenV1 = z.infer<typeof SessionAuthoringOpenV1Schema>;
 
 /** The Action acknowledges an editable page draft, never a Session or a writable copy. */
