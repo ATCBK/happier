@@ -1,8 +1,42 @@
 import { describe, it, expect } from 'vitest';
-import { createReducer, reducer } from "./reducer.js";
-import type { NormalizedMessage } from "../raw/index.js";
+import { createReducer, projectSidechainMessages, reducer } from "./reducer.js";
+import { normalizeRawMessage, type NormalizedMessage } from "../raw/index.js";
 
 describe('sidechains (provider-agnostic)', () => {
+  it('keeps a committed person question in its Run sidechain before and after a parent marker arrives', () => {
+    // Captured from fx-conv3's own committed question (seq 16), 2026-10-24.
+    // Text is redacted; the stored body and routing envelope are retained.
+    const sidechainId = 'subagent_run_927c9fe5-3f8c-47a5-8db4-7ea888f5b053';
+    const question = normalizeRawMessage('cmvlvcymq007ymcdtu4qqa7xj', '9e38ea44-a338-4e25-bc57-cef1250b0856', 1792814325035, {
+      role: 'user',
+      content: { type: 'text', text: '[question body]' },
+      meta: {
+        sentFrom: 'web', source: 'ui', permissionMode: 'default', model: 'gpt-6-luna',
+        modelSelectionV1: { v: 1, ref: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6-luna' }, updatedAt: 1792813747336 },
+        happierProvenanceV1: { v: 1, kind: 'happierApp', actor: { kind: 'owner' } },
+        happier: { kind: 'participant_message.v1', payload: { recipient: { kind: 'execution_run', runId: 'run_7425823b-704c-445f-aa46-a2ceb57bcfa1' } } },
+        happierInputAuthorityV1: { v: 1, producer: 'happierApp', caller: { kind: 'host' }, permission: { admittedPermissionCeiling: 'default' } },
+      },
+    }, { seq: 16, sidechainId });
+    expect(question).not.toBeNull();
+    if (!question) throw new Error('The captured question must normalize');
+    const state = createReducer();
+    const beforeMarker = reducer(state, [question]);
+    expect(beforeMarker.messages).toEqual([]);
+    expect(projectSidechainMessages(state, sidechainId)).toMatchObject([
+      { kind: 'user-text', realID: question.id, seq: 16, text: '[question body]', meta: question.meta },
+    ]);
+
+    const afterMarker = reducer(state, [{
+      id: 'cmvlv83bl007fmcdtdrqgu5nc', localId: 'bed1f6e6-18b1-4d95-94aa-7bb2e879176b',
+      seq: 12, createdAt: 1792814097866, role: 'agent', isSidechain: false,
+      content: [{ type: 'tool-call', id: sidechainId, name: 'SubAgentRun', input: { runId: 'run_7425823b-704c-445f-aa46-a2ceb57bcfa1' }, description: null, uuid: 'cmvlv83bl007fmcdtdrqgu5nc', parentUUID: null }],
+    }, question]);
+    const parent = afterMarker.messages.find(message => message.kind === 'tool-call');
+    expect(parent?.kind === 'tool-call' && parent.children).toEqual(projectSidechainMessages(state, sidechainId));
+    expect(projectSidechainMessages(state, sidechainId)).toHaveLength(1);
+  });
+
   it('merges streaming sidechain text chunks when happierSidechainStreamKey is shared', () => {
     const state = createReducer();
 
