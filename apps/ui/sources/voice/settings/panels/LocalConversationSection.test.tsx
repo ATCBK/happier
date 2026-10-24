@@ -928,14 +928,19 @@ describe('LocalConversationSection', () => {
     },
   );
 
-  it('offers the default session Agent model catalog while following the current session', async () => {
+  it('does not probe a substitute Agent for The session when no Session target is admitted', async () => {
     const LocalConversationSection = await loadLocalConversationSection();
     const voice = createLocalConversationVoice({
       conversationMode: 'agent',
       agent: {
         agentSource: 'session',
+        agentId: 'codex',
+        machineTargetMode: 'fixed',
+        machineTargetId: 'machine-1',
         chatModelSource: 'custom',
+        chatModelId: 'saved-model',
         commitModelSource: 'custom',
+        commitModelId: 'saved-commit',
       },
     });
 
@@ -945,12 +950,14 @@ describe('LocalConversationSection', () => {
       t('settingsVoice.local.conversation.chatModelId.title'),
     );
 
-    await waitForTestEvent(screen.subscribe, () => chatModel?.props.items,
-      items => items?.some((item: { id: string }) => item.id === 'm1') === true);
-    expect(chatModel?.props.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'm1' }),
-      expect.objectContaining({ id: '__custom__' }),
-    ]));
+    await flushHookEffects({ cycles: 1, turns: 6, frames: 1 });
+    expect(capabilitiesInvoke.mock.calls.filter(([, request]) => request.method === 'probeModels')).toEqual([]);
+    expect(chatModel?.props.items).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'm1' })]));
+    expect(chatModel?.props.items).toEqual(expect.arrayContaining([expect.objectContaining({ id: '__custom__' })]));
+    expect(chatModel?.props.selectedId).toBe('saved-model');
+    openAdvancedAgent(screen);
+    expect(findDropdownByItemTriggerTitle(screen, t('settingsVoice.local.conversation.commitModelId.title'))?.props.selectedId)
+      .toBe('saved-commit');
   });
 
   it('does not crash when providerId toggles away from local_conversation', async () => {

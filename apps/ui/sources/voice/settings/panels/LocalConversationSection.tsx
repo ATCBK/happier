@@ -3,7 +3,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { useUnistyles } from 'react-native-unistyles';
 
-import { DEFAULT_AGENT_ID, isBundledAgentId, type AgentId } from '@/agents/catalog/catalog';
+import { isBundledAgentId } from '@/agents/catalog/catalog';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
 import { resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
@@ -163,7 +163,6 @@ export function LocalConversationSection(props: {
     const raw = String(cfg.agent.agentId ?? '').trim();
     return raw.length > 0 ? raw : null;
   }, [cfg.agent.agentId, cfg.agent.agentSource]);
-  const effectiveAgentIdForModelOptions = selectedAgentIdForModelOptions ?? DEFAULT_AGENT_ID;
 
   const preflightMachineId = executionMachine.machineId;
 
@@ -264,15 +263,17 @@ export function LocalConversationSection(props: {
   ]);
 
   const preflightModels = useNewSessionPreflightModelsState({
-    backendTarget: hasConfiguredProviderChat
-      ? null
-      : { kind: 'backend', backendId: effectiveAgentIdForModelOptions },
+    // This settings page has no admitted Session target. The session source is
+    // resolved by the canonical Session reader at start, never by a default Agent.
+    backendTarget: !hasConfiguredProviderChat && selectedAgentIdForModelOptions
+      ? { kind: 'backend', backendId: selectedAgentIdForModelOptions }
+      : null,
     // This id is an Agent id, not a backend id, so name it as the runtime carrier:
     // a non-bundled backend id alone leaves the preflight with no Agent to probe.
-    runtimeCarrierAgentId: effectiveAgentIdForModelOptions as AgentId,
+    runtimeCarrierAgentId: selectedAgentIdForModelOptions,
     selectedMachineId: preflightMachineId,
     capabilityServerId,
-    enabled: Boolean(preflightMachineId),
+    enabled: Boolean(preflightMachineId && selectedAgentIdForModelOptions),
   });
 
   const selectableModelMenuItems = React.useMemo(() => {
