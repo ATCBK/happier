@@ -182,7 +182,7 @@ export function useMemorySearchProvider(
         && (!requestedServerId || areServerProfileIdentifiersEquivalent(selectedDaemonServerId, requestedServerId));
     const machineChoiceNeeded = enabled && !isExplicitNone && documentsRequested && daemonMemorySearchEnabled
         && daemonTarget === null && !selectionServesRequestedHome;
-    const decision = React.useMemo(() => {
+    const decision = React.useMemo((): MemorySearchProvider => {
         if (!enabled || isExplicitNone) return NO_MEMORY_SEARCH_PROVIDER;
         const effectiveFeaturesSnapshot = requestedServerId ? scopedFeaturesSnapshot : featuresSnapshot;
         const capability = effectiveFeaturesSnapshot.status === 'ready'

@@ -354,10 +354,12 @@ export function retireConnectedAccountDescriptorProjection(
   for (const listener of registryListeners) listener();
 }
 
-export function getConnectedServiceRegistrySnapshot(): ConnectedServiceRegistrySnapshot {
+export function getConnectedServiceRegistrySnapshot(scope?: ServerAccountScope): ConnectedServiceRegistrySnapshot {
   // A direct module reader has no React revision subscription. Never expose a
   // descriptor from an Account whose canonical lifetime has already retired.
-  if (connectedServiceRegistryAccountLifetime && !connectedServiceRegistryAccountLifetime.isCurrent()) {
+  if ((scope && (!connectedServiceRegistryAccountLifetime
+      || !areServerAccountScopesEqual(scope, connectedServiceRegistryAccountLifetime.scope)))
+    || (connectedServiceRegistryAccountLifetime && !connectedServiceRegistryAccountLifetime.isCurrent())) {
     return createConnectedServiceRegistryLoadingSnapshot(
       connectedServiceRegistrySnapshot.scopeKey,
     );

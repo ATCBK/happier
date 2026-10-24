@@ -154,7 +154,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
             const ids = new Set<string>();
             while (entry && !seen.has(entry)) {
                 seen.add(entry);
-                const data = entry.snapshot.data;
+                const data: RecordValue | null = entry.snapshot.data;
                 if (!data || !('records' in data)) break;
                 for (const record of data.records) ids.add(record.id);
                 if (!data.hasNext) {

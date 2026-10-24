@@ -177,7 +177,7 @@ describe('Account-scoped Team credential catalog demand', () => {
     });
 
     it('settles an independent Home without waiting for another Home catalog', async () => {
-        const scopes = [];
+        const scopes: Parameters<typeof refreshTeamCredentialResourceCatalog>[0][] = [];
         for (const name of ['held', 'ready']) {
             const serverId = await home.addHome({ name, serverUrl: `https://catalog-${name}.example.test`,
                 accountId: 'account-ada', teamsEnabled: true, credentialResourcesEnabled: true });

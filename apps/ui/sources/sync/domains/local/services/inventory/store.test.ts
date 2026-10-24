@@ -113,6 +113,8 @@ describe('local service inventory store', () => {
         // caught at the selector contract boundary with a clear error, not crash the Local
         // Services tab via `rowsById.get is not a function` mid-render.
         const malformed = {
+            summary: null,
+            machineSummarySource: null,
             machineId: 'machine-a',
             generatedAt: 1_000,
             refreshState: 'idle' as const,

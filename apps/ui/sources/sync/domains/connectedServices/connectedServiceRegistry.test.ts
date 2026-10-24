@@ -223,7 +223,10 @@ describe('connectedServiceRegistry', () => {
     const target = { service, modeId: mode.id };
     installConnectedAccountDescriptorProjection(projection);
     expect(getAccountConnectedServiceConfigurationMode(target, lifetime.scope)).toBeNull();
+    expect(getConnectedServiceRegistrySnapshot(lifetime.scope).entries).toEqual([]);
     installConnectedAccountDescriptorProjection(projection, lifetime);
+    expect(getConnectedServiceRegistrySnapshot(lifetime.scope).entries).toHaveLength(1);
+    expect(getConnectedServiceRegistrySnapshot({ ...lifetime.scope, accountId: 'account-b' }).entries).toEqual([]);
     expect(getQualifiedConnectedServiceRegistryEntry(service)?.executable).toBe(false);
     expect(getAccountConnectedServiceConfigurationMode(target, lifetime.scope)).toEqual(mode);
     expect(getAccountConnectedServiceConfigurationMode(target, { ...lifetime.scope, accountId: 'account-b' })).toBeNull();
@@ -232,6 +235,7 @@ describe('connectedServiceRegistry', () => {
     installConnectedAccountDescriptorProjection(projection, lifetime);
     current = false;
     expect(getAccountConnectedServiceConfigurationMode(target, lifetime.scope)).toBeNull();
+    expect(getConnectedServiceRegistrySnapshot(lifetime.scope).entries).toEqual([]);
   });
 
   it('admits healthy token, OAuth and service configuration while an unsupported Machine leaves the Account census stale', () => {
