@@ -47,6 +47,8 @@ export type SessionCurrentViewPublicationSourceV1 =
         sharedMetadata: Readonly<{ version: number; value: string }>;
         ownerMetadata: Readonly<{ value: string }>;
         agentState: Readonly<{ version: number; value: string | null }>;
+        /** Omission leaves the recipient's accepted identity unchanged. */
+        projectKey?: string | null;
       }>
     | Readonly<{
         kind: "legacy_v0";
@@ -120,6 +122,7 @@ export async function publishSessionCurrentViewUpdates(params: Readonly<{
                         ownerMetadata: source.ownerMetadata.value,
                         agentState: source.agentState.value,
                         agentStateVersion: source.agentState.version,
+                        ...(source.projectKey !== undefined ? { projectKey: source.projectKey } : {}),
                     },
                     recipient: accountId === source.sessionOwnerId
                         ? {

@@ -88,6 +88,7 @@ const V2_SESSION_LIST_ROW_BASE_SELECT = {
     metadata: true,
     metadataVersion: true,
     metadataLayoutVersion: true,
+    projectKey: true,
     ownerMetadata: true,
     agentState: true,
     agentStateVersion: true,
@@ -447,6 +448,7 @@ export function mapV2SessionListRow(params: Readonly<{
     return {
         id: row.id,
         ownerAccountId: row.accountId,
+        projectKey: row.projectKey,
         ...(origin ? { origin } : {}),
         workDepth: row.workDepth,
         seq: publicationProjection.seq,

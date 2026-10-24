@@ -406,6 +406,7 @@ const SessionMetadataSharedRecipientProjectionV1Schema = lazyZodSchema(() => z.s
   metadataLayoutVersion: z.literal(SESSION_METADATA_LAYOUT_VERSION_V1),
   agentState: z.null(),
   agentStateVersion: SessionEnvelopeVersionSchema,
+  projectKey: z.optional(z.nullable(z.string())),
 }));
 
 const SessionMetadataOwnerRecipientProjectionV1Schema =

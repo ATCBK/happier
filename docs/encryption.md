@@ -1851,6 +1851,17 @@ prompts, paths, user text or secrets. These are server-visible hints, not public
 unauthenticated reads, and never replace access, Account-mode, custody or private
 content admission.
 
+The development Session row's optional nullable `projectKey` is one such
+relationship: an opaque Home-local accepted Project anchor. It carries no
+Project name, checkout path, label, branch or repository content. The owning
+CLI publishes it after accepted-workspace registration through the strict
+`mode:'owner'` metadata patch, alongside the existing encrypted/plain metadata
+tuple. The server stores it separately from those content envelopes and includes
+it in authorized owner and recipient row projections. Shared editors and
+owner-migration patches cannot publish it. Omission preserves the prior value;
+null or absence on reads means not yet published. Private Project display and
+checkout facts retain their existing Account-mode envelopes.
+
 The Artifact list/query owner is implementing the first consumed extraction:
 `{ kind: <existing coarse family>, kindHint: <exact header.kind or null> }`.
 The family still comes from Protocol's existing classifier, including the skill

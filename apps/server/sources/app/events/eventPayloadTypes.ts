@@ -120,6 +120,7 @@ export type UpdateEvent = {
 } | {
     type: 'update-session';
     sessionId: string;
+    projectKey?: string | null;
     metadata?: {
         value: string | null;
         version: number;

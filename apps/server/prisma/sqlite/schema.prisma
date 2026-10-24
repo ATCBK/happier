@@ -1487,6 +1487,8 @@ model Session {
     metadataVersion   Int                 @default(0)
     ownerMetadata     String?
     metadataLayoutVersion Int             @default(0)
+    /// Home-local opaque accepted Project identity; null until the owner publishes it.
+    projectKey        String?
     agentState        String?
     agentStateVersion Int                 @default(0)
     seq               Int                 @default(0)

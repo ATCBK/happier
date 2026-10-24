@@ -112,6 +112,7 @@ export const UpdateBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.looseObject({
     t: z.literal('new-session'),
     id: z.string(),
+    projectKey: z.optional(z.nullable(z.string())),
     viewer: z.optional(SessionViewerProjectionV1Schema),
     seq: z.number().check(z.int(), z.minimum(0)),
     metadata: Base64Schema,
@@ -134,6 +135,7 @@ export const UpdateBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.looseObject({
     t: z.literal('update-session'),
     id: z.string(),
+    projectKey: z.optional(z.nullable(z.string())),
     metadata: z.optional(VersionedNullableStringSchema),
     metadataLayoutVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
     ownerMetadata: z.optional(z.strictObject({

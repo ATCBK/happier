@@ -367,6 +367,7 @@ export function buildSessionMetadataRecipientUpdate(
         ...payload.body,
         metadataLayoutVersion: recipientProjection.metadataLayoutVersion,
         ...ownerMetadata,
+        ...(recipientProjection.projectKey !== undefined ? { projectKey: recipientProjection.projectKey } : {}),
     };
     if (agentState === undefined) delete recipientBody.agentState;
     return {

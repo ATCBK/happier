@@ -1,0 +1,1 @@
+ALTER TABLE `Session` ADD COLUMN `projectKey` VARCHAR(191) NULL;

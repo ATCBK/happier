@@ -1,6 +1,7 @@
 import { normalizeSessionMessageContentForStorage } from "@/app/session/normalizeSessionMessageContentForStorage";
 import { projectSessionInputRepliesFromTurnInTx } from './messages/sessionMessageReply';
 import * as z from 'zod/mini';
+import { NonBlankOpaqueIdentifierSchema } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { buildSessionInputAdmissionReceipt, isSameSessionInputAdmissionIssuer } from "./messages/sessionInputAdmission";
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { assertSessionCapabilityInTx, assertSessionOwnerInTx, resolveSessionAccessForOperation, type EffectiveSessionAccess, type SessionCapability } from "@/app/session/access/sessionAccess";
@@ -4364,6 +4365,8 @@ export type UpdateSessionMetadataEnvelopeTupleResult =
         agentStateVersion: number;
         ownerMetadata: Readonly<{ value: string }>;
         agentState: Readonly<{ version: number; value: string | null }>;
+        /** Present only when this owner patch admitted a Project identity. */
+        projectKey?: string;
       }>
     | Readonly<{
         ok: false;
@@ -4416,13 +4419,14 @@ function isNonNegativeInteger(value: unknown): value is number {
 }
 
 function isExactMetadataEnvelopeTupleRetry(
-    current: StoredSessionMetadataEnvelopeTuple,
+    current: StoredSessionMetadataEnvelopeTuple & Readonly<{ projectKey: string | null }>,
     params: ActiveSessionMetadataEnvelopeTupleInput,
 ): boolean {
     if (
         current.metadataLayoutVersion !== SESSION_METADATA_LAYOUT_VERSION_V1
         || current.metadataVersion !== params.sharedMetadata.expectedVersion + 1
         || current.metadata !== params.sharedMetadata.ciphertext
+        || (params.mode === "owner" && params.projectKey !== undefined && current.projectKey !== params.projectKey)
     ) {
         return false;
     }
@@ -4525,6 +4529,9 @@ function toMetadataEnvelopeTupleSuccess(
         recipientCursors,
         sessionOwnerId,
         ownerAccountMode,
+        ...(params.mode === "owner" && params.projectKey !== undefined
+            ? { projectKey: params.projectKey }
+            : {}),
         metadataLayoutVersion: SESSION_METADATA_LAYOUT_VERSION_V1,
         sharedMetadata: {
             version: current.metadataVersion,
@@ -4570,6 +4577,10 @@ function toMetadataEnvelopeTupleVersionMismatch(
 function isValidSessionMetadataEnvelopeTupleInput(
     params: UpdateSessionMetadataEnvelopeTupleInput,
 ): boolean {
+    if ("projectKey" in params && (
+        params.mode !== "owner"
+        || (params.projectKey !== undefined && !NonBlankOpaqueIdentifierSchema.safeParse(params.projectKey).success)
+    )) return false;
     if ("activitySummaryV1" in params && (
         (params.mode !== "owner" && params.mode !== "owner_migration")
         || !SessionAgentStateActivitySummaryV1Schema.safeParse(params.activitySummaryV1).success
@@ -5197,6 +5208,7 @@ async function updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(
             latestTurnId: true,
             latestTurnStatus: true,
             seq: true,
+            projectKey: true,
             metadataLayoutVersion: true,
             metadataVersion: true,
             metadata: true,
@@ -5332,6 +5344,7 @@ async function updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(
             metadataLayoutVersion: SESSION_METADATA_LAYOUT_VERSION_V1,
             agentState: params.agentState.ciphertext,
             agentStateVersion: nextAgentStateVersion,
+            ...(params.mode === "owner" && params.projectKey !== undefined ? { projectKey: params.projectKey } : {}),
             ...normalizePendingRequestActivitySummary(
                 params.mode === "owner" ? params.activitySummaryV1 ?? {} : {},
             ),
@@ -5384,6 +5397,7 @@ async function updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(
             select: {
                 active: true,
                 archivedAt: true,
+                projectKey: true,
                 metadataLayoutVersion: true,
                 metadataVersion: true,
                 metadata: true,

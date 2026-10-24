@@ -36,6 +36,7 @@ export type SessionMetadataRecipientProjectionInput = Readonly<{
     ownerMetadata?: string | null;
     agentState: string | null;
     agentStateVersion: number;
+    projectKey?: string | null;
 }>;
 
 type LegacySessionMetadataRecipientProjection = Readonly<{
@@ -273,6 +274,7 @@ export function projectSessionMetadataForRecipient(params: Readonly<{
             metadataVersion: session.metadataVersion,
             metadataLayoutVersion: SESSION_METADATA_LAYOUT_VERSION_V1,
             ownerMetadata: validatedOwnerMetadata,
+            ...(session.projectKey !== undefined ? { projectKey: session.projectKey } : {}),
             agentState: session.agentState,
             agentStateVersion: session.agentStateVersion,
         };
@@ -282,6 +284,7 @@ export function projectSessionMetadataForRecipient(params: Readonly<{
         metadata: session.metadata,
         metadataVersion: session.metadataVersion,
         metadataLayoutVersion: SESSION_METADATA_LAYOUT_VERSION_V1,
+        ...(session.projectKey !== undefined ? { projectKey: session.projectKey } : {}),
         agentState: null,
         agentStateVersion: session.agentStateVersion,
     };
