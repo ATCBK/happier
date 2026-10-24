@@ -75,6 +75,8 @@ export type SessionPromptStackInput = Readonly<{
   accountContext?: SessionPromptStackAccountContext;
   /** Finite admission may share one fresh Project inventory across its Sessions. */
   projectPreparation?: SessionProjectPromptStackPreparation;
+  /** Already-admitted context; explicit [] withholds private Project inference. */
+  projectEntries?: readonly PromptStackEntryV1[];
   operationContext?: SavedSecretOperationContextV1;
 }>;
 
@@ -200,11 +202,11 @@ export async function prepareSessionPromptStackInputs(input: SessionPromptStackI
       metadata, signal: input.signal, machineId: input.machineId, directory: input.directory, serverId,
       operationContext: input.operationContext,
     };
-    const projectEntries = input.credentials ? await (input.projectPreparation
+    const projectEntries = input.projectEntries ?? (input.credentials ? await (input.projectPreparation
       ? input.projectPreparation.resolve({ metadata, machineId: input.machineId, directory: input.directory })
       : resolveSessionProjectPromptStack({
         credentials: input.credentials, ...projectInput,
-      })).then(project => project.entries) : [];
+      })).then(project => project.entries) : []);
     await assertOperationCurrent();
     return {
       credentials: input.credentials, operationContext: input.operationContext, serverId, scope, settings, profileId,

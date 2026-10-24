@@ -98,6 +98,8 @@ it('keeps unavailable Account inventory pending, then admits observed empty and 
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } }
     : { status: 503, data: { error: 'unavailable' } });
   const input = { credentials, metadata: null, machineId: 'prompt-machine',
+    // This Account-only preparation has no Session subject or Project context.
+    projectEntries: [],
     accountContext: { scopeKey, lifetimeToken, settings: null },
     // A retained caller's former opt-in must no longer weaken Account admission.
     allowOptionalAccountLibrary: true,
