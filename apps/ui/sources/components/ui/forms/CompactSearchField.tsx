@@ -98,6 +98,8 @@ function PageSearchColumn(props: Readonly<{ testID?: string; children: React.Rea
 type CompactSearchFieldInputOptions = Readonly<{
     /** Drawn inside the well after the input, before the trailing inset. */
     trailing?: React.ReactNode;
+    /** Resolves to the field's drawn frame, for what opens under the field (a list's filter editor). */
+    anchorRef?: React.RefObject<View | null>;
     /** The input's accessible name when it differs from the placeholder. */
     accessibilityLabel?: string;
     autoFocus?: boolean;
@@ -138,7 +140,7 @@ const CompactSearchFieldFrame = React.memo(function CompactSearchFieldFrame(prop
         else if (ownerRef) (ownerRef as React.MutableRefObject<React.ElementRef<typeof TextInput> | null>).current = node;
     }, [ownerRef]);
     return (
-        <View testID={props.testID ? `${props.testID}.layout` : undefined} style={props.style}>
+        <View ref={props.anchorRef} collapsable={false} testID={props.testID ? `${props.testID}.layout` : undefined} style={props.style}>
             <HappierSearchFieldBox
                 testID={props.testID}
                 onFocusInput={focusInput}
