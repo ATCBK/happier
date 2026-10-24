@@ -1,6 +1,7 @@
 import { HAPPIER_FRESHNESS_LINE_METRICS, HappierBanner, HappierPressable, happierPageTextMetrics, type HappierBannerPoint } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { View } from 'react-native';
+import { readHappierVisibleLayoutWidth } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
@@ -131,7 +132,7 @@ export const AttentionBanner = React.memo(function AttentionBanner(props: Readon
                 compactActionPlacement={props.compactActionPlacement}
                 // Two or more ways forward, or a list of steps, never share a line with the words.
                 actionPlacement={props.actionPlacement ?? (props.secondaryAction || (props.moreActions?.length ?? 0) > 0 ? 'below' : undefined)}
-                onLayout={(event) => { const width = event.nativeEvent.layout.width; if (width > 0) setCompact(width < PAGE_LIST_METRICS.rowStackBelowWidthPx); }}
+                onLayout={(event) => { const width = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width); if (width !== null) setCompact(width < PAGE_LIST_METRICS.rowStackBelowWidthPx); }}
                 details={<>
                     {hasDetails ? (
                         <HappierPressable
