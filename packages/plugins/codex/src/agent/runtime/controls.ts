@@ -6,6 +6,7 @@ import type {
   AgentSessionGoalControlContext,
   AgentSessionUsageLimitRecoveryControl,
 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import {
   readUnexpectedActionErrorDiagnosticV1,
   projectSessionGoalControlDiagnosticDetails,
@@ -69,11 +70,14 @@ async function withControlClient<T>(
   run: (client: Awaited<ReturnType<typeof createCodexNativeAppServerClient>>) => Promise<T>,
   onInitialize?: () => void,
 ): Promise<T> {
+  const processEnv = context.session.launchEnvironment?.values;
+  if (!processEnv) throw new PluginError({ code: 'codex_control_launch_scope_unavailable',
+    message: 'The target Session native launch environment is unavailable' });
   const client = await createCodexNativeAppServerClient({
     exec: context.services.exec,
     logger: context.services.logger,
     cwd: context.session.cwd,
-    processEnv: {},
+    processEnv,
     signal: context.signal,
     ...(onInitialize ? { onInitialize } : {}),
   });
@@ -84,7 +88,14 @@ async function withControlClient<T>(
   }
 }
 
-function createGoalControl(goalProjection: CodexGoalProjection): AgentSessionGoalControl {
+export function createCodexGoalControl(
+  goalProjection: CodexGoalProjection,
+  withClient: typeof withControlClient = async (context, run, onInitialize) => {
+    if (context.session.activity === 'active') throw new PluginError({ code: 'codex_live_goal_runtime_unavailable',
+      message: 'Live Goals require the target Session runtime control' });
+    return await withControlClient(context, run, onInitialize);
+  },
+): AgentSessionGoalControl {
   return {
     async get(context) {
       const threadId = context.session.providerSessionId;
@@ -92,9 +103,9 @@ function createGoalControl(goalProjection: CodexGoalProjection): AgentSessionGoa
       let phase: 'native_effect' | 'host_publication_rejected' = 'native_effect';
       let stage: SessionGoalControlDiagnosticStage = 'client_creation';
       try {
-        const response = await withControlClient(context, async (client) => {
+        const response = await withClient(context, async (client) => {
           stage = 'thread/goal/get';
-          return await client.request('thread/goal/get', { threadId });
+          return await client.request('thread/goal/get', { threadId }, { signal: context.signal });
         }, () => { stage = 'initialize'; });
         phase = 'host_publication_rejected';
         stage = 'host_publication';
@@ -109,9 +120,9 @@ function createGoalControl(goalProjection: CodexGoalProjection): AgentSessionGoa
       let phase: 'native_effect' | 'host_publication_rejected' = 'native_effect';
       let stage: SessionGoalControlDiagnosticStage = 'client_creation';
       try {
-        const response = await withControlClient(context, async (client) => {
+        const response = await withClient(context, async (client) => {
           stage = 'thread/goal/set';
-          return await client.request('thread/goal/set', { threadId, ...mutation });
+          return await client.request('thread/goal/set', { threadId, ...mutation }, { signal: context.signal });
         }, () => { stage = 'initialize'; });
         phase = 'host_publication_rejected';
         stage = 'host_publication';
@@ -126,9 +137,9 @@ function createGoalControl(goalProjection: CodexGoalProjection): AgentSessionGoa
       let phase: 'native_effect' | 'host_publication_rejected' = 'native_effect';
       let stage: SessionGoalControlDiagnosticStage = 'client_creation';
       try {
-        await withControlClient(context, async (client) => {
+        await withClient(context, async (client) => {
           stage = 'thread/goal/clear';
-          await client.request('thread/goal/clear', { threadId });
+          await client.request('thread/goal/clear', { threadId }, { signal: context.signal });
         }, () => { stage = 'initialize'; });
         phase = 'host_publication_rejected';
         stage = 'host_publication';
@@ -166,26 +177,32 @@ const createCatalog = (readSessionCatalog: (sessionId: string) => CodexSessionCa
   },
 });
 
-const usageLimitRecovery: AgentSessionUsageLimitRecoveryControl = {
-  async execute(request, context) {
-    if (request.kind !== 'checkNow') {
-      return { status: 'unsupported', diagnostic: diagnostic('codex_reset_credit_unsupported') };
-    }
-    try {
-      const snapshot = await withControlClient(context, async (client) => (
-        await readCodexRuntimeRateLimitsSnapshot(client)
-      ).rawSnapshot);
-      if (!isCodexRateLimitSnapshotExhausted(snapshot)) return { status: 'ready' };
-      const resetAtMs = readEarliestCodexRateLimitResetAtMs(snapshot);
-      return {
-        status: 'waiting',
-        ...(resetAtMs === null ? {} : { retryAfterMs: Math.max(0, resetAtMs - Date.now()) }),
-      };
-    } catch {
-      return { status: 'unavailable', retryable: true, diagnostic: diagnostic('codex_usage_limit_probe_failed') };
-    }
-  },
-};
+export function createCodexUsageLimitRecoveryControl(
+  withClient: typeof withControlClient = withControlClient,
+): AgentSessionUsageLimitRecoveryControl {
+  return {
+    async execute(request, context) {
+      if (request.kind !== 'checkNow') {
+        return { status: 'unsupported', diagnostic: diagnostic('codex_reset_credit_unsupported') };
+      }
+      try {
+        const snapshot = await withClient(context, async (client) => (
+          await readCodexRuntimeRateLimitsSnapshot({
+            request: (method, params) => client.request(method, params, { signal: context.signal }),
+          })
+        ).rawSnapshot);
+        if (!isCodexRateLimitSnapshotExhausted(snapshot)) return { status: 'ready' };
+        const resetAtMs = readEarliestCodexRateLimitResetAtMs(snapshot);
+        return {
+          status: 'waiting',
+          ...(resetAtMs === null ? {} : { retryAfterMs: Math.max(0, resetAtMs - Date.now()) }),
+        };
+      } catch {
+        return { status: 'unavailable', retryable: true, diagnostic: diagnostic('codex_usage_limit_probe_failed') };
+      }
+    },
+  };
+}
 
 const continuation: AgentSessionContinuationControl = {
   async verify(request, context) {
@@ -215,9 +232,9 @@ export function createCodexNativeSessionControls(
   // The runtime owns its native client, delivered roots and disposal.
   const catalogReaders = new Map<string, CodexSessionCatalogReader>();
   return Object.freeze({
-    goals: createGoalControl(goalProjection),
+    goals: createCodexGoalControl(goalProjection),
     catalog: createCatalog(sessionId => catalogReaders.get(sessionId)),
-    usageLimitRecovery,
+    usageLimitRecovery: createCodexUsageLimitRecoveryControl(),
     continuation,
     bindSessionCatalog(sessionId: string, readCatalog: CodexSessionCatalogReader) {
       catalogReaders.set(sessionId, readCatalog);

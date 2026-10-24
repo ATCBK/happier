@@ -1722,6 +1722,7 @@ type NativeAgentSessionDirectFacets = Readonly<{
     context: AgentSessionRuntimeContext;
     cwd: string;
     connectedAccounts: NonNullable<AgentSessionOpenRequest['connectedAccounts']>;
+    launchEnvironment?: AgentSessionOpenRequest['launchEnvironment'];
     capabilities: AgentSessionCapabilities;
     cancellation: NativeAgentSessionCancellation;
     configuration: NativeAgentSessionConfiguration;
@@ -1875,6 +1876,7 @@ function createNativeAgentSessionControlContext(params: Readonly<{
     activity: 'active' | 'inactive';
     connectedAccounts: NonNullable<AgentSessionOpenRequest['connectedAccounts']>;
     providerSessionId?: string;
+    launchEnvironment?: AgentSessionOpenRequest['launchEnvironment'];
 }>): AgentSessionControlContext {
     return Object.freeze({
         plugin: params.context.plugin,
@@ -1890,6 +1892,7 @@ function createNativeAgentSessionControlContext(params: Readonly<{
             id: params.context.session.id,
             cwd: params.cwd,
             activity: params.activity,
+            ...(params.launchEnvironment ? { launchEnvironment: params.launchEnvironment } : {}),
             ...(params.providerSessionId ? { providerSessionId: params.providerSessionId } : {}),
             connectedAccounts: Object.freeze([...params.connectedAccounts]),
         }),
@@ -3180,6 +3183,7 @@ export function createNativeAgentSessionOperations(
             cwd: directFacets.cwd,
             activity,
             connectedAccounts: directFacets.connectedAccounts,
+            launchEnvironment: directFacets.launchEnvironment,
             ...(providerSessionId ? { providerSessionId } : {}),
         });
     };
@@ -3207,6 +3211,8 @@ export function createNativeAgentSessionOperations(
         }));
         return await apply();
     });
+    const liveGoals = session.goals ?? directFacets?.goals;
+    const liveUsageLimitRecovery = session.usageLimitRecovery ?? directFacets?.usageLimitRecovery;
     const directHostControls: NativeAgentSessionDirectHostControls = directFacets
         ? Object.freeze({
             ...(directFacets.managedProviderRunServices ? { managedProviderRunServices: directFacets.managedProviderRunServices } : {}),
@@ -3400,7 +3406,7 @@ export function createNativeAgentSessionOperations(
                     },
                 }
                 : {}),
-            ...(directFacets.capabilities.goals?.active && directFacets.goals && session.nativeGoalControlsSupported !== false
+            ...(directFacets.capabilities.goals?.active && liveGoals && session.nativeGoalControlsSupported !== false
                 ? {
                     async refreshGoal() {
                         if (activeControlUnavailable()) {
@@ -3417,7 +3423,7 @@ export function createNativeAgentSessionOperations(
                                 directFacets.capabilities.goals!.source,
                             ),
                         });
-                        const result = await directFacets.goals!.get(goalContext, { signal: context.signal });
+                        const result = await liveGoals.get(goalContext, { signal: context.signal });
                         return result.status === 'applied' || result.status === 'unchanged' || result.status === 'pending'
                             ? result
                             : directControlFailureResult(result);
@@ -3462,7 +3468,7 @@ export function createNativeAgentSessionOperations(
                                 diagnostic: { code: 'native_goal_mutation_required' },
                             });
                         }
-                        const result = await runGoalMutation(async context => directFacets.goals!.set(mutation, context, { signal: context.signal }));
+                        const result = await runGoalMutation(async context => liveGoals.set(mutation, context, { signal: context.signal }));
                         return result.status === 'applied'
                             || result.status === 'unchanged'
                             || result.status === 'pending'
@@ -3478,7 +3484,7 @@ export function createNativeAgentSessionOperations(
                                 goalControlFailure: { phase: 'native_effect' },
                             });
                         }
-                        const result = await runGoalMutation(async context => directFacets.goals!.clear(context, { signal: context.signal }));
+                        const result = await runGoalMutation(async context => liveGoals.clear(context, { signal: context.signal }));
                         return result.status === 'applied'
                             || result.status === 'unchanged'
                             || result.status === 'pending'
@@ -3555,7 +3561,7 @@ export function createNativeAgentSessionOperations(
                         : {}),
                 }
                 : {}),
-            ...(directFacets.capabilities.usageLimitRecovery?.active && directFacets.usageLimitRecovery
+            ...(directFacets.capabilities.usageLimitRecovery?.active && liveUsageLimitRecovery
                 ? {
                     ...(directFacets.capabilities.usageLimitRecovery.active.includes('checkNow')
                         ? {
@@ -3575,7 +3581,7 @@ export function createNativeAgentSessionOperations(
                                     };
                                 }
                                 const context = createControlContext('active');
-                                return await directFacets.usageLimitRecovery!.execute({
+                                return await liveUsageLimitRecovery.execute({
                                     kind: 'checkNow',
                                     ...(request.resumePromptMode
                                         ? { resumePromptMode: request.resumePromptMode }
@@ -3609,7 +3615,7 @@ export function createNativeAgentSessionOperations(
                                         diagnostic: { code: 'usage_limit_issue_fingerprint_required' },
                                     });
                                 }
-                                return await directFacets.usageLimitRecovery!.execute({
+                                return await liveUsageLimitRecovery.execute({
                                     kind: 'consumeResetCredit',
                                     issueFingerprint: request.issueFingerprint,
                                 }, context, { signal: context.signal });
@@ -5915,6 +5921,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                             connectedAccounts:
                                 openRequest.connectedAccounts ?? [],
                             providerSessionId: continuationProviderSessionId,
+                            launchEnvironment: openRequest.launchEnvironment,
                         });
                     const result = sessions.continuation
                         ? await sessions.continuation.verify(
@@ -6207,6 +6214,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     getWorkspaceWrites: hostRuntimeParams.getWorkspaceWrites,
                     resolveMcpToolPolicy: hostRuntimeParams.resolveMcpToolPolicy,
                     get connectedAccounts() { return openRequest.connectedAccounts ?? []; },
+                    get launchEnvironment() { return openRequest.launchEnvironment; },
                         capabilities: sessionCapabilities,
                         cancellation,
                         configuration,

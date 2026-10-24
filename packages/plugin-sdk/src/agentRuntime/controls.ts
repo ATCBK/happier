@@ -30,6 +30,8 @@ export type AgentSessionControlContext = Omit<AgentSessionRuntimeContext, 'sessi
     cwd: string;
     activity: 'active' | 'inactive';
     providerSessionId?: string;
+    /** Target Session's admitted native scope; never the requesting Session's environment. */
+    launchEnvironment?: AgentSessionOpenRequest['launchEnvironment'];
     connectedAccounts: readonly AgentSessionConnectedAccountSelection[];
   }>;
 }>;

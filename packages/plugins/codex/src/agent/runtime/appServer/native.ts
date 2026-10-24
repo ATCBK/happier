@@ -1088,6 +1088,7 @@ export async function openCodexNativeAppServerSession(
     resolveCurrentPolicy: () => resolveCodexTerminalPermissionPolicy(readPermissionMode(request), request.configuration?.workspaceWrites, request.configuration?.unlistedTools),
     ...(goalProjection
       ? {
+          goalProjection,
           observeGoal: (() => {
             const goalSource = context.workState.publisher('goals');
             return async (payload: Parameters<CodexGoalProjection['publish']>[0]): Promise<void> => {
@@ -1116,8 +1117,7 @@ export async function openCodexNativeAppServerSession(
         : {}),
     });
     if (request.kind === 'create') {
-      // Goal controls use a separate native client. Persist the zero-turn
-      // thread through the existing attachment owner before exposing controls.
+      // Persist the zero-turn thread for attachment and later inactive controls.
       await runtime.prepareProviderCliAttach();
     }
   } catch (error) {
@@ -1143,6 +1143,8 @@ export async function openCodexNativeAppServerSession(
   );
   return {
     ...sessionRuntime,
+    goals: runtime.goals,
+    usageLimitRecovery: runtime.usageLimitRecovery,
     get skillsDelivered() { return runtime.skillsDelivered; },
     ...(sharedAppServer
       ? {

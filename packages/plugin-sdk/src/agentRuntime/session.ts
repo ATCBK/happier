@@ -10,7 +10,7 @@ import type { AgentTerminalLaunchPlan, AgentTerminalLaunchRequest } from './surf
 import type { JsonValue } from '../identity.js';
 import type { Disposable } from '../lifecycle.js';
 import type { PluginDiagnosticData } from '../diagnostics.js';
-import type { AgentSessionConversationRollbackControl } from './controls.js';
+import type { AgentSessionConversationRollbackControl, AgentSessionGoalControl, AgentSessionUsageLimitRecoveryControl } from './controls.js';
 
 /** Agent-owned runtime identity carried across host-owned session lifecycle. */
 export type RuntimeDescriptorV1 = Readonly<{
@@ -874,6 +874,10 @@ export interface AgentSessionRuntime extends Disposable {
   readonly runtimeCapabilities?: AgentSessionRuntimeCapabilities;
   /** Per-open active goal support; false suppresses manifest-declared live goal controls. */
   readonly nativeGoalControlsSupported?: boolean;
+  /** Declared live Goals use this opened runtime's native connection before factory controls. */
+  readonly goals?: AgentSessionGoalControl;
+  /** Declared live usage recovery uses this opened runtime's native connection before factory controls. */
+  readonly usageLimitRecovery?: AgentSessionUsageLimitRecoveryControl;
   /** False when this opened launch path cannot honor the requested skills. */
   readonly skillsDelivered?: boolean;
   /** Invoked by the host only for declared liveReload support. */

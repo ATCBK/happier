@@ -19,6 +19,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   runtime: ReturnType<typeof createCodexAppServerRuntime>;
   requests: Array<{ method: string; params: Record<string, unknown> }>;
   exec: ExecService;
+  launchEnvironment: NonNullable<AgentSessionOpenRequest['launchEnvironment']>;
   directory: string;
   endpoints: readonly string[];
   nativeLaunches: readonly (readonly string[])[];
@@ -50,6 +51,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   skillListFailure?: Readonly<{ code: number; message: string }>;
   initializeFailure?: Readonly<{ code: number; message: string }>;
   goalFailure?: Readonly<{ code: number; message: string }>;
+  goalThreadsVisibleOnlyWhenLoaded?: boolean;
   onTurnStart?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown>; turnId: string }>) => void | Promise<void>;
   beforeTurnStartResponse?: () => Promise<void>;
   beforeThreadResumeResponse?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown> }>) => void | Promise<void>;
@@ -120,6 +122,9 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       for (const socket of webSockets.clients) socket.send(JSON.stringify({ method, params }));
     }
   };
+  // Each server substitutes one native process. An unrelated control process
+  // may not find the fixture's live thread through its own rollout lookup scope.
+  const loadedGoalServers = new WeakSet<WebSocketServer>();
   const bindServer = (webSockets: WebSocketServer) => webSockets.on('connection', (socket) => {
     // Independent Codex 0.162.1 control processes do not inherit the runtime's extra roots.
     let extraRoots: readonly string[] = [];
@@ -148,14 +153,18 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
         try { result = await options.accountRead?.() ?? {}; }
         catch { error = { code: -32000, message: 'Account read unavailable' }; }
       } else if (message.method === 'account/rateLimits/read') {
-        result = await options.rateLimitsRead?.() ?? {};
+        try { result = await options.rateLimitsRead?.() ?? {}; }
+        catch { error = { code: -32000, message: 'Quota read unavailable' }; }
       } else if (message.method === 'thread/start') {
+        loadedGoalServers.add(webSockets);
         result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
       } else if (message.method.startsWith('thread/goal/')) {
         // An independent native control process can find only a persisted rollout.
         if (options.goalFailure) error = options.goalFailure;
-        else if (!materialized || params.threadId !== 'fresh-thread') error = { code: -32600, message: 'thread not found' };
-        else if (message.method === 'thread/goal/set') {
+        else if (!materialized || params.threadId !== 'fresh-thread'
+          || (options.goalThreadsVisibleOnlyWhenLoaded && !loadedGoalServers.has(webSockets))) {
+          error = { code: -32600, message: `thread not found: ${String(params.threadId)}` };
+        } else if (message.method === 'thread/goal/set') {
           goal = { ...goal, ...params, status: params.status ?? goal?.status ?? 'active',
             createdAt: 1_776_272_400, updatedAt: 1_776_272_460 };
           result = { goal };
@@ -179,7 +188,10 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       } else if (message.method === 'thread/resume') {
         if (resumeFailure) error = { code: -32000, message: resumeFailure };
         else if (params.threadId === 'fresh-thread' && !materialized) error = { code: -32000, message: 'no rollout found' };
-        else result = { thread: { id: params.threadId, turns }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
+        else {
+          loadedGoalServers.add(webSockets);
+          result = { thread: { id: params.threadId, turns }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
+        }
       } else if (message.method === 'turn/interrupt') {
         const turn = turns.find((entry) => entry.id === params.turnId);
         if (!turn) throw new Error('Cannot interrupt an unknown fixture turn');
@@ -318,7 +330,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     },
   } as unknown as ExecService;
   try {
-    await run({ runtime, requests, exec: nativeExec, directory: root, endpoints, nativeLaunches, nativeProcessExits, emitNotification,
+    await run({ runtime, requests, exec: nativeExec, launchEnvironment: configuredLaunchEnvironment, directory: root, endpoints, nativeLaunches, nativeProcessExits, emitNotification,
       failNextRevert: (outcome) => { revertFailure = outcome; },
       failRead: () => { rejectRead = true; }, failResume: (message) => { resumeFailure = message; }, async openConfiguredSession(providerSessionId, mcpServers = options.mcpServers) {
       // Exec and host SDK services are genuine external boundaries; native/runtime/client logic stays real.

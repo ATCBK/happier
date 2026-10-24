@@ -13,7 +13,7 @@ describe('Codex continuation native failure evidence', () => {
       const context = {
         signal: new AbortController().signal,
         services: { exec: fixture.exec, logger: { warn } },
-        session: { id: 'session-1', cwd: fixture.directory, activity: 'inactive', connectedAccounts: [] },
+        session: { id: 'session-1', cwd: fixture.directory, activity: 'inactive', connectedAccounts: [], launchEnvironment: fixture.launchEnvironment },
       } as unknown as AgentSessionControlContext;
       const result = await createCodexNativeSessionControls().continuation.verify({
         kind: 'resume', sessionId: 'session-1', cwd: fixture.directory, providerSessionId: 'fresh-thread',
@@ -42,7 +42,7 @@ describe('Codex continuation native failure evidence', () => {
       } } };
       const context = {
         signal: new AbortController().signal, services: { exec, logger: { warn } },
-        session: { id: 'session-1', cwd: fixture.directory, activity: 'inactive', connectedAccounts: [] },
+        session: { id: 'session-1', cwd: fixture.directory, activity: 'inactive', connectedAccounts: [], launchEnvironment: fixture.launchEnvironment },
       } as unknown as AgentSessionControlContext;
       const result = await createCodexNativeSessionControls().continuation.verify({
         kind: 'resume', sessionId: 'session-1', cwd: fixture.directory, providerSessionId: 'fresh-thread',

@@ -59,6 +59,8 @@ import {
 import { readCodexAuthTokensFromNativeHome } from '../../cli/auth/environment.js';
 import { readCodexRuntimeRateLimitsSnapshot } from '../../auth/services/quota/runtimeRateLimits.js';
 import { readCodexSessionCatalog, type CodexSessionCatalogReader } from './catalog/index.js';
+import { createCodexGoalControl, createCodexUsageLimitRecoveryControl } from '../controls.js';
+import { createCodexGoalProjection, readCodexGoalPayload, type CodexGoalProjection } from './work/goalProjection.js';
 import { CODEX_ACCOUNT_USAGE_PROVIDER_ID, resolveCodexUsageSubjectRef } from '../../auth/services/usage/identity.js';
 import {
   mapCodexRateLimitSnapshotToProviderAccountUsageSnapshot,
@@ -153,7 +155,6 @@ import { isCodexRequestUsageIdentityContradicted, resolveCodexRequestUsageAttrib
 import type { CodexProviderBindingEngineConfigV1 } from '../../providerBinding/runtimeConfig.js';
 import { createCodexAppServerRealtimeConversation } from './realtime.js';
 import { registerCodexAppServerInteractionHandlers } from './interactions.js';
-import { readCodexGoalPayload } from './work/goalProjection.js';
 
 export type CodexAppServerPolicy = Readonly<{
   approvalPolicy?: unknown;
@@ -228,6 +229,8 @@ export type CodexAppServerRuntime = CodexAppServerSession & Readonly<{
   prepareProviderCliAttach(): Promise<string>;
   prepareSkillDelivery(): Promise<void>;
   readCatalog: CodexSessionCatalogReader;
+  goals: NonNullable<AgentSessionRuntime['goals']>;
+  usageLimitRecovery: NonNullable<AgentSessionRuntime['usageLimitRecovery']>;
   refreshSkills: NonNullable<AgentSessionRuntime['refreshSkills']>;
   supportsInFlightSteer(): boolean;
   isTurnInFlight(): boolean;
@@ -328,6 +331,7 @@ type CodexAppServerRuntimeParams = CodexAppServerRuntimeTarget & Readonly<{
   toolRestriction?: Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>;
   resolveCurrentPolicy?: () => CodexAppServerPolicy | null;
   observeGoal?: (payload: Readonly<{ kind: 'present'; goal: Readonly<Record<string, unknown>> }> | Readonly<{ kind: 'absent' }>) => void | Promise<void>;
+  goalProjection?: CodexGoalProjection;
 }>;
 
 export type CodexAppServerRuntimeHost = Readonly<{
@@ -3432,6 +3436,14 @@ export function createCodexAppServerRuntime(
   };
 
   const runtime: CodexAppServerRuntime = {
+    goals: createCodexGoalControl(params.goalProjection ?? createCodexGoalProjection(), async (context, run) => {
+      context.signal.throwIfAborted();
+      return await run(await ensureClient());
+    }),
+    usageLimitRecovery: createCodexUsageLimitRecoveryControl(async (context, run) => {
+      context.signal.throwIfAborted();
+      return await run(await ensureClient());
+    }),
     realtimeConversation,
     prepareProviderCliAttach,
     get skillsDelivered() { return skillsDelivered; },

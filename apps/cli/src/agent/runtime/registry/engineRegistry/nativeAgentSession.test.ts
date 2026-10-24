@@ -120,7 +120,11 @@ import { combinePermissionModeQueuedPrompts } from '@/agent/runtime/permissions/
 import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
 import { createSessionProviderInputConsumerSessionAdapter } from '@/agent/runtime/waitForNextPermissionModeMessage';
 import { createProviderCliAttachSurface } from '@/session/attach/providerCliAttach';
-import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createAccountEncryptionCurrentnessFixture, createMutableApiSessionClientFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import * as sockets from '@/api/session/sockets';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import { runTerminalRemoteSessionModeLoop } from '@/agent/runtime/session/loop/runTerminalRemoteSessionModeLoop';
 import { bindProcessLogger, Logger, logger } from '@/ui/logger';
@@ -5200,7 +5204,7 @@ describe('native Agent session host adapter', () => {
         }
     });
 
-    it('projects declared native direct facets and persists the pre-dispatch rollback range without an Agent-id branch', async () => {
+    it('projects runtime-bound external plugin Goals ahead of factory controls and persists the pre-dispatch rollback range without an Agent-id branch', async () => {
         const emitter: { current: ((event: AgentSessionRuntimeEvent) => void) | null } = { current: null };
         const sessionConnectedAccounts = Object.freeze([Object.freeze({
             purpose: 'primary',
@@ -5257,10 +5261,16 @@ describe('native Agent session host adapter', () => {
         }));
         const runtime: AgentRuntime = {
             sessions: {
-                goals: { get: getGoal, set: setGoal, clear: clearGoal },
+                goals: {
+                    async get() { throw new Error('Factory controls cannot address the live target'); },
+                    async set() { throw new Error('Factory controls cannot address the live target'); },
+                    async clear() { throw new Error('Factory controls cannot address the live target'); },
+                },
                 catalog: { list: listCatalog },
-                usageLimitRecovery: { execute: executeUsage },
+                usageLimitRecovery: { async execute() { throw new Error('Factory controls cannot check the live target quota'); } },
                 open: vi.fn(async () => ({
+                    goals: { get: getGoal, set: setGoal, clear: clearGoal },
+                    usageLimitRecovery: { execute: executeUsage },
                     conversationRollback: { rollback, reconcile },
                     send: vi.fn(async () => ({ status: 'admitted' as const })),
                     watch: (handler: (event: AgentSessionRuntimeEvent) => void) => {
@@ -5359,7 +5369,39 @@ describe('native Agent session host adapter', () => {
         }>;
         created.operations.subscribeRuntimeEvents(() => undefined);
 
-        await controls.refreshGoal();
+        emitter.current?.({
+            kind: 'provider-session-id', sessionId: 'session-direct-controls', providerSessionId: 'provider-session-1',
+            emittedAtMs: 1, sequence: 1,
+        });
+        // The cont33 selector shape starts in another Session and crosses real
+        // Action routing, RPC registration and the host's runtime-bound facet.
+        // Only Home socket I/O and device-local settings are substituted.
+        const registeredControls: SessionRuntimeControls = {};
+        applySessionRuntimeControls(registeredControls, created.nativeRuntime ?? null);
+        registerSessionControlHandlers(hostSession.rpcHandlerManager, { sessionRuntimeControls: registeredControls,
+            getSessionMetadata: () => hostSession.getMetadataSnapshot() as Metadata });
+        const socketBoundary = vi.spyOn(sockets, 'createUserScopedSocketConnection').mockImplementation(() => {
+            const socket = createApiSessionSocketStub({ connected: true, emitWithAck: async (event, raw) => {
+                if (event !== SOCKET_RPC_EVENTS.CALL || !raw || typeof raw !== 'object'
+                    || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)) throw new Error('Unexpected Goal socket packet');
+                expect(raw.method).toBe(`${hostSession.sessionId}:${SESSION_RPC_METHODS.SESSION_GOAL_GET}`);
+                return { ok: true, result: await hostSession.rpcHandlerManager.invokeLocal(SESSION_RPC_METHODS.SESSION_GOAL_GET, raw.params) };
+            } });
+            return { socket, transport: { connect: async () => {}, destroy: async () => {}, onDisconnected: () => () => {} } };
+        });
+        const settingsBoundary = vi.spyOn(persistence, 'readSettings').mockResolvedValue({ schemaVersion: 6,
+            onboardingCompleted: true, machineId: 'machine-1' });
+        try {
+            const caller = createCliActionDeps({ token: 'selector-test', credentials: { token: 'selector-test', encryption: null },
+                sessionId: 'different-caller-session', mode: 'plain', ctx: null,
+                invokeBoundSessionRpc: async () => { throw new Error('The caller runtime must not receive the target Goal'); },
+                initialSessionGoalTransport: { ok: true, sessionId: hostSession.sessionId, mode: 'plain', ctx: null,
+                    accountEncryptionCurrentness: createAccountEncryptionCurrentnessFixture(),
+                    rawSession: createSessionRecordFixture({ id: hostSession.sessionId, active: true, encryptionMode: 'plain',
+                        machineId: 'machine-1', metadata: JSON.stringify({ path: '/tmp/acme-direct-controls-agent', machineId: 'machine-1' }) }) },
+            });
+            await expect(caller.sessionGoalGet!({ sessionId: hostSession.sessionId })).resolves.toMatchObject({ workState: null });
+        } finally { socketBoundary.mockRestore(); settingsBoundary.mockRestore(); }
         await controls.setGoal('Ship direct facets', { status: 'active', tokenBudget: 1000 });
         await controls.clearGoal();
         const vendorCatalog = await controls.listVendorPlugins();
@@ -5385,10 +5427,6 @@ describe('native Agent session host adapter', () => {
             issueFingerprint: 'quota-1',
         })).resolves.toEqual({ status: 'noRecoveryNeeded' });
 
-        emitter.current?.({
-            kind: 'provider-session-id', sessionId: 'session-direct-controls', providerSessionId: 'provider-session-1',
-            emittedAtMs: 1, sequence: 1,
-        });
         await expect(controls.rollbackConversation({ v: 1, target: { type: 'latest_turn' } })).resolves.toEqual({
             ok: true,
             target: { type: 'latest_turn' },
@@ -5467,6 +5505,7 @@ describe('native Agent session host adapter', () => {
             session: expect.objectContaining({
                 id: 'session-direct-controls',
                 activity: 'active',
+                providerSessionId: 'provider-session-1',
                 connectedAccounts: sessionConnectedAccounts,
             }),
             goalSource: expect.any(Object),
@@ -5518,6 +5557,63 @@ describe('native Agent session host adapter', () => {
         expect(openedWithoutGoals.nativeRuntime).not.toHaveProperty('setGoal');
         expect(openedWithoutGoals.nativeRuntime).not.toHaveProperty('clearGoal');
         await openedWithoutGoals.operations.resetOrDisposeRuntime();
+    });
+
+    it('suppresses native Goal capability after a real Codex ACP open so host Goal fallback remains available', async () => {
+        const factory = await loadRealAgentRuntimeFactory(
+            'packages/plugins/codex/src/agent/runtime/engine.ts', 'createCodexAgentRuntime',
+        );
+        const runtime = await factory({ plugin: { id: 'happier.agent.codex', version: '0.0.0' },
+            agent: { id: 'codex' }, signal: new AbortController().signal });
+        const sessions = runtime.sessions!;
+        const contributions = createExternalContributionFixtures('codex');
+        const agent: ResolvedAgentContribution = {
+            ...contributions.agent, pluginId: 'happier.agent.codex', provenance: 'first_party', source: { kind: 'bundled' },
+            richDefinition: { ...contributions.agent.richDefinition, provenance: 'first_party',
+                definition: { ...contributions.agent.richDefinition.definition,
+                    capabilities: { ...contributions.agent.richDefinition.definition.capabilities,
+                        sessions: { ...contributions.agent.richDefinition.definition.capabilities.sessions,
+                            goals: { active: { get: true, clear: true, set: { fields: ['objective', 'status'] } }, source: 'goals' },
+                            workStateSources: [{ id: 'goals', itemKinds: ['goal'] }],
+                        },
+                    },
+                },
+            },
+        };
+        const acpOpen = vi.fn(async () => ({
+            async send() { return { status: 'admitted' as const }; },
+            watch() { return { dispose() {} }; }, async dispose() {},
+        }));
+        const plan = await createNativeAgentRuntimeSessionPlan({
+            runtime: { ...runtime, sessions: { ...sessions, async open(request, context) {
+                // Only the external ACP transport is substituted. Codex open
+                // and the host's capability/control projection remain real.
+                return await sessions.open(request, { ...context,
+                    protocols: { ...context.protocols, acp: { ...context.protocols.acp, open: acpOpen } },
+                });
+            } } },
+            lease: { ...createLease('codex'), pluginId: 'happier.agent.codex' },
+            backend: { ...contributions.backend, pluginId: 'happier.agent.codex', provenance: 'first_party', source: { kind: 'bundled' } }, agent,
+            sessionInput: buildPluginSessionBindingInput({ credentials, directory: '/tmp/codex-acp-goals',
+                backendTarget: { kind: 'backend', backendId: 'codex' },
+                environmentVariables: { HAPPIER_CODEX_BACKEND_MODE: 'acp' },
+            }),
+            createSessionHostServiceOwners: () => createSessionHostServiceOwners(),
+        });
+        const created = await plan.config.createSessionRuntime!({
+            directory: '/tmp/codex-acp-goals', metadata: {}, machineId: 'machine-1',
+            session: createNativeSessionClientTestPort('session-acp-goals'), transcriptSession: {}, messageBuffer: {}, mcpServers: {},
+            permissionHandler: { cancelByPlugin: vi.fn(async () => undefined) }, getPermissionMode: () => 'default',
+            setThinking: () => undefined, memoryRecallGuidanceEnabled: false,
+        } as never);
+        try {
+            expect(acpOpen).toHaveBeenCalledOnce();
+            expect(created.nativeRuntime).not.toHaveProperty('refreshGoal');
+            expect(created.nativeRuntime).not.toHaveProperty('setGoal');
+            expect(created.nativeRuntime).not.toHaveProperty('clearGoal');
+        } finally {
+            await created.operations.resetOrDisposeRuntime();
+        }
     });
 
     it('sanitizes and cleans a late-environment resume when continuation verification rejects', async () => {
@@ -5720,6 +5816,7 @@ describe('native Agent session host adapter', () => {
             session: {
                 activity: 'inactive',
                 connectedAccounts: sessionConnectedAccounts,
+                launchEnvironment: { values: { R490_LATE_ENVIRONMENT: 'settled-before-prepare' } },
             },
         });
         expect(open.mock.calls[0]?.[0]).toMatchObject({

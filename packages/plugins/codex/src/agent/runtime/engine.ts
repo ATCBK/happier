@@ -129,6 +129,9 @@ async function openCodexSession(
     : await openCodexNativeAppServerSession(request, context, goalProjection, bindSessionCatalog);
   return {
     ...session,
+    // ACP exposes no native Goal port. Let the host use its unsupported/Goal
+    // fallback path instead of selecting the app-server-only factory facet.
+    ...(backendMode === 'acp' ? { nativeGoalControlsSupported: false } : {}),
     runtimeCapabilities: {
       ...session.runtimeCapabilities,
       localControl: backendMode === 'appServer'

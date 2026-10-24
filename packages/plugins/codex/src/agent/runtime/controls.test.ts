@@ -19,7 +19,7 @@ vi.mock('./appServer/client.js', async (importOriginal) => ({
 
 import { createCodexNativeSessionControls } from './controls.js';
 
-function context(activity: 'active' | 'inactive' = 'active'): AgentSessionControlContext {
+function context(activity: 'active' | 'inactive' = 'inactive'): AgentSessionControlContext {
   return {
     signal: new AbortController().signal,
     services: { exec: {} },
@@ -29,6 +29,7 @@ function context(activity: 'active' | 'inactive' = 'active'): AgentSessionContro
       activity,
       providerSessionId: 'thread-1',
       connectedAccounts: [],
+      launchEnvironment: { values: { CODEX_HOME: '/fixture' }, unset: [] },
     },
   } as unknown as AgentSessionControlContext;
 }

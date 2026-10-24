@@ -28,7 +28,7 @@ describe('Codex delivered skill catalog context', () => {
       const session = await fixture.openConfiguredSession();
       const context = {
         signal: new AbortController().signal, services: { exec: fixture.exec, logger: { warn: vi.fn() } },
-        session: { id: 'actual-happier-session', cwd: fixture.directory, activity: 'active', connectedAccounts: [] },
+        session: { id: 'actual-happier-session', cwd: fixture.directory, activity: 'active', connectedAccounts: [], launchEnvironment: fixture.launchEnvironment },
       } as unknown as AgentSessionControlContext;
       const run = vi.spyOn(fixture.exec, 'run');
       const spawn = vi.spyOn(fixture.exec, 'spawn');
@@ -85,7 +85,7 @@ describe('Codex delivered skill catalog context', () => {
       const session = await fixture.openConfiguredSession();
       const context = {
         signal: new AbortController().signal, services: { exec: fixture.exec, logger: { warn: vi.fn() } },
-        session: { id: 'actual-happier-session', cwd: fixture.directory, activity: 'active', connectedAccounts: [] },
+        session: { id: 'actual-happier-session', cwd: fixture.directory, activity: 'active', connectedAccounts: [], launchEnvironment: fixture.launchEnvironment },
       } as unknown as AgentSessionControlContext;
       const expected = (delivery: AgentSessionSkillDelivery) => ({ status: 'ok', kind: 'skills',
         items: delivery.items.map(item => ({ name: item.name, path: `${item.directory}/SKILL.md` })) });
@@ -134,7 +134,7 @@ describe('Codex native catalog failure evidence', () => {
         : fixture.exec;
       const context = {
         signal: new AbortController().signal, services: { exec, logger: { warn } },
-        session: { id: 'session-1', cwd: fixture.directory, activity: 'active', connectedAccounts: [] },
+        session: { id: 'session-1', cwd: fixture.directory, activity: 'active', connectedAccounts: [], launchEnvironment: fixture.launchEnvironment },
       } as unknown as AgentSessionControlContext;
       const result = await createCodexNativeSessionControls().catalog.list({ kind: 'skills' }, context);
       const details = phase === 'startup'
@@ -152,7 +152,7 @@ describe('Codex native catalog failure evidence', () => {
     await withCodexNativeAttachFixture(async fixture => {
       const context = {
         signal: new AbortController().signal, services: { exec: fixture.exec, logger: { warn: vi.fn() } },
-        session: { id: 'session-1', cwd: fixture.directory, activity: 'active', connectedAccounts: [] },
+        session: { id: 'session-1', cwd: fixture.directory, activity: 'active', connectedAccounts: [], launchEnvironment: fixture.launchEnvironment },
       } as unknown as AgentSessionControlContext;
       expect(await createCodexNativeSessionControls().catalog.list({ kind: 'skills' }, context))
         .toMatchObject({ status: 'ok', kind: 'skills', items: [{ name: 'project-skill', path: '/project/.agents/skills/project-skill/SKILL.md' }] });
@@ -160,7 +160,7 @@ describe('Codex native catalog failure evidence', () => {
     await withCodexNativeAttachFixture(async fixture => {
       const context = {
         signal: new AbortController().signal, services: { exec: fixture.exec, logger: { warn: vi.fn() } },
-        session: { id: 'session-1', cwd: fixture.directory, activity: 'active', connectedAccounts: [] },
+        session: { id: 'session-1', cwd: fixture.directory, activity: 'active', connectedAccounts: [], launchEnvironment: fixture.launchEnvironment },
       } as unknown as AgentSessionControlContext;
       expect(await createCodexNativeSessionControls().catalog.list({ kind: 'skills' }, context))
         .toMatchObject({ status: 'unsupported', diagnostic: { code: 'codex_skill_catalog_unsupported' } });

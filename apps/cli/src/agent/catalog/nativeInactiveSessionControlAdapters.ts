@@ -278,6 +278,7 @@ async function buildControlContext(params: Readonly<{
       id: params.adapterParams.sessionId,
       cwd,
       activity: 'inactive' as const,
+      launchEnvironment: Object.freeze({ values: params.launchScope.environment, unset: [] }),
       ...(providerSessionId ? { providerSessionId } : {}),
       connectedAccounts: params.launchScope.connectedAccounts,
     }),

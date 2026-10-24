@@ -126,8 +126,8 @@ describe.skipIf(!nativeBinary || process.platform === 'win32')('real native Code
       const threadId = events.find(event => event.kind === 'provider-session-id')?.providerSessionId;
       if (!threadId) throw new Error('Native thread identity unavailable');
       const control = { signal, services: { exec }, session: { id: context.session.id, cwd: root,
-        activity: 'inactive', providerSessionId: threadId, connectedAccounts: [] }, goalSource: publisher } as unknown as AgentSessionGoalControlContext;
-      await expect(runtime.sessions.goals.set({ objective: 'Retained B', status: 'paused' },
+        activity: 'inactive', providerSessionId: threadId, connectedAccounts: [], launchEnvironment: request.launchEnvironment }, goalSource: publisher } as unknown as AgentSessionGoalControlContext;
+      await expect(active.goals!.set({ objective: 'Retained B', status: 'paused' },
         { ...control, session: { ...control.session, activity: 'active' } })).resolves.toMatchObject({ status: 'applied' });
       await active.dispose(); active = undefined;
       await expect(runtime.sessions.goals.set({ objective: 'Retained B', status: 'paused' }, control)).resolves.toMatchObject({ status: 'applied' });
@@ -151,9 +151,9 @@ describe.skipIf(!nativeBinary || process.platform === 'win32')('real native Code
       expect(diagnostics).toMatchObject([{ threadId, kind: 'present', goalThreadId: threadId }]);
       expect(snapshots.length).toBeGreaterThan(0);
       for (const snapshot of snapshots) expect(snapshot.items).toEqual(retained);
-      await expect(runtime.sessions.goals.get({ ...control, session: { ...control.session, activity: 'active' } })).resolves.toMatchObject({ status: 'applied' });
+      await expect(active.goals!.get({ ...control, session: { ...control.session, activity: 'active' } })).resolves.toMatchObject({ status: 'applied' });
       for (const snapshot of snapshots) expect(snapshot.items).toEqual(retained);
-      await expect(runtime.sessions.goals.set({ objective: 'Changed C', status: 'paused' }, control)).resolves.toMatchObject({ status: 'applied' });
+      await expect(active.goals!.set({ objective: 'Changed C', status: 'paused' }, { ...control, session: { ...control.session, activity: 'active' } })).resolves.toMatchObject({ status: 'applied' });
       expect(snapshots.at(-1)?.items).toMatchObject([{ title: 'Changed C', status: 'paused' }]);
       await active.dispose(); active = undefined;
       await expect(runtime.sessions.goals.clear(control)).resolves.toMatchObject({ status: 'applied' });
