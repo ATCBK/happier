@@ -73,22 +73,28 @@ describe('Cua native read facts', () => {
         expect(h.argv).toEqual([['--json', '--embedded', 'runtime', 'doctor'], ['--json', 'images', 'ls']]);
     });
 
-    it('uses the observed built-in gVisor runtime on macOS without claiming runc or macOS capture support', async () => {
+    it.each(['local-sandbox', 'local-space'] as const)('reports native gVisor readiness but leaves %s unavailable without a guest daemon carrier', async (localId) => {
         const h = harness({ ...doctor,
             host: { os: 'macos', arch: 'aarch64', kvm: false, accel: { x86_64: 'tcg', aarch64: 'hvf' } },
             backends: doctor.backends.map((backend) => ({ ...backend, ready: backend.backend === 'managed' })),
             container: { ...doctor.container, reachable: false },
-        }, [{ ...image, ref: 'ghcr.io/trycua/linux:24.04', local: 'container' }]);
+        }, [{ ...image, ref: 'ghcr.io/trycua/linux:24.04', local: 'container',
+            sizes: { digest, platforms: [{ arch: 'arm64', disk: 21474836480 }] } }]);
         const facts = await h.facts.read();
         expect(facts.doctor).toMatchObject({ kind: 'known', value: { runtimes: [
             { id: 'qemu', ready: false },
             { id: 'runc', ready: false }, { id: 'gvisor', ready: true },
         ] } });
         expect(facts.capture).toEqual({ kind: 'unknown', reason: 'not_reported' });
-        expect(await h.facts.options()).toMatchObject({ choices: [
+        expect(await h.facts.options(undefined, {}, localId)).toMatchObject({ choices: [
             { id: 'runc:ghcr.io/trycua/linux:24.04', available: false },
-            { id: 'gvisor:ghcr.io/trycua/linux:24.04', available: true },
+            { id: 'gvisor:ghcr.io/trycua/linux:24.04', available: false },
         ] });
+        const configured = await h.facts.options(undefined, { runtimeId: 'gvisor',
+            size: { cpu: 2, memoryBytes: 4 * 1024 ** 3 } }, localId);
+        expect(configured.choices).toHaveLength(1);
+        expect(configured.choices[0]).toMatchObject({ available: false });
+        expect(configured.choices[0]).not.toHaveProperty('launch');
     });
 
     it('exposes image/runtime choices without inventing complete launches, prices or available headroom', async () => {

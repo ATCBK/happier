@@ -147,7 +147,10 @@ export function createCuaNativeFacts(native: CuaNativeClient) {
                         && (localId === 'local-space' && runtimeId === 'qemu'
                             ? diskBytes % 1024 ** 3 === 0 && diskBytes / 1024 ** 3 <= 4_294_967_295
                             : diskBytes === disk));
-                    const available = image.spacesd && image.os !== 'windows' && image.architectures.includes(nativeArch)
+                    // Native gVisor readiness does not qualify Happier bootstrap:
+                    // no detached guest-daemon carrier is implemented for it yet.
+                    // Keep its facts visible, but never offer an unusable allocation.
+                    const available = runtimeId !== 'gvisor' && image.spacesd && image.os !== 'windows' && image.architectures.includes(nativeArch)
                         && doctor.value.runtimes.some((value) => value.id === runtimeId && value.ready) && sizing;
                     return { id: `${runtimeId}:${image.imageId}`, title: `${image.imageId} (${runtimeId})`, available,
                         nativeFacts: { image: { id: image.imageId, title: image.imageId },
