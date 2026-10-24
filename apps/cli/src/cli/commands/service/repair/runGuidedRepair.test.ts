@@ -45,6 +45,23 @@ describe('runGuidedRepair', () => {
         spawnSyncMock.mockReset();
     });
 
+    it('stops the stale repair walk after a successful self update', async () => {
+        spawnSyncMock.mockReturnValue({ status: 0 });
+        const result = await runGuidedRepair({
+            findings: [{
+                kind: 'cli_self_update_available', severity: 'info', autoApplyWithoutPrompt: false,
+                releaseChannel: 'dev', currentVersion: '0.12.0', latestVersion: '0.12.1',
+            }, {
+                kind: 'machine_not_registered_for_profile', severity: 'warning', autoApplyWithoutPrompt: false,
+                serverId: 'cloud', serverName: 'Cloud', serverUrl: 'https://example.test',
+            }],
+            currentCli: { releaseChannel: 'dev', version: '0.12.0', invoker: 'hdev' },
+        });
+        expect(result).toBe(false);
+        expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+        expect(spawnSyncMock).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['self', 'update', '--dev']), expect.any(Object));
+    });
+
     it.each([false, true])('starts daemon repair using the finding Home (runtime-only: %s)', async (isRuntimeOnly) => {
         spawnSyncMock.mockReturnValue({
             pid: 1234,

@@ -1,116 +1,69 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderSystemdServiceUnit } from '@happier-dev/cli-common/service';
+import { resolveInstalledFirstPartyComponentPaths } from '@happier-dev/cli-common/firstPartyRuntime';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { maybeRunDoctorRepair } from './maybeRunDoctorRepair';
 
-type MockRepairResolution = {
-  runtime: {
-    platform: string;
-    uid: number;
-  };
-  plan: {
-    actions: Array<{ kind: string }>;
-    manualWarnings: string[];
-  };
-};
-
-const {
-  handleServiceRepairCliCommandMock,
-  resolveBackgroundServiceRepairPlanForCurrentRuntimeMock,
-  resolveDaemonServiceCliRuntimeFromEnvMock,
-} = vi.hoisted(() => ({
-  handleServiceRepairCliCommandMock: vi.fn(async (_params: unknown) => undefined),
-  resolveBackgroundServiceRepairPlanForCurrentRuntimeMock: vi.fn<(params: unknown) => Promise<MockRepairResolution>>(async (_params: unknown) => ({
-    runtime: {
-      platform: 'linux',
-      uid: 1000,
-    },
-    plan: {
-      actions: [],
-      manualWarnings: [],
-    },
-  })),
-  resolveDaemonServiceCliRuntimeFromEnvMock: vi.fn((_params?: unknown) => ({
-    platform: 'linux',
-    mode: 'user',
-    uid: 1000,
-  })),
+const { spawnSyncMock } = vi.hoisted(() => ({ spawnSyncMock: vi.fn((_command: string, _args?: readonly string[]) => ({ status: 0, stdout: '' })) }));
+// The installed CLI is a process boundary; service discovery and repair planning stay real.
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  spawnSync: spawnSyncMock,
 }));
 
-vi.mock('@/daemon/service/cli', () => ({
-  resolveDaemonServiceCliRuntimeFromEnv: (params?: unknown) => resolveDaemonServiceCliRuntimeFromEnvMock(params),
-}));
+afterEach(() => { vi.restoreAllMocks(); spawnSyncMock.mockReset(); spawnSyncMock.mockReturnValue({ status: 0, stdout: '' }); });
 
-vi.mock('@/diagnostics/backgroundServiceRepair/resolveBackgroundServiceRepairPlanForCurrentRuntime', () => ({
-  resolveBackgroundServiceRepairPlanForCurrentRuntime: (params: unknown) => resolveBackgroundServiceRepairPlanForCurrentRuntimeMock(params),
-}));
-
-vi.mock('../service/repair/handleServiceRepairCliCommand', () => ({
-  handleServiceRepairCliCommand: (params: unknown) => handleServiceRepairCliCommandMock(params),
-}));
-
-describe('maybeRunDoctorRepair', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.resetModules();
-    handleServiceRepairCliCommandMock.mockReset();
-    resolveBackgroundServiceRepairPlanForCurrentRuntimeMock.mockReset();
-    resolveDaemonServiceCliRuntimeFromEnvMock.mockReset();
-    resolveBackgroundServiceRepairPlanForCurrentRuntimeMock.mockResolvedValue({
-      runtime: {
-        platform: 'linux',
-        uid: 1000,
-      },
-      plan: {
-        actions: [] as Array<{ kind: string }>,
-        manualWarnings: [] as string[],
-      },
-    });
-    resolveDaemonServiceCliRuntimeFromEnvMock.mockImplementation((_params?: unknown) => ({
-      platform: 'linux',
-      mode: 'user',
-      uid: 1000,
-    }));
+describe('post-update repair', () => {
+  it('skips follow-up already handled by migration', async () => {
+    expect(await maybeRunDoctorRepair({ migrationRan: true, channel: 'stable' })).toBe(false);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 
-  it('skips repair follow-up when the migration step already handled convergence', async () => {
-    const { maybeRunDoctorRepair } = await import('./maybeRunDoctorRepair');
-
-    await expect(maybeRunDoctorRepair({
-      migrationRan: true,
-    })).resolves.toBe(false);
-
-    expect(resolveDaemonServiceCliRuntimeFromEnvMock).not.toHaveBeenCalled();
-    expect(resolveBackgroundServiceRepairPlanForCurrentRuntimeMock).not.toHaveBeenCalled();
-    expect(handleServiceRepairCliCommandMock).not.toHaveBeenCalled();
+  it('keeps an update without service repairs out of the interactive repair flow', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'post-update-no-repair-', env: {
+      HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux', HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+      HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable', HAPPIER_DAEMON_SERVICE_NODE_PATH: process.execPath,
+    } }, async () => {
+      expect(await maybeRunDoctorRepair({ migrationRan: false, channel: 'stable' })).toBe(false);
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    });
   });
 
-  it('runs doctor repair when post-update repair work still exists', async () => {
-    resolveBackgroundServiceRepairPlanForCurrentRuntimeMock.mockResolvedValueOnce({
-      runtime: {
-        platform: 'linux',
-        uid: 1000,
-      },
-      plan: {
-        actions: [{ kind: 'remove-service' }] as Array<{ kind: string }>,
-        manualWarnings: [] as string[],
-      },
-    });
-    const { maybeRunDoctorRepair } = await import('./maybeRunDoctorRepair');
-
-    await expect(maybeRunDoctorRepair({
-      migrationRan: false,
-    })).resolves.toBe(true);
-
-    expect(resolveDaemonServiceCliRuntimeFromEnvMock).toHaveBeenCalledWith({
-      processEnv: process.env,
-      mode: 'user',
-    });
-    expect(resolveBackgroundServiceRepairPlanForCurrentRuntimeMock).toHaveBeenCalledWith({
-      preferredMode: 'user',
-      includeAllModes: true,
-      systemUser: '',
-    });
-    expect(handleServiceRepairCliCommandMock).toHaveBeenCalledWith({
-      argv: ['repair'],
-      commandPath: 'happier service',
+  it.each([0, 7])('uses the updated managed CLI and reports a failing repair (exit %s)', async (status) => {
+    // The real Linux enablement reader consumes systemctl's key/value output.
+    spawnSyncMock.mockImplementation((command) => command === 'systemctl'
+      ? { status: 0, stdout: 'UnitFileState=enabled\nActiveState=inactive\nLoadState=loaded\n' }
+      : { status, stdout: '' });
+    await withConfiguredDaemonTestHome({ prefix: 'post-update-repair-', env: {
+      HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux', HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable',
+      HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable', HAPPIER_DAEMON_SERVICE_NODE_PATH: process.execPath,
+    } }, async ({ homeDir }) => {
+      const servicePath = join(homeDir, '.config/systemd/user/happier-daemon.default.service');
+      mkdirSync(dirname(servicePath), { recursive: true });
+      writeFileSync(servicePath, renderSystemdServiceUnit({
+        description: 'Happier daemon', execStart: ['/old/happier', 'daemon', 'start-sync'],
+        env: { HAPPIER_HOME_DIR: homeDir, HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+          HAPPIER_DAEMON_SERVICE_TARGET_MODE: 'default-following' },
+      }));
+      const expected = resolveInstalledFirstPartyComponentPaths({
+        componentId: 'happier-cli', channel: 'stable', processEnv: process.env,
+      }).binaryPath;
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      // The activated binary owns repair even if this process has the same version.
+      const updated = { migrationRan: false, channel: 'stable' as const };
+      expect(await maybeRunDoctorRepair(updated)).toBe(true);
+      expect(spawnSyncMock).toHaveBeenCalledWith(expected, ['service', 'repair'], expect.objectContaining({
+        stdio: 'inherit', env: expect.objectContaining({
+          HAPPIER_HOME_DIR: homeDir, HAPPIER_PUBLIC_RELEASE_CHANNEL: 'stable',
+          HAPPIER_DAEMON_SERVICE_CHANNEL: 'stable', HAPPIER_DAEMON_SERVICE_NODE_PATH: expected,
+          HAPPIER_DAEMON_SERVICE_ENTRY_PATH: '',
+        }),
+      }));
+      expect(warn).toHaveBeenCalledTimes(status === 0 ? 0 : 1);
+      log.mockRestore();
     });
   });
 });
