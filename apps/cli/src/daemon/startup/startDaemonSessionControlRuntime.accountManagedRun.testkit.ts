@@ -6,13 +6,13 @@ import axios from 'axios';
 import { DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { SESSION_FOLLOW_HTTP_PATHS_V1, SessionAutoFollowPreferencesResponseSchema } from '@happier-dev/protocol/sessions/follow/api';
 import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
-import { ProviderConnectionIdSchema, type AccountEncryptionCurrentnessResponse, type SessionExecutionRunBrokerAuthorityRequestV1, type SessionExecutionRunBrokerAuthorityResponseV1 } from '@happier-dev/protocol';
+import { ProviderConnectionIdSchema, type AccountEncryptionCurrentnessResponse, type ProviderRuntimeBindingBasisV1, type SessionExecutionRunBrokerAuthorityRequestV1, type SessionExecutionRunBrokerAuthorityResponseV1 } from '@happier-dev/protocol';
 import type { StoredCredentials } from '@/persistence';
 import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
-import { createRuntimeProviderSpawnAuthorizationAttempt } from '@/providers/spawn/authorize';
+import { createRuntimeProviderSpawnAuthorizationAttempt, type ProviderSpawnAuthorizationAttempt } from '@/providers/spawn/authorize';
 import { projectProviderRuntimeBindingBasis } from '@/providers/spawn/runtimeBindingBasis';
 import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
 import { createAccountConnectionManagedConsumerSourceOpen } from '@/providers/broker/accountConnectionSource';
@@ -21,7 +21,7 @@ import { AGENT_RUNTIME_DAEMON_SERVICES_PATH, AgentRuntimeDaemonServiceRequestV1S
 import { createCurrentRunnerManagedProviderRunServices } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceAuthorityClient';
 import { createAgentRuntimeDaemonServiceAuthorityPath, publishAgentRuntimeDaemonServiceAuthority } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { TrackedSession } from '@/daemon/types';
 import type { AgentRuntimeDaemonServiceRoutes, startDaemonControlServer } from '@/daemon/controlServer';
 import { startDaemonSessionControlRuntime } from './startDaemonSessionControlRuntime';
@@ -72,6 +72,35 @@ vi.mock('@/session/transport/rpc/sessionRpc', () => ({ callSessionRpc: async (in
 }) }));
 vi.mock('@/ui/logger', () => ({ logger: { debug: () => {}, info: () => {}, infoFile: () => {}, warn: () => {}, warnLocalFile: () => {}, error: () => {} } }));
 
+type ManagedRunLaunchFixture = Awaited<ReturnType<typeof createManagedRunLaunchFixture>>;
+type AgentRuntimeDaemonServiceDispatchContext = Parameters<AgentRuntimeDaemonServiceRoutes['dispatch']>[1];
+
+/** Named so declaration emit references the composed owners instead of
+ * serializing their inferred shapes. */
+export type AttachedManagedRunFixture = Readonly<{
+  directory: string;
+  fixture: ManagedRunLaunchFixture;
+  runtime: Awaited<ReturnType<typeof startDaemonSessionControlRuntime>>;
+  control: Parameters<typeof startDaemonControlServer>[0] | null;
+  attempt: ProviderSpawnAuthorizationAttempt;
+  authorization: ProviderSpawnAuthorizationAttempt['authorization'];
+  credentials: StoredCredentials;
+  snapshot: ActiveAccountSettingsSnapshot & Readonly<{ scopeKey: string }>;
+  proof: Readonly<{ executionRunId: string; executionRunOccurrenceId: string; agentId: ManagedRunLaunchFixture['agentId']; modelId: string;
+    runtimeBindingBasis: ProviderRuntimeBindingBasisV1; expectedAccountSettingsScopeKey: string }>;
+  dispatch(operation: unknown): Promise<AgentRuntimeDaemonServiceResponseV1>;
+  dispatchRequest(request: unknown, signal?: AbortSignal): Promise<AgentRuntimeDaemonServiceResponseV1>;
+  context: AgentRuntimeDaemonServiceDispatchContext;
+  tracked: TrackedSession;
+  spawnResourceCleanupByPid: Map<number, () => void | Promise<void>>;
+  capabilityCleanupFilesystem: Readonly<{ refuse(): void; restore(): void; readBlockedPaths(): string[] }>;
+  resolveRunReportPolicy: ReturnType<typeof createSessionRunReportPolicyReader>;
+  requester: RequesterSessionRuntimeContext | null;
+  sourceDiagnostics: { stage: string; error: string | null };
+  withdrawRequesterAdmission(): void;
+  cleanup(): Promise<void>;
+}>;
+
 /** A genuine installed Agent/Provider and live daemon service dispatcher for
  * consumer delivery tests. No source projection, runtime owner or token is
  * fabricated by this fixture. */
@@ -82,7 +111,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
     | 'resolveCurrentMachineExecutionOriginContext'> & Readonly<{
       readMachineMemory?: () => import('@happier-dev/protocol').MachineVitalsSampleV1['memory'] | null;
     }>;
-}> = {}) {
+}> = {}): Promise<AttachedManagedRunFixture> {
   let preparationPhase = 'managed Run fixture';
   onTestFailed(() => { console.info('Attached managed Run fixture phase:', preparationPhase); });
   boundary.resolveRunAuthority = input.resolveRunAuthority ?? null;
@@ -269,7 +298,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
 /** The real private authority client above the fixture's captured control HTTP
  * boundary. Fault hooks substitute transport responses, never source cleanup. */
 export async function createAttachedManagedRunControlTransport(
-  fixture: Awaited<ReturnType<typeof createAttachedManagedRunFixture>>,
+  fixture: AttachedManagedRunFixture,
   input: Readonly<{
     beforeDispatch?(request: AgentRuntimeDaemonServiceRequestV1): Response | null | Promise<Response | null>;
     afterDispatch?(request: AgentRuntimeDaemonServiceRequestV1, response: AgentRuntimeDaemonServiceResponseV1): void | Promise<void>;

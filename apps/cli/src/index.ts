@@ -17,8 +17,8 @@ if (!isCliDistIntegrityProbe && isTopLevelVersionRequest(readCliProcessArgs())) 
   // A pending Promise alone does not keep Node alive. Keep the CLI process
   // referenced until async command dispatch (including install cleanup) settles.
   const cliLifetimeKeepAlive = isCliDistIntegrityProbe ? null : setInterval(() => undefined, 60_000);
-  const runBootstrap = () => import('./cli/bootstrap').then(({ runCliBootstrap }) => {
-    if (!isCliDistIntegrityProbe) return runCliBootstrap(import.meta.url);
+  const runBootstrap = () => import('./cli/bootstrap').then(async ({ runCliBootstrap }) => {
+    if (!isCliDistIntegrityProbe) await runCliBootstrap(import.meta.url);
   });
   const dispatch = !isCliDistIntegrityProbe && isTopLevelHelpRequest(readCliProcessArgs())
     ? import('./cli/rootHelp').then(({ printRootHelp }) => printRootHelp())

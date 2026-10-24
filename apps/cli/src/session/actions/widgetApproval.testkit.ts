@@ -2,13 +2,24 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod/mini';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema, decodePlainArtifactStoredContent, type AccountSettings } from '@happier-dev/protocol';
 import { deriveArtifactKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
-import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { PluginProjectionV2Schema, type PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
+import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
+export type CounterWidgetFixture = Readonly<{
+    pluginId: string;
+    inputType: Readonly<{ pluginId: string; localId: string }>;
+    projection: PluginProjectionV2;
+    registry: ResolvedContributionRegistry;
+    readUiResource: NonNullable<ResolvedExecutablePluginRuntimeRegistry['readUiResource']>;
+    definition: Readonly<{ kind: 'installed'; surface: Readonly<{ pluginId: string; localId: string }> }>;
+}>;
+
 /** One installed App-target widget with a contributed input type, as the daemon projects it. */
-export function createCounterWidgetFixture() {
+export function createCounterWidgetFixture(): CounterWidgetFixture {
     const pluginId = 'example.widgets';
     const inputType = { pluginId, localId: 'count-kind' };
     const occurrenceId = createPluginRuntimeOccurrenceId(pluginId);

@@ -2,21 +2,46 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, onTestFinished } from 'vitest';
 import { readStoredCredentialsForServerId, writeCredentialsTokenOnly, writeStoredCredentialsForServerId, type StoredCredentials } from '@/persistence';
-import { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceResponseV1Schema, type AgentRuntimeDaemonServiceRequestV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
+import { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceResponseV1Schema, type AgentRuntimeDaemonServiceRequestV1, type AgentRuntimeDaemonServiceResponseV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import type { startDaemonControlServer } from '@/daemon/controlServer';
 import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
 import { createRequesterSessionRuntimeContext } from '@/daemon/sessionEncryption/createRequesterSessionRuntimeContext';
 import type { TrackedSession } from '@/daemon/types';
+import type { AgentSessionRunnerBindingV1 } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { createPluginReloadController, type PluginReloadController } from '@/plugins/runtime/reload/controller';
 import { createRequesterSessionRuntimeContextResolver, releaseUnretainedRequesterSessionRuntimeContext,
-  resolveRequesterSessionBootstrapFromCustody } from '@/daemon/sessionEncryption/requesterSessionCredentials';
+  resolveRequesterSessionBootstrapFromCustody, type RequesterSessionRuntimeContext, type ResolveRequesterSessionRuntimeContext } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 import { startDaemonSessionControlRuntime } from '@/daemon/startup/startDaemonSessionControlRuntime';
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
 import { createOnHappySessionWebhook } from '@/daemon/sessions/onHappySessionWebhook';
 import { createSkillStore } from '@/prompts/skills/store/skillStore';
 import { createInstalledProjectAgentLaunchFixture } from './installedProjectAgentLaunchFixture';
+
+type InstalledProjectAgentLaunchFixture = Awaited<ReturnType<typeof createInstalledProjectAgentLaunchFixture>>;
+type InstalledProjectAgentDaemonFixtureOwners = Readonly<{
+  signal: AbortSignal;
+  cwd: string;
+  dispatch(operation: AgentRuntimeDaemonServiceRequestV1['operation'], executionRunSnapshotId?: string): Promise<AgentRuntimeDaemonServiceResponseV1>;
+  operationBase(invocationId?: string): { invocationId: string; requestId: string };
+  sessionId: string;
+  retainedAgent: AgentSessionRunnerBindingV1;
+  requester: RequesterSessionRuntimeContext;
+  runner: Readonly<{ pid: number; processStartTimeMs: number; processCommandHash: string; snapshotIdentity: string }>;
+  tracked: TrackedSession;
+  plugin: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>>;
+  pidToTrackedSession: Map<number, TrackedSession>;
+  pidToAwaiter: Map<number, (tracked: TrackedSession) => void>;
+  daemon: Awaited<ReturnType<typeof startDaemonSessionControlRuntime>>;
+  resolveRequesterRuntime: ResolveRequesterSessionRuntimeContext;
+  readRequesterRecoveryStage(): string;
+  replaceRequesterRuntime(): Promise<RequesterSessionRuntimeContext>;
+}>;
+/** Named so declaration emit references the composed owners instead of
+ * serializing their inferred shapes. */
+export type InstalledProjectAgentDaemonFixture = Omit<InstalledProjectAgentLaunchFixture, keyof InstalledProjectAgentDaemonFixtureOwners>
+  & InstalledProjectAgentDaemonFixtureOwners;
 
 export async function createInstalledProjectAgentDaemonFixture(readControl: () => Parameters<typeof startDaemonControlServer>[0] | null, bundledAgentId?: string, unassociated = false,
   authoredPlugin?: Parameters<typeof createAuthoredAdmittedPluginRuntimeFixture>[0]['plugins'][number],
@@ -25,7 +50,7 @@ export async function createInstalledProjectAgentDaemonFixture(readControl: () =
     & Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'resolveCurrentMachineExecutionOriginContext' | 'processEnv' | 'openTeamCredentialProviderBinding'>
     & Partial<Pick<Parameters<typeof startDaemonSessionControlRuntime>[0], 'credentials'>>
     & Pick<NonNullable<Parameters<typeof createInstalledProjectAgentLaunchFixture>[0]>, 'machineAccess'>
-    & { requesterCredentials?: StoredCredentials }) {
+    & { requesterCredentials?: StoredCredentials }): Promise<InstalledProjectAgentDaemonFixture> {
   const daemonCredentials = requesterOptions?.credentials ?? { token: 'custodian-token', encryption: null };
   const accountActionCredentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'requester',
     provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
