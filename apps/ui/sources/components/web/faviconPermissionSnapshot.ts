@@ -94,6 +94,8 @@ function deriveFaviconPermissionSnapshotFromSessions(
         const pendingFlags = derivePendingRequestFlagsFromSession(session, messages);
         const pendingRequestObservedAt = deriveLatestPendingRequestObservedAtFromSession(session, messages);
         const runtimeInput = {
+            id: session.id,
+            serverId: session.serverId,
             active: session.active,
             activeAt: session.activeAt,
             presence: session.presence,
