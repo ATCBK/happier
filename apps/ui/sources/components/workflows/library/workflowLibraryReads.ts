@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Dimensions } from 'react-native';
 import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
-import { SESSION_LIST_ROW_HEIGHT_MINIMAL } from '@/components/sessions/shell/sessionListRowHeights';
+import { HAPPIER_COLLECTION_ROW_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 import { workflowDefinitionListCursorPhaseV1, type WorkflowDefinitionListResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import type { WorkflowPluginSourceV1 } from '@happier-dev/protocol/workflows';
@@ -504,7 +504,7 @@ export async function readRunWindowPage(windowId: WorkflowRunListWindowId, curso
     // or byte cap. The same owner follows opaque cursors on actual page demand.
     // Membership-only badges keep their existing public projection/frontier.
     const limit = projection === undefined
-        ? Math.max(1, Math.ceil(Dimensions.get('window').height / SESSION_LIST_ROW_HEIGHT_MINIMAL)) : undefined;
+        ? Math.max(1, Math.ceil(Dimensions.get('window').height / HAPPIER_COLLECTION_ROW_METRICS.height.compact)) : undefined;
     const page = await listWorkflowRuns({ filter: buildWorkflowRunListFilter(windowId), cursor, projection, limit });
     return { ...page, automationRuns: [], nextCursor: page.nextCursor ?? null };
 }
