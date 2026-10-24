@@ -22,7 +22,7 @@ import { clearBrowserRuntimeControlRegistryForTests, registerBrowserRuntimeContr
 import { createBrowserControlState } from '@/sync/domains/browser/control/reducer';
 import { handleUiBrowserAutomationDispatchRequest } from '@/sync/domains/browser/automation/reverseDispatchHandler';
 import { loadBrowserDaemonRuntimeForTests } from '@/dev/testkit/harness/browserDaemonRuntime';
-import { BrowserDiagnosticsEvalResultV1Schema, BrowserDiagnosticsElementPickerResultV1Schema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { BrowserDiagnosticsEvalResultV1Schema, BrowserDiagnosticsElementPickerResultV1Schema, BrowserDiagnosticsGetPropertiesResultV1Schema, FeaturesResponseSchema } from '@happier-dev/protocol';
 import { uiBrowserAutomationDispatchMethod } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
 
 // These hook cases have a presented snapshot consumer. BrowserShell.test.tsx exercises the
@@ -284,10 +284,12 @@ describe('useBrowserDiagnosticsRuntime', () => {
         stubCryptoRandomUuid();
         const view = createLocalPreviewView({ engineKind, adapterKind: 'externalUrl' });
         const otherView = createLocalPreviewView({ engineKind, adapterKind: 'externalUrl', viewId: 'other_view' });
-        const mounted = await renderHook(() => useBrowserDiagnosticsRuntime({ view, enabled: true }));
+        let current = true;
+        const mounted = await renderHook(({ currentView }: { currentView: BrowserControlViewState }) =>
+            useBrowserDiagnosticsRuntime({ view: currentView, enabled: true, isCurrent: () => current }),
+        { initialProps: { currentView: view } });
         const other = await renderHook(() => useBrowserDiagnosticsRuntime({ view: otherView, enabled: true }));
-        await act(async () => mounted.getCurrent()?.interaction?.onEnableInteraction?.());
-        await act(async () => other.getCurrent()?.interaction?.onEnableInteraction?.());
+        expect(mounted.getCurrent()?.interaction?.state).toBe('disabled');
         const boundView = { browserSessionId: view.browserSessionId, viewId: view.viewId, sessionId: 'invoking_session' };
         const answeringViews = new Map([
             [uiBrowserAutomationDispatchMethod(view), boundView],
@@ -327,6 +329,17 @@ describe('useBrowserDiagnosticsRuntime', () => {
         // events separately use their destination-aware owner-only field classifier.
         expect(await evalResult).toMatchObject({ ok: true, result });
         expect(mounted.getCurrent()?.interaction?.evalConsole?.entries[0]?.result).toEqual(result.result);
+        expect(mounted.getCurrent()?.interaction?.state).toBe('enabled');
+        const propertiesInput = { v: 1, browserSessionId: view.browserSessionId, viewId: view.viewId, navigationGeneration: view.navigationGeneration,
+            tier: 'injectedPage', diagnosticsInteractionEnabled: true, propertyRequestId: 'agent_properties', objectId: 'agent_object', objectGroupId: 'agent_group' };
+        let propertiesResult!: ReturnType<typeof agent.execute>;
+        await act(async () => { propertiesResult = agent.execute('browser.diagnostics.getProperties', propertiesInput, context); });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(mounted.getCurrent()?.bridge?.getPropertiesRequest).toMatchObject({ propertyRequestId: 'agent_properties', objectId: 'agent_object' });
+        const properties = BrowserDiagnosticsGetPropertiesResultV1Schema.parse({ v: 1, propertyRequestId: 'agent_properties', viewId: view.viewId,
+            navigationGeneration: view.navigationGeneration, tier: 'injectedPage', audited: true, status: 'completed', objectId: 'agent_object', properties: [] });
+        await act(async () => mounted.getCurrent()?.bridge?.onPropertiesResult?.(properties));
+        expect(await propertiesResult).toMatchObject({ ok: true, result: properties });
         const pickerInput = { v: 1, browserSessionId: view.browserSessionId, viewId: view.viewId, navigationGeneration: view.navigationGeneration,
             tier: 'injectedPage', diagnosticsInteractionEnabled: true, pickerRequestId: 'agent_picker', action: 'start' };
         let pickerResult!: ReturnType<typeof agent.execute>;
@@ -339,6 +352,34 @@ describe('useBrowserDiagnosticsRuntime', () => {
         await act(async () => mounted.getCurrent()?.bridge?.onElementPickerResult?.(picked));
         expect(await pickerResult).toMatchObject({ ok: true, result: picked });
         expect(await agent.execute('browser.diagnostics.eval', input, { ...context, defaultSessionId: 'wrong_session' })).toMatchObject({ ok: false });
+        current = false;
+        expect(await agent.execute('browser.diagnostics.eval', { ...input, evalRequestId: 'retired_eval' }, context)).toMatchObject({ ok: false });
+        expect(mounted.getCurrent()?.bridge?.evalRequest).toBeUndefined();
+        current = true;
+        await act(async () => mounted.getCurrent()?.interaction?.onDisableInteraction?.());
+        expect(await agent.execute('browser.diagnostics.eval', { ...input, evalRequestId: 'revoked_eval' }, context)).toMatchObject({ ok: false });
+        expect(await agent.execute('browser.diagnostics.getProperties', { ...propertiesInput, propertyRequestId: 'revoked_properties' }, context)).toMatchObject({ ok: false });
+        expect(await agent.execute('browser.diagnostics.elementPicker.start', { ...pickerInput, pickerRequestId: 'revoked_picker' }, context)).toMatchObject({ ok: false });
+        expect(mounted.getCurrent()?.interaction?.state).toBe('disabled');
+        expect(mounted.getCurrent()?.bridge?.evalRequest).toBeUndefined();
+        expect(mounted.getCurrent()?.bridge?.getPropertiesRequest).toBeUndefined();
+        expect(mounted.getCurrent()?.bridge?.elementPickerRequest).toBeUndefined();
+        const navigatedView = { ...view, navigationGeneration: view.navigationGeneration + 1 };
+        await mounted.rerender({ currentView: navigatedView });
+        expect(await agent.execute('browser.diagnostics.eval', { ...input, evalRequestId: 'revoked_navigation_eval',
+            navigationGeneration: navigatedView.navigationGeneration }, context)).toMatchObject({ ok: false });
+        expect(mounted.getCurrent()?.interaction?.state).toBe('disabled');
+        await act(async () => mounted.getCurrent()?.interaction?.onEnableInteraction?.());
+        let reenabled!: ReturnType<typeof agent.execute>;
+        await act(async () => { reenabled = agent.execute('browser.diagnostics.eval', { ...input, evalRequestId: 'reenabled_eval',
+            navigationGeneration: navigatedView.navigationGeneration }, context); });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(mounted.getCurrent()?.bridge?.evalRequest).toMatchObject({ evalRequestId: 'reenabled_eval' });
+        await act(async () => mounted.getCurrent()?.interaction?.onDisableInteraction?.());
+        expect(await reenabled).toMatchObject({ ok: false });
+        await act(async () => mounted.getCurrent()?.bridge?.onEvalResult?.({ ...result, evalRequestId: 'reenabled_eval',
+            navigationGeneration: navigatedView.navigationGeneration }));
+        expect(mounted.getCurrent()?.interaction?.state).toBe('disabled');
         await mounted.unmount();
         expect(await agent.execute('browser.diagnostics.eval', input, context)).toMatchObject({ ok: false });
     });
