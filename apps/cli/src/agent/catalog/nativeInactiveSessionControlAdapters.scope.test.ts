@@ -55,6 +55,7 @@ async function createScopedInactiveFixture(): Promise<ScopedInactiveFixture & Re
         if (m.method === 'thread/goal/set') {
           const goal = { ...m.params, createdAt: 1776272400, updatedAt: 1776272460,
             tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, scopeProfile: process.env.SCOPE_PROFILE };
+          goal.sqlitePinned = process.argv.includes('sqlite_home="' + process.env.CODEX_SQLITE_HOME + '"');
           fs.writeFileSync(file, JSON.stringify(goal)); result = { goal };
         }
         if (m.method === 'thread/goal/get') result = { goal: fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null };
@@ -73,7 +74,7 @@ async function createScopedInactiveFixture(): Promise<ScopedInactiveFixture & Re
     await account.dependenciesFor(admitted.registry, root);
     const homes = new Map<string, string>();
     const profiles = ['a', 'b'].map(id => ({ v: 2 as const, id: `launch-${id}`, name: `Launch ${id}`,
-      extraEnvironmentVariables: [{ name: 'SCOPE_PROFILE', value: id }],
+      extraEnvironmentVariables: [{ name: 'SCOPE_PROFILE', value: id }, { name: 'CODEX_SQLITE_HOME', value: join(root, `sqlite-${id}`) }],
       defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {},
       createdAt: 1, updatedAt: 1 }));
     const snapshot = { source: 'network' as const, settings: { ...accountSettingsParse({
@@ -188,7 +189,7 @@ describe('admitted inactive daemon launch scope', () => {
   it('uses admitted inactive daemon scope so same-thread Resume sees Set and two profiles remain isolated', async () => {
     if (!fixture) throw new Error('Scope fixture unavailable');
     for (const profile of ['a', 'b']) {
-      await expect(fixture.resumeGoal(profile)).resolves.toMatchObject({ goal: { objective: `paused-${profile}`, scopeProfile: profile } });
+      await expect(fixture.resumeGoal(profile)).resolves.toMatchObject({ goal: { objective: `paused-${profile}`, scopeProfile: profile, sqlitePinned: true } });
     }
     expect(fixture.homeFor('a')).not.toBe(fixture.homeFor('b'));
     await expect(fixture.goal.getGoal!(fixture.inputFor('a'))).resolves.toMatchObject({ workState: { items: [{ title: 'paused-a' }] } });
