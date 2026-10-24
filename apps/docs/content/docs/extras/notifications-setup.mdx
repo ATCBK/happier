@@ -44,7 +44,7 @@ Current behavior is intentionally conservative:
 - an action can open the targeted session for review instead of sending a decision
 - when an action opens Happier and its server is not saved yet, Happier uses the safest add/switch flow instead of silently approving on the wrong server
 
-**Development builds only:** Android background actions can send `Allow` and `Deny` without opening Happier when registration succeeds. If registration is unavailable, the buttons open the app. Background delivery or execution can still fail after registration without opening Happier. If a response is unconfirmed, open the session to inspect the current request.
+**Development builds only:** Android and equipped iOS builds can send `Allow` and `Deny` without opening Happier, changing the selected Home, or leaving your current screen when background action registration succeeds. On iOS, permission buttons require device authentication; saved credentials keep their existing protection while the device is locked. If the native support is missing or registration is unavailable, the buttons open the app. A live response still uses the same exact-target action handler. Background delivery or execution can fail after registration without opening Happier. If a response is unconfirmed, open the session to inspect the current request. End-to-end notification-action lifecycle and physical-device validation are still pending; an OTA update alone cannot add the required iOS native support.
 
 For the exact routing behavior, see [Notification routing](/extras/notifications-routing).
 

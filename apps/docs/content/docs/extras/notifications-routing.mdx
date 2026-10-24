@@ -56,7 +56,7 @@ This is the default behavior for normal notification taps and for the `Answer` a
 
 ## What happens when you press a notification action
 
-The Android background permission actions below are an unreleased development capability. Native delivery still needs Android lifecycle validation.
+The mobile background permission actions below are an unreleased development capability. iOS requires an equipped native build; end-to-end notification-action lifecycle and physical-device validation are still pending.
 
 On the mobile app, current interactive notification actions are:
 
@@ -65,9 +65,9 @@ On the mobile app, current interactive notification actions are:
 
 Their behavior is intentionally different:
 
-- On Android, `Allow` and `Deny` respond without opening Happier, changing the selected server, or navigating away from your current screen when background actions are available. On installations where background actions are unavailable, pressing a button opens Happier; Happier still handles a live response without navigating.
-- On iOS, `Allow` and `Deny` retain their foreground flow: respond when the target can be verified, then open the session. Older notifications open for review without sending a decision.
-- An unhandled saved Android launch response opens the session for review without sending a decision. The same response does not open the session again while Happier remains running.
+- On Android and equipped iOS builds, live `Allow` and `Deny` responses use the exact saved Home, Account, session and request turn without changing the selected Home or navigating away from your current screen. Successful background registration lets them respond without opening Happier. On iOS, the buttons require device authentication.
+- If native support is missing or background registration is unavailable, the permission buttons open Happier. A live response uses the same exact-target handler without switching Homes or navigating. A later delivery or execution failure can leave the app closed.
+- An unhandled saved launch response opens the session for review without sending a decision. The same response does not open the session again while Happier remains running.
 - `Answer` opens the app directly on the session so you can answer in context
 
 User-action requests include cases such as:
@@ -77,23 +77,37 @@ User-action requests include cases such as:
 
 Happier does **not** currently try to send freeform or multiple-choice answers directly from the notification itself. The action button is a fast path back into the correct session.
 
+## Desktop Guard warnings (development)
+
+The development Tauri client has a native transport for **Keep running** and
+**Stop now** on an idle-stop warning. Native builds and desktop validation are
+pending; this is not a claim of released availability. Both buttons use the
+same Guard Actions and approval preferences as the app. A replaced or cancelled
+warning cannot act on a later warning, and a reachable current Guard observation
+withdraws the resolved warning.
+
+Linux needs a desktop notification service with action support. macOS needs a
+real app bundle and notification permission; an unbundled development binary
+cannot use its Terminal identity for these actions. Windows needs an installed
+app with its notification identity registered. Keep Happier running, including
+in the background, to receive actions and withdraw warnings. Fully quitting it
+ends those process-owned callbacks; cold-start actions and Windows Action Center
+delivery remain unverified. Open the session to inspect its current countdown
+and use its in-app control.
+
 ## Server-aware safety rules
 
-These navigation rules apply to ordinary taps, `Answer`, and iOS permission actions. An unhandled saved Android response follows the same navigation rules for review, without sending a decision. Live Android permission actions use the separate rules below.
+These navigation rules apply to ordinary taps and `Answer`. An unhandled saved permission response follows the same navigation rules for review, without sending a decision. Live mobile permission actions use the separate rules below.
 
 ### 1) Server is already active
 
-If the notification targets the server that is already active and the action target can be verified:
-
-- Happier performs the action immediately (for example `Allow` / `Deny`)
-- then opens the session
+If the notification targets the server that is already active, Happier opens the session.
 
 ### 2) Server is saved, but not active
 
 If the notification targets a saved server profile that is not currently active and can be switched to safely:
 
 - Happier switches to that saved server
-- performs the action if applicable
 - opens the session
 
 ### 3) Server is not saved, and the device has no saved servers yet
@@ -123,22 +137,17 @@ After you choose **Add & Use**, Happier continues to the original session automa
 
 Notification actions are convenient, but permission responses are security-sensitive.
 
-For the foreground permission flow above, Happier only auto-sends a response when it can prove that the targeted server is:
+Ordinary taps and saved launch responses provide navigation for review. They cannot authorize an approval or denial. A live permission action must verify the exact saved Home and Account before sending a decision, using the rules below.
 
-- already active, or
-- already saved locally and can be switched to explicitly
+## Mobile permission action safety and recovery
 
-If the server is unknown, Happier falls back to navigation and review instead of silently performing the approval.
-
-## Android permission action safety and recovery
-
-A live Android action requires a saved Home and saved sign-in details for an account that can access the session. It can respond on an inactive saved Home without selecting that Home. An unknown or ambiguous Home or a notification naming a different account requires in-app review. Happier does not queue an approval for a later sign-in. A live or background response to an older notification without the request's turn sends no decision and leaves a review notice for when Happier is active, without opening the session.
+A live mobile action requires a saved Home and saved sign-in details for an account that can access the session. It can respond on an inactive saved Home without selecting that Home. An unknown or ambiguous Home or a notification naming a different account requires in-app review. Happier does not queue an approval for a later sign-in. A live or background response to an older notification without the request's turn sends no decision and leaves a review notice for when Happier is active, without opening the session.
 
 The CLI checks that the request is still the one shown in the notification. An alert from an earlier turn cannot answer a newer request. Only an accepted response is confirmed; rejection or an uncertain result is not reported as approval success.
 
 If a response is rejected or cannot be confirmed, Happier saves a generic recovery notice for when the app is active. It does not open the app from the background or automatically resend the decision. Open the relevant Home and session to inspect the current request before responding again. A saved cold-start response is navigation intent for review, never fresh authority to approve or deny. Only the generic notice is persisted; it contains no permission decision or session content.
 
-Background action delivery still depends on Android's battery restrictions and whether the app has been force-stopped. Physical-device validation is not yet complete. Ordinary notification taps, `Answer`, and iOS foreground permission behavior keep their existing paths.
+Background action delivery depends on the installed native build and OS lifecycle rules, including Android battery restrictions and force-stop state. iOS can expire background execution before a response is confirmed; Happier records a review notice rather than replaying the decision. Saved iOS credentials retain their existing access restriction while the device is locked. End-to-end notification-action lifecycle and physical-device validation are not yet complete. Ordinary notification taps and `Answer` keep their existing foreground paths.
 
 ## Prerequisites
 
