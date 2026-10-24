@@ -359,7 +359,7 @@ describe('accepted Session workspace registration', () => {
 
       publishedProjectKey = null;
       conflictOnNextMetadataPatch = () => {
-        currentSessionMetadata = mergeSessionMetadataForStartup({ mode: 'attach', attachMetadataIdentityPolicy: 'replace_with_runtime_identity',
+        currentSessionMetadata = mergeSessionMetadataForStartup({ mode: 'attach', attachMetadataIdentityPolicy: 'replace_with_runtime_identity', nowMs: 1,
           current: { ...currentSessionMetadata, workspaceId: accepted[0]!.id, projectId: project.projectKey },
           next: createTestMetadata({ path: unrelatedRoot, machineId: 'machine-a' }) });
         expect(currentSessionMetadata.workspaceId).toBeUndefined();

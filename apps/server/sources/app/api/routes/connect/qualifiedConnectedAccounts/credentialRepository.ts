@@ -8,7 +8,7 @@ import { StoredJsonContentEnvelopeSchema, isStoredJsonContentEnvelopeModeCompati
 import { QualifiedConnectedAccountConfigurationTargetV4Schema, QualifiedConnectedAccountCredentialMetadataV4Schema, QualifiedConnectedAccountServiceRefSchema, QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { PluginContributionLocalIdSchema } from '@happier-dev/protocol/plugins/contribution-identity';
-import { type QualifiedConnectedAccountConfigurationSnapshotV4, type QualifiedConnectedAccountConfigurationTargetV4, type QualifiedConnectedAccountCredentialMetadataV4, type QualifiedConnectedAccountServiceRef, type QualifiedConnectedAccountProfileV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { type QualifiedConnectedAccountConfigurationSnapshotV4, type QualifiedConnectedAccountConfigurationTargetV4, type QualifiedConnectedAccountCredentialMetadataV4, type QualifiedConnectedAccountCredentialSnapshotV4, type QualifiedConnectedAccountServiceRef, type QualifiedConnectedAccountProfileV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from '@/app/machines/managed/managedRead';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
@@ -2182,7 +2182,7 @@ type QualifiedConnectedServiceCredentialSnapshotBase = Readonly<{
     authenticationModeId: string | null;
     configurationRevision: string | null;
     content: StoredJsonContentEnvelope;
-    metadata: QualifiedConnectedAccountCredentialMetadataV4;
+    metadata: QualifiedConnectedAccountCredentialSnapshotV4['metadata'];
 }>;
 
 type QualifiedConnectedServiceCredentialSnapshot =
@@ -2325,11 +2325,10 @@ async function readQualifiedConnectedServiceCredentialInTx(
         configurationRevision: row.configurationRevision,
         content,
         expiresAt: row.expiresAt?.getTime() ?? null,
-        metadata: isV4
-            ? parseQualifiedConnectedServiceCredentialStoredMetadataV4(
-                row.metadata,
-            ).values
-            : projection.presentation,
+        metadata: {
+            ...projection.presentation,
+            ...(projection.health ? { health: projection.health } : {}),
+        },
     };
     const revision =
         projectQualifiedConnectedAccountCredentialRevisionSemantics(

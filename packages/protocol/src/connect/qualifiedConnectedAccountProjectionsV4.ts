@@ -16,6 +16,7 @@ import {
   ConnectedServiceAuthGroupRuntimeStateRevisionV1Schema,
   ConnectedServiceAuthGroupStateV1Schema,
   ConnectedServiceCredentialRevisionV1Schema,
+  ConnectedServiceCredentialHealthV1Schema,
   isConnectedServiceCredentialHealthStatusUsable,
 } from './connectedServiceSchemas.js';
 import {
@@ -175,7 +176,12 @@ export const QualifiedConnectedAccountCredentialSnapshotV4Schema =
     configurationRevision:
       z.nullable(QualifiedConnectedAccountConfigurationRevisionV4Schema),
     content: StoredJsonContentEnvelopeSchema,
-    metadata: QualifiedConnectedAccountCredentialMetadataV4Schema,
+    // Health is server-owned and read-only here. Credential replacement metadata
+    // stays presentation-only; health mutations use the fenced health endpoint.
+    metadata: z.strictObject({
+      ...QualifiedConnectedAccountCredentialMetadataV4Schema.shape,
+      health: z.optional(ConnectedServiceCredentialHealthV1Schema),
+    }),
   });
 
 export const QualifiedConnectedAccountGroupMemberV4Schema = lazyZodSchema(() => z.strictObject({

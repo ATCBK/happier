@@ -146,7 +146,7 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
     const confirmIdle = vi.fn(async (): Promise<ManagedActivityBridgeResultV1> => decision.kind === 'idle'
         ? { ...decision, evidence: signedIdle(machine, decision.since, Date.now()) } : decision);
     const reopen = vi.fn(async () => undefined);
-    const waitForChange = vi.fn(async (signal?: AbortSignal) => await new Promise<void>((_resolve, reject) => {
+    const waitForChange = vi.fn(async (signal?: AbortSignal): Promise<'activity' | 'currentness' | void> => await new Promise<void>((_resolve, reject) => {
         signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
     }));
     const driverInput = { token: 'token', serverUrl: 'https://home.example', homeId, controller,

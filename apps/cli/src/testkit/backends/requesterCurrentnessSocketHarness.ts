@@ -10,12 +10,13 @@ const createUserScopedSocketConnection = sockets.createUserScopedSocketConnectio
 export type RequesterCurrentnessSocketHarness = Readonly<{
     server: Server;
     clients: Socket[];
+    settleTransport(): Promise<void>;
     disconnect(): Promise<void>;
     reconnect(): Promise<void>;
     pushProfile(accountId: string): Promise<void>;
     pushSettings(accountId: string, settings: unknown, version: number): Promise<void>;
     hintSettings(settingsVersion: number): Promise<void>;
-    hintAccountChange(): Promise<void>;
+    hintAccountChange(cursor?: number): Promise<void>;
     pushInvalidCurrentness(accountId: string): Promise<void>;
     pushInvalidSettings(accountId: string): Promise<void>;
     push(accountId: string, currentness: unknown): Promise<void>;
@@ -30,23 +31,68 @@ export async function createRequesterCurrentnessSocketHarness(): Promise<Request
     const address = http.address();
     if (!address || typeof address === 'string') throw new Error('Missing socket listen address');
     const clients: Socket[] = [];
+    const failedUpgrades = new WeakSet<Socket>();
     const redirect = vi.spyOn(sockets, 'createUserScopedSocketConnection').mockImplementation(options => {
         const connection = createUserScopedSocketConnection({ ...options, serverUrl: `http://127.0.0.1:${address.port}` });
         // This is the genuine network socket, with default event typing at the test boundary.
         const client = connection.socket as Socket;
+        // Remember a native failure even if it precedes the fixture's settling call.
+        client.io.on('open', () => {
+            failedUpgrades.delete(client);
+            const engine = client.io.engine;
+            if (engine.transport.name !== 'polling') return;
+            const clear = () => { engine.off('upgradeError', failed); engine.off('upgrade', clear); engine.off('close', clear); };
+            const failed = () => { failedUpgrades.add(client); clear(); };
+            engine.once('upgradeError', failed);
+            engine.once('upgrade', clear);
+            engine.once('close', clear);
+        });
         client.on('fx56-delivered', (ack: () => void) => ack());
         clients.push(client);
         return connection;
     });
-    const deliver = async (body: unknown) => {
+    const deliver = async (body: unknown, cursor = 2) => {
         await Promise.all([...server.sockets.sockets.values()].map(socket => new Promise<void>(resolve => {
-            socket.emit('update', { id: 'encryption-change', seq: 2, createdAt: 2, body });
+            socket.emit('update', { id: 'encryption-change', seq: cursor, createdAt: 2, body });
             socket.emit('fx56-delivered', resolve);
         })));
     };
     return {
         server,
         clients,
+        async settleTransport() {
+            await Promise.all(clients.map(async client => {
+                const engine = client.io.engine;
+                const peer = client.id ? server.sockets.sockets.get(client.id)?.conn : undefined;
+                if (!client.connected || !peer) throw new Error('Requester fixture channel is unavailable');
+                if (failedUpgrades.has(client)) throw new Error('Requester fixture transport upgrade failed');
+                // The host supplies transport names. Polling-only channels have no upgrade to await.
+                const transports = client.io.opts.transports;
+                if (client.io.opts.upgrade === false || transports && !transports.some(transport => transport === 'websocket')
+                    || !server.engine.upgrades('polling').includes('websocket')) return;
+                await new Promise<void>((resolve, reject) => {
+                    const cleanup = () => {
+                        engine.off('upgrade', complete);
+                        engine.off('upgradeError', fail);
+                        engine.off('close', fail);
+                        peer.off('upgrade', complete);
+                        peer.off('close', fail);
+                    };
+                    const complete = () => {
+                        if (engine.transport.name !== 'websocket' || peer.transport.name !== 'websocket') return;
+                        cleanup();
+                        resolve();
+                    };
+                    const fail = () => { cleanup(); reject(new Error('Requester fixture transport upgrade failed')); };
+                    engine.on('upgrade', complete);
+                    engine.on('upgradeError', fail);
+                    engine.on('close', fail);
+                    peer.on('upgrade', complete);
+                    peer.on('close', fail);
+                    complete();
+                });
+            }));
+        },
         async disconnect() {
             clients.forEach(client => client.disconnect());
         },
@@ -67,8 +113,8 @@ export async function createRequesterCurrentnessSocketHarness(): Promise<Request
         async hintSettings(settingsVersion: number) {
             await deliver(UpdateBodySchema.parse({ t: 'account-settings-changed', settingsVersion }));
         },
-        async hintAccountChange() {
-            await deliver(UpdateBodySchema.parse({ t: 'account-change' }));
+        async hintAccountChange(cursor?: number) {
+            await deliver(UpdateBodySchema.parse({ t: 'account-change' }), cursor);
         },
         pushInvalidCurrentness: async (accountId: string) => await deliver({ t: 'update-account', id: accountId,
             encryptionCurrentness: { mode: 'unknown' } }),

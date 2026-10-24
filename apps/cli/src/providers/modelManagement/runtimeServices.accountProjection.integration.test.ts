@@ -84,7 +84,7 @@ it('explicit requester Refresh reads A external credential and refreshes a fresh
     const context = { getAccountSettingsSnapshot: () => snapshot,
       resolveManagedPurposeBindingIntent: async (): Promise<never> => { throw new Error('Unexpected purpose'); },
       signal: new AbortController().signal, isCurrent: () => true };
-    const request = { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey, sourceConnectionId: 'external-a', mode: 'management' as const };
+    const request = { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey, sourceConnectionId: ProviderConnectionIdSchema.parse('external-a'), mode: 'management' as const };
     await services.projectModelsForAccount(request, context);
     expect(transport).not.toHaveBeenCalled();
     for (const version of [1, 2]) {
@@ -152,7 +152,7 @@ it('explicit requester Refresh probes A managed source on B without B Account re
           readAccountId: () => 'account', readOrigin: async () => ({ serverIdentityId: 'home', machineId: fixture.machineId }) }) },
       signal: new AbortController().signal, isCurrent: () => current };
     const request = { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey,
-      mode: 'management' as const, sourceConnectionId: 'run-gateway' };
+      mode: 'management' as const, sourceConnectionId: ProviderConnectionIdSchema.parse('run-gateway') };
     const missingPurposeRuntime = createRuntimeProviderServices({ machineId: fixture.machineId, happyHomeDir: fixture.happyHomeDir,
       registry: fixture.contributes, featureGate: { isEnabled: () => true },
       getAccountSettingsSnapshot: () => { ambientReads++; return ambient; },
@@ -267,7 +267,7 @@ it('uses the selected worker Agent when the personal hub cannot activate that Ag
     const transport = vi.spyOn(machineRpc, 'callExactMachineRpc').mockImplementation(async request =>
       hubServices.projectModels(DaemonProviderModelProjectionRequestV1Schema.parse(request.request)));
     const projected = await workerServices.projectModels({ machineId: workerId, agentTargetKey: worker.agentTargetKey,
-      mode: 'management', sourceConnectionId: 'run-gateway', refreshPolicy: 'current_only' });
+      mode: 'management', sourceConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), refreshPolicy: 'current_only' });
     expect(projected, JSON.stringify(projected)).toMatchObject({ status: 'success', groups: [{
       connectionName: 'Gateway', rows: expect.arrayContaining([expect.objectContaining({ descriptor: { id: 'example', name: 'Example' }, compatibility: expect.objectContaining({ result: expect.objectContaining({ status: 'verified' }) }),
         gatewaySlots: [expect.objectContaining({ purpose: catalogModels[0]!.connectedAccountPurposes![0] })] })]),
@@ -285,14 +285,17 @@ it('uses the selected worker Agent when the personal hub cannot activate that Ag
     expect(launch, JSON.stringify(launch)).toMatchObject({ ok: true });
     if (launch.ok) launch.attempt.cleanupOnFailure();
     const refreshedAt = Date.now();
-    await hubServices.runtimeStore.update(state => ({ ...state, catalogs: state.catalogs.map(record => ({ ...record, lastAccessedAt: refreshedAt,
-      state: { ...record.state, ...applyProviderCatalogRefreshV1({ snapshot: record.state.snapshot,
+    await hubServices.runtimeStore.update(state => ({ ...state, catalogs: state.catalogs.map(record => {
+      const refreshed = applyProviderCatalogRefreshV1({ snapshot: record.state.snapshot,
         staleProbeModels: record.state.staleProbeModels }, {
         status: 'success', observedAt: refreshedAt, models: [],
-      }) },
-    })) }));
+      });
+      if (!refreshed.snapshot || !('catalogObservationId' in record.state)) throw new Error('Expected an observed catalog record');
+      return { ...record, lastAccessedAt: refreshedAt,
+        state: { ...record.state, snapshot: refreshed.snapshot, staleProbeModels: refreshed.staleProbeModels } };
+    }) }));
     const request = { machineId: workerId, agentTargetKey: worker.agentTargetKey,
-      sourceConnectionId: 'run-gateway', refreshPolicy: 'current_only' as const };
+      sourceConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), refreshPolicy: 'current_only' as const };
     const retainedRef = { ...selection.ref, modelId: 'retained-probe' };
     for (const retained of [{ currentSelection: retainedRef }, { favoriteSelections: [retainedRef] }]) {
       const stale = await workerServices.projectModels({ ...request, ...retained });
@@ -381,7 +384,7 @@ it.each(['issued', 'missing'] as const)('projects requester A personal hub throu
       return hub.projectModelsForAccount(projection, accountContext);
     });
     const request = { machineId: workerId, agentTargetKey: fixture.agentTargetKey, mode: 'management' as const,
-      sourceConnectionId: 'run-gateway', refreshPolicy: 'current_only' as const };
+      sourceConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), refreshPolicy: 'current_only' as const };
     if (readScope === 'missing') {
       await expect(worker.projectModelsForAccount(request, { ...accountContext, accountReadScope: undefined }))
         .resolves.toMatchObject({ status: 'success', groups: [], refreshFailures: [{ error: { code: 'provider_authorization_changed' } }] });
@@ -722,7 +725,7 @@ it.each([true, false])('G1 projects only the owning Account source and purpose w
       modelSettingsMutation: unexpected,
     });
     const request = DaemonProviderModelProjectionRequestV1Schema.parse({ machineId: fixture.machineId,
-      agentTargetKey: fixture.agentTargetKey, mode: 'management', sourceConnectionId: 'run-gateway', refreshPolicy: 'current_only' });
+      agentTargetKey: fixture.agentTargetKey, mode: 'management', sourceConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), refreshPolicy: 'current_only' });
     const ambient = await services.projectModels(request);
     expect(ambient, JSON.stringify(ambient)).toMatchObject({ status: 'success', groups: [{ connectionId: 'run-gateway', connectionName: 'Ambient Gateway',
       sourceAuthority: { connectionSecurityFingerprint: ambientResolution.record.connectionSecurityFingerprint },
@@ -774,7 +777,7 @@ it.each([true, false])('G1 projects only the owning Account source and purpose w
       }),
     });
     for (const actionId of ['providers.models.projection'] as const) {
-      const selected = await execute({ actionId, input: request },
+      const selected = await execute({ actionId, input: { ...request, forceRefresh: undefined } },
       { serverId: 'requester-home', signal: controller.signal });
       expect(selected).toMatchObject({ ok: true, result: { status: 'success', groups: [{ connectionName: 'Gateway',
         rows: [{ descriptor: { id: 'example' } }] }] } });

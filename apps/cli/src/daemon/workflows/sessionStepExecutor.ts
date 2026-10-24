@@ -1346,6 +1346,7 @@ export function createProductionWorkflowSessionStepExecutor(deps: Readonly<{
   credentials: StoredCredentials;
   workDepth?: number;
   resolveRoleInstructions?: (params: Parameters<WorkflowStepExecutor>[0]) => string | undefined;
+  resolveFrozenRole?: Parameters<typeof createProductionWorkflowConversationOwner>[0]['resolveFrozenRole'];
   machineId: string;
   machineAdmissionTransport: NonNullable<Parameters<typeof enqueueWorkflowSessionInput>[0]['machineAdmissionTransport']>;
   /** Canonical prepared Session-creation owner; this adapter never authors raw spawn options. */

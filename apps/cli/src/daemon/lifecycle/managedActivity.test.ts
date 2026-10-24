@@ -122,7 +122,7 @@ describe('managed activity inventory', () => {
             working = true;
             operations.create({ operationId: 'finite', actionId: 'projects.compute.exec',
                 scope: { accountId: 'owner', machineId: 'machine' }, title: 'Work',
-                cancellation: { supported: true }, inputIdentity: 'finite' });
+                cancellation: 'supported', inputIdentity: 'finite' });
             await passive.promise;
             expect(sessionReads).toBe(1);
             expect(await inventory.readDecision()).toEqual({ kind: 'busy', reasons: ['session', 'finite'] });

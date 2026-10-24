@@ -61,7 +61,7 @@ describe('daemon control server quiescing producer routes', () => {
       const refused = await spawn();
       expect(refused.statusCode).toBe(503);
       expect(refused.json()).toMatchObject({ errorCode: 'daemon_draining' });
-      const failure = normalizeSpawnSessionNonceResolution({ ...refused.json(), status: 'error', errorMessage: refused.json().error });
+      const failure = normalizeSpawnSessionNonceResolution({ ...refused.json<Record<string, unknown>>(), status: 'error', errorMessage: refused.json().error });
       expect(failure).toMatchObject({ status: 'error', errorCode: 'daemon_draining' });
       if (failure.status !== 'error') throw new Error('Expected typed spawn refusal');
       expect(SessionSpawnNewResultV1Schema.parse(projectSessionSpawnFailure(failure)))

@@ -482,7 +482,8 @@ describe('runtime provider model-management composition', () => {
     const rpc = new RpcHandlerManager({ scopePrefix: fixture.machineId, encryptionMode: 'plain', logger: () => {} });
     registerMachineProviderRpcHandlers({ rpcHandlerManager: rpc, machineId: fixture.machineId,
       featureGate: { isEnabled: () => true }, services: { ...services,
-        ...createRuntimeProviderConnectionServices({ machineId: fixture.machineId,
+        probe: (input, waiterLifetime) => services.probe(input, 'manual_refresh', waiterLifetime),
+        ...createRuntimeProviderConnectionServices({ machineId: fixture.machineId, happyHomeDir: fixture.happyHomeDir,
           credentials: { token: 'pool-custodian', encryption: null }, featureGate: { isEnabled: () => true },
           runtimeSummary: services.summary }),
         ...createLegacyProfileMigrationRpcServices({ credentials: { token: 'pool-custodian', encryption: null } }),
@@ -491,7 +492,7 @@ describe('runtime provider model-management composition', () => {
       implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
       endpointTemplateId: 'cliproxyapi-openai-responses', protocol: 'openai-responses' as const };
     const request = { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey,
-      sourceCatalog: true, refreshPolicy: 'current_only' as const, application,
+      sourceCatalog: true as const, refreshPolicy: 'current_only' as const, application,
       connectedAccountTarget: { kind: 'group' as const,
         service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool' } };
     const eligibilityRequest = { machineId: fixture.machineId, teamId: 'team', resourceId: 'resource',

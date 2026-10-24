@@ -447,7 +447,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             unsubscribeChanges = service.subscribe(() => { publications++; });
             const revision = service.revision();
             const parked = handlers.get(RPC_METHODS.DAEMON_STORAGE_WATCH)!({ machineId: 'machine', sinceRevision: revision },
-                { ...context, signal: cancellation.signal }).then(result => { completions++; return result; });
+                { ...context, signal: cancellation.signal }).then((result: unknown) => { completions++; return result; });
             pendingWatch = parked;
             await vi.waitFor(() => expect(watcherCount()).toBe(1));
             const beforeSamples = enumerations();
