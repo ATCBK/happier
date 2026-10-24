@@ -2,8 +2,11 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { HappierStoredImage } from '@happier-dev/plugin-ui/presentation';
+
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ImageWell } from '@/components/ui/media/ImageWell';
+import { STORED_IMAGE_HOST } from '@/components/ui/media/StoredImagePicture';
 import type { MediaStageItem } from '@/components/ui/media/stage/mediaStageItems';
 import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
 import type { UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
@@ -289,6 +292,35 @@ export function MediaViewerSpecimen() {
           isActive
           findSurfaceId="dev-media-pdf"
           testID="dev-media-pdf"
+        />
+      </View>
+
+      <Text variant="heading" style={{ color: theme.colors.text.primary }}>Stored image · transparent logo and a photo</Text>
+      <View style={styles.row}>
+        <HappierStoredImage
+          identity="dev-stored-logo"
+          status="loaded"
+          uri={`data:image/svg+xml;utf8,${encodeURIComponent(SAMPLE_SVG)}`}
+          dimensions={{ width: 120, height: 120 }}
+          host={STORED_IMAGE_HOST}
+          borderColor={theme.colors.border.default}
+          backgroundColor={theme.colors.surface.elevated}
+          checkerboardColor={theme.colors.text.primary}
+          accessibilityLabel="logo-dark.svg"
+          placeholder={null}
+          testID="dev-media-stored-logo"
+        />
+        <HappierStoredImage
+          identity="dev-stored-photo"
+          status="loaded"
+          uri={assetUri(SAMPLES.planetDark)}
+          dimensions={{ width: 120, height: 120 }}
+          host={STORED_IMAGE_HOST}
+          borderColor={theme.colors.border.default}
+          backgroundColor={theme.colors.surface.elevated}
+          accessibilityLabel="planet-dark.jpg"
+          placeholder={null}
+          testID="dev-media-stored-photo"
         />
       </View>
 

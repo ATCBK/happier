@@ -44,7 +44,8 @@ import type { MediaPlayerBodyProps } from '@/components/workspaces/files/file/Me
 import type { PdfViewerProps } from '../pdf/PdfViewerStates';
 import type { PdfZoom } from '../pdf/pdfZoom';
 
-import { ImageWellCheckerboard, useImageBacking } from '../imageBacking';
+import { HappierImageCheckerboard } from '@happier-dev/plugin-ui/presentation';
+import { useImageBacking } from '../imageBacking';
 import { MediaPicture, type MediaPictureSize } from '../MediaPicture';
 import { useFilePreviewSource, type FilePreviewSourceState } from '../useFilePreviewSource';
 import { useWheelZoom } from '../zoom/useWheelZoom';
@@ -413,7 +414,7 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
                     >
                       <View style={[pictureSize, backing.paper ? { backgroundColor: backing.paper } : null]}>
                         {backing.checkerboard && pictureSize ? (
-                          <ImageWellCheckerboard color={theme.colors.text.primary} testID="media-stage-image-checkerboard" />
+                          <HappierImageCheckerboard color={theme.colors.text.primary} testID="media-stage-image-checkerboard" />
                         ) : null}
                         <MediaPicture
                           key={attempt}

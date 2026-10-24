@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { HappierImageCheckerboard, HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
@@ -11,7 +11,7 @@ import type { ImageBackground } from '@/sync/domains/settings/registry/local/loc
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
-import { ImageWellCheckerboard, useImageBacking, type ImageBackingKind } from './imageBacking';
+import { useImageBacking, type ImageBackingKind } from './imageBacking';
 import { MediaPicture, type MediaPictureSize } from './MediaPicture';
 import { resolveImageWellFit } from './resolveImageWellFit';
 import {
@@ -165,7 +165,7 @@ function ImageWellPicture(
       ]}
     >
       {backing.checkerboard && pictureSize ? (
-        <ImageWellCheckerboard color={theme.colors.text.primary} />
+        <HappierImageCheckerboard color={theme.colors.text.primary} />
       ) : null}
       <MediaPicture
         kind={props.kind}

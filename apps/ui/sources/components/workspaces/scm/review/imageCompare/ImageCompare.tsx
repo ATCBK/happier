@@ -8,7 +8,7 @@ import {
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ImageWell } from '@/components/ui/media/ImageWell';
-import { ImageWellCheckerboard } from '@/components/ui/media/imageBacking';
+import { HappierImageCheckerboard } from '@happier-dev/plugin-ui/presentation';
 import {
   MediaPicture,
   type MediaPictureSize,
@@ -347,7 +347,7 @@ function LayeredCompare(
         {box ? (
           <View style={[box, styles.stack]}>
             {props.alphaCapable ? (
-              <ImageWellCheckerboard color={theme.colors.text.primary} />
+              <HappierImageCheckerboard color={theme.colors.text.primary} />
             ) : null}
             <View style={StyleSheet.absoluteFill}>
               {picture(props.beforeUri, props.onBeforeSize)}

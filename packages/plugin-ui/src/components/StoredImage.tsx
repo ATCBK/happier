@@ -3,6 +3,7 @@ import type { StoredImageRefV1, PluginUiReadStoredImageResultV1 } from '@happier
 import { usePluginHostApi } from '../hostApi/context.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { HappierStoredImage } from '../presentation/content/StoredImage.js';
+import { isHappierAlphaCapableImageMimeType } from '../presentation/media/ImageBacking.js';
 import { usePluginTheme } from './PluginUiProvider.js';
 import { Icon } from './Icon.js';
 
@@ -52,6 +53,7 @@ export function StoredImage({ image, accessibilityLabel, testID, expandable = tr
   return <HappierStoredImage identity={identity} status={current.status} uri={current.uri}
     dimensions={current.image} accessibilityLabel={accessibilityLabel} testID={testID}
     borderColor={theme.colors.border} backgroundColor={theme.colors.control}
+    checkerboardColor={isHappierAlphaCapableImageMimeType(current.image?.mimeType ?? mimeType) ? theme.colors.text : undefined}
     host={presentationHost?.storedImageHost}
     onPress={activate}
     placeholder={<Icon name={current.status === 'error' ? 'warning' : 'preview'} />} />;

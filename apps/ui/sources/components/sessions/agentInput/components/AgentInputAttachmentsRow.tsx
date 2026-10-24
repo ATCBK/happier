@@ -20,7 +20,8 @@ import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
-import { ImageWellCheckerboard, useImageBacking } from '@/components/ui/media/imageBacking';
+import { HappierImageCheckerboard } from '@happier-dev/plugin-ui/presentation';
+import { useImageBacking } from '@/components/ui/media/imageBacking';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -129,7 +130,7 @@ function TrayPictureBacking(props: Readonly<{ alphaCapable: boolean; checkerboar
     return (
         <>
             {backing.paper ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: backing.paper }]} /> : null}
-            {backing.checkerboard ? <ImageWellCheckerboard color={theme.colors.text.primary} testID={props.checkerboardTestID} /> : null}
+            {backing.checkerboard ? <HappierImageCheckerboard color={theme.colors.text.primary} testID={props.checkerboardTestID} /> : null}
         </>
     );
 }

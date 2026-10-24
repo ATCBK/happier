@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { Image, Pressable, View } from 'react-native';
+import { HappierImageCheckerboard } from '../media/ImageBacking.js';
 import { resolveHappierStoredImageDimensions, resolveHappierStoredImageLayout, type HappierStoredImageDimensions } from './storedImageLayout.js';
 
 export type HappierStoredImageHost = Readonly<{
@@ -14,6 +15,8 @@ export type HappierStoredImageProps = Readonly<{
   accessibilityHint?: string;
   borderColor: string;
   backgroundColor: string;
+  /** Ink colour of the transparency checkerboard; pass it only for an alpha-capable picture. */
+  checkerboardColor?: string;
   placeholder: ReactNode;
   onPress?: () => void;
   host?: HappierStoredImageHost;
@@ -34,9 +37,12 @@ export function HappierStoredImage(props: HappierStoredImageProps): ReactElement
     accessibilityLabel={props.accessibilityLabel} accessibilityHint={props.accessibilityHint} onPress={props.onPress}
     style={{ ...size, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: props.borderColor, backgroundColor: props.backgroundColor }}>
     {props.status === 'loaded' && props.uri
-      ? props.host?.renderImage({ uri: props.uri, ...(props.imageTestID ? { testID: props.imageTestID } : {}), onLoad })
-        ?? <Image testID={props.imageTestID} source={{ uri: props.uri }} resizeMode="contain" onLoad={(event) => onLoad(event.nativeEvent.source)}
-          style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />
+      ? <>
+        {props.checkerboardColor ? <HappierImageCheckerboard color={props.checkerboardColor} testID={props.testID ? `${props.testID}-backing` : undefined} /> : null}
+        {props.host?.renderImage({ uri: props.uri, ...(props.imageTestID ? { testID: props.imageTestID } : {}), onLoad })
+          ?? <Image testID={props.imageTestID} source={{ uri: props.uri }} resizeMode="contain" onLoad={(event) => onLoad(event.nativeEvent.source)}
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }} />}
+      </>
       : <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: props.backgroundColor }}>{props.placeholder}</View>}
   </Pressable>;
 }

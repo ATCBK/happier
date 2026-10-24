@@ -81,4 +81,37 @@ describe('authorized StoredImage reference presentation', () => {
     mount.unmount();
     expect(signal?.aborted).toBe(true);
   });
+  it('lays the transparency checkerboard behind alpha-capable pictures and leaves a JPEG on its plain backdrop', async () => {
+    const context = createSurfaceContext();
+    const referenceFor = (mimeType: string, extension: string): StoredImageRefV1 => ({ mediaId: `media-${extension}`, mediaKind: 'image',
+      width: 100, height: 60, sizeBytes: 24, file: { sessionId: 'session-1', storage: 'daemon',
+        path: `.happier/uploads/artifacts/session-1/image.${extension}`, sha256: 'a'.repeat(64), mimeType } });
+    // Byte acquisition is the host API boundary; the component, backing decision and RNW paint are real.
+    const hostApi = createHostApiStub(context, {
+      readStoredImage: async (ref) => ({ bytesBase64: 'cG5n', mimeType: ref.file.mimeType, width: 100, height: 60 }),
+    });
+    const render = (reference: StoredImageRefV1) => <PluginUiProvider hostApi={hostApi} context={context}>
+      <PluginUiPresentationHostProviderInternal host={{ renderMarkdown: () => null, renderCodeBlock: () => null,
+        renderPopover: () => null, renderIcon: () => null,
+        storedImageHost: { renderImage: ({ uri }) => <img src={uri} alt="Admitted image" /> } }}>
+        <StoredImage image={reference} accessibilityLabel="Logo" testID="logo" expandable={false} />
+      </PluginUiPresentationHostProviderInternal>
+    </PluginUiProvider>;
+    const backing = (mount: Awaited<ReturnType<typeof mountThroughReactNativeWebAsync>>) =>
+      mount.container.querySelector('[data-testid="logo-backing"]');
+    const mount = await mountThroughReactNativeWebAsync(render(referenceFor('image/png', 'png')));
+    try {
+      expect(mount.container.querySelector('img')).not.toBeNull();
+      expect(backing(mount)).not.toBeNull();
+      for (const [mimeType, extension] of [['image/webp', 'webp'], ['image/gif', 'gif'], ['image/svg+xml', 'svg']] as const) {
+        await mount.render(render(referenceFor(mimeType, extension)));
+        expect(backing(mount), mimeType).not.toBeNull();
+      }
+      await mount.render(render(referenceFor('image/jpeg', 'jpg')));
+      expect(mount.container.querySelector('img')).not.toBeNull();
+      expect(backing(mount)).toBeNull();
+    } finally {
+      mount.unmount();
+    }
+  });
 });

@@ -189,6 +189,10 @@ export {
   resolveHappierStoredImageLayout,
   type HappierStoredImageDimensions,
 } from './content/storedImageLayout.js';
+export {
+  HappierImageCheckerboard,
+  isHappierAlphaCapableImageMimeType,
+} from './media/ImageBacking.js';
 export { HappierLiveStreamInputLayer } from './media/LiveStreamInputLayer.js';
 export {
   HappierLiveStream,
