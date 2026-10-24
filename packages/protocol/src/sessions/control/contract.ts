@@ -720,6 +720,11 @@ export const SessionArchiveResultSchema = lazyZodSchema(() => z.looseObject({
 }));
 export type SessionArchiveResult = z.infer<typeof SessionArchiveResultSchema>;
 
+/** Retained archive HTTP body; Action selection and report scope stay separate. */
+export const SessionArchiveHttpBodyV1Schema = lazyZodSchema(() => z.nullish(z.strictObject({
+  originRunId: z.optional(z.string().check(z.minLength(1))),
+})));
+
 /** Action-owned direct-report scope; omission keeps the incumbent parent-only operation. */
 export const SessionArchiveActionInputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: z.string().check(z.trim(), z.minLength(1)),
