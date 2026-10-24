@@ -128,7 +128,11 @@ const store = createSharedSubscriptionStore<
     defaultSnapshotClient,
     // A launcher read can fail while inventory remains healthy and unchanged. Its own
     // demand must recover on the same authenticated reconnect, without a scan delta.
-    subscribeRecovery: (input, recover) => subscribeMachineRpcRecovery({ ...input, expectedAccountId: input.accountId }, () => recover(true)),
+    subscribeRecovery: (input, recover) => subscribeMachineRpcRecovery({ ...input, expectedAccountId: input.accountId }, () => {
+        // A retired inventory owns recovery until its current snapshot arrives. Its
+        // availability publication requests this projection once, after that barrier.
+        if (!inventorySubscriptions.get(storeKey(normalizeInput(input)))?.isUnavailable()) recover(true);
+    }),
     beginRefresh: (state, input) => {
         if (state.updatedAt !== null) return state;
         const normalized = normalizeInput(input);
@@ -175,7 +179,7 @@ const store = createSharedSubscriptionStore<
 
 // Freshness belongs to the launcher store, including complete managed-binding reads made
 // outside a Services page. All projections share the inventory's one parked Machine watch.
-const inventorySubscriptions = new Map<string, { input: LocalServiceLauncherStoreKeyInput; count: number; dispose(): void }>();
+const inventorySubscriptions = new Map<string, { input: LocalServiceLauncherStoreKeyInput; count: number; isUnavailable(): boolean; dispose(): void }>();
 
 export function getLocalServiceLauncherState(
     input: LocalServiceLauncherStoreKeyInput,
@@ -212,7 +216,7 @@ export function subscribeLocalServiceLauncherStore(
             // declaration hydration independent of that scan, then reconcile its result.
             if (availabilityChanged || (generationChanged && next.generatedAt !== null)) store.invalidate(input);
         }, options?.inventorySnapshotClient ? { snapshotClient: options.inventorySnapshotClient } : undefined);
-        subscription = { input, count: 0, dispose };
+        subscription = { input, count: 0, isUnavailable: () => unavailable, dispose };
         inventorySubscriptions.set(key, subscription);
     }
     subscription.count++;

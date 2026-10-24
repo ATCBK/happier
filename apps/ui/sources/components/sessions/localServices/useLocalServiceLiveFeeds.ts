@@ -129,15 +129,22 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
     const declarations = React.useMemo(() => sourceTargets.filter(target => target.declaration && target.declaration.workspaceRefId === input.workspaceRefId
         && target.declaration.selection.kind === 'manifest'), [input.workspaceRefId, sourceTargets]);
     const [change, observeAgain] = React.useReducer((value: number) => value + 1, 0);
+    const subscriptions = React.useMemo(() => new Map<string, Readonly<{ key: LocalServiceLauncherStoreKeyInput; dispose: () => void }>>(),
+        [binding, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows]);
     React.useEffect(() => {
         if (!canObserve || !binding || !input.machineId) return;
         // Project admission can fail independently of healthy native snapshots. Reconnect
         // must renew that observation even when the launcher has no changed facts to publish.
         return subscribeMachineRpcRecovery({ machineId: input.machineId, serverId: input.serverId,
-            expectedAccountId: binding.accountId }, () => observeAgain());
-    }, [binding, canObserve, input.machineId, input.serverId]);
-    const subscriptions = React.useMemo(() => new Map<string, Readonly<{ key: LocalServiceLauncherStoreKeyInput; dispose: () => void }>>(),
-        [binding, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows]);
+            expectedAccountId: binding.accountId }, () => {
+                // Failed native reads publish their recovery and renew this observation.
+                // Wait for those facts instead of starting a census of the failed feed.
+                for (const { key } of subscriptions.values()) {
+                    if (key.machineId === input.machineId && getLocalServiceLauncherState(key).refreshStatus === 'error') return;
+                }
+                observeAgain();
+            });
+    }, [binding, canObserve, input.machineId, input.serverId, subscriptions]);
     React.useEffect(() => {
         const release = () => { for (const subscription of subscriptions.values()) subscription.dispose(); subscriptions.clear(); };
         const retirement = binding?.onRetire(release);

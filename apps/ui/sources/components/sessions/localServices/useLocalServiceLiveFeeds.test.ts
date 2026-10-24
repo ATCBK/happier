@@ -132,6 +132,7 @@ describe('Project Services source feed plus actual native binding', () => {
     let running = false;
     let sourceGeneration = 1;
     let holdReopen = false;
+    let failBindings = false;
     const reopenedLauncher = createDeferred<void>();
     remote.mockImplementation(async ({ method, machineId, payload, signal }: {
       method: string; machineId: string; payload: { projection?: 'managed_bindings' }; signal: AbortSignal;
@@ -142,6 +143,7 @@ describe('Project Services source feed plus actual native binding', () => {
       }
       if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) {
         if (holdReopen) await reopenedLauncher.promise;
+        if (payload.projection && failBindings) throw new Error('binding unavailable');
         return { protocolVersion: 1,
           snapshot: { v: 1, machineId, updatedAt: running ? 100 : payload.projection ? 1 : sourceGeneration,
             targets: payload.projection ? running ? [actual] : [] : [declaration] } };
@@ -190,6 +192,32 @@ describe('Project Services source feed plus actual native binding', () => {
         expect(countReads(false) - sourceReads).toBe(75);
         expect(countReads(true) - bindingReads).toBe(0);
         expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } });
+        const bindingKey = { ...key, projection: 'managed_bindings' as const };
+        failBindings = true;
+        await act(async () => {
+          invalidateLocalServiceLauncherStore(bindingKey);
+          await readLocalServiceLauncherStore(bindingKey);
+        });
+        await vi.waitFor(() => expect(readRows()[0]?.status).toBe('unavailable'));
+        await flushHookEffects();
+        const failedCensuses = censusReads;
+        const failedCommits = feedCommits;
+        const failedBindingReads = countReads(true);
+        for (let failure = 1; failure < 75; failure++) {
+          await act(async () => {
+            invalidateLocalServiceLauncherStore(bindingKey);
+            await readLocalServiceLauncherStore(bindingKey);
+          });
+        }
+        expect(countReads(true) - failedBindingReads).toBe(74);
+        expect(censusReads - failedCensuses).toBe(0);
+        expect(feedCommits - failedCommits).toBe(0);
+        failBindings = false;
+        await act(async () => {
+          invalidateLocalServiceLauncherStore(bindingKey);
+          await readLocalServiceLauncherStore(bindingKey);
+        });
+        await vi.waitFor(() => expect(readRows()[0]?.status).toBe('stopped'));
       }
       if (recovery === 'visibility') {
         const cachedRow = readRows()[0];
@@ -223,11 +251,20 @@ describe('Project Services source feed plus actual native binding', () => {
         });
         await flushHookEffects();
         expect(watches).toHaveLength(1);
+        const censusesBeforeRecovery = censusReads;
+        holdReopen = recovery === 'home-reconnect-invalid';
         await act(async () => {
           if (recovery === 'daemon-restart') clearMachineRequestReachabilityForMachine(scope, source.machineId);
           else publishHomeAccountChange(serverId, undefined, { source: 'connected' });
         });
         await vi.waitFor(() => expect(watches).toHaveLength(2));
+        if (holdReopen) {
+          await flushHookEffects();
+          expect.soft(censusReads - censusesBeforeRecovery).toBe(0);
+          // The recovering native reads, not a second recovery observer, renew admission.
+          await act(async () => { holdReopen = false; reopenedLauncher.resolve(); });
+          await vi.waitFor(() => expect(readRows()[0]?.status).toBe('stopped'));
+        }
       }
       running = true;
       const previousCensuses = censusReads;

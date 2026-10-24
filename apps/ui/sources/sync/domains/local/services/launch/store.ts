@@ -145,14 +145,25 @@ export function failLocalServiceLauncherRefresh(
         };
     }
 
+    let staleTargets: Map<string, LocalServiceLaunchTarget> | null = null;
+    if (input.stale) {
+        for (const [id, target] of state.targetsById) {
+            if (target.state === 'stale' && target.actions.length === 0) continue;
+            if (!staleTargets) staleTargets = new Map(state.targetsById);
+            staleTargets.set(id, { ...target, state: 'stale', actions: [] });
+        }
+    }
+    const targetsById = staleTargets ?? state.targetsById;
+    const sessionId = input.sessionId ?? state.sessionId;
+    if (state.machineId === input.machineId && state.sessionId === sessionId
+        && state.refreshStatus === 'error' && state.refreshError === input.reasonCode && targetsById === state.targetsById) return state;
     return carrySnapshotTime(state, {
         ...state,
         machineId: input.machineId,
-        sessionId: input.sessionId ?? state.sessionId,
+        sessionId,
         refreshStatus: 'error',
         refreshError: input.reasonCode,
-        ...(input.stale ? { targetsById: new Map([...state.targetsById].map(([id, target]) =>
-            [id, { ...target, state: 'stale' as const, actions: [] }])) } : {}),
+        targetsById,
     });
 }
 
