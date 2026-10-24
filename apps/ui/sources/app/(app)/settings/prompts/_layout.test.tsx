@@ -1,9 +1,12 @@
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { act } from 'react-test-renderer';
+
 import { renderScreen } from '@/dev/testkit';
 
 const useArtifactsLoaded = vi.hoisted(() => vi.fn());
+const fetchArtifactsList = vi.hoisted(() => vi.fn());
 const routerState = vi.hoisted(() => ({ pathname: '/settings/prompts', screenOptions: null as null | Record<string, unknown>,
     params: {} as Record<string, string | string[]> }));
 
@@ -25,12 +28,16 @@ vi.mock('expo-router', async () => {
 });
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
+// The sync engine's inventory read is the network boundary: the layout reads it while the inventory is unknown.
+vi.mock('@/sync/sync', () => ({ sync: { fetchArtifactsList } }));
 vi.mock('@/sync/domains/state/storage', async (importOriginal) => (await import('@/dev/testkit/mocks/storage'))
     .createStorageModuleMock({ importOriginal, overrides: { useArtifactsLoaded } }));
 
 describe('PromptsLayoutRoute', () => {
     beforeEach(() => {
         useArtifactsLoaded.mockReset();
+        fetchArtifactsList.mockReset();
+        fetchArtifactsList.mockResolvedValue(undefined);
         routerState.pathname = '/settings/prompts';
         routerState.screenOptions = null;
         routerState.params = {};
@@ -57,6 +64,32 @@ describe('PromptsLayoutRoute', () => {
 
         expect(screen.findByTestId('prompts.artifacts.loading')).toBeTruthy();
         expect(screen.findAllByType('PromptRouteSlot' as never)).toHaveLength(0);
+    });
+
+    it('says when the inventory read fails and Retry reads it again, instead of spinning forever', async () => {
+        useArtifactsLoaded.mockReturnValue(false);
+        fetchArtifactsList.mockRejectedValueOnce(new Error('Failed to fetch'));
+        const { default: PromptsLayoutRoute } = await import('./_layout');
+        const screen = await renderScreen(<PromptsLayoutRoute />);
+        await act(async () => {});
+
+        expect(screen.findByTestId('prompts.artifacts.loading')).toBeNull();
+        expect(screen.findAllByType('PromptRouteSlot' as never)).toHaveLength(0);
+        const failed = screen.findAll(node => node.props.testID === 'prompts.artifacts.failed' && node.props.action !== undefined)[0]!;
+        expect(failed.props.action.label).toBe('Retry');
+
+        await act(async () => { failed.props.action.onPress(); });
+        expect(fetchArtifactsList).toHaveBeenCalledTimes(2);
+        // The retry succeeded: the failed state is gone while the inventory is still being published.
+        expect(screen.findByTestId('prompts.artifacts.failed')).toBeNull();
+        expect(screen.findByTestId('prompts.artifacts.loading')).toBeTruthy();
+    });
+
+    it('does not read the inventory itself once it is loaded', async () => {
+        useArtifactsLoaded.mockReturnValue(true);
+        const { default: PromptsLayoutRoute } = await import('./_layout');
+        await renderScreen(<PromptsLayoutRoute />);
+        expect(fetchArtifactsList).not.toHaveBeenCalled();
     });
 
     it('mounts the selected prompt route after artifact heads are ready', async () => {
