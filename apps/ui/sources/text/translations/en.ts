@@ -9,6 +9,7 @@ import { composerReferenceTranslations } from './composerReferenceTranslations.s
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { sessionListSpacesKeyboardTranslations } from './sessionListSpacesKeyboardTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
 import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
@@ -1413,6 +1414,7 @@ const enSettingsKeyboard = {
     codeProblemNext: 'Next problem',
     codeProblemPrevious: 'Previous problem',
     ...workspaceTabKeyboardTranslations,
+    ...sessionListSpacesKeyboardTranslations['en'],
     ...reviewKeyboardTranslations['en'],
     ...paneKeyboardTranslations['en'].commands,
     ...mediaKeyboardTranslations['en'],

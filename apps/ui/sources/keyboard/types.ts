@@ -77,6 +77,8 @@ export type KeyboardCommandId =
     | 'sessions.selection.extendUp'
     | 'sessions.selection.selectAll'
     | 'sessions.selection.toggleFocused'
+    | 'sessionList.filter.open'
+    | `sessionList.space.select${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`
     | 'session.visible.next'
     | 'session.visible.previous'
     | 'workspace.closePane'
@@ -186,6 +188,8 @@ export type KeyboardCommandSettingsTitleKey = Extract<
     | 'settingsKeyboard.commands.sessionsSelectionExtendUp'
     | 'settingsKeyboard.commands.sessionsSelectionSelectAll'
     | 'settingsKeyboard.commands.sessionsSelectionToggleFocused'
+    | 'settingsKeyboard.commands.sessionListFilterOpen'
+    | `settingsKeyboard.commands.sessionListSpaceSelect${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`
     | 'settingsKeyboard.commands.sessionVisibleNext'
     | 'settingsKeyboard.commands.sessionVisiblePrevious'
     | 'settingsKeyboard.commands.splitCanvasCloseLeaf'

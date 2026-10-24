@@ -11,6 +11,7 @@ import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { sessionListSpacesKeyboardTranslations } from './sessionListSpacesKeyboardTranslations.shared';
 import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
 import { quickOpenTranslations } from './quickOpenTranslations';
@@ -1613,6 +1614,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
             codeProblemNext: '下一個問題',
             codeProblemPrevious: '上一個問題',
     ...workspaceTabKeyboardTranslations,
+    ...sessionListSpacesKeyboardTranslations['zh-Hant'],
     ...paneKeyboardTranslations['zh-Hant'].commands,
     ...mediaKeyboardTranslations['zh-Hant'],
     ...quickOpenTranslations['zh-Hant'].commands,

@@ -2,6 +2,21 @@ import type { KeyboardCommand, KeyboardCommandId, KeyboardCommandSettingsTitleKe
 
 export const defaultKeyboardCommands: readonly KeyboardCommand[] = [
     {
+        id: 'sessionList.filter.open',
+        settingsTitleKey: 'settingsKeyboard.commands.sessionListFilterOpen',
+        defaultBinding: { binding: 'Alt+F', platforms: ['web'], webHost: 'desktop' },
+        when: context => !context.isEditableTarget,
+    },
+    ...([1, 2, 3, 4, 5, 6, 7, 8, 9] as const).map((ordinal): KeyboardCommand => ({
+        id: `sessionList.space.select${ordinal}`,
+        settingsTitleKey: `settingsKeyboard.commands.sessionListSpaceSelect${ordinal}`,
+        defaultBindings: [
+            { binding: `Ctrl+${ordinal}`, platforms: ['macos'] },
+            { binding: `Alt+${ordinal}`, platforms: ['windows', 'linux'], blockedSurfaces: ['native'], webHost: 'desktop' },
+        ],
+        when: context => !context.isEditableTarget,
+    })),
+    {
         id: 'code.goToDefinition',
         settingsTitleKey: 'actionPresentation.titles.code_definition_get',
         defaultBinding: { binding: 'F12', allowInEditable: true, nativeConsumable: true },

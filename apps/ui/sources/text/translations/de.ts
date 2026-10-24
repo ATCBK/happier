@@ -11,6 +11,7 @@ import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { sessionListSpacesKeyboardTranslations } from './sessionListSpacesKeyboardTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
 import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
@@ -1457,6 +1458,7 @@ export const de: TranslationStructure = {
             codeProblemNext: 'Nächstes Problem',
             codeProblemPrevious: 'Vorheriges Problem',
     ...workspaceTabKeyboardTranslations,
+    ...sessionListSpacesKeyboardTranslations['de'],
     ...reviewKeyboardTranslations['de'],
     ...paneKeyboardTranslations['de'].commands,
     ...mediaKeyboardTranslations['de'],

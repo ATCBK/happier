@@ -11,6 +11,7 @@ import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
+import { sessionListSpacesKeyboardTranslations } from './sessionListSpacesKeyboardTranslations.shared';
 import { reviewKeyboardTranslations } from './reviewKeyboardTranslations.shared';
 import { paneArrangementTranslations, paneKeyboardTranslations, paneRegionLabels } from './paneKeyboardTranslations';
 import { mediaKeyboardTranslations } from './mediaKeyboardTranslations';
@@ -1873,6 +1874,7 @@ export const pt: TranslationStructure = {
             codeProblemNext: 'Próximo problema',
             codeProblemPrevious: 'Problema anterior',
     ...workspaceTabKeyboardTranslations,
+    ...sessionListSpacesKeyboardTranslations['pt'],
     ...reviewKeyboardTranslations['pt'],
     ...paneKeyboardTranslations['pt'].commands,
     ...mediaKeyboardTranslations['pt'],
