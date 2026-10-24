@@ -1,4 +1,5 @@
 import { getPreferredLanguage, t } from '@/text';
+import { parsePolicyDuration } from '@/components/machines/policy/policyDuration';
 
 /**
  * The choices of Keeping it tidy (plan 40 STO-21/22, R43): each continuous value lists its presets
@@ -12,10 +13,9 @@ export const SUGGEST_UNUSED_PRESET_DAYS = [14, 30, 90] as const;
 export const SCAN_TIME_PRESETS = ['00:00', '03:00', '06:00', '12:00', '18:00', '21:00'] as const;
 export const FOREVER_ID = 'forever';
 
-/** "30", "30 days", " 14d " → 14…; anything that is not a whole number of days from one is not a choice. */
+/** An explicit duration in whole days from one up. */
 export function parseCustomStorageDays(raw: string): number | null {
-    const value = Number(raw.trim().replace(/\s*(days?|d)$/iu, ''));
-    return Number.isInteger(value) && value >= 1 && value <= Number.MAX_SAFE_INTEGER ? value : null;
+    return parsePolicyDuration(raw, { unit: 'd', minimum: 1 });
 }
 
 /** "3:00", "03:00", "21:30" → the policy's 24-hour HH:mm. */

@@ -3,6 +3,7 @@ import type { MachineGuardViewV1 } from '@happier-dev/protocol/machines/guard/gu
 import type { GuardKeepReasonV1, MachineGuardLadderV1 } from '@happier-dev/protocol/machines/guard/guardViewV1';
 
 import { formatMachineCountdown, formatMachineDuration } from '@/components/machines/durationWords';
+import { parsePolicyDuration } from '@/components/machines/policy/policyDuration';
 import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
 import { getPreferredLanguage, t } from '@/text';
 import { joinList } from '@/utils/text/joinList';
@@ -34,24 +35,14 @@ export const CEILING_PRESET_BYTES = [2, 4, 8, 16, 32].map(gib => gib * 1024 ** 3
 export const CEILING_WARN_PRESETS = [80, 90, 95];
 export const PAUSE_FOR_MS = HOUR;
 
-/** "90", "90 min", "2 h", "1.5 h", "1 d" → milliseconds; a whole minute from one up, no upper bound. */
+/** An explicit duration in milliseconds, in whole minutes from one up. */
 export function parseCustomGuardMinutes(raw: string): number | null {
-    const match = /^\s*(\d+(?:[.,]\d+)?)\s*(m|min|mins|minutes?|h|hours?|d|days?)?\s*$/iu.exec(raw);
-    if (!match) return null;
-    const value = Number(match[1]!.replace(',', '.'));
-    const unit = (match[2] ?? 'min').toLowerCase();
-    const ms = Math.round(value * (unit.startsWith('d') ? 24 * HOUR : unit.startsWith('h') ? HOUR : MINUTE));
-    return ms >= MINUTE && ms % MINUTE === 0 && Number.isSafeInteger(ms) ? ms : null;
+    return parsePolicyDuration(raw, { unit: 'ms', minimum: MINUTE, step: MINUTE });
 }
 
-/** "45 s", "3 min", "0" → milliseconds; any whole second from zero up. */
+/** An explicit duration in milliseconds, in whole seconds from zero up. */
 export function parseCustomGuardGrace(raw: string): number | null {
-    const match = /^\s*(\d+(?:[.,]\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?)?\s*$/iu.exec(raw);
-    if (!match) return null;
-    const value = Number(match[1]!.replace(',', '.'));
-    const unit = (match[2] ?? 's').toLowerCase();
-    const ms = Math.round(value * (unit.startsWith('m') ? MINUTE : 1000));
-    return ms >= 0 && ms % 1000 === 0 && Number.isSafeInteger(ms) ? ms : null;
+    return parsePolicyDuration(raw, { unit: 'ms', minimum: 0, step: 1000 });
 }
 
 /** "12 GB", "1.5 TB", "800 MB" → bytes in the memory base (a ceiling is memory). */

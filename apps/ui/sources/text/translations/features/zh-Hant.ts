@@ -6320,8 +6320,8 @@ const machineDetailPageTranslations = { 'zh-Hant': translated({
                 },
                 customSustain: {
                     title: "持續時間",
-                    body: "任意整數分鐘，最長一週（10080）。",
-                    invalid: "請輸入 1 到 10080 之間的整數分鐘數。",
+                    body: "任意整數分鐘，最長一週（10080）。 請註明單位：ms、s、min、h 或 d。",
+                    invalid: "請輸入 1 到 10080 之間的整數分鐘數。 請註明單位：ms、s、min、h 或 d。",
                 },
                 customCpu: {
                     title: "CPU 高於",
@@ -6629,7 +6629,7 @@ const machineDetailPageTranslations = { 'zh-Hant': translated({
                     customTitle: "建議清理未使用項目的時間",
                 },
                 days: ({ days }) => `${days} 天`,
-                customDays: { body: "任意整數天數，1 或更大。", invalid: "請輸入整數天數，1 或更大。" },
+                customDays: { body: "任意整數天數，1 或更大。 請註明單位：ms、s、min、h 或 d。", invalid: "請輸入整數天數，1 或更大。 請註明單位：ms、s、min、h 或 d。" },
             },
             scope: {
                 label: "顯示範圍",
@@ -6894,8 +6894,8 @@ const machineDetailPageTranslations = { 'zh-Hant': translated({
                 milliseconds: ({ milliseconds }) => `${milliseconds} ms`,
                 customIdle: {
                     title: "閒置工具關閉時間",
-                    body: "輸入毫秒、秒、分鐘或小時；至少 1 秒。",
-                    invalid: "輸入至少 1 秒的時間長度。",
+                    body: "輸入毫秒、秒、分鐘或小時；至少 1 秒。 請註明單位：ms、s、min、h 或 d。",
+                    invalid: "輸入至少 1 秒的時間長度。 請註明單位：ms、s、min、h 或 d。",
                 },
                 customBrowsers: {
                     title: "瀏覽器並行數",
@@ -6951,7 +6951,7 @@ const machineDetailPageTranslations = { 'zh-Hant': translated({
                 sustainHelp: "構建時的短暫峰值絕不會觸發。",
                 cooldownTitle: "然後在兩步之間等待",
                 cooldownHelp: "每一步之後，Happier 會等待這麼久，並確認記憶體是否下降。",
-                customMinutes: { title: "持續時間", body: "任意整數分鐘，1 或更大，例如 3 或 90。", invalid: "請輸入整數分鐘數，1 或更大。" },
+                customMinutes: { title: "持續時間", body: "任意整數分鐘，1 或更大，例如 3 min 或 1.5 h。 請註明單位：ms、s、min、h 或 d。", invalid: "請輸入整數分鐘數，1 或更大。 請註明單位：ms、s、min、h 或 d。" },
             },
             ladder: {
                 label: "記憶體守護會做什麼",
@@ -7053,7 +7053,7 @@ const machineDetailPageTranslations = { 'zh-Hant': translated({
                 graceHelp: "給程序一點時間自行結束。",
                 atOnce: "立即",
                 seconds: ({ seconds }) => `${seconds} 秒`,
-                customGrace: { title: "等待多久", body: "秒或分鐘，例如 45 秒或 3 分鐘。", invalid: "請輸入秒數或分鐘數，0 或更大。" },
+                customGrace: { title: "等待多久", body: "秒或分鐘，例如 45 秒或 3 分鐘。 請註明單位：ms、s、min、h 或 d。", invalid: "請輸入秒數或分鐘數，0 或更大。 請註明單位：ms、s、min、h 或 d。" },
             },
             limits: {
                 title: "限制與電源",

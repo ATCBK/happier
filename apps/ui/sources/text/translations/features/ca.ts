@@ -6330,8 +6330,8 @@ const machineDetailPageTranslations = { ca: translated({
                 },
                 customSustain: {
                     title: "Durant quant de temps",
-                    body: "Qualsevol nombre enter de minuts, fins a una setmana (10080).",
-                    invalid: "Introdueix un nombre enter de minuts d’1 a 10080.",
+                    body: "Qualsevol nombre enter de minuts, fins a una setmana (10080). Indica una unitat: ms, s, min, h o d.",
+                    invalid: "Introdueix un nombre enter de minuts d’1 a 10080. Indica una unitat: ms, s, min, h o d.",
                 },
                 customCpu: {
                     title: "CPU per sobre de",
@@ -6639,7 +6639,7 @@ const machineDetailPageTranslations = { ca: translated({
                     customTitle: "Suggereix els elements sense ús al cap de",
                 },
                 days: ({ days }) => `${days} ${days === 1 ? 'dia' : 'dies'}`,
-                customDays: { body: "Qualsevol nombre enter de dies, 1 o més.", invalid: "Introdueix un nombre enter de dies, 1 o més." },
+                customDays: { body: "Qualsevol nombre enter de dies, 1 o més. Indica una unitat: ms, s, min, h o d.", invalid: "Introdueix un nombre enter de dies, 1 o més. Indica una unitat: ms, s, min, h o d." },
             },
             scope: {
                 label: "Què es mostra",
@@ -6904,8 +6904,8 @@ const machineDetailPageTranslations = { ca: translated({
                 milliseconds: ({ milliseconds }) => `${milliseconds} ms`,
                 customIdle: {
                     title: "Tancament d’eines inactives",
-                    body: "Introdueix mil·lisegons, segons, minuts o hores; com a mínim 1 segon.",
-                    invalid: "Introdueix una durada d’almenys 1 segon.",
+                    body: "Introdueix mil·lisegons, segons, minuts o hores; com a mínim 1 segon. Indica una unitat: ms, s, min, h o d.",
+                    invalid: "Introdueix una durada d’almenys 1 segon. Indica una unitat: ms, s, min, h o d.",
                 },
                 customBrowsers: {
                     title: "Navegadors simultanis",
@@ -6961,7 +6961,7 @@ const machineDetailPageTranslations = { ca: translated({
                 sustainHelp: "Un pic de compilació no ho activa mai.",
                 cooldownTitle: "Després espera entre passos",
                 cooldownHelp: "Després de cada pas, Happier espera aquest temps i comprova que la memòria ha baixat.",
-                customMinutes: { title: "Quant de temps", body: "Qualsevol nombre enter de minuts, 1 o més, com 3 o 90.", invalid: "Introdueix un nombre enter de minuts, 1 o més." },
+                customMinutes: { title: "Quant de temps", body: "Qualsevol nombre enter de minuts, 1 o més, com 3 min o 1.5 h. Indica una unitat: ms, s, min, h o d.", invalid: "Introdueix un nombre enter de minuts, 1 o més. Indica una unitat: ms, s, min, h o d." },
             },
             ladder: {
                 label: "El que faria la protecció de memòria",
@@ -7063,7 +7063,7 @@ const machineDetailPageTranslations = { ca: translated({
                 graceHelp: "Dona un moment a un procés per acabar per ell mateix.",
                 atOnce: "Immediatament",
                 seconds: ({ seconds }) => `${seconds} s`,
-                customGrace: { title: "Quant esperar", body: "Segons o minuts, com 45 s o 3 min.", invalid: "Introdueix un nombre de segons o minuts, 0 o més." },
+                customGrace: { title: "Quant esperar", body: "Segons o minuts, com 45 s o 3 min. Indica una unitat: ms, s, min, h o d.", invalid: "Introdueix un nombre de segons o minuts, 0 o més. Indica una unitat: ms, s, min, h o d." },
             },
             limits: {
                 title: "Límits i energia",

@@ -6348,8 +6348,8 @@ const machineDetailPageTranslations = { pl: translated({
                 },
                 customSustain: {
                     title: "Jak długo",
-                    body: "Dowolna liczba całkowita minut, do tygodnia (10080).",
-                    invalid: "Wpisz liczbę całkowitą minut od 1 do 10080.",
+                    body: "Dowolna liczba całkowita minut, do tygodnia (10080). Podaj jednostkę: ms, s, min, h lub d.",
+                    invalid: "Wpisz liczbę całkowitą minut od 1 do 10080. Podaj jednostkę: ms, s, min, h lub d.",
                 },
                 customCpu: {
                     title: "CPU powyżej",
@@ -6657,7 +6657,7 @@ const machineDetailPageTranslations = { pl: translated({
                     customTitle: "Sugeruj nieużywane elementy po",
                 },
                 days: ({ days }) => `${days} ${days === 1 ? 'dzień' : days % 10 >= 2 && days % 10 <= 4 && (days % 100 < 12 || days % 100 > 14) ? 'dni' : 'dni'}`,
-                customDays: { body: "Dowolna liczba całkowita dni, 1 lub więcej.", invalid: "Podaj całkowitą liczbę dni, 1 lub więcej." },
+                customDays: { body: "Dowolna liczba całkowita dni, 1 lub więcej. Podaj jednostkę: ms, s, min, h lub d.", invalid: "Podaj całkowitą liczbę dni, 1 lub więcej. Podaj jednostkę: ms, s, min, h lub d." },
             },
             scope: {
                 label: "Co pokazać",
@@ -6922,8 +6922,8 @@ const machineDetailPageTranslations = { pl: translated({
                 milliseconds: ({ milliseconds }) => `${milliseconds} ms`,
                 customIdle: {
                     title: "Zamykanie bezczynnych narzędzi",
-                    body: "Wpisz milisekundy, sekundy, minuty lub godziny; co najmniej 1 sekundę.",
-                    invalid: "Wpisz czas wynoszący co najmniej 1 sekundę.",
+                    body: "Wpisz milisekundy, sekundy, minuty lub godziny; co najmniej 1 sekundę. Podaj jednostkę: ms, s, min, h lub d.",
+                    invalid: "Wpisz czas wynoszący co najmniej 1 sekundę. Podaj jednostkę: ms, s, min, h lub d.",
                 },
                 customBrowsers: {
                     title: "Równoczesne przeglądarki",
@@ -6979,7 +6979,7 @@ const machineDetailPageTranslations = { pl: translated({
                 sustainHelp: "Skok podczas kompilacji nigdy tego nie uruchamia.",
                 cooldownTitle: "Potem czekaj między krokami",
                 cooldownHelp: "Po każdym kroku Happier czeka tyle czasu i sprawdza, czy pamięci ubyło.",
-                customMinutes: { title: "Jak długo", body: "Dowolna liczba całkowita minut, 1 lub więcej, np. 3 lub 90.", invalid: "Wpisz liczbę całkowitą minut, 1 lub więcej." },
+                customMinutes: { title: "Jak długo", body: "Dowolna liczba całkowita minut, 1 lub więcej, np. 3 min lub 1.5 h. Podaj jednostkę: ms, s, min, h lub d.", invalid: "Wpisz liczbę całkowitą minut, 1 lub więcej. Podaj jednostkę: ms, s, min, h lub d." },
             },
             ladder: {
                 label: "Co zrobiłaby ochrona pamięci",
@@ -7081,7 +7081,7 @@ const machineDetailPageTranslations = { pl: translated({
                 graceHelp: "Daje procesowi chwilę na samodzielne zakończenie.",
                 atOnce: "Od razu",
                 seconds: ({ seconds }) => `${seconds} s`,
-                customGrace: { title: "Jak długo czekać", body: "Sekundy lub minuty, np. 45 s lub 3 min.", invalid: "Wpisz liczbę sekund lub minut, 0 lub więcej." },
+                customGrace: { title: "Jak długo czekać", body: "Sekundy lub minuty, np. 45 s lub 3 min. Podaj jednostkę: ms, s, min, h lub d.", invalid: "Wpisz liczbę sekund lub minut, 0 lub więcej. Podaj jednostkę: ms, s, min, h lub d." },
             },
             limits: {
                 title: "Limity i zasilanie",

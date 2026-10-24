@@ -156,8 +156,12 @@ describe('GuardTab', () => {
             return { status: 'conflict', policy: MachineResourcesPolicyV1Schema.parse({ v: 1 }), revision: writes.length + 1 };
         } });
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-guard-tool-idle-select')).not.toBeNull()); });
-        const prompt = vi.spyOn(Modal, 'prompt').mockResolvedValueOnce('1001 ms').mockResolvedValueOnce('12');
+        const prompt = vi.spyOn(Modal, 'prompt').mockResolvedValueOnce('5000').mockResolvedValueOnce('1.001 s').mockResolvedValueOnce('12');
+        const alert = vi.spyOn(Modal, 'alert').mockImplementation(() => {});
         try {
+            await act(async () => { policyControl(screen, 'machine-guard-tool-idle-select').props.onSelect('custom'); });
+            await act(async () => { await vi.waitFor(() => expect(alert).toHaveBeenCalled()); });
+            expect(writes).toHaveLength(0);
             await act(async () => { policyControl(screen, 'machine-guard-tool-idle-select').props.onSelect('custom'); });
             await act(async () => { await vi.waitFor(() => expect(writes).toHaveLength(1)); });
             expect(writes[0]).toEqual({ processes: { toolIdleCloseMs: 1001 } });

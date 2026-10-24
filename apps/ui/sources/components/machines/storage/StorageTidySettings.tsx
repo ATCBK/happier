@@ -213,7 +213,7 @@ function DaysRow(props: Readonly<{
     const custom = React.useCallback(() => {
         fireAndForget((async () => {
             const raw = await Modal.prompt(customTitle, t('machineStorage.tidy.customDays.body'), {
-                defaultValue: days === null ? '' : String(days),
+                defaultValue: days === null ? '' : `${days} d`,
                 confirmText: t('common.save'),
             });
             if (raw === null) return;

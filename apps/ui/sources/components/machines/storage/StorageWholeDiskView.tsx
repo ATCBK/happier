@@ -203,7 +203,7 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
   const customAge = React.useCallback(() => {
     fireAndForget((async () => {
       const raw = await Modal.prompt(t('machineStorage.disk.olderThan'), t('machineStorage.tidy.customDays.body'), {
-        defaultValue: 'days' in oldAge ? String(oldAge.days) : '', confirmText: t('common.save'),
+        defaultValue: 'days' in oldAge ? `${oldAge.days} d` : '', confirmText: t('common.save'),
       });
       if (raw === null) return;
       const days = parseCustomStorageDays(raw);

@@ -28,7 +28,7 @@ type Failure = (row: GuardRowId) => string | null;
 
 function minutesCustom(value: number) {
     return { title: t('machineGuard.memory.customMinutes.title'), body: t('machineGuard.memory.customMinutes.body'),
-        invalid: t('machineGuard.memory.customMinutes.invalid'), defaultValue: String(Math.round(value / 60_000)), parse: parseCustomGuardMinutes };
+        invalid: t('machineGuard.memory.customMinutes.invalid'), defaultValue: `${value / 60_000} min`, parse: parseCustomGuardMinutes };
 }
 
 /**

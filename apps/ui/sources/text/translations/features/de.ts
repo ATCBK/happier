@@ -6322,8 +6322,8 @@ const machineDetailPageTranslations = { de: translated({
                 },
                 customSustain: {
                     title: "Wie lange",
-                    body: "Eine beliebige ganze Zahl an Minuten, bis zu einer Woche (10080).",
-                    invalid: "Gib eine ganze Zahl an Minuten von 1 bis 10080 ein.",
+                    body: "Eine beliebige ganze Zahl an Minuten, bis zu einer Woche (10080). Gib eine Einheit an: ms, s, min, h oder d.",
+                    invalid: "Gib eine ganze Zahl an Minuten von 1 bis 10080 ein. Gib eine Einheit an: ms, s, min, h oder d.",
                 },
                 customCpu: {
                     title: "CPU über",
@@ -6631,7 +6631,7 @@ const machineDetailPageTranslations = { de: translated({
                     customTitle: "Ungenutztes vorschlagen nach",
                 },
                 days: ({ days }) => `${days} ${days === 1 ? 'Tag' : 'Tage'}`,
-                customDays: { body: "Eine beliebige ganze Zahl von Tagen, 1 oder mehr.", invalid: "Gib eine ganze Zahl von Tagen ein, 1 oder mehr." },
+                customDays: { body: "Eine beliebige ganze Zahl von Tagen, 1 oder mehr. Gib eine Einheit an: ms, s, min, h oder d.", invalid: "Gib eine ganze Zahl von Tagen ein, 1 oder mehr. Gib eine Einheit an: ms, s, min, h oder d." },
             },
             scope: {
                 label: "Was angezeigt wird",
@@ -6896,8 +6896,8 @@ const machineDetailPageTranslations = { de: translated({
                 milliseconds: ({ milliseconds }) => `${milliseconds} ms`,
                 customIdle: {
                     title: "Inaktive Werkzeuge schließen",
-                    body: "Gib Millisekunden, Sekunden, Minuten oder Stunden ein; mindestens 1 Sekunde.",
-                    invalid: "Gib eine Dauer von mindestens 1 Sekunde ein.",
+                    body: "Gib Millisekunden, Sekunden, Minuten oder Stunden ein; mindestens 1 Sekunde. Gib eine Einheit an: ms, s, min, h oder d.",
+                    invalid: "Gib eine Dauer von mindestens 1 Sekunde ein. Gib eine Einheit an: ms, s, min, h oder d.",
                 },
                 customBrowsers: {
                     title: "Gleichzeitige Browser",
@@ -6953,7 +6953,7 @@ const machineDetailPageTranslations = { de: translated({
                 sustainHelp: "Eine Lastspitze beim Build löst nichts aus.",
                 cooldownTitle: "Dann zwischen den Schritten warten",
                 cooldownHelp: "Nach jedem Schritt wartet Happier so lange und prüft, ob der Speicher gesunken ist.",
-                customMinutes: { title: "Wie lange", body: "Eine ganze Zahl von Minuten, 1 oder mehr, etwa 3 oder 90.", invalid: "Gib eine ganze Zahl von Minuten ein, 1 oder mehr." },
+                customMinutes: { title: "Wie lange", body: "Eine ganze Zahl von Minuten, 1 oder mehr, etwa 3 min oder 1.5 h. Gib eine Einheit an: ms, s, min, h oder d.", invalid: "Gib eine ganze Zahl von Minuten ein, 1 oder mehr. Gib eine Einheit an: ms, s, min, h oder d." },
             },
             ladder: {
                 label: "Was der Speicherschutz tun würde",
@@ -7055,7 +7055,7 @@ const machineDetailPageTranslations = { de: translated({
                 graceHelp: "Gibt einem Prozess einen Moment, von selbst fertig zu werden.",
                 atOnce: "Sofort",
                 seconds: ({ seconds }) => `${seconds} s`,
-                customGrace: { title: "Wie lange warten", body: "Sekunden oder Minuten, etwa 45 s oder 3 min.", invalid: "Gib eine Anzahl Sekunden oder Minuten ein, 0 oder mehr." },
+                customGrace: { title: "Wie lange warten", body: "Sekunden oder Minuten, etwa 45 s oder 3 min. Gib eine Einheit an: ms, s, min, h oder d.", invalid: "Gib eine Anzahl Sekunden oder Minuten ein, 0 oder mehr. Gib eine Einheit an: ms, s, min, h oder d." },
             },
             limits: {
                 title: "Limits und Energie",

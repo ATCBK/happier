@@ -6320,8 +6320,8 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
                 },
                 customSustain: {
                     title: "持续时间",
-                    body: "任意整数分钟，最长一周（10080）。",
-                    invalid: "请输入 1 到 10080 之间的整数分钟数。",
+                    body: "任意整数分钟，最长一周（10080）。 请注明单位：ms、s、min、h 或 d。",
+                    invalid: "请输入 1 到 10080 之间的整数分钟数。 请注明单位：ms、s、min、h 或 d。",
                 },
                 customCpu: {
                     title: "CPU 高于",
@@ -6629,7 +6629,7 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
                     customTitle: "建议清理未使用项目的时间",
                 },
                 days: ({ days }) => `${days} 天`,
-                customDays: { body: "任意整数天数，1 或更大。", invalid: "请输入整数天数，1 或更大。" },
+                customDays: { body: "任意整数天数，1 或更大。 请注明单位：ms、s、min、h 或 d。", invalid: "请输入整数天数，1 或更大。 请注明单位：ms、s、min、h 或 d。" },
             },
             scope: {
                 label: "显示范围",
@@ -6894,8 +6894,8 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
                 milliseconds: ({ milliseconds }) => `${milliseconds} ms`,
                 customIdle: {
                     title: "闲置工具关闭时间",
-                    body: "输入毫秒、秒、分钟或小时；至少 1 秒。",
-                    invalid: "输入至少 1 秒的时长。",
+                    body: "输入毫秒、秒、分钟或小时；至少 1 秒。 请注明单位：ms、s、min、h 或 d。",
+                    invalid: "输入至少 1 秒的时长。 请注明单位：ms、s、min、h 或 d。",
                 },
                 customBrowsers: {
                     title: "浏览器并发数",
@@ -6951,7 +6951,7 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
                 sustainHelp: "构建时的短暂峰值绝不会触发。",
                 cooldownTitle: "然后在两步之间等待",
                 cooldownHelp: "每一步之后，Happier 会等待这么久，并确认内存是否下降。",
-                customMinutes: { title: "持续时间", body: "任意整数分钟，1 或更大，例如 3 或 90。", invalid: "请输入整数分钟数，1 或更大。" },
+                customMinutes: { title: "持续时间", body: "任意整数分钟，1 或更大，例如 3 min 或 1.5 h。 请注明单位：ms、s、min、h 或 d。", invalid: "请输入整数分钟数，1 或更大。 请注明单位：ms、s、min、h 或 d。" },
             },
             ladder: {
                 label: "内存守护会做什么",
@@ -7053,7 +7053,7 @@ const machineDetailPageTranslations = { 'zh-Hans': translated({
                 graceHelp: "给进程一点时间自行结束。",
                 atOnce: "立即",
                 seconds: ({ seconds }) => `${seconds} 秒`,
-                customGrace: { title: "等待多久", body: "秒或分钟，例如 45 秒或 3 分钟。", invalid: "请输入秒数或分钟数，0 或更大。" },
+                customGrace: { title: "等待多久", body: "秒或分钟，例如 45 秒或 3 分钟。 请注明单位：ms、s、min、h 或 d。", invalid: "请输入秒数或分钟数，0 或更大。 请注明单位：ms、s、min、h 或 d。" },
             },
             limits: {
                 title: "限制与电源",

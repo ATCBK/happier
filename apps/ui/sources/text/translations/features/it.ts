@@ -6330,8 +6330,8 @@ const machineDetailPageTranslations = { it: translated({
                 },
                 customSustain: {
                     title: "Per quanto tempo",
-                    body: "Qualsiasi numero intero di minuti, fino a una settimana (10080).",
-                    invalid: "Inserisci un numero intero di minuti da 1 a 10080.",
+                    body: "Qualsiasi numero intero di minuti, fino a una settimana (10080). Indica un’unità: ms, s, min, h o d.",
+                    invalid: "Inserisci un numero intero di minuti da 1 a 10080. Indica un’unità: ms, s, min, h o d.",
                 },
                 customCpu: {
                     title: "CPU sopra",
@@ -6639,7 +6639,7 @@ const machineDetailPageTranslations = { it: translated({
                     customTitle: "Suggerisci gli elementi inutilizzati dopo",
                 },
                 days: ({ days }) => `${days} ${days === 1 ? 'giorno' : 'giorni'}`,
-                customDays: { body: "Un numero intero di giorni, 1 o più.", invalid: "Inserisci un numero intero di giorni, 1 o più." },
+                customDays: { body: "Un numero intero di giorni, 1 o più. Indica un’unità: ms, s, min, h o d.", invalid: "Inserisci un numero intero di giorni, 1 o più. Indica un’unità: ms, s, min, h o d." },
             },
             scope: {
                 label: "Cosa mostrare",
@@ -6904,8 +6904,8 @@ const machineDetailPageTranslations = { it: translated({
                 milliseconds: ({ milliseconds }) => `${milliseconds} ms`,
                 customIdle: {
                     title: "Chiusura degli strumenti inattivi",
-                    body: "Inserisci millisecondi, secondi, minuti oppure ore; almeno 1 secondo.",
-                    invalid: "Inserisci una durata di almeno 1 secondo.",
+                    body: "Inserisci millisecondi, secondi, minuti oppure ore; almeno 1 secondo. Indica un’unità: ms, s, min, h o d.",
+                    invalid: "Inserisci una durata di almeno 1 secondo. Indica un’unità: ms, s, min, h o d.",
                 },
                 customBrowsers: {
                     title: "Browser simultanei",
@@ -6961,7 +6961,7 @@ const machineDetailPageTranslations = { it: translated({
                 sustainHelp: "Un picco durante una build non lo fa mai scattare.",
                 cooldownTitle: "Poi attendi tra un passo e l’altro",
                 cooldownHelp: "Dopo ogni passo Happier attende questo tempo e verifica che la memoria sia scesa.",
-                customMinutes: { title: "Per quanto", body: "Un numero intero di minuti, 1 o più, come 3 o 90.", invalid: "Inserisci un numero intero di minuti, 1 o più." },
+                customMinutes: { title: "Per quanto", body: "Un numero intero di minuti, 1 o più, come 3 min o 1.5 h. Indica un’unità: ms, s, min, h o d.", invalid: "Inserisci un numero intero di minuti, 1 o più. Indica un’unità: ms, s, min, h o d." },
             },
             ladder: {
                 label: "Cosa farebbe la protezione della memoria",
@@ -7063,7 +7063,7 @@ const machineDetailPageTranslations = { it: translated({
                 graceHelp: "Dà a un processo un momento per finire da solo.",
                 atOnce: "Subito",
                 seconds: ({ seconds }) => `${seconds} s`,
-                customGrace: { title: "Per quanto attendere", body: "Secondi o minuti, come 45 s o 3 min.", invalid: "Inserisci un numero di secondi o minuti, 0 o più." },
+                customGrace: { title: "Per quanto attendere", body: "Secondi o minuti, come 45 s o 3 min. Indica un’unità: ms, s, min, h o d.", invalid: "Inserisci un numero di secondi o minuti, 0 o più. Indica un’unità: ms, s, min, h o d." },
             },
             limits: {
                 title: "Limiti e alimentazione",

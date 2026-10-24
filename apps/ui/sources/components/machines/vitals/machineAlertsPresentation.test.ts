@@ -18,12 +18,14 @@ const off: MachineVitalsAlertsPolicyV1 = {
 
 describe('custom alert values (R43: the full meaningful range, bounded by units only)', () => {
   it('takes any whole minute from one minute up to the week the evaluator can read', () => {
-    expect(parseCustomSustainMinutes('7')).toBe(7);
+    expect(parseCustomSustainMinutes('7')).toBeNull();
+    expect(parseCustomSustainMinutes('7 min')).toBe(7);
     expect(parseCustomSustainMinutes(' 45 min ')).toBe(45);
-    expect(parseCustomSustainMinutes('10080')).toBe(10_080);
-    expect(parseCustomSustainMinutes('10081')).toBeNull();
-    expect(parseCustomSustainMinutes('0')).toBeNull();
-    expect(parseCustomSustainMinutes('2.5')).toBeNull();
+    expect(parseCustomSustainMinutes('7 d')).toBe(10_080);
+    expect(parseCustomSustainMinutes('10081 min')).toBeNull();
+    expect(parseCustomSustainMinutes('0 min')).toBeNull();
+    expect(parseCustomSustainMinutes('2.5 min')).toBeNull();
+    expect(parseCustomSustainMinutes('1.5 h')).toBe(90);
   });
 
   it('takes a CPU line between 1 and 100 percent', () => {

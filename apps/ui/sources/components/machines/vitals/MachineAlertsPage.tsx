@@ -362,8 +362,7 @@ function SustainSelect(
           t('machineVitals.alerts.customSustain.title'),
           t('machineVitals.alerts.customSustain.body'),
           {
-            defaultValue: String(minutes),
-            inputType: 'numeric',
+            defaultValue: `${minutes} min`,
             confirmText: t('common.save'),
           },
         );

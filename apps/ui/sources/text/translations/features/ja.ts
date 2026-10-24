@@ -6325,8 +6325,8 @@ const machineDetailPageTranslations = { ja: translated({
                 },
                 customSustain: {
                     title: "継続時間",
-                    body: "1 週間 (10080) までの整数の分数。",
-                    invalid: "1 から 10080 までの整数の分数を入力してください。",
+                    body: "1 週間 (10080) までの整数の分数。 単位を付けてください: ms、s、min、h、d。",
+                    invalid: "1 から 10080 までの整数の分数を入力してください。 単位を付けてください: ms、s、min、h、d。",
                 },
                 customCpu: {
                     title: "CPU がこの値超",
@@ -6634,7 +6634,7 @@ const machineDetailPageTranslations = { ja: translated({
                     customTitle: "未使用の項目を提案するまでの期間",
                 },
                 days: ({ days }) => `${days} 日`,
-                customDays: { body: "1 以上の整数の日数。", invalid: "1 以上の整数の日数を入力してください。" },
+                customDays: { body: "1 以上の整数の日数。 単位を付けてください: ms、s、min、h、d。", invalid: "1 以上の整数の日数を入力してください。 単位を付けてください: ms、s、min、h、d。" },
             },
             scope: {
                 label: "表示する範囲",
@@ -6899,8 +6899,8 @@ const machineDetailPageTranslations = { ja: translated({
                 milliseconds: ({ milliseconds }) => `${milliseconds} ms`,
                 customIdle: {
                     title: "アイドル状態のツールを閉じる",
-                    body: "ミリ秒、秒、分、時間で入力してください。最短は1秒です。",
-                    invalid: "1秒以上の時間を入力してください。",
+                    body: "ミリ秒、秒、分、時間で入力してください。最短は1秒です。 単位を付けてください: ms、s、min、h、d。",
+                    invalid: "1秒以上の時間を入力してください。 単位を付けてください: ms、s、min、h、d。",
                 },
                 customBrowsers: {
                     title: "ブラウザの同時実行数",
@@ -6956,7 +6956,7 @@ const machineDetailPageTranslations = { ja: translated({
                 sustainHelp: "ビルド中の一時的なスパイクでは動作しません。",
                 cooldownTitle: "ステップ間の待機時間",
                 cooldownHelp: "各ステップのあと、Happier はこの時間待ってメモリが減ったかを確認します。",
-                customMinutes: { title: "時間", body: "1 以上の整数の分数。例: 3 や 90。", invalid: "1 以上の整数の分数を入力してください。" },
+                customMinutes: { title: "時間", body: "1 以上の整数の分数。例: 3 min、1.5 h。 単位を付けてください: ms、s、min、h、d。", invalid: "1 以上の整数の分数を入力してください。 単位を付けてください: ms、s、min、h、d。" },
             },
             ladder: {
                 label: "メモリガードの動作内容",
@@ -7058,7 +7058,7 @@ const machineDetailPageTranslations = { ja: translated({
                 graceHelp: "プロセスが自力で終了するための猶予を与えます。",
                 atOnce: "すぐに",
                 seconds: ({ seconds }) => `${seconds} 秒`,
-                customGrace: { title: "待機時間", body: "秒または分。例: 45 秒や 3 分。", invalid: "0 以上の秒数または分数を入力してください。" },
+                customGrace: { title: "待機時間", body: "秒または分。例: 45 秒や 3 分。 単位を付けてください: ms、s、min、h、d。", invalid: "0 以上の秒数または分数を入力してください。 単位を付けてください: ms、s、min、h、d。" },
             },
             limits: {
                 title: "上限と電源",

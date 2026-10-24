@@ -1,6 +1,7 @@
 import type { MachineVitalsAlertsPolicyV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsAlertsV1';
 
 import type { MachineResourcesPolicyReadOnlyReason } from '@/sync/domains/machines/resources/machineResourcesPolicy';
+import { parsePolicyDuration } from '@/components/machines/policy/policyDuration';
 import { t } from '@/text';
 
 import { formatMachineDuration } from '../durationWords';
@@ -138,12 +139,7 @@ export const DISK_BYTES_PRESETS = [10e9, 20e9, 50e9, 100e9] as const;
 
 /** A whole number of minutes, one up to a week; anything else is not a sustain. */
 export function parseCustomSustainMinutes(raw: string): number | null {
-  const value = Number(raw.trim().replace(/\s*(min|m)$/iu, ''));
-  return Number.isInteger(value) &&
-    value >= 1 &&
-    value <= ALERT_SUSTAIN_MAX_MINUTES
-    ? value
-    : null;
+  return parsePolicyDuration(raw, { unit: 'min', minimum: 1, maximum: ALERT_SUSTAIN_MAX_MINUTES });
 }
 
 /** A busy line between 1 and 100 percent. */

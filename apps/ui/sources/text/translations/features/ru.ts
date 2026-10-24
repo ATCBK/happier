@@ -6357,8 +6357,8 @@ const machineDetailPageTranslations = { ru: translated({
                 },
                 customSustain: {
                     title: "Как долго",
-                    body: "Любое целое число минут, до недели (10080).",
-                    invalid: "Введите целое число минут от 1 до 10080.",
+                    body: "Любое целое число минут, до недели (10080). Укажите единицу: ms, s, min, h или d.",
+                    invalid: "Введите целое число минут от 1 до 10080. Укажите единицу: ms, s, min, h или d.",
                 },
                 customCpu: {
                     title: "CPU выше",
@@ -6666,7 +6666,7 @@ const machineDetailPageTranslations = { ru: translated({
                     customTitle: "Предлагать неиспользуемое через",
                 },
                 days: ({ days }) => `${days} ${days % 10 === 1 && days % 100 !== 11 ? 'день' : days % 10 >= 2 && days % 10 <= 4 && (days % 100 < 12 || days % 100 > 14) ? 'дня' : 'дней'}`,
-                customDays: { body: "Любое целое число дней, 1 или больше.", invalid: "Введите целое число дней, 1 или больше." },
+                customDays: { body: "Любое целое число дней, 1 или больше. Укажите единицу: ms, s, min, h или d.", invalid: "Введите целое число дней, 1 или больше. Укажите единицу: ms, s, min, h или d." },
             },
             scope: {
                 label: "Что показать",
@@ -6931,8 +6931,8 @@ const machineDetailPageTranslations = { ru: translated({
                 milliseconds: ({ milliseconds }) => `${milliseconds} ms`,
                 customIdle: {
                     title: "Закрытие неактивных инструментов",
-                    body: "Введите миллисекунды, секунды, минуты или часы; не менее 1 секунды.",
-                    invalid: "Введите длительность не менее 1 секунды.",
+                    body: "Введите миллисекунды, секунды, минуты или часы; не менее 1 секунды. Укажите единицу: ms, s, min, h или d.",
+                    invalid: "Введите длительность не менее 1 секунды. Укажите единицу: ms, s, min, h или d.",
                 },
                 customBrowsers: {
                     title: "Одновременные браузеры",
@@ -6988,7 +6988,7 @@ const machineDetailPageTranslations = { ru: translated({
                 sustainHelp: "Пик нагрузки при сборке его никогда не запускает.",
                 cooldownTitle: "Затем ждать между шагами",
                 cooldownHelp: "После каждого шага Happier ждёт это время и проверяет, снизилось ли использование памяти.",
-                customMinutes: { title: "Как долго", body: "Любое целое число минут, 1 или больше, например 3 или 90.", invalid: "Введите целое число минут, 1 или больше." },
+                customMinutes: { title: "Как долго", body: "Любое целое число минут, 1 или больше, например 3 min или 1.5 h. Укажите единицу: ms, s, min, h или d.", invalid: "Введите целое число минут, 1 или больше. Укажите единицу: ms, s, min, h или d." },
             },
             ladder: {
                 label: "Что сделала бы защита памяти",
@@ -7090,7 +7090,7 @@ const machineDetailPageTranslations = { ru: translated({
                 graceHelp: "Даёт процессу немного времени завершиться самому.",
                 atOnce: "Сразу",
                 seconds: ({ seconds }) => `${seconds} с`,
-                customGrace: { title: "Сколько ждать", body: "Секунды или минуты, например 45 с или 3 мин.", invalid: "Введите число секунд или минут, 0 или больше." },
+                customGrace: { title: "Сколько ждать", body: "Секунды или минуты, например 45 с или 3 мин. Укажите единицу: ms, s, min, h или d.", invalid: "Введите число секунд или минут, 0 или больше. Укажите единицу: ms, s, min, h или d." },
             },
             limits: {
                 title: "Лимиты и питание",

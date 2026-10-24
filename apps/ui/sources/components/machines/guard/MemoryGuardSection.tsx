@@ -43,7 +43,7 @@ export const MemoryGuardSection = React.memo(function MemoryGuardSection(props: 
     const failure = (id: GuardRowId) => props.failed.has(id) ? t('machineGuard.saveFailed', { machine: props.machineName }) : null;
     const guard = policy.memoryGuard;
     const minutes = (value: number) => ({ title: t('machineGuard.memory.customMinutes.title'), body: t('machineGuard.memory.customMinutes.body'),
-        invalid: t('machineGuard.memory.customMinutes.invalid'), defaultValue: String(Math.round(value / 60_000)), parse: parseCustomGuardMinutes });
+        invalid: t('machineGuard.memory.customMinutes.invalid'), defaultValue: `${value / 60_000} min`, parse: parseCustomGuardMinutes });
     const pauseLink = row.kind === 'paused'
         ? <TextLinkButton testID="machine-guard-memory-resume" tone="strong" label={t('machineGuard.memory.resumeNow')} disabled={!editable}
             onPress={() => save('memory', { memoryGuard: { pausedUntil: null } })} />

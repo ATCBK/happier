@@ -46,7 +46,7 @@ export const LeftBehindSection = React.memo(function LeftBehindSection(props: Re
                 <GuardSelectRow testID="machine-guard-grace" title={t('machineGuard.leftBehind.graceTitle')} subtitle={t('machineGuard.leftBehind.graceHelp')}
                     label={t('machineGuard.leftBehind.graceTitle')} value={rule.graceMs} format={formatGuardGrace} presets={LEFT_BEHIND_GRACE_PRESETS_MS}
                     custom={{ title: t('machineGuard.leftBehind.customGrace.title'), body: t('machineGuard.leftBehind.customGrace.body'),
-                        invalid: t('machineGuard.leftBehind.customGrace.invalid'), defaultValue: `${Math.round(rule.graceMs / 1000)} s`, parse: parseCustomGuardGrace }}
+                        invalid: t('machineGuard.leftBehind.customGrace.invalid'), defaultValue: `${rule.graceMs / 1000} s`, parse: parseCustomGuardGrace }}
                     editable={editable} failed={failure('grace')} awaiting={awaiting('grace')} onChange={graceMs => save('grace', { leftBehind: { graceMs } })} />
             ) : null}
         </ItemGroup>

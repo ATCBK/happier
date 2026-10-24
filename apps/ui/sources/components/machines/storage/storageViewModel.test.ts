@@ -177,11 +177,16 @@ describe('verdict chips (R42)', () => {
 
 describe('Custom… values (R43)', () => {
     it('takes any whole number of days from one, and a time of day', () => {
-        expect(parseCustomStorageDays('45')).toBe(45);
+        expect(parseCustomStorageDays('45')).toBeNull();
+        expect(parseCustomStorageDays('45 d')).toBe(45);
         expect(parseCustomStorageDays(' 400 days ')).toBe(400);
         expect(parseCustomStorageDays('1d')).toBe(1);
         expect(parseCustomStorageDays('0')).toBeNull();
         expect(parseCustomStorageDays('2.5')).toBeNull();
+        expect(parseCustomStorageDays('48 h')).toBe(2);
+        expect(parseCustomStorageDays('25 h')).toBeNull();
+        expect(parseCustomStorageDays('9007199254740991 d')).toBe(Number.MAX_SAFE_INTEGER);
+        expect(parseCustomStorageDays('9007199254740992 d')).toBeNull();
         expect(parseCustomScanTime('3:05')).toBe('03:05');
         expect(parseCustomScanTime('23:59')).toBe('23:59');
         expect(parseCustomScanTime('24:00')).toBeNull();

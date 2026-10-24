@@ -1,18 +1,11 @@
 import * as React from 'react';
 import type { MachineResourcesPolicyState } from '@/sync/domains/machines/resources/useMachineResourcesPolicy';
 import { formatElapsedDuration } from '@/components/machines/durationWords';
+import { parsePolicyDuration } from '@/components/machines/policy/policyDuration';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { GuardSelectRow } from './guardRows';
-
-function parseIdleDuration(raw: string): number | null {
-    const match = /^\s*(\d+(?:[.,]\d+)?)\s*(ms|s|sec|seconds?|m|min|minutes?|h|hours?)?\s*$/iu.exec(raw);
-    if (!match) return null;
-    const unit = (match[2] ?? 'ms').toLowerCase();
-    const value = Number(match[1]!.replace(',', '.')) * (unit === 'ms' ? 1 : unit.startsWith('h') ? 3_600_000 : unit.startsWith('m') ? 60_000 : 1000);
-    return Number.isSafeInteger(value) && value >= 1000 ? value : null;
-}
 
 /** Controls use the same resources document and Action as every other machine rule. */
 export function AgentToolsSection(props: Readonly<{ settings: MachineResourcesPolicyState; editable: boolean; machineName: string }>) {
@@ -35,7 +28,7 @@ export function AgentToolsSection(props: Readonly<{ settings: MachineResourcesPo
                     : t('machineGuard.tools.milliseconds', { milliseconds: value })}
             presets={[null, 300_000, 600_000, 1_800_000]} editable={props.editable} failed={failure('idle')}
             custom={{ title: t('machineGuard.tools.customIdle.title'), body: t('machineGuard.tools.customIdle.body'), invalid: t('machineGuard.tools.customIdle.invalid'),
-                defaultValue: `${policy.toolIdleCloseMs ?? 300_000} ms`, parse: parseIdleDuration }}
+                defaultValue: `${policy.toolIdleCloseMs ?? 300_000} ms`, parse: raw => parsePolicyDuration(raw, { unit: 'ms', minimum: 1000 }) }}
             onChange={toolIdleCloseMs => save('idle', { toolIdleCloseMs })} />
         <GuardSelectRow<number | null> testID="machine-guard-browser-limit" title={t('machineGuard.tools.browserTitle')}
             subtitle={t('machineGuard.tools.browserHelp')} label={t('machineGuard.tools.browserTitle')}
