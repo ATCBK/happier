@@ -181,6 +181,7 @@ function projectedActionToDefinition(
             plugin: action.surfaces.includes('plugin'),
         },
         inputHints: presentation.inputHints,
+        ...(action.sessionTarget === undefined ? {} : { sessionTarget: action.sessionTarget }),
         ...(sideEffectClass ? { sideEffectClass } : {}),
     });
 }

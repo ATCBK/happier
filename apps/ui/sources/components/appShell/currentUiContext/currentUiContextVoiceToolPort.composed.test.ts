@@ -3,12 +3,13 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { createHomeGovernanceHarness, createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { ModalProvider, useOptionalModal } from '@/modal';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { getStorage } from '@/sync/domains/state/storage';
 import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { parseToken } from '@/utils/auth/parseToken';
 
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
@@ -563,6 +564,7 @@ function withoutAbortSignalAny(): () => void {
 
 function createDaemonActionProjection(input: Readonly<{
     dangerLevel?: PluginProjectedActionV2['dangerLevel'];
+    sessionTarget?: PluginProjectedActionV2['sessionTarget'];
 }> = {}): PluginUiProjectionModel {
     const dangerLevel = input.dangerLevel ?? 'safe';
     const daemonAction = PluginProjectedActionV2Schema.parse({
@@ -574,6 +576,7 @@ function createDaemonActionProjection(input: Readonly<{
         surfaces: ['voice'],
         execution: { target: 'daemon' },
         dangerLevel,
+        ...(input.sessionTarget ? { sessionTarget: input.sessionTarget } : {}),
         ...(dangerLevel === 'safe'
             ? {}
             : { confirmation: { title: 'Confirm ticket creation' } }),
@@ -615,6 +618,17 @@ function requireActionInvoker(port: ReturnType<typeof createCurrentUiContextVoic
 }
 
 describe('current UI context Voice tool port', () => {
+    it('retains the strict daemon SessionTarget declaration in Voice discovery', () => {
+        const projection = createDaemonActionProjection({ sessionTarget: { field: 'sessionId', cardinality: 'one' } });
+        const port = createCurrentUiContextVoiceToolPort({
+            reader: { readCurrentUiContext: () => null, resolveCurrentUiCommand: () => null, subscribe: () => () => {} },
+            readProjection: () => projection, readNavigationBinding: () => null,
+        });
+        expect(port.listCurrentContributedActionDefinitions?.()).toEqual(expect.arrayContaining([
+            expect.objectContaining({ id: formatQualifiedPluginActionId(ACTION_ID), sessionTarget: { field: 'sessionId', cardinality: 'one' } }),
+        ]));
+    });
+
     it('resolves an opaque committed message reference after reverse CLI Action admission before the client handler sees text', async () => {
         const reference = { v: 1 as const, sessionId: 'message-session', messageId: 'committed-message', observedRevision: 'revision-1' };
         const snapshot = { sessionId: reference.sessionId, messageId: reference.messageId, observedRevision: reference.observedRevision,
@@ -781,14 +795,24 @@ describe('current UI context Voice tool port', () => {
         const initialState = getStorage().getState();
         const serverId = (await upsertAndActivateServer({ serverUrl: 'https://reverse-action.test', name: 'Reverse Action Home' })).id;
         getStorage().getState().activateProfileScope({ serverId, accountId: 'reverse-account' });
+        const token = createAccountTokenForTests('reverse-account');
         const credentials = await TokenStorage.setCredentialsForServerUrlWithRollback(
-            'https://reverse-action.test', { serverId }, { token: createAccountTokenForTests('reverse-account') },
+            'https://reverse-action.test', { serverId }, { token },
         );
         if (!credentials) throw new Error('Reverse Action Home credentials were not persisted');
-        setRuntimeFetch(async (url) => {
+        const machineBatchRequests: unknown[] = [];
+        setRuntimeFetch(async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/auth/ping') return Response.json({ ok: true });
             if (path === '/health') return Response.json({ status: 'ok' });
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+                expect(new URL(String(url)).origin).toBe('https://reverse-action.test');
+                expect(new Headers(init.headers).get('authorization')).toBe(`Bearer ${token}`);
+                const body: unknown = typeof init.body === 'string' ? JSON.parse(init.body) : init.body;
+                machineBatchRequests.push(body);
+                return createMachineReadBatchResponseFixture(body, id => id === 'machine-current-ui-client-action'
+                    ? createPlainMachineRowFixture({ id, accountId: 'reverse-account' }) : null);
+            }
             if (path === '/v1/machines/machine-current-ui-client-action') return Response.json({
                 machine: createPlainMachineRowFixture({ id: 'machine-current-ui-client-action', accountId: 'reverse-account' }),
             });
@@ -822,7 +846,7 @@ describe('current UI context Voice tool port', () => {
         }));
         await fixture.composition.unload();
         try {
-            await fixture.composition.reconcile([fixture.activation]);
+            expect(await fixture.composition.reconcile([fixture.activation])).toMatchObject([{ result: { ok: true } }]);
             const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
             const handler = createCurrentUiContributedActionRpcHandler({
                 machineId: CLIENT_ACTION_HOST_ORIGIN.machineId, serverId,
@@ -833,6 +857,7 @@ describe('current UI context Voice tool port', () => {
                 expectedContributorOccurrenceId: fixture.action.occurrenceId, defaultSessionId: 'invoking-session' }))
                 .toEqual({ ok: true, result: { navigated: true } });
             expect(viewedSessionId).toBe('created-session');
+            expect(machineBatchRequests).toContainEqual({ machineIds: ['machine-current-ui-client-action'] });
         } finally {
             unregister(); await fixture.composition.unload(); await credentials.rollback(); resetRuntimeFetch();
             getStorage().setState(initialState, true); invalidateAccountEncryptionModeCache();
@@ -1121,7 +1146,10 @@ describe('current UI context Voice tool port', () => {
             formatQualifiedPluginActionId({ pluginId: ACTION_ID.pluginId, localId: 'ui-only' }),
         )).resolves.toBeNull();
         expect(daemonRequests).toHaveLength(1);
-        expect(homes.requests.some(request => request.serverId === actionHomeId && request.path === '/v1/machines/machine-actions')).toBe(true);
+        const machineRead = homes.requests.find(request => request.serverId === actionHomeId
+            && request.path === '/v1/machines/read-batch');
+        expect(machineRead).toMatchObject({ input: { machineIds: ['machine-actions'] } });
+        expect(machineRead?.token && parseToken(machineRead.token)).toBe('current-ui-account');
         expect(daemonReply).toHaveBeenCalledWith(expect.objectContaining({
             machineId: ACTION_ORIGIN.machineId,
             method: RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ,
