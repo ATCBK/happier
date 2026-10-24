@@ -7,6 +7,9 @@ import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import { afterEach, describe, expect, it } from 'vitest';
+import { TriageEvidenceDisclosureProvider, type TriageDetailPrimaryWriteV1 } from '@happier-dev/triage-sources/ui';
+import { projectGithubRepositoryCapabilities } from '../../triage/capabilities.js';
+import { GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1 } from '../../triage/contribution.js';
 
 import {
   GITHUB_CONNECTED_ACCOUNT_PURPOSE,
@@ -78,6 +81,7 @@ function launchInput(): JsonValue {
         scopeLabel: 'octo-org/example-app',
         state: { presentation: 'active', nativeLabel: 'Open' },
         facts: [],
+        reviewRevision: { baseSha: 'a'.repeat(40), headSha: HEAD_REVISION, nativeRevision: HEAD_REVISION },
       },
       viewer: { involvement: [] },
     },
@@ -157,9 +161,14 @@ async function mountPanel(panel: string | (() => string), options: Readonly<{
   feedback?: (connection: string) => JsonValue;
   timeline?: (continuation: string | undefined) => JsonValue;
   checks?: JsonValue;
-  overview?: JsonValue;
+  overview?: JsonValue | Promise<JsonValue>;
+  translations?: Readonly<Record<string, string>>;
+  primaryWrites?: Array<TriageDetailPrimaryWriteV1 | null>;
+  primaryValue?: TriageDetailPrimaryWriteV1 | null;
+  writes?: Array<{ localId: string; input: unknown }>;
 }> = {}): Promise<PluginUiTestkit> {
   let detail!: PluginUiTestkit;
+  const offerPrimaryWrite = (write: TriageDetailPrimaryWriteV1 | null) => { options.primaryWrites?.push(write); };
   await act(async () => {
     detail = await createPluginUiTestkit({
       identity: { instanceId: `fixture-instance-panel-${panel}`, mountNonce: `fixture-mount-panel-${panel}` },
@@ -170,18 +179,28 @@ async function mountPanel(panel: string | (() => string), options: Readonly<{
         } : context);
         // The SDK artifact boundary returns an opaque UI element; the RNW host requires a real React element.
         if (body !== null && !React.isValidElement(body)) throw new Error('Expected a React-native author surface');
-        return options.visible === undefined ? body : <Tabs value={options.visible() ? 'source' : 'session'}
+        const offered = options.primaryWrites === undefined && options.primaryValue === undefined ? body : <TriageEvidenceDisclosureProvider disclosure={{
+          available: false, disclose: async () => ({ kind: 'inert' }),
+          primaryWrite: { value: options.primaryValue, offer: offerPrimaryWrite },
+        }}>{body}</TriageEvidenceDisclosureProvider>;
+        return options.visible === undefined ? offered : <Tabs value={options.visible() ? 'source' : 'session'}
           onValueChange={() => {}} ariaLabel="Detail planes" tabList="host">
-          <Tabs.Item value="source" title="Source" retention="retain">{body}</Tabs.Item>
+          <Tabs.Item value="source" title="Source" retention="retain">{offered}</Tabs.Item>
           <Tabs.Item value="session" title="Session" />
         </Tabs>;
       }),
-      surfaceContext: createSurfaceContextFixture(),
+      surfaceContext: createSurfaceContextFixture(options.translations === undefined ? {} : {
+        locale: 'fr', translations: options.translations,
+      }),
       adapter: createPluginUiRnwSemanticSurfaceAdapter(),
       launchInput: { ...(launchInput() as Record<string, JsonValue>), panel: typeof panel === 'string' ? panel : panel() } as JsonValue,
       handlers: {
         executeAction: async ({ action, input, signal }) => {
           const localId = (action as { localId: string }).localId;
+          if (localId === GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestMerge || localId === GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestMarkReady) {
+            options.writes?.push({ localId, input });
+            return { kind: 'refused', reason: 'state_changed' };
+          }
           if (localId === GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readCapabilities && options.readCapabilities !== undefined) return await options.readCapabilities(signal);
           if (localId === GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1.readFeedback && options.feedback !== undefined) {
             return options.feedback((input as { connection: string }).connection);
@@ -220,6 +239,116 @@ async function mountPanel(panel: string | (() => string), options: Readonly<{
 }
 
 describe('the GitHub detail as Triage panels', () => {
+  it('keeps the header write at detail lifetime without another Overview read when panels change or the body hides', async () => {
+    const offered: Array<TriageDetailPrimaryWriteV1 | null> = [];
+    const writes: Array<{ localId: string; input: unknown }> = [];
+    let panel = 'files';
+    let visible = true;
+    let capabilitiesReads = 0;
+    let resolveOverview!: (value: JsonValue) => void;
+    const overview = new Promise<JsonValue>((resolve) => { resolveOverview = resolve; });
+    const detail = await mountPanel(() => panel, { primaryWrites: offered, writes, overview, visible: () => visible,
+      readCapabilities: async () => {
+        capabilitiesReads += 1;
+        return { kind: 'capabilities', ...projectGithubRepositoryCapabilities({
+          kind: 'readable', repositoryId: '1296269', repositoryKey: 'octo-org/example-app',
+          mergeSettings: { merge: true, squash: false, rebase: null }, archived: false, hasIssues: true,
+        }) };
+      },
+    });
+    // The header remains visible while a sibling (for example Session) owns the body.
+    visible = false;
+    await act(async () => { await detail.updateSurface(createSurfaceContextFixture()); });
+    await act(async () => { resolveOverview({ ...(overviewAnswer() as Record<string, JsonValue>),
+      draft: false, mergeable: true, mergeableState: 'clean' }); });
+    expect(offered.at(-1)).toMatchObject({ title: 'Merge', disabledReason: null, pending: false });
+    visible = true;
+    await act(async () => { await detail.updateSurface(createSurfaceContextFixture()); });
+    for (const next of ['checks', 'activity', 'overview', 'files']) {
+      const before = offered.length;
+      panel = next;
+      await act(async () => { await detail.updateSurface(createSurfaceContextFixture()); });
+      expect(offered.at(-1)).toMatchObject({ title: 'Merge', disabledReason: null });
+      expect(offered.slice(before)).not.toContain(null);
+      expect(overviewReads).toHaveLength(1);
+      expect(capabilitiesReads).toBe(1);
+    }
+    const write = offered.at(-1);
+    if (!write) throw new Error('Expected a detail-owned primary write');
+    visible = false;
+    await act(async () => { await detail.updateSurface(createSurfaceContextFixture()); });
+    await act(async () => { await write.execute('merge'); });
+    expect(writes).toHaveLength(1);
+    await act(async () => { await detail.dispose(); });
+    mounted.splice(mounted.indexOf(detail), 1);
+    await act(async () => { await write.execute('merge'); });
+    expect(writes).toHaveLength(1);
+  });
+  it.each([false, true])('does not bypass the shared primary write in the source actions panel (draft=%s)', async (draft) => {
+    let invoked = 0;
+    const detail = await mountPanel('actions', {
+      primaryValue: draft ? { title: 'Mark ready', disabledReason: null, pending: false,
+        execute: async () => { invoked += 1; } } : null,
+      readCapabilities: async () => ({ kind: 'capabilities', ...projectGithubRepositoryCapabilities({
+        kind: 'readable', repositoryId: '1296269', repositoryKey: 'octo-org/example-app',
+        mergeSettings: { merge: true, squash: false, rebase: null }, archived: false, hasIssues: true,
+      }) }),
+    });
+    await expect(detail.queryByRole('button', { name: 'Merge pull request' })).resolves.toBeUndefined();
+    if (draft) {
+      const ready = await detail.getByRole('button', { name: 'Mark ready for review' });
+      await act(async () => { await detail.press(ready); });
+      expect(invoked).toBe(1);
+    } else await expect(detail.queryByRole('button', { name: 'Mark ready for review' })).resolves.toBeUndefined();
+  });
+  it('withdraws a primary write when the exact read finds a closed draft', async () => {
+    const offered: Array<TriageDetailPrimaryWriteV1 | null> = [];
+    await mountPanel('overview', { primaryWrites: offered,
+      overview: { ...(overviewAnswer() as Record<string, JsonValue>), state: 'closed', draft: true,
+        mergeable: false, mergeableState: 'dirty' },
+      readCapabilities: async () => ({ kind: 'capabilities', ...projectGithubRepositoryCapabilities({
+        kind: 'readable', repositoryId: '1296269', repositoryKey: 'octo-org/example-app',
+        mergeSettings: { merge: true, squash: false, rebase: null }, archived: false, hasIssues: true,
+      }) }),
+    });
+    expect(offered.at(-1)).toBeNull();
+  });
+  it.each([
+    { draft: true, mergeable: true, mergeableState: 'clean', title: 'Mark ready', disabled: false },
+    { draft: false, mergeable: false, mergeableState: 'dirty', title: 'Merge', disabled: true },
+    { draft: false, mergeable: true, mergeableState: 'blocked', title: 'Merge', disabled: true },
+    { draft: false, mergeable: true, mergeableState: 'clean', title: 'Merge', disabled: false },
+  ])('offers the source-owned header write truthfully ($mergeableState, draft=$draft)', async ({ title, disabled, ...facts }) => {
+    const offered: Array<TriageDetailPrimaryWriteV1 | null> = [];
+    const writes: Array<{ localId: string; input: unknown }> = [];
+    const exact = { ...(overviewAnswer() as Record<string, JsonValue>), ...facts };
+    const detail = await mountPanel('overview', { overview: exact, primaryWrites: offered, writes,
+      readCapabilities: async () => ({ kind: 'capabilities', ...projectGithubRepositoryCapabilities({
+        kind: 'readable', repositoryId: '1296269', repositoryKey: 'octo-org/example-app',
+        mergeSettings: { merge: true, squash: false, rebase: null }, archived: false, hasIssues: true,
+      }) }),
+    });
+    const write = offered.at(-1);
+    expect(write).toMatchObject({ title, pending: false });
+    expect(write?.disabledReason !== null).toBe(disabled);
+    expect(write?.methods?.map((method) => method.id) ?? []).toEqual(facts.draft ? [] : ['merge']);
+    expect(overviewReads).toHaveLength(1);
+    // Source-only facts/reads remain single-owned on ordinary host context arrivals.
+    await act(async () => { await detail.updateSurface(createSurfaceContextFixture()); });
+    expect(overviewReads).toHaveLength(1);
+    if (!write) throw new Error('Expected a primary write offer');
+    if (!facts.draft) {
+      await act(async () => { await write.execute('squash'); });
+      expect(writes).toHaveLength(0);
+    }
+    await act(async () => { await write.execute(facts.draft ? undefined : 'merge'); });
+    expect(writes).toHaveLength(disabled ? 0 : 1);
+    if (!disabled) expect(writes[0]).toMatchObject({
+      localId: facts.draft ? GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestMarkReady : GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestMerge,
+      input: { headRevision: HEAD_REVISION, ...(facts.draft ? {} : { mergeMethod: 'merge' }) },
+    });
+  });
+
   it.each([true, false])('reports an empty description only after a successful exact read (success=%s)', async (success) => {
     const detail = await mountPanel('overview', { overview: success
       ? { ...(overviewAnswer() as Record<string, JsonValue>), body: '' }
@@ -227,9 +356,19 @@ describe('the GitHub detail as Triage panels', () => {
     });
     if (success) await expect(detail.getByText('No description.')).resolves.toBeDefined();
     else {
-      expect(document.body.textContent).toContain('overview-read-refused');
+      expect(document.body.textContent).toContain('GitHub could not complete this read.');
+      expect(document.body.textContent).not.toContain('overview-read-refused');
       await expect(detail.queryByText('No description.')).resolves.toBeUndefined();
     }
+  });
+
+  it('renders a classified read failure through the shared translation owner without diagnostic codes', async () => {
+    const detail = await mountPanel('overview', {
+      overview: { kind: 'unavailable', failure: { class: 'authentication', code: 'source/unauthorized' } },
+      translations: { 'plugins.triage.sourceSettings.failure.authentication': 'Reconnectez cette source.' },
+    });
+    await expect(detail.getByText('Reconnectez cette source.')).resolves.toBeDefined();
+    expect(document.body.textContent).not.toContain('source/unauthorized');
   });
 
   it('does not claim empty comments when only the other feedback connections answered', async () => {
@@ -239,7 +378,8 @@ describe('the GitHub detail as Triage panels', () => {
         : { kind: connection, rows: [], omittedRowCount: 0, projectionTruncated: false },
       timeline: () => ({ kind: 'unavailable', failure: { class: 'transient', code: 'timeline-read-refused' } }),
     });
-    expect(document.body.textContent).toContain('comments-read-refused');
+    expect(document.body.textContent).toContain('GitHub could not complete this read.');
+    expect(document.body.textContent).not.toContain('comments-read-refused');
     await expect(detail.queryByText('0 comment(s) read.')).resolves.toBeUndefined();
     await expect(detail.queryByText('0 event(s) read.')).resolves.toBeUndefined();
     await expect(detail.queryByRole('heading', { name: 'Nothing has been said yet' })).resolves.toBeUndefined();

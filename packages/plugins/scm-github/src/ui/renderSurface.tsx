@@ -80,6 +80,7 @@ import {
   useExecutePluginAction,
   useReviewCommentProposalsForEntry,
   useSurfaceContext,
+  useTabPanelActivity,
   type ReviewCommentProposalReadV1,
   type MetadataEntry,
   type PluginActionExecution,
@@ -103,6 +104,9 @@ import {
   TriageStatusRow,
   TriageActivityTimeline,
   useTriagePostMutationCompletion,
+  useTriageEvidenceDisclosure,
+  useTriageDetailRequest,
+  type TriageDetailPrimaryWriteV1,
   type TriageActivityContinuationV1,
   type TriageActivityEventV1,
   type TriageActivityKindV1,
@@ -205,6 +209,8 @@ import {
   githubMutationMayHaveChangedProviderStateV1,
   githubOfferedMutationsV1,
   projectGithubMutationOutcomeV1,
+  projectGithubPrimaryWriteV1,
+  type GithubPrimaryWriteReasonV1,
   readGithubLabelsV1,
   readGithubNamesV1,
   type GithubMutationOutcomeV1,
@@ -564,7 +570,7 @@ type GithubWriteControllerV1 = Readonly<{
   /** `null` until one dispatch has settled; a press in flight settles nothing. */
   outcome: GithubMutationOutcomeV1 | null;
   pending: boolean;
-  run: (payload: GithubWritePayloadV1) => void;
+  run: (payload: GithubWritePayloadV1, signal?: AbortSignal) => Promise<void>;
 }>;
 
 type GithubWritePayloadV1 =
@@ -603,15 +609,13 @@ function useGithubWrite(
   const { execution, execute } = useExecutePluginAction(action);
   const [outcome, setOutcome] = React.useState<GithubMutationOutcomeV1 | null>(null);
 
-  const run = React.useCallback((payload: GithubWritePayloadV1) => {
+  const run = React.useCallback(async (payload: GithubWritePayloadV1, signal?: AbortSignal): Promise<void> => {
     setOutcome(null);
-    void (async () => {
-      const settled = await execute(payload);
-      const parsed = settled.status === 'success' ? parseResult(settled.result) : null;
-      const outcome = projectGithubMutationOutcomeV1(settled, parsed);
-      setOutcome(outcome);
-      onObserved(settled, outcome, localId);
-    })();
+    const settled = await execute(payload, signal === undefined ? undefined : { signal });
+    const parsed = settled.status === 'success' ? parseResult(settled.result) : null;
+    const outcome = projectGithubMutationOutcomeV1(settled, parsed);
+    setOutcome(outcome);
+    onObserved(settled, outcome, localId);
   }, [execute, localId, onObserved, parseResult]);
 
   return React.useMemo(
@@ -658,6 +662,78 @@ function parseIssueDeltaResult(value: unknown): GithubMutationResultV1 | null {
 function parseThreadResolutionResult(value: unknown): GithubMutationResultV1 | null {
   const parsed = GithubPullRequestThreadResolutionResultV1Schema.safeParse(value);
   return parsed.success ? parsed.data : null;
+}
+
+const PRIMARY_WRITE_REASONS: Readonly<Record<GithubPrimaryWriteReasonV1, string>> = {
+  reading: 'Reading the current pull request…',
+  unavailable: 'The current pull request could not be read.',
+  headUnknown: 'The head commit is not known yet.',
+  headChanged: 'New commits arrived. Re-read this pull request before changing it.',
+  conflicts: 'This pull request has merge conflicts.',
+  blocked: 'GitHub is blocking this merge.',
+  checksFailed: 'Required checks are failing.',
+  checksPending: 'Required checks are still running.',
+  reviewRequired: 'A required review is missing.',
+  changesRequested: 'Changes have been requested.',
+  mergeabilityUnknown: 'GitHub has not confirmed that this pull request is ready to merge.',
+  methodsUnknown: 'No enabled merge method has been reported by GitHub.',
+  archived: 'This repository is archived.',
+  unsupported: 'This repository does not support this change.',
+};
+
+/** The header and source controls share the incumbent writers and H2 projection. */
+function useGithubPrimaryWrite(input: TriageDetailSurfaceInputV1,
+  overview: GithubOverviewControllerV1,
+  capabilities: GithubReadStateV1<GithubRepositoryCapabilitiesV1>,
+  onObserved: GithubObservedEntryHandlerV1,
+  activity: ReturnType<typeof useTabPanelActivity>,
+): TriageDetailPrimaryWriteV1 | null {
+  const text = usePluginTranslation();
+  const { active, activeSignal } = activity;
+  const request = useTriageDetailRequest(input);
+  const routingToken = input.observation.locator.routingToken;
+  const head = input.observation.snapshot.reviewRevision?.headSha;
+  const presentation = input.observation.snapshot.state.presentation;
+  const merge = useGithubWrite(GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestMerge, parseMergeResult, onObserved);
+  const markReady = useGithubWrite(GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestMarkReady, parseMarkReadyResult, onObserved);
+  const projection = React.useMemo(() => projectGithubPrimaryWriteV1({ detail: input, overview: overview.value,
+    capabilities: capabilities.kind === 'ready' ? capabilities.value : null,
+    failed: overview.failure !== null || capabilities.kind === 'unavailable',
+  // An offer depends on write authority/head/state, not a newly parsed copy of
+  // title, links or the parent context. Publishing it must not create its own arrival.
+  }), [request, routingToken, head, presentation, overview.value, overview.failure, capabilities]);
+  const write = projection?.kind === 'markReady' ? markReady : merge;
+  const execute = React.useCallback(async (methodId?: string): Promise<void> => {
+    if (!active || activeSignal.aborted || projection === null || projection.reason !== null || write.pending
+      || write.outcome?.kind === 'uncertain' || write.outcome?.kind === 'unreadable') return;
+    if (projection.kind === 'markReady') {
+      const payload = buildGithubPullRequestMarkReadyInputV1(input);
+      if (payload !== null) await write.run(payload, activeSignal);
+    } else {
+      const method = projection.methods.find((candidate) => candidate === methodId);
+      if (method === undefined) return;
+      const payload = buildGithubPullRequestMergeInputV1(input, method);
+      if (payload !== null) await write.run(payload, activeSignal);
+    }
+  }, [active, activeSignal, request, routingToken, head, projection, write.pending, write.outcome, write.run]);
+  return React.useMemo(() => {
+    if (projection === null) return null;
+    const uncertain = write.outcome?.kind === 'uncertain' || write.outcome?.kind === 'unreadable';
+    const disabledReason = !active ? text('plugins.github.ui.primaryWrite.inactive', 'Open the source detail to make this change.')
+      : uncertain ? text('plugins.github.ui.mutations.uncertain.description', 'The outcome is unknown. Re-read the pull request before trying again.')
+      : projection.reason === null ? null : text(`plugins.github.ui.primaryWrite.${projection.reason}`, PRIMARY_WRITE_REASONS[projection.reason]);
+    return {
+      title: projection.kind === 'markReady' ? text('plugins.github.ui.primaryWrite.markReady', 'Mark ready')
+        : text('plugins.github.ui.primaryWrite.merge', 'Merge'),
+      disabledReason,
+      pending: write.pending,
+      ...(projection.kind === 'markReady' ? {} : { methods: projection.methods.map((method) => ({
+        id: method, title: text(MERGE_METHOD_COPY[method].key, MERGE_METHOD_COPY[method].fallback),
+      })) }),
+      ...(write.outcome === null ? {} : { feedback: <WriteOutcome outcome={write.outcome} /> }),
+      execute,
+    };
+  }, [active, execute, projection, text, write.outcome, write.pending]);
 }
 
 type GithubMergeSignatureStateV1 = Readonly<{
@@ -710,18 +786,20 @@ function MergeWrite({
   terminal,
   onObserved,
   capabilities,
+  primaryWrite,
 }: Readonly<{
   input: TriageDetailSurfaceInputV1;
   terminal: boolean;
   onObserved: GithubObservedEntryHandlerV1;
   capabilities: GithubReadStateV1<GithubRepositoryCapabilitiesV1>;
+  primaryWrite?: TriageDetailPrimaryWriteV1;
 }>): React.ReactElement {
   const text = usePluginTranslation();
-  const capabilityReason = githubOperationCapabilityReason(
+  const capabilityReason = primaryWrite === undefined ? githubOperationCapabilityReason(
     text,
     capabilities,
     'pullRequestMerge',
-  );
+  ) : primaryWrite.disabledReason;
   const [mergeMethod, setMergeMethod] = React.useState<GithubMergeMethodV1 | null>(null);
   const write = useGithubWrite(
     GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestMerge,
@@ -742,6 +820,7 @@ function MergeWrite({
   );
   const head = input.observation.snapshot.reviewRevision?.headSha;
   const allowedMethods = GITHUB_MERGE_METHODS_V1.filter((method) => {
+    if (primaryWrite !== undefined) return primaryWrite.methods?.some((choice) => choice.id === method) === true;
     if (capabilities.kind !== 'ready') return true;
     const availability = capabilities.value.mergeMethods[method];
     return availability.kind === 'available';
@@ -808,7 +887,7 @@ function MergeWrite({
           const chosen = GITHUB_MERGE_METHODS_V1.find((method) => method === value);
           if (chosen !== undefined) setMergeMethod(chosen);
         }}
-        disabled={write.pending || terminal}
+        disabled={(primaryWrite?.pending ?? write.pending) || terminal}
       />
       {head === undefined
         ? null
@@ -825,13 +904,14 @@ function MergeWrite({
         title="Merge pull request"
         titleKey="plugins.github.ui.mutations.merge"
         variant="primary"
-        busy={write.pending}
-        disabled={payload === null || write.pending || terminal}
+        busy={primaryWrite?.pending ?? write.pending}
+        disabled={payload === null || (primaryWrite?.pending ?? write.pending) || terminal}
         onPress={() => {
-          if (payload !== null) write.run(payload);
+          if (primaryWrite !== undefined) void primaryWrite.execute(mergeMethod ?? undefined);
+          else if (payload !== null) void write.run(payload);
         }}
       />
-      {write.outcome === null ? null : <WriteOutcome outcome={write.outcome} />}
+      {primaryWrite === undefined ? write.outcome === null ? null : <WriteOutcome outcome={write.outcome} /> : primaryWrite.feedback}
     </Stack>
   );
 }
@@ -888,6 +968,7 @@ function ExactWrite({
   onObserved,
   capabilities,
   operation,
+  primaryWrite,
 }: Readonly<{
   localId: string;
   payload: GithubWritePayloadV1 | null;
@@ -897,9 +978,10 @@ function ExactWrite({
   onObserved: GithubObservedEntryHandlerV1;
   capabilities: GithubReadStateV1<GithubRepositoryCapabilitiesV1>;
   operation: keyof GithubRepositoryCapabilitiesV1['operations'];
+  primaryWrite?: TriageDetailPrimaryWriteV1;
 }>): React.ReactElement {
   const text = usePluginTranslation();
-  const capabilityReason = githubOperationCapabilityReason(text, capabilities, operation);
+  const capabilityReason = primaryWrite === undefined ? githubOperationCapabilityReason(text, capabilities, operation) : primaryWrite.disabledReason;
   const write = useGithubWrite(localId, parseResult, onObserved);
   if (capabilityReason !== null) {
     return <UnavailableOperationWrite title={title} titleKey={titleKey} reason={capabilityReason} />;
@@ -910,13 +992,14 @@ function ExactWrite({
         title={title}
         titleKey={titleKey}
         variant="secondary"
-        busy={write.pending}
-        disabled={payload === null || write.pending}
+        busy={primaryWrite?.pending ?? write.pending}
+        disabled={payload === null || (primaryWrite?.pending ?? write.pending)}
         onPress={() => {
-          if (payload !== null) write.run(payload);
+          if (primaryWrite !== undefined) void primaryWrite.execute();
+          else if (payload !== null) void write.run(payload);
         }}
       />
-      {write.outcome === null ? null : <WriteOutcome outcome={write.outcome} />}
+      {primaryWrite === undefined ? write.outcome === null ? null : <WriteOutcome outcome={write.outcome} /> : primaryWrite.feedback}
     </Stack>
   );
 }
@@ -926,11 +1009,13 @@ function PullRequestHeadWrites({
   onObserved,
   capabilities,
   branchUpdateEligible,
+  primaryWrite,
 }: Readonly<{
   input: TriageDetailSurfaceInputV1;
   onObserved: GithubObservedEntryHandlerV1;
   capabilities: GithubReadStateV1<GithubRepositoryCapabilitiesV1>;
   branchUpdateEligible: boolean;
+  primaryWrite?: TriageDetailPrimaryWriteV1 | null;
 }>): React.ReactElement {
   const markReady = React.useMemo(() => buildGithubPullRequestMarkReadyInputV1(input), [input]);
   const updateBranch = React.useMemo(
@@ -939,7 +1024,7 @@ function PullRequestHeadWrites({
   );
   return (
     <Stack gap="medium">
-      {input.observation.snapshot.state.nativeLabel === 'Draft'
+      {(primaryWrite === undefined ? input.observation.snapshot.state.nativeLabel === 'Draft' : primaryWrite !== null && primaryWrite.methods === undefined)
         ? (
           <ExactWrite
             localId={GITHUB_TRIAGE_MUTATION_ACTION_IDS_V1.pullRequestMarkReady}
@@ -950,6 +1035,7 @@ function PullRequestHeadWrites({
             onObserved={onObserved}
             capabilities={capabilities}
             operation="pullRequestMarkReady"
+            {...(primaryWrite == null ? {} : { primaryWrite })}
           />
         )
         : null}
@@ -1617,8 +1703,10 @@ function GithubActionsPanel(props: Readonly<{
   onObserved: GithubObservedEntryHandlerV1;
   publicationProposals: ReviewCommentProposalReadV1;
   capabilities: GithubReadStateV1<GithubRepositoryCapabilitiesV1>;
+  overview: GithubOverviewControllerV1;
 }>): React.ReactElement | null {
-  const overview = useGithubOverview(props.input);
+  const primaryHost = useTriageEvidenceDisclosure().primaryWrite;
+  const sharedPrimary = primaryHost === undefined ? undefined : primaryHost.value ?? null;
   return (
     <WritesSection
       input={props.input}
@@ -1627,7 +1715,8 @@ function GithubActionsPanel(props: Readonly<{
       onObserved={props.onObserved}
       publicationProposals={props.publicationProposals}
       capabilities={props.capabilities}
-      overview={overview.value}
+      overview={props.overview.value}
+      {...(sharedPrimary === undefined ? {} : { primaryWrite: sharedPrimary })}
     />
   );
 }
@@ -1640,6 +1729,7 @@ function WritesSection({
   publicationProposals,
   capabilities,
   overview,
+  primaryWrite,
 }: Readonly<{
   input: TriageDetailSurfaceInputV1;
   kindId: GithubTriageKindIdV1;
@@ -1648,6 +1738,7 @@ function WritesSection({
   publicationProposals: ReviewCommentProposalReadV1;
   capabilities: GithubReadStateV1<GithubRepositoryCapabilitiesV1>;
   overview: Extract<GithubOverviewResultV1, { kind: 'overview' }> | null;
+  primaryWrite?: TriageDetailPrimaryWriteV1 | null;
 }>): React.ReactElement | null {
   const offered = githubOfferedMutationsV1({
     kindId,
@@ -1698,13 +1789,14 @@ function WritesSection({
               valueKey="plugins.github.ui.mutations.description"
               fallback="These change the pull request on GitHub itself. Each one asks you to confirm before anything is written."
             />
-            {offered.includes('merge')
+            {offered.includes('merge') && (primaryWrite === undefined || (primaryWrite !== null && primaryWrite.methods !== undefined))
               ? (
                 <MergeWrite
                   input={input}
                   terminal={mergeSignature.terminal}
                   onObserved={onObserved}
                   capabilities={capabilities}
+                  {...(primaryWrite?.methods === undefined ? {} : { primaryWrite })}
                 />
               )
               : null}
@@ -1715,6 +1807,7 @@ function WritesSection({
                     input={input}
                     onObserved={onObserved}
                     capabilities={capabilities}
+                    {...(primaryWrite === undefined ? {} : { primaryWrite })}
                     branchUpdateEligible={overview?.kindId === 'pull-request'
                       && overview.branchUpdateEligibility === 'behind'}
                   />
@@ -1977,6 +2070,7 @@ function OverviewPanel({
   capabilities: GithubReadStateV1<GithubRepositoryCapabilitiesV1>;
 }>): React.ReactElement {
   const text = usePluginTranslation();
+  // Whole-detail legacy presentation retains its manual, tab-owned read interval.
   const overview = useGithubOverview(input);
   const exact = overview.value;
   const statusLabel = githubOverviewStatusLabel(input, exact);
@@ -3819,14 +3913,15 @@ function GithubStoryOverview({
   kindId,
   locale,
   nowMs,
+  overview,
 }: Readonly<{
   input: TriageDetailSurfaceInputV1;
   kindId: GithubTriageKindIdV1;
   locale: string;
   nowMs: number;
+  overview: GithubOverviewControllerV1;
 }>): React.ReactElement {
   const text = usePluginTranslation();
-  const overview = useGithubOverview(input, { readWhenActive: true });
   const exact = overview.value;
   // The observation's own summary is the ask until the reader re-reads the
   // current description; neither is invented when both are absent.
@@ -3838,15 +3933,25 @@ function GithubStoryOverview({
         changes={kindId === 'pull-request' ? <GithubChangeStep input={input} overview={exact} /> : null}
         checks={kindId === 'pull-request' ? <GithubChecksStep input={input} /> : null}
         trailing={byline.length === 0 ? undefined : <Text variant="micro" tone="secondary" value={byline.join(' · ')} />}
-      >
-        <GithubOverviewReadFailure controller={overview} />
-        {overview.failure === null ? null : (
-          <RefreshRow
-            onRefresh={overview.refresh}
-            pending={overview.refreshing}
-            accessibilityLabel={text('plugins.github.ui.overview.reread', 'Re-read this overview from GitHub')}
+        notice={overview.failure === null ? undefined : (
+          // One line above the ask, beside its Re-read: the description it previews (the last read, or the
+          // list's own summary) stays readable instead of sitting under a whole-panel error.
+          <Status
+            tone="warning"
+            label={exact === null
+              ? text('plugins.github.ui.overview.unavailable', 'The current overview is unavailable')
+              : text('plugins.github.ui.overview.retained', 'Showing the last overview read')}
+            value={failureDescription(overview.failure, text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'), text)}
+            action={(
+              <RefreshRow
+                onRefresh={overview.refresh}
+                pending={overview.refreshing}
+                accessibilityLabel={text('plugins.github.ui.overview.reread', 'Re-read this overview from GitHub')}
+              />
+            )}
           />
         )}
+      >
         {ask === undefined || ask === null || ask.length === 0
           ? exact === null ? null : <Text variant="micro" tone="secondary" valueKey="plugins.github.ui.story.noDescription" fallback="No description." />
           : <GithubOverviewMarkdown body={ask} />}
@@ -3858,9 +3963,11 @@ function GithubStoryOverview({
 function GithubDetailBody({
   input: launched,
   kindId,
+  detailActivity,
 }: Readonly<{
   input: TriageDetailSurfaceInputV1;
   kindId: GithubTriageKindIdV1;
+  detailActivity: ReturnType<typeof useTabPanelActivity>;
 }>): React.ReactElement {
   const text = usePluginTranslation();
   const { locale } = useSurfaceContext();
@@ -3919,7 +4026,21 @@ function GithubDetailBody({
     launched.observation.entryRef.kindId,
   ]);
   const input = launched;
-  const capabilities = useGithubCapabilities(input);
+  const primaryHost = useTriageEvidenceDisclosure().primaryWrite;
+  const tabActivity = useTabPanelActivity();
+  const publishesPrimaryWrite = primaryHost !== undefined && input.panel !== undefined && input.panel !== 'actions';
+  // The header is outside the body tabs. Its facts and confirmed writer belong
+  // to this mounted detail, even while a sibling tab hides the source body.
+  const activity = publishesPrimaryWrite ? detailActivity : tabActivity;
+  const capabilities = useGithubCapabilities(input, activity);
+  const overview = useGithubOverview(input, { readWhenActive: input.panel === 'overview' || publishesPrimaryWrite, activity });
+  const primaryWrite = useGithubPrimaryWrite(input, overview, capabilities, onObserved, activity);
+  const publishPrimaryWrite = primaryHost?.offer;
+  React.useLayoutEffect(() => {
+    if (publishPrimaryWrite === undefined || !publishesPrimaryWrite) return undefined;
+    publishPrimaryWrite(primaryWrite);
+    return () => { publishPrimaryWrite(null); };
+  }, [publishesPrimaryWrite, primaryWrite, publishPrimaryWrite]);
   const body = React.useMemo(() => projectGithubDetailBody(input), [input]);
   const publicationProposals = useReviewCommentProposalsForEntry({
     linkedSessionIds: input.linkedSessions.map((linked) => linked.sessionId),
@@ -3977,7 +4098,7 @@ function GithubDetailBody({
             .filter((declaration) => ['overview', 'timeline', 'files', 'checks'].includes(declaration.id))
             .map((declaration) => [declaration.id === 'timeline' ? 'activity' : declaration.id, declaration.retention]))}
           panels={{
-            overview: <GithubStoryOverview input={input} kindId={kindId} locale={locale} nowMs={nowMs} />,
+            overview: <GithubStoryOverview input={input} kindId={kindId} locale={locale} nowMs={nowMs} overview={overview} />,
             activity: kindId === 'pull-request'
               ? (
                 <PullRequestActivityPanel
@@ -3999,6 +4120,7 @@ function GithubDetailBody({
                 onObserved={onObserved}
                 publicationProposals={publicationProposals}
                 capabilities={capabilities}
+                overview={overview}
               />
             ),
           }}
@@ -4042,6 +4164,10 @@ function GithubDetailBody({
 }
 
 function GithubDetailSurface(context: RenderContext): React.ReactElement {
+  const detailActivity = React.useMemo(() => ({
+    active: context.activity?.active !== false,
+    activeSignal: context.signal,
+  }), [context.activity?.active, context.signal]);
   const admitted = React.useMemo(() => {
     const parsed = TriageDetailSurfaceInputV1Schema.safeParse(context.launchInput);
     if (!parsed.success) return { ok: false as const };
@@ -4066,7 +4192,7 @@ function GithubDetailSurface(context: RenderContext): React.ReactElement {
     );
   }
 
-  return <TriageDetailInstance><GithubDetailBody input={admitted.input} kindId={admitted.kindId} /></TriageDetailInstance>;
+  return <TriageDetailInstance><GithubDetailBody input={admitted.input} kindId={admitted.kindId} detailActivity={detailActivity} /></TriageDetailInstance>;
 }
 
 /**

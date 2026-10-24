@@ -84,6 +84,49 @@ import {
   type GithubPullRequestUpdateBranchResultV1,
 } from '../../triage/mutations/contracts.js';
 import type { GithubTriageKindIdV1 } from '../../triage/types.js';
+import type { GithubRepositoryCapabilitiesV1 } from '../../triage/capabilities.js';
+import type { GithubOverviewValueV1 } from './panelReaders.js';
+
+export type GithubPrimaryWriteReasonV1 = 'reading' | 'unavailable' | 'headChanged' | 'headUnknown'
+  | 'conflicts' | 'blocked' | 'checksFailed' | 'checksPending' | 'reviewRequired' | 'changesRequested'
+  | 'mergeabilityUnknown' | 'methodsUnknown' | 'archived' | 'unsupported';
+
+/** Presentation of the existing write, from H2 native facts; GitHub still authorizes it. */
+export function projectGithubPrimaryWriteV1(input: Readonly<{
+  detail: TriageDetailSurfaceInputV1;
+  overview: GithubOverviewValueV1 | null;
+  capabilities: GithubRepositoryCapabilitiesV1 | null;
+  failed: boolean;
+}>): Readonly<{ kind: 'merge' | 'markReady'; reason: GithubPrimaryWriteReasonV1 | null; methods: readonly GithubMergeMethodV1[] }> | null {
+  const { detail, overview, capabilities } = input;
+  if (detail.observation.entryRef.kindId !== 'pull-request'
+    || !githubOfferedMutationsV1({ kindId: 'pull-request', state: detail.observation.snapshot.state }).includes('merge')) return null;
+  const exact = overview?.kindId === 'pull-request' ? overview : null;
+  const kind: 'markReady' | 'merge' = exact?.draft === true ? 'markReady' : 'merge';
+  const methods = kind === 'markReady' || capabilities === null ? []
+    : GITHUB_MERGE_METHODS_V1.filter((method) => capabilities.mergeSettings?.[method] === true
+      && capabilities.mergeMethods[method].kind === 'available');
+  const answer = (reason: GithubPrimaryWriteReasonV1 | null) => ({ kind, reason, methods });
+  if (input.failed) return answer('unavailable');
+  if (exact === null || capabilities === null) return answer('reading');
+  const availability = capabilities.operations[kind === 'markReady' ? 'pullRequestMarkReady' : 'pullRequestMerge'];
+  if (availability.kind !== 'available') return answer(availability.code === 'repository_archived' ? 'archived' : 'unsupported');
+  const head = detail.observation.snapshot.reviewRevision?.headSha;
+  if (head === undefined || exact.headRevision === undefined) return answer('headUnknown');
+  if (head !== exact.headRevision) return answer('headChanged');
+  if (exact.merged === true || (exact.state !== undefined && exact.state !== 'open')) return null;
+  if (kind === 'markReady') return answer(null);
+  if (exact.mergeable === false) return answer('conflicts');
+  if (exact.mergeableState === 'blocked') {
+    if (exact.requiredChecks?.state === 'failed') return answer('checksFailed');
+    if (exact.requiredChecks?.state === 'pending') return answer('checksPending');
+    if (exact.reviewDecision === 'changes-requested') return answer('changesRequested');
+    if (exact.reviewDecision === 'review-required') return answer('reviewRequired');
+    return answer('blocked');
+  }
+  if (exact.mergeable !== true || exact.mergeableState !== 'clean' || exact.draft === undefined) return answer('mergeabilityUnknown');
+  return answer(methods.length === 0 ? 'methodsUnknown' : null);
+}
 
 /**
  * GitHub's own merge-method vocabulary, in the order the chooser offers it.

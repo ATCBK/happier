@@ -106,6 +106,7 @@ export function useGithubRoutingToken(input: TriageDetailSurfaceInputV1): string
 /** One mount-owned repository capability read shared by every write control. */
 export function useGithubCapabilities(
   input: TriageDetailSurfaceInputV1,
+  activity?: ReturnType<typeof useTabPanelActivity>,
 ): GithubReadStateV1<GithubRepositoryCapabilitiesV1> {
   const action = useMemo(() => ({
     pluginId: GITHUB_PLUGIN_ID,
@@ -115,7 +116,8 @@ export function useGithubCapabilities(
   const request = useTriageDetailRequest(input);
   const { instance, localRef } = request;
   const routingToken = useGithubRoutingToken(input);
-  const { active, activeSignal } = useTabPanelActivity();
+  const tabActivity = useTabPanelActivity();
+  const { active, activeSignal } = activity ?? tabActivity;
   const [state, setState] = useState<GithubReadStateV1<GithubRepositoryCapabilitiesV1>>(
     { kind: 'loading' },
   );
@@ -187,7 +189,7 @@ export type GithubOverviewControllerV1 = Readonly<{
  */
 export function useGithubOverview(
   input: TriageDetailSurfaceInputV1,
-  options: Readonly<{ readWhenActive?: boolean }> = {},
+  options: Readonly<{ readWhenActive?: boolean; activity?: ReturnType<typeof useTabPanelActivity> }> = {},
 ): GithubOverviewControllerV1 {
   const action = useMemo(() => ({
     pluginId: GITHUB_PLUGIN_ID,
@@ -196,7 +198,8 @@ export function useGithubOverview(
   const { execute } = useExecutePluginAction(action);
   const { instance, localRef } = useTriageDetailRequest(input);
   const routingToken = useGithubRoutingToken(input);
-  const { active, activeSignal } = useTabPanelActivity();
+  const tabActivity = useTabPanelActivity();
+  const { active, activeSignal } = options.activity ?? tabActivity;
   const [state, setState] = useState<Readonly<{
     value: GithubOverviewValueV1 | null;
     refreshing: boolean;
