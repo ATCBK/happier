@@ -1686,8 +1686,8 @@ describe('/session/[id]/info', () => {
         expect(itemByTitle('sessionInfo.copyMetadata')?.props.onPress).toBeUndefined();
     });
 
-    it('wires developer debug information through item-local copy feedback and omits unknown provider artifact lines', async () => {
-        localDevModeEnabled = true;
+    it('offers session information copying outside developer mode and omits unknown provider artifact lines', async () => {
+        localDevModeEnabled = false;
         mockAgentCore = {
             resume: {
                 vendorResumeIdField: 'codexSessionId',

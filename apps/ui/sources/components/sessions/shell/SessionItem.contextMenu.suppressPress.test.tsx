@@ -22,7 +22,7 @@ vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
     DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
 }));
 
-vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => undefined) }));
+vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => true) }));
 
 vi.mock('@/utils/sessions/sessionUtils', () => ({
     getSessionName: () => 'Session',
@@ -324,7 +324,10 @@ describe('SessionItem context menu press suppression', () => {
         expect(hasRenameMenuItem(menus[0].props.items)).toBe(true);
     });
 
-    it('shows the copy information context menu item in developer-mode builds', async () => {
+    it.each(['ios', 'android', 'web'] as const)('copies session information outside developer mode on %s', async (platform) => {
+        platformOs = platform;
+        localDevModeEnabled = false;
+        const Clipboard = await import('expo-clipboard');
         const session = createSessionFixture({
             id: 'sess_debug_menu',
             active: false,
@@ -354,9 +357,17 @@ describe('SessionItem context menu press suppression', () => {
             />,
         );
 
-        let menus = screen.tree.root.findAllByType('DropdownMenu' as React.ElementType);
+        if (platform === 'web') {
+            const hoverContainer = screen.root.findAll((node) => typeof node.props.onPointerEnter === 'function')[0];
+            await act(async () => hoverContainer?.props.onPointerEnter());
+        }
+        const menus = screen.tree.root.findAllByType('DropdownMenu' as React.ElementType);
         expect(menus).toHaveLength(1);
         expect(hasCopyDebugInformationMenuItem(menus[0].props.items)).toBe(true);
+        await act(async () => {
+            await menus[0].props.onSelect('session.copyDebugInformation');
+        });
+        expect(Clipboard.setStringAsync).toHaveBeenCalledWith(expect.stringContaining('Happier session ID: sess_debug_menu'));
     });
 
     it('copies debug information from the full cached session when row metadata is list-projected', async () => {

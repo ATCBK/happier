@@ -9,19 +9,13 @@ import {
     WEB_START_ELLIPSIS_CONTAINER_TEXT_STYLE,
     WEB_START_ELLIPSIS_CONTENT_TEXT_STYLE,
 } from '@/components/ui/text/webStartEllipsisTextStyles';
-import {
-    DEFAULT_AGENT_ID,
-    getAgentCore,
-    resolveAgentIdFromFlavor,
-} from '@/agents/catalog/catalog';
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { Typography } from '@/constants/Typography';
 import { formatPendingCountBadge } from '@/components/sessions/pendingBadge';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { t } from '@/text';
 import type { SessionListSecondaryLineMode } from '@/sync/domains/session/listing/deriveSessionListActivity';
 import { Session } from '@/sync/domains/state/storageTypes';
-import { storage, useLocalSetting } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storage';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { PinIcon, PinSlashIcon } from './sessionPinIcons';
 import { TagIcon } from './sessionTagIcons';
@@ -73,9 +67,7 @@ import {
 import { useOptionalSessionListSelectionRow } from './selection/SessionListSelectionContext';
 import { resolveSessionListSelectionPointerAction } from './selection/sessionListSelectionPointer';
 import {
-    buildSessionDebugInformation,
-    isSessionDebugInformationEnabled,
-    resolveProviderSessionIdForDebug,
+    buildSessionDebugInformationForSession,
 } from '@/components/sessions/debug/sessionDebugInformation';
 import { copySessionDebugInformationToClipboard } from '@/components/sessions/debug/sessionDebugClipboard';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -731,8 +723,6 @@ const SessionItemContent = React.memo(
         // session is held in the working group while its live signals are
         // stale, so animating would misrepresent live activity.
         const attentionIndicatorAnimationEnabled = rowAttentionAnimationEnabled && workingIndicatorPaused !== true;
-        const localDevModeEnabled = useLocalSetting('devModeEnabled');
-        const devModeEnabled = isSessionDebugInformationEnabled(localDevModeEnabled);
         const router = useRouter();
         const agentSwitchingEnabled = useFeatureEnabled('sessions.agentSwitching', {
             scopeKind: 'spawn',
@@ -809,23 +799,7 @@ const SessionItemContent = React.memo(
         const rowActionIconColor = theme.colors.text.secondary;
         const resolveSessionDebugInformation = React.useCallback(() => {
             const fullSession = storage.getState().sessions[resolvedSession.id];
-            const debugSession = fullSession ?? resolvedSession;
-            const debugMetadata = debugSession.metadata ?? resolvedSession.metadata;
-            const debugAgentId = resolveAgentIdFromSessionMetadata(debugMetadata)
-                ?? resolveAgentIdFromFlavor(debugMetadata?.flavor)
-                ?? resolveAgentIdFromSessionMetadata(resolvedSession.metadata)
-                ?? resolveAgentIdFromFlavor(resolvedSession.metadata?.flavor)
-                ?? DEFAULT_AGENT_ID;
-            const debugAgentCore = getAgentCore(debugAgentId);
-            const providerSessionId = resolveProviderSessionIdForDebug({
-                metadata: debugMetadata,
-                vendorResumeIdField: debugAgentCore.resume.vendorResumeIdField,
-            });
-            return buildSessionDebugInformation({
-                session: debugSession,
-                providerDisplayName: t(debugAgentCore.displayNameKey),
-                providerSessionId,
-            });
+            return buildSessionDebugInformationForSession(fullSession?.metadata ? fullSession : resolvedSession);
         }, [resolvedSession]);
         const confirmDeleteDraft = React.useCallback(async () => {
             if (!draft || !onDeleteDraft) return;
@@ -895,9 +869,7 @@ const SessionItemContent = React.memo(
                     icon: <Icon name="trash" size={16} color={rowActionIconColor} />,
                 });
             }
-            if (devModeEnabled) {
-                items.push(createCopySessionDebugInformationMenuItem({ iconColor: rowActionIconColor }));
-            }
+            items.push(createCopySessionDebugInformationMenuItem({ iconColor: rowActionIconColor }));
             if (showForkAction) {
                 items.push({
                     id: 'session.fork',
@@ -907,7 +879,7 @@ const SessionItemContent = React.memo(
                 });
             }
             return items;
-        }, [devModeEnabled, draft, onDeleteDraft, rowActionIconColor, showForkAction]);
+        }, [draft, onDeleteDraft, rowActionIconColor, showForkAction]);
         const handleSelectLeadingMenuItem = React.useCallback(async (itemId: string) => {
             if (itemId === SESSION_DELETE_DRAFT_MENU_ITEM_ID) {
                 await confirmDeleteDraft();

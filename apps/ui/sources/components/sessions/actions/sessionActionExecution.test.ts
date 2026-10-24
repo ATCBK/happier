@@ -365,7 +365,7 @@ describe('executeSessionAction', () => {
 
     it('does not silently ignore local action ids without an injected operation', async () => {
         await expect(executeSessionAction({
-            actionId: SESSION_ACTION_PIN_ID,
+            actionId: SESSION_ACTION_EDIT_TAGS_ID,
             target: createTarget(),
         })).rejects.toBeInstanceOf(HappyError);
     });

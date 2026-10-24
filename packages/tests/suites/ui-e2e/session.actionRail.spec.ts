@@ -134,6 +134,23 @@ test.describe('ui e2e: session action rail', () => {
       await mutateUiE2eScopedAccountSettings({ page, experiments: true, featureToggles: { 'terminal.embeddedPty': true } });
       await mutateUiE2eLocalSettings({ page, settingsPatch: { themePreference: 'light', embeddedTerminalDockLocation: 'bottom', uiContentWidthMode: 'compact' } });
       await page.goto(sessionUrl, { waitUntil: 'domcontentloaded' });
+      await test.step('the header pins the session and copies its information without developer mode', async () => {
+        const menu = page.getByTestId('session-header-action-menu-trigger');
+        await expect(menu).toBeVisible({ timeout: 180_000 });
+        await menu.click();
+        await page.getByTestId('dropdown-option-ui_session_pin').click();
+        await expect(page.getByTestId('session-list-header:pinned-v1')).toBeVisible();
+        await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+        await menu.click();
+        await expect(page.getByTestId('dropdown-option-ui_session_unpin')).toBeVisible();
+        await page.getByTestId('dropdown-option-session_copyDebugInformation').click();
+        await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toContain(`Happier session ID: ${sessionId}`);
+        await menu.click();
+        await page.screenshot({ path: testInfo.outputPath('session-header-pinned-copy-information.png') });
+        await page.getByTestId('dropdown-option-ui_session_unpin').click();
+        await expect(page.getByTestId('session-list-header:pinned-v1')).toHaveCount(0);
+      });
       const rail = page.getByTestId('session-action-rail');
       const review = page.getByTestId('session-action-rail:review');
       const files = page.getByTestId('session-action-rail:files');
