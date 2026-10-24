@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { readExternalSessionLink, type ExternalSessionLink } from '../external/readExternalSessionLink';
 
 type SessionPresentationAgentIdInput = Readonly<{
     metadataLayoutVersion?: number;
@@ -18,6 +19,7 @@ type SessionPresentationAgentIdInput = Readonly<{
 
 export function readSessionPresentationAgentId(
     session: SessionPresentationAgentIdInput,
+    admittedLinkedSession?: ExternalSessionLink | null,
 ): string | null {
     const metadataLayoutVersion = readSessionMetadataLayoutVersion(session.metadataLayoutVersion);
     if (metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1) {
@@ -31,7 +33,8 @@ export function readSessionPresentationAgentId(
         return null;
     }
     // Legacy Agent identity is Session-readable even when the producer withholds a full owner view.
-    return resolveAgentIdFromSessionMetadata(session.metadata ?? null);
+    return resolveAgentIdFromSessionMetadata(session.metadata ?? null,
+        admittedLinkedSession === undefined ? readExternalSessionLink(session.metadata) : admittedLinkedSession);
 }
 
 /** Full Sessions and compact rows share presentation without reinterpreting a projected identity. */
