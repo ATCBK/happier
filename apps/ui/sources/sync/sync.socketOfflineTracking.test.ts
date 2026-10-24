@@ -434,6 +434,8 @@ describe('sync socket offline tracking', () => {
     apiSocketRequestMock.mockReset();
     apiSocketRequestMock.mockImplementation(async (path, init) => defaultHomeResponse(new URL(path, 'http://localhost').pathname, init));
     await restoreTestHome();
+    // Restoration runs Sync's guarded subscription lifecycle. Individual cases
+    // deliver SDK events without registering another set of private listeners.
     apiSocketRequestMock.mockClear();
     fetchChangesMock.mockClear();
     fetchCurrentChangesCursorMock.mockClear();
@@ -522,8 +524,7 @@ describe('sync socket offline tracking', () => {
       .toEqual({ status: 'completed' });
     expect((sync as any).lastSocketDisconnectedAtMs ?? null).toBeNull();
 
-    // subscribeToUpdates installs the socket listeners and should set the timestamp on disconnected.
-    (sync as any).subscribeToUpdates();
+    // The restored Sync owner already subscribes; deliver at its SDK boundary.
     emitSocketStatus('disconnected');
 
     const afterDisconnected = (sync as any).lastSocketDisconnectedAtMs;
@@ -549,7 +550,6 @@ describe('sync socket offline tracking', () => {
       },
     }));
 
-    (sync as any).subscribeToUpdates();
     emitSocketStatus('disconnected');
 
     expect(storage.getState().concurrentSessionListCacheByServerId[serverId]?.listObservation)
@@ -557,18 +557,9 @@ describe('sync socket offline tracking', () => {
   });
 
   it('uses captured offline duration for loaded transcript catch-up after connected status clears the disconnect timestamp', async () => {
-    (sync as any).subscribeToUpdates();
-
-
-    emitSocketStatus('disconnected');
-    const disconnectedAt = (sync as any).lastSocketDisconnectedAtMs;
-    expect(typeof disconnectedAt).toBe('number');
-    (sync as any).lastSocketDisconnectedAtMs = Date.now() - 1000;
-
-
-    emitSocketStatus('connected');
-    expect((sync as any).lastSocketDisconnectedAtMs ?? null).toBeNull();
-
+    // Admit the already-loaded transcript before simulating transport loss.
+    // Awaiting HTTP fixture admission after reconnect permits unrelated pending
+    // dial failure/recovery to replace the downtime this case is exercising.
     storage.setState((state) => ({
       ...state,
       sessions: {
@@ -587,8 +578,12 @@ describe('sync socket offline tracking', () => {
     (sync as any).sessionMaterializedMaxSeqById = { s_reconnect_gap: 20 };
     (sync as any).isForeground = true;
 
+    emitSocketStatus('disconnected');
+    expect(typeof (sync as any).lastSocketDisconnectedAtMs).toBe('number');
+    (sync as any).lastSocketDisconnectedAtMs = Date.now() - 1000;
+    emitSocketStatus('connected');
+    expect((sync as any).lastSocketDisconnectedAtMs ?? null).toBeNull();
     await (sync as any).fetchMessages('s_reconnect_gap');
-
     expectApiSocketMessageRequest({ sessionId: 's_reconnect_gap', afterSeq: '20', limit: '150' });
   }, 60_000);
 

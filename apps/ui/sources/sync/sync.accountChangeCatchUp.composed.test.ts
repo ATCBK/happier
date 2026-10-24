@@ -708,6 +708,139 @@ describe('sync AccountChange catch-up projection', () => {
         }
     });
 
+    it('does not reread Teams or Home for already published rows across ten held-cursor wakes', async () => {
+        await restoreTestAccount();
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const { observeTeamsDirectory, resetTeamsDirectoryEngineForTests } = await import('./engine/teams/teamsDirectoryEngine');
+        const { getTeamsDirectorySnapshot, resetTeamsSnapshotsForTests } = await import('./store/teams/teamsSnapshots');
+        const { observeHomeGovernance, resetHomeGovernanceEngineForTests } = await import('./engine/home/governance/homeGovernanceEngine');
+        const { getHomeGovernanceSnapshot, resetHomeGovernanceSnapshotsForTests } = await import('./store/home/governance/homeGovernanceSnapshots');
+        const { NO_HOME_CAPABILITIES_V1 } = await import('@happier-dev/protocol/home/governance');
+        const { teamDirectoryQueryKeyV1 } = await import('@happier-dev/protocol/teams');
+        const { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1, HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1 } = await import('@happier-dev/protocol/changes');
+        const scope = getActiveServerAccountScope();
+        if (!scope) throw new Error('Expected restored Account scope');
+        const reads: string[] = [];
+        let sessionAvailable = false;
+        domainHttp.mockImplementation(async ({ url }) => {
+            const path = new URL(url).pathname;
+            if (path === '/v1/teams/list') {
+                reads.push(path);
+                return jsonResponse({ items: [], nextCursor: null });
+            }
+            if (path === '/v1/home/governance/get') {
+                reads.push(path);
+                return jsonResponse({
+                    viewer: { accountId: ACCOUNT_ID, homeRole: 'owner', status: 'active' },
+                    capabilities: { ...NO_HOME_CAPABILITIES_V1, viewAdministration: true },
+                    policy: { revision: 3, teamCreationPolicy: 'managed_only', authentication: { status: 'inherited' } },
+                    authenticationOptions: { methods: [], permittedAccountModes: ['plain'], recommendedProvisioningMode: 'plain',
+                        signInService: { deploymentMode: null, canDisable: false } },
+                    setupState: 'owned', activeOwnerCount: 1, teamsEnabled: true,
+                });
+            }
+            if (path === '/v2/sessions/held-session') return sessionAvailable
+                ? jsonResponse({ session: createPlainSessionCurrentProjectionRecordFixture({ id: 'held-session' }) })
+                : Response.json({ error: 'temporarily_unavailable' }, { status: 503 });
+            return Response.json({}, { status: 404 });
+        });
+        const input = { v: 1, scope: 'member', archived: 'active' } as const;
+        const stopTeams = observeTeamsDirectory(scope, input);
+        const stopHome = observeHomeGovernance(scope);
+        const runtime = syncRuntime as unknown as SyncAccountChangeCatchUpHarness;
+        let teamCursor = 2;
+        changesResponse.mockImplementation(async ({ url }) => {
+            const after = Number(new URL(url).searchParams.get('after'));
+            const changes = [
+                { cursor: 1, changedAt: 1, kind: 'share', entityId: 'held-session' },
+                { cursor: teamCursor, changedAt: teamCursor, kind: 'account', entityId: TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 },
+                { cursor: 3, changedAt: 3, kind: 'account', entityId: HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1 },
+            ].filter(change => change.cursor > after).sort((a, b) => a.cursor - b.cursor);
+            return { changes, nextCursor: Math.max(after, teamCursor, 3) };
+        });
+        try {
+            await waitForHomeGovernance(() => {
+                expect(getTeamsDirectorySnapshot(scope, teamDirectoryQueryKeyV1(input))?.status).toBe('ready');
+                expect(getHomeGovernanceSnapshot(scope)?.status).toBe('ready');
+            });
+            await runtime.resumeViaChanges({ accountId: ACCOUNT_ID });
+            await waitForHomeGovernance(() => expect(reads).toHaveLength(4));
+            const heldCursor = runtime.changesCursor;
+            reads.length = 0;
+            for (let wake = 0; wake < 10; wake++) await runtime.resumeViaChanges({ accountId: ACCOUNT_ID });
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(runtime.changesCursor).toBe(heldCursor);
+            expect(reads).toEqual([]);
+
+            // A newer change for the same family must still reach its mounted reader.
+            teamCursor = 4;
+            await runtime.resumeViaChanges({ accountId: ACCOUNT_ID });
+            await waitForHomeGovernance(() => expect(reads).toEqual(['/v1/teams/list']));
+            expect(runtime.changesCursor).toBe(heldCursor);
+            sessionAvailable = true;
+            await runtime.resumeViaChanges({ accountId: ACCOUNT_ID });
+            expect(runtime.changesCursor).toBe('4');
+        } finally {
+            stopTeams(); stopHome();
+            resetTeamsDirectoryEngineForTests(); resetTeamsSnapshotsForTests();
+            resetHomeGovernanceEngineForTests(); resetHomeGovernanceSnapshotsForTests();
+        }
+    });
+
+    it('revalidates mounted Home projections once on a genuine focused reconnect, not empty catch-up wakes', async () => {
+        const runtime = await prepareAccountChangeWakeSchedulingHarness();
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const { observeHomeGovernance, resetHomeGovernanceEngineForTests } = await import('./engine/home/governance/homeGovernanceEngine');
+        const { getHomeGovernanceSnapshot, resetHomeGovernanceSnapshotsForTests } = await import('./store/home/governance/homeGovernanceSnapshots');
+        const { NO_HOME_CAPABILITIES_V1 } = await import('@happier-dev/protocol/home/governance');
+        const scope = getActiveServerAccountScope();
+        if (!scope) throw new Error('Expected restored Account scope');
+        const socket = sockets.at(-1);
+        if (!socket) throw new Error('Expected focused Account transport');
+        const { subscribeHomeAccountChange } = await import('./runtime/orchestration/homeAccountChange');
+        const wakes: Array<{ serverId: string; source?: string }> = [];
+        const unsubscribe = subscribeHomeAccountChange(event => wakes.push(event));
+        // Deliver genuine SDK transport-boundary events, retaining ApiSocket and Sync.
+        socket.connected = true;
+        for (const listener of socket.listeners('connect')) listener();
+        let revision = 1;
+        let reads = 0;
+        domainHttp.mockImplementation(async ({ url }) => {
+            if (new URL(url).pathname !== '/v1/home/governance/get') return Response.json({}, { status: 404 });
+            reads++;
+            return jsonResponse({
+                viewer: { accountId: ACCOUNT_ID, homeRole: 'owner', status: 'active' },
+                capabilities: { ...NO_HOME_CAPABILITIES_V1, viewAdministration: true },
+                policy: { revision, teamCreationPolicy: 'managed_only', authentication: { status: 'inherited' } },
+                authenticationOptions: { methods: [], permittedAccountModes: ['plain'], recommendedProvisioningMode: 'plain',
+                    signInService: { deploymentMode: null, canDisable: false } },
+                setupState: 'owned', activeOwnerCount: 1, teamsEnabled: true,
+            });
+        });
+        const release = observeHomeGovernance(scope);
+        try {
+            await waitForHomeGovernance(() => expect(getHomeGovernanceSnapshot(scope)?.data?.policy.revision).toBe(1));
+            for (let wake = 0; wake < 10; wake++) await runtime.resumeViaChanges({ accountId: ACCOUNT_ID });
+            expect(reads).toBe(1);
+            expect(wakes.filter(event => event.source === 'connected')).toEqual([]);
+            revision = 2;
+            socket.connected = false;
+            for (const listener of socket.listeners('disconnect')) listener('transport close');
+            socket.connected = true;
+            for (const listener of socket.listeners('connect')) listener();
+            expect(wakes.filter(event => event.source === 'connected')).toEqual([
+                expect.objectContaining({ serverId: scope.serverId, source: 'connected' }),
+            ]);
+            await waitForHomeGovernance(() => expect(getHomeGovernanceSnapshot(scope)?.data?.policy.revision).toBe(2));
+            expect(reads).toBe(2);
+        } finally {
+            unsubscribe();
+            release();
+            resetHomeGovernanceEngineForTests();
+            resetHomeGovernanceSnapshotsForTests();
+        }
+    });
+
     it('refreshes shared Machine access in the open store after an AccountChange wake', async () => {
         let role: 'use' | 'manage' = 'use';
         const machine = createPlainMachineRowFixture({ id: 'shared-machine', accountId: 'custodian' });

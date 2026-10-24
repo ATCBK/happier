@@ -1488,6 +1488,9 @@ class Sync {
     private nativeInactiveCheckpointTimer: ReturnType<typeof setTimeout> | null = null;
     private jsThreadLagTelemetry: JsThreadLagTelemetry | null = null;
 	      private changesCursor: string | null = isEmbedWindowContext() ? null : loadChangesCursor(String(getActiveServerSnapshot().serverId ?? '').trim() || null);
+        // Publication is an observation, not materialization proof. Retain only the
+        // latest notified row per resource while its durable checkpoint is held.
+        private publishedAccountChangeCursors = new Map<string, number>();
         private safeCursorLagState: SafeCursorLagTripwireState | null = null;
         private webSyncClientIdentity: WebSyncClientIdentity | null = null;
         private webSyncClientIdentityHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -2678,6 +2681,7 @@ class Sync {
         });
         const settingsScope = await this.activateAccountSettingsScope(accountId);
         this.changesCursor = loadChangesCursor(this.getChangesCursorScope());
+        this.publishedAccountChangeCursors = new Map();
         await this.configureSettingsSecretKeys(credentials, settingsScope);
         this.syncJsThreadLagTelemetryRuntime();
         assertSyncServerTargetCurrent(appliedServerTarget);
@@ -2871,6 +2875,7 @@ class Sync {
         });
         const settingsScope = await this.activateAccountSettingsScope(accountId);
         this.changesCursor = loadChangesCursor(this.getChangesCursorScope());
+        this.publishedAccountChangeCursors = new Map();
         await this.configureSettingsSecretKeys(credentials, settingsScope);
         this.syncJsThreadLagTelemetryRuntime();
         assertSyncServerTargetCurrent(appliedServerTarget);
@@ -3448,6 +3453,7 @@ class Sync {
         this.sessionDataKeyEnvelopes.clear();
         this.machineDataKeys.clear();
         this.machineRecipientChangeCursors.clear();
+        this.publishedAccountChangeCursors = new Map();
         this.artifactDataKeys.clear();
 
         this.lastSocketDisconnectedAtMs = null;
@@ -11869,7 +11875,13 @@ class Sync {
 
           // Subscribe to connection state changes
           apiSocket.onReconnected(() => {
-              if (!this.embedSessionScope) publishMachineContributionRegistryProjectionReconnect();
+              if (!this.embedSessionScope) {
+                  // A completed change page cannot renew projections whose authority
+                  // was lost with the transport but produced no durable Account row.
+                  const serverId = this.getAppliedTransportTarget()?.serverId;
+                  if (serverId) publishHomeAccountChange(serverId, undefined, { source: 'connected' });
+                  publishMachineContributionRegistryProjectionReconnect();
+              }
               fireAndForget(this.resumeSync('socket-reconnect'), { tag: 'Sync.resumeSync.socket-reconnect' });
           });
       }
@@ -12187,6 +12199,7 @@ class Sync {
           const credentials = this.credentials;
           if (!credentials) return finish('fallback');
           const request = embedScope?.request ?? this.createAppliedTransportRequest(transportTarget);
+          const publishedAccountChangeCursors = this.publishedAccountChangeCursors;
 
           const canWriteCursor = (): boolean => {
               if (shouldContinue()) {
@@ -12232,6 +12245,15 @@ class Sync {
                     }
                     this.changesCursor = checkpoint.cursor;
                     this.safeCursorLagState = null;
+                    if (context.reason === 'snapshot-base') publishedAccountChangeCursors.clear();
+                    else {
+                        // ChangeEntry cursors are numeric. This only releases transient
+                        // notification memory; the existing checkpoint owner decides safety.
+                        const approved = Number(cursor);
+                        for (const [key, publishedCursor] of publishedAccountChangeCursors) {
+                            if (publishedCursor <= approved) publishedAccountChangeCursors.delete(key);
+                        }
+                    }
                     syncReliabilityTelemetry.record('sync.cursor.checkpointAdvanced', {
                         cursor,
                         reason: context.reason,
@@ -12333,7 +12355,16 @@ class Sync {
                             resolveSessionLiveConsumption(sessionId).isFullContentConsumer,
                         getSessionMaterializedMaxSeq: (sessionId) => this.sessionMaterializedMaxSeqById[sessionId] ?? 0,
                         isSessionMessagesDeferred: (sessionId) => this.hasDeferredNewerMessages(sessionId),
-                        publishAccountChanges: (changes, materialization) => {
+                        publishAccountChanges: (replayedChanges, materialization) => {
+                            if (!shouldContinue() || !isAppliedTransportCurrent()) return;
+                            const changes = replayedChanges.filter(change =>
+                                publishedAccountChangeCursors.get(`${change.kind}:${change.entityId}`) !== change.cursor);
+                            if (changes.length === 0) return;
+                            // A failed row still retries through the full materialization
+                            // plan. Only newly observed rows describe a new projection wake.
+                            const publishedPlan = changes.length === replayedChanges.length ? planned : planSyncActionsFromChanges(changes, {
+                                isSessionListMember: sessionId => this.isSessionListMemberOnHome(plannedServerId, sessionId),
+                            });
                             // Audience/grant changes need not alter the published Machine blobs.
                             // The existing focused AccountChange cursor is their freshness signal.
                             for (const change of changes) {
@@ -12367,10 +12398,10 @@ class Sync {
                                     })),
                                     changeKinds: changes.map(change => change.kind),
                                     ...(materialization?.workflowRunsMaterialized ? { workflowRunsMaterialized: true as const } : {}),
-                                    sessionListQueryAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectSessionListQuery(planned),
-                                    profileCatalogAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectProfileCatalog(planned),
-                                    accountSettingsAffects: materialization?.workflowRunsMaterialized ? false : planned.invalidate.settings || planned.unsupportedChanges.length > 0,
-                                    usageQueryAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectUsageQuery(planned),
+                                    sessionListQueryAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectSessionListQuery(publishedPlan),
+                                    profileCatalogAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectProfileCatalog(publishedPlan),
+                                    accountSettingsAffects: materialization?.workflowRunsMaterialized ? false : publishedPlan.invalidate.settings || publishedPlan.unsupportedChanges.length > 0,
+                                    usageQueryAffects: materialization?.workflowRunsMaterialized ? false : plannedChangesAffectUsageQuery(publishedPlan),
                                 });
                             }
                             publishActivePluginCollectionUiQueryChanges(changes);
@@ -12384,6 +12415,9 @@ class Sync {
                                 // An in-flight read was superseded by invalidate;
                                 // preserve a trailing refresh for the new facts.
                                 this.pluginAvailabilitySync.invalidate();
+                            }
+                            for (const change of changes) {
+                                publishedAccountChangeCursors.set(`${change.kind}:${change.entityId}`, change.cursor);
                             }
                         },
                         refreshWorkflowRuns: (runIds) => refreshWorkflowRunsByIds(runIds),
