@@ -665,7 +665,7 @@ const AgentSettingsScreenInner = React.memo(function AgentSettingsScreenInner(pr
     externalSessionsRefreshKey: string | null;
     /** The Account's server: the machines listed in "On your machines". */
     accountServerId: string | null;
-    /** A recovery that sent the person here to install on one machine opens that machine's row. */
+    /** A route that names one machine (a recovery) opens that machine's row. */
     recoveryMachineId: string | null;
 }>) {
     const router = useRouter();
@@ -925,32 +925,21 @@ export const AgentSettingsScreen = React.memo(function AgentSettingsScreen() {
     }, [normalizedAgentId, routePluginId]);
     const hasQualifiedAgentRoute = routePluginId.length > 0;
 
-    const recoveryInstallRequest = React.useMemo(() => {
-        const target = readMachineAdministrationTargetRouteParams(params);
-        const installIntent =
-            params.installIntent === 'update'
-                ? 'update'
-                : params.installIntent === 'install'
-                    ? 'install'
-                    : null;
-        if (!target || !installIntent) {
-            return null;
-        }
-        return { ...target, installIntent } as const;
-    }, [
-        params.installIntent,
-        params.machineId,
-        params.serverIdentityId,
-    ]);
+    // A route that names a machine (a recovery sending the person here to install, update or sign in)
+    // opens that machine's row.
+    const recoveryRequest = React.useMemo(
+        () => readMachineAdministrationTargetRouteParams(params),
+        [params.machineId, params.serverIdentityId],
+    );
     const recoveryInstallTarget = React.useMemo(() => {
-        if (!recoveryInstallRequest) return null;
+        if (!recoveryRequest) return null;
         const state = administrationTargetSelection.state;
         if (state.kind !== 'online' && state.kind !== 'offline') return null;
-        return state.target.machineId === recoveryInstallRequest.machineId
-            && areServerProfileIdentifiersEquivalent(state.target.serverIdentityId, recoveryInstallRequest.serverIdentityId)
-            ? { target: state.target, installIntent: recoveryInstallRequest.installIntent }
+        return state.target.machineId === recoveryRequest.machineId
+            && areServerProfileIdentifiersEquivalent(state.target.serverIdentityId, recoveryRequest.serverIdentityId)
+            ? { target: state.target }
             : null;
-    }, [administrationTargetSelection.state, recoveryInstallRequest]);
+    }, [administrationTargetSelection.state, recoveryRequest]);
     const machineScope = useAgentsMachineScope(administrationTargetSelection);
     const executionTarget = machineScope.executionTarget;
     // An offline machine keeps its scope so its last known projection stays visible.

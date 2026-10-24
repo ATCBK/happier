@@ -106,6 +106,11 @@ export function AgentMachinesSection(
   const [expandedMachineId, setExpandedMachineId] = React.useState<
     string | null
   >(props.initialExpandedMachineId ?? null);
+  // Route selection may settle after this section mounts. Apply that arrival once;
+  // unchanged route props must still let the person collapse or open another row.
+  React.useEffect(() => {
+    if (props.initialExpandedMachineId) setExpandedMachineId(props.initialExpandedMachineId);
+  }, [props.initialExpandedMachineId]);
   const selectTarget = targetSelection.selectTarget;
   const onExpandedMachineChange = React.useCallback(
     (machineId: string | null) => {
