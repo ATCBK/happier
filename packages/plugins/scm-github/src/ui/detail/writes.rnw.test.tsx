@@ -438,8 +438,10 @@ describe('the mounted GitHub write controls', () => {
 
     await expect(detail.getByText('Not carried out'))
       .resolves.toEqual({ content: 'Not carried out' });
-    await expect(detail.getByText('GitHub could not complete this change. (github_forbidden)'))
-      .resolves.toEqual({ content: 'GitHub could not complete this change. (github_forbidden)' });
+    await expect(detail.getByText('GitHub could not complete this change.'))
+      .resolves.toEqual({ content: 'GitHub could not complete this change.' });
+    await expect(detail.queryByText('GitHub could not complete this change. (github_forbidden)'))
+      .resolves.toBeUndefined();
   });
 
   it('keeps the lifecycle glyph static while merge is pending or refused', async () => {
