@@ -67,9 +67,11 @@ export type PopoverProps = Readonly<{
    * view's one primary button, for a primary action that is a choice ("Add a
    * source" opening the sources that can be added). `well` is the glyph alone in a round resting fill
    * (needs `triggerIcon`): the phone toolbar's Filters and ⋯ beside the search, where the buttons are the
-   * object on their row.
+   * object on their row. `status` is a quiet status line that opens its own explanation (a pull request's
+   * merge readiness beside Merge): optional `triggerMarks`, the words, a quieter `triggerDetail` clause and a
+   * caret, on the plain button's hover fill.
    */
-  triggerAppearance?: 'text' | 'control' | 'primary' | 'well';
+  triggerAppearance?: 'text' | 'control' | 'primary' | 'well' | 'status';
   /**
    * Draws a caret after a plain `text` trigger, so a title that opens a menu reads as one ("Entry ⌄" in
    * a table's column header). Labelled appearances (`control`, `primary`) are buttons and never take it.
@@ -90,6 +92,16 @@ export type PopoverProps = Readonly<{
    */
   triggerTaskStatus?: TaskStatusCategory;
   triggerAccessibilityLabel: string;
+  /** `status` only: the quieter clause after the words, on the same line ("1 approval needed"). */
+  triggerDetail?: string;
+  /**
+   * `status` only: one small mark per tracked condition, before the words, in its tone (`danger` failed,
+   * `attention` needs the reader, `secondary` met, `muted` still waiting). Decoration: the words and the
+   * opened content carry the meaning.
+   */
+  triggerMarks?: readonly HappierTone[];
+  /** On a phone, the host's bottom sheet titled `title` (with `footer` pinned under the content) instead of an anchored popover. */
+  sheet?: Readonly<{ title: string; footer?: ReactNode }>;
   /** Accessible name for the non-menu dialog surface; defaults to the trigger label. */
   contentAccessibilityLabel?: string;
   /**
@@ -119,8 +131,6 @@ type PopoverPresentationProps = PopoverProps & Readonly<{
   initialFocusRef?: RefObject<unknown>;
   /** Private menu-content bridge for the incumbent Popover close lifecycle. */
   renderContent?: (controls: PluginUiPopoverContentControls) => ReactNode;
-  /** Private: on a phone, the host's bottom sheet titled `title`, with `footer` pinned under the rows. */
-  sheet?: Readonly<{ title: string; footer?: ReactNode }>;
   /** Private: how many choices are in force, drawn as a count on a `well` trigger. */
   triggerCount?: number;
 }>;
@@ -133,6 +143,19 @@ const groupLabelStyle = {
 
 /** A text trigger's words and caret on one line, the caret kept close like a sorted title's arrow. */
 const disclosureTriggerStyle = { flexDirection: 'row', alignItems: 'center', gap: 3, minWidth: 0 } as const;
+
+/** A status trigger: marks, words and caret on one line, the words free to shrink before the caret does. */
+const statusTriggerStyle = { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 } as const;
+const statusMarksStyle = { flexDirection: 'row', alignItems: 'center', gap: 2 } as const;
+const statusMarkStyle = { width: 4, height: 12, borderRadius: 2 } as const;
+const statusWordsStyle = { flexShrink: 1 } as const;
+
+/** Met reads as quiet ink and still-waiting as a faint slot; only trouble takes a colour. */
+function resolveStatusMarkColor(tone: HappierTone, colors: ReturnType<typeof usePluginTheme>['colors']): string {
+  if (tone === 'neutral' || tone === 'secondary') return colors.mutedText;
+  if (tone === 'muted') return colors.divider;
+  return colors[tone];
+}
 
 function requestContextOpen(event: unknown, onOpenChange: (open: boolean) => void) {
   const candidate = event as { preventDefault?: () => void; stopPropagation?: () => void } | null;
@@ -157,6 +180,8 @@ function PopoverPresentation({
   triggerIcon,
   triggerTaskStatus,
   triggerAccessibilityLabel,
+  triggerDetail,
+  triggerMarks,
   contentAccessibilityLabel: requestedContentAccessibilityLabel,
   floatingRole,
   children,
@@ -201,9 +226,12 @@ function PopoverPresentation({
   // of a toolbar's control row. Both hooks run on every render, whichever appearance draws.
   const primaryFace = useButtonFace('primary', 'normal', disabled === true);
   const controlFace = useButtonFace('secondary', 'small', disabled === true);
+  const statusFace = useButtonFace('plain', 'small', disabled === true);
+  const statusTrigger = !fieldTrigger && !iconOnly && triggerAppearance === 'status';
   const buttonFace = fieldTrigger ? null
     : triggerAppearance === 'primary' ? primaryFace
-      : triggerAppearance === 'control' ? controlFace : null;
+      : triggerAppearance === 'control' ? controlFace
+        : statusTrigger ? statusFace : null;
   const iconChrome = (state: HappierPressableStyleState) => resolveHappierIconButtonChrome({
     size: well ? HAPPIER_ICON_BUTTON_WELL_SIZE : HAPPIER_ICON_BUTTON_SIZE, variant: well ? 'well' : 'plain',
     selected: state.selected,
@@ -327,7 +355,26 @@ function PopoverPresentation({
               </HappierBadge>
             ) : null}
           </View>
-        ) : buttonFace ? (state) => buttonFace.renderContent(state, {
+        ) : statusTrigger ? (state) => statusFace.renderContent(state, {
+          children: (
+            <View style={statusTriggerStyle}>
+              {triggerMarks === undefined || triggerMarks.length === 0 ? null : (
+                <View style={statusMarksStyle}>
+                  {triggerMarks.map((tone, index) => (
+                    <View key={index} style={[statusMarkStyle, { backgroundColor: resolveStatusMarkColor(tone, theme.colors) }]} />
+                  ))}
+                </View>
+              )}
+              <HappierText accessible={false} variant={triggerTextVariant} tone={triggerTextTone} numberOfLines={1} style={statusWordsStyle}>
+                {trigger}
+                {triggerDetail === undefined || triggerDetail.length === 0 ? null : (
+                  <HappierText accessible={false} variant={triggerTextVariant} tone="secondary">{`  ${triggerDetail}`}</HappierText>
+                )}
+              </HappierText>
+              <HappierFieldBoxChevron open={open} color={theme.colors.secondaryText} />
+            </View>
+          ),
+        }) : buttonFace ? (state) => buttonFace.renderContent(state, {
           // The glyph in the button's own ink, at a Button's leading-icon size.
           ...(triggerTaskStatus !== undefined ? { icon: <TaskStatusGlyph category={triggerTaskStatus} /> }
             : triggerIcon === undefined ? {} : {
