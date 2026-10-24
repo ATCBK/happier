@@ -49,6 +49,7 @@ import { projectPluginTransactionChangeResult } from './transactionChangeResult'
 import { updateSelectedPluginOptionalAccess } from './optionalAccessSelections';
 import { createDaemonPluginCandidateOperationRoot } from './candidateStorage';
 import { DaemonPluginChangePreparationError } from './changeService';
+import { projectPluginArchiveStagingFailure } from '@/plugins/distribution/archive/stage';
 import {
   evaluatePluginAuthorityReview,
   type PluginAuthorityReviewEvaluation,
@@ -200,7 +201,8 @@ export function createDaemonArchivePluginChangePreparer(params: Readonly<{
         stagingParentPath: join(operationRootPath, 'staging'),
       });
       if (!staged.ok) {
-        throw new Error(`Archive plugin candidate rejected (${staged.rejection.code}): ${staged.rejection.message}`);
+        const failure = projectPluginArchiveStagingFailure(staged.rejection);
+        throw new DaemonPluginChangePreparationError(failure.code, failure.message);
       }
       stagedCandidate = staged.candidate;
       const availability = createVerifiedPortablePluginInstallationAvailability({

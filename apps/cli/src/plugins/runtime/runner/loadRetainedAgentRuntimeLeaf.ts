@@ -427,6 +427,7 @@ export async function verifyRunnerAgentBindingAgainstGeneration(
         : developmentRoot && manifestAuthority === 'bundled_first_party'
             ? { ok: true as const, manifest: readRetainedFirstPartyDevelopmentManifest({ pluginId: binding.pluginId }) }
         : await readPluginManifest({
+            purpose: 'installedRead',
             manifestPath: join(rootPath, '.happier-plugin', 'plugin.json'),
             manifestAuthority,
             sourceProvenance: 'localSource',

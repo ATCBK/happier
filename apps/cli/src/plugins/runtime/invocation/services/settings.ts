@@ -9,7 +9,7 @@ import {
 import { PluginAccountSettingsValuesV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
 import { isBoundedPluginPerActiveServerValueV1 } from '@happier-dev/protocol/plugins/contributions/settings';
 import type { PluginJsonSchemaValidator, PluginSettingsContributionV2 } from '@happier-dev/protocol';
-import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
@@ -30,6 +30,12 @@ import type {
 import type { StablePluginEventsBroker } from './events';
 import { clonePluginPlainData } from '../../plainData';
 import type { PluginInvocationServicesSeed } from './types';
+import {
+    admitLocalSettingsDeclarations,
+    resolveLocalSettingsDeclarations,
+    PluginLocalSettingsDeclarationError,
+} from '@/plugins/settings/localSettingsContributions';
+import { compilePluginSettingFieldSchema } from '@/plugins/settings/fieldSchemaValidation';
 import {
     PLUGIN_HOST_STORAGE_KEY_PREFIX,
     updatePluginStorageScopeValueAtomically,
@@ -120,33 +126,37 @@ export function createStablePluginSettingsModel(params: Parameters<typeof create
         }
         throw error;
     }
-    return attachSettingsRuntimeValidators(model, params.contributions ?? [params.contribution!]);
+    return attachSettingsRuntimeValidators(model, resolveRuntimeSettingsDeclarations(params.pluginId, params.contributions ?? [params.contribution!]));
+}
+
+function resolveRuntimeSettingsDeclarations(pluginId: string, contributions: readonly PluginSettingsContributionV2[]) {
+    try {
+        return resolveLocalSettingsDeclarations({ settings: contributions.map(definition => ({ pluginId, definition })) })
+            .map(declaration => declaration.definition);
+    } catch (error) {
+        if (!(error instanceof PluginLocalSettingsDeclarationError)) throw error;
+        // Preserve the existing direct model-construction error vocabulary;
+        // declaration admission and its diagnostics retain attributed typed errors.
+        const code = error.code === 'PLUGIN_SETTINGS_DEFAULT_INVALID' ? 'plugin_settings_invalid_default'
+            : error.code === 'PLUGIN_SETTINGS_SCHEMA_INVALID' ? 'plugin_settings_invalid_schema'
+            : 'plugin_settings_declaration_invalid';
+        throw settingsError(code, error.message);
+    }
 }
 
 function attachSettingsRuntimeValidators(
     model: StablePluginSettingsModel,
     inputContributions: readonly PluginSettingsContributionV2[],
 ): StablePluginSettingsModel {
-    const contributions = inputContributions.map((contribution, index) => (
-        clonePlainData(contribution, `contributions[${index}]`)
-    ));
+    const contributions = inputContributions;
     const perActiveServerMapFieldIds = new Set(contributions.flatMap((contribution) => contribution.fields.flatMap((field) => (
         field.presentation?.binding?.kind === 'perActiveServer' ? [field.presentation.binding.byServerIdSettingId] : []
     ))));
     const validators = new Map<string, PluginJsonSchemaValidator>();
     const storedValueReaders = new Map<string, ReturnType<typeof createPluginJsonSchemaZodValueAdapter>>();
+    const admittedFields = new Map(contributions.flatMap(contribution => contribution.fields.map(field => [field.id, field] as const)));
     for (const field of model.fields) {
-        let validate: PluginJsonSchemaValidator;
-        try {
-            validate = compilePluginJsonSchema(field.descriptor.schema);
-        } catch {
-            throw settingsError('plugin_settings_invalid_schema', `Plugin setting '${field.qualifiedId}' has an invalid schema`);
-        }
-        if (field.descriptor.secret !== true && field.descriptor.default !== undefined
-            && !isValidStablePluginSettingValue(validate, perActiveServerMapFieldIds.has(field.id), field.descriptor.default)) {
-            throw settingsError('plugin_settings_invalid_default', `Plugin setting '${field.qualifiedId}' has an invalid default`);
-        }
-        validators.set(field.id, validate);
+        validators.set(field.id, compilePluginSettingFieldSchema(admittedFields.get(field.id)!));
         storedValueReaders.set(field.id, createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(field.descriptor.schema)));
     }
     validatorsByModel.set(model, validators);
@@ -163,9 +173,17 @@ export function createStablePluginSettingsModels(params: Readonly<{
     pluginId: string;
     contributions: readonly PluginSettingsContributionV2[];
 }>): ReadonlyMap<StablePluginSettingsScope, StablePluginSettingsModel> {
+    return createSettingsModelsForAdmittedDeclarations(params.pluginId,
+        resolveRuntimeSettingsDeclarations(params.pluginId, params.contributions));
+}
+
+function createSettingsModelsForAdmittedDeclarations(
+    pluginId: string,
+    contributions: readonly PluginSettingsContributionV2[],
+): ReadonlyMap<StablePluginSettingsScope, StablePluginSettingsModel> {
     let models: ReadonlyMap<StablePluginSettingsScope, StablePluginSettingsModel>;
     try {
-        models = createProtocolSettingsModels(params);
+        models = createProtocolSettingsModels({ pluginId, contributions });
     } catch (error) {
         if (error instanceof PluginUiDeclarationProjectionErrorV1) {
             throw settingsError(error.code, error.message);
@@ -176,7 +194,7 @@ export function createStablePluginSettingsModels(params: Readonly<{
     return new Map(
         [...models.entries()].map(([scope, model]) => [
             scope,
-            attachSettingsRuntimeValidators(model, params.contributions.filter(contribution => contribution.scope === scope)),
+            attachSettingsRuntimeValidators(model, contributions.filter(contribution => contribution.scope === scope)),
         ]),
     );
 }
@@ -1084,31 +1102,24 @@ export function createStablePluginSettingsHost(params: Readonly<{
     recordStore: StablePluginSettingsRecordStore;
     broker: StablePluginEventsBroker;
     /**
-     * Reports a plugin whose declared settings this host could not model, so the
-     * caller can tell the operator which plugin lost its Settings service. The
-     * host itself owns no logging channel. A caller whose declaration set covers
-     * a single plugin can rethrow to keep the precise authoring error.
+     * Reports each excluded group with its attributed admission error. Healthy
+     * sibling groups retain the plugin's scoped Settings service.
      */
     onPluginSettingsUnavailable?(input: Readonly<{ pluginId: string; error: unknown }>): void;
 }>): StablePluginSettingsHost {
+    const admission = admitLocalSettingsDeclarations({ settings: params.declarations.map(declaration => ({
+        pluginId: declaration.pluginId, definition: declaration.contribution,
+    })) });
+    for (const error of admission.errors) params.onPluginSettingsUnavailable?.({ pluginId: error.pluginId, error });
     const declarationsByPluginId = new Map<string, PluginSettingsContributionV2[]>();
-    for (const declaration of params.declarations) {
+    for (const declaration of admission.declarations) {
         const existing = declarationsByPluginId.get(declaration.pluginId) ?? [];
-        existing.push(declaration.contribution);
+        existing.push(declaration.definition);
         declarationsByPluginId.set(declaration.pluginId, existing);
     }
     const modelsByPluginId = new Map<string, ReturnType<typeof createStablePluginSettingsModels>>();
     for (const [pluginId, contributions] of declarationsByPluginId) {
-        try {
-            modelsByPluginId.set(pluginId, createStablePluginSettingsModels({ pluginId, contributions }));
-        } catch (error) {
-            // One plugin's unmodellable settings declaration must not deny every
-            // other plugin its Settings service. Omitting the plugin is strictly
-            // more closed than admitting a partially modelled one: `hasPlugin`
-            // reports false and `bind` returns null, so no read, write, or patch
-            // path can reach an unvalidated field.
-            params.onPluginSettingsUnavailable?.({ pluginId, error });
-        }
+        modelsByPluginId.set(pluginId, createSettingsModelsForAdmittedDeclarations(pluginId, contributions));
     }
     const owner = createStablePluginSettingsOwner({
         recordStore: params.recordStore,

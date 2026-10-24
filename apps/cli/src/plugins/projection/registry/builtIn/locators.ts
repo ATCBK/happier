@@ -163,6 +163,7 @@ export function loadBundledPluginLocatorResult(
             unmatchedProviderKeys,
         );
         const ingestion = ingestCanonicalPluginManifest(manifest, {
+            purpose: 'installedRead',
             manifestAuthority: 'bundled_first_party',
             sourceProvenance: pluginSourceProvenanceForKind('bundled'),
         });

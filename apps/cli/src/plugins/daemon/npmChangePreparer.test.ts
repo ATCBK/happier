@@ -32,6 +32,7 @@ import {createMarketplaceNpmDiscoveryProjectionV1} from '@happier-dev/protocol/m
 import {PluginCompatibilityProjectionV1Schema} from '@happier-dev/protocol/plugins/availability/v1';
 
 import { createDaemonPluginChangeService } from './changeService';
+import { describeUserPluginChangeFailure } from './changeClient';
 import type { DaemonPluginChangeService } from './changeService';
 import { resolveInstalledPluginUpdate } from './resolveInstalledUpdate';
 import {
@@ -435,6 +436,39 @@ async function requestCuratedUpdate(params: Readonly<{
 }
 
 describe('createDaemonNpmPluginChangePreparer', () => {
+  it.each([
+    ['default', undefined],
+    ['tag', 'latest'],
+    ['range', '^1.0.0'],
+    ['exact', '1.2.3'],
+  ] as const)('returns the typed attributed Settings refusal for a %s npm selector without publishing', async (_label, selector) => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-npm-settings-home-'));
+    roots.push(happyHomeDir);
+    const fixture = await createNpmPackageFixture({ markerPath: join(happyHomeDir, 'never'), contributes: {
+      settings: [{ id: 'preferences', title: 'Preferences', scope: 'daemon', target: { kind: 'plugin' },
+        fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' }, default: 'private-settings-value' }] }],
+    } });
+    const service = createDaemonPluginChangeService({ prepare: createDaemonNpmPluginChangePreparer({
+      happyHomeDir, createClient: () => fixture.client,
+      runtimeLifecycle: { prepare: async () => { throw new Error('Invalid candidate must not publish'); } },
+    }) });
+    try {
+      const result = await service.requestPluginChange({ kind: 'installNpm', packageName: fixture.packageName,
+        ...(selector === undefined ? {} : { selector }), registryOrigin: 'https://registry.npmjs.org' });
+      expect(result).toMatchObject({ kind: 'failed', code: 'PLUGIN_SETTINGS_DEFAULT_INVALID',
+        message: expect.stringContaining("Plugin 'acme.npm-candidate' Settings 'preferences' field 'enabled'") });
+      if (result.kind !== 'failed') throw new Error('Invalid Settings must refuse preparation');
+      const publicFailure = describeUserPluginChangeFailure(result);
+      expect(publicFailure).toMatchObject({
+        code: 'failed',
+        message: expect.stringContaining("Plugin 'acme.npm-candidate' Settings 'preferences' field 'enabled'"),
+        details: { causeCode: 'PLUGIN_SETTINGS_DEFAULT_INVALID' },
+      });
+      expect(JSON.stringify(result)).not.toContain('private-settings-value');
+      expect(JSON.stringify(publicFailure)).not.toContain('private-settings-value');
+      expect((await createPluginRegistryStateStore({ happyHomeDir }).read()).plugins).toEqual({});
+    } finally { await service.shutdown(); }
+  });
   it('uses supplied generation-custody retirement dependencies for the npm registry mutation', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-npm-retirement-dependencies-home-'));
     roots.push(happyHomeDir);

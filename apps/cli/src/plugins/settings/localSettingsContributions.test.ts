@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { PluginSettingsContributionV2 } from '@happier-dev/protocol';
 import type { ResolvedSettingsContribution } from '@/plugins/projection/registry/types';
 
-import { resolveLocalSettingsDeclarations } from './localSettingsContributions';
+import { admitLocalSettingsDeclarations, resolveLocalSettingsDeclarations } from './localSettingsContributions';
 
 function settingsContribution(
     id: string,
@@ -27,6 +27,30 @@ function settingsContribution(
 }
 
 describe('local settings contribution admission', () => {
+    it('validates explicit nonsecret defaults just like omitted secret declarations', () => {
+        const input = settingsContribution('invalid-default', 'daemon', { type: 'boolean' });
+        expect(() => resolveLocalSettingsDeclarations({ settings: [{ ...input, definition: {
+            ...input.definition, fields: [{ id: 'shared', title: 'Shared', schema: { type: 'boolean' }, secret: false, default: 'true' }],
+        } }] })).toThrowError(expect.objectContaining({ code: 'PLUGIN_SETTINGS_DEFAULT_INVALID', fieldId: 'shared' }));
+    });
+
+    it('isolates a conflicting group atomically without hiding another scope or plugin', () => {
+        const first = settingsContribution('first', 'daemon', { type: 'string' });
+        const conflicting = settingsContribution('conflicting', 'daemon', { type: 'boolean' });
+        const otherScope = settingsContribution('account', 'account', { type: 'boolean' });
+        const otherPlugin = { ...conflicting, pluginId: 'acme.other' };
+        const admitted = admitLocalSettingsDeclarations({ settings: [first, conflicting, otherScope, otherPlugin] });
+        expect(admitted.declarations.map(row => `${row.pluginId}/${row.definition.id}`))
+            .toEqual(['acme.settings/first', 'acme.settings/account', 'acme.other/conflicting']);
+        expect(admitted.errors).toEqual([expect.objectContaining({ code: 'PLUGIN_SETTINGS_FIELD_ID_CONFLICT',
+            pluginId: 'acme.settings', contributionId: 'conflicting', fieldId: 'shared' })]);
+    });
+
+    it('propagates unexpected host faults rather than treating them as malformed author declarations', () => {
+        const fault = new Error('host-fault-sentinel');
+        const input = { pluginId: 'acme.settings', get definition(): never { throw fault; } };
+        expect(() => admitLocalSettingsDeclarations({ settings: [input] })).toThrow(fault);
+    });
     it('consumes already-admitted account and daemon settings with the same nonsecret local id', () => {
         expect(resolveLocalSettingsDeclarations({
             settings: [

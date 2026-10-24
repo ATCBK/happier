@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createPluginCompatibilityProjectionV1, PluginManifestV2Schema } from '@happier-dev/protocol';
+
+import { PluginCompatibilityDiagnosticSchema } from '@/plugins/validation/diagnostics/types';
 
 import { resolveAndDownloadNpmArtifact, type NpmRegistryArtifactClient } from './adapter';
 
@@ -138,6 +141,51 @@ describe('resolveAndDownloadNpmArtifact', () => {
       client,
     })).rejects.toThrow(/compatible generated compatibility projection/i);
 
+    expect(bodyRequests).toEqual([]);
+  });
+
+  it('retains the safe Settings diagnostic when automatic exact acquisition refuses before download', async () => {
+    const compatibilityProjection = createPluginCompatibilityProjectionV1({
+      manifest: PluginManifestV2Schema.parse({
+        schemaVersion: 2, id: 'acme.external-settings', version: '1.0.0', displayName: 'External Settings',
+        engines: { happier: '>=0.0.0' }, runtime: { apiVersion: 1 },
+        contributes: { settings: [{
+          id: 'preferences', title: 'Preferences', scope: 'daemon', target: { kind: 'plugin' },
+          fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' }, default: 'private-default-value' }],
+        }] },
+      }),
+      uiArtifacts: { version: 2, entries: [] },
+    });
+    const bodyRequests: string[] = [];
+    const client: NpmRegistryArtifactClient = {
+      getJson: async () => ({ name: 'plugin', versions: { '1.0.0': {
+        name: 'plugin', version: '1.0.0', happier: { compatibilityProjection },
+        dist: { integrity: `sha512-${createHash('sha512').update('unused').digest('base64')}`,
+          tarball: 'https://registry.example.test/plugin/-/plugin-1.0.0.tgz' },
+      } } }),
+      getBody: async ({ url }) => {
+        bodyRequests.push(url);
+        throw new Error('Invalid automatic candidate must not download');
+      },
+    };
+    const dir = await mkdtemp(join(tmpdir(), 'happier-npm-settings-automatic-'));
+    dirs.push(dir);
+    const error: unknown = await resolveAndDownloadNpmArtifact({
+      input: { registryOrigin: 'https://registry.example.test', packageName: 'plugin', selector: '1.0.0' },
+      destinationPath: join(dir, 'plugin.tgz'), requireCompatibleProjection: true, client,
+    }).then(() => null, error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ diagnostics: [expect.objectContaining({
+      code: 'plugin_manifest_invalid',
+      contribution: { pluginId: 'acme.external-settings', localId: 'preferences' },
+      details: { code: 'PLUGIN_SETTINGS_DEFAULT_INVALID', fieldId: 'enabled' },
+    })] });
+    if (!(error instanceof Error) || !('diagnostics' in error) || !Array.isArray(error.diagnostics)) {
+      throw new Error('Compatibility refusal must retain diagnostics');
+    }
+    const diagnostic = PluginCompatibilityDiagnosticSchema.parse(error.diagnostics[0]);
+    expect(diagnostic.message).toContain("Plugin 'acme.external-settings' Settings 'preferences' field 'enabled'");
+    expect(JSON.stringify(error)).not.toContain('private-default-value');
     expect(bodyRequests).toEqual([]);
   });
 

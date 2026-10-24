@@ -2,6 +2,7 @@ import { createPluginCompatibilityProjectionV1, PluginCompatibilityProjectionV1S
 import type { PluginCompatibilityProjectionV1 } from '@happier-dev/protocol';
 
 import { ingestCanonicalPluginManifest } from '@/plugins/manifest/ingest';
+import { projectPluginManifestCompatibilityDiagnostic } from '@/plugins/manifest/diagnostics';
 import { generatedUiArtifactDefaultHostCompatibilityFailure } from '@/plugins/projection/registry/ui/artifactCompatibility';
 import type { PluginCompatibilityDiagnostic } from '@/plugins/validation/diagnostics/types';
 
@@ -55,16 +56,14 @@ export function evaluatePluginCompatibilityProjection(
     // Author diagnostics may restate unverified manifest content. Only the
     // host validator's explicitly value-free reason can replace the closed
     // ingestion code; identical safe projections collapse.
-    const messages = [...new Set(manifestValidation.diagnostics.map((entry) => (
-      entry.safeCompatibilityMessage ?? `Plugin manifest compatibility check failed: ${entry.code}.`
-    )))];
+    const diagnostics = [...new Map(manifestValidation.diagnostics.map((entry) => {
+      const diagnostic = projectPluginManifestCompatibilityDiagnostic(entry);
+      return [JSON.stringify(diagnostic), diagnostic] as const;
+    })).values()];
     return Object.freeze({
       kind: 'incompatible',
       projection,
-      diagnostics: Object.freeze(messages.map((message) => Object.freeze({
-        code: 'plugin_manifest_invalid' as const,
-        message,
-      }))),
+      diagnostics: Object.freeze(diagnostics.map((diagnostic) => Object.freeze(diagnostic))),
     });
   }
   for (const artifact of projection.uiArtifacts.entries) {

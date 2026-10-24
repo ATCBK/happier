@@ -6,7 +6,8 @@ import { pluginCompatibilityProjectionEqualV1 } from '@happier-dev/protocol/plug
 import { readMarketplaceRegistryProfileRequirementV1 } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
 
 import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
-import { resolveAndDownloadNpmArtifact } from '@/plugins/distribution/npm/adapter';
+import { NpmArtifactCompatibilityError, resolveAndDownloadNpmArtifact } from '@/plugins/distribution/npm/adapter';
+import { projectPluginAttributedCompatibilityFailure } from '@/plugins/manifest/diagnostics';
 import {
   createNpmRegistryHttpsClient,
   type NpmRegistryHttpsClient,
@@ -63,6 +64,7 @@ import {
   type PreparedDaemonPluginChangeCandidate,
 } from './changeContract';
 import { DaemonPluginChangePreparationError } from './changeService';
+import { projectPluginArchiveStagingFailure } from '@/plugins/distribution/archive/stage';
 import { derivePluginInstallReviewPrincipal } from './installReviewPrincipal';
 import {
   projectPluginInstallationReview,
@@ -441,7 +443,8 @@ export function createDaemonNpmPluginChangePreparer(params: Readonly<{
         stagingParentPath: join(operationRootPath, 'staging'),
       });
       if (!staged.ok) {
-        throw new Error(`Npm plugin candidate rejected (${staged.rejection.code}): ${staged.rejection.message}`);
+        const failure = projectPluginArchiveStagingFailure(staged.rejection);
+        throw new DaemonPluginChangePreparationError(failure.code, failure.message);
       }
       stagedCandidate = staged.candidate;
       assertStagedCandidateMatchesMarketplaceListing(request, staged.candidate);
@@ -716,6 +719,10 @@ export function createDaemonNpmPluginChangePreparer(params: Readonly<{
         });
       } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], 'Npm candidate preparation and cleanup both failed');
+      }
+      if (error instanceof NpmArtifactCompatibilityError) {
+        const failure = projectPluginAttributedCompatibilityFailure(error.diagnostics);
+        if (failure) throw new DaemonPluginChangePreparationError(failure.code, failure.message);
       }
       throw registryProfileRequiredFrom(error, request) ?? error;
     }

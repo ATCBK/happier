@@ -12,6 +12,7 @@ import { defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
 import type { PluginUiArtifactsManifestV2 } from '@happier-dev/protocol/plugins/ui';
 import { createBundledPluginPublicationFailure } from '../../../../../../../scripts/workspaces/bundledPluginPublicationFailure.mjs';
 import { projectBundledPluginCatalogEntries } from '@/plugins/projection/catalog/installed';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
 import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '../sources/generatedBundledPluginManifests';
 import {
@@ -50,6 +51,15 @@ function locator(
 }
 
 describe('bundled plugin locators', () => {
+    it('reads an admitted bundled declaration with invalid Settings without dropping healthy families', () => {
+        const bundled = locator();
+        const result = loadBundledPluginLocatorResult([{ ...bundled, manifest: createPluginManifestV2Fixture({
+            id: bundled.pluginId, entrypoints: {}, contributes: { settings: [{ id: 'preferences', title: 'Preferences', scope: 'daemon',
+                target: { kind: 'plugin' }, fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' }, default: 'true' }] }] },
+        }) }]);
+        expect(result.pluginFailures).toEqual([]);
+        expect(result.loadedPlugins[0]?.manifest.contributes.settings[0]?.id).toBe('preferences');
+    });
     it('admits a requested file declaration and isolates an invalid optional manifest', () => {
         const root = mkdtempSync(join(tmpdir(), 'happier-lazy-bundled-declaration-'));
         const execPathDescriptor = Object.getOwnPropertyDescriptor(process, 'execPath')!;

@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { runPluginAuthorDoctor } from './doctor';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { ingestCanonicalPluginManifest } from '@/plugins/manifest/ingest';
+import { readPluginManifest } from '@/plugins/manifest/read';
 
 const resolveSingleFileEntry = async (locator: string) => ({
   kind: 'singleFile' as const,
@@ -14,6 +17,32 @@ const resolveSingleFileEntry = async (locator: string) => ({
 });
 
 describe('plugin author doctor', () => {
+  it('refuses an external authored invalid Settings default with the same attributed error as install admission', async () => {
+    const manifest = createPluginManifestV2Fixture({ id: 'acme.settings-admission', contributes: {
+      settings: [{ id: 'preferences', title: 'Preferences', scope: 'daemon', target: { kind: 'plugin' },
+        fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' }, default: 'true' }] }],
+    } });
+    const root = await mkdtemp(join(tmpdir(), 'happier-doctor-settings-'));
+    try {
+      const locator = join(root, 'plugin.mjs');
+      await writeFile(locator, `export const manifest = ${JSON.stringify(manifest)}; export function activate() {}`);
+      const diagnostic = { code: 'PLUGIN_SETTINGS_DEFAULT_INVALID', pluginId: 'acme.settings-admission',
+        contributionId: 'preferences', fieldId: 'enabled' };
+      await expect(runPluginAuthorDoctor({ locator })).resolves.toMatchObject({ ok: false,
+        diagnostics: [expect.objectContaining(diagnostic)] });
+      expect(ingestCanonicalPluginManifest(manifest, { sourceProvenance: 'localSource' }))
+        .toMatchObject({ ok: false, diagnostics: [expect.objectContaining(diagnostic)] });
+      const manifestPath = join(root, 'plugin.json');
+      await writeFile(manifestPath, JSON.stringify(manifest));
+      await expect(readPluginManifest({ manifestPath, sourceProvenance: 'localSource' })).resolves.toMatchObject({
+        ok: false, diagnostics: [{ code: 'plugin_manifest_invalid',
+          contribution: { pluginId: diagnostic.pluginId, localId: diagnostic.contributionId },
+          details: { code: diagnostic.code, fieldId: diagnostic.fieldId },
+        }],
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('reports the canonical projection and observable evaluation timing without purity claims', async () => {
     const evaluate = vi.fn(async () => ({
       entry: {

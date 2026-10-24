@@ -108,7 +108,7 @@ import { deriveMountedPluginInvocationCaller, type MountedAccountPluginExecution
 import {
     assertLocalSettingsDeclarationsAccessible,
     flattenLocalSettingsFields,
-    resolveLocalSettingsDeclarations,
+    admitLocalSettingsDeclarations,
 } from '@/plugins/settings/localSettingsContributions';
 import { resolveNotificationChannelSettingsContributions } from '@/plugins/settings/notificationChannelSettings';
 import { resolveInvocationContributionPolicyFacts } from '@/plugins/runtime/policy/evaluate';
@@ -883,7 +883,7 @@ function readPluginSettingsDeclaration(
 ): Readonly<{
     fields: readonly PluginSettingFieldV2[];
 }> {
-    const declarations = resolveLocalSettingsDeclarations({
+    const admission = admitLocalSettingsDeclarations({
         settings: [
             ...(registry.contributes.settings ?? []).filter((entry) => (
                 entry.definition.scope === scope.kind
@@ -894,6 +894,8 @@ function readPluginSettingsDeclaration(
         ],
         pluginId,
     });
+    const { declarations } = admission;
+    if (declarations.length === 0 && admission.errors[0]) throw admission.errors[0];
     assertLocalSettingsDeclarationsAccessible({
         declarations,
         facts: resolveInvocationContributionPolicyFacts({

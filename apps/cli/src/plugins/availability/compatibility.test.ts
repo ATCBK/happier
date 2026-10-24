@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { evaluatePluginCompatibilityProjection } from './compatibility';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
 function projectionWithIncompatibleUiArtifact(contributionId: string): Record<string, unknown> {
   return {
@@ -68,6 +69,18 @@ function projectionWithCanonicalIngestionInvalidManifest(
 }
 
 describe('evaluatePluginCompatibilityProjection', () => {
+  it('preserves safe typed Settings attribution during published-candidate preflight', () => {
+    const evaluation = evaluatePluginCompatibilityProjection({ version: 1,
+      manifest: createPluginManifestV2Fixture({ id: 'acme.settings-preflight', contributes: {
+        settings: [{ id: 'preferences', title: 'Preferences', scope: 'daemon', target: { kind: 'plugin' },
+          fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' }, default: 'private-settings-value' }] }],
+      } }), uiArtifacts: { version: 2, entries: [] } });
+    expect(evaluation).toMatchObject({ kind: 'incompatible', diagnostics: [{ code: 'plugin_manifest_invalid',
+      contribution: { pluginId: 'acme.settings-preflight', localId: 'preferences' },
+      details: { code: 'PLUGIN_SETTINGS_DEFAULT_INVALID', fieldId: 'enabled' },
+    }] });
+    expect(JSON.stringify(evaluation.kind === 'incompatible' ? evaluation.diagnostics : [])).not.toContain('private-settings-value');
+  });
   it('refuses a described appPage requiring a newer engine through canonical compatibility admission', () => {
     const candidate = {
       version: 1,

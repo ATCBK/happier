@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ingestCanonicalPluginManifest } from './ingest';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
 const fixture = {
   schemaVersion: 2,
@@ -16,6 +17,18 @@ const fixture = {
 } as const;
 
 describe('CLI canonical manifest ingestion', () => {
+  it.each([
+    { schema: { type: 'string', pattern: '[' }, code: 'PLUGIN_SETTINGS_SCHEMA_INVALID' },
+    { schema: { anyOf: [{ type: 'integer' }, { type: 'null' }] }, code: 'PLUGIN_SETTINGS_PROJECTION_INVALID' },
+  ])('refuses an unservable Settings group at ingress ($code)', ({ schema, code }) => {
+    const manifest = createPluginManifestV2Fixture({ id: 'acme.invalid-settings', contributes: {
+      settings: [{ id: 'preferences', title: 'Preferences', scope: 'daemon', target: { kind: 'plugin' },
+        fields: [{ id: 'value', title: 'Value', schema }] }],
+    } });
+    expect(ingestCanonicalPluginManifest(manifest, { sourceProvenance: 'localSource' })).toMatchObject({
+      ok: false, diagnostics: [{ code, pluginId: 'acme.invalid-settings', contributionId: 'preferences', fieldId: 'value' }],
+    });
+  });
   it('normalizes installed UTF-8 bytes and bundled objects identically', () => {
     const installed = ingestCanonicalPluginManifest(Buffer.from(JSON.stringify(fixture), 'utf8'), { sourceProvenance: 'registryCustodied' });
     const bundled = ingestCanonicalPluginManifest(fixture, { sourceProvenance: 'registryCustodied' });

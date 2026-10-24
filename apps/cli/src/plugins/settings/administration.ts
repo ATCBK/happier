@@ -25,6 +25,7 @@ import {
 import { createStablePluginEventsBroker } from '@/plugins/runtime/invocation/services/events';
 import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveNotificationChannelSettingsContributions } from '@/plugins/settings/notificationChannelSettings';
+import { admitLocalSettingsDeclarations } from '@/plugins/settings/localSettingsContributions';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 import {
@@ -480,14 +481,14 @@ async function accountSettingsService(params: Readonly<{
   if (!target) {
     administrationError('plugin_settings_unavailable', 'The requested plugin is not installed.');
   }
-  const declarations = [
+  const admission = admitLocalSettingsDeclarations({ settings: [
     ...(registry.settings ?? []),
     ...resolveNotificationChannelSettingsContributions(registry.notificationChannels ?? []),
-  ].flatMap((candidate) => (
-    candidate.pluginId === params.pluginId
-      ? [Object.freeze({ pluginId: params.pluginId, contribution: candidate.definition })]
-      : []
-  ));
+  ], pluginId: params.pluginId });
+  if (admission.declarations.length === 0 && admission.errors[0]) throw admission.errors[0];
+  const declarations = admission.declarations.map(declaration => Object.freeze({
+    pluginId: declaration.pluginId, contribution: declaration.definition,
+  }));
   const hiddenFieldIds = new Set(declarations.flatMap(({ contribution }) => (
     contribution.fields.flatMap((field) => (
       field.presentation?.binding?.kind === 'perActiveServer'
@@ -497,12 +498,6 @@ async function accountSettingsService(params: Readonly<{
   )));
   const host = createStablePluginSettingsHost({
     declarations,
-    // This declaration set covers exactly the requested plugin, so there is
-    // nothing to isolate it from: rethrow so the author keeps the precise
-    // authoring error instead of a generic "no Settings service".
-    onPluginSettingsUnavailable({ error }) {
-      throw error;
-    },
     recordStore: createRoutedPluginSettingsRecordStore([
       createAccountSettingsBackedSettingsRecordStore(
         createAccountPluginSettingsRecordStorage(),

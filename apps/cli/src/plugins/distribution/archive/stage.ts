@@ -13,6 +13,8 @@ import type { PluginUiArtifactsManifestEntryV2, PluginUiArtifactsManifestV2 } fr
 
 import { readPluginManifest } from '@/plugins/manifest/read';
 import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
+import type { PluginCompatibilityDiagnostic } from '@/plugins/validation/diagnostics/types';
+import { projectPluginAttributedCompatibilityFailure } from '@/plugins/manifest/diagnostics';
 
 import {
   cleanupExtractedPortableArchive,
@@ -57,7 +59,14 @@ export type PluginArchiveStagingRejection = Readonly<{
   code: PluginArchiveStagingRejectionCode;
   message: string;
   archiveCode?: string;
+  diagnostics?: readonly PluginCompatibilityDiagnostic[];
 }>;
+
+/** Project the existing staging refusal into a change-service failure. */
+export function projectPluginArchiveStagingFailure(rejection: PluginArchiveStagingRejection): Readonly<{ code: string; message: string }> {
+  const code = projectPluginAttributedCompatibilityFailure(rejection.diagnostics)?.code ?? rejection.code;
+  return { code, message: `${rejection.code}: ${rejection.message}` };
+}
 
 export type StagedNpmCompatiblePluginArchive = Readonly<{
   rootPath: string;
@@ -103,10 +112,10 @@ export type StageNpmCompatiblePluginArchiveParams = Readonly<{
 class CandidateRejected extends Error {
   readonly rejection: PluginArchiveStagingRejection;
 
-  constructor(code: PluginArchiveStagingRejectionCode, message: string) {
+  constructor(code: PluginArchiveStagingRejectionCode, message: string, diagnostics?: readonly PluginCompatibilityDiagnostic[]) {
     super(message);
     this.name = 'CandidateRejected';
-    this.rejection = Object.freeze({ code, message });
+    this.rejection = Object.freeze({ code, message, ...(diagnostics ? { diagnostics } : {}) });
   }
 }
 
@@ -594,7 +603,14 @@ export async function stageNpmCompatiblePluginArchive(
       sourceProvenance: 'registryCustodied',
     });
     assertStagingNotAborted(params.signal);
-    if (!manifestResult.ok) reject('manifest_invalid', 'Plugin manifest failed strict ingestion and semantic validation');
+    if (!manifestResult.ok) {
+      // General ingestion messages can echo unverified manifest keys/values.
+      // Only the Settings owner's identity/code projection is value-free.
+      const diagnostics = manifestResult.diagnostics.map(diagnostic => diagnostic.contribution
+        ? diagnostic
+        : { code: diagnostic.code, message: 'Plugin manifest failed strict ingestion and semantic validation' });
+      throw new CandidateRejected('manifest_invalid', diagnostics.map(diagnostic => diagnostic.message).join('\n'), diagnostics);
+    }
     if (manifestResult.manifest.version !== packageIdentity.version) {
       reject('manifest_identity_mismatch', 'Plugin manifest version does not match package.json version');
     }

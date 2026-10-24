@@ -303,6 +303,7 @@ export function createDaemonPathPluginChangePreparer(params: Readonly<{
               immutableGenerationId: generationReference.immutableGenerationId,
             });
             const incumbent = await readPluginManifest({
+              purpose: 'installedRead',
               manifestPath: join(
                 incumbentGeneration.rootPath,
                 ...incumbentGeneration.record.manifestRelativePath.split('/'),

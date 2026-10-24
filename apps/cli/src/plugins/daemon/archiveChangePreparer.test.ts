@@ -46,6 +46,7 @@ async function createArchiveFixture(params?: Readonly<{
   speech?: boolean;
   scm?: boolean;
   hostedWeb?: boolean;
+  contributes?: Readonly<Record<string, unknown>>;
 }>): Promise<Readonly<{
   archivePath: string;
   archiveDigestSha256: `sha256:${string}`;
@@ -94,7 +95,7 @@ async function createArchiveFixture(params?: Readonly<{
             scope: { access: [...(params.optionalSessionsAccess ?? ['read'])], projectIds: ['project-a'] },
           }] : [],
         },
-        contributes: params?.action || params?.hostedWeb ? {
+        contributes: params?.contributes ?? (params?.action || params?.hostedWeb ? {
           ...(params?.action ? {
             actions: [{
               id: 'roundtrip',
@@ -165,7 +166,7 @@ async function createArchiveFixture(params?: Readonly<{
             kind: 'packed-forge',
             capabilities: ['detect'],
           }],
-        } : {},
+        } : {}),
       }),
     },
     {
@@ -319,6 +320,24 @@ async function startArchiveServer(bytes: Buffer | (() => Buffer), expectedPath?:
 }
 
 describe('createDaemonArchivePluginChangePreparer', () => {
+  it('returns the typed attributed Settings refusal from archive staging without publishing', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-archive-settings-home-'));
+    roots.push(happyHomeDir);
+    const fixture = await createArchiveFixture({ contributes: { settings: [{
+      id: 'preferences', title: 'Preferences', scope: 'daemon', target: { kind: 'plugin' },
+      fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' }, default: 'private-settings-value' }],
+    }] } });
+    const service = createDaemonPluginChangeService({ prepare: createDaemonArchivePluginChangePreparer({
+      happyHomeDir, runtimeLifecycle: { prepare: async () => { throw new Error('Invalid candidate must not publish'); } },
+    }) });
+    try {
+      const result = await service.requestPluginChange({ kind: 'installArchive', locator: fixture.archivePath });
+      expect(result).toMatchObject({ kind: 'failed', code: 'PLUGIN_SETTINGS_DEFAULT_INVALID',
+        message: expect.stringContaining("Plugin 'acme.archive-candidate' Settings 'preferences' field 'enabled'") });
+      expect(JSON.stringify(result)).not.toContain('private-settings-value');
+      expect((await createPluginRegistryStateStore({ happyHomeDir }).read()).plugins).toEqual({});
+    } finally { await service.shutdown(); }
+  });
   it('omits the retained archive query from failed acquisition diagnostics', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-archive-query-failure-home-'));
     roots.push(happyHomeDir);

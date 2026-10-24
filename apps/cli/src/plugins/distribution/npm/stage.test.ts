@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createTestNpmTarball, sriSha512, type TestTarEntry } from '../testkit/npmTarball';
 import { cleanupStagedNpmArtifactCandidate, stageDownloadedNpmArtifactCandidate } from './stage';
 import type { DownloadedNpmArtifactCandidate } from './types';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
 const tempDirs: string[] = [];
 
@@ -242,6 +243,20 @@ async function createCandidateFixture(overrides: FixtureOverrides = {}): Promise
 }
 
 describe('stageDownloadedNpmArtifactCandidate', () => {
+  it('retains typed Settings attribution from a real tarball without echoing the invalid default', async () => {
+    const invalidDefault = 'private-settings-value';
+    const fixture = await createCandidateFixture({ pluginManifestBody: JSON.stringify(createPluginManifestV2Fixture({
+      id: 'acme.npm-stage', version: '1.2.3', entrypoints: { daemon: './dist/daemon.mjs' },
+      contributes: { settings: [{ id: 'preferences', title: 'Preferences', scope: 'daemon', target: { kind: 'plugin' },
+        fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' }, default: invalidDefault }] }] },
+    })) });
+    const result = await stageDownloadedNpmArtifactCandidate({ candidate: fixture.candidate, stagingParentPath: fixture.stagingParentPath });
+    expect(result).toMatchObject({ ok: false, rejection: { code: 'manifest_invalid', diagnostics: [{
+      code: 'plugin_manifest_invalid', contribution: { pluginId: 'acme.npm-stage', localId: 'preferences' },
+      details: { code: 'PLUGIN_SETTINGS_DEFAULT_INVALID', fieldId: 'enabled' },
+    }] } });
+    expect(JSON.stringify(result)).not.toContain(invalidDefault);
+  });
   it.each([
     [{ packageJsonBody: '{' }, 'package_json_invalid'],
     [{ uiArtifactsBody: '{' }, 'ui_artifact_manifest_invalid'],

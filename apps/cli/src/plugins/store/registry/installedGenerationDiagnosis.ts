@@ -100,6 +100,7 @@ async function inspectManifestLoadability(
   let manifest: Awaited<ReturnType<typeof readPluginManifest>>;
   try {
     manifest = await readPluginManifest({
+      purpose: 'installedRead',
       manifestPath: join(
         generation.rootPath,
         ...generation.record.manifestRelativePath.split('/'),

@@ -41,6 +41,7 @@ export function readRetainedFirstPartyDevelopmentManifest(params: Readonly<{ plu
     const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(candidate => candidate.pluginId === params.pluginId);
     if (!locator) throw new Error('Retained first-party development declaration is unavailable');
     const ingestion = ingestCanonicalPluginManifest(readBundledPluginManifest(locator, params.runtimeRoot), {
+        purpose: 'installedRead',
         manifestAuthority: 'bundled_first_party', sourceProvenance: 'localSource',
     });
     if (!ingestion.ok || ingestion.manifest.id !== params.pluginId) {
@@ -387,6 +388,7 @@ export async function attestRetainedPluginSource(params: Readonly<{
             pluginId: params.pluginId, runtimeRoot: join(runnerSourceRoot, 'apps', 'cli'),
         }) }
         : await readPluginManifest({
+        purpose: 'installedRead',
         manifestPath: generation
             ? join(rootPath, ...generation.record.manifestRelativePath.split('/'))
             : join(rootPath, '.happier-plugin', 'plugin.json'),

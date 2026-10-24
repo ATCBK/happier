@@ -4,9 +4,10 @@ import { formatPluginManifestIngestionDiagnostic } from '@happier-dev/protocol/p
 import { decodePluginManifestUtf8 } from '@happier-dev/protocol/plugins/manifest/ingest';
 
 import type { PluginCompatibilityDiagnostic } from '@/plugins/validation/diagnostics/types';
-import { ingestCanonicalPluginManifest } from './ingest';
+import { ingestCanonicalPluginManifest, type PluginManifestReadPurpose } from './ingest';
 import type { PluginSourceProvenance } from './sourceProvenance';
 import type { CanonicalPluginManifest } from './types';
+import { projectPluginManifestCompatibilityDiagnostic } from './diagnostics';
 
 export type ReadPluginManifestResult =
   | Readonly<{
@@ -26,6 +27,7 @@ export async function readPluginManifest(params: Readonly<{
   /** See `PluginManifestValidationOptions.sourceProvenance`. */
   sourceProvenance: PluginSourceProvenance;
   enforceEngineCompatibility?: boolean;
+  purpose?: PluginManifestReadPurpose;
 }>): Promise<ReadPluginManifestResult> {
   let manifestRawBytes: Uint8Array;
   try {
@@ -49,6 +51,7 @@ export async function readPluginManifest(params: Readonly<{
   const ingestion = ingestCanonicalPluginManifest(manifestRawBytes, {
     ...(params.manifestAuthority ? { manifestAuthority: params.manifestAuthority } : {}),
     sourceProvenance: params.sourceProvenance,
+    purpose: params.purpose,
     ...(params.enforceEngineCompatibility !== undefined
       ? { enforceEngineCompatibility: params.enforceEngineCompatibility }
       : {}),
@@ -57,8 +60,11 @@ export async function readPluginManifest(params: Readonly<{
     return {
       ok: false,
       diagnostics: ingestion.diagnostics.map((diagnostic) => ({
+        ...projectPluginManifestCompatibilityDiagnostic(diagnostic),
         code: 'plugin_manifest_invalid',
-        message: `${diagnostic.code}: ${formatPluginManifestIngestionDiagnostic(diagnostic)}`,
+        ...(diagnostic.pluginId && diagnostic.contributionId ? {} : {
+          message: `${diagnostic.code}: ${formatPluginManifestIngestionDiagnostic({ ...diagnostic, code: 'plugin_manifest_invalid' })}`,
+        }),
       })),
     };
   }

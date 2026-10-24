@@ -806,6 +806,43 @@ describe('stable typed settings foundation', () => {
         expect(unavailable[0]?.message).toContain('invalid default');
     });
 
+    it('keeps a healthy same-plugin group writable beside invalid defaults and controls without pruning stored opaque fields', async () => {
+        const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-settings-isolation-'));
+        const storage = createPluginStorageOwner({ pluginId: 'acme.plugin', paths: resolvePluginStorePaths({ happyHomeDir }) });
+        await storage.daemon.set(PLUGIN_SETTINGS_STORAGE_KEY, { t: 'happier_plugin_settings_record_v1', revision: 1,
+            values: { rejected: 'opaque', retired: { keep: true } } });
+        const errors: unknown[] = [];
+        const host = createStablePluginSettingsHost({
+            declarations: [
+                { pluginId: 'acme.plugin', contribution: { ...declaration(), id: 'bad-default', fields: [
+                    { id: 'rejected', title: 'Rejected', schema: { type: 'boolean' }, default: 'true' },
+                ] } },
+                { pluginId: 'acme.plugin', contribution: { ...declaration(), id: 'ambiguous', fields: [
+                    { id: 'ambiguous', title: 'Ambiguous', schema: { anyOf: [{ type: 'integer' }, { type: 'null' }] }, default: null },
+                ] } },
+                { pluginId: 'acme.plugin', contribution: declaration() },
+            ],
+            recordStore: createPluginStorageBackedSettingsRecordStore({ storageForPlugin: () => storage.daemon }),
+            broker: createStablePluginEventsBroker(),
+            onPluginSettingsUnavailable({ error }) { errors.push(error); },
+        });
+        expect(host.hasPlugin('acme.plugin')).toBe(true);
+        const service = host.bind(seed(() => true))!.forScope({ kind: 'daemon' });
+        expect(service.describe().map(field => field.id)).not.toContain('rejected');
+        expect(service.describe().map(field => field.id)).not.toContain('ambiguous');
+        await expect(service.get('rejected')).rejects.toMatchObject({ code: 'plugin_settings_unknown_id' });
+        await expect(service.set('endpoint', false)).rejects.toMatchObject({ code: 'plugin_settings_validation_failed' });
+        await service.set('endpoint', 'https://healthy.example');
+        await expect(service.get('endpoint')).resolves.toBe('https://healthy.example');
+        expect(await storage.daemon.get(PLUGIN_SETTINGS_STORAGE_KEY)).toMatchObject({ values: {
+            rejected: 'opaque', retired: { keep: true }, endpoint: 'https://healthy.example',
+        } });
+        expect(errors).toEqual(expect.arrayContaining([
+            expect.objectContaining({ code: 'PLUGIN_SETTINGS_DEFAULT_INVALID', contributionId: 'bad-default', fieldId: 'rejected' }),
+            expect.objectContaining({ code: 'PLUGIN_SETTINGS_PROJECTION_INVALID', contributionId: 'ambiguous', fieldId: 'ambiguous' }),
+        ]));
+    });
+
     it('permits the same non-secret local id across account and daemon scopes', () => {
         const accountEndpoint: PluginSettingsContributionV2 = {
             ...declaration(),

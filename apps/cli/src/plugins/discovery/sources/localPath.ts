@@ -10,6 +10,7 @@ import type { PluginCompatibilityDiagnostic } from '@/plugins/validation/diagnos
 import { readPluginManifest } from '@/plugins/manifest/read';
 import { pluginSourceProvenanceForKind } from '@/plugins/manifest/sourceProvenance';
 import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
+import type { PluginManifestReadPurpose } from '@/plugins/manifest/ingest';
 import { PLUGIN_MANIFEST_RELATIVE_PATH } from '@/plugins/store/paths';
 import { resolveAbsolutePathFromWorkingDirectory } from '@/utils/path/expandHomeDirPath';
 
@@ -84,6 +85,7 @@ export async function resolveLocalPathPluginSource(params: Readonly<{
    * which is a working tree on this machine by construction.
    */
   installedSourceKind?: PluginSourceKindV1;
+  purpose?: PluginManifestReadPurpose;
 }>): Promise<ResolvedLocalPathPluginSource> {
   const rawLocator = String(params.locator ?? '').trim();
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//u.test(rawLocator)) {
@@ -123,7 +125,7 @@ export async function resolveLocalPathPluginSource(params: Readonly<{
   const { pluginRootPath, manifestPath } = resolveManifestLocation(canonicalPath, pathStat.isFile());
   const manifestAuthority = 'external' as const;
   const sourceProvenance = pluginSourceProvenanceForKind(params.installedSourceKind);
-  const manifestRead = await readPluginManifest({ manifestPath, manifestAuthority, sourceProvenance });
+  const manifestRead = await readPluginManifest({ manifestPath, manifestAuthority, sourceProvenance, purpose: params.purpose });
   if (!manifestRead.ok) {
     return manifestRead;
   }

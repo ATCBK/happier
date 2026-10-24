@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -6,6 +6,38 @@ import { describe, expect, it } from 'vitest';
 
 import { loadInstalledPlugins } from './installed';
 import { createPluginStateStore } from '@/plugins/store/state.testkit';
+import { seedCurrentLocalPathPluginFixture } from '@/plugins/store/registry/currentState.testkit';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { admitLocalSettingsDeclarations } from '@/plugins/settings/localSettingsContributions';
+
+describe('retained Settings declarations', () => {
+  it.each([false, true])('keeps a physical committed installation discoverable (invalid default: %s)', async (invalidDefault) => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-retained-settings-'));
+    const pluginId = 'acme.retained-settings';
+    try {
+      const pluginRoot = join(directory, 'plugin');
+      await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
+      const manifest = createPluginManifestV2Fixture({ id: pluginId, contributes: { settings: [
+        { id: 'preferences', title: 'Preferences', scope: 'daemon', target: { kind: 'plugin' },
+          fields: [{ id: 'enabled', title: 'Enabled', schema: { type: 'boolean' }, default: invalidDefault ? 'true' : true }] },
+        { id: 'healthy', title: 'Healthy', scope: 'daemon', target: { kind: 'plugin' },
+          fields: [{ id: 'healthy', title: 'Healthy', schema: { type: 'boolean' }, default: false }] },
+      ] } });
+      await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify(manifest));
+      await writeFile(join(pluginRoot, 'daemon.mjs'), 'export function activate() {}');
+      const happyHomeDir = join(directory, 'home');
+      // The generation testkit models bytes accepted by an earlier host.
+      await seedCurrentLocalPathPluginFixture({ happyHomeDir, pluginRoot, pluginId, manifestVersion: '1.0.0' });
+      const discovered = await loadInstalledPlugins({ happyHomeDir });
+      const loaded = discovered.loadedPlugins.find(plugin => plugin.pluginId === pluginId);
+      expect(loaded).toBeDefined();
+      const admission = admitLocalSettingsDeclarations({ settings: loaded!.manifest.contributes.settings.map(definition => ({ pluginId, definition })) });
+      expect(admission.declarations.map(row => row.definition.id)).toEqual(invalidDefault ? ['healthy'] : ['preferences', 'healthy']);
+      expect(admission.errors).toMatchObject(invalidDefault ? [{ code: 'PLUGIN_SETTINGS_DEFAULT_INVALID',
+        pluginId, contributionId: 'preferences', fieldId: 'enabled' }] : []);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+});
 
 async function writePluginManifest(rootDir: string, pluginId: string): Promise<void> {
   const manifestDir = join(rootDir, '.happier-plugin');

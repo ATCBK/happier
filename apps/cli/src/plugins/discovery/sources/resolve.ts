@@ -57,5 +57,5 @@ export async function resolveInstalledPluginSource(params: Readonly<{
       }],
     };
   }
-  return await resolveLocalPathPluginSource({ locator, installedSourceKind: record.source.kind });
+  return await resolveLocalPathPluginSource({ locator, installedSourceKind: record.source.kind, purpose: 'installedRead' });
 }

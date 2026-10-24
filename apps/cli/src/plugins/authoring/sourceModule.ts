@@ -12,6 +12,7 @@ import {
   normalizePluginDaemonDatabaseRuntimeProjection,
 } from '@happier-dev/plugin-sdk/host/registration';
 import { serializeCanonicalPluginManifest } from '@/plugins/manifest/serialize';
+import { assertPluginManifestSettingsValid } from '@/plugins/settings/manifestSettings';
 import {
   createPluginTypeScriptCandidateScope,
   createPluginTypeScriptGenerationScope,
@@ -271,6 +272,7 @@ export function projectPluginAuthorModule(
     );
   }
   let daemonDatabases: PluginDaemonDatabaseRuntimeProjection;
+  assertPluginManifestSettingsValid(manifestResult.manifest);
   try {
     daemonDatabases = normalizePluginDaemonDatabaseRuntimeProjection(
       namespace.daemonDatabases,

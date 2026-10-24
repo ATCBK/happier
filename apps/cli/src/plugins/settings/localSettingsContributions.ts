@@ -1,5 +1,10 @@
 import { PluginSettingsContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/settings';
 import type { PluginSettingFieldV2, PluginSettingsContributionV2 } from '@happier-dev/protocol';
+import {
+    PluginSettingsProjectionError,
+    projectPluginSettingsContributionV2,
+} from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { isBoundedPluginPerActiveServerValueV1 } from '@happier-dev/protocol/plugins/contributions/settings';
 
 import type { ResolvedSettingsContribution } from '@/plugins/projection/registry/types';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
@@ -19,6 +24,7 @@ export class PluginLocalSettingsDeclarationError extends Error {
         | 'PLUGIN_SETTINGS_PLUGIN_ID_REQUIRED'
         | 'PLUGIN_SETTINGS_SCHEMA_INVALID'
         | 'PLUGIN_SETTINGS_DEFAULT_INVALID'
+        | 'PLUGIN_SETTINGS_FIELD_ID_CONFLICT'
         | 'PLUGIN_SETTINGS_SCOPE_UNAVAILABLE'
         | 'PLUGIN_SETTINGS_AVAILABILITY_UNAVAILABLE';
     readonly pluginId: string;
@@ -35,7 +41,7 @@ export class PluginLocalSettingsDeclarationError extends Error {
         policyCode?: string;
         reason: string;
     }>) {
-        super(params.reason);
+        super(`Plugin '${params.pluginId}' Settings '${params.contributionId}'${params.fieldId ? ` field '${params.fieldId}'` : ''}: ${params.reason}`);
         this.name = 'PluginLocalSettingsDeclarationError';
         this.code = params.code;
         this.pluginId = params.pluginId;
@@ -52,7 +58,7 @@ export type ResolvedLocalSettingsDeclaration = Readonly<{
 }>;
 
 export function resolveLocalSettingsDeclarations(params: Readonly<{
-    settings: readonly ResolvedSettingsContribution[];
+    settings: readonly Pick<ResolvedSettingsContribution, 'pluginId' | 'definition'>[];
     pluginId?: string;
 }>): readonly ResolvedLocalSettingsDeclaration[] {
     const declarations: ResolvedLocalSettingsDeclaration[] = [];
@@ -81,6 +87,9 @@ export function resolveLocalSettingsDeclarations(params: Readonly<{
             });
         }
         const definition = parsed.data;
+        const perActiveServerMaps = new Set(definition.fields.flatMap(field => (
+            field.presentation?.binding?.kind === 'perActiveServer' ? [field.presentation.binding.byServerIdSettingId] : []
+        )));
         for (const field of definition.fields) {
             let validate: ReturnType<typeof compilePluginSettingFieldSchema>;
             try {
@@ -95,7 +104,9 @@ export function resolveLocalSettingsDeclarations(params: Readonly<{
                     reason: `Plugin setting '${field.id}' has an invalid schema`,
                 });
             }
-            if (field.secret === undefined && field.default !== undefined && !isValidPluginJsonSchemaValue(validate, field.default)) {
+            if ((field.secret === undefined || field.secret === false) && field.default !== undefined
+                && (!isValidPluginJsonSchemaValue(validate, field.default)
+                    || (perActiveServerMaps.has(field.id) && !isBoundedPluginPerActiveServerValueV1(field.default)))) {
                 throw new PluginLocalSettingsDeclarationError({
                     code: 'PLUGIN_SETTINGS_DEFAULT_INVALID',
                     pluginId: contribution.pluginId,
@@ -109,6 +120,48 @@ export function resolveLocalSettingsDeclarations(params: Readonly<{
     }
 
     return Object.freeze(declarations);
+}
+
+export type PluginSettingsAdmissionError = PluginLocalSettingsDeclarationError | PluginSettingsProjectionError;
+export type AdmittedLocalSettingsDeclaration = ResolvedLocalSettingsDeclaration & Readonly<{
+    projection: ReturnType<typeof projectPluginSettingsContributionV2>;
+}>;
+
+/** One Settings admission decision for projection and every scoped runtime reader/writer. */
+export function admitLocalSettingsDeclarations(params: Readonly<{
+    settings: readonly Pick<ResolvedSettingsContribution, 'pluginId' | 'definition'>[];
+    pluginId?: string;
+}>): Readonly<{
+    declarations: readonly AdmittedLocalSettingsDeclaration[];
+    errors: readonly PluginSettingsAdmissionError[];
+}> {
+    const declarations: AdmittedLocalSettingsDeclaration[] = [];
+    const errors: PluginSettingsAdmissionError[] = [];
+    const fieldIdsByScope = new Map<string, Set<string>>();
+    for (const input of params.settings) {
+        if (params.pluginId && input.pluginId !== params.pluginId) continue;
+        try {
+            const declaration = resolveLocalSettingsDeclarations({ settings: [input] })[0]!;
+            const projection = projectPluginSettingsContributionV2({ pluginId: declaration.pluginId, definition: declaration.definition });
+            const scopeKey = `${declaration.pluginId}/${declaration.definition.scope}`;
+            const fieldIds = fieldIdsByScope.get(scopeKey) ?? new Set<string>();
+            const duplicate = declaration.definition.fields.find(field => fieldIds.has(field.id));
+            if (duplicate) throw new PluginLocalSettingsDeclarationError({
+                code: 'PLUGIN_SETTINGS_FIELD_ID_CONFLICT', pluginId: declaration.pluginId,
+                contributionId: declaration.definition.id, fieldId: duplicate.id,
+                reason: `Plugin setting '${duplicate.id}' is declared by multiple Settings groups in this scope`,
+            });
+            for (const field of declaration.definition.fields) fieldIds.add(field.id);
+            fieldIdsByScope.set(scopeKey, fieldIds);
+            declarations.push(Object.freeze({ ...declaration, projection }));
+        } catch (error) {
+            if (!(error instanceof PluginLocalSettingsDeclarationError) && !(error instanceof PluginSettingsProjectionError)) throw error;
+            // Missing attribution is a host invariant, never an author error to suppress.
+            if (!input.pluginId) throw error;
+            errors.push(error);
+        }
+    }
+    return Object.freeze({ declarations: Object.freeze(declarations), errors: Object.freeze(errors) });
 }
 
 export function flattenLocalSettingsFields(

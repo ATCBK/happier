@@ -13,7 +13,7 @@ import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/
 import { isDynamicPluginResourceContributionV2, PluginAgentCapabilitiesV2Schema, PluginResourceKindV2Schema, PluginDynamicResourceScopeV1Schema } from '@happier-dev/protocol/plugins/contributions/v2';
 import { PluginActionDeclaredExecutionV2Schema, PluginActionScopeV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
 import { getPluginMachineExecutionOriginRef, PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
-import { PluginSettingsProjectionError, projectPluginSettingsContributionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { PluginSettingsProjectionError } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { AgentProviderRequirementsV1Schema } from '@happier-dev/protocol/providers/compatibility/v1';
 
 import type { PluginCatalogEntry } from '@/plugins/projection/catalog/installed';
@@ -71,7 +71,7 @@ import { mapPluginSourceToDiagnosticSource } from '@/plugins/projection/introspe
 import type { PluginTargetActivationIntrospectionSnapshot } from '@/plugins/projection/introspection/targetActivationFacts';
 import {
     PluginLocalSettingsDeclarationError,
-    resolveLocalSettingsDeclarations,
+    admitLocalSettingsDeclarations,
 } from '@/plugins/settings/localSettingsContributions';
 import { resolveNotificationChannelSettingsContributions } from '@/plugins/settings/notificationChannelSettings';
 import { deriveRegistryConnectedAccountPurposeAuthorizations } from '@/daemon/connectedServices/purposeBindings/deriveRegistryConnectedAccountPurposeAuthorizations';
@@ -350,6 +350,12 @@ function collectPluginContributionMetadata(
     }
     for (const resource of registry.resources) {
         upsert(resource);
+    }
+    for (const setting of registry.settings ?? []) {
+        upsert(setting);
+    }
+    for (const channel of registry.notificationChannels ?? []) {
+        upsert(channel);
     }
     for (const target of registry.browserTargets ?? []) {
         upsert(target);
@@ -875,32 +881,41 @@ export function buildResourcesById(
 
 function buildSettingsById(
     registry: ResolvedContributionRegistry,
+    diagnostics: PluginDiagnosticRecordV1[],
+    installedPackages: readonly PluginCatalogEntry[] = [],
 ): PluginProjectionV2['settingsById'] {
     const settingsById: PluginProjectionV2['settingsById'] = {};
-    let declarations;
+    let metadata: ReturnType<typeof collectPluginDiagnosticMetadata> | undefined;
+    let admission: ReturnType<typeof admitLocalSettingsDeclarations>;
     try {
-        declarations = resolveLocalSettingsDeclarations({
-            settings: [
-                ...(registry.settings ?? []),
-                ...resolveNotificationChannelSettingsContributions(registry.notificationChannels ?? []),
-            ],
-        });
+        admission = admitLocalSettingsDeclarations({ settings: [
+            ...(registry.settings ?? []),
+            ...resolveNotificationChannelSettingsContributions(registry.notificationChannels ?? []),
+        ] });
     } catch (error) {
-        if (!(error instanceof PluginLocalSettingsDeclarationError)) throw error;
-        const fieldContext = error.fieldId ? ` field '${error.fieldId}'` : '';
-        throw new PluginSettingsProjectionError(
-            `Cannot project settings contribution '${error.pluginId}/${error.contributionId}'${fieldContext}: ${error.reason}`,
-            error.pluginId,
-            error.contributionId,
-            error.fieldId ?? null,
-        );
+        if (error instanceof PluginLocalSettingsDeclarationError && error.code === 'PLUGIN_SETTINGS_PLUGIN_ID_REQUIRED') {
+            throw new PluginSettingsProjectionError(error.message, error.pluginId, error.contributionId, error.fieldId ?? null);
+        }
+        throw error;
     }
-    for (const declaration of declarations) {
-        settingsById[qualifiedProjectionKey(declaration.pluginId, declaration.definition.id)] =
-            projectPluginSettingsContributionV2({
-                pluginId: declaration.pluginId,
-                definition: declaration.definition,
-            });
+    for (const declaration of admission.declarations) {
+        settingsById[qualifiedProjectionKey(declaration.pluginId, declaration.definition.id)] = declaration.projection;
+    }
+    for (const error of admission.errors) {
+        metadata ??= collectPluginDiagnosticMetadata({ registry, installedPackages });
+        const plugin = metadata.get(error.pluginId);
+        if (!plugin) throw error;
+        diagnostics.push(enrichPluginDiagnosticRecord({
+            code: error.code,
+            severity: 'error',
+            message: error.message,
+            details: { fieldId: error.fieldId ?? null },
+        }, {
+            ordinal: diagnostics.length, plugin,
+            contribution: createPluginContributionIdentity({ pluginId: plugin.id, localId: error.contributionId }),
+            stage: 'normalization', occurrenceId: registry.occurrenceIdsByPluginId?.[plugin.id],
+            host: 'daemon', platform: process.platform, occurredAtMs: Date.now(),
+        }));
     }
     return settingsById;
 }
@@ -948,9 +963,11 @@ export function buildPluginSettingsProjectionV2(params: Readonly<{
     registry: ResolvedContributionRegistry;
     generation: number;
 }>): PluginProjectionV2 {
+    const diagnostics: PluginDiagnosticRecordV1[] = [];
     return {
         ...createEmptyPluginProjectionV2(params.generation),
-        settingsById: buildSettingsById(params.registry),
+        settingsById: buildSettingsById(params.registry, diagnostics),
+        diagnostics,
     };
 }
 
@@ -1197,7 +1214,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         toolsById: buildToolsById(params.registry),
         commandsById: buildCommandsById(params.registry),
         resourcesById: buildResourcesById(params.registry, purposeScopes, params.pluginExecutionOriginsByPluginId),
-        settingsById: buildSettingsById(params.registry),
+        settingsById: buildSettingsById(params.registry, diagnostics, installedPackages),
         familiesById,
         contributionIntrospection: narrowIntrospectionToClientReadFamilies(projectPluginContributionIntrospection({
             generation: params.generation,

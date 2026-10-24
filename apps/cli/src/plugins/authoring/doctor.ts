@@ -13,6 +13,8 @@ import {
   preparePluginAuthorDependencies,
   type PluginAuthorDependencyPreparationResult,
 } from './toolchain';
+import { PluginLocalSettingsDeclarationError } from '@/plugins/settings/localSettingsContributions';
+import { PluginSettingsProjectionError } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 /**
  * The doctor speaks the same author-source-location vocabulary as every other
@@ -24,8 +26,13 @@ export type PluginAuthorDoctorDiagnostic = Readonly<{
   code:
     | 'plugin_author_dependency_preparation_failed'
     | 'plugin_author_evaluation_failed'
-    | 'plugin_author_evaluation_slow';
+    | 'plugin_author_evaluation_slow'
+    | PluginLocalSettingsDeclarationError['code']
+    | PluginSettingsProjectionError['code'];
   message: string;
+  pluginId?: string;
+  contributionId?: string;
+  fieldId?: string;
   location?: PluginAuthorDoctorDiagnosticLocation;
 }>;
 
@@ -70,8 +77,12 @@ function createErrorDiagnostic(
 ): PluginAuthorDoctorDiagnostic {
   const location = diagnosticLocationFromError(error, packageRoot);
   return Object.freeze({
-    code,
+    code: error instanceof PluginLocalSettingsDeclarationError || error instanceof PluginSettingsProjectionError ? error.code : code,
     message: `${prefix}: ${messageFromError(error)}`,
+    ...((error instanceof PluginLocalSettingsDeclarationError || error instanceof PluginSettingsProjectionError) ? {
+      pluginId: error.pluginId, contributionId: error.contributionId,
+      ...(error.fieldId ? { fieldId: error.fieldId } : {}),
+    } : {}),
     ...(location === undefined ? {} : { location }),
   });
 }

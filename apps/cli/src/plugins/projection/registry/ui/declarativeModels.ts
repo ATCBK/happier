@@ -8,7 +8,7 @@ import {
     type StablePluginDeclarativeModel,
 } from '@/plugins/runtime/invocation/services/declarativeModel';
 import { createStablePluginSettingsModels } from '@/plugins/runtime/invocation/services/settings';
-import { resolveLocalSettingsDeclarations } from '@/plugins/settings/localSettingsContributions';
+import { admitLocalSettingsDeclarations } from '@/plugins/settings/localSettingsContributions';
 
 import type { ResolvedContributionRegistry } from '../types';
 
@@ -80,10 +80,10 @@ export function resolveDeclarativeProjectionModels(params: Readonly<{
         if (!pluginId) continue;
         const occurrenceId = params.readPluginOccurrenceId(pluginId);
         try {
-            const settingDefinitions = resolveLocalSettingsDeclarations({
+            const settingDefinitions = admitLocalSettingsDeclarations({
                 settings: params.registry.settings ?? [],
                 pluginId,
-            }).map((setting) => setting.definition);
+            }).declarations.map((setting) => setting.definition);
             const settings = settingDefinitions.length > 0
                 ? [...createStablePluginSettingsModels({
                     pluginId,

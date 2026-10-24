@@ -1,4 +1,5 @@
 import { awaitPluginAcquisition, createPluginAcquisitionLifetime } from '../acquisitionLifetime';
+import type { PluginCompatibilityDiagnostic } from '@/plugins/validation/diagnostics/types';
 
 import { downloadResolvedNpmArtifact, type NpmArtifactBodyClient } from './download';
 import { normalizeNpmArtifactRequest } from './normalize';
@@ -6,6 +7,13 @@ import { resolveNpmArtifactMetadata, type NpmRegistryJsonClient } from './resolv
 import type { DownloadedNpmArtifactCandidate, NpmProvenanceSignal, NpmRegistrySigningKey, NormalizeNpmArtifactRequestInput, ResolvedNpmArtifact } from './types';
 
 export type NpmRegistryArtifactClient = NpmRegistryJsonClient & NpmArtifactBodyClient;
+
+export class NpmArtifactCompatibilityError extends Error {
+  constructor(readonly diagnostics: readonly PluginCompatibilityDiagnostic[]) {
+    super('Npm artifact selection requires a compatible generated compatibility projection before archive download');
+    this.name = 'NpmArtifactCompatibilityError';
+  }
+}
 
 function parseRegistryKeys(value: unknown): readonly NpmRegistrySigningKey[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid npm registry signing keys response');
@@ -95,7 +103,7 @@ export async function resolveAndDownloadNpmArtifact(params: Readonly<{
       !params.requireCompatibleProjection && request.selector.kind === 'exact'
     );
     if (!resolved.compatibility?.automaticEligible && !mayDeferCompatibilityToPresentUserReview) {
-      throw new Error('Npm artifact selection requires a compatible generated compatibility projection before archive download');
+      throw new NpmArtifactCompatibilityError(resolved.compatibility?.diagnostics ?? []);
     }
     const registryKeys = resolved.signatures.length === 0 ? [] : parseRegistryKeys(await awaitPluginAcquisition(params.client.getJson({
       url: `${request.registryOrigin}/-/npm/v1/keys`,
