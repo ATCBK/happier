@@ -46,7 +46,8 @@ import { refreshTerminalPresentUserPolicy } from '@/settings/accountSettings/res
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { StoredApprovalRequestSchema, requiresExactDaemonApprovalReplay } from '@happier-dev/protocol/approvals/approvalRequestV1';
-import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { buildApprovalRequestArtifactHeaderV1, deriveManagedDeleteApprovalSubjectKeyV1,
+    managedDeleteApprovalIndexedKindV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { SessionCreationKeyV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
@@ -137,10 +138,68 @@ function adapter(withAuthority = true, executeSessionStart?: Parameters<typeof c
 }
 
 describe('daemon managed Machine Action factory', () => {
+    it.each([['stop', 'unused'], ['delete', 'unused'], ['stop', 'deadline'], ['delete', 'deadline'], ['stop', 'admission-conflict']] as const)(
+        'settles an automatic retention operation after manual %s (%s) without native IO', async (desired, kind) => {
+        await storeHome('srv_home');
+        const machine = ManagedMachineV1Schema.parse({ id: 'managed', homeId: 'srv_home', custodianAccountId: 'account',
+            controller: { machineId: 'controller', installationId: 'installation' }, enrolledMachineId: 'guest',
+            launch: { provider: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
+            allocation: 'bound', resource: { contributionRef: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
+            creationState: 'active', desired: 'start', desiredWhen: 'now', intentRevision: 0,
+            retention: kind === 'unused' ? { kind, afterMs: 3_600_000, effect: 'stop' }
+                : { kind: 'deadline', at: kind === 'admission-conflict' ? 0 : Date.now() + 60_000, effect: 'stop', interrupts: true },
+            wakeOnAcceptedMessage: false });
+        let current = kind === 'unused' ? { ...machine, desired, intentRevision: 1 } : machine;
+        let readCurrent!: () => void;
+        const currentRead = new Promise<void>(resolve => { readCurrent = resolve; });
+        const nativeEffects: string[] = [];
+        const native = nativeFixture({ privateNative: true, onNativeRole: role => { nativeEffects.push(role); } });
+        const post = vi.spyOn(axios, 'post').mockImplementation(async () => {
+            if (kind === 'admission-conflict') return { status: 409, data: { code: 'intent_changed' } };
+            throw new Error('Unexpected policy HTTP preparation');
+        });
+        const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'account',
+            generateOperationId: () => 'superseded-retention' });
+        const managed = createDaemonManagedMachineActionAdapter({ credentials, machineId: 'controller', serverBaseUrl: serverUrl,
+            serverId: configuration.activeServerId, installationIdentity: { installationId: 'installation', privateKey: nacl.sign.keyPair().secretKey },
+            managedProviderOperationAuthority: authority,
+            resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'controller', serverIdentityId: 'srv_home' }),
+            acquireRuntimeRegistryLease: async () => ({ registry: native.runtimeRegistry, source: 'active', durableRevision: 1, release: async () => {} }),
+            observeActionExecution: request => operations.observeExecution(request), readPolicyCurrent: async () => { readCurrent(); return current; },
+            executeManagedPolicyAction: unavailable });
+        if (kind === 'deadline') vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        try {
+            const execution = managed.executePolicy({ machine, purpose: { kind: 'retention' } });
+            if (kind === 'deadline') {
+                expect(await Promise.race([currentRead.then(() => 'waiting'), execution])).toBe('waiting');
+                await new Promise<void>(resolve => setImmediate(resolve));
+                expect(await operations.handlers.getV2({ operationId: 'superseded-retention' })).toMatchObject({ kind: 'found',
+                    operation: { state: 'running', progress: { phase: 'managed.intent.waiting-deadline' } } });
+                current = { ...machine, desired, intentRevision: 1 };
+                await vi.advanceTimersByTimeAsync(60_000);
+            }
+            await expect(execution).resolves.toMatchObject({ ok: false,
+                errorCode: kind === 'admission-conflict' ? 'intent_changed' : 'cancelled' });
+        } finally { vi.useRealTimers(); }
+        await expect(operations.handlers.getV2({ operationId: 'superseded-retention', waitForTerminal: true }))
+            .resolves.toMatchObject({ kind: 'found', operation: { state: kind === 'admission-conflict' ? 'failed' : 'cancelled',
+                domainRef: { kind: 'managedMachine', id: machine.id } } });
+        if (kind === 'admission-conflict') {
+            expect(post.mock.calls.filter(([url]) => String(url).endsWith('/prepare-policy'))).toHaveLength(1);
+            expect(diagnostics).not.toHaveBeenCalledWith('[managed-policy.wait-superseded]', expect.anything());
+        } else {
+            expect(post).not.toHaveBeenCalled();
+            expect(diagnostics).toHaveBeenCalledWith('[managed-policy.wait-superseded]', expect.objectContaining({
+                managedId: machine.id, reasonCode: 'intent_changed',
+            }));
+        }
+        expect(nativeEffects).toEqual([]);
+    });
     it.each([
         ['cleanup', false], ['cleanup', true], ['rearmed-wake', false], ['rearmed-wake', true], ['denied-wake', false], ['retired-wake', false],
     ] as const)('resumes %s from a separate approving client through exact daemon replay (missing coordinator: %s)', async (purpose, missingCoordinator) => {
-        const wake = purpose !== 'cleanup';
+        const wake = !purpose.startsWith('cleanup');
         const denied = purpose === 'denied-wake';
         const retired = purpose === 'retired-wake';
         vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
@@ -171,6 +230,29 @@ describe('daemon managed Machine Action factory', () => {
         type ArtifactWire = { id: string; header: string; body: string; dataEncryptionKey: string;
             headerVersion: number; bodyVersion: number; seq: number; createdAt: number; updatedAt: number; provenance?: unknown };
         let artifact: ArtifactWire | undefined;
+        let retirementListFails = false;
+        const retirementArtifacts = new Map<string, ArtifactWire>();
+        const ensureRetirementArtifacts = () => {
+            if (retirementArtifacts.size > 0 || !artifact) return;
+            const content = decodePlainArtifactStoredContent(artifact.body);
+            const original = StoredApprovalRequestSchema.parse(JSON.parse(String(content && typeof content === 'object'
+                ? Reflect.get(content, 'body') : null)));
+            for (const [id, managedId] of [['matching-delete-approval', machine.id], ['other-delete-approval', 'other-managed']] as const) {
+                const request = StoredApprovalRequestSchema.parse({ ...original, status: 'open', decision: undefined, execution: undefined,
+                    actionArgs: { homeId: machine.homeId, managedId, intent: 'delete', when: 'now', expectedRevision: 1, reviewedDependencies: true },
+                    summary: 'Delete managed Machine' });
+                retirementArtifacts.set(id, { id,
+                    header: encodePlainArtifactStoredContent(buildApprovalRequestArtifactHeaderV1(request)),
+                    body: encodePlainArtifactStoredContent({ body: JSON.stringify(request) }), dataEncryptionKey: artifact.dataEncryptionKey,
+                    headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+            }
+        };
+        const readRetirementApproval = (id: string) => {
+            const row = retirementArtifacts.get(id);
+            if (!row) return null;
+            const content = decodePlainArtifactStoredContent(row.body);
+            return StoredApprovalRequestSchema.parse(JSON.parse(String(content && typeof content === 'object' ? Reflect.get(content, 'body') : null)));
+        };
         const storedApproval = () => {
             if (!artifact) throw new Error('Cleanup approval was not persisted');
             const content = decodePlainArtifactStoredContent(artifact.body);
@@ -182,7 +264,8 @@ describe('daemon managed Machine Action factory', () => {
         // Home/Artifact HTTP and the update socket are the substituted boundaries.
         // Action policy, the two executors, replay, operation and native owner stay real.
         vi.spyOn(axios, 'get').mockImplementation(async url => {
-            const path = new URL(String(url)).pathname;
+            const parsedUrl = new URL(String(url));
+            const path = parsedUrl.pathname;
             if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
             if (path === ACCOUNT_SECURITY_PATH_V1) return { status: 200, data: AccountSecurityGetResponseV1Schema.parse({ v: 1,
                 encryptionMode: 'plain', terminalPresentUserPolicy: 'allowed', nativeEmail: null,
@@ -191,10 +274,36 @@ describe('daemon managed Machine Action factory', () => {
                 if (storedApproval().status === 'open') waiting();
                 return { status: 200, data: { ...artifact, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none' } };
             }
+            if (path === '/v1/artifacts') {
+                if (retirementListFails) return { status: 500, data: { error: 'artifact_list_failed' } };
+                ensureRetirementArtifacts();
+                const kinds = parsedUrl.searchParams.get('kinds');
+                expect(kinds && JSON.parse(kinds)).toEqual([managedDeleteApprovalIndexedKindV1(
+                    deriveManagedDeleteApprovalSubjectKeyV1({ homeId: machine.homeId, managedId: machine.id }))]);
+                const matching = retirementArtifacts.get('matching-delete-approval');
+                return { status: 200, data: { items: matching ? [{ ...matching,
+                    ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none' }] : [],
+                    hasUnclassified: false, coverage: { status: 'complete', unclassifiedCount: 0 } } };
+            }
+            const retirement = [...retirementArtifacts.values()].find(row => path === `/v1/artifacts/${row.id}`);
+            if (retirement) return { status: 200, data: { ...retirement,
+                ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none' } };
             throw new Error(`Unexpected cleanup GET ${path}`);
         });
         vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
             const path = new URL(String(url)).pathname;
+            if (path === '/v1/artifacts/read') {
+                const artifactIds = (body as { artifactIds?: unknown }).artifactIds;
+                if (!Array.isArray(artifactIds) || artifactIds.some(id => typeof id !== 'string')) {
+                    throw new Error('Invalid selected Artifact read');
+                }
+                return { status: 200, data: { items: artifactIds.map(id => {
+                    const row = retirementArtifacts.get(id);
+                    if (!row) throw new Error(`Missing selected Artifact ${id}`);
+                    return { artifactId: id, ok: true, artifact: { ...row, ownerAccountId: 'account', access: 'owner',
+                        encryptionMode: 'plain', publicAudience: 'none' }, recipientCensus: null };
+                }) } };
+            }
             if (path === '/v1/artifacts' || artifact && path === `/v1/artifacts/${artifact.id}`) {
                 const record = body as { id?: string; header: string; body: string; dataEncryptionKey?: string;
                     expectedHeaderVersion?: number; expectedBodyVersion?: number; provenance?: unknown };
@@ -202,6 +311,7 @@ describe('daemon managed Machine Action factory', () => {
                     if (!record.id || !record.dataEncryptionKey) throw new Error('Missing canonical approval Artifact fields');
                     artifact = { id: record.id, header: record.header, body: record.body, dataEncryptionKey: record.dataEncryptionKey,
                         headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, provenance: record.provenance };
+                    ensureRetirementArtifacts();
                     return { status: 200, data: { id: record.id, headerVersion: 1, bodyVersion: 1 } };
                 }
                 if (!artifact) throw new Error('No cleanup Artifact to update');
@@ -211,6 +321,18 @@ describe('daemon managed Machine Action factory', () => {
                     headerVersion: artifact.headerVersion + 1, bodyVersion: artifact.bodyVersion + 1, seq: artifact.seq + 1, updatedAt: artifact.updatedAt + 1 };
                 for (const socket of approvalWire.sockets) socket.wake();
                 return { status: 200, data: { success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion } };
+            }
+            const retirementEntry = [...retirementArtifacts.entries()].find(([id]) => path === `/v1/artifacts/${id}`);
+            if (retirementEntry) {
+                const [id, current] = retirementEntry;
+                const record = body as { header: string; body: string; expectedHeaderVersion?: number; expectedBodyVersion?: number; provenance?: unknown };
+                expect(record.expectedHeaderVersion).toBe(current.headerVersion);
+                expect(record.expectedBodyVersion).toBe(current.bodyVersion);
+                const updated = { ...current, header: record.header, body: record.body, provenance: record.provenance,
+                    headerVersion: current.headerVersion + 1, bodyVersion: current.bodyVersion + 1,
+                    seq: current.seq + 1, updatedAt: current.updatedAt + 1 };
+                retirementArtifacts.set(id, updated);
+                return { status: 200, data: { success: true, headerVersion: updated.headerVersion, bodyVersion: updated.bodyVersion } };
             }
             controllerPaths.push(path);
             if (path.endsWith('/activation-failed')) {
@@ -315,6 +437,24 @@ describe('daemon managed Machine Action factory', () => {
                 : denied ? { ok: false, errorCode: 'approval_rejected' } : missingCoordinator
                 ? { ok: false, errorCode: 'approval_stale', details: { reason: 'live_invocation_unavailable' } } : { ok: true } });
             expect(effects).toEqual(missingCoordinator || denied || retired ? [] : [wake ? 'power' : 'destroy']);
+            if (!wake && !missingCoordinator) {
+                expect(readRetirementApproval('matching-delete-approval')).toMatchObject({ status: 'canceled' });
+                expect(readRetirementApproval('other-delete-approval')).toMatchObject({ status: 'open' });
+                retirementListFails = true;
+                const listFailureExecutor = createActionExecutor({ ...createCliActionDeps(executorParams),
+                    managedMachineReferences: async () => ({ homeId: machine.homeId, machineId: null,
+                        coverage: 'complete', references: [], unavailable: [] }),
+                    managedMachineAction: async () => ({ kind: 'accepted', managedId: machine.id, intentRevision: 3,
+                        operation: { operationId: 'delete-with-list-failure' } }),
+                    isActionApprovalRequired: () => false,
+                });
+                expect(await listFailureExecutor.execute('machines.managed.delete', {
+                    homeId: machine.homeId, managedId: machine.id, intent: 'delete', when: 'now',
+                    expectedRevision: 2, reviewedDependencies: true,
+                }, { surface: 'ui', authority: 'present_user', serverId: configuration.activeServerId,
+                    presentUserConfirmation: { actionId: 'machines.managed.delete' } })).toMatchObject({ ok: true });
+                await vi.waitFor(() => expect(diagnostics).toHaveBeenCalledWith('[Approval retirement]', { code: 'list_failed' }));
+            }
             if (wake && (denied || missingCoordinator || retired)) {
                 expect(failedActivation).toMatchObject({ status: 'failed', failureCode: denied ? 'managed_start_denied' : 'managed_start_failed' });
             } else expect(failedActivation).toBeUndefined();
@@ -1245,7 +1385,13 @@ describe('daemon managed Machine Action factory', () => {
                 if (path === '/v1/account/entity-rows/acp') return { status: 200,
                     data: AcpCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
                         content: { t: 'plain', v: { v: 1, definitions: [] } } }) };
-                if (path === '/v1/artifacts') return { status: 200, data: { items: [], hasUnclassified: false } };
+                if (path === '/v1/artifacts') {
+                    const query = new URL(String(url)).searchParams;
+                    const filtered = query.has('kind') || query.has('kinds') || query.has('unclassified');
+                    return { status: 200, data: filtered ? { items: [], hasUnclassified: false,
+                        ...(query.has('kinds') || query.has('unclassified')
+                            ? { coverage: { status: 'complete', unclassifiedCount: 0 } } : {}) } : [] };
+                }
                 if (path.startsWith('/v1/artifacts/')) {
                     expect(config?.headers?.Authorization).toBe(`Bearer ${token}`);
                     return { status: artifact && path === `/v1/artifacts/${artifact.id}` ? 200 : 404,

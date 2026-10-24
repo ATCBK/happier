@@ -4,8 +4,10 @@ import type { ApiMachineClient } from '@/api/apiMachine';
 import type { Machine } from '@/api/types';
 import type { ManagedControllerV1, ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { ManagedMachineControllerError } from '@/machines/managed/controllerErrors';
+import { hasSubmittedManagedRetentionEffect } from '@/machines/managed/managedRetentionPolicy';
 import { logger } from '@/ui/logger';
-import type { createDaemonManagedMachineActionAdapter } from './managedMachineActionAdapter';
+import { MANAGED_MACHINE_POLICY_RETENTION_SATISFIED_ABORT,
+    type createDaemonManagedMachineActionAdapter } from './managedMachineActionAdapter';
 import { createManagedPolicyCensusProofV1, ManagedPolicyCensusInputV1Schema, ManagedPolicyCensusOutputV1Schema,
     type ManagedPolicyPurposeV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 
@@ -63,9 +65,10 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
         | 'policy_runtime_stopped', reason?: unknown) => {
         if (cancel.signal.aborted) return;
         try { logger.warnLocalFile('[managed-policy.abort]', { managedId, reasonCode }); } catch { /* Diagnostic only. */ }
-        cancel.abort(reason);
+        cancel.abort(reasonCode === 'retention_satisfied' ? MANAGED_MACHINE_POLICY_RETENTION_SATISFIED_ABORT : reason);
     };
     const reconcile = async (census: ManagedMachinePolicyCensus, scheduleNew: boolean) => {
+        const retentionContinuations = new Map(census.retentionContinuations?.map(item => [item.managedId, item.requestId]));
         enrolledMachineIds = new Set(census.machines.flatMap(machine => machine.enrolledMachineId ? [machine.enrolledMachineId] : []));
         const current = new Set<string>();
         for (const machine of census.machines) {
@@ -79,12 +82,6 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 ? { kind: 'accepted-input-start', target }
                 : machine.retention.kind !== 'until-delete' ? { kind: 'retention' } : null;
             if (!purpose) continue;
-            // Unused retention needs the guest's registered daemon, then its
-            // positive activity evidence. Enrollment alone is still creation.
-            // A reviewed deadline or an already-submitted effect retains its
-            // own lifecycle, including reconciliation before enrollment.
-            if (purpose.kind === 'retention' && machine.retention.kind === 'unused'
-                && !machine.enrolledMachineId && !machine.submittedNativeEffect) continue;
             current.add(machine.id);
             // Intent revisions created by this same driver do not cancel its
             // native completion. A replaced native resource or enrollment does
@@ -94,30 +91,42 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 wakeOnAcceptedMessage: machine.wakeOnAcceptedMessage, purpose: purpose.kind,
                 ...(purpose.kind === 'accepted-input-start' ? { origin: purpose.target.origin } : {}) };
             const prior = active.get(machine.id);
-            if (prior && isDeepStrictEqual(prior.signature, signature) && !prior.cancel.signal.aborted) continue;
             // Pending may remain authorized until its Agent actually claims it.
-            // Running compute already satisfies its wake; keep any incumbent
-            // native reconciliation above, but do not create another Start/Ask.
+            // Running compute already satisfies its wake; retire any incumbent
+            // pre-effect wait rather than creating another Start/Ask.
             if (purpose.kind === 'accepted-input-start' && !machine.submittedNativeEffect
                 && machine.observation?.availability === 'present' && machine.observation.power === 'running') {
                 if (prior) abortPolicy(machine.id, prior.cancel, 'policy_replaced');
                 continue;
             }
             // Native Stop, or Suspend where that is how the provider parks, satisfies a Stop policy until compute runs again.
-            // Keep an already-running driver's settlement above; a pending native
-            // effect still needs its incumbent reconciliation, and an accepted
-            // wake target takes precedence over retention in the purpose above.
+            // A submitted native effect still needs its incumbent reconciliation,
+            // and an accepted wake target takes precedence over retention above.
             if (purpose.kind === 'retention' && machine.retention.kind !== 'until-delete'
                 && machine.retention.effect === 'stop' && !machine.submittedNativeEffect
                 && machine.observation?.availability === 'present' && (machine.observation.power === 'stopped' || machine.observation.power === 'suspended')) {
                 if (prior) abortPolicy(machine.id, prior.cancel, 'retention_satisfied');
                 continue;
             }
+            // Observed satisfaction must retire an incumbent even when none of
+            // its scheduling inputs changed. Only unsatisfied work can retain
+            // the same outstanding driver lifetime.
+            if (prior && isDeepStrictEqual(prior.signature, signature) && !prior.cancel.signal.aborted) continue;
             if (prior) abortPolicy(machine.id, prior.cancel, 'policy_replaced');
             // Controller publications only recheck an incumbent's currentness.
             // They cannot admit new work, including after that work has failed.
             if (!scheduleNew) continue;
-            if (purpose.kind === 'retention' && machine.retention.kind === 'unused' && !machine.submittedNativeEffect) {
+            // Delete already owns this resource. Preserve any incumbent native
+            // completion above, but never create competing retention work.
+            if (purpose.kind === 'retention' && (machine.desired === 'delete' || machine.submittedNativeEffect?.intent === 'delete')) continue;
+            const continuationRequestId = retentionContinuations.get(machine.id);
+            const continuesRetention = hasSubmittedManagedRetentionEffect(machine, continuationRequestId);
+            // A person's submitted Stop/Suspend already has its own execution
+            // owner. Only Home-admitted policy custody can resume it here.
+            if (purpose.kind === 'retention' && machine.submittedNativeEffect && !continuesRetention) continue;
+            // New unused retention needs registration and positive guest evidence.
+            // Only a policy-owned submitted Stop/Suspend continues without enrollment.
+            if (purpose.kind === 'retention' && machine.retention.kind === 'unused' && !continuesRetention) {
                 let guest: Machine | null | undefined;
                 try {
                     guest = machine.enrolledMachineId ? await params.loadMachine?.(machine.enrolledMachineId, lifetime.signal) : null;
@@ -142,7 +151,8 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 try {
                     await prior?.task;
                     cancel.signal.throwIfAborted();
-                    await params.executePolicy({ machine, purpose, signal: cancel.signal });
+                    await params.executePolicy({ machine, purpose, signal: cancel.signal,
+                        ...(continuesRetention ? { retentionContinuationRequestId: continuationRequestId } : {}) });
                 } catch (error) {
                     if (!cancel.signal.aborted) params.onUnavailable?.(error);
                 } finally {

@@ -115,6 +115,57 @@ describe('daemon managed policy census transport', () => {
             expect(held?.aborted).toBe(true);
         } finally { await runtime.stop(); await apiMachine.shutdown(); }
     });
+    it.each([
+        { desired: 'delete', submitted: true, enrolled: false, deadline: false },
+        { desired: 'delete', submitted: false, enrolled: true, deadline: false },
+        { desired: 'start', submitted: true, enrolled: false, deadline: false },
+        { desired: 'delete', submitted: false, enrolled: true, deadline: true },
+        { desired: 'stop', submitted: true, enrolled: false, deadline: false },
+        { desired: 'stop', submitted: true, enrolled: true, deadline: false },
+        { desired: 'stop', submitted: true, enrolled: true, deadline: true },
+        { desired: 'suspend', submitted: true, enrolled: true, deadline: false },
+    ] as const)('creates no retention operations during repeated invalidations for a manual Delete or Stop: %j', async fixture => {
+        const key = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(8));
+        const controller = { machineId: 'controller', installationId: 'installation' };
+        const machine = ManagedMachineV1Schema.parse({ id: 'managed', homeId: 'home', custodianAccountId: 'owner', controller,
+            launch: { provider: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
+            allocation: 'bound', resource: { contributionRef: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
+            creationState: 'active', desired: fixture.desired, desiredWhen: 'now', intentRevision: 1,
+            retention: fixture.deadline ? { kind: 'deadline', at: 0, effect: 'stop', interrupts: true }
+                : { kind: 'unused', afterMs: 3_600_000, effect: 'stop' }, wakeOnAcceptedMessage: false,
+            ...(fixture.enrolled ? { enrolledMachineId: 'guest' } : {}),
+            ...(fixture.submitted ? { submittedNativeEffect: { intentRevision: 1, requestId: 'manual-control',
+                intent: fixture.desired === 'start' ? 'delete' : fixture.desired, controller } } : {}),
+        });
+        let censusReads = 0;
+        vi.spyOn(axios, 'post').mockImplementation(async () => {
+            censusReads += 1;
+            return { status: 200, data: { machines: [machine], targets: [] } };
+        });
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'owner' });
+        const adapter = createDaemonManagedMachineActionAdapter({ credentials: { token: 'owner-token', encryption: null },
+            machineId: 'controller', serverId: 'home', serverBaseUrl: 'https://home.example', installationIdentity: null,
+            acquireRuntimeRegistryLease: async () => { throw new Error('No native runtime is installed'); },
+            observeActionExecution: request => operations.observeExecution(request),
+            executeManagedPolicyAction: (current, context, runApproved) => executeManagedMachinePolicyAction({ machine: current,
+                context, runApproved, serverId: 'home', createExecutor: overrides => createActionExecutor({ ...createUnavailableActionTransportDeps(), ...overrides }) }),
+        });
+        const runtime = createDaemonManagedMachinePolicyRuntime({
+            loadMachine: async id => ({ id, encryptionMode: 'plain', active: true, metadata: null, metadataVersion: 0,
+                daemonState: { status: 'running' }, daemonStateVersion: 1 }),
+            readCensus: signal => readManagedMachinePolicyCensus({ homeId: 'home', controller,
+                custodianAccountId: 'owner', privateKey: key.secretKey, token: 'owner-token', serverUrl: 'https://home.example', signal }),
+            executePolicy: adapter.executePolicy,
+        });
+        try {
+            for (let index = 0; index < 32; index += 1) {
+                runtime.notifyChanged();
+                await new Promise<void>(resolve => setImmediate(resolve));
+            }
+            expect(censusReads).toBe(32);
+            expect(ActionOperationListV1ResponseSchema.parse(await operations.handlers.listV2({})).items).toHaveLength(0);
+        } finally { await runtime.stop(); }
+    });
     it('defers unused retention until guest readiness without deferring a reviewed deadline or canceled creation cleanup', async () => {
         const key = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(8));
         let machine = ManagedMachineV1Schema.parse({ id: 'managed', homeId: 'home', custodianAccountId: 'owner',
@@ -154,7 +205,8 @@ describe('daemon managed policy census transport', () => {
             machine = ManagedMachineV1Schema.parse({ ...machine, enrolledMachineId: 'guest' });
             vi.mocked(axios.post).mockResolvedValue({ status: 200, data: { machines: [machine], targets: [] } });
             await notify();
-            await vi.waitFor(async () => expect(await list()).toMatchObject([{ state: 'failed', error: { errorCode: 'admission_unavailable' } }]));
+            await vi.waitFor(async () => expect(await list()).toMatchObject([{ state: 'failed', error: { errorCode: 'admission_unavailable' },
+                domainRef: { kind: 'managedMachine', id: machine.id } }]));
             machine = ManagedMachineV1Schema.parse({ ...machine, enrolledMachineId: undefined,
                 retention: { kind: 'deadline', at: Date.now() + 3_600_000, effect: 'stop', interrupts: true } });
             vi.mocked(axios.post).mockResolvedValue({ status: 200, data: { machines: [machine], targets: [] } });
@@ -167,9 +219,48 @@ describe('daemon managed policy census transport', () => {
             machine = ManagedMachineV1Schema.parse({ ...machine, creationState: 'active', desired: 'stop',
                 retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' },
                 submittedNativeEffect: { intentRevision: 0, requestId: 'submitted-stop', intent: 'stop', controller: machine.controller } });
-            vi.mocked(axios.post).mockResolvedValue({ status: 200, data: { machines: [machine], targets: [] } });
+            vi.mocked(axios.post).mockResolvedValue({ status: 200, data: { machines: [machine], targets: [],
+                retentionContinuations: [{ managedId: machine.id, requestId: 'submitted-stop' }] } });
             await notify();
             await vi.waitFor(async () => expect(await list()).toHaveLength(4));
+            machine = ManagedMachineV1Schema.parse({ ...machine, desired: 'suspend',
+                submittedNativeEffect: { intentRevision: 0, requestId: 'submitted-suspend', intent: 'suspend', controller: machine.controller } });
+            vi.mocked(axios.post).mockResolvedValue({ status: 200, data: { machines: [machine], targets: [],
+                retentionContinuations: [{ managedId: machine.id, requestId: 'submitted-suspend' }] } });
+            await notify();
+            await vi.waitFor(async () => expect(await list()).toHaveLength(5));
+        } finally {
+            await runtime.stop();
+        }
+    });
+    it('retires an incumbent unused-retention operation when the resource observation satisfies its stop effect', async () => {
+        let machine = ManagedMachineV1Schema.parse({
+            id: 'managed', homeId: 'home', custodianAccountId: 'owner',
+            controller: { machineId: 'controller', installationId: 'installation' }, enrolledMachineId: 'guest',
+            launch: { provider: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
+            allocation: 'bound', resource: { contributionRef: { pluginId: 'fixture.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
+            creationState: 'active', desired: 'start', desiredWhen: 'now', intentRevision: 0,
+            retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' }, wakeOnAcceptedMessage: false,
+            observation: { observedAt: 1, availability: 'present', power: 'running' },
+        });
+        let held: AbortSignal | undefined;
+        const runtime = createDaemonManagedMachinePolicyRuntime({
+            loadMachine: async id => ({ id, encryptionMode: 'plain', active: true, metadata: null, metadataVersion: 0,
+                daemonState: { status: 'running' }, daemonStateVersion: 1 }),
+            readCensus: async () => ({ machines: [machine], targets: [] }),
+            executePolicy: async input => {
+                held = input.signal;
+                await new Promise<void>(resolve => input.signal?.addEventListener('abort', () => resolve(), { once: true }));
+                return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+            },
+        });
+        try {
+            runtime.notifyChanged();
+            await vi.waitFor(() => expect(held).toBeDefined());
+            machine = ManagedMachineV1Schema.parse({ ...machine,
+                observation: { observedAt: 2, availability: 'present', power: 'suspended' } });
+            runtime.notifyChanged();
+            await vi.waitFor(() => expect(held?.aborted).toBe(true));
         } finally {
             await runtime.stop();
         }

@@ -3,18 +3,19 @@ import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/action
 import { ManagedAcquireInputV1Schema, ManagedControllerUpdateInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { SessionSpawnNewInputV2 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
-import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionSpawnNewActionResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { ManagedPolicyPurposeV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import type { ApiMachineClient } from '@/api/apiMachine';
 import { randomUUID } from 'node:crypto';
-import { createCliWorkflowTriggerActions } from '@/session/actions/workflowTriggers';
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { isOriginalLocalManagedSetupContext } from '@/api/externalActionExecutionAuthorization';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { logger } from '@/ui/logger';
+import { ManagedRetentionWaitSuperseded } from '@/machines/managed/controllerErrors';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { ManagedIntentResultSchema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
 
 import { prepareInstalledWorkflowActionAuthorization, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import type { StoredCredentials } from '@/persistence';
@@ -53,7 +54,18 @@ type ManagedMachineActionAdapterParams = Readonly<{
     acquireRuntimeRegistryLease(): Promise<PluginRuntimeRegistryLease>;
 }>;
 
-export type ManagedMachinePolicyRequest = Readonly<{ machine: ManagedMachineV1; purpose: ManagedPolicyPurposeV1; signal?: AbortSignal; actionOrigin?: ExternalActionExecutionAuthorizationV1 }>;
+export type ManagedMachinePolicyRequest = Readonly<{ machine: ManagedMachineV1; purpose: ManagedPolicyPurposeV1; signal?: AbortSignal; actionOrigin?: ExternalActionExecutionAuthorizationV1;
+    retentionContinuationRequestId?: string }>;
+
+export const MANAGED_MACHINE_POLICY_RETENTION_SATISFIED_ABORT = Object.freeze({
+    kind: 'managed_machine_policy_abort',
+    reasonCode: 'retention_satisfied',
+    outcome: 'satisfied',
+} as const);
+
+function isManagedMachinePolicyRetentionSatisfiedAbort(reason: unknown): boolean {
+    return reason === MANAGED_MACHINE_POLICY_RETENTION_SATISFIED_ABORT;
+}
 
 /** Captures this runtime's own requester Account services, never borrowed custodian credentials. */
 export function createManagedSessionStartApprovalObserver(params: Readonly<{
@@ -206,7 +218,7 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
                         }
                     }
                     if (!result.ok) throw Object.assign(new Error(result.errorCode), { code: result.errorCode });
-                    const spawn = SessionSpawnNewResultV1Schema.safeParse(result.result);
+                    const spawn = SessionSpawnNewActionResultV1Schema.safeParse(result.result);
                     if (!spawn.success) {
                         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
                         if (!approval.success || approval.data.actionId !== 'session.spawn_new') {
@@ -254,6 +266,7 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
             };
             // The admitted native owner alone uses its private custodian FIN
             // material. A foreign Manage requester gains no generic recipe rewrite.
+            const { createCliWorkflowTriggerActions } = await import('@/session/actions/workflowTriggers');
             const triggers = createCliWorkflowTriggerActions({ credentials: params.credentials,
                 serverHttpBaseUrl: params.serverBaseUrl,
                 resolveWorkflow: async () => { throw Object.assign(new Error('Not an inline managed scope binding'), { code: 'source_unavailable' }); } });
@@ -313,6 +326,7 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
             let completion: Promise<ActionExecuteResult> | undefined;
             const observed = await params.observeActionExecution({ actionId, input: { managedId: request.machine.id, purpose: request.purpose },
                 actionRequestId: requestId, execute: operation => {
+                    operation.operationOwnerUpdate?.update({ domainRef: { kind: 'managedMachine', id: request.machine.id } });
                     completion = (async () => {
                         const lifetime = new AbortController();
                         const cancel = () => {
@@ -329,6 +343,7 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
                             const context = { ...operation, signal: lifetime.signal };
                             const result = await withBoundDriver(params, lifetime.signal, async driver => await driver.executePolicy(
                                 request.machine, request.purpose, { requestId, context, signal: lifetime.signal,
+                                    ...(request.retentionContinuationRequestId ? { retentionContinuationRequestId: request.retentionContinuationRequestId } : {}),
                                     ...(request.actionOrigin ? { actionOrigin: request.actionOrigin } : {}),
                                     runPolicyAction: (machine, runApproved) => params.executeManagedPolicyAction!(machine, context, runApproved) },
                             ));
@@ -337,7 +352,20 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
                             const actionFailure = error && typeof error === 'object' && 'actionFailure' in error
                                 ? ActionExecuteFailureSchema.safeParse(error.actionFailure) : null;
                             if (!lifetime.signal.aborted && actionFailure?.success) return actionFailure.data;
-                            const code = lifetime.signal.aborted ? 'cancelled'
+                            if (isManagedMachinePolicyRetentionSatisfiedAbort(lifetime.signal.reason)
+                                && operation.operationAcceptance?.operationId) {
+                                return { ok: true as const, result: ManagedIntentResultSchema.parse({
+                                    kind: 'accepted', managedId: request.machine.id,
+                                    intentRevision: request.machine.intentRevision,
+                                    operation: { operationId: operation.operationAcceptance.operationId },
+                                }) };
+                            }
+                            const supersededWait = request.purpose.kind === 'retention' && error instanceof ManagedRetentionWaitSuperseded;
+                            if (supersededWait) {
+                                try { logger.warnLocalFile('[managed-policy.wait-superseded]', { managedId: request.machine.id,
+                                    operationId: operation.operationAcceptance?.operationId, reasonCode: error.code }); } catch { /* Diagnostic only. */ }
+                            }
+                            const code = lifetime.signal.aborted || supersededWait ? 'cancelled'
                                 : readRpcErrorCode(error)
                                     ?? (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'managed_controller_request_failed');
                             return { ok: false as const, errorCode: code, error: code };
