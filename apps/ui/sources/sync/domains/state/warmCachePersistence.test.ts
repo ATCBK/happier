@@ -154,6 +154,20 @@ describe('warmCachePersistence', () => {
             transport: 'stdio', stdio: { command: 'tool', args: [] }, envKeys: ['API_KEY'], enabled: true,
             source: { kind: 'user', path: '/config.json' } }] }) };
         warmCache.saveFoundWarmCacheEntry('server-a', 'account-a', result);
+        const notified = vi.fn();
+        const unsubscribe = warmCache.subscribeFoundWarmCacheEntry('server-a', 'account-a', 'mcp_server', 'machine-a', notified);
+        const stringify = vi.spyOn(JSON, 'stringify');
+        try {
+            warmCache.saveFoundWarmCacheEntry('server-a', 'account-a', structuredClone(result));
+            expect(stringify).not.toHaveBeenCalled();
+            expect(notified).not.toHaveBeenCalled();
+            warmCache.saveFoundWarmCacheEntry('server-a', 'account-a', { ...result, observedAt: 11 });
+            expect(notified).toHaveBeenCalledTimes(1);
+        } finally {
+            stringify.mockRestore();
+            unsubscribe();
+        }
+        warmCache.saveFoundWarmCacheEntry('server-a', 'account-a', result);
         expect(warmCache.loadFoundWarmCacheEntry('server-a', 'account-a', 'mcp_server', 'machine-a')).toEqual(result);
         expect(warmCache.loadFoundWarmCacheEntry('server-b', 'account-a', 'mcp_server', 'machine-a')).toBeNull();
         expect(warmCache.loadFoundWarmCacheEntry('server-a', 'account-b', 'mcp_server', 'machine-a')).toBeNull();

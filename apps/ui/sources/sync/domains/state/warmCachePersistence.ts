@@ -516,7 +516,7 @@ export const FoundCacheEntryV1Schema = z.discriminatedUnion('kind', [z.strictObj
     result: DaemonMcpServersDetectResponseSchema,
 })]);
 export type FoundCacheEntryV1 = z.infer<typeof FoundCacheEntryV1Schema>;
-const foundCacheListeners = new Set<Readonly<{ key: string | null; listener: () => void }>>();
+const foundCacheListeners = new Map<string | null, Set<() => void>>();
 function foundCacheKey(serverId: string | null | undefined, accountId: string | null | undefined,
     kind: FoundCacheEntryV1['kind'], machineId: string) {
     return buildScopedKey(`found-warm-cache-v1:${kind}:${encodeURIComponent(machineId)}`, serverId, accountId);
@@ -532,13 +532,60 @@ export function saveFoundWarmCacheEntry(serverId: string | null | undefined, acc
     const previous = loadScopedRecord(key, FoundCacheEntryV1Schema);
     if (sameStrictJsonValue(previous, parsed)) return;
     saveScopedRecord(key, parsed);
-    for (const subscription of foundCacheListeners) if (subscription.key === key) subscription.listener();
+    for (const listener of foundCacheListeners.get(key) ?? []) listener();
 }
 export function subscribeFoundWarmCacheEntry(serverId: string | null | undefined, accountId: string | null | undefined,
     kind: FoundCacheEntryV1['kind'], machineId: string, listener: () => void): () => void {
-    const subscription = { key: foundCacheKey(serverId, accountId, kind, machineId), listener };
-    foundCacheListeners.add(subscription);
-    return () => { foundCacheListeners.delete(subscription); };
+    const key = foundCacheKey(serverId, accountId, kind, machineId);
+    const listeners = foundCacheListeners.get(key) ?? new Set<() => void>();
+    listeners.add(listener);
+    foundCacheListeners.set(key, listeners);
+    return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) foundCacheListeners.delete(key);
+    };
+}
+
+/** Held detection count for navigation; updates inspect only the changed Machine's cache entry. */
+export function createFoundMcpServersCountReader(serverId: string, accountId: string, machineIds: readonly string[]) {
+    const ids = [...new Set(machineIds)];
+    const counts = new Map<string, number | null>();
+    let total = 0;
+    let known = 0;
+    let snapshot: number | null = null;
+    const listeners = new Set<() => void>();
+    let disposers: Array<() => void> = [];
+    const update = (id: string) => {
+        const entry = loadFoundWarmCacheEntry(serverId, accountId, 'mcp_server', id);
+        const count = entry?.kind === 'mcp_server' && entry.result.ok ? entry.result.servers.length : null;
+        const previous = counts.get(id);
+        if (previous === count) return;
+        if (previous != null) { total -= previous; known--; }
+        counts.set(id, count);
+        if (count !== null) { total += count; known++; }
+    };
+    const publish = () => {
+        const next = known > 0 ? total : null;
+        if (next === snapshot) return;
+        snapshot = next;
+        for (const listener of listeners) listener();
+    };
+    const refresh = () => { for (const id of ids) update(id); publish(); };
+    refresh();
+    return {
+        getSnapshot: () => { if (listeners.size === 0) refresh(); return snapshot; },
+        subscribe: (listener: () => void) => {
+            if (listeners.size === 0) {
+                disposers = ids.map(id => subscribeFoundWarmCacheEntry(serverId, accountId, 'mcp_server', id, () => { update(id); publish(); }));
+                refresh();
+            }
+            listeners.add(listener);
+            return () => {
+                listeners.delete(listener);
+                if (listeners.size === 0) { for (const off of disposers) off(); disposers = []; }
+            };
+        },
+    };
 }
 
 const USAGE_SUMMARY_WARM_CACHE_PREFIX = 'usage-summary-warm-cache-v1';
