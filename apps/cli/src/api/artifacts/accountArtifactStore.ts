@@ -635,9 +635,10 @@ export function createAccountArtifactStore(params: Readonly<{
     if (options?.cursor) url.searchParams.set('cursor', options.cursor);
     if (options?.includeBody) url.searchParams.set('includeBody', 'true');
     const coarseKind = options?.coarseKind;
-    const filtered = coarseKind !== undefined || options?.kinds !== undefined || Boolean(options?.unclassified);
+    const indexedKinds = options?.indexedKinds ?? options?.kinds;
+    const filtered = coarseKind !== undefined || indexedKinds !== undefined || Boolean(options?.unclassified);
     if (filtered && coarseKind !== undefined) url.searchParams.set('kind', coarseKind);
-    if (options?.kinds !== undefined) url.searchParams.set('kinds', JSON.stringify(options.kinds));
+    if (indexedKinds !== undefined) url.searchParams.set('kinds', JSON.stringify(indexedKinds));
     if (options?.unclassified) url.searchParams.set('unclassified', String(options.unclassified));
     if (options?.ownerAccountId) url.searchParams.set('ownerAccountId', options.ownerAccountId);
     const response = await axios.get(url.toString(), { headers: headers(),

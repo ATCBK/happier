@@ -25,6 +25,7 @@ import { AutonomousExchangeControlRequestV1Schema } from '../sessions/messages/a
 import { AutonomousExchangeObservedRevisionV1Schema } from '../sessions/messages/autonomousExchangeV1.js';
 import { ActionResolvedSessionTargetsV1Schema, normalizeSessionTargetV1, type ActionSessionTargetDeclarationV1 } from './sessionTargetV1.js';
 import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1.js';
+import { deriveManagedDeleteApprovalSubjectKeyV1 } from '../approvals/approvalArtifactHeaderV1.js';
 import { ScmDiffSummaryModelSelectorSchema } from '../scm/diffSummary.js';
 import * as z from 'zod/mini';
 import { actionStartTargetUnavailableV1 } from './executor/actionStartDiagnostics.js';
@@ -2582,6 +2583,57 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     currentAccount?: Readonly<{ accountId: string; serverId: string; serverIdentityId: string }>;
   }>) => Promise<ActionExecuteResult>;
 }> {
+  const retireOpenManagedDeleteApprovals = async (input: Readonly<{ homeId: string; managedId: string }>,
+    ctx: ActionExecutorContext): Promise<void> => {
+    if (!deps.approvalsList || !deps.approvalsGet || !deps.approvalsUpdate) return;
+    const warn = async (warning: Readonly<{ artifactId?: string; code: string }>) => {
+      try {
+        await deps.recordApprovalRetirementWarning?.(warning);
+      } catch {
+        // Diagnostics cannot change the already-confirmed Delete outcome.
+      }
+    };
+    const failureCode = (error: unknown, fallback: string) => normalizeId(readRecord(error).code) || fallback;
+    let cursor: string | null = null;
+    do {
+      let page: Awaited<ReturnType<NonNullable<ActionExecutorDeps['approvalsList']>>>;
+      try {
+        page = await deps.approvalsList({ status: 'open', actionId: 'machines.managed.delete',
+          subjectKey: deriveManagedDeleteApprovalSubjectKeyV1(input), cursor,
+          limit: 100, serverId: normalizeId(ctx.serverId) || null });
+      } catch (error) {
+        await warn({ code: failureCode(error, 'list_failed') });
+        return;
+      }
+      for (const item of page.items) {
+        let stored: Awaited<ReturnType<NonNullable<ActionExecutorDeps['approvalsGet']>>>;
+        try {
+          stored = await deps.approvalsGet({ artifactId: item.artifactId,
+            serverId: normalizeId(ctx.serverId) || null });
+        } catch (error) {
+          await warn({ artifactId: item.artifactId, code: failureCode(error, 'read_failed') });
+          continue;
+        }
+        const parsed = StoredApprovalRequestSchema.safeParse(stored);
+        if (!parsed.success || parsed.data.status !== 'open' || parsed.data.actionId !== 'machines.managed.delete') continue;
+        const actionArgs = readRecord(parsed.data.actionArgs);
+        if (actionArgs.homeId !== input.homeId || actionArgs.managedId !== input.managedId) continue;
+        const now = Date.now();
+        const canceled: ApprovalRequest = { ...settleApprovalRequestReplayInputs(parsed.data), status: 'canceled',
+          updatedAtMs: Math.max(now, parsed.data.updatedAtMs) };
+        try {
+          const updated = await deps.approvalsUpdate({ artifactId: item.artifactId, request: canceled,
+            serverId: normalizeId(ctx.serverId) || null });
+          if (!updated.ok) {
+            await warn({ artifactId: item.artifactId, code: updated.errorCode });
+          }
+        } catch (error) {
+          await warn({ artifactId: item.artifactId, code: failureCode(error, 'update_failed') });
+        }
+      }
+      cursor = page.nextCursor ?? null;
+    } while (cursor);
+  };
   const prepareApprovalExecutionOrigin = async (params: Parameters<typeof buildApprovalExecutionOriginV1>[0]) => {
     if (params.context.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
     const prepared = await deps.prepareApprovalExecutionOriginContext?.({
@@ -6406,8 +6458,30 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             context: nativeContext,
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
-          return readActionFailureEnvelope(result) ?? { ok: true,
-            result: machineReferences ? { ...readRecord(result), machineReferences } : result };
+          const failure = readActionFailureEnvelope(result);
+          if (failure) return failure;
+          const projectedResult = machineReferences ? { ...readRecord(result), machineReferences } : result;
+          if (managedMachineActionId === 'machines.managed.delete') {
+            const deferred = { ok: true as const, result: projectedResult };
+            if (isDeferredApprovalResult(deferred)) return deferred;
+            const deleteResult = ManagedDeleteOutputV1Schema.parse(projectedResult);
+            if (deleteResult.kind === 'accepted') {
+              const deleteInput = ManagedMachineActionInputSchemasV1['machines.managed.delete'].parse(nativeInput);
+              try {
+                await retireOpenManagedDeleteApprovals(deleteInput, ctx);
+              } catch (error) {
+                try {
+                  await deps.recordApprovalRetirementWarning?.({
+                    code: normalizeId(readRecord(error).code) || 'retirement_failed',
+                  });
+                } catch {
+                  // Retirement and its diagnostics are both post-effect best effort.
+                }
+              }
+            }
+            return { ok: true, result: deleteResult };
+          }
+          return { ok: true, result: projectedResult };
         } catch (error) {
           if (readRecord(error).code === 'action_outcome_unknown') {
             // The managed effect owner could not confirm a dispatched effect.

@@ -3,6 +3,9 @@ import { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
 import { ActionIdSchema, type ActionId } from '../actions/actionIds.js';
 import type { ApprovalQueueListItemV1, ApprovalQueueListResultV1 } from '../actions/executor/types.js';
 import type { ArtifactListSelectionOptionsV1 } from '../artifacts/artifactListSelectionV1.js';
+import { encodeArtifactKindV1 } from '../artifacts/artifactKindV1.js';
+import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
+import { ManagedDeleteInputV1Schema } from '../machines/managed/actionsV1.js';
 export { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
 import {
   StoredExecutionRunHostActionApprovalRequestV1Schema,
@@ -45,6 +48,21 @@ function sessionBindingMatches(header: ApprovalArtifactHeaderCandidateV1, sessio
       : header.sessions === undefined || header.sessions === null);
 }
 
+export function deriveManagedDeleteApprovalSubjectKeyV1(input: Readonly<{ homeId: string; managedId: string }>): string {
+  return `managed-delete:${computeCanonicalDomainSeparatedDigest('happier.approval.managed-delete-subject.v1', [input.homeId, input.managedId])}`;
+}
+
+/** One subject-index producer; a header hint never substitutes for body admission. */
+export function readApprovalRequestArtifactSubjectKeyV1(request: ApprovalRequest): string | null {
+  if (request.actionId !== 'machines.managed.delete') return null;
+  const input = ManagedDeleteInputV1Schema.safeParse(request.actionArgs);
+  return input.success ? deriveManagedDeleteApprovalSubjectKeyV1(input.data) : null;
+}
+
+export function managedDeleteApprovalIndexedKindV1(subjectKey: string): string {
+  return encodeArtifactKindV1({ kind: 'other', kindHint: `${APPROVAL_ARTIFACT_KINDS_V1.builtIn}#${subjectKey}` });
+}
+
 export function buildApprovalRequestArtifactHeaderV1(
   request: ApprovalRequest,
   options: Readonly<{ legacyServerId?: string | null }> = {},
@@ -53,12 +71,14 @@ export function buildApprovalRequestArtifactHeaderV1(
   const sessionId = origin?.sessionId
     ?? (typeof request.createdBy.sessionId === 'string' ? request.createdBy.sessionId.trim() : '');
   const legacyServerId = options.legacyServerId?.trim() || null;
+  const approvalSubjectKey = readApprovalRequestArtifactSubjectKeyV1(request);
   return {
     v: 1,
     kind: APPROVAL_ARTIFACT_KINDS_V1.builtIn,
     title: request.summary,
     approvalStatus: request.status,
     actionId: request.actionId,
+    ...(approvalSubjectKey ? { approvalSubjectKey } : {}),
     ...(sessionId ? { sessions: [sessionId], sessionId } : {}),
     ...(origin ? { serverId: origin.serverId } : legacyServerId ? { serverId: legacyServerId } : {}),
     ...(origin?.serverIdentityId ? { serverIdentityId: origin.serverIdentityId } : {}),
@@ -75,11 +95,13 @@ export function approvalRequestArtifactHeaderMatches(
   const origin = request.v === 2 ? request.executionOriginV1 : null;
   const sessionId = origin?.sessionId
     ?? (typeof request.createdBy.sessionId === 'string' ? request.createdBy.sessionId.trim() : '');
+  const approvalSubjectKey = readApprovalRequestArtifactSubjectKeyV1(request);
   return header.v === 1
     && header.kind === APPROVAL_ARTIFACT_KINDS_V1.builtIn
     && header.title === request.summary
     && header.approvalStatus === request.status
     && header.actionId === request.actionId
+    && optionalExactStringMatches(header.approvalSubjectKey, approvalSubjectKey)
     && sessionBindingMatches(header, sessionId || null)
     && (request.v === 1 || (
       optionalExactStringMatches(header.serverId, origin?.serverId ?? null)
@@ -225,6 +247,7 @@ export async function listApprovalArtifactsV1(params: Readonly<{
   cursor?: string | null;
   limit?: number | null;
   serverId?: string | null;
+  subjectKey?: string | null;
   readPage: (options: ArtifactListSelectionOptionsV1 & Readonly<{ limit: number; includeBody: true }>) => Promise<Readonly<{
     items: readonly ApprovalListArtifactV1[];
     nextCursor?: string;
@@ -241,11 +264,13 @@ export async function listApprovalArtifactsV1(params: Readonly<{
     // A source page must fit the remaining result capacity. Advancing its
     // cursor after consuming only a prefix would silently skip valid matches.
     const page = await params.readPage({ limit: maxItems - items.length, includeBody: true,
+      ...(params.subjectKey ? { indexedKinds: [managedDeleteApprovalIndexedKindV1(params.subjectKey)] } : {}),
       headerFilter: header => {
         if (header.kind !== APPROVAL_ARTIFACT_KINDS_V1.builtIn && header.kind !== APPROVAL_ARTIFACT_KINDS_V1.targetAction) return false;
         // Approval status can change between the header page and hydration.
         // Keep that filter at the fresh, body-authoritative read below.
-        return !params.actionId || (header.kind === APPROVAL_ARTIFACT_KINDS_V1.targetAction ? 'action.invoke' : header.actionId) === params.actionId;
+        return (!params.actionId || (header.kind === APPROVAL_ARTIFACT_KINDS_V1.targetAction ? 'action.invoke' : header.actionId) === params.actionId)
+          && (!params.subjectKey || header.approvalSubjectKey === params.subjectKey);
       }, ...(cursor ? { cursor } : {}) });
     for (const artifact of page.items) {
       if (items.length >= maxItems) break;
@@ -273,7 +298,9 @@ export async function listApprovalArtifactsV1(params: Readonly<{
     }
     cursor = page.nextCursor;
   } while (cursor && items.length < maxItems);
-  return { items, nextCursor: cursor ?? null, queryPlan: { kind: 'approval_artifact_header_scan', backingStore: 'ArtifactStore',
-    boundedBy: items.length >= maxItems ? 'requested matching approval count' : 'ArtifactStore source exhaustion',
+  return { items, nextCursor: cursor ?? null, queryPlan: { kind: params.subjectKey
+    ? 'bounded_approval_artifact_header_scan' : 'approval_artifact_header_scan', backingStore: 'ArtifactStore',
+    boundedBy: params.subjectKey ? 'exact approval subject key'
+      : items.length >= maxItems ? 'requested matching approval count' : 'ArtifactStore source exhaustion',
     serverLimit: maxItems, hydratedTranscripts: false } };
 }

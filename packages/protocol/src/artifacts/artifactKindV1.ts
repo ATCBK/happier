@@ -79,7 +79,11 @@ export function encodeArtifactKindV1(value: ArtifactKindV1): string {
 
 /** Only the type discriminator leaves the private header; no title/name/content is extracted. */
 export function deriveArtifactKindV1(header: Readonly<Record<string, unknown>>): ArtifactKindV1 {
-  return { kind: deriveArtifactCoarseKindV1(header), kindHint: typeof header.kind === 'string' && header.kind.length > 0 ? header.kind : null };
+  const approvalSubjectKey = header.kind === 'approval_request.v1' && typeof header.approvalSubjectKey === 'string'
+    && header.approvalSubjectKey.startsWith('managed-delete:') ? header.approvalSubjectKey : null;
+  return { kind: deriveArtifactCoarseKindV1(header),
+    kindHint: approvalSubjectKey ? `${header.kind}#${approvalSubjectKey}`
+      : typeof header.kind === 'string' && header.kind.length > 0 ? header.kind : null };
 }
 
 export function deriveArtifactStoredKindV1(header: Readonly<Record<string, unknown>>): string {

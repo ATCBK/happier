@@ -2240,6 +2240,8 @@ export type ActionExecutorDeps = Readonly<{
   approvalsList?: (args: Readonly<{
     status?: ApprovalRequest['status'] | null;
     actionId?: ActionId | null;
+    /** Exact server-visible non-content approval subject selector. */
+    subjectKey?: string | null;
     cursor?: string | null;
     limit?: number | null;
     serverId?: string | null;
@@ -2247,6 +2249,8 @@ export type ActionExecutorDeps = Readonly<{
   approvalsCreate?: (args: Readonly<{ request: ApprovalRequest; serverId?: string | null }>) => Promise<{ artifactId: string }>;
   approvalsGet?: (args: Readonly<{ artifactId: string; serverId?: string | null }>) => Promise<ApprovalRequest | TargetActionApprovalRequestV1 | null>;
   approvalsUpdate?: (args: Readonly<{ artifactId: string; request: ApprovalRequest; serverId?: string | null }>) => Promise<{ ok: true } | { ok: false; errorCode: string; error: string }>;
+  /** Code-only host diagnostic for best-effort retirement after an already-confirmed effect. */
+  recordApprovalRetirementWarning?: (warning: Readonly<{ artifactId?: string; code: string }>) => void | Promise<void>;
   /** Host-owned Home identity preparation, demanded only when constructing an approval origin. Never serialized. */
   prepareApprovalExecutionOriginContext?: (args: Readonly<{ signal?: AbortSignal }>) => Promise<Readonly<Pick<ActionExecutorContext, 'serverIdentityId'>>>;
   /** Revalidates the origin against current credential/runtime/target owners before effects. */
