@@ -104,6 +104,7 @@ export {
 } from './hostApi.js';
 export type { PluginUiTargetedContributionSelectorV1 } from './hostApi.js';
 export type { PluginUiIconTokenV1 } from '../ui.js';
+export type { InboxItemAttentionTypeV1 } from '../ui.js';
 export type { PluginUiToneV1 } from '../ui.js';
 export type { PluginUiAttachmentToneV1 } from '../ui.js';
 export type { PluginUiHostApi } from './hostApi.js';

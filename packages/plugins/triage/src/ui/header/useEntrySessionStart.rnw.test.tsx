@@ -279,7 +279,7 @@ async function mountProbe(input: Readonly<{
             readSession: async ({ sessionId }) => input.linkedSession?.sessionId === sessionId ? {
                 sessionId, ...(input.linkedSession.serverId === undefined ? {} : { serverId: input.linkedSession.serverId }),
                 lifecycle: 'active', runtime: 'idle', operational: 'ready',
-                workStatus: { bucket: 'finished', tone: 'neutral', word: 'Ready' },
+                workStatus: { state: 'ready', bucket: 'finished', tone: 'neutral', attentionType: null, word: 'Ready' },
                 workspace: { machineId: input.linkedSession.machineId, path: input.linkedSession.path },
                 pendingPermissions: [],
             } : null,

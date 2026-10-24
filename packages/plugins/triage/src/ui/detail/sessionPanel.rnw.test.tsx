@@ -37,7 +37,7 @@ function liveState(sessionId: string, agent?: SessionStateV1['agent']): SessionS
     lifecycle: 'active',
     runtime: 'waiting',
     operational: 'ready',
-    workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' },
+    workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' },
     pendingPermissions: [],
     ...(agent === undefined ? {} : { agent }),
   } as SessionStateV1;

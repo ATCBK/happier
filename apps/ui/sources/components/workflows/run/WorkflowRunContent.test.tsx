@@ -2871,7 +2871,7 @@ describe('WorkflowRunContent', () => {
     const sleeping = await renderContent({
       machineName: 'Build box',
       machineReachable: false,
-      machineStatus: { bucket: 'idle', tone: 'neutral', word: 'Asleep' },
+      machineStatus: { state: 'asleep', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Asleep' },
     });
     expect(
       sleeping.findByTestId('workflow-run-machine-unavailable'),

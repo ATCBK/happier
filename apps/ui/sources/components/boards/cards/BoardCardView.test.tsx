@@ -109,7 +109,8 @@ describe('Board body facts', () => {
         const base = runCard('cancelled');
         const workflow = (word: string, tone: 'attention' | 'neutral'): BoardCard => ({ ...base, key: 'workflow',
             ref: { kind: 'workflow', qualifiedId: { serverId: 'home-a', id: 'wf' } },
-            status: { bucket: tone === 'attention' ? 'needs_you' : 'idle', tone, word },
+            status: { state: 'interrupted', attentionType: tone === 'attention' ? 'decision' : null,
+                bucket: tone === 'attention' ? 'needs_you' : 'idle', tone, word },
             body: { kind: 'workflow', needsYouCount: 0, lastRunWord: word, lastRunAt: new Date(Date.now() - 90_000).toISOString(),
                 runSummaryAvailable: true, triggerSummary: null, nextRun: { kind: 'unscheduled' } } });
         const count = (text: string, word: string) => text.split(word).length - 1;
@@ -146,7 +147,7 @@ describe('Board body facts', () => {
     });
     it('says an unreadable Session once too: titled by its kind, one status word and one reason, no second kind line', async () => {
         const card: BoardCard = { key: 'locked', ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: 's-locked' } }, picked: true,
-            availability: 'ready', title: 'boards.kinds.session', status: { bucket: 'idle', tone: 'neutral', word: 'boards.card.unavailable' },
+            availability: 'ready', title: 'boards.kinds.session', status: { state: 'unavailable', attentionType: null, bucket: 'idle', tone: 'neutral', word: 'boards.card.unavailable' },
             body: { kind: 'session', serverId: 'home-a', sessionId: 's-locked', statusDetail: 'boards.card.readFailed' } };
         const text = (await renderScreen(<BoardCardView card={card} />)).getTextContent();
         expect(text.split('boards.kinds.session')).toHaveLength(2);
@@ -157,7 +158,7 @@ describe('Board body facts', () => {
         storage.setState({ sessionListRowsByServerId: { 'home-a': { 's-undecided': createSessionListRenderableSessionFixture({
             id: 's-undecided', encryptionMode: 'e2ee', encryptedContentAvailability: undefined }) } } });
         const card: BoardCard = { key: 'undecided', ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: 's-undecided' } }, picked: true,
-            availability: 'ready', title: 'boards.kinds.session', status: { bucket: 'idle', tone: 'neutral', word: 'Idle' },
+            availability: 'ready', title: 'boards.kinds.session', status: { state: 'unknown', attentionType: null, bucket: 'idle', tone: 'neutral', word: 'Idle' },
             body: { kind: 'session', serverId: 'home-a', sessionId: 's-undecided' } };
         hydrateSessionListRows.mockClear();
         const screen = await renderScreen(<BoardCardView card={card} />);
@@ -170,7 +171,8 @@ describe('Board body facts', () => {
     it('in a status group, keeps what a needs-you card waits for and drops a healthy word the group already says', async () => {
         const session = (word: string, tone: 'attention' | 'neutral', bucket: 'needs_you' | 'idle'): BoardCard => ({
             key: `session:${word}`, ref: { kind: 'session', qualifiedId: { serverId: 'home-a', id: word } }, picked: true,
-            availability: 'ready', title: 'Checkout UI retry states', status: { bucket, tone, word },
+            availability: 'ready', title: 'Checkout UI retry states', status: { state: bucket,
+                attentionType: bucket === 'needs_you' ? 'approval' : null, bucket, tone, word },
             body: { kind: 'session', serverId: 'home-a', sessionId: word } });
         const screen = await renderScreen(<>
             <BoardCardView card={session('Permission required', 'attention', 'needs_you')} showStatusWord={false} />

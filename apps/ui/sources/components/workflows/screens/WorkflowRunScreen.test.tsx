@@ -304,7 +304,7 @@ function LeadRunPeekHost(props: Readonly<{ home: string; runId: string; visible:
     const resource = tab && isWorkflowRunPeekDetailsResource(tab.resource) ? tab.resource : null;
     const item = { key: `run:${props.runId}`, kind: 'workflow_run', title: 'Lead workflow', agentId: null,
         facts: [], parentKey: null, level: 0, progress: null,
-        status: { bucket: 'working', tone: 'neutral', word: 'Working' }, open: { kind: 'workflow_run', runId: props.runId },
+        status: { state: 'running', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' }, open: { kind: 'workflow_run', runId: props.runId },
     } satisfies WorkItem;
     return <>
         <Pressable testID="lead-open-workflow" onPress={() => openItem(item)} />

@@ -61,10 +61,10 @@ describe('SessionWorkMapView', () => {
         const { projectSessionWorkMap } = await import('./workMapProducer');
         const { workStatusSurfaceStyle } = await import('@/components/work/status/workStatusTreatment');
         const sessions = [
-            report('stalled', { bucket: 'offline', tone: 'attention', word: 'Last seen 3h ago' }),
-            report('asks', { bucket: 'needs_you', tone: 'attention', word: 'Needs your permission' }),
-            report('broke', { bucket: 'needs_you', tone: 'danger', word: 'Error' }),
-            report('busy', { bucket: 'working', tone: 'neutral', word: 'Working' }),
+            report('stalled', { state: 'disconnected', bucket: 'offline', tone: 'attention', attentionType: null, word: 'Last seen 3h ago' }),
+            report('asks', { state: 'permission_required', bucket: 'needs_you', tone: 'attention', attentionType: 'approval', word: 'Needs your permission' }),
+            report('broke', { state: 'failed', bucket: 'needs_you', tone: 'danger', attentionType: 'blocked', word: 'Error' }),
+            report('busy', { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' }),
         ];
         const projection: WorkProjection = {
             sessions,

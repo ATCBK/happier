@@ -170,7 +170,7 @@ describe('the PRs & Issues grouping axis', () => {
   it('retains unchanged items in a 2000-row window when one linked Session changes work group', () => {
     const rows = Array.from({ length: 2000 }, (_, index) => row(String(index)));
     const working = {
-      lifecycle: 'active', operational: 'working', workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' },
+      lifecycle: 'active', operational: 'working', workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' },
     } as const;
     const changedKey = triageEntryRowKey(rows[0]!.entryRef);
     const input = { rows, pins: [], workflowSubjectOf: pullRequests };
@@ -225,7 +225,7 @@ describe('the PRs & Issues grouping axis', () => {
       workflowSubjectOf: pullRequests,
       agentStatesOf: (key) => (key === triageEntryRowKey(row('b').entryRef) ? [] : [{
         sessionId: 'session-a', lifecycle: 'active', runtime: 'working', operational: 'working',
-        workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' }, pendingPermissions: [],
+        workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' }, pendingPermissions: [],
       }]),
     });
     expect(byGroup(items)).toEqual({ pinned: ['a', 'z'], everythingElse: ['b'] });
@@ -273,7 +273,7 @@ describe('the PRs & Issues grouping axis', () => {
   it('states the linked agent of every row, window and pinned alike, from the one Session join', () => {
     const working = {
       sessionId: 'session-a', lifecycle: 'active', runtime: 'working', operational: 'working',
-      workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' }, pendingPermissions: [],
+      workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' }, pendingPermissions: [],
     } as const;
     const items = planTriageListItemsV1({
       rows: [row('a'), row('b')],

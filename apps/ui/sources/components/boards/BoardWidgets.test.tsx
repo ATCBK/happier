@@ -114,7 +114,7 @@ function boardStore(board: WorkBoardV1) {
 
 function workCard(): BoardCard {
     return { key: buildWorkBoardItemKeyV1(work), ref: work, picked: true, availability: 'ready', title: 'checkout',
-        status: { bucket: 'working', tone: 'neutral', word: 'working' }, body: { kind: 'none' } };
+        status: { state: 'working', attentionType: null, bucket: 'working', tone: 'neutral', word: 'working' }, body: { kind: 'none' } };
 }
 
 function canvasWidgets(board: WorkBoardV1): readonly BoardCanvasWidget[] {

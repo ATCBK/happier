@@ -872,7 +872,7 @@ async function mountShell(
                 readSession: ({ sessionId }) => ({
                     sessionId, title: options.sessionTitle ?? harness.readSessionTitle(sessionId),
                     lifecycle: 'active', runtime: 'waiting', operational: 'ready',
-                    workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' }, pendingPermissions: [],
+                    workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' }, pendingPermissions: [],
                 }),
                 notify: async (notification) => { options.onNotification?.(notification); },
                 diagnostic: ({ data }) => { options.onDiagnostic?.(data); },

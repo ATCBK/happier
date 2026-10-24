@@ -352,7 +352,7 @@ function archivedWorkItem(source: WorkReportSessionSource): WorkItem {
         facts: source.facts,
         parentKey: null,
         level: 0,
-        status: { bucket: 'finished', tone: 'neutral', word: t('sessionWork.states.archived') },
+        status: { state: 'archived', bucket: 'finished', tone: 'neutral', attentionType: null, word: t('sessionWork.states.archived') },
         progress: null,
         open: { kind: 'session', sessionId: source.sessionId },
     };

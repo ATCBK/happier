@@ -19,6 +19,7 @@ import type {
 } from './ui/publicContract.js';
 
 export type {
+    InboxItemAttentionTypeV1,
     PluginRightSidebarDefaultPlacement,
     PluginRightSidebarCountV1,
     PluginDefaultPlacement,

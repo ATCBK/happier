@@ -114,7 +114,7 @@ it('joins activity only by the exact retained Session id and retains the selecte
     deliveryMode: 'repliesOnly', approval: { kind: 'off' }, enabled: true, deletionState: 'none' });
   if (!binding) throw new Error('Expected a binding');
   const read = { status: 'ready' as const, state: { hasUnreadMessages: true,
-    workStatus: { bucket: 'working' as const, tone: 'neutral' as const, word: 'Working' },
+    workStatus: { state: 'thinking', bucket: 'working' as const, tone: 'neutral' as const, attentionType: null, word: 'Working' },
     latestActivity: { kind: 'ready' as const, text: 'Approved reply', createdAt: 3000 } } };
   const build = (sessionStates: ReadonlyMap<string, typeof read>) => buildChannelsConversationIndex({
     bindings: [binding], connections: [], providerName: id => id, t, sessionStates,

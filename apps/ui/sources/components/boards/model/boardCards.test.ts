@@ -408,7 +408,8 @@ describe('board cards', () => {
     });
 
     it('says in the column what a board holds right now: who needs you, then how many items (lab boards-B1)', () => {
-        const status = (bucket: 'needs_you' | 'working') => ({ bucket, tone: bucket === 'needs_you' ? 'attention' as const : 'neutral' as const, word: bucket });
+        const status = (bucket: 'needs_you' | 'working') => ({ state: bucket, attentionType: bucket === 'needs_you' ? 'decision' as const : null,
+            bucket, tone: bucket === 'needs_you' ? 'attention' as const : 'neutral' as const, word: bucket });
         const cards = [status('needs_you'), status('needs_you'), status('working')].map((value, index) => ({
             key: `k${index}`,
             ref: { kind: 'session' as const, qualifiedId: { serverId: 'home-a', id: `s${index}` } },

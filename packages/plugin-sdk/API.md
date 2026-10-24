@@ -2861,6 +2861,7 @@
 | `./ui` | `CurrentUiContextSnapshotV1` | type | any |
 | `./ui` | `EphemeralInputSettlement` | type | any |
 | `./ui` | `HostedWebBridgeEnvelopeV1` | type | any |
+| `./ui` | `InboxItemAttentionTypeV1` | type | any |
 | `./ui` | `MAX_COMPOSER_ATTACHMENT_DESCRIPTION_CODE_POINTS_V1` | value | any |
 | `./ui` | `MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1` | value | any |
 | `./ui` | `MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1` | value | any |

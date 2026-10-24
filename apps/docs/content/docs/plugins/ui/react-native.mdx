@@ -1287,8 +1287,11 @@ own Work tab, Inbox and workflow maps use, from
 - `buildHappierWorkMap` and `HappierWorkMapView`: a map of work built only from
   the parent each node declares, drawn as cards on a rail or in side-by-side lanes;
   `density="compact"` is the mini-map a row carries.
-- The status language: map your own facts to `{ bucket, tone, word }`
-  (`HappierWorkStatusPresentation`). Buckets read in `HAPPIER_WORK_STATUS_BUCKETS`
+- The status language: map your own facts to
+  `{ state, bucket, tone, attentionType, word }`, plus an optional semantic `glyph`
+  (`HappierWorkStatusPresentation`). `state` is your own state id, and
+  `attentionType` is the admitted attention classification (`null` when nothing
+  asks for the person). Buckets read in `HAPPIER_WORK_STATUS_BUCKETS`
   order and `resolveHappierWorkStatusBucketLabel` labels them in the host's
   locale. `HappierWorkStatusWord` and `resolveHappierWorkStatusSurfaceStyle` draw
   the tone: a soft ring and tint only for work that needs the person or failed.

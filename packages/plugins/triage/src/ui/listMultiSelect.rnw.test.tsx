@@ -747,7 +747,7 @@ describe('selecting several PRs & Issues rows', () => {
     it('reads only visible entry relations despite many unrelated Account link pages', async () => {
         const working: SessionStateV1 = {
             sessionId: 'visible-session', lifecycle: 'active', runtime: 'working', operational: 'working',
-            pendingPermissions: [], workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' },
+            pendingPermissions: [], workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' },
         };
         const harness = createHarness({ sessionStates: { 'visible-session': working } });
         const entryRef = { source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' };
@@ -783,7 +783,7 @@ describe('selecting several PRs & Issues rows', () => {
         const sessionId = 'visible-200';
         const harness = createHarness({ sessionStates: { [sessionId]: {
             sessionId, lifecycle: 'active', runtime: 'working', operational: 'working',
-            pendingPermissions: [], workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' },
+            pendingPermissions: [], workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' },
         } } });
         for (let index = 0; index < 201; index += 1) {
             expect((await linkEntryToSession({
@@ -865,7 +865,7 @@ describe('selecting several PRs & Issues rows', () => {
         const harness = createHarness({ sessionStates: { 'linked-session': {
             sessionId: 'linked-session', lifecycle: 'active', runtime: 'idle',
             operational: 'ready', pendingPermissions: [],
-            workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' },
+            workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' },
         } }, sessionLinkReadError: () => {
             if (failuresRemaining === 0) return undefined;
             failuresRemaining -= 1;
@@ -901,7 +901,7 @@ describe('selecting several PRs & Issues rows', () => {
         const working: SessionStateV1 = {
             sessionId: 'working-session', lifecycle: 'active', runtime: 'working',
             operational: 'working', pendingPermissions: [],
-            workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' },
+            workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' },
         };
         const harness = createHarness({ sessionStates: { 'working-session': working } });
         await linkEntryToSession({
@@ -929,7 +929,7 @@ describe('selecting several PRs & Issues rows', () => {
 
         harness.sessionStates['working-session'] = {
             ...working, runtime: 'idle', operational: 'ready',
-            workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' },
+            workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' },
         };
         await act(async () => { shell.invalidateSession('working-session', `sha256:${'2'.repeat(64)}`); });
         await vi.waitFor(async () => {
@@ -946,7 +946,7 @@ describe('selecting several PRs & Issues rows', () => {
             sessionStates: { 'working-session': {
                 sessionId: 'working-session', lifecycle: 'active', runtime: 'working',
                 operational: 'working', pendingPermissions: [],
-                workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' },
+                workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' },
             } },
         });
         const entryRef = { source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' };

@@ -6319,7 +6319,7 @@ describe('Channels thread router conversation', () => {
     'session-thread-2': {
       sessionId: 'session-thread-2', title: 'Rendez-vous showroom Morges',
       lifecycle: 'active', runtime: 'working', operational: 'working', pendingPermissions: [],
-      workStatus: { bucket: 'needs_you', tone: 'attention', word: 'Needs you' },
+      workStatus: { state: 'action_required', bucket: 'needs_you', tone: 'attention', attentionType: 'decision', word: 'Needs you' },
     },
   };
 
@@ -6492,14 +6492,14 @@ describe('Channels thread router conversation', () => {
       ],
     }, 'c');
     const base = { lifecycle: 'active' as const, runtime: 'idle' as const, operational: 'none' as const, pendingPermissions: [] };
-    const idle = { bucket: 'idle' as const, tone: 'neutral' as const, word: 'Idle' };
+    const idle = { state: 'waiting', bucket: 'idle' as const, tone: 'neutral' as const, attentionType: null, word: 'Idle' };
     const sessions: Readonly<Record<string, SessionStateV1>> = {
       [longId('session-old')]: { ...base, sessionId: longId('session-old'), workStatus: idle, hasUnreadMessages: false,
         latestActivity: { kind: 'ready', text: 'Pièce jointe reçue', createdAt: replyAt(8) } },
       [longId('session-new')]: { ...base, sessionId: longId('session-new'), workStatus: idle, hasUnreadMessages: true,
         latestActivity: { kind: 'ready', text: 'Le devis est prêt', createdAt: replyAt(11) } },
       [longId('session-working')]: { ...base, sessionId: longId('session-working'), runtime: 'working', operational: 'working',
-        workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' }, hasUnreadMessages: false,
+        workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' }, hasUnreadMessages: false,
         latestActivity: { kind: 'ready', text: 'Je regarde le planning', createdAt: replyAt(10) } },
     };
     const readReply = ConversationBindingReadResultV1Schema.parse({ kind: 'ready', revision: 1, binding: routerBinding });
@@ -9868,17 +9868,17 @@ describe('Channels collapsed row identity', () => {
           inputMode: 'allAllowedMessages', deliveryMode: 'repliesOnly', approval: { kind: 'off' }, enabled: true, deletionState: 'none' },
       ],
     }, '7');
-    const idle = { bucket: 'idle' as const, tone: 'neutral' as const, word: 'Idle' };
+    const idle = { state: 'waiting', bucket: 'idle' as const, tone: 'neutral' as const, attentionType: null, word: 'Idle' };
     const base = { lifecycle: 'active' as const, runtime: 'idle' as const, operational: 'none' as const, pendingPermissions: [] };
     const sessions: Readonly<Record<string, SessionStateV1>> = {
       'session-ready': { ...base, sessionId: 'session-ready', workStatus: idle, hasUnreadMessages: true,
         latestActivity: { kind: 'ready', text: 'Le devis est prêt,\n je l’envoie ce soir.', createdAt: replyAt } },
       'session-working': { ...base, sessionId: 'session-working', runtime: 'working', operational: 'working',
-        workStatus: { bucket: 'needs_you', tone: 'attention', word: 'Needs you' }, hasUnreadMessages: false,
+        workStatus: { state: 'action_required', bucket: 'needs_you', tone: 'attention', attentionType: 'decision', word: 'Needs you' }, hasUnreadMessages: false,
         latestActivity: { kind: 'ready', text: 'Puis-je lire le dossier ?', createdAt: replyAt } },
       'session-hidden': { ...base, sessionId: 'session-hidden', title: 'Private title', workStatus: idle, latestActivity: { kind: 'hidden' } },
       'session-empty': { ...base, sessionId: 'session-empty', workStatus: idle, hasUnreadMessages: false, latestActivity: { kind: 'empty' } },
-      'session-thread': { ...base, sessionId: 'session-thread', workStatus: { bucket: 'needs_you', tone: 'attention', word: 'Needs you' },
+      'session-thread': { ...base, sessionId: 'session-thread', workStatus: { state: 'action_required', bucket: 'needs_you', tone: 'attention', attentionType: 'decision', word: 'Needs you' },
         hasUnreadMessages: true, latestActivity: { kind: 'ready', text: 'Thread reply', createdAt: replyAt } },
     };
     const readSessionIds: string[] = [];
@@ -10632,7 +10632,7 @@ describe('Channels page (the one owner of linked conversations)', () => {
           readSessionIds.push(requested);
           return requested === sessionId
             ? { sessionId, title: 'Chantier Morges', lifecycle: 'active', runtime: 'idle', operational: 'none', pendingPermissions: [],
-              workStatus: { bucket: 'idle', tone: 'neutral', word: 'Idle' } }
+              workStatus: { state: 'waiting', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Idle' } }
             : null;
         },
       },

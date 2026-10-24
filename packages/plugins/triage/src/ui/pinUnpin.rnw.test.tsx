@@ -244,7 +244,7 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
                 executeAction: async ({ action, input }) => await harness.executeAction({ action, input }),
                 readSession: ({ sessionId }) => ({
                     sessionId, lifecycle: 'active', runtime: 'working', operational: 'working',
-                    workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' }, pendingPermissions: [],
+                    workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' }, pendingPermissions: [],
                 } satisfies SessionStateV1),
                 // Selection is route-owned. This harness is testing Pin/Unpin,
                 // so acknowledge the canonical location rather than exercising

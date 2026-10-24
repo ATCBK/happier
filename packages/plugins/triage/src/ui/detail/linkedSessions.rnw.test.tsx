@@ -56,7 +56,7 @@ async function mountHeader(titles = ['Route repair', 'Parser cleanup'], options:
         return {
           sessionId, title: titles[sessionId === 'session-linked' ? 0 : sessionId === 'session-other' ? 1 : 2],
           lifecycle: 'active', runtime: 'waiting', operational: 'ready',
-          workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' }, pendingPermissions: [],
+          workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' }, pendingPermissions: [],
         };
       },
       ...(options.onWatch === undefined ? {} : {

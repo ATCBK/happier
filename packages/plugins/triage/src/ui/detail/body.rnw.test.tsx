@@ -123,7 +123,7 @@ const MANIFEST = definePlugin({
 const INPUT = createTriageSourceV1Fixture().detailInput as TriageDetailSurfaceInputV1;
 const LIVE_SESSION = {
   sessionId: 'session-a', title: 'Fix rounding', lifecycle: 'active', runtime: 'idle',
-  operational: 'ready', workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' },
+  operational: 'ready', workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' },
   pendingPermissions: [],
 } satisfies SessionStateV1;
 

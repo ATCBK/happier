@@ -90,13 +90,39 @@ describe('qualified Project new-Session origin', () => {
 describe('linked Session catalog identity', () => {
   it('accepts absent identity and strict catalog identity but rejects undeclared identity fields', () => {
     const state = { sessionId: 'session-1', lifecycle: 'active', runtime: 'waiting',
-      operational: 'permission_required', workStatus: { bucket: 'needs_you', tone: 'attention', word: 'Permission required' },
+      operational: 'permission_required', workStatus: { state: 'permission_required', bucket: 'needs_you',
+        tone: 'attention', attentionType: 'approval', word: 'Permission required' },
       pendingPermissions: [] };
     const agent = { agentId: 'codex', displayName: 'Codex', brand: { pluginId: 'happier.agent.codex' } };
     expect(PluginUiSessionStateV1Schema.safeParse(state).success).toBe(true);
     expect(PluginUiSessionStateV1Schema.parse({ ...state, agent }).agent).toEqual(agent);
     expect(PluginUiSessionStateV1Schema.safeParse({ ...state, agent: { ...agent, secret: 'not-public' } }).success).toBe(false);
     expect(PluginUiSessionStateV1Schema.safeParse({ ...state, agent: { ...agent, brand: { ...agent.brand, bytes: [] } } }).success).toBe(false);
+  });
+
+  it('retains domain state, admitted attention and semantic glyph independently in a closed Work result', () => {
+    const state = { sessionId: 'session-1', lifecycle: 'active', runtime: 'waiting', operational: 'failed',
+      workStatus: { state: 'failed', bucket: 'needs_you', tone: 'danger', attentionType: 'approval',
+        word: 'Failed', glyph: 'failure' }, pendingPermissions: [] };
+    expect(PluginUiSessionStateV1Schema.parse(state).workStatus).toEqual(state.workStatus);
+    expect(PluginUiSessionStateV1Schema.parse({ ...state,
+      workStatus: { ...state.workStatus, attentionType: null, glyph: undefined },
+    }).workStatus.attentionType).toBeNull();
+    expect(PluginUiSessionStateV1Schema.safeParse({ ...state,
+      workStatus: { ...state.workStatus, attentionType: 'needs_you' },
+    }).success).toBe(false);
+    expect(PluginUiSessionStateV1Schema.safeParse({ ...state,
+      workStatus: { ...state.workStatus, glyph: 'private-glyph' },
+    }).success).toBe(false);
+    expect(PluginUiSessionStateV1Schema.safeParse({ ...state,
+      workStatus: { ...state.workStatus, state: undefined },
+    }).success).toBe(false);
+    expect(PluginUiSessionStateV1Schema.safeParse({ ...state,
+      workStatus: { ...state.workStatus, attentionType: undefined },
+    }).success).toBe(false);
+    expect(PluginUiSessionStateV1Schema.safeParse({ ...state,
+      workStatus: { ...state.workStatus, needsYou: true },
+    }).success).toBe(false);
   });
 });
 

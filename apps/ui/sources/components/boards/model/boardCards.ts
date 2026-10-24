@@ -142,6 +142,8 @@ function notLoaded(member: BoardMember, availability: Exclude<BoardCardAvailabil
 
 function unavailableStatus(availability: Exclude<BoardCardAvailability, 'ready'>): WorkStatusPresentation {
     return {
+        state: availability,
+        attentionType: null,
         bucket: availability === 'not_loaded' ? 'idle' : 'offline', tone: 'neutral',
         word: availability === 'not_loaded' ? t('common.loading') : t('boards.card.unavailable'),
     };
@@ -402,6 +404,9 @@ function isSameCard(a: BoardCard, b: BoardCard): boolean {
         && a.status.bucket === b.status.bucket
         && a.status.tone === b.status.tone
         && a.status.word === b.status.word
+        && a.status.state === b.status.state
+        && a.status.attentionType === b.status.attentionType
+        && a.status.glyph === b.status.glyph
         && JSON.stringify(a.body) === JSON.stringify(b.body);
 }
 

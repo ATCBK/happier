@@ -67,6 +67,8 @@ import {
 } from '../../sessions/awareness/projectionV1.js';
 import { ProjectKeyV1Schema } from '../../workspaces/workspaceRefV1.js';
 import { PluginUiNewSessionSeedOriginV1Schema } from './newSessionSeedOrigin.js';
+import { InboxItemAttentionTypeV1Schema } from '../../sessions/follow/sessionFollowPolicyV1.js';
+import { PluginUiIconTokenV1Schema } from '../contributions/ui/tokens.js';
 export { PluginUiNewSessionSeedOriginV1Schema, StoredPluginUiNewSessionSeedOriginV1Schema,
   type PluginUiNewSessionSeedOriginV1 } from './newSessionSeedOrigin.js';
 
@@ -284,9 +286,12 @@ export const PluginUiSessionStateV1Schema = lazyZodSchema(() => z.strictObject({
   runtime: SessionAwarenessRuntimeV1Schema,
   operational: SessionAwarenessOperationalPrimaryV1Schema,
   workStatus: z.strictObject({
+    state: z.string(),
     bucket: z.enum(['needs_you', 'working', 'finished', 'idle', 'offline']),
     tone: z.enum(['neutral', 'attention', 'danger']),
+    attentionType: z.nullable(InboxItemAttentionTypeV1Schema),
     word: z.string(),
+    glyph: z.optional(PluginUiIconTokenV1Schema),
   }),
   workspace: zMini.optional(SessionAwarenessWorkspaceV1Schema),
   pendingPermissions: z.array(PluginUiSessionPendingPermissionV1Schema),

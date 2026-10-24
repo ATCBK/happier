@@ -51,7 +51,7 @@ afterEach(async () => { await standardCleanup(); vi.unstubAllGlobals(); setReduc
 const ref = { kind: 'machine', qualifiedId: { serverId: 'other-home', id: 'machine-a' } } as const;
 const key = buildWorkBoardItemKeyV1(ref);
 const card: BoardCard = { key, ref, picked: true, availability: 'ready', title: 'Machine',
-    status: { bucket: 'idle', tone: 'neutral', word: 'Idle' }, body: { kind: 'none' } };
+    status: { state: 'idle', attentionType: null, bucket: 'idle', tone: 'neutral', word: 'Idle' }, body: { kind: 'none' } };
 
 async function canvas(snap = false, displayedCard = card) {
     const scope = { serverId: 'home-a', accountId: 'account-a' };

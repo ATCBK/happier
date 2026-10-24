@@ -194,7 +194,8 @@ describe('mounted plugin UI linked-Session state (r0.42)', () => {
             title: 'repo',
             serverId: CURRENT_ACCOUNT_LIFETIME.scope.serverId,
             operational: 'permission_required',
-            workStatus: { bucket: 'needs_you', tone: 'attention', word: expect.any(String) },
+            workStatus: { state: 'permission_required', bucket: 'needs_you', tone: 'attention',
+                attentionType: 'approval', word: expect.any(String) },
             workspace: { path: '/work/repo' },
             pendingPermissions: [{
                 requestId: 'req-1',
@@ -278,16 +279,16 @@ describe('mounted plugin UI linked-Session state (r0.42)', () => {
         const mounted = mountSurface();
 
         await expect(mounted.api.readSession('working')).resolves.toMatchObject({
-            workStatus: { bucket: 'working', tone: 'neutral', word: expect.any(String) },
+            workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: expect.any(String) },
         });
         await expect(mounted.api.readSession('finished')).resolves.toMatchObject({
-            workStatus: { bucket: 'finished', tone: 'neutral' },
+            workStatus: { state: 'ready', bucket: 'finished', tone: 'neutral', attentionType: null },
         });
         await expect(mounted.api.readSession('lead')).resolves.toMatchObject({
-            workStatus: { bucket: 'idle', tone: 'neutral' },
+            workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null },
         });
         await expect(mounted.api.readSession('offline')).resolves.toMatchObject({
-            workStatus: { bucket: 'offline', tone: 'neutral' },
+            workStatus: { state: 'disconnected', bucket: 'offline', tone: 'neutral', attentionType: null },
         });
         mounted.dispose();
     });

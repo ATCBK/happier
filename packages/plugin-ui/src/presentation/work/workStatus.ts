@@ -4,8 +4,9 @@
  *
  * Extracted from Happier core's `apps/ui/sources/components/work/status/**`, which keeps only the
  * mapping from Happier's own owner facts (Sessions, workflow runs, worker updates) onto this
- * presentation. A plugin maps its own facts onto the same three fields; the words stay the owner's.
+ * presentation. A plugin maps its own facts onto the same fields; the words stay the owner's.
  */
+import type { InboxItemAttentionTypeV1, PluginUiIconTokenV1 } from '@happier-dev/plugin-sdk/ui';
 import type { HappierTone } from '../semantics.js';
 
 export type HappierWorkStatusBucket = 'needs_you' | 'working' | 'finished' | 'idle' | 'offline';
@@ -21,10 +22,16 @@ export const HAPPIER_WORK_STATUS_SEMANTIC_TONE = {
 } as const satisfies Readonly<Record<HappierWorkStatusTone, HappierTone>>;
 
 export type HappierWorkStatusPresentation = Readonly<{
+  /** The domain owner's state; Session vocabulary remains Protocol-owned. */
+  state: string;
   bucket: HappierWorkStatusBucket;
   tone: HappierWorkStatusTone;
+  /** C1's admitted classification, independent of the visible status tone. */
+  attentionType: InboxItemAttentionTypeV1 | null;
   /** The owner's own state word ("Completed", "Waiting for you"); never the bucket label. */
   word: string;
+  /** The public semantic icon token, resolved by the shared status renderer. */
+  glyph?: PluginUiIconTokenV1;
 }>;
 
 /** The buckets in reading order: the columns of a by-status board and the groups of every status list. */

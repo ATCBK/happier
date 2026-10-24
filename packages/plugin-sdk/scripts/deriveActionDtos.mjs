@@ -43,6 +43,7 @@ const supportBindings = [
 ];
 const uiBindings = [
   ...['PluginUiToneV1', 'PluginUiIconTokenV1'].map(name => ['plugins/contributions/ui/tokens.ts', name]),
+  ['sessions/follow/sessionFollowPolicyV1.ts', 'InboxItemAttentionTypeV1'],
   ...['PluginDeclarativeNodeV2', 'PluginDeclarativeControlV2', 'PluginDeclarativeToneV2', 'PluginDeclarativeActionVariantV2', 'PluginDeclarativeStateV2', 'PluginDeclarativeMetadataEntryV2', 'PluginDeclarativeComposerApplyEffectV1', 'PluginDeclarativeActionNodeV2', 'PluginDeclarativeRowNodeV2', 'PluginDeclarativeTargetedSurfaceReferenceV1', 'PluginDeclarativeListNodeV2', 'PluginDeclarativeSectionNodeV2', 'PluginDeclarativeItemNodeV2', 'PluginDeclarativeStateNodeV2', 'PluginDeclarativeTargetedSurfaceNodeV2', 'PluginDeclarativeMetadataNodeV2', 'PluginDeclarativeActionPanelNodeV2', 'PluginDeclarativeCollectionListNodeV2', 'PluginCollectionRowCommandV1'].map(name => ['plugins/contributions/ui/v2.ts', name]),
   ['plugins/data/collectionContributionV1.ts', 'PluginCollectionProjectedScalarFieldRefV1'],
   ...['ComposerContentMediaKindV1', 'ComposerContentMimeTypeV1'].map(name => ['runtime/input/composerContentV1.ts', name]),

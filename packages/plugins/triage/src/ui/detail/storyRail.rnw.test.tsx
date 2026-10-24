@@ -25,7 +25,7 @@ const SESSION: SessionStateV1 = {
   lifecycle: 'active',
   runtime: 'waiting',
   operational: 'permission_required',
-  workStatus: { bucket: 'needs_you', tone: 'attention', word: 'Permission required' },
+  workStatus: { state: 'permission_required', bucket: 'needs_you', tone: 'attention', attentionType: 'approval', word: 'Permission required' },
   workspace: { worktreeName: 'fix/2476-checks' },
   pendingPermissions: [{
     requestId: 'request-1',

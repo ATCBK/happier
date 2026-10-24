@@ -10531,6 +10531,7 @@ export interface SystemTaskJsonObject {
 }
 export type PluginUiToneV1 = 'success' | 'info' | 'warning' | 'neutral' | 'danger' | 'accent';
 export type PluginUiIconTokenV1 = 'file' | 'filter' | 'waiting' | 'info' | 'warning' | 'check' | 'error' | 'terminal' | 'new' | 'action' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'list' | 'board';
+export type InboxItemAttentionTypeV1 = 'mention' | 'blocked' | 'decision' | 'approval' | 'update';
 export type PluginDeclarativeControlV2 = {
     kind: 'text';
     settingId: string;

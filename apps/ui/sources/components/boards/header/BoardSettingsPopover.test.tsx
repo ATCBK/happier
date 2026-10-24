@@ -74,7 +74,7 @@ describe('Board settings picked items', () => {
         const cards: BoardCard[] = Array.from({ length: 40 }, (_, index) => {
             const ref = { kind: 'workflow' as const, qualifiedId: { serverId: 'home', id: `w${index}` } };
             return { key: buildWorkBoardItemKeyV1(ref), ref, picked: true, availability: 'ready', title: `Workflow ${index}`,
-                status: { bucket: 'idle', tone: 'neutral', word: 'Idle' }, body: { kind: 'none' } };
+                status: { state: 'idle', attentionType: null, bucket: 'idle', tone: 'neutral', word: 'Idle' }, body: { kind: 'none' } };
         });
         const remove = vi.fn();
         vi.useFakeTimers();

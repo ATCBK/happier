@@ -60,7 +60,8 @@ function card(kind: Exclude<BoardItemRefV1['kind'], 'task'>, id: string, bucket:
         picked: true,
         availability: 'ready',
         title: id,
-        status: { bucket, tone: bucket === 'needs_you' ? 'attention' : 'neutral', word: bucket },
+        status: { state: bucket, bucket, tone: bucket === 'needs_you' ? 'attention' : 'neutral', word: bucket,
+            attentionType: bucket === 'needs_you' ? 'decision' : null },
         body: { kind: 'none' },
     };
 }

@@ -32,7 +32,7 @@ describe('linked Session activity over the hosted transport', () => {
                 if (message.kind === 'request') receive?.({ wireVersion: 1, kind: 'result', identity,
                     requestId: message.requestId, method: message.method, result: {
                         sessionId: 'linked', lifecycle: 'active', runtime: 'idle', operational: 'none',
-                        workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' }, pendingPermissions: [],
+                        workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' }, pendingPermissions: [],
                         hasUnreadMessages: true, latestActivity: { kind: 'ready', text: 'Shared final', createdAt: 4000, ...extra },
                     } });
             },

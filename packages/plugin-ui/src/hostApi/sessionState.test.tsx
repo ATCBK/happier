@@ -11,7 +11,7 @@ import { selectChannelsConversationSessionState as select } from '../../../plugi
 
 const WORKING: SessionStateV1 = {
   sessionId: 'first', lifecycle: 'active', runtime: 'working', operational: 'working',
-  pendingPermissions: [], workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' },
+  pendingPermissions: [], workStatus: { state: 'thinking', bucket: 'working', tone: 'neutral', attentionType: null, word: 'Working' },
 };
 
 describe('useSessionStates', () => {
@@ -45,7 +45,7 @@ describe('useSessionStates', () => {
       expect({ extraRenders: renders - rendersBefore, sameSnapshot: current!.sessions === settled }).toEqual({
         extraRenders: 0, sameSnapshot: true,
       });
-      snapshots.set('first', { ...WORKING, workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' } });
+      snapshots.set('first', { ...WORKING, workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' } });
       await act(async () => { watchers.get('first')!({ version: 1, subscriptionId: 'first', kind: 'invalidated', digest: 'work' }); });
       expect(current!.sessions.get('first')?.state?.workStatus.bucket).toBe('idle');
       expect(current!.sessions.get('second')).toBe(settled.get('second'));
@@ -95,7 +95,7 @@ describe('useSessionStates', () => {
       expect(watchers.size).toBe(0);
       expect(pendingSignal?.aborted).toBe(true);
       const readsBeforeLateCallback = readSession.mock.calls.length;
-      snapshot = { ...WORKING, workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' } };
+      snapshot = { ...WORKING, workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' } };
       await act(async () => {
         retiredWatch({ version: 1, subscriptionId: 'watch', kind: 'invalidated', digest: 'late' });
         finishRead?.(snapshot);
@@ -205,7 +205,7 @@ describe('useSessionStates', () => {
       await act(async () => { tree.update(view(['first'])); });
       expect(watchers.get('first')).toBe(watch);
 
-      snapshots.set('first', { ...WORKING, workStatus: { bucket: 'idle', tone: 'neutral', word: 'Ready' } });
+      snapshots.set('first', { ...WORKING, workStatus: { state: 'ready', bucket: 'idle', tone: 'neutral', attentionType: null, word: 'Ready' } });
       await act(async () => { watch?.({ version: 1, subscriptionId: 'first-watch', kind: 'invalidated', digest: 'idle' }); });
       await vi.waitFor(() => expect(current?.sessions.get('first')?.state?.workStatus.bucket).toBe('idle'));
 
