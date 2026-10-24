@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useState, type ComponentType, type ReactElement, type ReactNode } from 'react';
+import { createContext, memo, useContext, useState, type ComponentType, type ReactElement, type ReactNode, type RefObject } from 'react';
 import { Platform, View, type ViewStyle } from 'react-native';
 
 import { useHappierPageSection } from '../layout/PageSection.js';
@@ -45,6 +45,10 @@ export type HappierCollectionListHost = Readonly<{
     onChangeText: (text: string) => void;
     placeholder: string;
     testID?: string;
+    /** A control inside the field's well, after the input (the list's filter button). */
+    trailing?: ReactNode;
+    /** Resolves to the field's drawn frame, the anchor of what opens under it (the filter editor). */
+    anchorRef?: RefObject<View | null>;
     style: HappierStyleProp;
   }>>;
   /** The list's own ground (theme-bound). */
@@ -61,6 +65,10 @@ export type HappierCollectionListSearch = Readonly<{
   onChangeText: (text: string) => void;
   placeholder: string;
   testID?: string;
+  /** The list's filter button, inside the field's well where the list has a search field (lab `sfcols:mcpFilter`). */
+  trailing?: ReactNode;
+  /** The field's frame, for the filter editor to open under the field's left edge. */
+  anchorRef?: RefObject<View | null>;
 }>;
 
 export type HappierCollectionListFilters = Readonly<{
@@ -77,6 +85,11 @@ export type HappierCollectionListProps = Readonly<{
    * it: the surface already names it, and its search starts at the header's place.
    */
   title?: string;
+  /**
+   * The title as a control (a saved-space list's "My work ⌄", which opens its spaces and filter). It takes
+   * the title's place on the same row and edge; `title` then only names the list for assistive tech.
+   */
+  titleControl?: ReactNode;
   /** Quiet, tabular count beside the title; omitted while unknown. */
   count?: number | null;
   /** The add control ("+", or a menu when there is more than one way to add). */
@@ -86,6 +99,11 @@ export type HappierCollectionListProps = Readonly<{
    * "Acme · Only people you invite"), led by an optional 14px glyph.
    */
   subtitle?: Readonly<{ text: string; leading?: ReactNode; testID?: string }> | null;
+  /**
+   * The band under the header: a saved-space list's spaces strip and the conditions it carries beyond
+   * its space. Every list that has spaces puts them here, between the title and search.
+   */
+  strip?: ReactNode;
   /** Present only when the list is long enough to need it. */
   search?: HappierCollectionListSearch | null;
   filters?: HappierCollectionListFilters | null;
@@ -327,6 +345,8 @@ const subtitleStyle: ViewStyle = {
 const searchStyle: HappierPortableStyle = { marginHorizontal: M.rowInset, marginBottom: M.headerGap };
 const untitledSearchStyle: HappierPortableStyle = { ...searchStyle, marginTop: M.headerPaddingTop };
 const filtersStyle: ViewStyle = { marginHorizontal: M.rowInset, marginBottom: M.headerGap };
+// The strip starts on the title's text edge (its first tab under the title's first letter), like Sessions.
+const stripStyle: ViewStyle = { paddingLeft: M.contentInset, paddingRight: M.rowInset, marginBottom: M.headerGap };
 const scrollerStyle: HappierPortableStyle = { paddingTop: 0 };
 const footerStyle: ViewStyle = { height: 16 };
 const groupLabelRowStyle: ViewStyle = {
@@ -378,14 +398,15 @@ function HappierCollectionListImpl(props: HappierCollectionListProps): ReactElem
   const { host } = props;
   const { Text, Scroller, SearchField } = host;
   const showFilters = props.filters != null && props.filters.targetCount > 0;
-  const showHeader = props.title !== undefined || props.count != null || props.headerAction != null;
+  const showHeader = props.title !== undefined || props.titleControl != null || props.count != null || props.headerAction != null;
   return (
     <HappierCollectionListRowContext.Provider value>
     <View testID={props.testID} style={[railStyle, host.surfaceStyle]}>
       {showHeader ? (
         <View style={props.subtitle ? [headerStyle, headerWithSubtitleStyle] : headerStyle}>
           <View style={headingStyle}>
-            {props.title !== undefined ? <Text role="title" accessibilityRole="header">{props.title}</Text> : null}
+            {props.titleControl != null ? props.titleControl
+              : props.title !== undefined ? <Text role="title" accessibilityRole="header">{props.title}</Text> : null}
             {props.count !== undefined && props.count !== null ? (
               <Text role="count">{props.count}</Text>
             ) : null}
@@ -399,12 +420,15 @@ function HappierCollectionListImpl(props: HappierCollectionListProps): ReactElem
           <Text role="subtitle" numberOfLines={1}>{props.subtitle.text}</Text>
         </View>
       ) : null}
+      {props.strip != null ? <View style={stripStyle}>{props.strip}</View> : null}
       {props.search ? (
         <SearchField
           value={props.search.value}
           onChangeText={props.search.onChangeText}
           placeholder={props.search.placeholder}
           style={showHeader ? searchStyle : untitledSearchStyle}
+          {...(props.search.trailing == null ? {} : { trailing: props.search.trailing })}
+          {...(props.search.anchorRef === undefined ? {} : { anchorRef: props.search.anchorRef })}
           {...(props.search.testID === undefined ? {} : { testID: props.search.testID })}
         />
       ) : null}
