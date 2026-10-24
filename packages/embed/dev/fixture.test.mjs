@@ -181,8 +181,12 @@ test('lead creation projects a typed SDK spawn failure without exception text', 
   const happier = {
     embed: { async createSession() {
       throw Object.assign(new Error('sensitive spawn detail'), {
+        code: 'invalid_parameters',
+        details: { issues: [
+          { path: ['organizationPlacement', 'sectionId'], code: 'invalid_type', message: 'sensitive spawn detail' },
+        ] },
         session: { id: leadSessionId },
-        result: { type: 'error', code: 'spawn_failed', retryable: false },
+        result: { type: 'error', code: 'invalid_parameters', retryable: false },
       });
     } },
     sessions: { get() { throw new Error('Unexpected retained Session'); } },
@@ -192,7 +196,8 @@ test('lead creation projects a typed SDK spawn failure without exception text', 
     .then(() => null, (error) => error);
   assert.deepEqual(projectFixtureErrorResponse(failure), {
     status: 400,
-    body: { error: 'spawn_failed', sessionId: leadSessionId },
+    body: { error: 'invalid_parameters', sessionId: leadSessionId,
+      issues: [{ path: ['organizationPlacement', 'sectionId'], code: 'invalid_type' }] },
   });
   assert.doesNotMatch(JSON.stringify(projectFixtureErrorResponse(failure)), /sensitive spawn detail/);
   assert.equal(store.listLeads('salesperson')[0].sessionId, null);

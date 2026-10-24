@@ -87,9 +87,22 @@ function readRetainedSdkSessionId(error) {
     ? error.result.sessionId : undefined;
 }
 
+function readTypedSdkIssues(error) {
+  if (!error || typeof error !== 'object' || !error.details || typeof error.details !== 'object'
+    || !Array.isArray(error.details.issues)) return [];
+  return error.details.issues.flatMap((issue) => {
+    if (!issue || typeof issue !== 'object' || typeof issue.code !== 'string' || !issue.code.trim()
+      || !Array.isArray(issue.path) || issue.path.some((segment) => typeof segment !== 'string' && typeof segment !== 'number')) {
+      return [];
+    }
+    return [{ path: issue.path, code: issue.code }];
+  });
+}
+
 function fixtureSdkFailure(error, sessionId) {
   const code = readTypedSdkErrorCode(error) ?? 'fixture_sdk_error';
-  const failure = Object.assign(new Error(code), { code, sessionId });
+  const issues = readTypedSdkIssues(error);
+  const failure = Object.assign(new Error(code), { code, sessionId, ...(issues.length ? { details: issues } : {}) });
   if (error && typeof error === 'object' && typeof error.status === 'number') failure.status = error.status;
   return failure;
 }
