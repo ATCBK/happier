@@ -16,7 +16,8 @@ import { readAuthTokenProvenance } from '@happier-dev/protocol/auth/authToken';
 import { withActionAccountRequestSignal, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { parseTokenPayload } from '@/utils/auth/parseToken';
 import { getRandomBytes } from '@/platform/cryptoRandom';
-import { fetchMachineRows, type FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
+import type { MachinePublishedRowV1 } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { readMachineRows } from '@/sync/api/machines/machineRowsApi';
 import { readMachineInstallationPublicKey } from '@/sync/domains/machines/machineInstallationPublicKey';
 import { resolveFreshMachineAdministrationExecutionTarget } from '@/sync/domains/machines/administration/useTargetSelection';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
@@ -45,7 +46,7 @@ export function readOriginalAccountActionAuthentication(token: string) {
         ? authentication.data : null;
 }
 
-function projectActionMachine(source: Pick<FetchedMachineRow, 'id' | 'kind' | 'active' | 'revokedAt' | 'replacedByMachineId'
+function projectActionMachine(source: Pick<MachinePublishedRowV1, 'id' | 'kind' | 'active' | 'revokedAt' | 'replacedByMachineId'
     | 'installationId' | 'dataEncryptionKey' | 'runnerContentKeyBinding' | 'access' | 'installationPublicKey'> | null | undefined) {
     const projection = ExternalActionMachineBootstrapV1Schema.safeParse(source && {
         id: source.id, kind: source.kind, active: source.active, revokedAt: source.revokedAt,
@@ -58,12 +59,12 @@ function projectActionMachine(source: Pick<FetchedMachineRow, 'id' | 'kind' | 'a
 
 /** Account discovery has content; validate the canonical identity projection. */
 export async function readOriginalAccountActionMachine(account: LazyActionAccountContext, machineId: string, signal?: AbortSignal) {
-    const machines = await withActionAccountRequestSignal(account, signal, ownedSignal => fetchMachineRows({ credentials: account.credentials,
-        readTransport: account.readTransport, signal: ownedSignal,
-        request: (path, init) => account.request(path, { ...init, signal: ownedSignal }) }));
+    const readTransport = account.readTransport;
+    if (!readTransport) return null;
+    const machines = await withActionAccountRequestSignal(account, signal, ownedSignal => readMachineRows({
+        readTransport, machineIds: [machineId], signal: ownedSignal }));
     account.assertCurrent();
-    if (!Array.isArray(machines)) return null;
-    return projectActionMachine(machines.find(candidate => candidate && typeof candidate === 'object' && candidate.id === machineId));
+    return projectActionMachine(machines.get(machineId));
 }
 
 function readCurrentOwnActionMachine(account: LazyActionAccountContext, machineId: string) {

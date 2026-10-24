@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { projectExternalActionHttpError } from '@happier-dev/protocol/actions/externalActionApi';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import type { ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { readSpawnSessionRpcTimeoutMsFromEnv } from '@/sync/domains/session/spawn/spawnSessionRpcTimeout';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 // Only authenticated HTTP and device credential IO leave this process.
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-const { executeOriginalAccountActionTransport, executeOriginalAccountMachineAction } = await import('./externalActionAccountTransport');
+const { executeOriginalAccountActionTransport, executeOriginalAccountMachineAction, readOriginalAccountActionMachine } = await import('./externalActionAccountTransport');
 let account: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | null = null;
 let serverId: string;
 const path = '/v1/actions/plugins.uninstall';
@@ -30,6 +30,11 @@ beforeEach(async () => {
 });
 afterEach(async () => { account?.dispose(); account = null; vi.useRealTimers(); await homes.reset(); });
 
+function answerOwnedMachine() {
+    const machine = { ...createPlainMachineRowFixture({ id: 'machine-1', accountId: 'owner' }), installationId: 'installation-1' };
+    homes.answer(serverId, '/v1/machines/machine-1', { body: { machine } });
+}
+
 async function execute() {
     if (!account) throw new Error('Expected captured Account');
     const result = await executeOriginalAccountActionTransport({ account, binding,
@@ -40,12 +45,27 @@ async function execute() {
 }
 
 describe('captured Account Action response decoding', () => {
+    it('reads only the exact Action Machine rather than the Account Machine census', async () => {
+        const machines = Array.from({ length: 100 }, (_, index) => createPlainMachineRowFixture({ id: `machine-${index}`, accountId: 'owner' }));
+        homes.answer(serverId, '/v1/machines', { body: machines });
+        homes.answer(serverId, 'POST /v1/machines/read-batch', { select: async body => ({
+            body: await createMachineReadBatchResponseFixture(body, id => machines.find(machine => machine.id === id) ?? null).json(),
+        }) });
+        if (!account) throw new Error('Expected captured Account');
+        expect(await readOriginalAccountActionMachine(account, 'machine-42')).toMatchObject({ id: 'machine-42' });
+        expect(homes.requests.filter(request => new URL(request.path, 'https://plugin-transport.test').pathname === '/v1/machines')).toHaveLength(0);
+        expect(homes.requestsFor('/v1/machines/read-batch').map(request => request.input)).toEqual([{ machineIds: ['machine-42'] }]);
+    });
+
+    it('refuses private Machine discovery without a captured Account read transport', async () => {
+        if (!account) throw new Error('Expected captured Account');
+        const before = homes.requests.length;
+        expect(await readOriginalAccountActionMachine({ ...account, readTransport: undefined }, 'machine-1')).toBeNull();
+        expect(homes.requests.slice(before)).toHaveLength(0);
+    });
+
     it('preserves Account page source and version through the real Machine Action envelope', async () => {
-        homes.answer(serverId, '/v1/machines', { body: [ExternalActionMachineBootstrapV1Schema.parse({
-            id: 'machine-1', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
-            installationId: 'installation-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
-            access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-        })] });
+        answerOwnedMachine();
         const mountedBinding = { pluginId: 'com.acme.portable', contributionLocalId: 'page', occurrenceId: 'account-custody',
             pluginVersion: '1.0.0', sourceCustody: { kind: 'bundled_first_party' as const,
                 packagedRuntime: { kind: 'source_declaration' as const, packageName: '@acme/portable' } } };
@@ -65,11 +85,7 @@ describe('captured Account Action response decoding', () => {
         const { dispatchPluginSurfaceAction } = await import('@/components/plugins/surfaces/pluginSurfaceActionDispatch');
         const capturedAccount = account;
         if (!capturedAccount) throw new Error('Expected captured Account');
-        homes.answer(serverId, '/v1/machines', { body: [ExternalActionMachineBootstrapV1Schema.parse({
-            id: 'machine-1', kind: 'persistent', active: true, revokedAt: null, replacedByMachineId: null,
-            installationId: 'installation-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
-            access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-        })] });
+        answerOwnedMachine();
         const mountedBinding = { pluginId: 'com.acme.portable', contributionLocalId: 'page', occurrenceId: 'account-custody',
             pluginVersion: '1.0.0', sourceCustody: { kind: 'bundled_first_party' as const,
                 packagedRuntime: { kind: 'source_declaration' as const, packageName: '@acme/portable' } } };
