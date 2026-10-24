@@ -35,9 +35,6 @@ import { projectDeclarativeStructuredFindText } from '@/components/plugins/share
 const NON_STRUCTURED_HAPPIER_META_KINDS = new Set([
     'attachments.v1',
     'session_media.v1',
-    // SCM result metadata belongs to the comparison surface; preserve its
-    // host-authored transcript notice through the ordinary prose path.
-    'scm_diff_summary.v1',
 ]);
 const FAIL_CLOSED_STRUCTURED_MESSAGE_INTERACTION = deriveTranscriptInteraction({ kind: 'public' });
 

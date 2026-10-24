@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMessageStructuredPresentationV1 } from '@happier-dev/protocol';
 import { ScmDiffSummaryGenerateSuccessSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { renderWithSessionTranscriptSource as renderScreen } from '@/dev/testkit';
+import { createTestSessionTranscriptSource } from '@/dev/testkit/sessionTranscriptSource';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import {
     createPluginMessageActionHost,
@@ -92,6 +93,32 @@ describe('StructuredMessageBlock', () => {
         expect(renderStructuredMessage({ message, sessionId: 's1', interaction: editableInteraction, onJumpToAnchor: () => {} })).toBeNull();
         expect(projectStructuredMessageFindText(message)).toBeNull();
     });
+    it('shows a saved SCM publication as one receipt that opens its exact captured comparison, replacing the notice prose', async () => {
+        const payload = ScmDiffSummaryGenerateSuccessSchema.parse({ success: true, sourceKey: 'cmp-7', resultId: 'saved-1', revision: 3,
+            metadata: { source: { kind: 'workingTree' }, sourceKey: 'cmp-7' },
+            comparison: { id: 'cmp-7', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' }, endpoints: {},
+                inventory: { state: 'complete', reasons: [], files: [] } },
+            requestedOutputs: ['walkthrough'], outputs: { walkthrough: { state: 'complete', value: {
+                title: 'Coupons apply per line', intro: '', stops: [], otherChangeRefs: [] } } },
+            analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } });
+        const message = { kind: 'agent-text' as const, id: 'notice-published', localId: null, createdAt: 1, text: 'Walkthrough written.',
+            meta: { happier: { kind: 'scm_diff_summary.v1', payload },
+                scmResultUpdate: { status: 'published', canUndo: true, outputs: [{ kind: 'walkthrough', change: 'created' }] } } };
+        const navigate = vi.fn();
+        const screen = await renderScreen(
+            <StructuredMessageBlock message={message} sessionId="s1" interaction={editableInteraction} onJumpToAnchor={() => {}} />,
+            createTestSessionTranscriptSource({ navigate }),
+        );
+
+        expect(screen.findAllHostsByTestId('scm-result-receipt')).toHaveLength(1);
+        expect(projectStructuredMessageFindText(message)?.map((block) => block.text)).toContain('Coupons apply per line');
+        await screen.pressByTestIdAsync('scm-result-receipt-open');
+        const href = String(navigate.mock.calls[0]?.[0]);
+        expect(href).toContain('details=scmReview');
+        expect(href).toContain('cmp-7');
+        expect(href).toContain('walkthrough');
+    });
+
     it('renders a persisted structured snapshot without resolving current daemon content', async () => {
         const screen = await renderScreen(
             <StructuredMessageBlock
