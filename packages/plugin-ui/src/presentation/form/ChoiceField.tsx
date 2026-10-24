@@ -277,6 +277,8 @@ export function HappierChoiceField<Value = string>(
             autoFocusOnOpen: true,
             onRequestClose: () => setOpen(false),
             content: (controls) => (
+              // The choices stand on the host's menu step, like every anchored menu (absent, they float flat).
+              <View style={[{ borderRadius: theme.radii.panel }, palette.menuLift ?? null]}>
               <HappierSurface
                 materialRole="floating"
                 nested
@@ -323,6 +325,7 @@ export function HappierChoiceField<Value = string>(
                   </HappierScrollArea>
                 </View>
               </HappierSurface>
+              </View>
             ),
           })
         : null}

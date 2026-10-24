@@ -758,13 +758,18 @@ const FLOATING_SURFACE_SCROLL_INSET = Object.freeze({
 function FloatingScrollSurface(props: Readonly<{ maxHeight: number; floatingRole?: HappierFloatingRole; children: ReactNode }>): ReactElement {
   // The Surface's 1px border on each side sits outside the scroller.
   const scrollMaxHeight = Math.max(0, props.maxHeight - 2);
+  const theme = usePluginTheme();
+  // It stands on the host's menu step, as core's floating menus do; a host without one floats it flat.
+  const lift = (useOptionalHappierUiPalette(theme) ?? resolveHappierUiPalette(theme)).menuLift;
   return (
     <HAPPIER_PAGE_CHROME_CONTEXT_INTERNAL.Provider value={null}>
-      <Surface padding="none" materialRole="floating" floatingRole={props.floatingRole}>
-        <HappierScrollArea style={{ maxHeight: scrollMaxHeight }} contentContainerStyle={FLOATING_SURFACE_SCROLL_INSET}>
-          <HappierStack gap={4}>{props.children}</HappierStack>
-        </HappierScrollArea>
-      </Surface>
+      <View style={[{ borderRadius: theme.radii.panel }, lift ?? null]}>
+        <Surface padding="none" materialRole="floating" floatingRole={props.floatingRole}>
+          <HappierScrollArea style={{ maxHeight: scrollMaxHeight }} contentContainerStyle={FLOATING_SURFACE_SCROLL_INSET}>
+            <HappierStack gap={4}>{props.children}</HappierStack>
+          </HappierScrollArea>
+        </Surface>
+      </View>
     </HAPPIER_PAGE_CHROME_CONTEXT_INTERNAL.Provider>
   );
 }

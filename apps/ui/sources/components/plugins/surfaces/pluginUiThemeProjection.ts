@@ -303,6 +303,8 @@ export function projectPluginUiHostPalette(theme: Pick<Theme, 'colors' | 'dark'>
         segmentTrack: colors.segmentedControl.trackBackground,
         segmentThumb: colors.segmentedControl.activeBackground,
         segmentThumbLift: shadowLevelStyle(colors.shadowLevels[1]),
+        // Menus and a field's choices stand on the menu step core's FloatingOverlay draws.
+        menuLift: shadowLevelStyle(colors.shadowLevels[2]),
         // A navigation column's rows on the shell plane: the same chip and hover core rows draw
         // (`HAPPIER_COLLECTION_LIST_ROW_STYLE` over `Item`).
         navigationSelected: colors.surface.elevated,
