@@ -9,6 +9,7 @@ import {
   restoreServerAccountForTest,
 } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 
 vi.mock('expo-router', async () => {
@@ -91,12 +92,25 @@ function setupOperation(
 
 async function mountContinuation() {
   const trustMutations: unknown[] = [];
+  const serverIdentityId = 'srv_service_setup_consent';
+  const workspaceRef = {
+    id: 'checkout',
+    serverId: serverIdentityId,
+    machineId: 'devbox',
+    rootPath: '/src/lumen',
+    createdAtMs: 1,
+    projectKey: 'project-lumen',
+  };
   const connection = await restoreServerAccountForTest({
     serverUrl: 'https://service-setup-consent.test',
-    serverIdentityId: 'srv_service_setup_consent',
+    serverIdentityId,
     accountId: 'account',
     request: async (url, init) => {
       const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/project-rows/list')
+        return Response.json(
+          createPlainProjectAccountRowListFixture({ workspaceRefs: [workspaceRef] }),
+        );
       if (path === '/v1/account/encryption')
         return Response.json({ mode: 'plain', updatedAt: 1 });
       if (path === '/v1/account/encryption/currentness')
@@ -130,28 +144,16 @@ async function mountContinuation() {
     workspaceId: 'checkout',
     rootPath: '/src/lumen',
   };
-  const scope = { serverId, accountId: 'account' };
-  storage.setState({
-    profileScope: scope,
-    projectAccountRows: {
-      scope,
+  // Restore admits the Account census through its real HTTP/cipher/store owners.
+  // Seeding rows directly would race (and bypass) the authorized refresh.
+  await vi.waitFor(() =>
+    expect(storage.getState().projectAccountRows).toMatchObject({
+      scope: { serverId, accountId: 'account' },
       status: 'ready',
       coverage: 'complete',
-      relationships: [],
-      organizations: [],
-      revisionsByPhysicalKey: {},
-      workspaceRefs: [
-        {
-          id: 'checkout',
-          serverId,
-          machineId: 'devbox',
-          rootPath: '/src/lumen',
-          createdAtMs: 1,
-          projectKey: 'project-lumen',
-        },
-      ],
-    },
-  } as never);
+      workspaceRefs: [workspaceRef],
+    }),
+  );
   const held = setupOperation(serverId, workspace, {
     operationId: 'held-setup',
     state: 'accepted',
