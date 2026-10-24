@@ -1041,6 +1041,7 @@ const artifactsBrowserTranslations = { ru: {
         },
         proposal: {
             title: 'Предложенная правка',
+            titleBy: ({ who }) => `${who} предлагает правку`,
             basedOn: ({ n }) => `На основе версии ${n}`,
             current: ({ n }) => `Версия ${n} · текущая`,
             before: 'До',

@@ -164,6 +164,7 @@ export type ArtifactsBrowserTranslations = Readonly<{
     }>;
     proposal: Readonly<{
         title: string;
+        titleBy: (params: Readonly<{ who: string }>) => string;
         basedOn: (params: Readonly<{ n: number }>) => string;
         current: (params: Readonly<{ n: number }>) => string;
         before: string;
@@ -357,6 +358,7 @@ export const artifactsBrowserTranslationsEnglish = { en: {
         },
         proposal: {
             title: 'Suggested edit',
+            titleBy: ({ who }) => `${who} suggests an edit`,
             basedOn: ({ n }) => `Based on version ${n}`,
             current: ({ n }) => `Version ${n} · current`,
             before: 'Before',

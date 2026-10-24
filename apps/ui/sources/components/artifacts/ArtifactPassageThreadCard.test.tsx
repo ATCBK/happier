@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { DocPassageMarginThread } from './docPassageMargin';
 
 vi.mock('@/text', async () => {
@@ -95,5 +97,43 @@ describe('ArtifactPassageThreadCard re-attachment', () => {
     expect(moved.screen.getTextContent()).toContain('Up to 3 attempts');
     expect(moved.screen.findByTestId(`${id}.earlier`)).not.toBeNull();
     expect(moved.screen.getTextContent()).toContain('Up to 5 tries');
+  });
+
+  it('names who suggested the edit on its card, since the margin shows the suggestion without its message byline', async () => {
+    const source = thread({ state: 'exact', range: { start: 0, end: 11 } });
+    const proposal: DiscussionOpenedMessageV1 = {
+      ...root, id: 'm2', seq: 2, createdAt: 2,
+      authorAccountId: 'mei', accountActor: { accountId: 'mei', profile: { name: 'Mei Kato' } } as DiscussionOpenedMessageV1['accountActor'],
+      messageRef: { ...root.messageRef, messageId: 'm2' },
+      replyTarget: { kind: 'message', messageId: 'm1' },
+      content: { kind: 'doc_edit_proposal', proposal: {
+        target: firstPassage, baseRevision: firstPassage.revision, before: firstPassage.quote, after: 'Up to 3 attempts', reason: 'Budget changed.',
+      } },
+    };
+    const view = await mount({ thread: { ...source, replies: [proposal], proposal } });
+    const card = view.screen.findByTestId(`${id}.proposal`);
+    expect(card).not.toBeNull();
+    const cardText = card!.findAll((node) => typeof node.props?.children === 'string').map((node) => node.props.children).join(' ');
+    expect(cardText).toContain('Mei Kato');
+  });
+
+  it('names an agent reply by its Session in the latest-reply line, not as the Account that runs it', async () => {
+    const previousState = storage.getState();
+    try {
+      const agentSession = createSessionFixture({ id: 'runbook-agent', serverId: 'home', metadataLayoutVersion: 1,
+        metadata: { path: '', host: '' }, ownerMetadataView: { name: 'Support runbook', host: 'box', path: '/runbook' } });
+      storage.setState({ sessionListRowsByServerId: { home: { 'runbook-agent': buildSessionListRenderableFromSession(agentSession) } } });
+      const source = thread({ state: 'exact', range: { start: 0, end: 11 } });
+      const reply: DiscussionOpenedMessageV1 = {
+        ...root, id: 'm2', seq: 2, createdAt: 2, authorAccountId: 'alice',
+        producerV1: { kind: 'agent', sessionId: 'runbook-agent' } as DiscussionOpenedMessageV1['producerV1'],
+        messageRef: { ...root.messageRef, messageId: 'm2' }, replyTarget: { kind: 'message', messageId: 'm1' },
+        content: { v: 1, parts: [{ t: 'text', text: 'Updated.' }] },
+      };
+      const view = await mount({ thread: { ...source, replies: [reply] } });
+      const line = view.screen.findByTestId(`${id}.reply`);
+      const lineText = line!.findAll((node) => typeof node.props?.children === 'string').map((node) => node.props.children).join(' ');
+      expect(lineText).toContain('Support runbook');
+    } finally { storage.setState(previousState); }
   });
 });

@@ -1041,6 +1041,7 @@ const artifactsBrowserTranslations = { pt: {
         },
         proposal: {
             title: 'Edição sugerida',
+            titleBy: ({ who }) => `${who} sugere uma edição`,
             basedOn: ({ n }) => `Baseada na versão ${n}`,
             current: ({ n }) => `Versão ${n} · atual`,
             before: 'Antes',

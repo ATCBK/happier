@@ -1041,6 +1041,7 @@ const artifactsBrowserTranslations = { 'zh-Hans': {
         },
         proposal: {
             title: '建议的修改',
+            titleBy: ({ who }) => `${who} 建议修改`,
             basedOn: ({ n }) => `基于版本 ${n}`,
             current: ({ n }) => `版本 ${n} · 当前`,
             before: '修改前',

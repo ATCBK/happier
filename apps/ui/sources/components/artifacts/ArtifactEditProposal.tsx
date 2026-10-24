@@ -70,6 +70,11 @@ export function ArtifactEditProposal(
     resolveAccountLabel: (accountId: string) => string | null;
     /** Who suggested the edit, as the thread names and mentions them; Ask to redo addresses them. */
     proposer?: ProposalAuthor | null;
+    /**
+     * The card names its proposer in its title. A Doc margin thread shows the suggestion without its
+     * message's byline; a Discussion message already names its speaker above the card.
+     */
+    namesProposer?: boolean;
   }>,
 ): React.ReactElement {
   const { theme } = useUnistyles();
@@ -266,7 +271,9 @@ export function ArtifactEditProposal(
     } : undefined;
     const open = {
       state: 'open' as const,
-      title: t('artifacts.browser.proposal.title'),
+      title: props.namesProposer && proposer
+        ? t('artifacts.browser.proposal.titleBy', { who: proposer.label })
+        : t('artifacts.browser.proposal.title'),
       basedOn: t('artifacts.browser.proposal.basedOn', { n: base.bodyVersion }),
       reason: proposal.reason,
     };
@@ -292,7 +299,8 @@ export function ArtifactEditProposal(
         testID: `${testID}.cantEdit`, mark: 'locked', text: t('artifacts.browser.proposal.cantEdit'),
       } } };
     }
-    return { ...open, footer: {
+    // A current suggestion states its version once, in the footer (lab L8-A).
+    return { ...open, basedOn: currency === 'current' ? undefined : open.basedOn, footer: {
       kind: 'decide',
       status: busy === 'accept' || busy === 'decline'
         ? { indicator: 'busy', text: busy === 'accept' ? t('artifacts.browser.proposal.accepting') : t('artifacts.browser.proposal.declining') }

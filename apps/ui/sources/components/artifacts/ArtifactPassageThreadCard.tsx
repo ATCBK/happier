@@ -80,14 +80,17 @@ export function ArtifactPassageThreadCard(
   const reattached = thread.passage !== thread.original;
   // Who suggested the edit, named as the thread names them: an agent by its Session, a person by name.
   // A Workflow Run is neither; it can't be asked to redo, so it names no proposer to address.
-  const producer = thread.proposal?.producerV1 ?? null;
-  const producerSessionId = producer?.kind === 'agent' ? producer.sessionId : null;
+  // An agent's message speaks as its Session (C7), in the latest-reply line as in the proposal title.
+  const producerSessionId = thread.proposal?.producerV1?.kind === 'agent' ? thread.proposal.producerV1.sessionId : null;
+  const replySessionId = latestReply?.producerV1?.kind === 'agent' ? latestReply.producerV1.sessionId : null;
+  const serverId = root.messageRef.discussion.serverId;
   const producerAddresses = React.useMemo(
-    () => producerSessionId && thread.proposal?.messageRef
-      ? [{ serverId: thread.proposal.messageRef.discussion.serverId, sessionId: producerSessionId }] : [],
-    [producerSessionId, thread.proposal?.messageRef],
+    () => [producerSessionId, replySessionId].flatMap((sessionId) => (sessionId ? [{ serverId, sessionId }] : [])),
+    [producerSessionId, replySessionId, serverId],
   );
-  const [producerTitle] = useSessionDisplayTitles(producerAddresses);
+  const producerTitles = useSessionDisplayTitles(producerAddresses);
+  const producerTitle = producerSessionId ? (producerTitles[0] ?? null) : null;
+  const replyTitle = replySessionId ? (producerTitles[producerSessionId ? 1 : 0] ?? null) : null;
   const proposer = React.useMemo(() => {
     const message = thread.proposal;
     if (!message) return null;
@@ -215,6 +218,7 @@ export function ArtifactPassageThreadCard(
           <Text variant="meta" numberOfLines={1} style={styles.replyText}>
             {t('artifacts.browser.passage.replied', {
               name:
+                replyTitle ??
                 resolveAccountLabel(latestReply.authorAccountId ?? '') ??
                 resolveDiscussionMessageAuthorLabel(latestReply),
               time: formatShortRelativeTime(latestReply.createdAt),
@@ -285,6 +289,7 @@ export function ArtifactPassageThreadCard(
           viewerAccountId={props.viewerAccountId}
           resolveAccountLabel={resolveAccountLabel}
           proposer={proposer}
+          namesProposer
         />
       ) : null}
     </View>

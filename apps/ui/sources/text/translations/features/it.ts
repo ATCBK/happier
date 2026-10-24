@@ -1041,6 +1041,7 @@ const artifactsBrowserTranslations = { it: {
         },
         proposal: {
             title: 'Modifica suggerita',
+            titleBy: ({ who }) => `${who} suggerisce una modifica`,
             basedOn: ({ n }) => `Basata sulla versione ${n}`,
             current: ({ n }) => `Versione ${n} · attuale`,
             before: 'Prima',
