@@ -69,7 +69,12 @@ export function parseUpdateContainer(update: unknown): UpdateContainer | null {
         }
         return null;
     }
-    return validatedUpdate.data;
+    const parsed = validatedUpdate.data;
+    // Released Session writers use sid only as the compatibility alias of id.
+    // Contradictory routing identities are malformed, not a content update.
+    if (parsed.body.t === 'update-session' && Object.hasOwn(parsed.body, 'sid')
+        && parsed.body.sid !== parsed.body.id) return null;
+    return parsed;
 }
 
 export function parseEphemeralUpdate(update: unknown): EphemeralUpdate | null {
