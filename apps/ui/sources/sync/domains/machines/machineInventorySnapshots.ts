@@ -1,5 +1,5 @@
 import {
-    buildMachineDisplayRenderableFromCacheEntry,
+    readWarmMachineDisplays,
 } from '@/sync/domains/state/machineDisplayWarmCacheAdapters';
 import type { MachineDisplayCacheEntryV1 } from '@/sync/domains/state/warmCachePersistence';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -83,36 +83,6 @@ function normalizePortableIdentity(value: unknown): string | null {
 
 function compareMachineDisplays(left: MachineDisplayRenderable, right: MachineDisplayRenderable): number {
     return left.id.localeCompare(right.id);
-}
-
-function readWarmMachineDisplays(params: Readonly<{
-    profile: ServerProfile;
-    serverIdentityId: string;
-    accountId: string;
-    loadWarmEntries: (
-        serverId: string,
-        accountId: string,
-    ) => Record<string, MachineDisplayCacheEntryV1>;
-}>): readonly MachineDisplayRenderable[] {
-    const entriesByMachineId = new Map<string, MachineDisplayCacheEntryV1>();
-    const keys = uniqueNonEmpty([
-        params.serverIdentityId,
-        params.profile.id,
-        ...(params.profile.legacyServerIds ?? []),
-    ]);
-    for (const key of keys) {
-        const entries = params.loadWarmEntries(key, params.accountId);
-        for (const entry of Object.values(entries)) {
-            const previous = entriesByMachineId.get(entry.machineId);
-            if (!previous || entry.updatedAt > previous.updatedAt) {
-                entriesByMachineId.set(entry.machineId, entry);
-            }
-        }
-    }
-    return Object.freeze([...entriesByMachineId.values()]
-        .map(buildMachineDisplayRenderableFromCacheEntry)
-        .filter(isPersistentMachine)
-        .sort(compareMachineDisplays));
 }
 
 function resolveRawMachineList(params: Readonly<{

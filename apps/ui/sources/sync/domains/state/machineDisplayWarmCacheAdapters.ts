@@ -1,10 +1,33 @@
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
-import { MachineKindFromLegacyProjectionSchema } from '@happier-dev/protocol/machines/machineKind';
+import { isPersistentMachine, MachineKindFromLegacyProjectionSchema } from '@happier-dev/protocol/machines/machineKind';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
 
 import type { MachineDisplayCacheEntryV1 } from './warmCachePersistence';
 
 const EMPTY_MACHINE_DISPLAY_CACHE_ENTRIES: Record<string, never> = {};
+
+/** One presentation read for hydration and all-profile inventory, including 0.2 profile-id keys. */
+export function readWarmMachineDisplays(params: Readonly<{
+    profile: ServerProfile | null;
+    serverIdentityId: string;
+    accountId: string;
+    loadWarmEntries: (serverId: string, accountId: string) => Record<string, MachineDisplayCacheEntryV1>;
+}>): readonly MachineDisplayRenderable[] {
+    const entriesByMachineId = new Map<string, MachineDisplayCacheEntryV1>();
+    const keys = new Set([params.profile?.serverIdentityId, params.serverIdentityId, params.profile?.id, ...(params.profile?.legacyServerIds ?? [])]
+        .map(value => String(value ?? '').trim()).filter(Boolean));
+    for (const key of keys) {
+        for (const entry of Object.values(params.loadWarmEntries(key, params.accountId))) {
+            const previous = entriesByMachineId.get(entry.machineId);
+            if (!previous || entry.updatedAt > previous.updatedAt) entriesByMachineId.set(entry.machineId, entry);
+        }
+    }
+    return Object.freeze([...entriesByMachineId.values()]
+        .map(buildMachineDisplayRenderableFromCacheEntry)
+        .filter(isPersistentMachine)
+        .sort((left, right) => left.id.localeCompare(right.id)));
+}
 
 export function buildMachineDisplayRenderableFromCacheEntry(entry: MachineDisplayCacheEntryV1): MachineDisplayRenderable {
     return {
