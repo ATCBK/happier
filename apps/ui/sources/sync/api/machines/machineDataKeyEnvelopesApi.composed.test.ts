@@ -65,7 +65,9 @@ describe('captured Machine recipient preparation transport', () => {
             recipientChangeCursors, isCurrent: () => true });
         try {
             await refresh();
-            expect(reads()).toHaveLength(ids.length);
+            // One admitted Machine pass owns an initial census and the canonical
+            // bounded final recheck; this is two reads, not two admissions.
+            expect(reads()).toHaveLength(ids.length * 2);
             for (revision = 2; revision <= 5; revision++) {
                 machines = machines.map(machine => ({ ...machine, daemonStateVersion: revision,
                     keyBasis: { ...machine.keyBasis!, daemonStateVersion: revision } }));
@@ -77,7 +79,7 @@ describe('captured Machine recipient preparation transport', () => {
             const beforeRecipientChange = reads().length;
             recipientChangeCursors.set(changedId, 1);
             await refresh();
-            expect(reads().slice(beforeRecipientChange).map(request => request.path.split('/')[3])).toEqual([changedId]);
+            expect(reads().slice(beforeRecipientChange).map(request => request.path.split('/')[3])).toEqual([changedId, changedId]);
         } finally { await home.dispose(); }
     });
 
@@ -369,12 +371,12 @@ describe('captured Machine recipient preparation transport', () => {
                 censusGate = undefined;
                 revision++;
                 machine.keyBasis = row().keyBasis;
-                await refresh(13); // Warm display still has the previous decrypted content versions.
-                expect(censusReads() - before).toBe(12);
+                await refresh(13); // Content revisions on the same owner envelope are not recipient demand.
+                expect(censusReads() - before).toBe(10);
                 machine.metadataVersion = revision;
                 machine.daemonStateVersion = revision;
                 await refresh(14);
-                expect(censusReads() - before).toBe(12); // Hydrating that same published basis is not another input change.
+                expect(censusReads() - before).toBe(10); // Hydrating that same published basis is not another input change.
                 recipientChangeCursors.set(machine.id, 5);
                 delivered = null;
                 recipientBindingAvailable = false;

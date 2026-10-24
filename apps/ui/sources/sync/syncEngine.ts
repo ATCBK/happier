@@ -12377,10 +12377,12 @@ class Sync {
                             const publishedPlan = changes.length === replayedChanges.length ? planned : planSyncActionsFromChanges(changes, {
                                 isSessionListMember: sessionId => this.isSessionListMemberOnHome(plannedServerId, sessionId),
                             });
-                            // Audience/grant changes need not alter the published Machine blobs.
-                            // The existing focused AccountChange cursor is their freshness signal.
+                            // Recipient/access changes need not alter the published Machine blobs.
+                            // Their dedicated focused AccountChange cursor is the freshness signal.
                             for (const change of changes) {
-                                if (change.kind === 'machine') this.machineRecipientChangeCursors.set(change.entityId, change.cursor);
+                                if (change.kind === MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1) {
+                                    this.machineRecipientChangeCursors.set(change.entityId, change.cursor);
+                                }
                             }
                             if (plannedServerId && sessionRecordChangeScope) {
                                 publishMountedDiscussionChanges({

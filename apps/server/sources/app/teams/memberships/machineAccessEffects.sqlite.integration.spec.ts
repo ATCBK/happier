@@ -70,7 +70,7 @@ describe("Machine effective access membership effects (SQLite integration)", () 
         expect(f.disconnected).toHaveBeenCalledWith(true);
         expect(f.unrelatedDisconnected).not.toHaveBeenCalled();
         expect(f.otherMachineDisconnected).not.toHaveBeenCalled();
-        expect(await db.accountChange.count({ where: { accountId: f.member.id, entityId: f.machine.id, kind: "machine" } })).toBe(1);
+        expect(await db.accountChange.count({ where: { accountId: f.member.id, entityId: f.machine.id, kind: "machineRecipientAccess" } })).toBe(1);
         expect(await db.session.findUnique({ where: { id: f.session.id } })).not.toBeNull();
         expect(await db.accessKey.findUnique({ where: { accountId_machineId_sessionId: { accountId: f.member.id, machineId: f.machine.id, sessionId: f.session.id } } })).toMatchObject({ data: "retained-session-key" });
         await inTx(tx => setTeamMembershipStatusInTx(tx, {
@@ -116,7 +116,7 @@ describe("Machine effective access membership effects (SQLite integration)", () 
         }));
         expect(f.disconnected).toHaveBeenCalledWith(true);
         for (const accountId of [f.member.id, second.id]) {
-            expect(await db.accountChange.count({ where: { accountId, entityId: f.machine.id, kind: "machine" } })).toBe(1);
+            expect(await db.accountChange.count({ where: { accountId, entityId: f.machine.id, kind: "machineRecipientAccess" } })).toBe(1);
             expect(await inTx(tx => resolveEffectiveMachineRoleInTx(tx, { actorAccountId: accountId, machineId: f.machine.id }))).toBeNull();
         }
     });
@@ -130,7 +130,7 @@ describe("Machine effective access membership effects (SQLite integration)", () 
         }));
         expect(f.disconnected).not.toHaveBeenCalled();
         expect(await db.machineGroupGrant.count({ where: { machineId: f.machine.id } })).toBe(0);
-        expect(await db.accountChange.count({ where: { accountId: f.owner.id, entityId: f.machine.id, kind: "machine" } })).toBe(1);
+        expect(await db.accountChange.count({ where: { accountId: f.owner.id, entityId: f.machine.id, kind: "machineRecipientAccess" } })).toBe(1);
     });
 
     it("applies the same exact requester loss after direct Leave without deleting the requester's history", async () => {

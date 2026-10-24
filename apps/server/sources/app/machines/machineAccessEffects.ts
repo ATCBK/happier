@@ -1,4 +1,5 @@
 import type { MachineAccessRoleV1 } from '@happier-dev/protocol/machines/machineAccessV1';
+import { MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1 } from '@happier-dev/protocol/changes';
 
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
@@ -112,7 +113,7 @@ export async function applyMachineAccessImpactsInTx(
 
     await acquireAccountChangePublicationLocksInTx(tx, publications.flatMap(publication => [...publication.changed]));
     for (const { machineId, changed, revoked } of publications) {
-        await markAccountsChanged(tx, { accountIds: [...changed], kind: "machine", entityId: machineId });
+        await markAccountsChanged(tx, { accountIds: [...changed], kind: MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1, entityId: machineId });
 
         if (revoked.size === 0) continue;
         const machine = await tx.machine.findUnique({ where: { id: machineId }, select: { accountId: true, installationId: true } });

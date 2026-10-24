@@ -28,6 +28,9 @@ export {
   type PluginDomainWebhookChangeHint,
 } from './pluginDomain.js';
 
+/** Recipient/access-specific Machine projection invalidation on the existing AccountChange feed. */
+export const MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1 = 'machineRecipientAccess' as const;
+
 export const ChangeKindSchema = lazyZodSchema(() => z.enum([
   'account',
   'automation',
@@ -39,6 +42,7 @@ export const ChangeKindSchema = lazyZodSchema(() => z.enum([
   'friend_accepted',
   'kv',
   'machine',
+  MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1,
   'machinePool',
   'pet',
   'pluginDomain',
@@ -48,6 +52,10 @@ export const ChangeKindSchema = lazyZodSchema(() => z.enum([
 ]));
 
 export type ChangeKind = z.infer<typeof ChangeKindSchema>;
+
+export function isMachineProjectionChangeKindV1(kind: string): kind is 'machine' | typeof MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1 {
+  return kind === 'machine' || kind === MACHINE_RECIPIENT_ACCESS_CHANGE_KIND_V1;
+}
 
 /** AccountChange entity identities for reconstructible Home administration projections. */
 export const HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1 = 'home-governance' as const;

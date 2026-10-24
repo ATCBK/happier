@@ -272,6 +272,18 @@ describe('planSyncActionsFromChanges', () => {
         ]) expect(plannedChangesAffectUsageQuery(planSyncActionsFromChanges([machine, change]))).toBe(true);
     });
 
+    it('routes recipient-access Machine changes through the Machine projection owner', () => {
+        const planned = planSyncActionsFromChanges([
+            buildChange({ cursor: 1, kind: 'machineRecipientAccess', entityId: 'machine-a' }),
+        ]);
+
+        expect(planned.invalidate.machines).toBe(true);
+        expect(planned.unsupportedChanges).toEqual([]);
+        expect(classifyChangeForCheckpoint(planned.changes[0]!, {
+            isSessionMessagesLoaded: () => false,
+        })).toMatchObject({ plannerOwner: 'machines', snapshotDomain: 'machines' });
+    });
+
     it('ignores unrelated domain pages without suppressing a material Usage change on the same page', () => {
         const unrelated = [
             buildChange({ cursor: 1, kind: 'machine', entityId: 'machine-a' }),

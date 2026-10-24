@@ -3,6 +3,7 @@ import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } from '@happier-dev/protocol/s
 import {
     ChangeKindSchema,
     HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1,
+    isMachineProjectionChangeKindV1,
     PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1,
     SessionOrganizationChangeHintSchema,
     TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1,
@@ -89,6 +90,7 @@ export const CHANGE_CHECKPOINT_COVERAGE = {
     friend_accepted: { plannerOwner: 'friends', snapshotDomain: 'friends' },
     kv: { plannerOwner: 'kv', snapshotDomain: 'todos' },
     machine: { plannerOwner: 'machines', snapshotDomain: 'machines' },
+    machineRecipientAccess: { plannerOwner: 'machines', snapshotDomain: 'machines' },
     machinePool: { plannerOwner: 'machine-pools', snapshotDomain: 'machine-pools' },
     pet: { plannerOwner: 'pets', snapshotDomain: 'pets' },
     savedSecretResource: { plannerOwner: 'saved-secrets', snapshotDomain: 'saved-secret-resource-catalog' },
@@ -628,7 +630,7 @@ export function planSyncActionsFromChanges(
             continue;
         }
 
-        if (kind === 'machine') {
+        if (isMachineProjectionChangeKindV1(kind)) {
             invalidateMachines = true;
             continue;
         }
