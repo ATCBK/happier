@@ -1763,6 +1763,7 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
     const rootAtStart = durableStore.rootIndex;
     if (!rootAtStart) throw new Error('workflow_root_invocation_missing');
     rootRecordId = rootAtStart.id;
+    let discussionPublicationPending = false;
     if (controllerFailure) {
       const root = await durableStore.readByLogicalInvocation(rootRecordId);
       if (!root) throw new Error('workflow_root_invocation_missing');
@@ -2062,6 +2063,15 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
           && 'workflowStorageOperation' in error
           && classifyDaemonServerWorkError(error).kind === 'server_error';
         if (!publicationUnavailable && !storageUnavailable) throw error;
+        if (publicationUnavailable) {
+          discussionPublicationPending = true;
+          // An Ask or unavailable append retains publication custody, not an
+          // executable claim. Never replace Cancel with publication attention
+          // or reopen an already-cancelled root on every lease reclaim.
+          if (await durableStore.readControl() === 'cancel_requested') {
+            return { state: 'cancelled' } satisfies WorkflowCoordinatorResult;
+          }
+        }
         // Preserve every admitted identity and completed result. Known
         // publication refusal needs visible attention; a storage 5xx can follow
         // a committed write. Neither permits a terminal effect reinterpretation.
@@ -2070,11 +2080,18 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
         const root = await durableStore.readByLogicalInvocation(rootRecordId);
         if (!root) throw error;
         const reason = publicationUnavailable ? 'workflow_discussion_publication_unavailable' : 'storage_unavailable';
-        await durableStore.commitFact({ key: root.key, lifecycle: 'needs_attention',
-          reason,
-          reasonMessage: publicationUnavailable
-            ? 'The accepted result is saved, but Discussion publication is unavailable. Restore access or resolve the publication request, then resume the run.'
-            : 'Workflow storage is temporarily unavailable. Previously saved work is preserved; review the run before continuing.' });
+        try {
+          await durableStore.commitFact({ key: root.key, lifecycle: 'needs_attention',
+            reason,
+            reasonMessage: publicationUnavailable
+              ? 'The accepted result is saved, but Discussion publication is unavailable. Restore access or resolve the publication request, then resume the run.'
+              : 'Workflow storage is temporarily unavailable. Previously saved work is preserved; review the run before continuing.' });
+        } catch (error) {
+          if (error instanceof WorkflowControlBoundary && error.state === 'cancelled') {
+            return { state: 'cancelled' } satisfies WorkflowCoordinatorResult;
+          }
+          throw error;
+        }
         return { state: 'interrupted', reason } satisfies WorkflowCoordinatorResult;
       }
       finally { releaseActivity?.(); }
@@ -2159,7 +2176,8 @@ export function createProductionWorkflowRunCoordinator(params: Readonly<{
           finalResult: result.finalResult,
         }))
         : undefined;
-      const custodyState = hasPendingChildStop ? undefined : projectWorkflowTerminalCustodySettlement(result.state);
+      const custodyState = hasPendingChildStop || discussionPublicationPending
+        ? undefined : projectWorkflowTerminalCustodySettlement(result.state);
       const transition = {
         operation: 'transition', runId: claim.runId, parentAttempt: claim.attempt,
         accountCurrentness: encryption.witness,
