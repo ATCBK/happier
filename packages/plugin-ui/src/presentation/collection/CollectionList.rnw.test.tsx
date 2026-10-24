@@ -1,5 +1,5 @@
 import { act, type ReactNode } from 'react';
-import { ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { describe, expect, it } from 'vitest';
 
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
@@ -93,6 +93,35 @@ describe('HappierCollectionList (list presentation)', () => {
     expect(mount.container.querySelector('[data-testid="show-archived"]')).toBeNull();
     await mount.render(<HappierCollectionList host={host} title="Teams" filters={filters(2)} />);
     expect(mount.container.querySelector('[data-testid="show-archived"]')).not.toBeNull();
+    mount.unmount();
+  });
+
+  it('keeps a collapsible search behind its magnifier until opened, and closing it clears the query', async () => {
+    let query = '';
+    const searchHost: HappierCollectionListHost = {
+      ...host,
+      SearchToggle: (props) => <Pressable testID={props.testID} accessibilityState={{ selected: props.open }} onPress={props.onPress}><Text>find</Text></Pressable>,
+    };
+    const list = () => (
+      <HappierCollectionList host={searchHost} title="Discussions"
+        search={{ testID: 'search', value: query, onChangeText: (next) => { query = next; }, placeholder: 'Search discussions', collapsible: true }}>
+        <Text>row</Text>
+      </HappierCollectionList>
+    );
+    const mount = mountThroughReactNativeWeb(list());
+    const toggle = () => mount.container.querySelector<HTMLElement>('[data-testid="search:toggle"]');
+    expect(toggle()).not.toBeNull();
+    expect(mount.container.querySelector('[data-testid="search"]')).toBeNull();
+
+    act(() => { toggle()!.click(); });
+    expect(mount.container.querySelector('[data-testid="search"]')).not.toBeNull();
+
+    query = 'release';
+    await mount.render(list());
+    act(() => { toggle()!.click(); });
+    expect(query).toBe('');
+    await mount.render(list());
+    expect(mount.container.querySelector('[data-testid="search"]')).toBeNull();
     mount.unmount();
   });
 

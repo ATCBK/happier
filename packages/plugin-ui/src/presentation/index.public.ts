@@ -272,6 +272,7 @@ export {
   type HappierCollectionModelInput,
   type HappierCollectionViewport,
 } from './collection/useCollection.js';
+export { resolveHappierCollectionTitleAccessoryFits } from './collection/collectionTitleRoom.js';
 export {
   HAPPIER_COLLECTION_LIST_METRICS,
   HAPPIER_COLLECTION_LIST_ROW_STYLE,
