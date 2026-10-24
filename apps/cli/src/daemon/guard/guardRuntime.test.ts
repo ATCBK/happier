@@ -308,6 +308,48 @@ describe('memory guard episode on the incumbent minute sampler', () => {
       expect(targetNotices.some(state => state.kind === 'clear')).toBe(false);
     } finally { await fixture.close(); }
   });
+  it.each(['idle', 'memory', 'memory_with_auxiliary'] as const)('admits a due %s stop while unrelated inventory edges arrive during native reads', async rule => {
+    const native = rule === 'memory_with_auxiliary' ? createGuardLeftBehindFixture() : undefined;
+    // Compose the real native confirmation and due planner, as the daemon's
+    // auxiliary owner does. Its empty confirmed set has no cleanup effect.
+    const policyWork: GuardPolicyWork | undefined = native ? {
+      enabled: policy => policy.leftBehind.mode !== 'off',
+      subscribe: () => () => {},
+      async readPlan({ policy, now }) {
+        await native.observe();
+        const plan = planLeftBehind({ policy: policy.leftBehind, confirmed: native.tracker.confirmed(), now });
+        return { nextAt: plan.nextAt };
+      },
+    } : undefined;
+    const fixture = await setup('session', rule !== 'idle', undefined, 1, policyWork);
+    try {
+      if (native) { fixture.setLeftBehindPolicy({ mode: 'automatic', graceMs: 60000 }); await fixture.drain(); }
+      if (rule === 'idle') { fixture.setIdlePolicy({ enabled: true, afterMs: 600000 }); await fixture.drain(); }
+      for (let minute = 0; minute < (rule === 'idle' ? 9 : 5); minute++) {
+        await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      }
+      let arrivals = 0;
+      let admissionStartedAt: number | undefined;
+      fixture.duringNativeRead(async () => {
+        // A same-minute timer can precede the asynchronous sampler commit.
+        // Churn starts only once the pressure evidence required for admission exists.
+        const minute = Math.floor(Date.now() / 60000) * 60000;
+        if (rule !== 'idle' && ((fixture.sampler.latest()?.sampledAt ?? -1) < minute
+          || fixture.sampler.minutes(minute).at(-1)?.t !== minute)) return;
+        admissionStartedAt ??= fixture.reads - 1;
+        // Background owner churn never changes the selected Session's generation.
+        // Keep the old loop finite so a regression reports its repeated observations.
+        if (arrivals < 8) { arrivals++; fixture.changed(); }
+      });
+      let readsAtStop: number | undefined;
+      fixture.onNativeStop(async () => { readsAtStop = admissionStartedAt === undefined ? undefined : fixture.reads - admissionStartedAt; });
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stoppedIds).toEqual(['s']);
+      expect(fixture.notices.filter(state => state.kind === 'stopped')).toHaveLength(1);
+      expect(arrivals).toBeGreaterThan(0);
+      expect(readsAtStop).toBeLessThanOrEqual(3);
+    } finally { await fixture.close(); }
+  });
   it.each(['idle', 'memory'] as const)('cancels the %s intent when Keep running wins during its publication', async rule => {
     const fixture = await setup('session', rule === 'memory');
     try {

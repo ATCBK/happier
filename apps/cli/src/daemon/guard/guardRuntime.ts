@@ -146,7 +146,7 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
     subject: { kind: 'session', sessionId: sessionId(candidate)!, title: candidate.target.label },
     ...(kind !== 'kept_running' && candidate.target.wayBack ? { wayBack: candidate.target.wayBack } : {}),
   });
-  const runIdlePlan = async (facts: GuardFacts | undefined, policy: MachineGuardPolicyV1, observed: number, signal: AbortSignal) => {
+  const runIdlePlan = async (facts: GuardFacts | undefined, policy: MachineGuardPolicyV1, signal: AbortSignal) => {
     const plan: ReturnType<typeof planIdleSessions> = facts ? planIdleSessions({ ...facts, policy: policy.idleSessions, now: now(), keepRunningAnchors,
       blocked: idleBlocked }) : { items: [] };
     if (facts) {
@@ -176,7 +176,8 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
           return { acted: true };
         }
       }
-      if (signal.aborted || observed !== revision) return { acted: false, nextAt: plan.nextAt };
+      if (signal.aborted || sessionWarnings.get(id) !== current
+        || JSON.stringify(input.readPolicy().idleSessions) !== JSON.stringify(policy.idleSessions)) return { acted: false, nextAt: plan.nextAt };
       if (now() < decision.stopAt) continue;
       if (!await input.notice(candidate, { kind: 'stopped', at: now(), rule: 'idle_sessions', idleMs: now() - decision.anchor }, signal)) {
         idleBlocked.set(id, { signature: decision.signature, failed: true }); await clearSessionWarning(id);
@@ -269,8 +270,10 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
         try {
           const currentFacts = needsFacts ? observeFacts(await input.readFacts(signal)) : undefined;
           if (signal.aborted) break;
-          if (observed !== revision) continue;
-          const idle = await runIdlePlan(currentFacts, policy, observed, signal);
+          // Inventory changes wake the loop; current policy and target admission,
+          // rather than unrelated owner edges, decide whether this read can act.
+          if (JSON.stringify(input.readPolicy()) !== JSON.stringify(policy)) continue;
+          const idle = await runIdlePlan(currentFacts, policy, signal);
           if (idle.acted) { changed(); continue; }
           nextAt = idle.nextAt;
           if (needsPolicyWork) {
@@ -284,10 +287,14 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
               waitForChange(observed, waitingSignal),
             ]) });
             if (signal.aborted) break;
-            if (observed !== revision) continue;
-            if (!work) throw new Error('Policy work read completed without a plan');
-            if (work.nextAt !== undefined) nextAt = nextAt === undefined ? work.nextAt : Math.min(nextAt, work.nextAt);
-            if (work.run) { await work.run(); changed(); continue; }
+            // Retire obsolete auxiliary work without vetoing a due memory intent.
+            // Its fresh target/policy/pressure admission remains below.
+            if (observed === revision) {
+              if (!work) throw new Error('Policy work read completed without a plan');
+              if (work.nextAt !== undefined) nextAt = nextAt === undefined ? work.nextAt : Math.min(nextAt, work.nextAt);
+              if (work.run) { await work.run(); changed(); continue; }
+            }
+            if (JSON.stringify(input.readPolicy()) !== JSON.stringify(policy)) continue;
           }
           if (!memoryPolicy.enabled && !verification) {
             connectionMinutes.clear();
@@ -377,12 +384,12 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
                       if (!acknowledged) { await fail(candidate, 'warning_unavailable'); changed(); continue; }
                     }
                   }
-                  if (observed !== revision) continue;
+                  if (!warning || sessionWarnings.get(sessionId(candidate)!) !== warning) continue;
                   nextAt = nextAt === undefined ? warning.stopAt : Math.min(nextAt, warning.stopAt);
                   mayStop = now() >= warning.stopAt;
                 } else if (warning) await clearWarning();
                 publish({ state: 'acting', since: episode.since, step: candidate.step, expectedReturnBytes: candidate.footprintBytes });
-                if (mayStop && !signal.aborted && observed === revision) {
+                if (mayStop && !signal.aborted) {
                   const stoppingWarning = warning;
                   if (candidate.kind === 'session' && !await input.notice(candidate, { kind: 'stopped', at: now(), rule: 'memory_guard', idleMs: now() - candidate.settledAt }, signal)) {
                     await clearWarning(); await fail(candidate, 'stop_marker_unavailable'); changed(); continue;
@@ -407,7 +414,7 @@ export function createGuardRuntime(input: GuardRuntimeInput) {
                       sustainMs: firePolicy.sustainMs, holds: record => holds(record.lvl) }).sustained
                     || !fireCandidate || guardTargetRef(fireCandidate) !== guardTargetRef(candidate)
                     || fireCandidate.settledAt !== candidate.settledAt) { await clearWarning(); changed(); continue; }
-                  if (signal.aborted || candidate.kind !== 'session' && observed !== revision) { await clearWarning(); continue; }
+                  if (signal.aborted) { await clearWarning(); continue; }
                   if (candidate.kind === 'session') sessionWarnings.delete(sessionId(candidate)!);
                   warning = undefined;
                   emit();
