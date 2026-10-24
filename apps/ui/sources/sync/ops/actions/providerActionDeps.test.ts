@@ -15,6 +15,11 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import nacl from 'tweetnacl';
+import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { openExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 
 // Only Socket transport is substituted; Action admission and scoped Machine routing stay real.
 const providerHarness = createProviderSettingsHarness({ machines: [] });
@@ -51,6 +56,97 @@ async function executeSourceVisibility(serverId: string, accountId: string, show
 }
 
 describe('Provider Account source visibility Action', () => {
+    it('carries requester Account custody for foreign-worker picker, current selection, source browse and refresh without raw catalog reads', async () => {
+        const installation = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(17));
+        const machine = createMachineFixture({ id: 'foreign-worker', activeAt: Date.now(),
+            installationId: 'foreign-installation', installationPublicKey: encodeBase64(installation.publicKey),
+            access: { custodian: { accountId: 'worker-custodian', displayName: 'Worker owner' },
+                role: 'use', resourceMode: 'plain', accessState: 'ready' },
+        });
+        const serverIdentityId = 'srv_requester_projection';
+        const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine,
+            ...Array.from({ length: 100 }, (_, index) => createMachineFixture({ id: `unrelated-worker-${index}` })),
+        ],
+            currentAccount: true, serverIdentityId, waivedActions: ['providers.models.refresh'] });
+        const home = account.home.findByServerUrl('https://provider-settings-account.test');
+        if (!home?.token) throw new Error('Expected requester Home credentials');
+        const agentTargetKey = 'agent:happier.agent.codex/codex';
+        const currentSelection = { agentTargetKey, providerConnectionId: 'pc_a', modelId: 'model-a' };
+        const projected = createConfirmedTeamModelProjectionFixture({ agentTargetKey, modelId: 'requester-model' });
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, () => {
+            throw createProviderErrorV1('provider_authorization_changed', { machineId: machine.id });
+        });
+        // Authenticated HTTP is the system boundary. Keep Action dispatch,
+        // fresh Machine custody, sealing and strict response decoding real.
+        for (const actionId of ['providers.models.projection', 'providers.models.refresh'] as const) {
+            account.home.answer(serverId, `/v1/actions/${actionId}/execution-authorization`, { select: body => {
+                const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+                return { body: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'requester-root', binding: {
+                    accountId, authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId,
+                    machineId: machine.id, installationId: machine.installationId, custodianAccountId: 'worker-custodian',
+                    accountEncryptionMode: 'plain', actionId, requestId: request.envelope.requestId,
+                    target: request.envelope.target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
+                } }) };
+            } });
+            account.home.answer(serverId, `/v1/actions/${actionId}`, { select: body => {
+                const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+                expect(openExternalActionRequesterAccountContextV1({ authorization: request.executionAuthorization,
+                    purpose: { kind: 'external_action' }, machineId: machine.id, installationId: 'foreign-installation',
+                    serverIdentityId, installationPrivateKey: installation.secretKey })).toEqual({ token: home.token });
+                expect(JSON.stringify(request)).not.toContain(home.token);
+                return { body: { v: 1, actionId, requestId: request.envelope.requestId,
+                    execution: { ok: true, result: projected } } };
+            } });
+        }
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const censusReadsBeforePicker = account.home.requests.filter(request => new URL(request.path, home.serverUrl).pathname === '/v1/machines').length;
+        for (const selectors of [{}, { currentSelection }, { sourceConnectionId: 'pc_a' }, { forceRefresh: true as const }]) {
+            const actionId = 'forceRefresh' in selectors ? 'providers.models.refresh' : 'providers.models.projection';
+            expect(await executor.execute(actionId, { machineId: machine.id, agentTargetKey, ...selectors },
+                { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId, expectedAccountId: accountId }))
+                .toEqual({ ok: true, result: projected });
+        }
+        expect(providerHarness.state.requests.filter(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toHaveLength(0);
+        expect(account.home.requests.filter(request => new URL(request.path, home.serverUrl).pathname === '/v1/machines')).toHaveLength(censusReadsBeforePicker);
+        const reads = account.home.requestsFor('/v1/actions/providers.models.projection');
+        expect(reads).toHaveLength(3);
+        expect(account.home.requestsFor('/v1/actions/providers.models.refresh')).toHaveLength(1);
+        expect(reads.map(read => ExternalActionExecutionAuthorizationRequestV1Schema.parse(read.input).envelope))
+            .toMatchObject([{ input: { machineId: machine.id, agentTargetKey } },
+                { input: { currentSelection } }, { input: { sourceConnectionId: 'pc_a' } }]);
+        const error = createProviderErrorV1('provider_authorization_changed', { machineId: machine.id, connectionId: 'pc_a' });
+        account.home.answer(serverId, '/v1/actions/providers.models.projection', { select: body => {
+            const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+            return { body: { v: 1, actionId: 'providers.models.projection', requestId: request.envelope.requestId,
+                execution: { ok: false, errorCode: error.code, error: error.code, details: error } } };
+        } });
+        expect(await executor.execute('providers.models.projection', { machineId: machine.id, agentTargetKey, currentSelection },
+            { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId, expectedAccountId: accountId }))
+            .toEqual({ ok: false, errorCode: error.code, error: error.code, details: error });
+        expect(providerHarness.state.requests.filter(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toHaveLength(0);
+    });
+
+    it('refuses foreign-worker model discovery without an installation key before private or raw projection dispatch', async () => {
+        const machine = createMachineFixture({ id: 'foreign-worker', activeAt: Date.now(),
+            installationId: 'foreign-installation',
+            access: { custodian: { accountId: 'worker-custodian', displayName: 'Worker owner' },
+                role: 'use', resourceMode: 'plain', accessState: 'ready' },
+        });
+        const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine],
+            currentAccount: true, serverIdentityId: 'srv_requester_projection' });
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, () => {
+            throw createProviderErrorV1('provider_authorization_changed', { machineId: machine.id });
+        });
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        expect(await createDefaultActionExecutor().execute('providers.models.projection', {
+            machineId: machine.id, agentTargetKey: 'agent:happier.agent.codex/codex',
+        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId, expectedAccountId: accountId }))
+            .toMatchObject({ ok: false });
+        expect(providerHarness.state.requests.filter(request => request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toHaveLength(0);
+        expect(account.home.requestsFor('/v1/actions/providers.models.projection')).toHaveLength(0);
+    });
+
     it.each(['same', 'other-machine', 'other-source', 'management', 'forced-refresh'] as const)(
         'shares only the exact admitted descriptive model question: %s', async variant => {
         const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });

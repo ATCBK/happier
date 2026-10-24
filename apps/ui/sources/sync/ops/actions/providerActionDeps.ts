@@ -11,6 +11,9 @@ import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEn
 import { getProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { createMachineRpcReadAdmission } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcReadAdmission';
+import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
+import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
+import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 
 export function createUiProviderActionExecuteV1(account: LazyActionAccountContext,
@@ -18,8 +21,28 @@ export function createUiProviderActionExecuteV1(account: LazyActionAccountContex
 ): NonNullable<ActionExecutorDeps['providerActionExecute']> {
   return createProviderActionExecuteV1({
     assertCurrent: context => { context.signal?.throwIfAborted(); account.assertCurrent(); },
-    rpc: ({ machineId, method, request, context, operationTimeoutMs }) => withActionAccountRequestSignal(account, context.signal, signal =>
-      machineRpcWithServerScope<unknown, typeof request.input>({
+    rpc: ({ machineId, method, request, context, operationTimeoutMs }) => withActionAccountRequestSignal(account, context.signal, async signal => {
+      // Personal discovery on a granted worker needs the requester's Account
+      // custody. Own workers and Team compatibility retain their raw RPC path.
+      if ((request.actionId === 'providers.models.projection' || request.actionId === 'providers.models.refresh')
+        && !request.input.teamCredentialModel && !context.externalActionCredential
+        && !context.externalActionExecutionAuthorization && !context.rpcSessionAuthorization) {
+        if (!context.actionRequestId) throw createRpcCallError({ error: 'admission_unavailable', errorCode: 'admission_unavailable' });
+        const execution = await executeOriginalAccountMachineAction({ account, machineId,
+          actionId: request.actionId, input: request.input, requestId: context.actionRequestId,
+          authority: context.authority, actionCaller: context.actionCaller, signal, foreignTargetOnly: true,
+          onTransportIssued: () => { context.signal?.throwIfAborted(); account.assertCurrent(); options?.onRpcDispatched?.(); },
+        });
+        if (execution) {
+          if (!execution.ok) {
+            const error = ProviderErrorV1Schema.safeParse(execution.details);
+            if (error.success && error.data.code === execution.errorCode) throw error.data;
+            throw createRpcCallError({ error: execution.error, errorCode: execution.errorCode });
+          }
+          return execution.result;
+        }
+      }
+      return machineRpcWithServerScope<unknown, typeof request.input>({
         machineId, method, payload: request.input, serverId: account.serverId, accountId: account.accountId,
         signal,
         ...(request.actionId === 'providers.models.projection' || request.actionId === 'providers.models.list'
@@ -29,7 +52,8 @@ export function createUiProviderActionExecuteV1(account: LazyActionAccountContex
         } : {}),
         ...(operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
         onDispatched: () => { context.signal?.throwIfAborted(); account.assertCurrent(); options?.onRpcDispatched?.(); },
-      })),
+      });
+    }),
     readAccountCatalog: context => withActionAccountRequestSignal(account, context.signal,
       signal => readProviderCatalogForMutationInContext(account, signal)),
     setDefault: (input, context) => account.mutateRawSettings(raw => applyProviderDefaultModelSelectionV1(raw, input),
