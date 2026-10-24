@@ -6,7 +6,6 @@ import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugin
 import { PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
 import { searchActionDefinitionSummaries } from '@happier-dev/protocol/actions/actionCatalog';
 
-import { requestDaemonPluginActionExecution } from '@/daemon/controlClient';
 import type { PluginActionExecutionAttempt } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 
 type OccurrenceBoundActionExecutorContext = ActionExecutorContext & Readonly<{
@@ -58,7 +57,10 @@ export function createDaemonPluginActionExecutor(params: Readonly<{
     base: params.base,
     ...(params.executeInCurrentProcess ? { executeInCurrentProcess: params.executeInCurrentProcess } : {}),
     requestPluginActionExecution: params.requestPluginActionExecution
-      ?? requestDaemonPluginActionExecution,
+      ?? (async (request, options) => {
+        const { requestDaemonPluginActionExecution } = await import('@/daemon/controlClient');
+        return await requestDaemonPluginActionExecution(request, options);
+      }),
     ...(params.getInitiatingActionCaller ? { getInitiatingActionCaller: params.getInitiatingActionCaller } : {}),
     ...(params.startedBy ? { startedBy: params.startedBy } : {}),
   });
