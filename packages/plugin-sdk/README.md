@@ -27,6 +27,32 @@ boundary, and this workspace README does not claim that release or loaded
 validation. Preview status does not waive correctness, installability,
 lifecycle cleanup, security disclosure, examples, or documentation.
 
+## Discussion invalidation (0.3 development source)
+
+Plugin UI can observe one Discussion through the existing Resource lifecycle:
+
+```ts
+const reference = { hostRead: 'discussion.get', input: { discussionId } } as const;
+const watch = await host.watchResource(reference, () => refresh());
+// Release the observation when its consumer closes.
+await watch.dispose();
+```
+
+Native and hostedWeb use the same admitted host read. Its JSON snapshot contains
+only `discussionId` and an observation `revision`; invalidation events contain
+only the Resource digest. Read content through the ordinary Discussion Actions.
+The current plugin caller, captured Account and Discussion access still apply;
+an unavailable target or retired mount cannot establish a watch. Older hosts
+refuse the unsupported reference through their existing typed result.
+
+Daemon plugins can subscribe to `@happier/session/discussion-invalidated` with
+`scope: { kind: 'account' }` through `context.services.events.host`. Its closed
+payload contains a Discussion ID and an optional revision, never authored
+content. Both observations consume the existing Account change producer. They
+are lossy refresh hints, not a replay log or an exactly-once delivery promise.
+This is an unpublished Developer Preview source contract; loaded-runtime
+verification is separate.
+
 ## Voice presentation (0.3 development)
 
 In the 0.3 development Voice contract, `VoiceProviderSettings.privacyFacts`
@@ -76,6 +102,78 @@ Session-native work retain their own targets.
 `SurfaceContext.targetedContributions` is optional: static, machine-free UI can
 render without a runtime occurrence. Absence does not admit private machine
 operations or manufacture a targeted contribution snapshot.
+
+## Automation Event authoring (0.3 development source)
+
+`host.openAutomationEvent({ eventRef, setupInput, monitoringMachineId?, connectedAccount? })`
+opens Happier's existing Event editor in the Account trigger form. `setupInput` contains
+the selected Event's declared setup Action operands, such as a repository. The qualified
+Connected Account, when supplied, seeds that Action's account field; a contradictory account already
+present in `setupInput` is rejected. Opening configures and saves nothing. The person
+explicitly chooses any omitted monitoring Machine through the existing watcher chooser
+and any omitted account through the setup Action form, then reviews source setup and
+completes the existing trigger form's Runs on and Then choices. Opening is not enabling monitoring.
+This method requires the active Account and an installed negotiated host handler; hosts
+without it return the existing typed unsupported result. See
+[the host ownership contract](../../docs/plugin-platform.md).
+
+## Project pages (0.3 development source)
+
+An external plugin can contribute a Project destination with the existing
+`appPage` surface family:
+
+```ts
+defineUiSurfaceDefinition({
+  id: 'project-review', placement: 'appPage', target: { kind: 'project' },
+  title: 'Project review', description: 'Review this Project.',
+  renderer: { kind: 'reactNative' },
+});
+```
+
+Use the renderer shape advertised by your generated SDK. Omitting `target`
+keeps the existing app-page meaning; `settingsPage` remains app-only. Project
+pages support the same page metadata, while columns, app-rail placement and
+personal widget areas remain app-target-only. Raw `ui.views` uses
+`container:'appPage', target:{kind:'project'}`. Optional applicability uses the
+ordinary `availability.when` expression with `project.repository.kind`.
+
+For an Overview widget in unreleased 0.3 source, use
+`placement:'widget', target:{kind:'project'}` with a required `sizeDeclaration`
+through `defineUiSurfaceDefinition` (raw Views use `container:'widget'`).
+The same optional repository applicability is preserved. The host's existing
+Project widget area supplies the admitted Project context; do not add a
+Project-id input or reconstruct it from launch input. This is a generic plugin
+surface, separate from the app-only personal widget-area declaration above.
+
+Read the host's accepted `surface.target.projectKey`, optional qualified
+`source`, `checkout`, `repository` and observed `branch`; a route's Workspace reference id is a
+checkout address. Rendering does not require a Run-on selection. Use
+`replacePageLocation(subPath, {backLocation})` for local detail/page/return
+navigation. The host owns qualified URLs and ephemeral launch input.
+Contextual dynamic Resource producers receive the same admitted target through
+`options.context.target`, even for an unopened tab badge. Session targets also
+carry optional `repository`, `branch` and `headOid`; unknown facts are omitted.
+Use these facts instead of launching a checkout probe. Declare one ordered
+labelled binding with `counts:{resourceId,items:[{field,label}]}` on a Project
+page or sidebar destination. Its one JSON Resource returns exactly those field
+names with nonnegative integer or `null` values. Labels belong to the declaration;
+malformed records stay wholly unknown, and legacy scalar `countResourceId`
+cannot be combined with `counts`.
+
+In unreleased 0.3 source, a daemon dynamic Resource can optionally provide
+`createProducer({signal, context, readAction, observeAction})` when its read and
+observe callbacks need one shared owner. Return `{read, observe, dispose}`; the
+factory signal belongs to the admitted Resource context, not its first read.
+Individual callback signals still cancel only their own invocation. The host
+retires the producer with that context and disposes late factory results.
+This is daemon-only: unsupported placements reject it, and required direct
+callbacks must fail explicitly if they cannot provide the same lifetime.
+Use the existing read-only Action ports for dependencies; do not create another
+credential watcher, request registry or polling owner.
+See the [public example](examples/public-authoring) and
+[Project page recipe](../../apps/docs/content/docs/plugins/ui/configuration-pages.mdx#project-pages).
+This is a Developer Preview source contract, not a publication or loaded-runtime
+verification claim.
 
 ## Portable Account Actions (0.3 development)
 
