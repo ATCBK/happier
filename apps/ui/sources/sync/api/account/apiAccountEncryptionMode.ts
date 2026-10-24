@@ -160,10 +160,10 @@ export function createSocketAccountEncryptionObservation(options: Readonly<{
         update: (raw: unknown) => {
             if (options.isCurrent() && observation.update(raw)) notify();
         },
-        dispose: () => {
+        dispose: (reason?: AccountEncryptionInvalidation['reason']) => {
             accountEncryptionModeCacheInvalidationListeners.delete(invalidate);
             observation.dispose();
-            notify();
+            notify(reason);
         },
     };
 }

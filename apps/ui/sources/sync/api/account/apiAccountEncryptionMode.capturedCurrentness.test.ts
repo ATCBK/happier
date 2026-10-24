@@ -114,7 +114,7 @@ it('keeps captured-Home readiness failure out of the selected Home recovery flow
     expect(new URL(String(fetchMock.mock.calls[0]?.[0])).origin).toBe('https://captured-currentness.test');
 });
 
-it.each(['unchanged', 'mode', 'fingerprint', 'update', 'malformed-update', 'scope-reset', 'holder-retired', 'credential-retired', 'home-retired', 'fresh-denied'] as const)(
+it.each(['unchanged', 'intentional-disconnect', 'mode', 'fingerprint', 'update', 'malformed-update', 'scope-reset', 'credential-retired', 'home-retired', 'fresh-denied'] as const)(
     'revalidates finite Session hydration across socket loss (%s)', async outcome => {
     const accountId = `finite-${outcome}`;
     const serverUrl = `https://finite-${outcome}.test`;
@@ -175,7 +175,7 @@ it.each(['unchanged', 'mode', 'fingerprint', 'update', 'malformed-update', 'scop
             for (const listener of socket!.listenersAny()) listener('update', update);
         }
         if (outcome === 'scope-reset') invalidateAccountEncryptionModeCache({ reason: 'scope-reset' });
-        if (outcome === 'holder-retired') apiSocket.disconnect();
+        if (outcome === 'intentional-disconnect') apiSocket.disconnect();
         if (outcome === 'credential-retired' || outcome === 'home-retired') {
             const { TokenStorage } = await import('@/auth/storage/tokenStorage');
             await TokenStorage.removeCredentialsForServerUrl(serverUrl, { serverId });
@@ -186,7 +186,7 @@ it.each(['unchanged', 'mode', 'fingerprint', 'update', 'malformed-update', 'scop
         }
         release();
         const result = await reading;
-        if (outcome === 'unchanged') {
+        if (outcome === 'unchanged' || outcome === 'intentional-disconnect') {
             expect(result).toMatchObject({ value: { session: { id: sessionId } } });
             expect(source.isCurrent()).toBe(true);
             expect(operationReads).toBe(2);
@@ -197,7 +197,7 @@ it.each(['unchanged', 'mode', 'fingerprint', 'update', 'malformed-update', 'scop
             await expect(TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId })).resolves.toEqual(credentials);
         } else {
             expect(result).toHaveProperty('error');
-            if (['mode', 'fingerprint', 'update', 'malformed-update', 'scope-reset', 'holder-retired'].includes(outcome)) {
+            if (['mode', 'fingerprint', 'update', 'malformed-update', 'scope-reset'].includes(outcome)) {
                 // A previously retired capture is refused by the Snapshot
                 // reader before hydration; a fresh-read mismatch reaches the
                 // finite currentness owner's more specific typed error.

@@ -498,10 +498,10 @@ class ApiSocket {
 
     disconnect() {
         if (this.accountEncryptionObservation) {
-            this.accountEncryptionObservation.dispose();
+            this.accountEncryptionObservation.dispose('transport-withdrawal');
             this.accountEncryptionObservation = null;
         } else if (this.socketClientType === 'user-scoped') {
-            invalidateAccountEncryptionModeCache({ serverId: this.config?.serverId });
+            invalidateAccountEncryptionModeCache({ serverId: this.config?.serverId, reason: 'transport-withdrawal' });
         }
         const scopedSupervisor = this.scopedConnectionSupervisor;
         this.scopedConnectionSupervisor = null;
