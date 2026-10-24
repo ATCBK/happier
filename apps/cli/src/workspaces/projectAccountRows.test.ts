@@ -11,7 +11,7 @@ import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/
 import { ExternalActionExecutionAuthorizationV1Schema, type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { createProjectWorkspaceRetirement } from './projectWorkspaceRetirement';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import { mockProjectAccountRowsHttpBoundary as boundary } from './projectAccountRows.testkit';
+import { createPlainProjectAccountRefRow, mockProjectAccountRowsHttpBoundary as boundary } from './projectAccountRows.testkit';
 import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 import { readWorkspaceSyncWorkerTargetSnapshot } from './sync/workspaceSyncPreparation';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
@@ -31,6 +31,40 @@ function deferred() {
 }
 
 describe('Project snapshot refresh availability', () => {
+  it('publishes no unchanged row census to its consumers and retains immutable rows across a real change', async () => {
+    const rows = Array.from({ length: 1001 }, (_, index) => createPlainProjectAccountRefRow({ ...ref,
+      id: `ref-${index}`, rootPath: `/work/${index}` }));
+    boundary(rows);
+    const input = { credentials, serverId: 'home-a', publication: 'installed' as const };
+    const accepted = await readProjectAccountRows(input);
+    let publications = 0;
+    const releases = Array.from({ length: 8 }, () => subscribeActiveProjectAccountRowsSnapshot(() => publications++));
+    try {
+      // Response ordering and fresh HTTP objects are not a Project change.
+      rows.reverse();
+      for (let refresh = 0; refresh < 3; refresh++) {
+        expect(await readProjectAccountRows(input)).toBe(accepted);
+      }
+      expect(publications).toBe(0);
+      const changed = rows[0];
+      if (changed.key.kind !== 'workspace-ref') throw new Error('Expected workspace fixture');
+      const changedId = changed.key.id;
+      rows[0] = createPlainProjectAccountRefRow({ ...ref, id: changedId, rootPath: '/work/moved' }, 1);
+      const next = await readProjectAccountRows(input);
+      expect(publications).toBe(8);
+      expect(next.workspaceRefs.find(value => value.id === changedId)?.rootPath).toBe('/work/moved');
+      expect(next.rows.filter(row => row.key.kind !== 'workspace-ref' || row.key.id !== changedId)
+        .every(row => accepted.rows.includes(row))).toBe(true);
+      expect(await readProjectAccountRows(input)).toBe(next);
+      expect(publications).toBe(8);
+      withdrawActiveProjectAccountRowsSnapshot();
+      expect(publications).toBe(16);
+      // Repeated withdrawal is not a new unavailability transition.
+      withdrawActiveProjectAccountRowsSnapshot();
+      expect(publications).toBe(16);
+    } finally { for (const release of releases) release(); }
+  });
+
   it('asks only for the complete Home ref/graph domain during Sync target preparation', async () => {
     const rows = [{ key, revision: 0, content: { t: 'plain', v: { key, value: ref } } },
       ...Array.from({ length: 1024 }, (_, index) => {

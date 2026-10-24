@@ -68,14 +68,20 @@ function publish(snapshot: ActiveProjectAccountRowsSnapshot): ActiveProjectAccou
 function publish(snapshot: null): null;
 function publish(snapshot: ActiveProjectAccountRowsSnapshot | null): ActiveProjectAccountRowsSnapshot | null {
   const previous = active;
+  if (snapshot === previous) return previous;
   if (snapshot && previous?.scopeKey === snapshot.scopeKey) {
     const rows = new Map(previous.rows.map(row => [buildProjectAccountRowPhysicalKeyV1(row.key), row]));
+    let changed = false;
     for (const row of snapshot.rows) {
       const identity = buildProjectAccountRowPhysicalKeyV1(row.key);
       const known = rows.get(identity);
-      if (!known || row.revision >= known.revision) rows.set(identity, row);
+      if (!known || row.revision > known.revision) {
+        rows.set(identity, row);
+        changed = true;
+      }
     }
     // Rows, including reserved tombstones, are immutable within a revision.
+    if (!changed) return previous;
     // Reproject the winning graph and refs together before notifying consumers.
     snapshot = projectSnapshotFromRows([...rows.values()], snapshot.scopeKey);
   }
