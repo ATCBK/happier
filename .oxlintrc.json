@@ -37,6 +37,13 @@
         "react/void-use-memo": "error",
         "react/set-state-in-render": "error"
       }
+    },
+    {
+      "files": ["apps/ui/sources/**/*.{ts,tsx}"],
+      "plugins": ["react"],
+      "rules": {
+        "react/exhaustive-deps": "warn"
+      }
     }
   ]
 }

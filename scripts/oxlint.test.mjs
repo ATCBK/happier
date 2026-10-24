@@ -27,7 +27,7 @@ test('root lint policy catches defects in authored code and both UI contribution
 export function Example() {
   const [value, setValue] = useState(0);
   setValue(value + 1);
-  useMemo(() => { console.log(value); }, [value]);
+  useMemo(() => { console.log(value); }, []);
   return <div>{value}</div>;
 }`;
   for (const file of [
@@ -70,6 +70,11 @@ export function Example() {
       code,
     );
   }
+  assert.ok(
+    diagnostics.some((diagnostic) => diagnostic.filename === 'apps/ui/sources/example.tsx'
+      && diagnostic.code === 'react-hooks(exhaustive-deps)' && diagnostic.severity === 'warning'),
+    'UI stale closures must be reported as warnings',
+  );
   assert.ok(
     diagnostics.some(
       (diagnostic) =>
