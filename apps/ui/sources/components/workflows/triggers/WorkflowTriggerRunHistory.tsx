@@ -26,10 +26,9 @@ export const WorkflowTriggerRunHistory = React.memo(function WorkflowTriggerRunH
         {read.rows.length === 0 && read.status !== 'failed' ? <SurfaceStateCard
             size="line" kind={read.status === 'loading' ? 'loading' : 'empty'}
             title={t(read.status === 'loading' ? 'common.loading' : 'workflows.empty.runsTitle')} /> : null}
-        {serverId !== null ? read.rows.map((row, index) => <WorkflowRunItemBody
+        {serverId !== null ? read.rows.map((row) => <WorkflowRunItemBody
             key={row.id} kind="workflow_run" runId={row.id} serverId={serverId}
-            includeResult fallbackName={props.triggerName}
-            isFirst={index === 0} isLast={index === read.rows.length - 1} isSingle={read.rows.length === 1} />) : null}
+            includeResult fallbackName={props.triggerName} />) : null}
         {read.hasMore ? <ToolbarButton testID={`session-work-trigger-history:${props.automationId}-loadMore`}
             label={t(read.loadMoreFailed ? 'workflows.retry' : 'workflows.destination.history.loadMore')}
             busy={read.loadingMore} disabled={read.loadingMore} onPress={read.loadMore} /> : null}

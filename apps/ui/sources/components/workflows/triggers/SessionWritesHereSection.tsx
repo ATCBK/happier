@@ -54,9 +54,8 @@ const WritesHere = React.memo(function WritesHere(props: Readonly<{ sessionId: s
             mark={<Icon name="sign-in" size={16} color={theme.colors.text.secondary} />} />
     )}>
         {hasScheduled ? <ScheduledWorkflowRows read={scheduled} sessionId={props.sessionId} /> : null}
-        {runIds.map((runId, index) => <DestinationRun key={runId} runId={runId} serverId={props.serverId}
-            sessionId={props.sessionId}
-            first={index === 0} last={index === runIds.length - 1} />)}
+        {runIds.map((runId) => <DestinationRun key={runId} runId={runId} serverId={props.serverId}
+            sessionId={props.sessionId} />)}
         {readFailed ? <SurfaceFreshnessLine testID="session-work-writes-here-failed"
             tone="warning" reason={t('workflows.triggers.section.loadFailed')}
             action={{ label: t('workflows.retry'), onPress: read.loadMoreFailed ? read.loadMore : read.retry }} /> : null}
@@ -66,7 +65,7 @@ const WritesHere = React.memo(function WritesHere(props: Readonly<{ sessionId: s
 });
 
 const DestinationRun = React.memo(function DestinationRun(props: Readonly<{
-    runId: string; serverId: string; sessionId: string; first: boolean; last: boolean;
+    runId: string; serverId: string; sessionId: string;
 }>) {
     const rowRef = React.useRef<View>(null);
     const visible = useWorkRowOnScreen(rowRef);
@@ -77,7 +76,7 @@ const DestinationRun = React.memo(function DestinationRun(props: Readonly<{
     return <View ref={rowRef} collapsable={false}>
         <WorkflowRunItemBody kind="workflow_run" runId={props.runId} serverId={props.serverId}
             destinationSessionId={props.sessionId}
-            isFirst={props.first} isLast={props.last} presentation="work" />
+            presentation="work" />
         {visible && working ? <ManagedRunMiniMap runId={props.runId} serverId={props.serverId}
             testIDPrefix={`session-work-writes-here-flow:${props.runId}`} onOpen={open} /> : null}
     </View>;
