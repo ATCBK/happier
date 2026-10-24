@@ -640,7 +640,7 @@ live in the page-presentation owners in code.
   native navigation already shows the title, the header shows only the purpose.
 - **Sections read before their controls.** A sentence-case section title with its explanation above
   the rows, then one card sheet. Row dividers use the divider ink and run from the rows' text edge
-  (past the leading column when the section reserves one) to the trailing row inset; the last row
+  (past the leading column when the section reserves one) to the sheet's trailing edge; the last row
   draws none. No uppercase group labels or after-the-fact footers on page surfaces.
 - **Configure on sheets, browse flat.** Configuration and hub pages keep their sections on sheets. A
   section that indexes entities (all services, all machines, usage accounts) lies flat on the page
