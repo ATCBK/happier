@@ -8,6 +8,7 @@ import {
   type HappierInputFieldDescriptor,
 } from './InputField.js';
 import { HappierInputPickerProvider, type HappierInputPickerPort } from './inputPicker.js';
+import { PluginUiPresentationHostProviderInternal, type PluginUiPresentationHost } from '../../presentationHost/context.js';
 
 const theme = createSurfaceContext().theme;
 const metric: HappierInputFieldDescriptor = {
@@ -109,6 +110,29 @@ describe('one typed field decides how a fixed choice is drawn, for every form', 
       segments[1]!.click();
     });
     expect(onChange).toHaveBeenLastCalledWith('cost');
+  });
+
+  it('hangs a field\'s floating choices from the drawn box, not from the wider press row around it', async () => {
+    const anchors: unknown[] = [];
+    const host: PluginUiPresentationHost = {
+      renderMarkdown: () => null, renderCodeBlock: () => null, renderIcon: () => null,
+      // The host's popover is the platform boundary; record what the field anchors it to.
+      renderPopover: (input) => { anchors.push(input.anchorRef.current); return null; },
+    };
+    const five = ['a', 'b', 'c', 'd', 'e'].map((value) => ({ value, label: value.toUpperCase() }));
+    const view = mountThroughReactNativeWeb(<PluginUiPresentationHostProviderInternal host={host}>
+      <HappierInputField field={metric} value={undefined} options={five} onChange={() => {}} frame="none" theme={theme} testID="metric" />
+    </PluginUiPresentationHostProviderInternal>);
+    try {
+      const trigger = view.container.querySelector<HTMLElement>('[data-testid="metric.trigger"]')!;
+      await act(async () => { trigger.click(); });
+      const anchor = anchors.at(-1) as HTMLElement | undefined;
+      expect(anchor).toBeInstanceOf(HTMLElement);
+      // The box sits inside the press target; the menu matches its width, so it is never the row itself.
+      expect(anchor).not.toBe(trigger);
+      expect(trigger.contains(anchor!)).toBe(true);
+      expect(anchor!.textContent).toContain(trigger.textContent?.trim().slice(0, 3) ?? '');
+    } finally { view.unmount(); }
   });
 
   it('keeps a list for choices that explain themselves, carry long labels, number five or more, or take several values', () => {

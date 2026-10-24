@@ -212,7 +212,7 @@ export function HappierChoiceField<Value = string>(
   const noMatches = localization?.translate('happier.plugin-ui.select.noMatches', 'No matches') ?? 'No matches';
   const searchLabel = localization?.translate('happier.plugin-ui.select.search', 'Search') ?? 'Search';
   return (
-    <View ref={anchorRef} collapsable={false} style={{ gap: theme.spacing.small, alignSelf: 'stretch' }}>
+    <View style={{ gap: theme.spacing.small, alignSelf: 'stretch' }}>
       <HappierPressable
         testID={
           props.testID === undefined
@@ -235,6 +235,8 @@ export function HappierChoiceField<Value = string>(
       >
         {(state) => (
           <HappierFieldBoxTrigger
+            // The choices hang from the drawn box at its width, not from the wider press row.
+            boxRef={anchorRef}
             span="column"
             colors={{
               borderColor: palette.controlBorder,

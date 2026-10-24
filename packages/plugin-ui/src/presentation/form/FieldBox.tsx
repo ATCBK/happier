@@ -1,4 +1,4 @@
-import { useCallback, useContext, type ReactNode } from 'react';
+import { useCallback, useContext, type ReactNode, type Ref } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
@@ -168,6 +168,8 @@ export type HappierFieldBoxTriggerProps = Readonly<{
    * sizes to its choice (never held to the field's width floor); pair it with a soft fill.
    */
   density?: 'field' | 'chip';
+  /** The drawn box itself: what the field's choices hang from and match in width (the press target may be wider). */
+  boxRef?: Ref<View>;
 }>;
 
 /**
@@ -176,7 +178,7 @@ export type HappierFieldBoxTriggerProps = Readonly<{
  * pressable — the row or trigger around it owns the interaction and focus; that
  * trigger takes `HAPPIER_FOCUS_RING_DELEGATED_STYLE` when the box draws the ring.
  */
-export function HappierFieldBoxTrigger({ colors, leading, children, trailing, span, density }: HappierFieldBoxTriggerProps) {
+export function HappierFieldBoxTrigger({ colors, leading, children, trailing, span, density, boxRef }: HappierFieldBoxTriggerProps) {
   const paintColor = useHappierMaterialColorResolver();
   const rowLayout = useContext(HappierPageRowFieldLayoutContext);
   const chip = density === 'chip';
@@ -197,6 +199,8 @@ export function HappierFieldBoxTrigger({ colors, leading, children, trailing, sp
   }, [maxWidthPx, onFieldSaturated, reportsSaturation]);
   return (
     <View
+      ref={boxRef}
+      collapsable={false}
       {...(observesSaturation ? { onLayout: handleLayout } : {})}
       style={[chip ? HAPPIER_FIELD_BOX_CHIP_SHAPE : HAPPIER_FIELD_BOX_SHAPE, {
         flexDirection: 'row',
