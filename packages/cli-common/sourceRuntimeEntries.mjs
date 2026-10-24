@@ -24,16 +24,16 @@ export async function initialize(repoDir) {
   nodeWorkspacePackages = await readWorkspacePackages(repoDir);
 }
 
-async function resolveSourceImport(specifier, context, nextResolve) {
+function resolveSourceImport(specifier, context, nextResolve) {
   // Loading the registration leaf is explicit source-tool intent. Preserve
   // Node's conditions while selecting source targets for package-local imports
   // too (for example SDK #http), without requiring another caller flag.
   const sourceContext = context.conditions.includes(SOURCE_CONDITION) ? context
     : { ...context, conditions: [...context.conditions, SOURCE_CONDITION] };
   if (specifier.startsWith('@happier-dev/') || nodeWorkspacePackages.has(packageNameOfSpecifier(specifier))) {
-    return await nextResolve(pathToFileURL(resolveWorkspaceSource(nodeWorkspacePackages, specifier)).href, sourceContext);
+    return nextResolve(pathToFileURL(resolveWorkspaceSource(nodeWorkspacePackages, specifier)).href, sourceContext);
   }
-  return await nextResolve(specifier, sourceContext);
+  return nextResolve(specifier, sourceContext);
 }
 
 export { resolveSourceImport as resolve };
