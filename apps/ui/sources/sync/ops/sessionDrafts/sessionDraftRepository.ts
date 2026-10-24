@@ -15,6 +15,9 @@ import { DiscussionInitialParticipantsV1Schema, type DiscussionInitialParticipan
 import { SYNCED_SESSION_AUTHORING_FIELD_IDS_V2, SyncedSessionAuthoringValueV2Schema, type SyncedSessionAuthoringValueV2 } from '@happier-dev/protocol/sessions/authoring/index';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { ProjectOpenDraftDocumentV2Schema, type ProjectOpenDraftDocumentV2 } from '@happier-dev/protocol/projects/openProjectDraftV1';
+import { ActionResolvedSessionTargetsV1Schema, ActionSessionAddressV1Schema } from '@happier-dev/protocol/actions/sessionTargetV1';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { SessionMessageSendResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
 import { randomUUID as platformRandomUUID } from '@/platform/randomUUID';
 import { log } from '@/log';
@@ -87,7 +90,28 @@ export type SessionMessagingDraftMutationAttempt = Readonly<{
     localId: string;
     currentness: SessionDraftCurrentness;
     intent: SessionDraftSessionMessagingValueV1;
+    /** Private, device-local execution custody; never read from a transcript or synchronized draft. */
+    custody?: SessionMessagingDraftCustody;
 }>;
+
+const sessionMessagingDraftCustodySchema = z.strictObject({
+    targets: ActionResolvedSessionTargetsV1Schema,
+    results: z.array(z.strictObject({
+        target: ActionSessionAddressV1Schema,
+        result: z.union([
+            z.strictObject({ ok: z.literal(true), result: SessionMessageSendResultV1Schema }),
+            ActionExecuteFailureSchema,
+        ]),
+    })),
+});
+export type SessionMessagingDraftCustody = z.infer<typeof sessionMessagingDraftCustodySchema>;
+
+function readSessionMessagingDraftCustody(value: unknown): SessionMessagingDraftCustody {
+    const parsed = sessionMessagingDraftCustodySchema.parse(value);
+    if (parsed.targets.actionId !== 'session.message.send' || parsed.targets.field !== 'sessionId'
+        || parsed.targets.operands) throw new Error('Invalid retained Session message custody');
+    return parsed;
+}
 
 export type SessionDraftLocalSupplement = Readonly<{
     /** Local action-operation correlation; never sealed or sent to the server. */
@@ -884,6 +908,7 @@ function normalizeLocalSupplement(value: unknown, expectedAddress: SessionDraftA
         if (currentness && intent.success && typeof messagingAttempt.localId === 'string' && messagingAttempt.localId.trim()) {
             normalized.sessionMessagingMutationAttempt = {
                 localId: messagingAttempt.localId.trim(), currentness, intent: intent.data,
+                ...(messagingAttempt.custody === undefined ? {} : { custody: readSessionMessagingDraftCustody(messagingAttempt.custody) }),
             };
         }
     }
@@ -1398,6 +1423,7 @@ export class SessionDraftRepository {
         patch: Readonly<{
             launchUserAttemptId?: string | null;
             discussionMutationAttempt?: SessionDiscussionDraftMutationAttempt | null;
+            sessionMessagingMutationAttempt?: SessionMessagingDraftMutationAttempt | null;
             newSessionLocalState?: NewSessionDraftLocalState | null;
             legacyNewSessionDraftV1?: true | null;
             legacyExistingSessionDraftV1?: true | null;
@@ -1430,6 +1456,14 @@ export class SessionDraftRepository {
                 throw new Error('Discussion mutation attempt must belong to its exact draft');
             }
             nextSupplement.discussionMutationAttempt = structuredClone(attempt);
+        }
+        if (params.patch.sessionMessagingMutationAttempt === null) delete nextSupplement.sessionMessagingMutationAttempt;
+        else if (params.patch.sessionMessagingMutationAttempt !== undefined) {
+            const attempt = params.patch.sessionMessagingMutationAttempt;
+            if (!addressesEqual(attempt.currentness.address, params.address)) {
+                throw new Error('Session message attempt must belong to its exact draft');
+            }
+            nextSupplement.sessionMessagingMutationAttempt = structuredClone(attempt);
         }
         if (params.patch.legacyNewSessionDraftV1 === null) delete nextSupplement.legacyNewSessionDraftV1;
         else if (params.patch.legacyNewSessionDraftV1 === true) nextSupplement.legacyNewSessionDraftV1 = true;
@@ -1652,6 +1686,25 @@ export class SessionDraftRepository {
             ...replica, localSupplement: { ...replica.localSupplement, sessionMessagingMutationAttempt: attempt },
         });
         return attempt;
+    }
+
+    retainSessionMessagingDraftCustody(params: Readonly<{
+        scope: SessionDraftRepositoryScope;
+        sessionId: string;
+        localId: string;
+        custody: SessionMessagingDraftCustody;
+    }>): boolean {
+        const attempt = this.readSessionMessagingDraftMutationAttempt(params);
+        if (!attempt || attempt.localId !== params.localId) return false;
+        // A late result may not acquire a newer draft's retry identity.
+        if (!areSessionDraftCurrentnessCapturesEqual(attempt.currentness,
+            this.captureSessionDraftCurrentness({ scope: params.scope, address: attempt.currentness.address,
+                fieldIds: Object.keys(attempt.currentness.mutationIds) }))) return false;
+        if (attempt.custody && !areJsonValuesEqual(StrictJsonValueSchema.parse(attempt.custody.targets),
+            StrictJsonValueSchema.parse(params.custody.targets))) throw new Error('Session message targets are already frozen');
+        this.writeSessionDraftLocalSupplement({ scope: params.scope, address: attempt.currentness.address,
+            patch: { sessionMessagingMutationAttempt: { ...attempt, custody: params.custody } } });
+        return true;
     }
 
     clearSessionMessagingDraftMutationAttempt(params: Readonly<{
@@ -2901,6 +2954,7 @@ export const flushProjectOpenDraftForAdmission = singleton.flushProjectOpenDraft
 export const writeSessionDraftLocalSupplement = singleton.writeSessionDraftLocalSupplement.bind(singleton);
 export const captureSessionDraftCurrentness = singleton.captureSessionDraftCurrentness.bind(singleton);
 export const readSessionMessagingDraftMutationAttempt = singleton.readSessionMessagingDraftMutationAttempt.bind(singleton);
+export const retainSessionMessagingDraftCustody = singleton.retainSessionMessagingDraftCustody.bind(singleton);
 export const getOrCreateSessionMessagingDraftMutationAttempt = singleton.getOrCreateSessionMessagingDraftMutationAttempt.bind(singleton);
 export const clearSessionMessagingDraftMutationAttempt = singleton.clearSessionMessagingDraftMutationAttempt.bind(singleton);
 export const captureSessionDraftLaunchCurrentness = singleton.captureSessionDraftLaunchCurrentness.bind(singleton);
