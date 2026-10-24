@@ -29,6 +29,14 @@ export const WorkflowsDestinationIndex = React.memo(function WorkflowsDestinatio
     const params = useLocalSearchParams<{ authoringSessionId?: string; authoringServerId?: string; automationUnavailable?: string }>();
     const wide = useDetailsPaneAvailable();
     const sessionId = typeof params.authoringSessionId === 'string' ? params.authoringSessionId : null;
+    const hideWorkflowLabel = t('panes.mainColumn.hideWorkflow');
+    const showWorkflowLabel = t('panes.mainColumn.showWorkflow');
+    const workflowsName = t('workflows.title');
+    const mainColumn = React.useMemo(() => ({
+        hideLabel: hideWorkflowLabel,
+        showLabel: showWorkflowLabel,
+        identity: { name: workflowsName },
+    }), [hideWorkflowLabel, showWorkflowLabel, workflowsName]);
     const close = () => router.setParams({ authoringSessionId: undefined, authoringServerId: undefined });
     const content = !columnVisible && (access.kind === 'workflows' || access.kind === 'triggersOnly')
         ? <WorkflowsColumn surface="page" {...(access.kind === 'workflows'
@@ -37,8 +45,7 @@ export const WorkflowsDestinationIndex = React.memo(function WorkflowsDestinatio
     const main = <>{params.automationUnavailable === '1' ? <SurfaceStateCard testID="retired-automation-unavailable"
         size="line" kind="unavailable" title={t('workflows.triggers.legacy.notAvailable')} /> : null}{content}</>;
     if (wide && sessionId && access.kind === 'workflows') return <AppPaneScopeHost scopeId="workflows" main={main}
-        mainColumn={{ hideLabel: t('panes.mainColumn.hideWorkflow'), showLabel: t('panes.mainColumn.showWorkflow'),
-            identity: { name: t('workflows.title') } }}
+        mainColumn={mainColumn}
         destinationDetails={{ onClose: close, pane: <View style={{ flex: 1, minHeight: 0 }}>
             <PaneHeader title={t('workflows.authoring.agent')} onClose={close} />
             <WorkflowAuthoringSessionPane sessionId={sessionId} serverId={params.authoringServerId} active composer />
