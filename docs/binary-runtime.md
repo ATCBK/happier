@@ -15,11 +15,39 @@ to the native server. It is not a package-manager launcher or project binary.
 `contributes.languageServers` references that dependency and declares
 `['--lsp', '--stdio']`. Automatic type acquisition is disabled through its
 initialization options; external-code execution and telemetry are not enabled.
-The Machine host starts the process only after an explicit language query,
-using the existing managed executable resolver, protocol client and supervisor.
-Opening a file alone neither launches this server nor authorizes project code.
+The Machine host starts the process for an explicit language query or when the
+person enters Edit, using the existing managed executable resolver, protocol
+client and supervisor. View and Changes keep on-demand startup. Entering Edit
+shows the server's starting state while initialization completes; it does not
+authorize project code.
 Declaration and acquisition ownership apply equally to external plugins; a
 `systemTools` reference uses the existing declared system-tool owner instead.
+
+The development `lang-web` plugin declares JSON, CSS/SCSS/Less and HTML servers
+from `vscode-langservers-extracted@4.10.0` through the generic
+`managedJavaScriptPackage` dependency source. An explicit dependency install
+uses the existing managed package coordinator, pinned package version and
+`--ignore-scripts`. Launch reads that installed package's exact npm `bin` entry
+and runs it with the existing managed JavaScript runtime's absolute executable.
+It does not execute the npm shell shim, search PATH, install a missing runtime,
+or fetch a package when a file opens. Missing prerequisites use the ordinary
+Install flow. External plugins use this same source and resolver.
+
+The development `lang-markdown` plugin declares native Marksman 2026-02-08
+through the checksum-pinned executable-asset path. Its release supplies Linux
+x64/arm64, universal macOS, and Windows x64 assets; Windows arm64 is unavailable.
+The plugin retains the MIT license notice. It requires no Node or .NET runtime.
+Cross-file Markdown features use an existing Git root or `.marksman.toml`;
+opening a document does not create a project marker.
+
+Project diagnostics run only on an explicit request. When workspace diagnostic
+pull is unavailable, a language-server declaration may supply `projectCheck`
+with its own declared executable, arguments, root-relative `projectFile` and
+output codec. The bundled native TypeScript checker uses `--noEmit --pretty
+false --incremental false -p tsconfig.json`. It shares managed execution,
+cancellation, plugin retirement and Processes custody with the LSP host.
+Diagnostics stream independently of the supervisor's retained output preview;
+no result-count or output-size cap is imposed by the checker.
 
 ## Runtime contract
 
@@ -464,9 +492,9 @@ Published hosts and bundled libraries currently include:
 - `packages/support`
 - `packages/plugin-sdk`
 
-Their `prepack` scripts run `scripts/bundleWorkspaceDeps.mjs`, which delegates to `bundleWorkspacePackagesWithRuntimeDependencies(...)`. That canonical publisher stages each workspace together with its external runtime dependency tree and publishes the internal dependency closure in dependency-first order.
+Their `prepack` scripts run package-local `scripts/bundleWorkspaceDeps.mjs` adapters. The shared publisher stages each workspace with its external runtime dependency tree and publishes the internal dependency closure in dependency-first order. In 0.3 development, Stack prepares its producers before taking publication custody, then calls `scripts/workspaces/syncBundledWorkspacePackages.mjs` for copy verification and repair through the same per-package publisher.
 
-Current 0.3 workspace bundling preserves runtime package-local `imports` declarations and their conditional order, alongside `exports`. Compiled bundled copies omit the development-only `happier-source` condition at every level of both maps, so source-enabled callers still resolve their complete compiled runtime. Authored source tools continue selecting workspace roots through the canonical source resolver. The existing workspace copier and bootstrap sync include exact retained relative import targets outside `dist`; external package targets still use the package's declared dependency closure. Live bundle health checks compare the retained import map and target files, and Stack bundle freshness observes package-root targets so changing only an imported runtime helper requires a refresh.
+Current 0.3 workspace bundling preserves runtime package-local `imports` declarations and their conditional order, alongside `exports`. Compiled bundled copies omit the development-only `happier-source` condition at every level of both maps, so source-enabled callers still resolve their complete compiled runtime. Authored source tools continue selecting workspace roots through the canonical source resolver. The existing workspace copier and bootstrap sync include exact retained relative import targets outside `dist`; external package targets still use the package's declared dependency closure. Live bundle health checks compare the retained import map and target files. Stack uses the canonical copier's content verification for producer outputs, package-root targets, declared resources, vendored dependencies and destination bytes; unchanged repeats copy no bodies and write no destination files.
 
 In 0.3 development, CLI testkit and publisher runtime-tree checks share the
 workspace health owner. Third-party declaration-only targets (`types`, including
@@ -474,7 +502,7 @@ nested export conditions) do not determine runtime health: some published
 dependencies omit those files. Executable targets and dependency versions remain
 required, as do first-party declared output files, including declarations.
 
-Publication has two explicit modes. Live source-dev refreshes keep each physical consumer package directory mounted, publish complete files with `package.json` last, retain prior targets for in-flight module resolvers, and roll back already-published files if a later replacement fails. A consumer workspace symlink or junction is replaced with a private directory rather than publishing through it into producer inputs; failed publication restores the link. Artifact publication is selected by npm `prepack` or `--artifact` and prunes retained targets so obsolete generations cannot enter a tarball. Both modes use the package build owner's content record to admit current `dist` outputs, including source additions and deletions, build inputs, compiler identity, and declared output bytes. Health checks require every current source runtime file to match but deliberately allow extra retained targets in live trees.
+Publication has two explicit modes. Live source-dev refreshes keep each physical consumer package directory mounted, publish complete files with `package.json` last, retain prior targets for in-flight module resolvers, and roll back already-published files if a later replacement fails. The shared publisher replaces a consumer workspace symlink or junction with a private directory rather than publishing through it into producer inputs; failed publication restores the link. Stack's live copier preserves links to the canonical source workspace, while explicit artifact publication detaches them into physical packages. Artifact publication is selected by npm `prepack` or `--artifact` and prunes retained targets so obsolete generations cannot enter a tarball. Both modes use the package build owner's content record to admit current `dist` outputs, including source additions and deletions, build inputs, compiler identity, and declared output bytes. Health checks require every current source runtime file to match but deliberately allow extra retained targets in live trees.
 
 Public npm/SDK publication retains the workspace package-build owner, dependency
 graph admission, captured package inputs, compiler state, currentness records and
