@@ -208,7 +208,8 @@ describe('listOpenApprovalArtifactsForSession', () => {
             const metadataOnly = { ...changed, updatedAt: 3 };
             const refreshed = project(rows.map(row => row === changed ? metadataOnly : row));
             expect(admit).not.toHaveBeenCalled();
-            expect(refreshed[42]?.artifact).toBe(metadataOnly);
+            expect(refreshed[42]).toBe(updated[42]);
+            expect(refreshed[42]?.artifact).toEqual({ id: metadataOnly.id, header: metadataOnly.header });
             expect(refreshed[42]?.approval).toBe(updated[42]?.approval);
             expect(refreshed.every((entry, index) => index === 42 || entry === updated[index])).toBe(true);
 
@@ -231,7 +232,7 @@ describe('listOpenApprovalArtifactsForSession', () => {
             admit.mockClear();
             expect(project([otherHome])).toEqual([]);
             const other = listTranscriptApprovalArtifactsForSession([otherHome], { ...target, serverId: 'server-b' });
-            expect(other[0]?.artifact).toBe(otherHome);
+            expect(other[0]?.artifact).toEqual({ id: otherHome.id, header: otherHome.header });
             expect(other[0]?.approval).not.toBe(refreshed[42]?.approval);
             expect(admit).toHaveBeenCalledTimes(1);
         } finally { admit.mockRestore(); }
@@ -302,12 +303,12 @@ describe('listOpenApprovalArtifactsForSession', () => {
         const input = { scope, artifactScope: scope, artifactsLoaded: true, artifacts: [ordinary, draft],
             items: [{ id: 'discussion-a', unreadMentionCount: 1 }] };
         const rows = buildDiscussionListAttention(input);
-        expect(rows[0]).toMatchObject({ attentionReason: 'draft_waiting', approvalArtifactIds: [ordinary.id, draft.id] });
+        expect(rows[0]).toMatchObject({ attentionReason: 'draft_waiting', attentionType: 'approval', approvalArtifactIds: [ordinary.id, draft.id] });
         expect(buildDiscussionListAttention(input, rows)).toBe(rows);
         expect(buildDiscussionListAttention({ ...input, artifacts: [ordinary] }, rows)[0])
-            .toMatchObject({ attentionReason: 'approval_pending', approvalArtifactIds: [ordinary.id] });
+            .toMatchObject({ attentionReason: 'approval_pending', attentionType: 'approval', approvalArtifactIds: [ordinary.id] });
         expect(buildDiscussionListAttention({ ...input, artifacts: [{ ...draft, body: undefined }] }, rows)[0])
-            .toMatchObject({ attentionReason: 'mentioned', approvalArtifactIds: [] });
+            .toMatchObject({ attentionReason: 'mentioned', attentionType: 'mention', approvalArtifactIds: [] });
         const settled = ApprovalRequestV2Schema.parse({ ...reviewed, status: 'executed', updatedAtMs: 2,
             decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true, result: {} } });
         expect(buildDiscussionListAttention({ ...input,

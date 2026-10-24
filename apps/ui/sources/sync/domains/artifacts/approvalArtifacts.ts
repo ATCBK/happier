@@ -9,7 +9,8 @@ import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/s
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 export type OpenApprovalArtifactForSession = Readonly<{
-    artifact: DecryptedArtifact;
+    /** Card routing/Home facts only. Current grants and detail content stay with the Artifact owner. */
+    artifact: Pick<DecryptedArtifact, 'id' | 'header'>;
     approval: ApprovalRequest;
 }>;
 
@@ -77,6 +78,7 @@ type ApprovalArtifactSnapshot = {
 const admittedApprovalBodies = new WeakMap<ApprovalArtifactSnapshot['header'], Readonly<{
     body: string | null;
     parsed: ParsedApprovalArtifactBodyV1 | null;
+    sessionEntry: OpenApprovalArtifactForSession | null;
 }>>();
 const approvalArtifactSnapshots = new WeakMap<DecryptedArtifact, ApprovalArtifactSnapshot>();
 
@@ -105,8 +107,16 @@ function readApprovalArtifactSnapshot(artifact: DecryptedArtifact): AdmittedAppr
     const admitted = admittedApprovalBodies.get(snapshot.header);
     const parsed = admitted?.body === snapshot.body ? admitted.parsed
         : approvalArtifactBodyMatchesHeaderV1(snapshot.header, snapshot.body);
-    if (!admitted || admitted.body !== snapshot.body) admittedApprovalBodies.set(snapshot.header, { body: snapshot.body, parsed });
-    const sessionEntry = parsed?.family === 'built_in' ? { artifact, approval: parsed.request } : null;
+    // HTTP grant/kind/provenance enrichment is not a change to the card's admitted facts.
+    // Carry this narrow producer value with admission, never stale Artifact authority.
+    const sessionEntry = parsed?.family === 'built_in'
+        ? admitted?.parsed === parsed && admitted.sessionEntry?.artifact.id === artifact.id
+            ? admitted.sessionEntry
+            : { artifact: { id: artifact.id, header: snapshot.header }, approval: parsed.request }
+        : null;
+    if (!admitted || admitted.body !== snapshot.body || admitted.sessionEntry !== sessionEntry) {
+        admittedApprovalBodies.set(snapshot.header, { body: snapshot.body, parsed, sessionEntry });
+    }
     snapshot.admitted = { parsed, sessionEntry,
         references: collectApprovalLinkedSessionReferences(snapshot, sessionEntry?.approval) };
     return snapshot.admitted;
