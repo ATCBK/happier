@@ -16,6 +16,7 @@ import type {
     SessionPermissionMode,
     SessionInactiveResumePolicy,
     SessionInputAdmissionRejectionCodeV1,
+    SpawnSessionErrorDetail,
 } from '@happier-dev/protocol';
 
 export const SESSION_INPUT_TARGET_UPDATE_REQUIRED_ERROR_CODE =
@@ -53,6 +54,7 @@ export type SubmitSessionUserMessageResult = Readonly<{
     }>;
     errorCode?: string;
     errorMessage?: string;
+    errorDetail?: SpawnSessionErrorDetail;
     localId?: string;
 }>;
 

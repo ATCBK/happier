@@ -79,6 +79,24 @@ function createAccountLifetime(scope = { serverId: 'server-1', accountId: 'accou
 }
 
 describe('submitSessionUserMessage Pending action ownership', () => {
+    it('keeps an ordinary message pending and returns the typed person hold from launch admission', async () => {
+        const session = createSession({ active: false, presence: 0,
+            metadata: { ...createSession().metadata!, flavor: 'claude' } });
+        const harness = createPort();
+        harness.isMachineReachable.mockReturnValue(true);
+        harness.port.ensureSessionRuntimeForPendingInput = async () => ({ type: 'error',
+            errorCode: 'SPAWN_VALIDATION_FAILED', errorMessage: 'Automatic Session resume refused',
+            errorDetail: { kind: 'launch_error', code: 'held_by_person', message: 'Automatic Session resume refused' } });
+        const result = await submitSessionUserMessage(harness.port, { ...submitOptions(session),
+            configuredMode: 'server_pending', sessionInactiveResumePolicy: 'online_only',
+            resumeTargetOverride: { machineId: 'm1', directory: '/tmp/project' } });
+        expect(result).toMatchObject({ type: 'wake_failed', persistence: 'pending',
+            errorCode: 'SPAWN_VALIDATION_FAILED',
+            errorDetail: { kind: 'launch_error', code: 'held_by_person' },
+            wake: { attempted: true, state: 'failed' }, localId: 'pending-1' });
+        expect(harness.sendMessage).not.toHaveBeenCalled();
+        expect(harness.updatePendingRequestedAction).not.toHaveBeenCalled();
+    });
     const resetAction = {
         v: 1, kind: 'reset_start', reset: {
             source: { bindingKind: 'account', ref: { service: { pluginId: 'happier.agent.codex', localId: 'codex-account' }, accountId: 'connected-account' } },

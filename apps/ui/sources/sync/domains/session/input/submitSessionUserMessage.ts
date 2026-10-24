@@ -657,6 +657,7 @@ async function enqueuePending(
                 },
                 errorCode: wakeResult.errorCode,
                 errorMessage: wakeResult.errorMessage,
+                ...(wakeResult.errorDetail ? { errorDetail: wakeResult.errorDetail } : {}),
                 localId,
             };
         }
@@ -850,6 +851,7 @@ export async function submitSessionUserMessage(
                         wake: { attempted: true, state: 'failed', errorMessage: wakeResult.errorMessage },
                         errorCode: wakeResult.errorCode,
                         errorMessage: wakeResult.errorMessage,
+                        ...(wakeResult.errorDetail ? { errorDetail: wakeResult.errorDetail } : {}),
                         localId,
                     };
                 }
