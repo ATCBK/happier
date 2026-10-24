@@ -27,6 +27,8 @@ export type MemoryDuplicateChoiceProps = Readonly<{
   onCandidateChange: (id: string) => void;
   choice: MemoryDuplicateChoiceKind;
   onChoiceChange: (choice: MemoryDuplicateChoiceKind) => void;
+  /** Opens the author's own view of a saved fact; the author keeps the draft and choice meanwhile. */
+  onViewCandidate?: (id: string) => void;
   disabled?: boolean;
 }>;
 
@@ -62,10 +64,11 @@ export function MemoryDuplicateChoice(props: MemoryDuplicateChoiceProps): ReactE
         replace: translate(`${KEY}.replaceHint`, 'The saved fact moves to history. Agents only see the new one.'),
         keep_both: translate(`${KEY}.keepBothHint`, 'Saves the new fact next to the saved one.'),
       },
+      view: translate(`${KEY}.view`, 'View'),
     }} />;
 }
 
-const ROLE = { title: 'label', label: 'meta', text: 'body', meta: 'micro', effect: 'meta' } as const;
+const ROLE = { title: 'label', label: 'meta', text: 'body', meta: 'micro', effect: 'meta', action: 'micro' } as const;
 
 function ChoiceText(props: HappierMemoryDuplicateChoiceTextProps): ReactElement {
   const theme = usePluginTheme();
@@ -73,9 +76,10 @@ function ChoiceText(props: HappierMemoryDuplicateChoiceTextProps): ReactElement 
   const color = props.role === 'title' || props.role === 'text'
     ? props.retired ? theme.colors.mutedText : theme.colors.text
     : props.role === 'label' || props.role === 'meta' ? theme.colors.mutedText : theme.colors.secondaryText;
+  const weight = props.role === 'title' || props.role === 'action' ? 'semiBold' : undefined;
   return <HappierText testID={props.testID} numberOfLines={props.numberOfLines} accessibilityRole={props.accessibilityRole}
     style={[
-      resolveHappierTypeRoleStyle(ROLE[props.role], theme, typography, props.role === 'title' ? 'semiBold' : undefined),
+      resolveHappierTypeRoleStyle(ROLE[props.role], theme, typography, weight),
       { color },
       props.retired ? { textDecorationLine: 'line-through' } : null,
     ]}>{props.children}</HappierText>;

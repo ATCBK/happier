@@ -46,6 +46,35 @@ describe('external author memory duplicate choice', () => {
     } finally { mounted.unmount(); }
   });
 
+  it('offers the caller’s own view of each saved fact without changing the chosen fact or effect', () => {
+    const onView = vi.fn();
+    const context = createSurfaceContext();
+    const mounted = mountThroughReactNativeWeb(<PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+      <MemoryDuplicateChoiceExample onView={onView} />
+    </PluginUiProvider>);
+    try {
+      act(() => byId(mounted.container, 'author-duplicate.choice:replace')!.click());
+      const view = byId(mounted.container, 'author-duplicate.candidate.saved-backoff.view')!;
+      expect(view.getAttribute('role')).toBe('button');
+      expect(view.textContent).toBe('View');
+      act(() => view.click());
+      expect(onView).toHaveBeenCalledWith('saved-backoff');
+      // Viewing is not choosing: the closest fact stays chosen and the effect is unchanged.
+      expect(byId(mounted.container, 'author-duplicate.candidate.saved-retry')!.getAttribute('aria-checked')).toBe('true');
+      expect(byId(mounted.container, 'author-duplicate.effect')!.textContent).toBe('The saved fact moves to history. Agents only see the new one.');
+    } finally { mounted.unmount(); }
+  });
+
+  it('draws no view control when the caller has none', () => {
+    const context = createSurfaceContext();
+    const mounted = mountThroughReactNativeWeb(<PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+      <MemoryDuplicateChoiceExample />
+    </PluginUiProvider>);
+    try {
+      expect(byId(mounted.container, 'author-duplicate.candidate.saved-retry.view')).toBeNull();
+    } finally { mounted.unmount(); }
+  });
+
   it('retires only the chosen saved fact under Replace, through the caller’s own text leaf', () => {
     function Harness() {
       const [choice, setChoice] = useState<publicComponents.HappierMemoryDuplicateChoiceKind>('update');
