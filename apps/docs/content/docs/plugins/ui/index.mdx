@@ -11,6 +11,11 @@ Happier has three public Plugin UI models. Choose the narrowest one that fits th
 
 React Native plugin code is trusted package code and runs in the client realm; it is not a sandbox.
 
+For a full Project destination in 0.3 development source, use the existing
+`appPage` family with a Project target. The
+[Project page recipe](/plugins/ui/configuration-pages#project-pages) covers
+accepted context, the shared host DetailsPane and local page navigation.
+
 ## Hosted web scaffold and availability
 
 The hostedWeb scaffold emits the packaged artifact and canonical bootstrap contract; each host then reports the one physical frame adapter it can construct, so packaged runtime availability is per host rather than a single global claim. See [Hosted web UI](/plugins/ui/hosted-web#build-and-runtime-availability) for the derived per-host status.
@@ -93,6 +98,24 @@ internals, or import protocol types from an admitted surface.
 `defineUiSurface` remains the only provider installation boundary there. Use
 root hooks for host-backed Actions and Resources; `/data` remains the dedicated
 Collection-query entry.
+
+## Read a Machine display name (development)
+
+In **0.3 development source**, a mounted surface can call
+`host.readMachineDisplayName({ serverId, machineId }, { signal })` to label an
+already-known Machine. Check `host.version().methods` for
+`readMachineDisplayName` before calling an older host. Both native and hosted
+surfaces use the same read contract.
+
+The result is `{ status: 'ready', displayName }` or `{ status: 'unavailable' }`.
+The name follows Happier's existing Machine display rules, including locked
+and unnamed Machines. Unknown ids, revoked Machines, and a Home or Account
+outside the mounted surface's currently active Account return unavailable.
+This read uses the viewer's existing display projection; it does not load
+another Home, enumerate Machines, or grant access to Machine metadata.
+Read again when your surface needs a current label; this method installs no
+subscription. Retired surfaces and cancelled requests retain the ordinary host
+errors.
 
 ## UI capabilities in a client Action
 
@@ -333,8 +356,10 @@ cancellation, data and pacing owners. Account-local reads can pass `false` to
 ignore unrelated Machine readiness, but must still wait while `ready === false`.
 In the current development build, the same context publisher projects
 `requesterExecutionReady`: reads wait for the mounted caller's admission and, for
-an Account-owned destination, its exact Account origin. A legitimate Machine
-caller does not need an unrelated Account origin. Account reads' revision does not change for Machine-only
+an Account-owned destination, its exact Account origin. Choosing development
+renderer bytes does not replace an existing Account destination's custody or
+make an interim Machine requester ready. Genuine Machine-only or newly declared
+development destinations do not need an unrelated Account origin. Account reads' revision does not change for Machine-only
 readiness changes. This applies to custom reads on any surface, not just Settings.
 An undemanded reader stays cold; a genuine
 outage after readiness stays an error with Retry. These observations grant no
@@ -548,7 +573,12 @@ Medium in the caution ink, Low and Nit in two steps of quiet ink), with your
 translated `label`. `presentation="badge"` draws it as a tinted chip among other
 facts and `presentation="dot"` as the mark alone. A `Banner` with
 `presentation="strip"` is the compact band across the top of a pane: its title
-leads when a description finishes the sentence.
+leads when a description finishes the sentence. A card `Banner` keeps its
+`action` beside the text while it fits; pass `actionPlacement="below"` to keep
+it under the text at every width (several buttons, or a notice whose text is a
+list of `points`, which always sit above the action), and
+`compactActionPlacement="full-width"` to draw it across the whole banner on a
+narrow pane. The strip takes neither.
 
 ```tsx
 import { DiffStat, WidgetGlanceRow } from '@happier-dev/plugin-ui';

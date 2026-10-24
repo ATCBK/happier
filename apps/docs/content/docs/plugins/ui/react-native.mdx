@@ -163,6 +163,70 @@ to a frame does not establish an execution sandbox. Consult the installed API
 inventory for the exact bindings; this development surface is not a released
 stability or platform-certification promise.
 
+### Field boxes in development
+
+For ordinary forms, use the semantic `Select` and `TextField` controls. Custom
+adapters can use the same field visuals from
+`@happier-dev/plugin-ui/components`. These are **unreleased 0.3 development
+interfaces**; check your installed API inventory before using them.
+
+`HappierFieldBoxTrigger` draws a select's box around `children`, with optional
+`leading` and `trailing` content. Supply `colors` for the border and background,
+and optionally its raised `edge` and `focusRing`. It is a visual, so its enclosing
+trigger owns pressing, keyboard focus, accessible naming and expanded state.
+`span` chooses content width (`content`, the default), a page-field column
+(`column`), the whole row (`row`), or intrinsic toolbar width (`intrinsic`).
+`density="chip"` uses a compact borderless pill. `boxRef` identifies the drawn
+box for an adapter that anchors its choices there.
+
+Use `resolveHappierFieldBoxLabel({ value, placeholder, colors })` to obtain
+`{ text, placeholder, style }` for your text renderer: an empty, null or undefined
+value shows the supplied placeholder. Its colors are `valueColor` and
+`placeholderColor`. `HappierFieldBoxChevron` takes `open`, `color` and optional
+`size`; it points up while open and is decorative.
+
+`HappierFieldTextBox` frames your input and optional `error` node with the same
+border/background/edge colors. Style the child input with
+`resolveHappierFieldTextInputMetrics({ multiline, minLines,
+nativeMinimumTargetSize, presentation })`. Match the box's `multiline` and
+`presentation` to those metrics; `presentation="document"` gives long prose a
+roomier reading treatment. Your input owns its value, label, caret, validation
+and submission, and your error renderer owns its alert semantics.
+
+`HappierSearchFieldBox` frames a child search input with `colors`, a `radius`,
+optional `leading`/`trailing` content and `minimumTargetSize`. Supply
+`onFocusInput` to focus your input when the field's padding or border is pressed.
+The wrapper adds no keyboard stop or accessible name; label the input itself.
+It does not search or retain a query. A custom material adapter may use
+`renderSurface({ style, children })` while retaining the shared focus target.
+
+## Collection filters and saved views (0.3 development)
+
+The prepublication `/components` surface exposes the same pure filter evaluator
+and typed field factory used by host collections: `compileEntityListFilterV1`,
+`defineEntityFilterFieldV1`, and `createPluginListFilterFieldRegistryV1`.
+Admit your plugin-owned field declaration and scalar, set, boolean or absolute
+time value before supplying held facts. Missing or retired fields evaluate as
+unavailable; they never silently turn a saved selection into a match-all view.
+Evaluation does not activate a plugin, invoke Actions, read Resources or start
+watches. Your existing source owns acquisition and retirement.
+
+`useCollectionSavedViewsControl` supplies controlled select/create/rename/update/
+delete presentation without owning storage. Give it admitted items, localized
+labels, the selected identity, mutation callbacks and the captured authority's
+stable `scope`. In an admitted surface, the existing `usePluginHostApi()` facade
+is bound to that Account lifetime and can supply this scope. A scope change
+retires private naming drafts, and stale callbacks cannot replace the next
+scope's presentation. Create and rename callbacks return acceptance; a refused
+write keeps the draft available for correction.
+
+The shared picker does not prescribe persistence: Triage keeps saved views and
+its selected view in Account storage, while host spaces keep their selection on
+the device. Host Resource-backed row fields are deferred; a plugin-owned page
+can supply its own held custom facts through the pure adapter without importing
+host or protocol internals. These are development-source contracts; check the
+installed Plugin UI inventory before targeting a published package.
+
 ## Resource states (0.3 development)
 
 Pass the `resource` snapshot from `usePluginResource` or `useLivePluginResource`
@@ -171,6 +235,17 @@ admitted content mounted while refreshing or after a failed refresh, with one
 freshness line and recovery action. Before the first successful read it shows
 loading or an error with Retry. Set `isEmpty` when your decoded content is empty;
 the component does not infer emptiness from Resource bytes.
+
+For typed shared content in unreleased 0.3 source, keep a stable
+`PluginUiResourceProjection` descriptor and use
+`useLivePluginResourceProjection(reference, projection, selector, { enabled })`.
+Its `decode(content, previous)` admits content once per descriptor at the
+shared Resource entry and can retain unchanged domain values. The selector
+receives the typed value and independent freshness, pending, error and
+subscription dimensions; unchanged selections do not notify consumers.
+Set `enabled: false` for an undemanded body so it opens no read or watch.
+This hook uses the same Resource lifetime, not a separate reader or poller.
+Check the installed Plugin UI inventory before targeting this source addition.
 
 `SceneArt` from `/components` renders a built-in or authored scene through the
 same host renderer used by `EmptyState`. A host without that renderer supplies
@@ -379,6 +454,59 @@ environment's preference suppress it.
 <CapacityBar theme={theme} label="Storage in use" value={100} capacity={200}
   basis="GB" animated reducedMotion={reducedMotion} />
 ```
+
+### CompositionStrip and hatched segments
+
+`CompositionStrip` takes `theme`, `label`, an explicit `total` and `segments`.
+Each `CompositionSegment` has `id`, `label`, `value` (a number or `null`) and
+optional `color`, `mark` and `pattern`. Use `pattern="hatched"` on a segment
+to distinguish a set-aside share in that segment's color. Explain what the
+hatch means in its label; the pattern alone carries no accessible meaning or
+cleanup authority. This additive API is part of the unreleased 0.3 development
+contract, available through `/components`.
+
+The default strip draws the hatch in both its bar segment and legend swatch.
+`variant="legend"` keeps only the legend, and `variant="bar"` only the bar;
+the `waffle` picture uses solid cells even for a hatched segment, while its
+legend retains the hatch. The whole comes from `total`, never a sum of the
+segments. Unknown values or overlapping shares keep the exact legend without
+inventing a proportional bar. `basis` names the unit and `unknownLabel`
+localizes missing values. `valueFormatter` changes visible amounts while
+accessible descriptions retain the source amount.
+
+```tsx
+import { CompositionStrip } from '@happier-dev/plugin-ui/components';
+
+<CompositionStrip theme={theme} label="Storage in use" total={100} basis="GB"
+  segments={[
+    { id: 'kept', label: 'Keeping', value: 70 },
+    { id: 'review', label: 'Selected for cleanup', value: 30, pattern: 'hatched' },
+  ]} />
+```
+
+### Byte figures
+
+Use `formatHappierDataBytes(bytes, { kind, locale? })` from `/components` for
+byte amounts. `kind` is required: `storage` uses decimal steps of 1,000 for
+disk, files, scans and Trash; `memory` uses binary steps of 1,024 for RAM,
+processes, swap and ceilings. Both use the labels B, KB, MB, GB, TB and PB;
+memory labels are GB rather than GiB. Choose the kind from what the amount
+measures, not from the platform or its current magnitude.
+
+```tsx
+import { formatHappierDataBytes, formatHappierDataBytesParts }
+  from '@happier-dev/plugin-ui/components';
+
+formatHappierDataBytes(1_000_000_000, { kind: 'storage', locale: 'en-US' }); // '1 GB'
+formatHappierDataBytes(1_073_741_824, { kind: 'memory', locale: 'en-US' }); // '1 GB'
+formatHappierDataBytesParts(1_000_000_000, { kind: 'storage', locale: 'en-US' }); // { value: '1', unit: 'GB' }
+```
+
+`formatHappierDataBytesParts` returns localized `value` and `unit` separately
+when a layout needs them. The formatter rounds to at most three significant digits;
+it formats negative or non-finite inputs as zero, so represent an unknown
+measurement explicitly before calling it. These helpers are unreleased 0.3
+development API, not evidence of availability in a published package.
 
 ### CoreLoadBars
 
@@ -861,6 +989,40 @@ the accessible name. The disclosure intentionally uses the public instant motion
 a custom animated composition may supply a public `HappierDisclosureMotionDriver`
 while honoring `reducedMotion`. Its header receives the toggle and expanded
 accessibility state together. Keep `defineUiSurface` as the provider boundary.
+
+### Custom grid card bodies (0.3 development)
+
+For `presentation="grid"`, `CollectionAnatomy.cardContent` replaces the generic
+card head and description with your domain body. This is **unreleased 0.3
+development API**. Supply `{ height, render(item), ownsFooter? }`: `height` is
+the exact body height at normal text size, scaled with the reader's text size.
+Every card shares that height, and the body must fit it. Unlike a static
+`preview`, the rendered body may subscribe to live data through your existing
+data owner.
+
+Keep the body's own component under the shared card activation and focus
+target. For example, extending the `Item` anatomy above:
+
+```tsx
+import { Stack, Text, type CollectionAnatomy } from '@happier-dev/plugin-ui';
+
+const gridAnatomy: CollectionAnatomy<Item> = {
+  glyph: () => null,
+  title: (item) => item.title,
+  accessibilityLabel: (item) => item.title,
+  cardContent: {
+    height: 120,
+    render: (item) => <Stack><Text value={item.title} /><Text value={item.summary} /></Stack>,
+  },
+};
+```
+
+The default keeps the anatomy's `reason` and `action` in their footer slots.
+Set `ownsFooter: true` only when your body draws that footer area itself; the
+grid then reserves no separate footer band. An anatomy `action` remains its
+own target outside the card's primary target, positioned over that area.
+Put interactive footer controls there instead of nesting a button in the
+card's body. List, table and board presentations retain their existing anatomy.
 
 ### Interactive row controls and spanning fields (0.3 development)
 

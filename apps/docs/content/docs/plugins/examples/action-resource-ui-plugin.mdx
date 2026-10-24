@@ -121,6 +121,76 @@ export const renderSurface = defineUiSurface(StatusPanel);
 `Action.Execute` names the same local id the manifest declared; the host binds
 it. Do not add a local click handler that calls your daemon another way.
 
+## Add host-rendered Session Inbox controls
+
+In **0.3 development source / Developer Preview**, a dynamic JSON Resource can
+publish Session Inbox rows with optional declarative `controls`. Import
+`PluginSessionInboxRowV1` and `PluginSessionInboxRowPageV1Schema` from
+`@happier-dev/plugin-sdk/resources`. These are source contracts; check the
+installed SDK before targeting a published host.
+
+Declare the index Resource with `scope: 'surface'` and
+`sessionInbox: { detailResourceId: 'session-detail' }`, plus a same-plugin JSON
+detail Resource with `scope: 'session'`. Its `read` callback returns a serialized
+page such as this:
+
+```ts
+import type { PluginSessionInboxRowV1 } from '@happier-dev/plugin-sdk/resources';
+
+const row = {
+  id: 'deployment-42',
+  session: { serverId: 'home', sessionId: 'session-42' },
+  title: 'Review deployment',
+  detail: null,
+  detailResource: { pluginId: 'com.example.build-status', resourceId: 'session-detail' },
+  controls: [
+    {
+      id: 'Review #42',
+      label: { key: 'deployment.review', fallback: 'Review' },
+      effect: {
+        kind: 'open',
+        page: { pageId: 'deployment-review', subPath: 'deployments/42' },
+      },
+    },
+    {
+      id: 'Continue',
+      label: { key: 'watch.continue', fallback: 'Continue' },
+      effect: {
+        kind: 'action',
+        invocation: {
+          action: { pluginId: 'com.example.watch', localId: 'continue' },
+          input: { sessionId: 'session-42', expectedRevision: 4 },
+        },
+      },
+    },
+  ],
+} satisfies PluginSessionInboxRowV1;
+
+const page = { kind: 'ready', rows: [row], nextCursor: null };
+// Return JSON.stringify(page) from the declared index Resource's read callback.
+```
+
+Control ids are nonempty strings unique within the row; labels can be literals
+or `{ key, fallback }`. This is the same button/effect binding used by
+[native notification buttons](/plugins/services/notifications#add-native-notification-buttons).
+An open effect targets your declared page and exact subPath; omitting `page`
+uses the row's normal destination. Two localized Allow and Deny controls may
+both open the same review page: neither submits a decision merely because of
+its label.
+
+An Action effect may reference another plugin's currently admitted Action.
+`input` is required strict JSON, including `null` when appropriate; there is no
+`args` alias. The host offers no affordance for an absent or disabled Action.
+A press goes through the contributed-Action front door with the viewer's UI
+authority, normal policy and confirmation, and the captured Home, Account and
+Session. The target Action still validates its own input and current state;
+include its expected revision when its contract uses CAS. Stale or replayed
+presses gain nothing beyond that Action's own rules. Returning Resource data
+never runs an Action or grants person authority to plugin JavaScript.
+
+The host owns the control-row presentation; this declaration does not add a
+plugin renderer, Inbox producer registry or permission workflow.
+
 ## What to add next
 
 - Needs the Resource to refresh when the Action lands? Swap

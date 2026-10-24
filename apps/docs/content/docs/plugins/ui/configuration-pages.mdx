@@ -121,6 +121,114 @@ export const renderSurface = defineUiSurface(ReviewBotSettings);
 components rendered at static props — show the real thing the option changes,
 not a drawing of it.
 
+## Project pages
+
+In the 0.3 Developer Preview source contract, a plugin can add a full Project
+destination with the existing `appPage` family. External plugins use the same
+contract as bundled plugins. Raw `ui.views` declares:
+
+```ts
+{
+  id: 'project-review',
+  container: 'appPage',
+  target: { kind: 'project' },
+  title: 'Project review',
+  description: 'Review the current Project.',
+  renderer: 'review-native',
+}
+```
+
+The SDK shorthand is `placement:'appPage', target:{kind:'project'}`. An omitted
+target keeps the existing app-page meaning. Declare optional repository
+applicability with the ordinary expression grammar, for example
+`availability:{when:{fact:'project.repository.kind',operator:'equals',value:'github'}}`.
+Missing repository facts stay unknown; omitting this condition makes the page
+available to any accepted Project. A renderer or permission refusal keeps an
+applicable destination visible with its normal unavailable state.
+
+The render context's Project target supplies the logical `projectKey`, an
+optional qualified `source`, accepted `checkout`, normalized `repository` and
+observed named `branch`.
+Read these supplied facts rather than probing the checkout. A page can render
+before Run-on is selected and when the checkout Machine is offline. Operations
+that need a Machine retain their ordinary execution selection and authority.
+Project pages share the normal page metadata; app columns, app-rail placement
+and personal widget areas stay app-target-only.
+
+A page may declare two labelled counts over one dynamic JSON Resource:
+
+```ts
+counts: {
+  resourceId: 'branch-counts',
+  items: [
+    { field: 'running', label: 'Running' },
+    { field: 'failed', label: 'Failed' },
+  ],
+}
+```
+
+Declare that Resource through the normal public Resource contract. It returns
+exactly `{running, failed}`, each a nonnegative integer or `null` for unknown;
+malformed records make both values unknown. Labels can use normal localized
+strings and never come from Resource output. The existing shared count owner
+reads/watches without loading the page body; hiding the tab releases badge
+demand. Do not turn the pair into a sum or a failed-first scalar.
+
+The contextual Resource producer receives the same admitted target in
+`options.context.target`: Project `repository` and `branch`, or Session
+`repository`, `branch` and `headOid`. Unknown facts are omitted; detached state
+does not invent a branch. A Session target matches the Resource context's
+`sessionId`. Use these supplied facts rather than adding a CI-context Action,
+SCM probe or page-only launch-input convention.
+
+Use public `Collection` and `DetailsPane` for list/detail composition. The host
+uses its existing Project details column on desktop and pushes details on a
+phone. Put the shared `DetailsPaneOpenAsPageButton` in `DetailsPane.actions`:
+
+```tsx
+import { usePluginHostApi } from '@happier-dev/plugin-ui';
+import { DetailsPaneOpenAsPageButton } from '@happier-dev/plugin-ui/components';
+
+const host = usePluginHostApi();
+const openAsPage = async () => {
+  const settled = await host.replacePageLocation(fullPageSubPath, {
+    backLocation: detailSubPath,
+  });
+  setSubPath(settled.subPath);
+};
+const detailActions = <DetailsPaneOpenAsPageButton onPress={openAsPage} />;
+```
+
+Here `fullPageSubPath`, `detailSubPath` and the list location come from your
+plugin's validated local route grammar; `setSubPath` updates the existing
+controlled page model. Return replaces the location with `detailSubPath` and
+sets `backLocation` to the list. Render the settled result because a navigation
+request can be refused. Keep filters, selection, scroll and Find above the
+pane/page presentation so moving the same detail does not fetch it again.
+
+The host generates qualified Project URLs, preserves Home/checkout context and
+owns Back, reload and ephemeral launch input. Customize tabs uses one
+device-local Project layout shared by desktop and phone; pin, reorder, overflow,
+hide and reset do not change page authority. Hidden tabs remain addressable.
+Only the selected presented page loads its body. The maintained
+[public authoring example](/plugins/quickstart) demonstrates the source workflow;
+check generated API/capability reports before targeting a published host.
+
+### Project Overview widgets (development)
+
+For an item in the Project Overview rather than a full destination, use
+`placement:'widget', target:{kind:'project'}` in the SDK shorthand
+(`container:'widget'` in raw `ui.views`). Declare `sizeDeclaration` with its
+supported sizes and default size. External plugins use the same contract.
+
+Repository applicability uses the same ordinary `availability.when`
+expression as Project pages. The host supplies the admitted Project target;
+do not reconstruct it from a widget input, launch input or URL. Existing
+Overview widget placement and Add Actions own the instance. This does not
+create a personal app `widgetAreas` surface or make a Project widget hostable
+on Home or a Session board. These are development-source contracts, not a
+released-host support claim.
+
 ## Page header
 
 `PageHeader` takes the page's `title`, a one-sentence `description` of what the
