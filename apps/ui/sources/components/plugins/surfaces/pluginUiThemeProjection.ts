@@ -313,6 +313,10 @@ export function projectPluginUiHostPalette(theme: Pick<Theme, 'colors' | 'dark'>
         skeleton: colors.surface.skeleton,
         versionControlAdded: colors.versionControl.added.foreground,
         versionControlRemoved: colors.versionControl.removed.foreground,
+        // Find's marks, the same roles core's FindHighlightedText draws (`theme.colors.find`).
+        findMatch: colors.find.matchAll,
+        findMatchCurrent: colors.find.matchCurrent,
+        findMatchCurrentForeground: colors.find.matchCurrentForeground,
         searchFieldRadiusPx: theme.borderRadius.lg,
         searchFieldEdge: resolveThemeControlEdge(theme, 'default') ?? undefined,
     });
