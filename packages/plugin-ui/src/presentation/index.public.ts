@@ -173,7 +173,7 @@ export {
   type HappierMaterialRole,
 } from './layout/material.js';
 export { HappierSurfaceGradientLayer } from './layout/SurfaceGradientLayer.js';
-export { HappierMaterialRoleProvider, useContainingHappierMaterialRole, useHappierMaterialColorResolver, type HappierFloatingRole, type HappierMaterialSurfaceRender } from './layout/Surface.js';
+export { HappierMaterialRoleProvider, HappierOpenedLayer, useContainingHappierMaterialRole, useHappierMaterialColorResolver, type HappierFloatingRole, type HappierMaterialSurfaceRender } from './layout/Surface.js';
 export {
   matchFindText,
   type FindTextMatchRange,
@@ -273,6 +273,7 @@ export {
   HAPPIER_COLLECTION_LIST_ROW_STYLE,
   HAPPIER_COLLECTION_LIST_TEXT,
   resolveHappierCollectionListRowPadding,
+  resolveHappierCollectionTreeChildIndentPx,
   HappierCollectionList,
   HappierCollectionListGroupLabel,
   HappierCollectionListMark,
