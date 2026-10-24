@@ -52,6 +52,7 @@ export type { CurrentUiContextEntityV1 } from './hostApi.js';
 export type { CurrentUiContextSnapshotV1 } from './hostApi.js';
 export type { EphemeralInputSettlement } from './hostApi.js';
 export type { HostedWebBridgeEnvelopeV1 } from '../ui.js';
+export type { InboxItemAttentionTypeV1 } from '../ui.js';
 export { MAX_COMPOSER_ATTACHMENT_DESCRIPTION_CODE_POINTS_V1 } from './hostApi.js';
 export { MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1 } from './hostApi.js';
 export { MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 } from './hostApi.js';
