@@ -28,6 +28,7 @@ export const GITHUB_DETAIL_FIELD_LABELS_V1: Readonly<Record<string, string | und
     'github/author': 'Author',
     'github/updated': 'Updated',
     'github/comments': 'Comments',
+    'github/changed-files': 'Files',
     'github/labels': 'Labels',
     'github/review-decision': 'Review',
     'github/checks': 'Checks',
