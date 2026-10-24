@@ -9,6 +9,7 @@ import { Text } from '@/components/ui/text/Text';
 import { useFilePreviewSource, type UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
 import type { MediaStageItem } from '@/components/ui/media/stage/mediaStageItems';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
+import { useImageBacking } from '@/components/ui/media/imageBacking';
 import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
 import { Icon } from '@/components/ui/icons/Icon';
 import {
@@ -203,6 +204,8 @@ function SessionMediaInlineImageTile(props: Readonly<{
     const { theme } = useUnistyles();
 
     const preview = useFilePreviewSource(props.previewInput);
+    const viewerKind = resolveFileViewerKind({ path: props.media.path, mimeType: props.media.mimeType });
+    const backing = useImageBacking(viewerKind.kind === 'svg' ? 'svg' : 'image', !isInlineVideo(props.media) && viewerKind.alphaCapable);
     const actionable = preview.status !== 'error' || props.fileOpenEnabled;
     const { onPreviewLoaded } = props;
     const loadedUri = preview.status === 'loaded' ? preview.uri : null;
@@ -231,6 +234,7 @@ function SessionMediaInlineImageTile(props: Readonly<{
             host={STORED_IMAGE_HOST}
             borderColor={theme.colors.border.default}
             backgroundColor={theme.colors.surface.elevated}
+            checkerboardColor={backing.checkerboard ? theme.colors.text.primary : undefined}
             imageTestID={`${props.testIdPrefix}-inline-image-preview:${props.media.path}`}
             testID={`${props.testIdPrefix}-inline-image:${props.media.path}`}
             accessibilityLabel={resolveInlineImageAccessibilityLabel(props.media)}
