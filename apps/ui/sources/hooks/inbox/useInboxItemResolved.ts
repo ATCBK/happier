@@ -77,8 +77,9 @@ export function useInboxItemResolved(
         case 'session': {
             const candidate = model.sessionCandidates.find(candidate => candidate.sessionId === focus.id
                 && areServerProfileIdentifiersEquivalent(candidate.address?.serverId ?? candidate.serverId ?? '', focus.serverId));
+            const type = candidate ? classifyInboxSessionCandidate(candidate).type : null;
             return candidate !== undefined && isSessionAwarenessContentReadableV1(candidate.awareness.encryption)
-                && inboxItemView(classifyInboxSessionCandidate(candidate).type) !== 'needs_you';
+                && (type === null || inboxItemView(type) !== 'needs_you');
         }
         case 'workflow_run': {
             const run = record !== true && 'summary' in record ? record : null;

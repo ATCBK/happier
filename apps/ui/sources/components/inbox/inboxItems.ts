@@ -88,6 +88,7 @@ export function buildInboxItems(input: InboxItemsInput, previous: readonly Inbox
             if (!serverId) continue;
             const question = item.entry.pendingUserActions[0];
             const { type, onceDelivery } = classifyInboxSessionCandidate(candidate, question?.questionV1?.type);
+            if (type === null) continue;
             const focus = { kind: 'session', id: candidate.sessionId, serverId,
                 ...(onceDelivery?.transcriptSeq ? { jumpSeq: onceDelivery.transcriptSeq } : {}) } as const;
             rows.push({ key: item.key, producer: 'live', type, view: inboxItemView(type), title: candidate.title,
