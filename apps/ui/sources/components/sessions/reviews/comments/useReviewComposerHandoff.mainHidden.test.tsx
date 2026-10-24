@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from '@/components/sessions/agentInput/agentInputTestHelpers';
 
+const windowSize = vi.hoisted(() => ({ width: 1200 }));
 const focusObservation = vi.hoisted(() => ({
     readMainHidden: (): boolean | undefined => undefined,
     focusedWhileHidden: [] as (boolean | undefined)[],
@@ -13,7 +14,7 @@ installAgentInputCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeNativeMock({ platformOS: 'ios' }, {
-            useWindowDimensions: () => ({ width: 1200, height: 900, scale: 1, fontScale: 1 }),
+            useWindowDimensions: () => ({ width: windowSize.width, height: 900, scale: 1, fontScale: 1 }),
         });
     },
 });
@@ -28,9 +29,54 @@ const { usePaneMainColumn } = await import('@/components/appShell/panes/mainColu
 const { KeyboardShortcutProvider, useKeyboardCommand } = await import('@/keyboard/KeyboardShortcutProvider');
 const { AgentInput } = await import('@/components/sessions/agentInput/AgentInput');
 const { storage } = await import('@/sync/domains/state/storage');
+const { useOptionalAppPaneScopeLayout } = await import('@/components/appShell/panes/hooks/useAppPaneScopeLayout');
 const { useReviewComposerHandoff } = await import('./useReviewComposerHandoff');
 
-afterEach(() => { vi.unstubAllGlobals(); focusObservation.focusedWhileHidden = []; });
+afterEach(() => { vi.unstubAllGlobals(); focusObservation.focusedWhileHidden = []; windowSize.width = 1200; });
+
+/** Opens a reading in Details beside a visible Session, then asks from it. */
+async function askFromReading(scopeId: string) {
+    storage.setState({ localSettings: { ...storage.getState().localSettings,
+        paneArrangement: 'session', uiMultiPanePanelsEnabled: true } });
+    const refs: {
+        pane: ReturnType<typeof useAppPaneScope> | null;
+        layout: ReturnType<typeof useOptionalAppPaneScopeLayout>;
+        handoff: (() => void) | null;
+    } = { pane: null, layout: null, handoff: null };
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
+    focusObservation.readMainHidden = () => refs.layout?.mainHidden;
+    function Session() {
+        const { dispatch } = useAppPaneContext();
+        refs.pane = useAppPaneScope(scopeId);
+        refs.layout = useOptionalAppPaneScopeLayout();
+        refs.handoff = useReviewComposerHandoff(scopeId);
+        React.useEffect(() => {
+            dispatch({ type: 'openDetailsTab', scopeId, tab: {
+                key: 'scmReview:working', kind: 'scmReview', title: 'Walkthrough', resource: { view: 'walkthrough' },
+            }, openAs: 'pinned' });
+        }, [dispatch]);
+        return <AgentInput value="" onChangeText={() => {}} onSend={() => {}}
+            placeholder="Message" autocompleteKinds={[]} autocompleteSuggestions={async () => []} />;
+    }
+    await renderScreen(<KeyboardShortcutProvider handlers={{}}><AppPaneScopeHost scopeId={scopeId} arrangement="honour"
+        mainColumn={{ hideLabel: 'Hide session', showLabel: 'Show session', identity: { name: 'Session' } }}
+        main={<Session />} emptyEditorPane={<div />} />
+    </KeyboardShortcutProvider>, { wrapper: runtime.Wrapper,
+        createNodeMock: element => element.type === 'HappierComposerInput' ? {
+            focus: () => { focusObservation.focusedWhileHidden.push(focusObservation.readMainHidden()); },
+            blur: () => {}, setSelection: () => {}, setTextAndSelection: () => {},
+            offsetAtPoint: async () => null, setDropCaret: () => {}, measureInWindow: () => {},
+        } : null,
+    });
+    const presentation = refs.layout?.layout.details;
+    await act(async () => {
+        refs.handoff?.();
+        await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    await act(async () => { for (const callback of frames.splice(0)) callback(0); });
+    return { refs, presentation };
+}
 
 describe('review composer handoff', () => {
     it('shows the retained session before focusing in Editor-first while keeping review state', async () => {
@@ -125,5 +171,22 @@ describe('review composer handoff', () => {
         await act(async () => { refs.setPresented?.(true); });
         expect(focusObservation.focusedWhileHidden.length).toBe(focusCount);
         expect(sent).toBe(false);
+    });
+
+    it('keeps a reading docked beside the visible Session open and only focuses the composer', async () => {
+        const { refs, presentation } = await askFromReading('session:ask-docked');
+        expect(presentation).toBe('docked');
+        expect(refs.pane?.scopeState?.details.isOpen).toBe(true);
+        expect(refs.pane?.scopeState?.details.tabs.map(tab => tab.key)).toEqual(['scmReview:working']);
+        expect(focusObservation.focusedWhileHidden.length).toBeGreaterThan(0);
+    });
+
+    it('closes a reading that overlays the Session before focusing the composer', async () => {
+        windowSize.width = 600;
+        const { refs, presentation } = await askFromReading('session:ask-overlay');
+        expect(presentation).toBe('overlay');
+        expect(refs.pane?.scopeState?.details.isOpen).toBe(false);
+        expect(refs.pane?.scopeState?.details.tabs.map(tab => tab.key)).toEqual(['scmReview:working']);
+        expect(focusObservation.focusedWhileHidden.length).toBeGreaterThan(0);
     });
 });
