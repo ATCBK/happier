@@ -541,6 +541,16 @@ Two consequences, both observable:
   Until 2026-08-24 the call was unwrapped and reached the global handler
   (`apps/server/sources/app/api/utils/enableErrorHandlers.ts`) as an untyped **500**
   `An unexpected error occurred` (`F-PREVIEW-1`).
+- In current 0.3 development source, the shared preview HTTP adapter also returns that typed
+  503 when an admitted byte stream fails before upstream response headers arrive. Stream admission
+  does not prove the daemon connected the destination: a stopped local listener can fail later.
+  The existing authorized collector-state probe can therefore report transport unavailability to
+  the pane rather than leaving it with a browser-generated empty-response document. Once response
+  headers have started, an interrupted stream is aborted, never replaced or appended with JSON.
+  An admitted request's typed 503 also emits the existing HTTP-finished observation with its actual
+  status and response-byte count. A pre-header upload quota refusal finishes with 413; quotas crossed
+  after response headers abort instead. These terminal observations retain the request's existing
+  private/public scope. Failures before tunnel admission have no started HTTP request to finish.
 - `capabilities.localServices.preview.pmsRelayReady` **includes this switch**. Before the same fix it
   did not, so a server with the two tunnel variables set and no signing key advertised a ready relay
   whose data path returned 500 on every request. An unmet signing prerequisite now reports
