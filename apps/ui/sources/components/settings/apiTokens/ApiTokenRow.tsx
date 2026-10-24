@@ -1,13 +1,12 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useUnistyles } from 'react-native-unistyles';
 import type { AccountApiTokenSummaryV1 } from '@happier-dev/protocol';
 
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { Item } from '@/components/ui/lists/Item';
-import { StatusPill } from '@/components/ui/status/StatusPill';
 import { t } from '@/text';
 
+import { ApiTokenStatusGlyph } from './ApiTokenStatusGlyph';
 import {
     buildApiTokenAccessSummaryParts,
     buildApiTokenRowPresentation,
@@ -16,17 +15,9 @@ import {
     type ApiTokenAccessSummaryNames,
 } from './apiTokenSettingsPresentation';
 
-const stylesheet = StyleSheet.create({
-    pills: {
-        flexDirection: 'row',
-        gap: 6,
-        alignItems: 'center',
-    },
-});
-
 /**
- * One token in the collection: its label, a quiet pill only for an embed or an expiry that needs
- * attention, and its access in one line. The same row in the rail (compact, selected by route) and
+ * One token in the collection: its label, an icon-only status only for an expiry that needs attention, and its access
+ * in one line (an embed-backed token leads it with its kind). The same row in the rail (compact, selected by route) and
  * on the list page (with a chevron).
  */
 export const ApiTokenRow = React.memo(function ApiTokenRow(props: Readonly<{
@@ -55,27 +46,10 @@ export const ApiTokenRow = React.memo(function ApiTokenRow(props: Readonly<{
             testID={`settings-api-tokens-row:${props.token.tokenId}`}
             title={props.token.label}
             titleStyle={presentation.status === 'expired' ? { color: theme.colors.text.secondary } : undefined}
-            titleAccessory={presentation.embedBacked || statusLabel ? (
-                <View style={stylesheet.pills}>
-                    {presentation.embedBacked ? (
-                        <StatusPill
-                            testID={`settings-api-tokens-embed:${props.token.tokenId}`}
-                            variant="neutral"
-                            hideDot
-                            label={t('settingsApiTokens.embedPill')}
-                        />
-                    ) : null}
-                    {statusLabel ? (
-                        <StatusPill
-                            testID={`settings-api-tokens-status:${props.token.tokenId}`}
-                            variant={presentation.statusVariant}
-                            hideDot
-                            label={statusLabel}
-                        />
-                    ) : null}
-                </View>
+            rightElement={statusLabel ? (
+                <ApiTokenStatusGlyph testID={`settings-api-tokens-status:${props.token.tokenId}`} presentation={presentation} />
             ) : undefined}
-            subtitle={summary}
+            subtitle={presentation.embedBacked ? [t('settingsApiTokens.embedPill'), summary].filter(Boolean).join(' · ') : summary}
             subtitleLines={1}
             accessibilityLabel={t('settingsApiTokens.rowAccessibilityLabel', {
                 label: props.token.label,

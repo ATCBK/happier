@@ -1,17 +1,17 @@
 import * as React from 'react';
 import type { AccountApiTokenSummaryV1 } from '@happier-dev/protocol';
 
+import { ApiTokenStatusGlyph } from '@/components/settings/apiTokens/ApiTokenStatusGlyph';
 import { buildApiTokenRowPresentation, resolveApiTokenStatusLabel } from '@/components/settings/apiTokens/apiTokenSettingsPresentation';
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { Item } from '@/components/ui/lists/Item';
-import { StatusPill } from '@/components/ui/status/StatusPill';
 
 import { listEmbedSummaryParts } from './embedDraft';
 import { formatEmbedSummary, type EmbedSummaryNames } from './embedPresentation';
 
 /**
- * One embed: its name, one line with only the facts that differ from the quiet defaults, and a pill
- * only for an expiry that needs attention. The same row in the rail (compact, selected by route) and
+ * One embed: its name, one line with only the facts that differ from the quiet defaults, and an
+ * icon-only status only for an expiry that needs attention. The same row in the rail (compact, selected by route) and
  * on the list page (with a chevron).
  */
 export const EmbedRow = React.memo(function EmbedRow(props: Readonly<{
@@ -32,9 +32,7 @@ export const EmbedRow = React.memo(function EmbedRow(props: Readonly<{
         <Item
             testID={`settings-embeds-row:${props.token.tokenId}`}
             title={props.token.label}
-            titleAccessory={statusLabel ? (
-                <StatusPill variant={presentation.statusVariant} hideDot label={statusLabel} />
-            ) : undefined}
+            rightElement={statusLabel ? <ApiTokenStatusGlyph presentation={presentation} /> : undefined}
             subtitle={summary}
             subtitleLines={1}
             accessibilityLabel={[props.token.label, statusLabel, summary].filter(Boolean).join(', ')}

@@ -55,7 +55,6 @@ describe('API-token Settings presentation', () => {
         expect(expiring).toMatchObject({
             displayPrefix: 'hap_v1_11111111…',
             status: 'expiring',
-            statusVariant: 'warning',
             embedBacked: false,
             encryptionAccess: 'bearerOnly',
             unattendedTeamAccess: 'authorized',
@@ -69,7 +68,7 @@ describe('API-token Settings presentation', () => {
             token: { ...expiring.token, expiresAt: '2026-08-21T12:00:00.000Z' },
             nowMs: NOW,
         });
-        expect(expired).toMatchObject({ status: 'expired', statusVariant: 'neutral' });
+        expect(expired).toMatchObject({ status: 'expired' });
         expect(buildApiTokenRowPresentation({
             token: { ...expiring.token, expiresAt: '2026-08-30T12:00:01.000Z' },
             nowMs: NOW,

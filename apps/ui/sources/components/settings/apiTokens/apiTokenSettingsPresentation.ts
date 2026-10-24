@@ -3,7 +3,6 @@ import type { AccountApiTokenSummaryV1 } from '@happier-dev/protocol/auth/accoun
 import type { ActionIdFamilyV1 } from '@happier-dev/protocol/actions/actionIds';
 import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 
-import type { StatusPillVariant } from '@/components/ui/status/StatusPill';
 import { t, type TranslationKeyNoParams } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 
@@ -69,7 +68,6 @@ export type ApiTokenRowPresentation = Readonly<{
     expiresIn: ApiTokenExpiresIn | null;
     /** An embed owns this token: its row opens Settings → Embeds, the one place it is managed. */
     embedBacked: boolean;
-    statusVariant: StatusPillVariant;
     encryptionAccess: 'enabled' | 'bearerOnly';
     unattendedTeamAccess: 'authorized' | 'notAuthorized';
 }>;
@@ -88,7 +86,6 @@ export function buildApiTokenRowPresentation(params: Readonly<{
         status: expired ? 'expired' : expiring ? 'expiring' : 'active',
         expiresIn,
         embedBacked: params.token.embedConfig !== null,
-        statusVariant: expired ? 'neutral' : expiring ? 'warning' : 'success',
         encryptionAccess: params.token.hasEncryptionAccess ? 'enabled' : 'bearerOnly',
         unattendedTeamAccess: params.token.hasUnattendedTeamAccess ? 'authorized' : 'notAuthorized',
     };
