@@ -1,4 +1,5 @@
 import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { readSessionGoalControlDiagnosticDetails } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { z } from 'zod/mini';
 import { awaitGoalAcknowledgement } from '@/session/goalControls/awaitGoalAcknowledgement';
 
@@ -207,10 +208,12 @@ function readRuntimeControlErrorResult(value: unknown) {
   const record = value as Record<string, unknown>;
   if (record.ok !== false || typeof record.error !== 'string') return null;
   const failure = SessionGoalControlFailureV1Schema.safeParse(record.goalControlFailure);
+  const details = readSessionGoalControlDiagnosticDetails(record.details);
   return {
     ok: false as const,
     error: record.error,
     errorCode: typeof record.errorCode === 'string' ? record.errorCode : 'runtime_control_failed',
+    ...(details ? { details } : {}),
     ...(failure.success ? { goalControlFailure: failure.data } : {}),
   };
 }

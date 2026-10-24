@@ -16,6 +16,7 @@ import { resolveInactiveSessionControlLaunchScope, type ResolveInactiveSessionCo
 import type { WorkStatePublisher } from '@happier-dev/plugin-sdk/sessions/work-state';
 import { readSessionWorkStateV1FromMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
 import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { readSessionGoalControlDiagnosticDetails } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import type { Metadata } from '@/api/types';
 import type { CatalogAgentId } from '@/agent/catalog/ids';
@@ -487,7 +488,9 @@ export function createNativeInactiveGoalAdapter(params: Readonly<{
       case 'unavailable':
       case 'unsupported': {
         const failure = SessionGoalControlFailureV1Schema.safeParse(result.goalControlFailure);
+        const details = readSessionGoalControlDiagnosticDetails(result.diagnostic.details);
         return { status: result.status, ok: false as const, errorCode: result.diagnostic.code, error: result.diagnostic.code,
+          ...(details ? { details } : {}),
           ...(result.status !== 'unsupported' ? { retryable: result.retryable } : {}),
           ...(failure.success ? { goalControlFailure: failure.data } : {}) };
       }

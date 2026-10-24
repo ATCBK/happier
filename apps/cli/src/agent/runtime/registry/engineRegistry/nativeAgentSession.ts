@@ -1,4 +1,5 @@
 import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
+import { readSessionGoalControlDiagnosticDetails } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { isSessionModeSelectionUnavailable } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { isForegroundTurnRuntimeTranscriptEvent } from '@/agent/runtime/session/events/runtimeTranscriptScope';
 import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
@@ -1896,14 +1897,16 @@ function createNativeAgentSessionControlContext(params: Readonly<{
 }
 
 function directControlFailureResult(
-    result: Readonly<{ status: string; diagnostic?: Readonly<{ code: string; message?: string }>; goalControlFailure?: unknown }>,
+    result: Readonly<{ status: string; diagnostic?: Readonly<{ code: string; message?: string; details?: unknown }>; goalControlFailure?: unknown }>,
 ) {
     const errorCode = result.diagnostic?.code ?? `agent_session_control_${result.status}`;
     const failure = SessionGoalControlFailureV1Schema.safeParse(result.goalControlFailure);
+    const details = readSessionGoalControlDiagnosticDetails(result.diagnostic?.details);
     return Object.freeze({
         ok: false,
         errorCode,
         error: result.diagnostic?.message ?? errorCode,
+        ...(details ? { details } : {}),
         ...(failure.success ? { goalControlFailure: failure.data } : {}),
     });
 }

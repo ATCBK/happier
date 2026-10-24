@@ -46,6 +46,7 @@ import type {
     AgentRuntime,
     AgentRuntimeFactory,
     AgentSessionCatalogControl,
+    AgentSessionGoalControl,
     AgentSessionContinuationControl,
     AgentSessionOpenRequest,
     AgentSessionConversationRollbackControl,
@@ -5218,9 +5219,9 @@ describe('native Agent session host adapter', () => {
             };
         });
         const reconcile = vi.fn<AgentSessionConversationRollbackControl['reconcile']>(async () => ({ status: 'applied' as const }));
-        const getGoal = vi.fn(async () => ({ status: 'applied' as const, revision: 'goal-revision-1' }));
-        const setGoal = vi.fn(async () => ({ status: 'applied' as const, revision: 'goal-revision-2' }));
-        const clearGoal = vi.fn(async () => ({ status: 'unchanged' as const, revision: 'goal-revision-3' }));
+        const getGoal = vi.fn<AgentSessionGoalControl['get']>(async () => ({ status: 'applied', revision: 'goal-revision-1' }));
+        const setGoal = vi.fn<AgentSessionGoalControl['set']>(async () => ({ status: 'applied', revision: 'goal-revision-2' }));
+        const clearGoal = vi.fn<AgentSessionGoalControl['clear']>(async () => ({ status: 'unchanged', revision: 'goal-revision-3' }));
         const listCatalog = vi.fn<AgentSessionCatalogControl['list']>(async (request) => request.kind === 'vendorPlugins'
             ? {
                 status: 'ok' as const,
@@ -5473,6 +5474,20 @@ describe('native Agent session host adapter', () => {
             { kind: 'consumeResetCredit', issueFingerprint: 'quota-1' },
         ]);
 
+        // The external plugin leaf is the SDK boundary. The real host adapter
+        // must retain its typed diagnostics for each Goal operation.
+        const details = { stage: 'thread/goal/get', errorClass: 'JsonRpcApplicationError', errorCode: '-32600' };
+        const goalFailure = { status: 'unavailable' as const, retryable: true,
+            diagnostic: { code: 'external_goal_failed', severity: 'error' as const, details },
+            goalControlFailure: { phase: 'native_effect' as const } };
+        getGoal.mockResolvedValueOnce(goalFailure);
+        setGoal.mockResolvedValueOnce(goalFailure);
+        clearGoal.mockResolvedValueOnce(goalFailure);
+        for (const result of [await controls.refreshGoal(), await controls.setGoal('Keep Goal'), await controls.clearGoal()]) {
+            expect(result).toMatchObject({ ok: false, errorCode: 'external_goal_failed', details,
+                goalControlFailure: { phase: 'native_effect' } });
+        }
+
         await created.operations.resetOrDisposeRuntime();
         await expect(controls.refreshGoal()).resolves.toEqual({
             ok: false,
@@ -5480,7 +5495,7 @@ describe('native Agent session host adapter', () => {
             error: 'native_goal_control_unavailable',
             goalControlFailure: { phase: 'native_effect' },
         });
-        expect(getGoal).toHaveBeenCalledTimes(1);
+        expect(getGoal).toHaveBeenCalledTimes(2);
 
         vi.mocked(runtime.sessions.open).mockResolvedValueOnce({
             nativeGoalControlsSupported: false,

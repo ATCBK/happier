@@ -6,6 +6,48 @@ import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAc
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { MACHINE_RPC_TIMEOUT_ERROR_CODE, RPC_ERROR_CODES } from '../rpc/errors.js';
 import { ActionErrorClassV1Schema, type ActionErrorClassV1 } from './actionErrorClassV1.js';
+import { isPluginError } from '../plugins/errors.js';
+
+const goalControlDiagnosticStages = ['client_creation', 'initialize', 'thread/goal/get', 'thread/goal/set',
+  'thread/goal/clear', 'host_publication'] as const;
+export type SessionGoalControlDiagnosticStage = typeof goalControlDiagnosticStages[number];
+
+const goalControlNativeErrorCodes = new Set([
+  'plugin_exec_native_launch_unavailable', 'PLUGIN_EXEC_CLIENT_PROTOCOL_ERROR',
+  'CODEX_REALTIME_ENABLED_LAUNCH_UNAVAILABLE',
+]);
+function readGoalControlNativeErrorCode(value: unknown): string | null {
+  return typeof value === 'string' && goalControlNativeErrorCodes.has(value) ? value : null;
+}
+
+/** Only stage and the existing content-free exception vocabulary cross Goal controls. */
+export function projectSessionGoalControlDiagnosticDetails(
+  stage: SessionGoalControlDiagnosticStage,
+  error: unknown,
+): Readonly<{ stage: SessionGoalControlDiagnosticStage; errorClass: ActionErrorClassV1 | 'PluginError'; errorCode: string | null }> {
+  const { errorClass, errorCode } = readUnexpectedActionErrorDiagnosticV1(error);
+  return { stage, errorClass: isPluginError(error) ? 'PluginError' : errorClass,
+    errorCode: errorCode ?? readGoalControlNativeErrorCode(
+      error && typeof error === 'object' && 'code' in error ? error.code : undefined) };
+}
+
+/** Plugin diagnostics may contain private data; never forward their opaque details. */
+export function readSessionGoalControlDiagnosticDetails(
+  value: unknown,
+): ReturnType<typeof projectSessionGoalControlDiagnosticDetails> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Readonly<Record<string, unknown>>;
+  const stage = goalControlDiagnosticStages.find(stage => stage === record.stage);
+  if (!stage || typeof record.errorClass !== 'string') return null;
+  const details = projectSessionGoalControlDiagnosticDetails(stage, {
+    name: record.errorClass,
+    code: record.errorClass === 'JsonRpcApplicationError' && typeof record.errorCode === 'string'
+      ? Number(record.errorCode) : record.errorCode,
+  });
+  // Serialized diagnostics are data, not thrown PluginError authority.
+  if (record.errorClass === 'PluginError') return { ...details, errorClass: 'PluginError' as const };
+  return details.errorClass === record.errorClass ? details : null;
+}
 
 /** Historical, content-free admission facts. Not credential authority or a live readiness claim. */
 export const ActionOperationCredentialUseV1Schema = lazyZodSchema(() => z.strictObject({

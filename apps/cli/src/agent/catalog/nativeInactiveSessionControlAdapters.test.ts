@@ -296,8 +296,11 @@ describe('native inactive Agent session controls', () => {
     { status: 'unavailable' as const, facet: { phase: 'native_effect' as const, privateText: 'must not disclose' }, expected: undefined },
   ])('preserves only closed external Goal evidence for $status / $facet', async ({ status, facet, expected }) => {
     // This is an external plugin contribution, not a replacement for host logic.
+    const details = status === 'unavailable'
+      ? { stage: 'client_creation', errorClass: 'PluginError', errorCode: 'plugin_exec_native_launch_unavailable' }
+      : { stage: 'initialize', errorClass: 'JsonRpcApplicationError', errorCode: '-32000' };
     const fail = async () => ({ status,
-      diagnostic: { code: 'external_goal_refused', severity: 'error' as const }, retryable: false, goalControlFailure: facet });
+      diagnostic: { code: 'external_goal_refused', severity: 'error' as const, details }, retryable: false, goalControlFailure: facet });
     const fixture = runtimeRegistryFixture({ agent: { pluginId: 'test.external-goals', localId: 'goal-agent' },
       sessions: { goals: { get: fail, set: fail, clear: fail }, async open() { throw new Error('not used'); } } });
     const adapter = createNativeInactiveGoalAdapter({ agentId: fixture.agentId,
@@ -306,7 +309,7 @@ describe('native inactive Agent session controls', () => {
       const result = await routeSessionGoalControl({ ...commonRouteParams('external-goal-failure'), operation,
         ...(operation === 'set' ? { request: { objective: 'Keep original refusal' } } : {}),
         resolveAdapter: async () => adapter });
-      expect(result).toMatchObject({ ok: false, status, errorCode: 'external_goal_refused',
+      expect(result).toMatchObject({ ok: false, status, errorCode: 'external_goal_refused', details,
         ...(expected ? { goalControlFailure: expected } : {}) });
       if (!expected) expect(result).not.toHaveProperty('goalControlFailure');
     }

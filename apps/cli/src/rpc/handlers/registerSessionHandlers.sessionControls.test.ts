@@ -39,6 +39,29 @@ function createRegistrar(): { handlers: Map<string, RpcHandler>; registrar: RpcH
 }
 
 describe('registerSessionHandlers session controls', () => {
+  it.each(['get', 'set', 'clear'] as const)('retains content-free native Goal error details through %s RPC', async operation => {
+    const { registerSessionControlHandlers } = await import('./sessionControls');
+    const { handlers, registrar } = createRegistrar();
+    const details = { stage: `thread/goal/${operation}`, errorClass: 'JsonRpcApplicationError', errorCode: '-32600' };
+    // The runtime-control port is the external Agent process boundary.
+    const failure = async () => ({ ok: false, errorCode: 'external_goal_failed', error: 'external_goal_failed',
+      details: { ...details, privateText: 'PRIVATE_TOKEN' }, goalControlFailure: { phase: 'native_effect' } });
+    registerSessionControlHandlers(registrar, {
+      sessionRuntimeControls: { refreshGoal: failure, setGoal: failure, clearGoal: failure },
+    });
+    const method = operation === 'get' ? SESSION_RPC_METHODS.SESSION_GOAL_GET
+      : operation === 'set' ? SESSION_RPC_METHODS.SESSION_GOAL_SET : SESSION_RPC_METHODS.SESSION_GOAL_CLEAR;
+    const result = await handlers.get(method)?.(operation === 'set' ? { objective: 'Keep Goal' } : {});
+    expect(result).toMatchObject({ ok: false, errorCode: 'external_goal_failed', details,
+      goalControlFailure: { phase: 'native_effect' } });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_TOKEN');
+    details.errorCode = 'PRIVATE_TOKEN';
+    const unknownCode = await handlers.get(method)?.(operation === 'set' ? { objective: 'Keep Goal' } : {});
+    expect(unknownCode).toMatchObject({ details: { stage: details.stage,
+      errorClass: details.errorClass, errorCode: null } });
+    expect(JSON.stringify(unknownCode)).not.toContain('PRIVATE_TOKEN');
+  });
+
   it.each(['current', 'new', 'no_issue', 'unavailable'] as const)(
     'qualifies a live Check Now against the action-time public issue (%s)', async (observation) => {
       const { registerSessionControlHandlers } = await import('./sessionControls');
