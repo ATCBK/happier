@@ -61,11 +61,11 @@ const INSTANCE = '11111111-1111-4111-8111-111111111111';
 const ENTRY_TITLE = 'Replace the duplicated normalizer';
 
 /**
- * The fixture theme's own pane minima sum to ~599 at `textScale: 1`, so 900
- * carries the wide composition and 420 cannot. Both are the measured widths
- * `shell/layout.ts` resolves, never a device guess.
+ * 1200 clears both the fixture's pane minima and the shared Collection toolbar's
+ * fold threshold; 420 cannot carry either wide composition. These are measured
+ * widths supplied to the real Collection, never a device guess.
  */
-const WIDE_WIDTH = 900;
+const WIDE_WIDTH = 1200;
 const COMPACT_WIDTH = 420;
 
 function listResult(): TriageListEntriesResultV1 {
@@ -265,7 +265,10 @@ describe('the PRs & Issues lens under the shell’s own measurement', () => {
         // A phone keeps the order inside the one Filters sheet (the shared Collection toolbar folds it there).
         await openToolbarMenu(shell, 'Filters');
         await expect(shell.getByRole('menuitemradio', { name: 'Oldest', state: { checked: true } })).resolves.toBeDefined();
+        // Finish the modal filter sheet before reaching the toolbar behind it.
+        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Show 1 result' })); });
         await act(async () => { await shell.press(await shell.getByRole('radio', { name: 'Board' })); });
+        await expect(shell.getByRole('radio', { name: 'Board', state: { checked: true } })).resolves.toBeDefined();
         await measureFillRegion(WIDE_WIDTH);
         await expect(toolbarMenuItem(shell, 'Order', 'menuitemradio', { name: 'Oldest', state: { checked: true } })).resolves.toBeDefined();
     });
