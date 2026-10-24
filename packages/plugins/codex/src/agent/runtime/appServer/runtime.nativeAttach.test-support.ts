@@ -48,6 +48,8 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   skillListResponseForRoots?: (extraRoots: readonly string[], params: Readonly<Record<string, unknown>>) => unknown;
   sessionFactory?: Pick<AgentSessionRuntimeFactory, 'open'>;
   skillListFailure?: Readonly<{ code: number; message: string }>;
+  initializeFailure?: Readonly<{ code: number; message: string }>;
+  goalFailure?: Readonly<{ code: number; message: string }>;
   onTurnStart?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown>; turnId: string }>) => void | Promise<void>;
   beforeTurnStartResponse?: () => Promise<void>;
   beforeThreadResumeResponse?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown> }>) => void | Promise<void>;
@@ -139,6 +141,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
         ? options.turnIdForStart?.(turnStartOccurrence) ?? `provider-turn-${turnStartOccurrence}` : 'fixture-turn';
       if (message.method === 'initialize') {
         result = { userAgent: 'happier_cli/0.162.1 (fixture)' };
+        error = options.initializeFailure;
       } else if (message.method === 'config/read') {
         result = { config: { mcp_servers: options.nativeMcpServers ?? (options.mcpServers ? { happier__wilson: { enabled: true } } : {}), features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
       } else if (message.method === 'account/read') {
@@ -150,7 +153,8 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
         result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
       } else if (message.method.startsWith('thread/goal/')) {
         // An independent native control process can find only a persisted rollout.
-        if (!materialized || params.threadId !== 'fresh-thread') error = { code: -32600, message: 'thread not found' };
+        if (options.goalFailure) error = options.goalFailure;
+        else if (!materialized || params.threadId !== 'fresh-thread') error = { code: -32600, message: 'thread not found' };
         else if (message.method === 'thread/goal/set') {
           goal = { ...goal, ...params, status: params.status ?? goal?.status ?? 'active',
             createdAt: 1_776_272_400, updatedAt: 1_776_272_460 };

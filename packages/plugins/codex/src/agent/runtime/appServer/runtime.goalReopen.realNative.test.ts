@@ -52,6 +52,7 @@ describe.skipIf(!nativeBinary || process.platform === 'win32')('real native Code
     ].join('\n'));
     const children: PluginProcessHandle[] = [];
     let controlOccurrence = 0;
+    let disableControlGoals = false;
     const launch = (args: readonly string[], processEnv: Readonly<Record<string, string>> = env): PluginProcessHandle => {
       const child = spawn(nativeBinary!, [...args], { cwd: root, env: processEnv, stdio: ['pipe', 'pipe', 'pipe'] });
       const stdout: Buffer[] = [];
@@ -82,7 +83,8 @@ describe.skipIf(!nativeBinary || process.platform === 'win32')('real native Code
         // Use a separate, owned native process for each ordinary control client.
         // Unix IPC replaces stdio only at the OS boundary in this probe.
         const socketPath = join(root, `control-${++controlOccurrence}.sock`);
-        const processHandle = launch(['app-server', '--listen', `unix://${socketPath}`]);
+        const processHandle = launch(['app-server', '--listen', `unix://${socketPath}`,
+          ...(disableControlGoals ? ['--disable', 'goals'] : [])]);
         await expect.poll(async () => await stat(socketPath).then(() => true, () => false)).toBe(true);
         const connection = await connectCodexUnixWebSocketJsonRpc({ socketPath,
           maxFrameBytes: request.maxFrameBytes, requestTimeoutMs: request.requestTimeoutMs });
@@ -132,6 +134,18 @@ describe.skipIf(!nativeBinary || process.platform === 'win32')('real native Code
       await expect(runtime.sessions.goals.get(control)).resolves.toMatchObject({ status: 'applied' });
       const retained = snapshots.at(-1)?.items;
       expect(retained).toMatchObject([{ title: 'Retained B', status: 'paused', tokenBudget: null }]);
+      // Native 0.162.1 returns -32600 for disabled Goals even with a valid,
+      // persisted thread. It is unsupported, not a transient control failure.
+      disableControlGoals = true;
+      try {
+        for (const operation of ['get', 'set', 'clear'] as const) {
+          const result = operation === 'set'
+            ? await runtime.sessions.goals.set({ status: 'paused' }, control)
+            : await runtime.sessions.goals[operation](control);
+          expect(result).toMatchObject({ status: 'unsupported', diagnostic: { code: 'codex_goals_disabled',
+            details: { stage: `thread/goal/${operation}`, errorCode: '-32600' } } });
+        }
+      } finally { disableControlGoals = false; }
       snapshots.length = 0;
       active = await runtime.sessions.open({ ...request, kind: 'resume', providerSessionId: threadId }, context);
       expect(diagnostics).toMatchObject([{ threadId, kind: 'present', goalThreadId: threadId }]);

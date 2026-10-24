@@ -392,6 +392,8 @@ type CodexNativeAppServerClientParams = Readonly<{
     toolRestrictionAllowedMcpServerKeys?: readonly string[];
     signal?: AbortSignal;
     initializeRequestOptions?: CodexAppServerRequestOptions;
+    /** Content-free control diagnostics distinguish transport creation from initialization. */
+    onInitialize?: () => void;
     transport?: CodexAppServerTransport;
 }>;
 
@@ -473,6 +475,7 @@ async function createUnlockedCodexNativeAppServerClient(params: CodexNativeAppSe
         const initializeRequestOptions = params.initializeRequestOptions ?? (params.signal
             ? { signal: params.signal }
             : undefined);
+        params.onInitialize?.();
         const initialized = await initializeCodexAppServerClient({
             request: async (method, requestParams) => await client.request(
                 method,
