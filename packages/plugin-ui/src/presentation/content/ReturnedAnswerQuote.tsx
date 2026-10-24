@@ -1,5 +1,5 @@
 import { useState, type ComponentType, type ReactElement, type ReactNode } from 'react';
-import { View } from 'react-native';
+import { View, type ViewStyle } from 'react-native';
 
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
 import { HAPPIER_SPACE_STEPS } from '../../environment/spacing.js';
@@ -81,8 +81,10 @@ export type HappierReturnedAnswerQuoteProps = Readonly<{
   /**
    * Bounds a long answer to a few lines of the caller's body text (`lineHeight`) with a Show more /
    * Show less control under it. The full answer stays reachable; an answer that fits is drawn whole.
+   * `fade` is the caller's bottom-edge fade (its scroll-edge mask owner) applied while the answer is
+   * clipped, so the clip never slices a line of text in half.
    */
-  collapse?: Readonly<{ lineHeight: number; showMore: string; showLess: string }>;
+  collapse?: Readonly<{ lineHeight: number; showMore: string; showLess: string; fade?: ViewStyle }>;
   space?: Readonly<Record<'s2' | 's6' | 's8' | 's10' | 's12', number>>;
 }>;
 
@@ -212,7 +214,8 @@ function ReturnedAnswerBody(
     <View style={{ minWidth: 0, gap: props.gap }}>
       <View
         testID={props.testID}
-        style={expanded ? { minWidth: 0 } : { minWidth: 0, maxHeight, overflow: 'hidden' }}
+        style={expanded ? { minWidth: 0 }
+          : { minWidth: 0, maxHeight, overflow: 'hidden', ...(overflowing ? collapse.fade : null) }}
       >
         <View onLayout={(event) => setNaturalHeight(event.nativeEvent.layout.height)}>
           {props.children}
