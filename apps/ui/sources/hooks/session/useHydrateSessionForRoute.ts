@@ -134,7 +134,7 @@ export function useHydrateSession(
     sessionId: string,
     tag: string,
     options?: Readonly<{ serverId?: string; forceRefresh?: boolean; hydrateMessages?: boolean; includeTurnsProjection?: boolean }>,
-): SessionRouteHydrationState {
+): SessionRouteHydrationState & Readonly<{ retry(): void }> {
     const normalizedSessionId = normalizeSessionId(sessionId);
     const normalizedServerId = String(options?.serverId ?? '').trim();
     const routeServerId = normalizedServerId || undefined;
@@ -155,11 +155,16 @@ export function useHydrateSession(
                 ? createAvailableState(normalizedSessionId, routeServerId)
                 : createLoadingState(normalizedSessionId, routeServerId, forceRefresh ? 'refreshing' : 'cold'),
     }));
+    const retryCurrent = React.useRef<Readonly<{ routeKey: string; invoke(): void }> | null>(null);
+    const retry = React.useCallback(() => {
+        if (retryCurrent.current?.routeKey === routeKey) retryCurrent.current.invoke();
+    }, [routeKey]);
 
     React.useEffect(() => {
         let canceled = false;
         let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
         let attemptCount = 0;
+        let pending = false;
 
         if (!normalizedSessionId) {
             setRouteStateRecord({ routeKey, state: createMissingState('', routeServerId, 'not_found') });
@@ -170,21 +175,23 @@ export function useHydrateSession(
             && session !== undefined
             && session?.sessionTurns === undefined
             && isSessionContentReadable(readSessionContentAvailability(session));
-        if (!forceRefresh && hasHydratedSession && !needsTurnsProjection) {
+        const alreadyAvailable = !forceRefresh && hasHydratedSession && !needsTurnsProjection;
+        if (alreadyAvailable) {
             setRouteStateRecord({ routeKey, state: createAvailableState(normalizedSessionId, routeServerId) });
-            return;
+        } else {
+            setRouteStateRecord({
+                routeKey,
+                state: createLoadingState(normalizedSessionId, routeServerId, forceRefresh ? 'refreshing' : 'store-miss'),
+            });
         }
-        setRouteStateRecord({
-            routeKey,
-            state: createLoadingState(normalizedSessionId, routeServerId, forceRefresh ? 'refreshing' : 'store-miss'),
-        });
 
-        const attemptHydration = () => {
-            if (canceled) return;
+        const attemptHydration = (refresh = forceRefresh) => {
+            if (canceled || pending) return;
+            pending = true;
 
             attemptCount++;
             const hydrationOptions = {
-                ...(forceRefresh ? { forceRefresh: true } : {}),
+                ...(refresh ? { forceRefresh: true } : {}),
                 ...(routeServerId ? { serverId: routeServerId } : {}),
                 ...(hydrateMessages !== undefined ? { hydrateMessages } : {}),
                 ...(includeTurnsProjection !== undefined ? { includeTurnsProjection } : {}),
@@ -235,7 +242,7 @@ export function useHydrateSession(
                     const retryDelayMs = Math.min(2000 * Math.pow(2, attemptCount - 1), 30000);
                     retryTimeoutId = setTimeout(() => {
                         if (!canceled) {
-                            attemptHydration();
+                            attemptHydration(refresh);
                         }
                     }, retryDelayMs);
                 })
@@ -249,16 +256,28 @@ export function useHydrateSession(
                     const retryDelayMs = Math.min(2000 * Math.pow(2, attemptCount - 1), 30000);
                     retryTimeoutId = setTimeout(() => {
                         if (!canceled) {
-                            attemptHydration();
+                            attemptHydration(refresh);
                         }
                     }, retryDelayMs);
-                });
+                })
+                .finally(() => { pending = false; });
         };
 
-        attemptHydration();
+        const retryNow = () => {
+            if (canceled || pending) return;
+            if (retryTimeoutId !== null) {
+                clearTimeout(retryTimeoutId);
+                retryTimeoutId = null;
+            }
+            setRouteStateRecord({ routeKey, state: createLoadingState(normalizedSessionId, routeServerId, 'refreshing') });
+            attemptHydration(true);
+        };
+        retryCurrent.current = { routeKey, invoke: retryNow };
+        if (!alreadyAvailable) attemptHydration();
 
         return () => {
             canceled = true;
+            if (retryCurrent.current?.invoke === retryNow) retryCurrent.current = null;
             if (retryTimeoutId !== null) {
                 clearTimeout(retryTimeoutId);
             }
@@ -277,7 +296,8 @@ export function useHydrateSession(
         return createAvailableState(normalizedSessionId, hydratedAvailableServerId);
     }, [hydratedAvailableServerId, normalizedSessionId]);
 
-    return hydratedAvailableState ?? routeState;
+    const currentState = hydratedAvailableState ?? routeState;
+    return React.useMemo(() => ({ ...currentState, retry }), [currentState, retry]);
 }
 
 /** Route identity is published only by route consumers, never embedded or background Session reads. */
