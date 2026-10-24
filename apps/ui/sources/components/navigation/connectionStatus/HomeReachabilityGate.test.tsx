@@ -1,13 +1,15 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { act, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { setActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { buildOrdinarySessionListHomeState } from '@/sync/domains/session/listing/ordinarySessionListHomeState';
+import { resolveSessionListQueryPresentation } from '@/sync/domains/session/listing/sessionListIndexPresentation';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -60,6 +62,38 @@ describe('HomeReachabilityGate', () => {
         );
         expect(screen.findAllByType('QuietLoading' as never)).toHaveLength(1);
         expect(screen.findAllByTestId('home-unreachable')).toHaveLength(0);
+    });
+
+    it('exposes list Retry after Home recovery and does not wake for Machine detail changes', async () => {
+        const { useSettlingHomeServerId } = await import('./HomeReachabilityGate');
+        const hook = await renderHook(useSettlingHomeServerId);
+        const failed = buildOrdinarySessionListHomeState({ serverId: appliedHomeId, requestedQueryKey: 'ordinary', sessionIds: [],
+            observation: { phase: 'error', lastSuccessAt: null, failure: { reason: 'network', code: null } }, online: true,
+            lifecycle: { serverId: appliedHomeId, hasFetchedSnapshot: false, fetchInFlight: false, fetchMoreInFlight: false,
+                frontier: { nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false } },
+        });
+        const presentation = () => resolveSessionListQueryPresentation({ selectedServerIds: [appliedHomeId],
+            statesByServerId: { [appliedHomeId]: failed }, coverageComplete: false, retainedRowCount: 0,
+            settlingHomeServerId: hook.getCurrent(),
+        });
+        expect(presentation()).toEqual({ kind: 'initial_loading' });
+        await act(async () => { storage.setState({ endpointStatus: 'online', socketStatus: 'connected' }); });
+        expect(hook.getCurrent()).toBeNull();
+        expect(presentation()).toEqual({ kind: 'error', retainedRows: false });
+        let publications = 0;
+        const unsubscribe = hook.subscribe(() => { publications += 1; });
+        await act(async () => {
+            for (let index = 0; index < 100; index += 1) storage.setState({ machineListByServerId: {} });
+        });
+        expect(publications).toBe(0);
+        // Miswiring the admitted census back to pending must re-enter settlement.
+        await act(async () => { storage.setState({ machineListStatusByServerId: { [appliedHomeId]: 'loading' } }); });
+        expect(hook.getCurrent()).toBe(appliedHomeId);
+        await act(async () => { storage.setState({ machineListStatusByServerId: {} }); });
+        expect(hook.getCurrent()).toBe(appliedHomeId);
+        await act(async () => { storage.setState({ endpointStatus: 'connecting', endpointReason: 'server_restarting', socketStatus: 'disconnected' }); });
+        expect(hook.getCurrent()).toBe(appliedHomeId);
+        unsubscribe();
     });
 
     it.each(['server_unreachable', 'server_error'] as const)('says the Home cannot be reached, by name, with Retry (%s)', async (kind) => {

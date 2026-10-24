@@ -50,7 +50,7 @@ function readAppliedHomeSummaryKind() {
     const syncError = selectSyncErrorForServer(state.syncError, serverId);
     const statuses = state.machineListStatusByServerId;
     const keys = resolveServerScopedMachineInventoryKeys({ serverId, machineListByServerId: statuses });
-    const status = keys.map(key => statuses[key]).find(value => value !== undefined) ?? 'idle';
+    const status = keys.map(key => statuses[key]).find(value => value !== undefined) ?? 'loading';
     // Machine counts refine connected-state labels but cannot make a Home
     // unavailable. Its list's error/sign-in state still enters the same classifier.
     const health = resolveConnectionHealth({ socketStatus: state.socketStatus,

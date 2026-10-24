@@ -133,7 +133,9 @@ export function resolveConnectionHealth(params: Readonly<{
 
     if (machines.machineCount === 0 && machines.hasUnknownServers) {
         return {
-            kind: 'connecting',
+            // The Home census owns settlement. Narrow health readers need not
+            // subscribe to Machine details to observe that it has completed.
+            kind: params.machineGroups.every(group => group.status === 'idle') ? 'machine_unknown' : 'connecting',
             machineCount: machines.machineCount,
             onlineCount: machines.onlineCount,
             hasUnknownMachines,

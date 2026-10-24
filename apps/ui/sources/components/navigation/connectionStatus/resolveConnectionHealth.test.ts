@@ -75,6 +75,20 @@ describe('resolveConnectionHealth', () => {
         expect(result.kind).toBe('no_machine');
     });
 
+    it('settles a connected Home from its idle census without demanding Machine details', () => {
+        const connected = { endpointStatus: 'online' as const, socketStatus: 'connected' as const };
+        expect(resolveConnectionHealth({ ...connected,
+            machineGroups: [{ machineCount: null, onlineCount: null, status: 'idle' }],
+        }).kind).toBe('machine_unknown');
+        // A pending census is a different producer fact; omitting settlement must fail closed.
+        expect(resolveConnectionHealth({ ...connected,
+            machineGroups: [{ machineCount: null, onlineCount: null, status: 'loading' }],
+        }).kind).toBe('connecting');
+        expect(resolveConnectionHealth({ endpointStatus: 'connecting', endpointReason: 'server_restarting',
+            socketStatus: 'disconnected', machineGroups: [{ machineCount: null, onlineCount: null, status: 'idle' }],
+        }).kind).toBe('server_restarting');
+    });
+
     it('returns machine_offline when machines exist but none are online', () => {
         const result = resolveConnectionHealth({
             socketStatus: 'connected',
