@@ -135,47 +135,30 @@ function createActionExecutor(deps: ActionExecutorDeps): ReturnType<typeof creat
 }
 
 describe('machine Agent inventory execution', () => {
-  it('dispatches ordinary inventory reads for less CPU than failed family-schema probes', async () => {
+  it('dispatches ordinary inventory reads without probing Action family schemas', async () => {
     // Inventory ports are external host boundaries; the executor and admission stay real.
     const executor = createActionExecutor(createDeps());
     const execute = () => executor.execute('paths.list_recent', {}, { surface: 'ui', authority: 'present_user' });
     expect(await execute()).toEqual({ ok: true, result: { items: [] } });
-    // Incumbent dispatch's enum misses, in execution order. The comparator
-    // retains the real schemas, but omits all other execution/admission work.
+    // Dispatch once paid one failed enum parse per Action family before reaching
+    // the handler. Family membership is a closed-option lookup, so no family
+    // schema parses the Action id. Counting is stable where CPU ratios are not.
     const families = [ActionOperationActionIdV1Schema, WidgetDefinitionActionIdV1Schema,
       WidgetLayoutFragmentActionIdV1Schema, WidgetInstanceActionIdV1Schema,
       ReviewCommentActionIdV1Schema, PluginPermissionGrantActionIdV1Schema, AutomationEventActionIdV1Schema,
-      WidgetInstanceActionIdV1Schema, WidgetDefinitionActionIdV1Schema, WidgetLayoutFragmentActionIdV1Schema,
       ArtifactAccessActionIdV1Schema, ArtifactActionIdV1Schema, WorkflowActionIdV1Schema,
       AutomationConversationActionIdV1Schema, ScopeActionIdSchema, SessionBoardActionIdV1Schema,
       DiscussionActionIdV1Schema, ManagedMachineActionIdV1Schema, MachinePresetActionIdV1Schema,
-      MachinePoolActionIdV1Schema, ActionOperationActionIdV1Schema, ProjectWorkerActionIdV1Schema,
+      MachinePoolActionIdV1Schema, ProjectWorkerActionIdV1Schema,
       MachineAccessActionIdSchema, UsageSourceActionIdSchema, ConnectedServiceConfigurationActionIdV1Schema,
       EphemeralRunnerActionIdV1Schema, PluginWebhookActionIdV1Schema, PluginSettingsAdministrationActionIdV1Schema];
-    for (let warm = 0; warm < 20; warm += 1) {
-      await execute();
-      for (const schema of families) schema.safeParse('paths.list_recent');
+    const probes = families.map(schema => vi.spyOn(schema, 'safeParse'));
+    try {
+      expect(await execute()).toEqual({ ok: true, result: { items: [] } });
+      expect(probes.reduce((total, probe) => total + probe.mock.calls.length, 0)).toBe(0);
+    } finally {
+      for (const probe of probes) probe.mockRestore();
     }
-    const samples = [];
-    for (let sample = 0; sample < 3; sample += 1) {
-      const executionStarted = process.cpuUsage();
-      for (let iteration = 0; iteration < 200; iteration += 1) await execute();
-      const executionCpu = process.cpuUsage(executionStarted);
-      const probeStarted = process.cpuUsage();
-      let misses = 0;
-      for (let iteration = 0; iteration < 200; iteration += 1) {
-        for (const schema of families) if (!schema.safeParse('paths.list_recent').success) misses += 1;
-      }
-      const probeCpu = process.cpuUsage(probeStarted);
-      expect(misses).toBe(200 * families.length);
-      samples.push({ executionCpuUs: executionCpu.user + executionCpu.system,
-        probeCpuUs: probeCpu.user + probeCpu.system });
-    }
-    const median = (values: number[]) => values.sort((a, b) => a - b)[1];
-    const executionCpuUs = median(samples.map(sample => sample.executionCpuUs));
-    const probeCpuUs = median(samples.map(sample => sample.probeCpuUs));
-    console.info(JSON.stringify({ executionCpuUs, probeCpuUs }));
-    expect(executionCpuUs).toBeLessThan(probeCpuUs);
     expect(await executor.execute('paths.list_recent', { limit: 'invalid' }, { surface: 'ui', authority: 'present_user' }))
       .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
   });

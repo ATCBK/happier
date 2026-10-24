@@ -613,7 +613,11 @@ it.each(['runner_http_fresh_terminal_interrupt_recovery', 'runner_http_fresh_ter
           });
           identitySubscription = subscribeSessionRuntimePublicationToMetadata({ session: publisher, sessionState: bridge.engine,
             runtime: created.operations, providerSessionMetadataKey: 'claudeSessionId' });
-          disposeConfigured = async () => { identitySubscription?.(); await created.operations.resetOrDisposeRuntime(); await hookServer?.dispose(); };
+          // The host runtime feeds this observer from its canonical event watch (publishHostRuntimeEvent).
+          const unsubscribeIdentityEvents = created.operations.subscribeRuntimeEvents(event => {
+            if ('kind' in event) identitySubscription?.observeRuntimeEvent(event);
+          });
+          disposeConfigured = async () => { unsubscribeIdentityEvents(); identitySubscription?.(); await created.operations.resetOrDisposeRuntime(); await hookServer?.dispose(); };
           if (pendingFollowup) {
             const { createHostRuntimeActivityProjection } = await import('@/agent/runtime/session/activity/createHostRuntimeActivityProjection');
             const activity = createHostRuntimeActivityProjection({ sessionId, agentRuntimeApplicability: 'supported',

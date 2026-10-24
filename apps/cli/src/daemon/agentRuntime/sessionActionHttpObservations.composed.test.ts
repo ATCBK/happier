@@ -1581,28 +1581,29 @@ it.each(['session.status.get', 'session.messages.recent.get', 'session.stop', 's
       return f.app.inject({ method: 'POST', url: '/v2/sessions/query', payload: body, headers: authorization.headers });
     };
     const { underSessionId: _root, ...unscopedQuery } = query;
+    // Every root that declares a sessionTarget operand (93a9ea0340) prepares its
+    // selector under the same signed root through isSessionTargetPreparationHttpPurpose,
+    // so an unscoped query is admitted; native resource access and the exact effect
+    // target (checked below and by the lifecycle purpose) remain independently enforced.
+    expect((await signedQuery(unscopedQuery)).statusCode).toBe(200);
     if (actionId === 'session.status.get') {
-      // The server's isSessionTargetPreparationHttpPurpose admits the named
-      // selector phase under the same signed root; native resource access and
-      // the eventual exact effect target remain independently enforced.
       expect((await signedQuery({ ...query, underSessionId: childId })).statusCode).toBe(200);
-      expect((await signedQuery(unscopedQuery)).statusCode).toBe(200);
     }
     if (isLedSubtreeSessionLifecycleActionId(actionId)) {
       // The unchanged lifecycle root may observe a still-led nested cascade.
       expect((await signedQuery({ ...query, underSessionId: childId })).statusCode).toBe(200);
-      f.members.delete(childId);
-      expect((await signedQuery({ ...query, underSessionId: childId })).statusCode).toBe(401);
-      f.members.add(childId);
+      if (actionId === 'session.archive') {
+        // The named Stop phase is admitted only by the narrower subtree purpose.
+        expect((await signedQuery({ ...query, underSessionId: childId }, 'session.stop')).statusCode).toBe(200);
+        f.members.delete(childId);
+        expect((await signedQuery({ ...query, underSessionId: childId }, 'session.stop')).statusCode).toBe(401);
+        f.members.add(childId);
+      }
     }
-    const outsideRoot = isLedSubtreeSessionLifecycleActionId(actionId) ? 'c123456789012345678901239' : childId;
-    const denied = actionId === 'session.status.get' ? [[query, 'session.list']] as const
-      : [[{ ...query, underSessionId: outsideRoot }, op.actionId], [unscopedQuery, op.actionId], [query, 'session.list']] as const;
-    for (const [body, effect] of denied) {
-      const refused = await signedQuery(body, effect);
-      expect(refused.statusCode).toBe(401);
-      expect(refused.json()).toMatchObject({ error: 'invalid_token' });
-    }
+    // A different effect Action never borrows the root's preparation admission.
+    const refused = await signedQuery(query, 'session.list');
+    expect(refused.statusCode).toBe(401);
+    expect(refused.json()).toMatchObject({ error: 'invalid_token' });
     storage.state.bound = false;
     expect((await signedQuery(query)).statusCode).toBe(401);
   } finally { await f.close(); }

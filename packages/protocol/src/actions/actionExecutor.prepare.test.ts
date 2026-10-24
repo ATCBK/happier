@@ -165,6 +165,27 @@ describe('ActionExecutor prepared invocation', () => {
     expect(opened).toEqual(['parent']);
   });
 
+  it('admits headless Resume of the caller\'s direct managed child and refuses other led descendants', async () => {
+    const { caller } = sessionReadHarness();
+    const sessionList = vi.fn<ActionExecutorDeps['sessionList']>(async ({ query }) => markSessionListQueryResultV1({
+      sessions: query?.underSessionId === 'parent' ? [
+        { id: 'child', active: false, presence: 'offline', updatedAt: 10, manager: { sessionId: 'parent' } },
+        { id: 'grandchild', active: false, presence: 'offline', updatedAt: 10, manager: { sessionId: 'child' } },
+      ] : [],
+      nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+    }));
+    const opened: string[] = [];
+    const executor = createExecutor({ sessionList, isActionApprovalRequired: () => false,
+      sessionOpen: async ({ sessionId }) => { opened.push(sessionId); return { ok: true }; },
+    });
+    const context = caller('parent');
+    await expect(executor.execute('session.open', { sessionId: 'child', intent: 'resume' }, context))
+      .resolves.toMatchObject({ ok: true });
+    await expect(executor.execute('session.open', { sessionId: 'grandchild', intent: 'resume' }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action', details: { cause: 'action_scope_restricted' } });
+    expect(opened).toEqual(['child']);
+  });
+
 
   it('admits registered Session setters for own and server-proved led targets', async () => {
     const { caller, sessionList } = sessionReadHarness();

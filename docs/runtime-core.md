@@ -1099,7 +1099,9 @@ returns `eligible`, `held_by_person`, `archived`, `machine_unavailable` or
 an admitted lead stopping a Session in its led subtree, with `managerSessionId`
 recording that Stop's admitted creator. A person may resume either kind of hold.
 The Session Action boundary admits led-subtree lifecycle targets for exactly
-`session.stop`, `session.archive` and `session.unarchive`; `session.open` remains
+`session.stop`, `session.archive` and `session.unarchive`. Headless `session.open`
+Resume of another Session is admitted only for the caller's direct managed child
+(the led-subtree row's manager is the caller); `session.open` otherwise remains
 current-Session-only. The existing `requestInactiveSessionResume` owner retains
 its separate current-manager check and person-only handling of older holds
 without creator evidence; it cannot widen that Action boundary.

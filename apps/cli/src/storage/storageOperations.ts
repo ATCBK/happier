@@ -191,6 +191,10 @@ export function createStorageOperations(input: Readonly<{
     }
     async function pileProjection(actor: StorageOperationActor, readSnapshot?: Awaited<ReturnType<typeof protectionSnapshot>>, includeVolumeFrees = false) {
         const state = await pile.get(actor.accountId, () => assertEffectActor(actor));
+        // Custody observed when this projection began; a ref dropped as unauthorized is only
+        // "another Account's" while that custody still holds.
+        const startingSessionIds = actor.sessionIds && new Set(actor.sessionIds);
+        let droppedUnauthorized = false;
         if (state.droppedSinceLastView.length) input.invalidate();
         const snapshot = readSnapshot ?? (state.items.length
             ? await protectionSnapshot(actor.sessionIds === undefined ? state.items.map(ref => ref.path) : []) : undefined);
@@ -203,6 +207,7 @@ export function createStorageOperations(input: Readonly<{
             }
             catch (error) {
                 if (!(error !== null && typeof error === 'object' && 'code' in error && error.code === 'unauthorized')) throw error;
+                droppedUnauthorized = true;
             }
         }
         const volumeFrees = new Map<string, number>();
@@ -229,7 +234,9 @@ export function createStorageOperations(input: Readonly<{
         await assertActor(actor);
         // Native review can await OS/SCM facts while current Session custody changes.
         // Never disclose the earlier projection after its private scope proof expired.
-        if (bindings.some(item => !permitted(item, actor))) {
+        if (droppedUnauthorized && startingSessionIds
+            && [...startingSessionIds].some(sessionId => !actor.sessionIds?.has(sessionId))
+            || bindings.some(item => !permitted(item, actor))) {
             throw Object.assign(new Error('Storage item is not owned by this Account'), { code: 'unauthorized' });
         }
         const result: MachineStoragePileResultV1 = { revision: input.revision(), items: visible,

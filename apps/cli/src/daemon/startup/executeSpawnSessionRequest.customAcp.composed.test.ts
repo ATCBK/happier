@@ -769,10 +769,10 @@ describe('Custom ACP fresh daemon launch composition', () => {
           // The real approval owner also requires an accepted original for a durable proposal.
           : outcome === 'manager-approval-required-resume' ? 'approval_origin_unavailable'
           : outcome === 'manager-person-hold-resume' ? 'held_by_person'
-          : outcome === 'manager-requester-retired-resume' ? 'unsupported_action'
-          : outcome === 'manager-not-parent-resume' ? 'authority_unavailable' : 'resume_failed';
+          // Dispatch admits headless Resume only for the caller's direct managed child.
+          : outcome === 'manager-not-parent-resume' ? 'unsupported_action' : 'resume_failed';
         expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode });
-        if (outcome === 'manager-requester-retired-resume') {
+        if (outcome === 'manager-not-parent-resume') {
           expect(result).toMatchObject({ details: { cause: 'action_scope_restricted' } });
         }
         expect(physicalLaunches).toBe(outcome === 'manager-launch-failed-resume' ? 1 : 0);

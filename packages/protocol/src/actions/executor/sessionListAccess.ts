@@ -3,7 +3,8 @@ import { getActionSpec, type ActionSpec } from '../actionSpecs.js';
 import { isSessionStateFieldActionId } from '../sessionStateFieldActions.js';
 import type { ActionContextualDefaults } from '../contextualDefaults.js';
 import { resolveActionAgentStartContextV1 } from './agentStartAdmission.js';
-import { readActionCallerLedSubtreeSessionIds } from './sessionLedSubtree.js';
+import { readActionCallerLedSubtreeSessionIds, readActionCallerLedSubtreeSessions } from './sessionLedSubtree.js';
+import { readSessionManagerSessionIdV1 } from '../../sessions/follow/sessionManagerV1.js';
 import type { ActionExecuteFailure, ActionExecutorContext, ActionExecutorDeps } from './types.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
@@ -71,6 +72,7 @@ export function resolveActionSessionListAccessFailure(
  * the host-only `sessionListAccess` fact to declare the same restricted corpus.
  * Reads, registered Session field setters and stop/archive/unarchive use the
  * same host Session caller and server-proved led subtree as start admission.
+ * Headless Resume additionally requires the caller to be the target's direct manager.
  * Other mutations remain current-Session-only. A Workflow caller additionally
  * admits its accepted typed reviewSession after a fresh exact access check.
  */
@@ -100,6 +102,10 @@ export async function resolveActionCurrentSessionScopeFailure(
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const inputRecord = input as Readonly<Record<string, unknown>>;
   const ledLifecycleAction = isLedSubtreeSessionLifecycleActionId(actionId);
+  // Headless Resume follows the direct-manager policy, not the led-subtree lifecycle scope:
+  // only the Session's own manager may reach the native launch, which rechecks that relation.
+  const headlessResume = actionId === 'session.open' && inputRecord.intent === 'resume'
+    && !Object.hasOwn(inputRecord, 'destination') && !Object.hasOwn(inputRecord, 'tabId');
   if (!Object.prototype.hasOwnProperty.call(inputRecord, 'sessionId')) return null;
   if (typeof inputRecord.sessionId !== 'string') return null;
 
@@ -145,7 +151,7 @@ export async function resolveActionCurrentSessionScopeFailure(
   }
   if (context.sessionListAccess === 'unavailable') return refuse('session_scope_unavailable');
   if (sideEffectClass !== 'read' && !isSessionStateFieldActionId(actionId)
-    && !ledLifecycleAction) {
+    && !ledLifecycleAction && !headlessResume) {
     return refuse('action_scope_restricted');
   }
   const resolved = await resolveActionAgentStartContextV1(deps, context, undefined, { purpose: 'session_scope' });
@@ -156,6 +162,14 @@ export async function resolveActionCurrentSessionScopeFailure(
   // Retain identity facts only within the execution owner's current invocation.
   // The Home membership observation below still runs at every effect fence.
   if (ledLifecycleAction) retainCallerContext?.(resolved);
+  if (headlessResume) {
+    const rows = await readActionCallerLedSubtreeSessions(deps, context);
+    if (context.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+    const row = rows?.get(targetSessionId);
+    if (!rows) return refuse('subtree_observation_unavailable');
+    return row && 'manager' in row && readSessionManagerSessionIdV1(row) === defaultSessionId
+      ? null : refuse('action_scope_restricted');
+  }
   // Observe membership through the same canonical reader used by start
   // admission, retaining failure separately from a successful empty subtree.
   const ids = await readActionCallerLedSubtreeSessionIds(deps, context);

@@ -1135,12 +1135,32 @@ export function createDefaultExternalSessionMaterializeActionExecutor(input: Rea
         )
         || Boolean(finalResolved.resource.retirementSignal?.aborted)
         || !finalResolved.providerOps.pageTranscript
+        || !finalResolved.providerOps.readAfterTranscript
       ) {
         throw new ExternalSessionMaterializeSourceInterruptionError(
           'source_changed',
           'External session source changed before finalization.',
         );
       }
+      // Cursors are opaque. A catch-up cursor and a page tail at the same position can be
+      // different strings (a source may carry resume state in one), so only then does the
+      // source itself decide whether the catch-up cursor is still at its end.
+      const sourceReportsCursorCurrent = async (): Promise<boolean> => {
+        try {
+          return (await finalResolved.providerOps.readAfterTranscript!({
+            source: finalCurrent.linked.source,
+            remoteSessionId: finalCurrent.linked.remoteSessionId,
+            cursor,
+            maxBytes: CAPTURE_MAX_BYTES,
+            maxItems: 1,
+          })).outcome === 'already_current';
+        } catch {
+          throw new ExternalSessionMaterializeSourceInterruptionError(
+            'source_unavailable',
+            'External session transcript source could not be read before finalization.',
+          );
+        }
+      };
       const finalPage = await readTranscriptPage(() => finalResolved.providerOps.pageTranscript!({
         source: finalCurrent.linked.source,
         remoteSessionId: finalCurrent.linked.remoteSessionId,
@@ -1148,7 +1168,7 @@ export function createDefaultExternalSessionMaterializeActionExecutor(input: Rea
         maxBytes: CAPTURE_MAX_BYTES,
         maxItems: 1,
       }));
-      if (finalPage.truncated || finalPage.tailCursor !== cursor) {
+      if (finalPage.truncated || finalPage.tailCursor !== cursor && !await sourceReportsCursorCurrent()) {
         throw new ExternalSessionMaterializeSourceInterruptionError(
           'source_changed',
           'External session source was rewritten before finalization.',

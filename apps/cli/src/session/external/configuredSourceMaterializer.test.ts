@@ -1451,8 +1451,12 @@ describe('configured external-session source materializer', () => {
         capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
         cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
       });
+    // The host runtime feeds Activity and the runtime-publication observer from the same
+    // event watch (runHostSessionRuntime publishHostRuntimeEvent).
     const unsubscribe = hostOperations.subscribeRuntimeEvents(event => {
-      if ('kind' in event) void binding.observeEvent(event);
+      if (!('kind' in event)) return;
+      void binding.observeEvent(event);
+      unsubscribeIdentity.observeRuntimeEvent(event);
     });
     const unsubscribeIdentity = subscribeSessionRuntimePublicationToMetadata({ session: metadataSession, sessionState,
       runtime: hostOperations, providerSessionMetadataKey: 'claudeSessionId' });
