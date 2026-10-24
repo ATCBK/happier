@@ -17,6 +17,40 @@ declare global {
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('RetainedPanelSurface', () => {
+    it('defers Activity content until first presentation, then withdraws effects and preserves its draft', async () => {
+        const store = createStore(() => ({ value: 0 }));
+        let initializations = 0;
+        let effects = 0;
+        let renders = 0;
+        function Editor() {
+            const value = useStore(store, state => state.value);
+            const [draft, setDraft] = React.useState(() => { initializations += 1; return ''; });
+            React.useEffect(() => { effects += 1; return () => { effects -= 1; }; }, []);
+            renders += 1;
+            return React.createElement('ActivityEditor', { value, draft, onChangeText: setDraft });
+        }
+        const content = <Editor />;
+        const panel = (active: boolean) => <RetainedPanelSurface isActive={active} hiddenMode="activity" testID="activity-panel">{content}</RetainedPanelSurface>;
+        const tree = await renderScreen(panel(false));
+        expect(initializations).toBe(0);
+        expect(effects).toBe(0);
+        await tree.update(panel(true));
+        await act(async () => tree.findByType('ActivityEditor').props.onChangeText('unsent draft'));
+        expect(effects).toBe(1);
+        await tree.update(panel(false));
+        expect(effects).toBe(0);
+        expect(tree.findHostByTestId('activity-panel')?.props.pointerEvents).toBe('none');
+        renders = 0;
+        await act(async () => { store.setState({ value: 3 }); });
+        expect(renders).toBe(0);
+        await tree.update(panel(true));
+        expect(tree.findByType('ActivityEditor').props).toMatchObject({ value: 3, draft: 'unsent draft' });
+        expect(initializations).toBe(1);
+        expect(effects).toBe(1);
+        await tree.unmount();
+        expect(effects).toBe(0);
+    });
+
     it('keeps a generic background result consumer live while the surface is hidden by default', async () => {
         const store = createStore(() => ({ result: 'pending' }));
         const observed: string[] = [];

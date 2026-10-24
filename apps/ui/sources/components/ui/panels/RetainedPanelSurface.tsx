@@ -21,6 +21,8 @@ export const RetainedPanelSurface = React.memo((props: Readonly<{
     mode?: RetainedPanelSurfaceMode;
     /** Opt in only for bodies proven safe to suspend, including their layout-effect lifetimes. */
     suspendWhenHidden?: boolean;
+    /** Activity withdraws effects while preserving previously presented local state. */
+    hiddenMode?: 'activity';
     children: React.ReactNode;
 }>) => {
     const active = props.isActive;
@@ -48,7 +50,9 @@ export const RetainedPanelSurface = React.memo((props: Readonly<{
 
     const content = (
         <PluginSurfaceFocusEligibilityProvider active={active}>
-            <Freeze freeze={props.suspendWhenHidden === true && !active && frozen}>{props.children}</Freeze>
+            <React.Activity mode={props.hiddenMode === 'activity' && !active ? 'hidden' : 'visible'}>
+                <Freeze freeze={props.hiddenMode !== 'activity' && props.suspendWhenHidden === true && !active && frozen}>{props.children}</Freeze>
+            </React.Activity>
         </PluginSurfaceFocusEligibilityProvider>
     );
 
