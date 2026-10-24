@@ -361,6 +361,24 @@ describe('Usage settings UI Action admission', () => {
         await screen.unmount();
     });
 
+    it('shows custom alert thresholds and lead times from the persisted preference as the chosen option, not Off', async () => {
+        raw.usageQuotaNotificationsV1 = { pace: true, almostOutRemainingFraction: 0.15, endingBeforeMs: 36 * 60 * 60 * 1000, creditExpiryBeforeMs: 3 * 24 * 60 * 60 * 1000 };
+        storage.getState().applySettings(settingsParse(raw), ++version);
+        const screen = await renderScreen(<UsageCapacityAlertsSettingsGroup />);
+        const checked = (testID: string) => screen.findByTestId(testID)?.props.accessibilityState?.checked;
+        await waitForHomeGovernance(() => expect(screen.findByTestId('settings-usage-alerts-almostOut:off')).toBeTruthy());
+        expect(checked('settings-usage-alerts-almostOut:0.15')).toBe(true);
+        expect(checked('settings-usage-alerts-almostOut:off')).toBe(false);
+        expect(checked(`settings-usage-alerts-ending:${36 * 60 * 60 * 1000}`)).toBe(true);
+        expect(checked(`settings-usage-alerts-creditExpiry:${3 * 24 * 60 * 60 * 1000}`)).toBe(true);
+        expect(checked('settings-usage-alerts-ending:off')).toBe(false);
+        await screen.pressByTestIdAsync('settings-usage-alerts-almostOut:off');
+        await waitForHomeGovernance(() => expect(approvalFor('session.providerLimits.alertAlmostOut')).toBeTruthy());
+        await decideApprovalAsInbox(serverId, approvalFor('session.providerLimits.alertAlmostOut')!.id, 'approve');
+        await waitForHomeGovernance(() => expect(storage.getState().settings.usageQuotaNotificationsV1.almostOutRemainingFraction).toBeNull());
+        await screen.unmount();
+    });
+
     it('keeps the routing hint enabled when approval is rejected', async () => {
         const screen = await renderScreen(<ProviderUsageGaugeSettingsGroup />);
         await waitForHomeGovernance(() => expect(screen.findByTestId('settings-session-providerUsageGauge-routingHints')).toBeTruthy());
