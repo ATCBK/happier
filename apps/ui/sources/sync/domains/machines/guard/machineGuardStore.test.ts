@@ -18,7 +18,7 @@ describe('Guard last-good freshness', () => {
         const list = { entries: [] as [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 1234 };
         const store = createMachineGuardStore({ viewClient, watchClient, activityWatchClient,
             activityClient: async () => ({ ok: true as const, value: list }) });
-        const key = { machineId: 'machine', range: '7d' as const, filter: 'all' as const };
+        const key = { machineId: 'machine', serverId: null, expectedAccountId: null, range: '7d' as const, filter: 'all' as const };
         const release = store.demandActivity(key);
         try {
             await settle();
