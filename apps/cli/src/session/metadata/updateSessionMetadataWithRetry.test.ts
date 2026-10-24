@@ -96,6 +96,23 @@ function e2eeCurrentness(credentials: Readonly<{
 }
 
 describe('updateSessionMetadataWithRetry', () => {
+  it('stops Project publication at an unsupported legacy owner migration without a legacy write fallback', async () => {
+    const credentials = { token: 'project-token', encryption: null };
+    const rawSession = { id: 'older-home-project-session', encryptionMode: 'plain',
+      metadata: JSON.stringify({ path: '/repo', host: 'host' }), ownerMetadata: null,
+      metadataVersion: 4, agentState: null, agentStateVersion: 7, dataEncryptionKey: null };
+    patchSessionMetadataEnvelopeTupleMock.mockRejectedValueOnce(Object.assign(new Error('unsupported owner migration'), {
+      code: 'metadata_privacy_upgrade_required', retryable: false,
+    }));
+    await expect(updateSessionMetadataWithRetry({ token: credentials.token, credentials, accountEncryptionCurrentness: plainCurrentness,
+      sessionId: rawSession.id, rawSession, projectKey: 'accepted-project', updater: metadata => metadata }))
+      .rejects.toMatchObject({ code: 'metadata_privacy_upgrade_required', retryable: false });
+    expect(patchSessionMetadataEnvelopeTupleMock).toHaveBeenCalledTimes(1);
+    expect(patchSessionMetadataEnvelopeTupleMock.mock.calls[0]?.[0].patch).toMatchObject({ mode: 'owner_migration' });
+    expect(patchSessionMetadataEnvelopeTupleMock.mock.calls[0]?.[0].patch).not.toHaveProperty('metadata');
+    expect(patchSessionMetadataEnvelopeTupleMock.mock.calls[0]?.[0].patch).not.toHaveProperty('agentState');
+    expect(patchSessionMetadataMock).not.toHaveBeenCalled();
+  });
   it('migrates a retained legacy Session before publishing its accepted Project relationship', async () => {
     const credentials = { token: 'project-token', encryption: null };
     const rawSession = { id: 'legacy-project-session', encryptionMode: 'plain', metadataLayoutVersion: 0,

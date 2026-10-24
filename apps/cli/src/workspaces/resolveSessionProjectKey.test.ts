@@ -24,6 +24,18 @@ it('resolves the exact Account workspace reference and Project key', async () =>
   readRows();
   await expect(resolveSessionProjectKey(input)).resolves.toMatchObject({ kind: 'resolved', projectKey: 'project', workspaceRef });
 });
+it('retains an explicit accepted checkout for subdirectory births and changed sandbox paths', async () => {
+  readRows();
+  await expect(resolveSessionProjectKey({ ...input, machineId: 'sandbox', directory: '/container/subdir' }))
+    .resolves.toMatchObject({ kind: 'resolved', projectKey: 'project', workspaceRef });
+});
+it('checks a legacy Project marker against the accepted exact-directory ref instead of treating the marker as authority', async () => {
+  readRows();
+  await expect(resolveSessionProjectKey({ ...input, metadata: { projectId: 'project' } }))
+    .resolves.toMatchObject({ kind: 'resolved', projectKey: 'project', workspaceRef });
+  await expect(resolveSessionProjectKey({ ...input, directory: undefined, metadata: { projectId: 'project' } }))
+    .resolves.toEqual({ kind: 'pending', reason: 'project_association_unavailable' });
+});
 it('resolves a directory-only Session through its exact Account checkout', async () => {
   readRows();
   const metadata = buildCommittedLaunchMetadata({ directory: '/repo', options: { directory: '/repo', machineId: 'machine', memoryEnabled: true } });
@@ -78,7 +90,7 @@ it('keeps an ambiguous exact-checkout association pending', async () => {
     kind: 'pending', reason: 'project_association_unavailable',
   });
 });
-it.each([{ projectId: 'project' }, { workspaceId: 'checkout', projectId: 'other' },
+it.each([{ workspaceId: 'checkout', projectId: 'other' },
   { workspaceId: 'missing', projectId: 'project' }])('keeps incomplete or mismatched association pending: %j', async metadata => {
   readRows();
   await expect(resolveSessionProjectKey({ ...input, metadata })).resolves.toEqual({ kind: 'pending', reason: 'project_association_unavailable' });

@@ -213,16 +213,18 @@ describe('mergeSessionMetadataForStartup', () => {
         expect(merged.hostPid).toBe(2);
     });
 
-    it('preserves accepted project and workspace identity when attaching', () => {
+    it.each([undefined, 'replace_with_runtime_identity'] as const)('preserves accepted project and workspace identity at the same checkout (%s)', attachMetadataIdentityPolicy => {
         const nowMs = 1;
         const merged = mergeSessionMetadataForStartup({
             current: {
+                path: '/workspace/accepted', machineId: 'machine-accepted',
                 workspaceId: 'ws_authoritative',
                 projectId: 'project_authoritative',
                 workspaceLocationId: 'loc_authoritative',
                 workspaceCheckoutId: 'checkout_authoritative',
             } as any,
             next: {
+                path: '/workspace/accepted', machineId: 'machine-accepted',
                 workspaceId: 'ws_wrong',
                 projectId: 'project_wrong',
                 workspaceLocationId: 'loc_wrong',
@@ -231,6 +233,7 @@ describe('mergeSessionMetadataForStartup', () => {
             } as any,
             nowMs,
             mode: 'attach',
+            attachMetadataIdentityPolicy,
         });
 
         expect((merged as Record<string, unknown>).workspaceId).toBe('ws_authoritative');

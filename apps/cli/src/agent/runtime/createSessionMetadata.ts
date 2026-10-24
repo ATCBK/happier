@@ -245,9 +245,10 @@ export function buildCommittedLaunchMetadata(input: Readonly<{
     accountSettings?: Readonly<Record<string, unknown>>;
 }>): SessionMetadata {
     const { options } = input;
+    const machineId = options.machineId || options.sessionCreationCorrespondence?.recipe.execution.machineId;
     let metadata: SessionMetadata = {
         path: input.directory, host: os.hostname(),
-        ...(options.machineId ? { machineId: options.machineId } : {}),
+        ...(machineId ? { machineId } : {}),
         ...(options.sessionCreationCorrespondence ? { sessionCreationCorrespondenceV1: options.sessionCreationCorrespondence } : {}),
         ...(options.sessionCreationCorrespondence?.recipe.checkout?.branchName !== undefined
             ? { branch: options.sessionCreationCorrespondence.recipe.checkout.branchName } : {}),

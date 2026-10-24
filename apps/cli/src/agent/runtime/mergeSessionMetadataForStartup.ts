@@ -26,6 +26,7 @@ import { SessionModelSelectionResolutionError } from '@happier-dev/protocol/prov
 import type { ProviderBoundModelRef, SessionModelSelectionIntentV1, SessionAttachMetadataIdentityPolicy } from '@happier-dev/protocol';
 import { resolveSessionConfigOptionOverridesFromMetadataSnapshot } from './sessionConfigOptionOverrideSync';
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
+import { hasSameSessionCheckout } from '@/session/metadata/sessionCheckoutIdentity';
 
 type AcpConfigOptionOverrideUpdate = Readonly<{
     configId: string;
@@ -390,8 +391,11 @@ export function mergeSessionMetadataForStartup(opts: {
     }
 
     if (mode === 'attach') {
-        // A new runner's process defaults are not a checkout observation.
-        if (opts.current.branch !== undefined) merged.branch = opts.current.branch;
+        const preserveCurrentCheckout = shouldPreserveCurrentIdentityOnAttach(opts.attachMetadataIdentityPolicy)
+            || hasSameSessionCheckout(opts.current, opts.next);
+        // A fresh committed birth also uses replacement policy. Keep its actual observation
+        // when the physical checkout is unchanged; process defaults are never an observation.
+        if (preserveCurrentCheckout && opts.current.branch !== undefined) merged.branch = opts.current.branch;
         else delete merged.branch;
         // Tool policy belongs to the retained Session, never runner defaults.
         for (const key of ['allowedTools', 'unlistedTools', 'workspaceWrites'] as const) {
@@ -437,7 +441,7 @@ export function mergeSessionMetadataForStartup(opts: {
         // accepted again by the workspace registration owner.
         for (const key of ['workspaceId', 'projectId'] as const) {
             const value = opts.current[key];
-            if (shouldPreserveCurrentIdentityOnAttach(opts.attachMetadataIdentityPolicy) && value !== undefined) {
+            if (preserveCurrentCheckout && value !== undefined) {
                 Object.assign(merged, { [key]: value });
             } else delete (merged as Record<string, unknown>)[key];
         }
