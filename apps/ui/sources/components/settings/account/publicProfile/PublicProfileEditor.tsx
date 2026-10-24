@@ -1,13 +1,8 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import {
-  HAPPIER_PAGE_METRICS,
-  HappierPublicProfile,
-  type HappierPublicProfileHeroGeometry,
-  type HappierPublicProfileLabels,
-  type HappierPublicProfileUsageHost,
-} from '@happier-dev/plugin-ui/presentation';
+import { HappierPublicProfile } from '@happier-dev/plugin-ui/components';
+import { HAPPIER_PAGE_METRICS, type HappierPublicProfileHeroGeometry, type HappierPublicProfileLabels, type HappierPublicProfileUsageHost } from '@happier-dev/plugin-ui/presentation';
 import type { PublicProfileLocalPreviewViewV1 } from '@happier-dev/protocol/account/publicProfilePublication';
 
 import { CorePluginUiPresentationScope } from '@/components/plugins/surfaces/CorePluginUiPresentationScope';

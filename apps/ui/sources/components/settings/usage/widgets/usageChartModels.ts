@@ -9,9 +9,9 @@ import { resolveUsageCalendarInstant, resolveUsageBucketBounds } from '@happier-
 import { isUsageNightHour, summarizeUsageConcurrency } from '@happier-dev/protocol/usage/usageWorkIntervals';
 import { UsagePresentationMetricSchema } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageChartMetric } from './usageChartHost';
-import { countUsageChartCalendarDates, projectUsageRiverWeekRange } from '@happier-dev/plugin-ui/presentation';
-import { projectUsageCalendarArtModel, type UsageCalendarArtModel,
-  type UsageMoonsModel, type UsageMachinesModel, type UsageProjectsModel, type UsageAtmosphereModel, type UsageGalaxyModel } from '@happier-dev/plugin-ui/presentation';
+import { countUsageChartCalendarDates, projectUsageRiverWeekRange } from '@happier-dev/plugin-ui/components';
+import { projectUsageCalendarArtModel } from '@happier-dev/plugin-ui/components';
+import { type UsageCalendarArtModel, type UsageMoonsModel, type UsageMachinesModel, type UsageProjectsModel, type UsageAtmosphereModel, type UsageGalaxyModel } from '@happier-dev/plugin-ui/presentation';
 
 /**
  * Private Usage → chart body models. Every figure comes from its canonical owner in the admitted slice

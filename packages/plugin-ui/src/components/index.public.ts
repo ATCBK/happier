@@ -1,11 +1,13 @@
+export { projectWidgetGroupCellContent, resolveWidgetGroupCells, resolveWidgetGroupColumns, packWidgetGroupBands } from '../data/widgetGroupLayout.js';
 export * from './Action.js';
 export * from './UsageCharts.js';
 export type { PublicUsageOriginalLabels, PublicUsageMetricId } from '../presentation/account/PublicProfileUsage.js';
-export { HappierPublicProfile, type HappierPublicProfileLabels, type HappierPublicProfileProps,
-  type HappierPublicProfileUsageHost, type HappierPublicProfileUsageLabels } from '../presentation/account/PublicProfile.js';
+export { HappierPublicProfile, HappierPublicProfileWidget, type HappierPublicProfileLabels, type HappierPublicProfileProps,
+  type HappierPublicProfileUsageHost, type HappierPublicProfileUsageLabels } from './PublicProfile.js';
 export { projectPublicUsageChartModels, projectPublicUsageRecords, type PublicUsageChartModels,
-  type PublicUsageRecordKind } from '../presentation/usage/charts/publicUsageChartModels.js';
-export { projectUsageCalendarArtModel } from '../presentation/usage/charts/publicUsageChartModels.js';
+  type PublicUsageRecordKind } from '../data/publicUsageChartModels.js';
+export { projectUsageCalendarArtModel } from '../data/publicUsageChartModels.js';
+export { countUsageChartCalendarDates, projectUsageRiverWeekRange } from '../data/usageChartCalendar.js';
 export type { UsageCalendarArtModel, UsageNinetyPlanetsModel, UsageStreakThreadModel, UsageDaysOnSurfaceModel,
   UsageRingedStreaksModel, UsageAroundPeriodModel, UsageWeeksSkylineModel, UsageMoonsModel, UsageMachinesModel,
   UsageProjectsModel, UsageAtmosphereModel, UsageGalaxyModel } from '../presentation/usage/charts/publicUsageChartModels.js';

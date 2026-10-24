@@ -450,8 +450,6 @@ export {
 } from './layout/WidgetFrame.js';
 export {
   packWidgetGroupBands,
-  projectWidgetGroupCellContent,
-  resolveWidgetGroupCells,
   resolveWidgetGroupColumns,
   type WidgetGroupBand,
   type WidgetGroupCell,

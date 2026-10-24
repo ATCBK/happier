@@ -1,33 +1,31 @@
-import { useMemo, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
-import type { PublicProfileReadResultV1, PublicProfileViewV1 } from '@happier-dev/plugin-sdk';
+import type { PublicProfileDisplayView } from '../../components/publicProfileTypes.js';
 
 import { useHappierUiTheme } from '../../environment/context.js';
-import {
-  renderInertDeclarativeView,
-  type InertDeclarativeLabels,
-} from '../../declarative/inertDeclarativeView.js';
+import type { InertDeclarativeLabels } from '../../declarative/inertDeclarativeView.js';
+import type { HappierUiTheme } from '../../environment/types.js';
 import { HappierText } from '../text/Text.js';
 import { HappierInfoState, HappierInfoTile } from '../state/InfoState.js';
 import { HAPPIER_PAGE_METRICS, HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '../layout/pageMetrics.js';
 export { HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '../layout/pageMetrics.js';
 import { HAPPIER_WIDGET_FRAME_METRICS, HappierWidgetFrame, resolveHappierWidgetFrameInsetPx } from '../layout/WidgetFrame.js';
 import { PublicProfileUsageBody, type HappierPublicProfileUsageHost } from './PublicProfileUsage.js';
-import { projectPublicUsageChartModels, projectPublicUsageRecords, type PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
+import type { PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
 import type { UsageRecordsModel } from '../usage/charts/UsageWorkCharts.js';
 export type { HappierPublicProfileUsageHost, HappierPublicProfileUsageLabels } from './PublicProfileUsage.js';
 import {
   packWidgetGroupBands,
-  resolveWidgetGroupCells,
   type WidgetGroupBand,
   type WidgetGroupCell,
+  type WidgetGroupCellInput,
 } from '../layout/widgetGroupLayout.js';
 
 type ViewWidget = Extract<
-  PublicProfileViewV1['layout']['items'][number],
+  PublicProfileDisplayView['layout']['items'][number],
   { kind: 'widget' }
 >;
-type ViewItem = PublicProfileViewV1['layout']['items'][number];
+type ViewItem = PublicProfileDisplayView['layout']['items'][number];
 
 /**
  * Every string the page shows besides the person's own data. The host localizes and formats them
@@ -52,15 +50,16 @@ export type HappierPublicProfileLabels = Readonly<{
 
 export type HappierPublicProfileHeroGeometry = Readonly<{ bandHeightPx: number; singleColumn: boolean }>;
 
-type PublishedPublicProfileProps = Readonly<{
-  view: Omit<PublicProfileViewV1, 'appearance' | 'service' | 'urls' | 'snapshot'> & Readonly<{
-    urls: PublicProfileViewV1['urls'] | null;
-    /**
-     * Null only on the owner's own page before its Usage can be read: the header, period line (saying
-     * why) and the owner's blocks still draw; visitors always receive a snapshot.
-     */
-    snapshot: PublicProfileViewV1['snapshot'] | null;
-  }>;
+export type PublicProfileProjection = Readonly<{
+  models: PublicUsageChartModels | null;
+  records: UsageRecordsModel | null;
+  cells: ReadonlyMap<string, WidgetGroupCellInput>;
+  renderDeclarative: (root: unknown, theme: HappierUiTheme, labels: InertDeclarativeLabels) => ReactNode;
+}>;
+
+export type PublishedPublicProfileProps = Readonly<{
+  view: PublicProfileDisplayView;
+  projection: PublicProfileProjection;
   labels: HappierPublicProfileLabels;
   /**
    * The applied atmosphere band (picture or planet), painted by the host's own adapter at the given
@@ -95,7 +94,7 @@ export type HappierPublicProfileOwner = Readonly<{
 
 export type HappierPublicProfileProps = PublishedPublicProfileProps | Readonly<{
   /** Withdrawal states have no fabricated snapshot, period, coverage or applied blocks. */
-  result: Exclude<PublicProfileReadResultV1, { kind: 'published' }>;
+  result: Readonly<{ kind: 'paused'; handle: string; identity: Readonly<{ name?: string }> }> | Readonly<{ kind: 'unavailable' }>;
   labels: Readonly<{ paused: string; unavailable: string }>;
   testID?: string;
 }>;
@@ -125,21 +124,11 @@ export function HappierPublicProfile(props: HappierPublicProfileProps) {
 function PublishedPublicProfile(props: PublishedPublicProfileProps) {
   const theme = useHappierUiTheme();
   const { view, labels } = props;
-  const usageModels = useMemo(() => view.snapshot ? projectPublicUsageChartModels(view.snapshot, view.metadata) : null,
-    [view.snapshot, view.metadata]);
-  const formatRecord = props.usage?.labels.records?.format;
-  const usageRecords = useMemo(() => formatRecord && view.snapshot ? projectPublicUsageRecords(view.snapshot, formatRecord) : null,
-    [view.snapshot, formatRecord]);
+  const { models: usageModels, records: usageRecords } = props.projection;
   const testID = props.testID ?? 'public-profile';
   const columns = props.singleColumn ? 1 : 2;
   const bands = packWidgetGroupBands(
-    resolveWidgetGroupCells(
-      'corePage',
-      view.layout.items.map((item) => ({
-        id: item.id,
-        size: item.kind === 'widget' ? item.size : undefined,
-      })),
-    ),
+    view.layout.items.map(item => props.projection.cells.get(item.id)!),
     columns,
   );
   const byId = new Map(
@@ -152,6 +141,7 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
         key={item.id}
         item={item}
         labels={labels}
+        projection={props.projection}
         usageModels={usageModels}
         usageRecords={usageRecords}
         usage={props.usage}
@@ -345,6 +335,7 @@ function PublicProfileItem(
   props: Readonly<{
     item: ViewItem;
     labels: HappierPublicProfileLabels;
+    projection: PublicProfileProjection;
     usageModels: PublicUsageChartModels;
     usageRecords: UsageRecordsModel | null;
     usage?: HappierPublicProfileUsageHost;
@@ -361,6 +352,7 @@ function PublicProfileItem(
       <PublicProfileBlock
         widget={item}
         labels={props.labels}
+        projection={props.projection}
         usageModels={props.usageModels}
         usageRecords={props.usageRecords}
         usage={props.usage}
@@ -371,10 +363,7 @@ function PublicProfileItem(
     );
   const groupInnerPx = props.coldWidthPx === undefined ? undefined : props.coldWidthPx - 2 * resolveHappierWidgetFrameInsetPx(item.frameStyle);
   const bands = packWidgetGroupBands(
-    resolveWidgetGroupCells(
-      'corePage',
-      item.children.map((child) => ({ id: child.id, size: child.size })),
-    ),
+    item.children.map(child => props.projection.cells.get(child.id)!),
     props.singleColumn || item.width === 'half' ? 1 : 2,
   );
   const children = new Map(
@@ -398,6 +387,7 @@ function PublicProfileItem(
                 key={child.id}
                 widget={child}
                 labels={props.labels}
+                projection={props.projection}
                 usageModels={props.usageModels}
                 usageRecords={props.usageRecords}
                 usage={props.usage}
@@ -417,18 +407,16 @@ function PublicProfileItem(
 /** The same placed block in an authenticated setup/frame; the host supplies an already masked view. */
 export function HappierPublicProfileWidget(props: Readonly<{
   view: PublishedPublicProfileProps['view'];
+  projection: PublicProfileProjection;
   widgetId: string;
   labels: HappierPublicProfileLabels;
   usage?: HappierPublicProfileUsageHost;
   testID: string;
 }>) {
-  const models = useMemo(() => props.view.snapshot ? projectPublicUsageChartModels(props.view.snapshot) : null, [props.view.snapshot]);
-  const format = props.usage?.labels.records?.format;
-  const records = useMemo(() => format && props.view.snapshot ? projectPublicUsageRecords(props.view.snapshot, format) : null,
-    [props.view.snapshot, format]);
+  const { models, records } = props.projection;
   const widget = props.view.layout.items.flatMap(item => item.kind === 'widget' ? [item] : item.children)
     .find(item => item.id === props.widgetId);
-  return widget && models ? <PublicProfileBlock widget={widget} labels={props.labels} usageModels={models} usageRecords={records}
+  return widget && models ? <PublicProfileBlock widget={widget} projection={props.projection} labels={props.labels} usageModels={models} usageRecords={records}
     usage={props.usage} testID={props.testID} bare /> : null;
 }
 
@@ -436,6 +424,7 @@ function PublicProfileBlock(
   props: Readonly<{
     widget: ViewWidget;
     labels: HappierPublicProfileLabels;
+    projection: PublicProfileProjection;
     usageModels: PublicUsageChartModels;
     usageRecords: UsageRecordsModel | null;
     usage?: HappierPublicProfileUsageHost;
@@ -456,7 +445,7 @@ function PublicProfileBlock(
   const body = props.widget.presentation.kind === 'usage'
     ? props.usage ? <PublicProfileUsageBody presentation={props.widget.presentation} models={props.usageModels} records={props.usageRecords}
       host={props.usage} width={props.coldWidthPx} testID={`${props.testID}-usage-${props.widget.id}`} /> : null
-    : renderInertDeclarativeView(props.widget.presentation.document.root, theme, props.labels.inert);
+    : props.projection.renderDeclarative(props.widget.presentation.document.root, theme, props.labels.inert);
   const shownBody = onlyYou ? <View style={styles.quieted}>{body}</View> : body;
   if (props.bare)
     return (

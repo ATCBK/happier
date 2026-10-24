@@ -1,9 +1,9 @@
 import { createElement, type ReactNode } from 'react';
-import { PluginDeclarativeNodeV2Schema } from '@happier-dev/protocol/plugins/contributions/ui/v2';
+import { PluginDeclarativeNodeV2Schema } from '@happier-dev/plugin-sdk/ui';
 import {
   readPluginDeclarativeDataFieldV1,
   readPluginDeclarativeDataRowsV1,
-} from '@happier-dev/protocol/plugins/contributions/ui/declarativeDataV1';
+} from '@happier-dev/plugin-sdk/ui';
 
 import type { HappierUiTheme } from '../environment/index.js';
 import { HappierMarkdown } from '../presentation/content/Markdown.js';

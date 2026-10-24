@@ -33,6 +33,9 @@ export type {
     PluginListFilterSelectionV1,
     PluginListFilterFactsV1,
 } from './collectionFilters.js';
+export { getWidgetSizeFootprintV1, WIDGET_SIZE_POLICY_V1 } from './widgetSizes.js';
+export type { WidgetGroupWidthV1, WidgetSurfaceRefV1 } from './widgetSizes.js';
+export { PluginDeclarativeNodeV2Schema, readPluginDeclarativeDataFieldV1, readPluginDeclarativeDataRowsV1 } from './declarativeData.js';
 export type { HostedWebBridgeEnvelopeV1 } from '../ui.js';
 export { PluginUiLaunchInputV1Schema } from './hostApi.js';
 export type { PluginRightSidebarDefaultPlacement } from '../ui.js';

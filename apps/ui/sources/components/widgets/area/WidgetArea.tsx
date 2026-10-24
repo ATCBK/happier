@@ -14,7 +14,8 @@ import { readWidgetGroupTitle } from '@/components/widgets/group/widgetGroupTitl
 import { buildWidgetGroupMembershipActions, describeWidgetGroup, describeWidgetGroupAmong, resolveWidgetGroupChildSizeLimit, WIDGET_GROUP_ICON, type WidgetGroupOperations } from '@/components/widgets/group/widgetGroupMenu';
 import { useWidgetCarriedIdentity } from '@/components/widgets/surface/widgetCarriedIdentity';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupFollowSource, widgetGroupPinnedSource, widgetGroupSurfaceContext } from '@/components/widgets/group/widgetGroupInputs';
-import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from '@happier-dev/plugin-ui/presentation';
+import { resolveWidgetGroupCells } from '@happier-dev/plugin-ui/components';
+import { resolveWidgetGroupColumns } from '@happier-dev/plugin-ui/presentation';
 import { resolveWidgetGroupPointerDestination, widgetGroupDropTarget, widgetLayoutCardDropTarget } from '@/components/widgets/group/widgetGroupDropTarget';
 import { WidgetGroupDropFeedback } from '@/components/widgets/group/WidgetGroupDropFeedback';
 import { WidgetGroupMembershipArrivalView, useWidgetGroupMembershipArrivals } from '@/components/widgets/group/widgetGroupMembershipArrival';

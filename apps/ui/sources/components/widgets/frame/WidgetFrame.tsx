@@ -33,7 +33,7 @@ import { usePageRowMetrics } from '@/components/ui/lists/useResolvedItemDensity'
 import { reanimatedDisclosureMotion } from '@/components/ui/lists/ExpandableItem';
 import { SurfaceFreshnessLine, SurfaceFreshnessOnSheetProvider } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard, SurfaceStateContentContext, type SurfaceStateAction } from '@/components/ui/surfaces/SurfaceStateCard';
-import { projectWidgetGroupCellContent } from '@happier-dev/plugin-ui/presentation';
+import { projectWidgetGroupCellContent } from '@happier-dev/plugin-ui/components';
 import { SurfaceStateSizeProvider, useSurfaceStateCardSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Text } from '@/components/ui/text/Text';

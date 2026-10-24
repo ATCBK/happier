@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   packWidgetGroupBands,
-  resolveWidgetGroupCells,
   resolveWidgetGroupColumns,
 } from './widgetGroupLayout.js';
+import { resolveWidgetGroupCells } from '../../data/widgetGroupLayout.js';
 
 const cells = (
   ...sizes: Array<

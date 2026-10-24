@@ -24,7 +24,7 @@ import {
   HAPPIER_PUBLIC_PROFILE_HERO_METRICS,
   HappierPublicProfile,
   type HappierPublicProfileLabels,
-} from './PublicProfile.js';
+} from '../../components/PublicProfile.js';
 import type { PublicUsageOriginalLabels } from './PublicProfileUsage.js';
 
 const coverage = { status: 'partial', method: 'mixed' } as const;

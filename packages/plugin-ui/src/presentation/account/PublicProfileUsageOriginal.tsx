@@ -1,4 +1,3 @@
-import { resolveUsageCalendarInstant } from '@happier-dev/plugin-sdk';
 import type { HappierUiTheme } from '../../environment/types.js';
 import { HappierText } from '../text/Text.js';
 import { UsageDailyChart } from '../usage/charts/UsageDailyChart.js';
@@ -74,10 +73,9 @@ export function publicProfileUsageOriginalBody(props: PublicProfileUsageBodyProp
       const days = presentation.inputs.style === 'heatmap' ? models.sky?.days.map(day => {
         // These are calendar coordinates, independent of the viewer's local time zone.
         const instant = Date.parse(`${day.date}T00:00:00Z`);
-        const dayBounds = resolveUsageCalendarInstant(instant, 0);
-        const weekday = (dayBounds.weekday + 6) % 7;
+        const weekday = (new Date(instant).getUTCDay() + 6) % 7;
         const value = day.state === 'unknown' ? null : day.state === 'inactive' ? 0 : day.level ?? null;
-        return { id: day.date, row: String(weekday), column: String(dayBounds.bucketStartMs - weekday * (dayBounds.bucketEndMs - dayBounds.bucketStartMs)),
+        return { id: day.date, row: String(weekday), column: String(instant - weekday * 86_400_000),
           label: `${labels.date(day.date)} · ${labels.activityLevel}`, value,
           valueLabel: value === null ? host.labels.unavailable : labels.level(value) };
       }) : undefined;

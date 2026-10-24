@@ -28,7 +28,8 @@ import { buildWidgetGroupMembershipActions, describeWidgetGroup, describeWidgetG
 import { useWidgetCarriedIdentity } from '@/components/widgets/surface/widgetCarriedIdentity';
 import { describeWidgetGroupContext, readWidgetGroupFollowedValue, widgetGroupPinnedSource, widgetGroupSurfaceContext } from '@/components/widgets/group/widgetGroupInputs';
 import type { WidgetBindingValueLabels } from '@/components/widgets/surface/useWidgetBindingValueLabels';
-import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from '@happier-dev/plugin-ui/presentation';
+import { resolveWidgetGroupCells } from '@happier-dev/plugin-ui/components';
+import { resolveWidgetGroupColumns } from '@happier-dev/plugin-ui/presentation';
 import { resolveWidgetCardPointerDestination, resolveWidgetGroupPointerDestination, widgetGroupDropTarget, widgetLayoutCardDropTarget, widgetLayoutEndDropTarget, widgetLayoutSiblingIds } from '@/components/widgets/group/widgetGroupDropTarget';
 import { PopoverScope } from '@/components/ui/popover';
 import { HomeWidgetAddPopover } from '@/components/widgets/add/HomeWidgetAddPopover';

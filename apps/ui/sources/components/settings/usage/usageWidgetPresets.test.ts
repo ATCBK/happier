@@ -5,7 +5,8 @@ import { createWidgetSurfaceArtifactPortV1,
 import { createUsageWidgetPresets, USAGE_WIDGET_PRESET_IDS } from './usageWidgetPresets';
 import { buildWidgetCandidateSetup } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { selectBuiltinWidgetCandidates } from '@/components/widgets/widgetCatalog';
-import { packWidgetGroupBands, resolveWidgetGroupCells } from '@happier-dev/plugin-ui/presentation';
+import { resolveWidgetGroupCells } from '@happier-dev/plugin-ui/components';
+import { packWidgetGroupBands } from '@happier-dev/plugin-ui/presentation';
 
 const names = Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, id])) as Record<typeof USAGE_WIDGET_PRESET_IDS[number], string>;
 const surface: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'account', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };

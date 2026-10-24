@@ -25,10 +25,8 @@ import {
   type WidgetGroupMenuInput,
   type WidgetGroupOperations,
 } from '@/components/widgets/group/widgetGroupMenu';
-import {
-  resolveWidgetGroupCells,
-  resolveWidgetGroupColumns,
-} from '@happier-dev/plugin-ui/presentation';
+import { resolveWidgetGroupCells } from '@happier-dev/plugin-ui/components';
+import { resolveWidgetGroupColumns } from '@happier-dev/plugin-ui/presentation';
 import { selectLocalServiceRunningCount } from '@/sync/domains/local/services/serviceRow';
 import { t } from '@/text';
 

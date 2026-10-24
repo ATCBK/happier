@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Platform, View, type ViewStyle } from 'react-native';
 import { Circle, Path, Rect, Svg } from 'react-native-svg';
-import type { PluginUiIconTokenV1 } from '@happier-dev/plugin-sdk/ui';
+import type { HappierIconName } from '../content/Icon.js';
 
 import { useHappierUiAnimationActivityInternal, useOptionalHappierUiAccessibility } from '../../environment/context.js';
 import type { HappierStyleProp } from '../portableTypes.js';
@@ -56,11 +56,11 @@ export type HappierStatusDotProps = Readonly<{
    * access. `new` keeps the dot (unread). `size` is the glyph box (14 in a list row's status slot); a token
    * without a status shape draws the dot. Working is the host's activity spinner, never a glyph.
    */
-  glyph?: PluginUiIconTokenV1;
+  glyph?: HappierIconName;
 }>;
 
 /** The status glyph shapes, on a 24 grid at the lab's 1.5 stroke (`clstatus`). */
-const STATUS_GLYPH_PATHS: Partial<Record<PluginUiIconTokenV1, readonly string[]>> = Object.freeze({
+const STATUS_GLYPH_PATHS: Partial<Record<HappierIconName, readonly string[]>> = Object.freeze({
   review: ['M12 3.5 5 6v5.6c0 4.1 2.9 7.4 7 8.9 4.1-1.5 7-4.8 7-8.9V6l-7-2.5Z', 'M10.1 9.7a2 2 0 0 1 3.8.7c0 1.3-1.9 1.6-1.9 2.9M12 15.9h.01'],
   attention: ['M4.5 5.5h15V16h-8.2l-4.3 3.4V16H4.5z', 'M10.2 9a1.9 1.9 0 0 1 3.6.7c0 1.2-1.8 1.5-1.8 2.6M12 14.3h.01'],
   failure: ['M12 7.6v5M12 16.2h.01'],
@@ -72,9 +72,9 @@ const STATUS_GLYPH_PATHS: Partial<Record<PluginUiIconTokenV1, readonly string[]>
   denied: ['M8 10.5V8a4 4 0 0 1 8 0v2.5'],
 });
 /** Glyphs drawn around a full circle (failure, stop, finished) or with a circle inside (@, lock body). */
-const STATUS_GLYPH_RING = new Set<PluginUiIconTokenV1>(['failure', 'pause', 'check']);
+const STATUS_GLYPH_RING = new Set<HappierIconName>(['failure', 'pause', 'check']);
 
-function HappierStatusGlyph(props: Readonly<{ glyph: PluginUiIconTokenV1; color: string; size: number }>) {
+function HappierStatusGlyph(props: Readonly<{ glyph: HappierIconName; color: string; size: number }>) {
   const paths = STATUS_GLYPH_PATHS[props.glyph] ?? [];
   const stroke = { stroke: props.color, strokeWidth: 1.5, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
   return (
@@ -89,7 +89,7 @@ function HappierStatusGlyph(props: Readonly<{ glyph: PluginUiIconTokenV1; color:
 }
 
 /** Whether the shared status renderer draws this token as a glyph (otherwise it is the dot). */
-function hasHappierStatusGlyph(glyph: PluginUiIconTokenV1 | undefined): boolean {
+function hasHappierStatusGlyph(glyph: HappierIconName | undefined): boolean {
   return glyph !== undefined && STATUS_GLYPH_PATHS[glyph] !== undefined;
 }
 

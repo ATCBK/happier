@@ -1,10 +1,8 @@
 export { type UsageChartAgent, type UsageChartPaint, type UsageChartValuesLabels } from './chartKit.js';
-export { projectUsageCalendarArtModel } from './publicUsageChartModels.js';
 export type { UsageCalendarArtModel, UsageNinetyPlanetsModel, UsageStreakThreadModel, UsageDaysOnSurfaceModel,
   UsageRingedStreaksModel, UsageAroundPeriodModel, UsageWeeksSkylineModel, UsageMoonsModel, UsageMachinesModel,
   UsageProjectsModel, UsageAtmosphereModel, UsageGalaxyModel } from './publicUsageChartModels.js';
 export type { UsagePlanetSlot, UsagePlanetSpec } from './usagePlanetSlot.js';
-export { countUsageChartCalendarDates, projectUsageRiverWeekRange } from './usageChartCalendar.js';
 export { UsageDailyChart, type UsageDailyChartProps } from './UsageDailyChart.js';
 export { UsageRhythmChart, USAGE_RHYTHM_MATRIX_MIN_WIDTH_PX, USAGE_RHYTHM_SIDE_BY_SIDE_MIN_WIDTH_PX, type UsageRhythmChartProps } from './UsageRhythmChart.js';
 export { UsagePeriodSummaryBody, UsageFootprintBody, UsageSourceCoverageBody,

@@ -1,8 +1,8 @@
-import type { BuiltinUsagePublicPresentationV1 } from '@happier-dev/plugin-sdk';
+import type { PublicProfileUsagePresentation } from '../../components/publicProfileTypes.js';
 
 import { useHappierUiTheme } from '../../environment/context.js';
 import { HappierText } from '../text/Text.js';
-import type { projectPublicUsageRecords, PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
+import type { PublicUsageRecordKind, PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
 import type { UsageChartAgent, UsageChartPaint } from '../usage/charts/chartKit.js';
 import type { UsagePlanetSlot } from '../usage/charts/usagePlanetSlot.js';
 import { UsageSkyOfDays, type UsageSkyLabels } from '../usage/charts/UsageSkyOfDays.js';
@@ -26,12 +26,12 @@ export type { PublicUsageOriginalLabels, PublicUsageMetricId } from './PublicPro
 
 /** Host localization for the same chart bodies used by private Usage. */
 export type HappierPublicProfileUsageLabels = Readonly<{
-  chartLabel: (widgetId: BuiltinUsagePublicPresentationV1['widgetId']) => string;
+  chartLabel: (widgetId: PublicProfileUsagePresentation['widgetId']) => string;
   unavailable: string;
   original?: PublicUsageOriginalLabels;
   sky?: UsageSkyLabels;
   parallel?: UsageDayLabels;
-  records?: Readonly<{ format: Parameters<typeof projectPublicUsageRecords>[1]; caption: string }>;
+  records?: Readonly<{ format: (kind: PublicUsageRecordKind, value: number) => Omit<UsageRecordsModel[number], 'id'>; caption: string }>;
   weekTide?: UsageWeekTideLabels;
   daylight?: UsageDaylightLabels;
   orbit?: UsageOrbitLabels;
@@ -62,7 +62,7 @@ export type HappierPublicProfileUsageHost = Readonly<{
 }>;
 
 export type PublicProfileUsageBodyProps = Readonly<{
-  presentation: BuiltinUsagePublicPresentationV1;
+  presentation: PublicProfileUsagePresentation;
   /** Already projected by projectPublicProfile; this adapter has no policy or query authority. */
   models: PublicUsageChartModels;
   records: UsageRecordsModel | null;
