@@ -17,6 +17,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useWidgetFrameResourceActivity } from '@/components/widgets/frame/widgetFrameResourceActivity';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 type PluginContextualResourceStore = ReturnType<typeof createPluginUiResourceStore>;
 
@@ -29,7 +30,7 @@ export type PluginContextualResourceStoreLease = Readonly<{
 
 export type PluginContextualResourceStoreOwner = Readonly<{
     /**
-     * Acquires one captured active-Account store for an exact host-stamped
+     * Acquires one captured exact Home/Account store for a host-stamped
      * binding. Callers cannot supply their own transport, cache, or Session
      * identity.
      */
@@ -43,11 +44,15 @@ export type PluginContextualResourceStoreOwner = Readonly<{
     }>): PluginContextualResourceStoreLease | null;
 }>;
 
+type ResourceStoreConsumer = Readonly<{
+    accountLifetime: ActiveServerAccountScopeLifetime;
+    retirement: Readonly<{ dispose(): void }>;
+}>;
+
 type ResourceStoreEntry = {
     readonly store: PluginContextualResourceStore;
     readonly bindingFamilyKey: string;
-    accountRetirement: Readonly<{ dispose(): void }> | null;
-    consumers: number;
+    consumers: Set<ResourceStoreConsumer>;
     disposed: boolean;
 };
 
@@ -89,7 +94,7 @@ function resourceBindingFamilyKey(input: ResourceStoreBinding): string {
 const CONTEXTUAL_RESOURCE_SURFACE_ID = 'host:plugin-contextual-resource';
 
 function createPluginContextualResourceStoreOwner(): PluginContextualResourceStoreOwner {
-    // The captured active Account is the sharing boundary. An entry exists only
+    // The captured exact Home/Account is the sharing boundary. An entry exists only
     // while one of its mounted consumers holds it; no Account-keyed outer map
     // and no zero-consumer retention survives navigation.
     const entries = new Map<string, ResourceStoreEntry>();
@@ -100,19 +105,25 @@ function createPluginContextualResourceStoreOwner(): PluginContextualResourceSto
         // cannot reenter through a stale map key.
         entries.delete(key);
         entry.disposed = true;
-        entry.accountRetirement?.dispose();
-        entry.accountRetirement = null;
+        for (const consumer of entry.consumers) consumer.retirement.dispose();
+        entry.consumers.clear();
         entry.store.dispose();
     };
 
     return Object.freeze({
         acquire(requestedBinding) {
-            const accountLifetime = captureActiveServerAccountScopeLifetime();
-            if (!requestedBinding.accountLifetime.isCurrent() || !accountLifetime?.isCurrent()
-                || accountLifetime.scope.serverId !== requestedBinding.accountLifetime.scope.serverId
-                || accountLifetime.scope.accountId !== requestedBinding.accountLifetime.scope.accountId) return null;
+            if (!requestedBinding.accountLifetime.isCurrent()) return null;
+            if (requestedBinding.serverId !== null && !areServerProfileIdentifiersEquivalent(
+                requestedBinding.accountLifetime.scope.serverId, requestedBinding.serverId,
+            )) return null;
+            const activeAccountLifetime = captureActiveServerAccountScopeLifetime();
+            const accountLifetime = activeAccountLifetime?.isCurrent()
+                && activeAccountLifetime.scope.serverId === requestedBinding.accountLifetime.scope.serverId
+                && activeAccountLifetime.scope.accountId === requestedBinding.accountLifetime.scope.accountId
+                ? activeAccountLifetime : requestedBinding.accountLifetime;
             // An Action's invocation lifetime may retire independently. The shared
-            // transport belongs to the canonical Account, never its first caller.
+            // active-Home transport belongs to the canonical Account. Exact other
+            // Homes retain their already-admitted credential lifetimes below.
             const input = { ...requestedBinding, accountLifetime };
 
             const key = resourceBindingKey(input);
@@ -134,10 +145,11 @@ function createPluginContextualResourceStoreOwner(): PluginContextualResourceSto
                     expectedCallerOccurrenceId: input.expectedCallerOccurrenceId,
                     context: input.context,
                 });
-                const isCurrent = (): boolean => (
-                    createdEntry?.disposed !== true
-                    && input.accountLifetime.isCurrent()
-                );
+                const isCurrent = (): boolean => {
+                    if (!createdEntry || createdEntry.disposed) return false;
+                    for (const consumer of createdEntry.consumers) if (consumer.accountLifetime.isCurrent()) return true;
+                    return false;
+                };
                 const client = Object.freeze({
                     ...createPluginContextualResourceReadClient({
                         pluginId: input.pluginId,
@@ -178,36 +190,36 @@ function createPluginContextualResourceStoreOwner(): PluginContextualResourceSto
                         pluginId: input.pluginId,
                     }),
                     bindingFamilyKey,
-                    accountRetirement: null,
-                    consumers: 0,
+                    consumers: new Set(),
                     disposed: false,
                 };
                 entries.set(key, createdEntry);
-                const retirement = input.accountLifetime.onRetire(() => {
-                    disposeEntry(key, createdEntry!);
-                });
-                // A raced retirement invokes the callback synchronously. Do
-                // not reattach a cleanup or return a retired store afterward.
-                if (entries.get(key) !== createdEntry || !input.accountLifetime.isCurrent()) {
-                    retirement.dispose();
-                    return null;
-                }
-                createdEntry.accountRetirement = retirement;
                 entry = createdEntry;
             }
 
-            entry.consumers += 1;
             let released = false;
+            let consumer: ResourceStoreConsumer | undefined;
             const release = (retire: boolean): void => {
                 if (released) return;
                 released = true;
+                if (consumer) {
+                    consumer.retirement.dispose();
+                    entry!.consumers.delete(consumer);
+                }
                 if (retire) {
                     disposeEntry(key, entry!);
                     return;
                 }
-                entry!.consumers -= 1;
-                if (entry!.consumers === 0) disposeEntry(key, entry!);
+                if (entry!.consumers.size === 0) disposeEntry(key, entry!);
             };
+            const retirement = accountLifetime.onRetire(() => release(false));
+            if (released || !accountLifetime.isCurrent() || entry.disposed) {
+                retirement.dispose();
+                if (entry.consumers.size === 0) disposeEntry(key, entry);
+                return null;
+            }
+            consumer = Object.freeze({ accountLifetime, retirement });
+            entry.consumers.add(consumer);
             return Object.freeze({
                 store: entry.store,
                 dispose(): void {
@@ -440,15 +452,17 @@ function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
  * type decoder and any last-known-good presentation policy, while this
  * boundary owns only lease, currentness, cancellation, and subscription.
  */
-export function PluginContextualResourceState(props: Readonly<{
+export function PluginContextualResourceState<TSelected = PluginUiResourceSnapshot | null>(props: Readonly<{
     binding: PluginContextualResourceBinding;
     resource: PluginUiResourceReference;
     isCurrent?: () => boolean;
     signal?: AbortSignal;
     /** Demand follows the containing host; identity and retained data keep the existing lease. */
     active?: boolean;
+    /** Select at the store subscription so summary consumers do not render for detail-only changes. */
+    select?: (snapshot: PluginUiResourceSnapshot | null) => TSelected;
     /** `refresh` re-reads through the same leased entry (a Retry); it settles even on failure or retirement. */
-    children: (snapshot: PluginUiResourceSnapshot | null, controls: PluginContextualResourceControls) => React.ReactNode;
+    children: (snapshot: TSelected, controls: PluginContextualResourceControls) => React.ReactNode;
 }>): React.ReactElement | null {
     const owner = usePluginContextualResourceStoreOwner();
     const presented = useLayoutPresentationActive();
@@ -460,6 +474,8 @@ export function PluginContextualResourceState(props: Readonly<{
     const stableResource = React.useMemo(() => props.resource, [resourceKey]);
     const currentRef = React.useRef(props.isCurrent);
     currentRef.current = props.isCurrent;
+    const selectorRef = React.useRef(props.select);
+    selectorRef.current = props.select;
     const currentAtRender = !isAbortSignalAborted(props.signal) && currentRef.current?.() !== false;
     const [acquired, setAcquired] = React.useState<AcquiredPluginContextualResource | null>(null);
 
@@ -507,7 +523,7 @@ export function PluginContextualResourceState(props: Readonly<{
         (listener: () => void): (() => void) => presented && props.active !== false ? entry?.subscribe(listener, true) ?? (() => {}) : () => {},
         [entry, presented, props.active],
     );
-    const getSnapshot = React.useCallback(
+    const getResourceSnapshot = React.useCallback(
         (): PluginUiResourceSnapshot | null => (
             currentRef.current?.() === false || props.signal?.aborted === true
                 ? null
@@ -515,8 +531,13 @@ export function PluginContextualResourceState(props: Readonly<{
         ),
         [entry, props.signal],
     );
+    const getSnapshot = React.useCallback((): TSelected => {
+        const snapshot = getResourceSnapshot();
+        // Without a selector the public default is the unchanged Resource snapshot.
+        return selectorRef.current ? selectorRef.current(snapshot) : snapshot as TSelected;
+    }, [getResourceSnapshot]);
     const snapshot = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-    useWidgetFrameResourceActivity(presented && props.active !== false && snapshot?.pending === 'refresh');
+    useWidgetFrameResourceActivity(presented && props.active !== false && getResourceSnapshot()?.pending === 'refresh');
     const controls = React.useMemo<PluginContextualResourceControls>(() => ({
         refresh: async () => { if (entry && currentRef.current?.() !== false) await entry.refresh(); },
     }), [entry]);
