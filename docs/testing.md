@@ -492,6 +492,13 @@ barrier and runs through the existing heavyweight admission. The native compiler
 remains authoritative for incremental currentness. There is no input-equality
 scan, shared in-flight result or completed-check cache.
 
+The root `build:packages` coordinator follows this producer-owned admission path.
+Its existing workspace graph prepares transitive producers through their joint
+publication-lease and capacity owner. Dispatch retains the compilation placement
+envelope without reserving capacity around the coordinator, so a foreign producer
+lease can settle before admission. Admitted descendants still cannot wait for
+foreign publication leases.
+
 Remote development service readiness and QA-browser forward readiness have no
 automatic overall startup deadline. They follow their owning process/user
 cancellation and exit lifecycle; positive explicit service-readiness options

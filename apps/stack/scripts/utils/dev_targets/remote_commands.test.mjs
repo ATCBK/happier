@@ -512,6 +512,24 @@ test('finite workspace publishers retain placement class without an outer payloa
   }
 });
 
+test('build:packages delegates admission to its transitive finite publishers', async () => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+  const args = ['node', 'scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs', '@happier-dev/protocol', '@happier-dev/transfers'];
+  const policy = resolveRemoteCommandPolicy(args, { repoRoot: root, cwd: root });
+  assert.equal(policy.selfPublisher, '1', 'the coordinator must not reserve capacity across foreign producer leases');
+  const publicPolicy = await commandPolicy.resolvePackageCommandPolicy(
+    ['pnpm', 'run', 'build:packages', '@happier-dev/protocol', '@happier-dev/transfers'], { repoRoot: root, cwd: root });
+  assert.equal(publicPolicy.selfPublisher, '1', 'the real manifest must preserve producer-owned resource-first admission');
+  assert.equal(publicPolicy.heavyClass, 'compilation', 'placement must retain the composed build envelope');
+  const native = spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}\nrepo_root=$1; invoked_cwd=$1; shift; resolve_native_command_policy "$@"; printf '%s' "$policy_selfPublisher"`,
+    'policy', root, ...args], { encoding: 'utf8' });
+  assert.equal(native.status, 0, native.stderr);
+  assert.equal(native.stdout, '1');
+  const target = { name: 'worker', platform: 'linux', repoDir: root, cliHomeDir: '/tmp/workspace-build-worker-home' };
+  assert.doesNotMatch(buildRemoteExecCommand(target, { commandArgs: args, admissionClass: 'compilation', executionId }), /--heavyweight-admission/);
+  assert.equal(resolveRemoteCommandPolicy(['node', './fixture/scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs'], { repoRoot: root, cwd: root }).selfPublisher, '0');
+});
+
 test('manifest publisher delegation follows real scripts without bypassing placement', async t => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url));
   const classify = commandPolicy.isSelfPublishingPackageCommand ?? (async () => false);

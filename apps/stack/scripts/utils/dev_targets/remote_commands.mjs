@@ -167,6 +167,7 @@ const COMMAND_RULES = [
   ] }, set: { compilerLeaf: '1' } },
   { when: { command: ['node', 'nodejs'], entryRepositoryPath: ['packages/plugin-sdk/scripts/bundleWorkspaceDeps.mjs'], declarations: ['1'], runScript: ['1'] }, set: { selfPublisher: '1' } },
   { when: { command: ['node', 'nodejs'], entryRepositoryPath: [
+    'scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs',
     'apps/cli/scripts/buildSharedDeps.mjs',
     'apps/server/scripts/buildSharedDeps.mjs',
     'packages/plugins/triage/scripts/ensureTypecheckDeclarationPrerequisites.mjs',

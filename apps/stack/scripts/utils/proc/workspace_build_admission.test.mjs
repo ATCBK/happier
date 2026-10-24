@@ -160,6 +160,51 @@ test('resource-blocked batch holds no capacity while the external publisher ente
   }
 });
 
+test('build:packages waits for a foreign transitive producer before capacity admission', { skip: process.platform !== 'linux', timeout: 15000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-build-packages-contention-' });
+  const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: fixture.root });
+  const { resolvePackageCommandPolicy } = await import('../dev_targets/remote_commands.mjs');
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+  const policy = await resolvePackageCommandPolicy(['pnpm', 'run', 'build:packages', '@happier-dev/protocol', '@happier-dev/transfers'], { repoRoot: root, cwd: root });
+  const lockPath = fixture.path('transitive-producer.lock');
+  const ownerUrl = new URL('./workspace_build_admission.mjs', import.meta.url).href;
+  const payload = `import {runWorkspaceBuildAdmission} from ${JSON.stringify(ownerUrl)};
+    const result=await runWorkspaceBuildAdmission({command:process.execPath,args:['-e','process.stdout.write("published")'],
+      launcherPath:${JSON.stringify(launcher)},locks:[{path:${JSON.stringify(lockPath)}}],
+      env:process.env,stdio:['ignore','pipe','pipe'],onStderr:value=>process.stderr.write(value)});
+    process.stdout.write(result.stdout??'');process.exitCode=result.status??1;`;
+  const env = buildNativeAdmissionFixtureEnv();
+  const cancellation = new AbortController();
+  let blocked;
+  const waiting = new Promise(resolve => { blocked = resolve; });
+  let terminal;
+  try {
+    await withWorkspaceBundleLock(async () => {
+      if (policy.selfPublisher === '1') {
+        const child = spawnTestProcess(process.execPath, ['--input-type=module', '-e', payload], { env, signal: cancellation.signal, stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '', stderr = '';
+        child.stdout.on('data', value => { stdout += value; });
+        child.stderr.on('data', value => { stderr += value; if (String(value).includes('workspace-lease-busy')) blocked(); });
+        terminal = new Promise(resolve => child.once('close', status => resolve({ status, stdout, stderr })));
+      } else {
+        terminal = runWorkspaceBuildAdmission({ command: process.execPath, args: ['--input-type=module', '-e', payload],
+          launcherPath: launcher, admissionClass: policy.heavyClass, env, signal: cancellation.signal,
+          stdio: ['ignore', 'pipe', 'pipe'], onStderr: value => { if (String(value).includes('workspace-lease-busy')) blocked(); } });
+      }
+      await Promise.race([waiting, terminal.then(result => assert.fail(`producer terminated instead of waiting before admission: ${result.stderr}`))]);
+      assert.deepEqual(await readdir(join(admissionRoot, 'owners')), [], 'foreign publication wait must hold no capacity');
+    }, { lockPath, signal: t.signal });
+    const result = await terminal;
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'published');
+    assert.deepEqual(await readdir(join(admissionRoot, 'owners')), []);
+    assert.deepEqual(await readdir(join(admissionRoot, 'waiters')), []);
+  } finally {
+    cancellation.abort();
+    await terminal;
+  }
+});
+
 for (const platform of ['linux', 'win32']) test(`dependency admission selects the canonical reader resource on ${platform}`, async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-dependency-admission-platform-' });
   const env = { ...buildNativeAdmissionFixtureEnv(), HAPPIER_STACK_HOME_DIR: fixture.root };
