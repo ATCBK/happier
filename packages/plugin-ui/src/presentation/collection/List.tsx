@@ -655,6 +655,8 @@ export function HappierListItem({
       fieldSaturatedAtPx,
     })
     : null), [fieldAccessory, fieldAccessorySiblingPx, fieldSaturatedAtPx, measuresFieldLabel, pageRowInsetPx, pageRowWidthPx, titleNaturalWidthPx]);
+  // A page row's trailing value summary reads at the row title's size in the regular face, as core page rows draw it.
+  const pageDetailTextStyle = { ...resolveHappierTextStepStyle({ ...HAPPIER_PAGE_TEXT.rowTitle, weight: 'regular' }, hostTypography), ...pageRowMetrics?.title };
   const handleDetailLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
     const width = event.nativeEvent.layout.width;
     if (Number.isFinite(width) && width > 0) setDetailWidthPx(current => current === width ? current : width);
@@ -918,7 +920,7 @@ export function HappierListItem({
               // On a page a trailing value summary reads at the row title's size in the regular face, as
               // core page rows draw it; elsewhere it is the collection's quiet meta.
               pageSection
-                ? { ...resolveHappierTextStepStyle({ ...HAPPIER_PAGE_TEXT.rowTitle, weight: 'regular' }, hostTypography), ...pageRowMetrics?.title,
+                ? { ...pageDetailTextStyle,
                     color: detailTone === undefined ? resolvedTheme.colors.secondaryText : resolvedTheme.colors[HAPPIER_TONE_COLOR_TOKEN[detailTone]] }
                 : textStyle(
                 resolvedTheme,
@@ -956,7 +958,8 @@ export function HappierListItem({
         {measuresDetail || measuresTitle ? <>
           {measuresDetail ? <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" onLayout={handleDetailLayout}
             style={{ position: 'absolute', left: 0, top: 0, opacity: 0, pointerEvents: 'none' }}>
-            <HappierText numberOfLines={1} textScale={textScale} style={textStyle(resolvedTheme, hostTypography, 'micro', resolvedTheme.colors.secondaryText)}>{detailContent ?? detail}</HappierText>
+            {/* Measured in the inline detail's own type, so the beneath decision sees the width it would draw. */}
+            <HappierText numberOfLines={1} textScale={textScale} style={pageDetailTextStyle}>{detailContent ?? detail}</HappierText>
           </View> : null}
           {measuresTitle ? <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" onLayout={handleTitleLayout}
             style={{ position: 'absolute', left: 0, top: 0, opacity: 0, pointerEvents: 'none' }}>
