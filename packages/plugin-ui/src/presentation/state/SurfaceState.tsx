@@ -22,6 +22,11 @@ export type HappierSurfaceStateAction = Readonly<{
   disabled?: boolean;
   /** Pending work owned by the caller; a returned promise also drives the shared pending behaviour. */
   busy?: boolean;
+  /**
+   * The next step continues the person's work (open the page again, go where it now lives) rather
+   * than retrying a failure, so as the primary action it takes the filled tone whatever the kind.
+   */
+  invitation?: boolean;
 }>;
 
 /** A present-tense line under the copy ("Reconnecting · next try in 8 s"); `busy` draws a working ring. */
@@ -356,7 +361,7 @@ export function HappierSurfaceState(props: HappierSurfaceStateProps) {
             {bindings.renderButton({
               action,
               emphasis: index === 0 ? 'primary' : 'secondary',
-              tone: index === 0 ? tone : 'secondary',
+              tone: index === 0 ? (action.invitation ? 'filled' : tone) : 'secondary',
               compact,
               fullWidth,
               testID:
