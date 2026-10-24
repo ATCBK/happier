@@ -7,6 +7,7 @@ import { isPublicRouteForUnauthenticated } from '@/auth/routing/authRouting';
 import { authGetTokenAtEndpoint } from '@/auth/flows/getToken';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getRandomBytesAsync } from '@/platform/cryptoRandom';
 import { getDefaultSystemTaskRunner, waitForSystemTaskResult } from '@/components/systemTasks';
@@ -33,6 +34,7 @@ import {
     adoptPersonalHomeProfileAndComplete,
     findPersonalHomeBootstrapCompletedProfile,
     getServerProfileById,
+    isServerProfilePersonalHomeBootstrapCompleted,
     listServerProfiles,
     preflightHomeProfileAdoption,
     resolveSavedServerProfileByUrl,
@@ -70,6 +72,15 @@ export function shouldBypassPersonalHomeBootstrapForSegments(segments: readonly 
     const normalized = segments.filter((segment) => !(segment.startsWith('(') && segment.endsWith(')')));
     if (normalized.length === 0 || normalized[0] === 'index') return false;
     return isPublicRouteForUnauthenticated([...segments]);
+}
+
+// An explicit existing Home is already the user's choice, including a generic Home on this
+// computer. Only the Personal Home's own profile belongs to this first-run setup/recovery owner.
+function isExplicitExistingHomeSelection(profile: ServerProfile | null, isSelectionExplicit: boolean | undefined): boolean {
+    return isSelectionExplicit === true
+        && profile != null
+        && profile.source !== 'desktop-personal-home'
+        && !isServerProfilePersonalHomeBootstrapCompleted(profile);
 }
 
 function normalizeUrl(value: unknown): string {
@@ -271,11 +282,9 @@ export function usePersonalHomeBootstrapRuntime(): PersonalHomeBootstrapRuntime 
         let completed = findPersonalHomeBootstrapCompletedProfile(profiles);
         const activeSelection = getActiveServerSnapshot();
         const activeProfile = getServerProfileById(activeSelection.serverId);
-        const explicitlySelectedOtherHome = activeSelection.isSelectionExplicit === true
-            && activeProfile != null
-            && (localUrl
-                ? !profileMatchesUrl(activeProfile, localUrl)
-                : activeProfile.serverIdentityId !== completed?.serverIdentityId);
+        const explicitlySelectedOtherHome = isExplicitExistingHomeSelection(
+            activeProfile, activeSelection.isSelectionExplicit,
+        );
         const relayRuntime = mapRelayStatus(authoritativeRelayStatus, relay.lastErrorMessage);
         let localHomeReachability: PersonalHomeFacts['localHomeReachability'] = 'unknown';
         let localHomeIdentity = candidate?.serverIdentityId ?? null;
@@ -803,7 +812,13 @@ function PersonalHomeBootstrapRuntimeInner(props: Readonly<{
 
 function EligibleDesktopPersonalHomeBootstrapRuntime(props: Readonly<{ children: React.ReactNode }>): React.ReactElement {
     const segments = useSegments();
-    if (shouldBypassPersonalHomeBootstrapForSegments(segments)) return <>{props.children}</>;
+    const activeSelection = useActiveServerSnapshot();
+    useServerProfilesGeneration();
+    const activeProfile = getServerProfileById(activeSelection.serverId);
+    if (shouldBypassPersonalHomeBootstrapForSegments(segments)
+        || isExplicitExistingHomeSelection(activeProfile, activeSelection.isSelectionExplicit)) {
+        return <>{props.children}</>;
+    }
 
     const completedProfile = findPersonalHomeBootstrapCompletedProfile(listServerProfiles());
     return (

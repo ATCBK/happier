@@ -447,10 +447,34 @@ describe('usePersonalHomeBootstrapRuntime production composition', () => {
         expect(harness.getCredentials()).toBeNull();
     });
 
+    it('does not start Personal Home checks for an explicitly selected existing Home', async () => {
+        const profiles = await import('@/sync/domains/server/serverProfiles');
+        const home = await profiles.upsertServerProfile({
+            serverUrl: 'https://existing-home.example',
+            source: 'manual',
+        });
+        await profiles.setActiveServerId(home.id, { scope: 'device' });
+        const { PersonalHomeBootstrapRuntimeMount } = await import('./usePersonalHomeBootstrapRuntime');
+        const screen = await renderScreen(
+            <PersonalHomeBootstrapRuntimeMount>
+                <PersonalHomeBootstrapContent><div data-testid="existing-home-content" /></PersonalHomeBootstrapContent>
+            </PersonalHomeBootstrapRuntimeMount>,
+        );
+        await flushHookEffects({ cycles: 4, turns: 4 });
+        expect(screen.findByTestId('existing-home-content')).not.toBeNull();
+        expect(screen.findByTestId('personal-home-use-another')).toBeNull();
+        expect(harness.taskCalls).toEqual([]);
+        expect(profiles.getActiveServerSnapshot().serverId).toBe(home.id);
+    });
+
     it('keeps explicit recovery/callback routes reachable without bypassing the ordinary shell route', async () => {
         const { shouldBypassPersonalHomeBootstrapForSegments } = await import('./usePersonalHomeBootstrapRuntime');
 
         expect(shouldBypassPersonalHomeBootstrapForSegments(['(app)', 'server'])).toBe(true);
+        expect(shouldBypassPersonalHomeBootstrapForSegments(['(app)', 'settings', 'server'])).toBe(true);
+        expect(shouldBypassPersonalHomeBootstrapForSegments(['(app)', 'settings', 'server', 'add'])).toBe(true);
+        expect(shouldBypassPersonalHomeBootstrapForSegments(['(app)', 'settings', 'server', '[homeId]'])).toBe(true);
+        expect(shouldBypassPersonalHomeBootstrapForSegments(['(app)', 'settings', 'home'])).toBe(false);
         expect(shouldBypassPersonalHomeBootstrapForSegments(['(app)', 'setup', 'wizard'])).toBe(true);
         expect(shouldBypassPersonalHomeBootstrapForSegments(['(app)', 'oauth', 'github'])).toBe(true);
         expect(shouldBypassPersonalHomeBootstrapForSegments(['(app)', 'restore', 'lost-access'])).toBe(true);
