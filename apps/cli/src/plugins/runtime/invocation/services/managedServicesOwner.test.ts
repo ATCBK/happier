@@ -986,7 +986,8 @@ describe('managed-services SVC09 owner', () => {
             if (result.status === 'rejected') throw result.reason;
             expect(harness.exec.spawn).toHaveBeenCalledTimes(2);
             await joined.request({ pathAndQuery: '/v1/responses', method: 'POST', body: Buffer.from('fresh second input') });
-            expect(result.value.instanceId).toBe(joined.instanceId);
+            // Consumer handles expose no instance id; both read the one replacement physical service.
+            expect(result.value.snapshot()).toEqual(joined.snapshot());
             await result.value.request({ pathAndQuery: '/v1/responses', method: 'POST', body: Buffer.from('fresh first input') });
             await result.value.dispose();
             expect(replacement.dispose).not.toHaveBeenCalled();

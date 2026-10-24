@@ -6,7 +6,7 @@ import { activatePluginRuntimeRegistry } from '../manager';
 import { ingestCanonicalPluginManifest } from '@/plugins/manifest/ingest';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import { BackgroundServiceContributionSchema } from '@happier-dev/protocol';
-import { createBackgroundServiceRunnerHost, type PluginBackgroundServiceRunnerRegistration } from './backgroundServices';
+import { createBackgroundServiceRunnerHost, type HostBackgroundServiceContext, type PluginBackgroundServiceRunnerRegistration } from './backgroundServices';
 
 function deferred() {
     let resolve!: () => void;
@@ -171,7 +171,7 @@ describe('background service demand lifecycle', () => {
         let hostRuns = 0;
         const host = createBackgroundServiceRunnerHost({ registrations: [], createContext() { throw new Error('Host services have no plugin context'); } });
         host.start();
-        host.register({ owner: { kind: 'host', serviceId: 'memory-indexer' }, occurrenceId: 'host-one', localId: 'index', activation: 'demand', async runner(context) {
+        host.register({ owner: { kind: 'host', serviceId: 'memory-indexer' }, occurrenceId: 'host-one', localId: 'index', activation: 'demand', async runner(context: HostBackgroundServiceContext) {
             expect(context.isOccurrenceCurrent()).toBe(true);
             expect(context).not.toHaveProperty('plugin');
             hostRuns += 1;

@@ -44,7 +44,7 @@ it('reports missing packaged Agent factory activation as internal failure in bot
       selection: { v: 1, updatedAt: 1, ref: { agentTargetKey: fixture.agentTargetKey,
         providerConnectionId: ProviderConnectionIdSchema.parse('run-gateway'), modelId: 'model-a' } },
       machineId: fixture.machineId, agentId: fixture.agentId, agentTargetKey: fixture.agentTargetKey,
-      lease: fixture.lease, getAccountSettingsSnapshot: () => fixture.snapshot,
+      lease: fixture.lease, getAccountSettingsSnapshot: () => fixture.snapshot, materializationBaseDir: fixture.happyHomeDir,
     });
     expect(result).toMatchObject({ ok: false, error: { code: 'agent_error' } });
     expect(fixture.lease.registry.agentRuntimesByAgentId.has(fixture.agentId)).toBe(false);

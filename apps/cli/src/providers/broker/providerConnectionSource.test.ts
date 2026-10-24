@@ -307,7 +307,8 @@ describe('Provider Connection Team broker source', () => {
       sourceRevision: 'source-revision-a',
     });
     expect(access).not.toBeNull();
-    expect(access?.sourceMemberKey).toBe(computeTeamCredentialSourceMemberKeyV1({
+    if (!access || !('access' in access)) throw new Error('Expected acquired Provider source access');
+    expect(access.sourceMemberKey).toBe(computeTeamCredentialSourceMemberKeyV1({
       kind: 'provider_credential_slot',
       connectionId: sourceBinding.connectionId,
       credentialSlotId: sourceBinding.credentialSlotId,
@@ -337,7 +338,7 @@ describe('Provider Connection Team broker source', () => {
     })).resolves.toBeNull();
     await staleLifetime.close();
     const controller = new AbortController();
-    const modelList = await access!.access.request({
+    const modelList = await access.access.request({
       pathAndQuery: '/v1/models',
       method: 'GET',
       headers: {},
@@ -346,7 +347,7 @@ describe('Provider Connection Team broker source', () => {
     });
     expect(modelList).toMatchObject({ status: 200 });
     expect(credentialValues).toEqual([]);
-    const response = await access!.access.request({
+    const response = await access.access.request({
       pathAndQuery: '/v1/responses',
       method: 'POST',
       headers: { authorization: 'Bearer worker-must-not-cross' },
@@ -376,7 +377,7 @@ describe('Provider Connection Team broker source', () => {
       modelId: 'gateway-model',
       sourceRevision: 'source-revision-a',
     })).resolves.toBe(access);
-    await expect(access!.access.request({
+    await expect(access.access.request({
       pathAndQuery: '/v1/responses',
       method: 'POST',
       headers: {},
@@ -387,7 +388,7 @@ describe('Provider Connection Team broker source', () => {
     expect(retire).not.toHaveBeenCalled();
     expect(openCpxProviderConnection).toHaveBeenCalledOnce();
     resourceEnabled = false;
-    await expect(access!.access.request({
+    await expect(access.access.request({
       pathAndQuery: '/v1/responses',
       method: 'POST',
       headers: {},
@@ -876,7 +877,8 @@ describe('Provider Connection Team broker source', () => {
       sourceRevision: 'source-revision-a',
     });
     expect(access).not.toBeNull();
-    const response = await access!.access.request({
+    if (!access || !('access' in access)) throw new Error('Expected acquired Provider source access');
+    const response = await access.access.request({
       pathAndQuery: '/v1/responses',
       method: 'POST',
       headers: { authorization: 'Bearer worker' },
@@ -891,7 +893,7 @@ describe('Provider Connection Team broker source', () => {
     expect(managedRequests[0]?.headers).not.toHaveProperty('authorization');
 
     resourceEnabled = false;
-    await expect(access!.access.request({
+    await expect(access.access.request({
       pathAndQuery: '/v1/responses',
       method: 'POST',
       body: new TextEncoder().encode('{}'),

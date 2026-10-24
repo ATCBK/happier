@@ -1278,7 +1278,8 @@ describe('Provider-broker release after grant expiry (machine/1 admission + brok
       resolveResourceTestRequestPolicy: async () => ({ resourceRevision: 7, application: binding.application, policy: null,
         modelCatalog: { models: [{ id: 'gpt-5' }], resolveCanonicalModelId: id => id } }),
       admitResourceTestRequest: async () => ({ ok: true, resourceId: binding.resourceId, resourceRevision: 7,
-        brokerMachineId: 'broker-machine', source, operation: { kind: 'resource_test', actorAccountId: binding.actorAccountId } }),
+        brokerMachineId: 'broker-machine', source, operation: { kind: 'resource_test', actorAccountId: binding.actorAccountId },
+        usageEventId: null }),
       sourceOwner,
     });
     closeTasks.push(runtime.close);

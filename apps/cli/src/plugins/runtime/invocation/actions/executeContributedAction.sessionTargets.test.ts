@@ -57,11 +57,13 @@ async function harness(durableApproval = false) {
         create: async request => { storedApproval = TargetActionApprovalRequestV1Schema.parse(request); return { artifactId: 'external-target-approval' }; },
         read: async () => storedApproval, update: updateApproval,
     });
-    const declaration = { scopes: ['global'], surfaces: ['cli', 'mcp', 'agent'],
-        sessionTarget: { field: 'sessionId', cardinality: 'one' },
-        inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, required: ['sessionId'], additionalProperties: false },
-        resultSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, required: ['sessionId'], additionalProperties: false },
-    } as const;
+    // Authored JSON Schema `required` lists are mutable arrays in the SDK contract.
+    const sessionIdSchema = () => ({ type: 'object' as const, properties: { sessionId: { type: 'string' as const } },
+        required: ['sessionId'], additionalProperties: false });
+    const declaration = { scopes: ['global'] as const, surfaces: ['cli', 'mcp', 'agent'] as const,
+        sessionTarget: { field: 'sessionId', cardinality: 'one' } as const,
+        inputSchema: sessionIdSchema(), resultSchema: sessionIdSchema(),
+    };
     const plugin = definePlugin({ id: pluginId, version: '1.0.0', entrypoints: { daemon: './daemon.mjs' },
         actions: { inspect: { ...declaration, title: 'Inspect selected Session', dangerLevel: 'safe',
             run: async input => { effects.push(input); return input; },

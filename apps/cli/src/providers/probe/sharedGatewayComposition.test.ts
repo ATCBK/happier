@@ -364,7 +364,7 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                     instanceId: expect.any(String), consumerId: JSON.stringify({ kind: 'session', sessionId: id }),
                   }]);
                 }
-                const readModels = async (endpoint: typeof consumer, credential = endpoint.credential) => {
+                const readModels = async (endpoint: Pick<typeof consumer, 'endpointUrl' | 'credential'>, credential = endpoint.credential) => {
                   const response = await fetch(`${endpoint.endpointUrl}/models`, {
                     headers: { authorization: `Bearer ${credential}` },
                   });

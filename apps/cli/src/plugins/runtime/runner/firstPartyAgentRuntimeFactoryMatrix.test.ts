@@ -1182,7 +1182,6 @@ describe('first-party runner Agent factory matrix', () => {
                                     },
                                 }]]),
                                 rejectedGenerations: new Map(),
-                                isCurrent: async () => true,
                             },
                         });
                         try {

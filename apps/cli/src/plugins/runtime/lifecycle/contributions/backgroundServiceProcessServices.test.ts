@@ -21,7 +21,7 @@ describe('background process invocation services', () => {
             plugin: { id: 'fixture', version: '1.0.0' }, contribution: { id: 'reader', qualifiedId: 'fixture/agents/reader' },
             occurrenceId: 'occurrence', correlationId: 'reader', surface: 'agent', signal,
             isOccurrenceCurrent: () => !signal.aborted,
-        }, { hostAccessRequests: [] }) };
+        }, { hostAccessRequests: [], filesystemRoots: { pluginData: '/tmp/unused-plugin-data', workspace: '/tmp/unused-workspace', projects: new Map() } }) };
         let client: ReturnType<typeof createBackgroundServiceProcessServiceClient<typeof roots>>;
         const copy = (message: BackgroundServiceProcessBridgeMessage) => JSON.parse(JSON.stringify(message));
         const host = createBackgroundServiceProcessServiceHost({ services: roots, send: message => queueMicrotask(() => client.receive(copy(message))) });

@@ -102,6 +102,9 @@ it.each(['deadline', 'cancelled'] as const)('settles Gateway binding status duri
             credentials: { token: 'binding-fixture-token', encryption: null }, featureGate: { isEnabled: () => true },
             runtimeSummary: services.summary }),
           ...createLegacyProfileMigrationRpcServices({ credentials: { token: 'binding-fixture-token', encryption: null } }),
+          // The machine runtime projects its manual-refresh probe onto the RPC adapter.
+          probe: (input, waiterLifetime) => services.probe(input, 'manual_refresh', waiterLifetime),
+          probeDraft: (input, waiterLifetime) => services.probeDraft(input, waiterLifetime),
         } });
       const controller = new AbortController();
       const request = { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey, selection,

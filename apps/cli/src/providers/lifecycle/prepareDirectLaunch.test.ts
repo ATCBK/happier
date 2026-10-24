@@ -43,9 +43,12 @@ describe('direct Provider launch lifecycle', () => {
         scope: { kind: 'session', sessionId: 'session-a' },
         previousBinding: null, confirmation: null, connectedServices: null, featureEnabled: true,
       }, {
-        initialResources: [() => {
-          if (!disposalFailed) { disposalFailed = true; throw failure; }
-        }],
+        initialResources: [(() => {
+          const dispose = () => {
+            if (!disposalFailed) { disposalFailed = true; throw failure; }
+          };
+          return { onFailure: dispose, onExit: dispose };
+        })()],
         resolvePrerequisites: async () => { throw new Error('Native launch has no Provider prerequisites'); },
         createAuthorizationAttempt: async () => { throw new Error('Native launch has no Provider authorization'); },
       });

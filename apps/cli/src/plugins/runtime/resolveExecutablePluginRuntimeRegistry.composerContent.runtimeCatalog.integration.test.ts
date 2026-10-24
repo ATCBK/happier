@@ -53,7 +53,7 @@ describe('executable plugin Composer content invocation binding', () => {
             process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY = pluginRoot;
             apiMachine = new ApiMachineClient('token', createMachine(machineId));
             apiMachine.setRPCHandlers({
-                spawnSession: async () => ({ type: 'error', errorMessage: 'No fixture Session launch' }),
+                spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'No fixture Session launch' }),
                 stopSession: async () => true,
                 requestShutdown() {},
                 preparedMachineTransfer: { request: preparedTransfers.requestPreparedTransfer },

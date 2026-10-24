@@ -843,7 +843,6 @@ describe('executable plugin runtime Connected Accounts integration', () => {
                         },
                     ]]),
                     rejectedGenerations: new Map(),
-                    isCurrent: async () => true,
                 },
                 connectedAccounts: owner,
             });

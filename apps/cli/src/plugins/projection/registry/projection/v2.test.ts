@@ -52,7 +52,7 @@ describe('buildPluginProjectionV2', () => {
         const { createCollectionDetailPlugin } = await import('../../../../../../../packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-collection-detail/index');
         const { manifest: original } = createCollectionDetailPlugin();
         const manifest = { ...original, contributes: { ...original.contributes,
-            actions: original.contributes.actions.map(action => action.id === 'clear'
+            actions: (original.contributes.actions ?? []).map(action => action.id === 'clear'
                 ? { ...action, confirmVerb: { key: 'actions.clear', fallback: 'Clear' }, irreversible: true as const } : action),
         } };
         const loaded: LoadedPlugin = {

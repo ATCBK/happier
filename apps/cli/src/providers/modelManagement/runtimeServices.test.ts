@@ -293,11 +293,16 @@ it.each(['projection', 'manualAdd', 'models'] as const)('cancels the registered 
     featureGate: { isEnabled: () => true }, modelSettingsMutation: async (): Promise<never> => {
       throw new Error('Cancelled catalog admission must not mutate');
     } });
-  const connections = createRuntimeProviderConnectionServices({ machineId: 'machine-a', credentials,
+  const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-provider-read-cancellation-'));
+  temporaryPaths.push(happyHomeDir);
+  const connections = createRuntimeProviderConnectionServices({ machineId: 'machine-a', credentials, happyHomeDir,
     featureGate: { isEnabled: () => true }, runtimeSummary: services.summary });
   const rpc = new RpcHandlerManager({ scopePrefix: 'machine-a', encryptionMode: 'plain', logger: () => {} });
   registerMachineProviderRpcHandlers({ rpcHandlerManager: rpc, machineId: 'machine-a', featureGate: { isEnabled: () => true },
-    services: { ...services, ...connections, ...createLegacyProfileMigrationRpcServices({ credentials }) } });
+    services: { ...services, ...connections, ...createLegacyProfileMigrationRpcServices({ credentials }),
+      // The machine runtime projects its manual-refresh probe onto the RPC adapter.
+      probe: (input, waiterLifetime) => services.probe(input, 'manual_refresh', waiterLifetime),
+      probeDraft: (input, waiterLifetime) => services.probeDraft(input, waiterLifetime) } });
   const controller = new AbortController();
   const method = operation === 'projection' ? RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION
     : operation === 'models' ? RPC_METHODS.DAEMON_PROVIDERS_MODELS : RPC_METHODS.DAEMON_PROVIDERS_MODEL_SETTINGS_MUTATE;
@@ -347,11 +352,14 @@ async function registeredProviderProjectionFixture() {
     resolveAddresses: async () => ['1.1.1.1'],
     modelSettingsMutation: async (): Promise<never> => { throw new Error('No mutation during projection'); } });
   const connections = createRuntimeProviderConnectionServices({ machineId: fixture.machineId, credentials,
-    featureGate: { isEnabled: () => true }, runtimeSummary: services.summary });
+    happyHomeDir: fixture.happyHomeDir, featureGate: { isEnabled: () => true }, runtimeSummary: services.summary });
   const rpc = new RpcHandlerManager({ scopePrefix: fixture.machineId, encryptionMode: 'plain', logger: () => {} });
   registerMachineProviderRpcHandlers({ rpcHandlerManager: rpc, machineId: fixture.machineId,
     featureGate: { isEnabled: () => true },
-    services: { ...services, ...connections, ...createLegacyProfileMigrationRpcServices({ credentials }) } });
+    services: { ...services, ...connections, ...createLegacyProfileMigrationRpcServices({ credentials }),
+      // The machine runtime projects its manual-refresh probe onto the RPC adapter.
+      probe: (input, waiterLifetime) => services.probe(input, 'manual_refresh', waiterLifetime),
+      probeDraft: (input, waiterLifetime) => services.probeDraft(input, waiterLifetime) } });
   const request = { machineId: fixture.machineId, agentTargetKey: fixture.agentTargetKey, refreshPolicy: 'current_only' as const };
   const envelope = { v: 1 as const, requestId: 'foreign-projection', target: { kind: 'machine' as const, machineId: fixture.machineId }, input: request };
   const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-proof', binding: {

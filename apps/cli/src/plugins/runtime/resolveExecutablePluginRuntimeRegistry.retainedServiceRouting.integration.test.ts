@@ -1648,6 +1648,7 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                         interactions: unavailable.interactions,
                         targetedContributions: unavailable.targetedContributions,
                         composerContent: unavailable.composerContent,
+                        backgroundServices: unavailable.backgroundServices,
                     },
                 });
 
@@ -1974,6 +1975,7 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                         targetedContributions:
                             unavailable.targetedContributions,
                         composerContent: unavailable.composerContent,
+                        backgroundServices: unavailable.backgroundServices,
                     },
                 });
             const originalGlobalFetch = globalThis.fetch;

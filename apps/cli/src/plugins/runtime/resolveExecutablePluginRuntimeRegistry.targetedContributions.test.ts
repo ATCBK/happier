@@ -149,7 +149,6 @@ function fixtureGenerationAuthority(
         commit: null,
         generations: new Map(generations.map((generation) => [generation.pluginId, generation])),
         rejectedGenerations: new Map(),
-        isCurrent: async () => true,
     };
 }
 

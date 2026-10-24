@@ -16,6 +16,7 @@ import { resolveBackgroundServiceProcessBootstrap, type BackgroundServiceProcess
 import { createProductionPluginInvocationServiceOwners } from '../invocation/services/production';
 import { createBackgroundServiceProcessServiceClient, createBackgroundServiceProcessServiceHost, type BackgroundServiceProcessBridgeMessage } from './contributions/backgroundServiceProcessBridge';
 import { waitForProcessExit } from '@/testkit/process/spawn';
+import type { PluginRuntimeOccurrenceId } from '../runtimeSlots';
 
 describe('admitted background service host activation', () => {
     it('executes a consumed external-session reader with child-local Exec and daemon-admitted operation roots', async () => {
@@ -28,7 +29,7 @@ describe('admitted background service host activation', () => {
         try {
             const pluginId = 'acme.consumed-reader';
             const localAgentId = 'native-reader';
-            const occurrenceId = 'daemon-admitted-reader-occurrence';
+            const occurrenceId = 'daemon-admitted-reader-occurrence' as PluginRuntimeOccurrenceId;
             const entryPath = join(root, 'daemon.mjs');
             await writeFile(join(root, 'native-transcript'), 'native operation roots');
             await writeFile(entryPath, `
@@ -146,10 +147,10 @@ describe('admitted background service host activation', () => {
                     });
                     watcher.once('error', rejectStarted);
                     try {
-                        const pending = runtime.externalSessions.listCandidates({
+                        const pending = Promise.resolve(runtime.externalSessions.listCandidates({
                             source: { kind: 'nativeFixture', mode: 'hold' }, maxItems: 1, maxSerializedBytes: 1_048_576,
                             deadlineAtMs: Date.now() + 30_000, signal: cancellation.signal,
-                        });
+                        }));
                         const pid = await Promise.race([started, pending.then(async result => {
                             const detail = await readFile(join(root, 'reader-errors'), 'utf8').catch(() => '');
                             throw new Error(`Reader settled before its native process started: ${JSON.stringify(result)} ${detail}`);
@@ -211,7 +212,7 @@ describe('admitted background service host activation', () => {
                     sourceSpec: { kind: 'path', locator: root, trustPolicy: 'local_trusted', installPolicy: 'link' },
                     manifest: parsed.manifest,
                 },
-                occurrenceId: 'daemon-admitted-occurrence',
+                occurrenceId: 'daemon-admitted-occurrence' as PluginRuntimeOccurrenceId,
                 sourceCustody: resolvePluginSourceCustody(sourceAuthority),
                 source: { kind: 'file_backed', sourceAuthority, entryPath },
             });
@@ -245,7 +246,7 @@ describe('admitted background service host activation', () => {
             activationTargets: [{
                 provenance: 'first_party', source: { kind: 'bundled' }, pluginId,
                 manifestPath: '/virtual/plugin.json', daemonEntryPath: '@example/service-host',
-                sourceSpec: { kind: 'bundled', locator: '@example/service-host', trustPolicy: 'bundled_trusted', installPolicy: 'copy' },
+                sourceSpec: { kind: 'bundled', locator: '@example/service-host', trustPolicy: 'local_trusted', installPolicy: 'copy' },
                 manifest: parsed.manifest,
             }],
         });

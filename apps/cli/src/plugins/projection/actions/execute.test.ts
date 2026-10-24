@@ -48,8 +48,6 @@ import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import { loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
 import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
-import { createActionExecutor } from '@happier-dev/protocol';
-import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { createHostContributedActionInvoker } from '@/plugins/runtime/invocation/actions/hostContributedActionInvoker';
 import type { InvokeContributedAction } from '@/plugins/runtime/invocation/services/actions';
 import { arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';

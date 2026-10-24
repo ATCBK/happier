@@ -9,6 +9,7 @@ import { createNativeAgentSessionOperations } from '@/agent/runtime/registry/eng
 import { createNativeAgentSessionPublications } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications';
 import { createSessionRuntimeModesPublisher } from '@/agent/runtime/controls/sessionRuntimeModesPublisher';
 import { computeSessionModePickerControl } from '../../../../../../ui/sources/sync/domains/sessionControl/sessionModeControl';
+import { MetadataSchema } from '@happier-dev/session-core/state';
 import { projectAgentPreflightSessionControlsCatalogEntry } from '@/plugins/projection/registry/agentCatalogEntryHooks';
 import { probeAgentModesBestEffort } from '@/capabilities/probes/agentModesProbe';
 import { preflightCatalogEntryFixture } from '@/capabilities/probes/preflightSessionControlsProbeAdapter.testkit';
@@ -226,7 +227,11 @@ describe('plugin session runtime adapters', () => {
     const runtime = (await plan.config.createSessionRuntime?.(host))?.nativeRuntime;
     if (!runtime) throw new Error('Missing composed native runtime');
     const projector = runtime.modes ? createSessionRuntimeModesPublisher({ agentId, session: host.session, source: runtime.modes }) : null;
-    const control = () => computeSessionModePickerControl({ agentId, metadata: host.session.getMetadataSnapshot() });
+    // The UI reads Session metadata through the shared stored-metadata parser.
+    const control = () => {
+      const snapshot = host.session.getMetadataSnapshot();
+      return computeSessionModePickerControl({ agentId, metadata: snapshot ? MetadataSchema.parse(snapshot) : null });
+    };
     const projected = projectAgentPreflightSessionControlsCatalogEntry({ agentId, systemTools: [],
       // This external Agent's native observation is also its preflight producer.
       preflightSessionControls: { probeModes: async () => nativePublication?.modesSource.read().modes ?? null },

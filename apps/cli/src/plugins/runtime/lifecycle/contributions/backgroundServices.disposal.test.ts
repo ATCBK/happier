@@ -45,7 +45,7 @@ describe('background service registry definitive disposal', () => {
             contributes: createResolvedContributionRegistry({ activationTargets: [{
                 provenance: 'first_party', source: { kind: 'bundled' }, pluginId,
                 manifestPath: '/virtual/plugin/happier.plugin.json', daemonEntryPath: '/virtual/plugin/daemon.mjs',
-                sourceSpec: { kind: 'package', locator: '@happier-dev/disposal-retry', trustPolicy: 'bundled_trusted', installPolicy: 'copy' },
+                sourceSpec: { kind: 'package', locator: '@happier-dev/disposal-retry', trustPolicy: 'local_trusted', installPolicy: 'copy' },
                 activationEvents: [], manifest: ingested.manifest,
             }] }),
             resolveActivationSource: () => ({
