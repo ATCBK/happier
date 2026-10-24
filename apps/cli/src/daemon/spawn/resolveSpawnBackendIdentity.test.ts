@@ -20,7 +20,7 @@ vi.mock('@/persistence', async (importOriginal) => ({
   readStoredCredentials: readStoredCredentialsMock,
 }));
 
-import { resolveSpawnBackendIdentity } from './resolveSpawnBackendIdentity';
+import { mapExistingSessionAttachFailureToSpawnError, resolveSpawnBackendIdentity } from './resolveSpawnBackendIdentity';
 import { createCustomAcpAdmissionRuntimeFixture } from '../startup/customAcpAdmission.testkit';
 import { AgentExecutionTargetV1Schema, CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { resolveDaemonCatalogAgentIdFromBackendTarget, resolveDaemonCliSubcommandFromBackendTarget } from '../backendTargetRouting';
@@ -76,6 +76,26 @@ function createLegacyCredentials(token: string, seed: number): Credentials & { e
 }
 
 describe('resolveSpawnBackendIdentity credential precedence', () => {
+  it('preserves a safe Session-detail diagnostic in the typed spawn failure', () => {
+    expect(mapExistingSessionAttachFailureToSpawnError({
+      ok: false,
+      reason: 'fetchFailed',
+      diagnostic: {
+        errorClass: 'Error',
+        errorCode: 'session_detail_invalid_response',
+        httpStatus: null,
+        stackFrames: [],
+      },
+    })).toMatchObject({
+      type: 'error',
+      errorCode: 'UNEXPECTED',
+      errorDetail: {
+        kind: 'launch_error',
+        code: 'session_detail_invalid_response',
+      },
+    });
+  });
+
   it('prefers caller-provided credentials over persisted credentials for existing-session attach context', async () => {
     const liveCredentials = createLegacyCredentials('live-token', 1);
     const stalePersistedCredentials = createLegacyCredentials('stale-token', 9);

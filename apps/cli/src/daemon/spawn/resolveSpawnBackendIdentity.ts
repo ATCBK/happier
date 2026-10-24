@@ -15,15 +15,16 @@ import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import {
   resolveExistingSessionAttachContext,
-  type ExistingSessionAttachContextFailureReason,
+  type ExistingSessionAttachContextFailure,
 } from '../sessionEncryption/resolveExistingSessionAttachContext';
 import { resolveConcreteCompatBackendTargetRefs } from '@/session/backendTargets/resolveConcreteBackendTargetRefs';
 import { resolveCurrentExternalSessionAgentRoutingId } from '@/api/session/external/linking/qualifiedLinkIdentityRegistry';
 import { projectResolvedAgentBackendTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
 
 export function mapExistingSessionAttachFailureToSpawnError(
-  reason: ExistingSessionAttachContextFailureReason,
+  failure: ExistingSessionAttachContextFailure,
 ): Extract<SpawnSessionResult, { type: 'error' }> {
+  const { reason } = failure;
   switch (reason) {
     case 'missingSessionId':
       return {
@@ -48,6 +49,11 @@ export function mapExistingSessionAttachFailureToSpawnError(
         type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
         errorMessage: 'Failed to fetch existing session for resume.',
+        errorDetail: {
+          kind: 'launch_error',
+          code: failure.diagnostic?.errorCode ?? 'session_detail_fetch_failed',
+          message: 'The Session detail needed for launch could not be read.',
+        },
       };
     case 'missingCredentials':
       return {
@@ -173,7 +179,7 @@ export async function resolveSpawnBackendIdentity(params: Readonly<{
       const { reason } = attachContext;
       return {
         ok: false,
-        error: mapExistingSessionAttachFailureToSpawnError(reason),
+        error: mapExistingSessionAttachFailureToSpawnError(attachContext),
       };
     }
 

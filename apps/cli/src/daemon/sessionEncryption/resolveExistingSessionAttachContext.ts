@@ -23,6 +23,8 @@ import { tryParseJsonRecord } from '@/utils/tryParseJsonRecord';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { readPendingExecutionRunIds } from '@/api/session/pendingQueueState';
 import { isSessionEncryptionModeAllowedByEffectiveClientRequirement } from '@/settings/accountSettings/resolveEffectiveClientEncryptionRequirement';
+import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { logger } from '@/ui/logger';
 
 const EXISTING_SESSION_ATTACH_DETAIL_CONCURRENCY = 4;
 let activeExistingSessionAttachDetailReads = 0;
@@ -53,6 +55,7 @@ export type ExistingSessionAttachContextFailureReason =
 export type ExistingSessionAttachContextFailure = Readonly<{
   ok: false;
   reason: ExistingSessionAttachContextFailureReason;
+  diagnostic?: ReturnType<typeof readUnexpectedActionErrorDiagnosticV1>;
 }>;
 
 function normalizeString(value: unknown): string {
@@ -390,7 +393,12 @@ export async function resolveExistingSessionAttachContext(_params: Readonly<{
       credentials: _params.credentials,
       accountEncryptionCurrentness,
     });
-  } catch {
-    return { ok: false, reason: 'fetchFailed' };
+  } catch (error) {
+    const diagnostic = readUnexpectedActionErrorDiagnosticV1(error);
+    logger.warn('[DAEMON RUN] Existing Session attach read failed', {
+      sessionId,
+      ...diagnostic,
+    });
+    return { ok: false, reason: 'fetchFailed', diagnostic };
   }
 }

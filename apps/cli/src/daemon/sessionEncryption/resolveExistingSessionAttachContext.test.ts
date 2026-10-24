@@ -38,6 +38,7 @@ import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedService
 import type { Credentials } from '@/persistence';
 import { resolveExistingSessionAttachContext } from './resolveExistingSessionAttachContext';
 import { configuration } from '@/configuration';
+import { logger } from '@/ui/logger';
 
 function deterministicRandomBytesFactory(): (length: number) => Uint8Array {
   let counter = 1;
@@ -762,7 +763,11 @@ describe('resolveExistingSessionAttachContext', () => {
   });
 
   it('returns a fetch-failed reason when session lookup throws', async () => {
-    vi.mocked(fetchSessionByIdCompat).mockRejectedValueOnce(new Error('boom'));
+    const failure = Object.assign(new Error('private response detail'), {
+      code: 'session_detail_invalid_response',
+    });
+    vi.mocked(fetchSessionByIdCompat).mockRejectedValueOnce(failure);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
 
     const credentials: Credentials = {
       token: 't',
@@ -771,7 +776,22 @@ describe('resolveExistingSessionAttachContext', () => {
 
     const out = await resolveExistingSessionAttachContext({ token: 't', sessionId: 'sess_throw', credentials });
 
-    expect(out).toEqual({ ok: false, reason: 'fetchFailed' });
+    expect(out).toMatchObject({
+      ok: false,
+      reason: 'fetchFailed',
+      diagnostic: {
+        errorClass: 'Error',
+        errorCode: 'session_detail_invalid_response',
+        httpStatus: null,
+      },
+    });
+    expect(warn).toHaveBeenCalledWith('[DAEMON RUN] Existing Session attach read failed', expect.objectContaining({
+      sessionId: 'sess_throw',
+      errorClass: 'Error',
+      errorCode: 'session_detail_invalid_response',
+      httpStatus: null,
+    }));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('private response detail');
   });
 
 });
