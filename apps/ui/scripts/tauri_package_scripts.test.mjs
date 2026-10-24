@@ -145,6 +145,21 @@ test('apps/ui macOS Tauri bundles declare camera and microphone privacy and hard
   }
 });
 
+test('macOS desktop admits HTTP localhost Homes without disabling ATS for other domains', async () => {
+  const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+  const info = plist.parse(await readFile(join(packageRoot, 'src-tauri', 'Info.plist'), 'utf8'));
+  // AMD-9 permits localhost and its subdomains. A global local-network or WebView
+  // exception would also admit unrelated HTTP Homes, beyond that contract.
+  assert.deepEqual(info.NSAppTransportSecurity, {
+    NSExceptionDomains: {
+      localhost: {
+        NSIncludesSubdomains: true,
+        NSExceptionAllowsInsecureHTTPLoads: true,
+      },
+    },
+  });
+});
+
 test('apps/ui Tauri config runs beforeBuildCommand/beforeDevCommand via node wrapper (works on Windows CI)', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);
