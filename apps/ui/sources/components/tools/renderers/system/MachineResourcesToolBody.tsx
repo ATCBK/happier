@@ -80,7 +80,7 @@ function ProcessesTree(
       machineId: props.call.machineId,
       machineName: '',
       titles,
-      logicalCores: null,
+      cpuCapacityCores: null,
       compact,
       readOnly: true,
     }),
