@@ -71,7 +71,7 @@ export function createSessionMetadataHttpBoundary(readSessions: () => Readonly<R
                 if (!session.access) throw new Error('Session HTTP fixture requires canonical access');
                 records.set(session.id, SessionCurrentProjectionRecordV1Schema.parse({
                     id: session.id, seq: session.seq, createdAt: session.createdAt, updatedAt: session.updatedAt,
-                    active: session.active, activeAt: session.activeAt, archivedAt: null, encryptionMode: 'plain', metadataLayoutVersion: 0,
+                    active: session.active, activeAt: session.activeAt, archivedAt: session.archivedAt ?? null, encryptionMode: 'plain', metadataLayoutVersion: 0,
                     metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion,
                     effectiveAccess: { v: 1, level: session.access.level, sources: [{ kind: 'owner' }], capabilities: session.access.capabilities },
                     responsibleAccountId: null, responsibleAccount: null, share: null, dataEncryptionKey: null,
