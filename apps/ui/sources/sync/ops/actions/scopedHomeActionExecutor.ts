@@ -22,7 +22,7 @@ const executorsByScope = new Map<
 
 export function scopedHomeActionExecutor(
     scope: ServerAccountScope,
-    options?: Pick<NonNullable<Parameters<typeof createDefaultActionExecutor>[0]>, 'teamMembershipHistoryAction' | 'onBlockingApprovalPending'> & Readonly<{
+    options?: Pick<NonNullable<Parameters<typeof createDefaultActionExecutor>[0]>, 'teamMembershipHistoryAction' | 'onBlockingApprovalPending' | 'hostActionApprovalLifetime'> & Readonly<{
         /** Invocation-local currentness, checked after admission before a snapshot read dispatches. */
         homeDomainReadCurrentness?: () => boolean;
     }>,
