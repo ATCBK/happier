@@ -214,7 +214,15 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
     enabledWhenDisabledCommandIds?: readonly KeyboardCommandId[];
 }>>) {
     const [find] = React.useState(createFindSurfaceRegistry);
-    const [findAvailabilityVersion, refreshFindAvailability] = React.useReducer((value: number) => value + 1, 0);
+    const [findAvailability, setFindAvailability] = React.useState({ available: false, open: false, inputFocused: false });
+    const refreshFindAvailability = React.useCallback(() => {
+        const resolved = find.resolve();
+        const available = resolved !== undefined;
+        const open = resolved?.isOpen() === true;
+        const inputFocused = resolved?.isInputFocused() === true;
+        setFindAvailability(current => current.available === available && current.open === open && current.inputFocused === inputFocused
+            ? current : { available, open, inputFocused });
+    }, [find]);
     React.useEffect(() => registerFindActionRuntime(find), [find]);
     const nextScopedHandlerIdRef = React.useRef(1);
     const [scopedHandlerEntries, setScopedHandlerEntries] = React.useState<ReadonlyMap<number, Readonly<{ handlers: KeyboardShortcutHandlers; nativeInput?: NativeKeyboardInputRegistration }>>>(
@@ -277,19 +285,22 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
         isEditableTarget: false,
         isComposing: false,
     }), []);
+    // Web always advertises Find; focus changes only its command-time destination.
+    const findOpenAvailable = surface === 'web' || findAvailability.available;
+    const findNavigationAvailable = surface === 'web' || findAvailability.open;
     const rootHandlers = React.useMemo<KeyboardShortcutHandlers>(() => ({
         'panes.region.next': () => focusPaneRegion('next') ? 'handled' : 'pass',
         'panes.region.previous': () => focusPaneRegion('previous') ? 'handled' : 'pass',
-        ...(surface === 'web' || find.resolve() ? {
+        ...(findOpenAvailable ? {
             'find.open': (event) => find.command('find.open', event),
         } satisfies KeyboardShortcutHandlers : {}),
-        ...(surface === 'web' || find.resolve()?.isOpen() ? {
+        ...(findNavigationAvailable ? {
             'find.next': (event) => find.command('find.next', event),
             'find.previous': (event) => find.command('find.previous', event),
         } satisfies KeyboardShortcutHandlers : {}),
         ...propHandlers,
         ...scopedHandlers,
-    }), [find, findAvailabilityVersion, propHandlers, scopedHandlers, surface]);
+    }), [find, findOpenAvailable, findNavigationAvailable, propHandlers, scopedHandlers]);
     const labelHandlers = React.useMemo<KeyboardShortcutHandlers>(() => ({
         ...rootHandlers,
         'shortcutsHelp.open': () => undefined,
@@ -389,7 +400,7 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
         const channel = (surface: 'find' | 'editor'): EmbeddedKeyboardChannel => {
             const options = { ...dispatcherOptions, handlers: selectEmbeddedKeyboardHandlers(dispatcherOptions.handlers, surface) };
             const signatures = [...resolveNativeHardwareKeyboardConsumableEventSignatures(options)];
-            if (find.resolve()?.isOpen()) signatures.push('Escape|shift=false|ctrl=false|meta=false|alt=false');
+            if (findAvailability.open) signatures.push('Escape|shift=false|ctrl=false|meta=false|alt=false');
             return { signatures, dispatch: (nativeEvent: NativeHardwareKeyboardEventLike) => {
                 const event = normalizeNativeHardwareKeyboardEvent(nativeEvent);
                 if (find.closeFromKeyboard(event) === 'handled') return true;
@@ -401,7 +412,7 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
             } };
         };
         return { find: channel('find'), editor: channel('editor') };
-    }, [dispatcherOptions, find, findAvailabilityVersion]);
+    }, [dispatcherOptions, find, findAvailability.open, findAvailability.inputFocused]);
     const registrationContextValue = React.useMemo<KeyboardShortcutRegistrationContextValue>(
         () => ({ registerHandlers, executeCommand, submitFindInput, find, refreshFindAvailability }),
         [registerHandlers, executeCommand, submitFindInput, find],
@@ -417,7 +428,7 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
                 if (signature) consumableEventSignatures.push(signature);
             }
         }
-        if (find.resolve()?.isOpen()) {
+        if (findAvailability.open) {
             consumableEventSignatures.push('Escape|shift=false|ctrl=false|meta=false|alt=false');
         }
         return {
@@ -429,12 +440,12 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
                 ].join(HANDLER_KEY_SIGNATURE_SEPARATOR)
                 : '',
         };
-    }, [dispatcherOptions, find, findAvailabilityVersion, nativeKeyboardConfigurationKey, nativeInputs, platform]);
+    }, [dispatcherOptions, findAvailability.open, findAvailability.inputFocused, nativeKeyboardConfigurationKey, nativeInputs, platform]);
     const nativeHardwareKeyboardRegistrationRef = React.useRef(nativeHardwareKeyboardRegistration);
     nativeHardwareKeyboardRegistrationRef.current = nativeHardwareKeyboardRegistration;
 
     useEscapeLayer({
-        enabled: Platform.OS === 'web' && find.resolve()?.isOpen() === true,
+        enabled: Platform.OS === 'web' && findAvailability.open,
         priority: ESCAPE_LAYER_PRIORITIES.find,
         allowEditableTarget: true,
         onEscape: (event) => find.closeFromKeyboard(normalizeKeyboardEvent(event as KeyboardEvent)) === 'handled',

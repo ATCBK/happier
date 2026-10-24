@@ -7,7 +7,8 @@ import { storage } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { KeyboardShortcutProvider, useKeyboardShortcutHandlers, useFindSurfaceRegistration, useEmbeddedFindKeyboard, useEmbeddedEditorKeyboard, useNativeKeyboardInput, useKeyboardCommand } from './KeyboardShortcutProvider';
+import { KeyboardShortcutProvider, useKeyboardShortcutHandlers, useFindSurfaceRegistration, useFindSurfaceRegistrationHost, useEmbeddedFindKeyboard, useEmbeddedEditorKeyboard, useNativeKeyboardInput, useKeyboardCommand } from './KeyboardShortcutProvider';
+import { useKeyboardShortcutLabel } from './shortcutLabels';
 import { useInboxItemNavigation } from '@/hooks/inbox/useInboxItemNavigation';
 import type { InboxItem } from '@/components/inbox/inboxItems';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
@@ -78,6 +79,82 @@ vi.mock('expo-modules-core', async (importOriginal) => ({
 }));
 
 describe('KeyboardShortcutProvider', () => {
+    it.each(['web', 'ios', 'android'])('keeps unchanged Find refreshes local on %s while publishing real availability and open changes', async platform => {
+        testState.platformOS = platform;
+        vi.stubGlobal('navigator', { platform: 'Linux' });
+        const facts = { focused: true, available: true, open: false, inputFocused: false };
+        let host: ReturnType<typeof useFindSurfaceRegistrationHost> | undefined;
+        let embedded: ReturnType<typeof useEmbeddedEditorKeyboard> | undefined;
+        let nextLabel: string | undefined;
+        let labelRenders = 0;
+        let embeddedRenders = 0;
+        const controller: FindController = {
+            query: '', options: { matchCase: false, regex: false }, status: { kind: 'idle' },
+            capabilities: { regex: true, stop: false }, setQuery() {}, setOptions() {}, step() {}, stop() {},
+            close() { facts.open = false; facts.inputFocused = false; host?.refresh(); },
+        };
+        function Surface() {
+            host = useFindSurfaceRegistrationHost();
+            useFindSurfaceRegistration({ surfaceId: 'editor', containsFocus: () => facts.focused,
+                isAvailable: () => facts.available, isOpen: () => facts.open, isInputFocused: () => facts.inputFocused,
+                open() { facts.open = true; facts.inputFocused = true; host?.refresh(); }, controller });
+            return null;
+        }
+        function Labels() {
+            useKeyboardShortcutLabel('files.editor.save');
+            nextLabel = useKeyboardShortcutLabel('find.next');
+            labelRenders += 1;
+            return null;
+        }
+        function Embedded() {
+            embedded = useEmbeddedEditorKeyboard();
+            embeddedRenders += 1;
+            return null;
+        }
+        await renderScreen(<KeyboardShortcutProvider handlers={{}}><Surface /><Labels /><Embedded /></KeyboardShortcutProvider>);
+        const before = { labels: labelRenders, embedded: embeddedRenders };
+        const refresh = host!.refresh;
+        const focusListeners = vi.mocked(window.addEventListener).mock.calls
+            .filter(([type]) => type === 'focusin' || type === 'focusout').map(([, listener]) => listener);
+        for (let index = 0; index < 20; index += 1) {
+            await act(async () => {
+                // Web advertises the same Find commands before and after editor focus.
+                if (platform === 'web') facts.focused = index % 2 === 1;
+                refresh();
+                for (const listener of focusListeners) {
+                    if (typeof listener === 'function') listener(new Event('focusin'));
+                }
+            });
+        }
+        expect({ labels: labelRenders, embedded: embeddedRenders }).toEqual(before);
+        const escape = 'Escape|shift=false|ctrl=false|meta=false|alt=false';
+        expect(embedded?.signatures).not.toContain(escape);
+        await act(async () => {
+            expect(embedded?.dispatch({ key: 'f', code: 'KeyF', repeat: false,
+                modifiers: { ctrl: platform !== 'ios', meta: platform === 'ios', shift: false, alt: false } })).toBe(true);
+        });
+        expect(facts.open).toBe(true);
+        expect(embedded?.signatures).toContain(escape);
+        expect(nextLabel).toBeDefined();
+        if (platform !== 'web') expect(nativeKeyboardState.consumableSignatures).toEqual(expect.arrayContaining([
+            escape, 'Enter|shift=false|ctrl=false|meta=false|alt=false',
+        ]));
+        const labelsBeforeInputBlur = labelRenders;
+        await act(async () => { facts.inputFocused = false; refresh(); });
+        expect(labelRenders).toBe(labelsBeforeInputBlur);
+        if (platform !== 'web') expect(nativeKeyboardState.consumableSignatures).not.toContain('Enter|shift=false|ctrl=false|meta=false|alt=false');
+        await act(async () => { expect(embedded?.dispatch({ key: 'Escape', code: 'Escape', repeat: false,
+            modifiers: { ctrl: false, meta: false, shift: false, alt: false } })).toBe(true); });
+        expect(facts.open).toBe(false);
+        expect(embedded?.signatures).not.toContain(escape);
+        await act(async () => { facts.available = false; refresh(); });
+        expect(embedded?.dispatch({ key: 'f', code: 'KeyF', repeat: false,
+            modifiers: { ctrl: platform !== 'ios', meta: platform === 'ios', shift: false, alt: false } })).toBe(false);
+        if (platform !== 'web') {
+            expect(nextLabel).toBeUndefined();
+            expect(nativeKeyboardState.consumableSignatures).not.toContain(escape);
+        }
+    });
     it('invalidates an open change peek after an engine edit and refuses its stale draft revert', async () => {
         const markers = buildEditorChangeMarkers('f', null, '@@ -3 +3 @@\n-old\n+new\n');
         const runtime = createCodeMirrorDecorations({ ...cmState, ...cmView });
