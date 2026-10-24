@@ -6,7 +6,7 @@ This page describes **0.3 development / Developer Preview source**. Exact field 
 
 ## Package boundary
 
-`@happier-dev/triage-protocol` exposes only the explicit V1 root, `/v1` and `/testing/v1` entries in its [export map](../packages/triage-protocol/package.json). Do not add floating default/current/latest/legacy aliases. The package contains portable composable schemas, authoring values, source-neutral projections and conformance fixtures. Keep host registries/runtime, provider clients, credential materialization, HTTP, UI implementations and persistence outside it.
+`@happier-dev/triage-protocol` retains its explicit V1 root, `/v1` and `/testing/v1` source-author entries in its [export map](../packages/triage-protocol/package.json). Hosted CI and Releases use the domain-versioned `/ci/v1` plus `/ci/testing/v1` and `/releases/v1` plus `/releases/testing/v1` pairs. Each domain retains an explicit wire epoch under the [SDK evolution doctrine](compatibility.md#sdk-protocol-evolution); package SemVer is independent. Do not add floating default/current/latest/legacy aliases. The package contains portable composable schemas, authoring values, source-neutral projections and conformance fixtures. Keep host registries/runtime, provider clients, credential materialization, HTTP, UI implementations and persistence outside it.
 
 Schemas use the public SDK `/protocol` composition algebra and `/contributions` authoring seam. The [SDK feature-protocol dependency policy](../packages/plugin-sdk/src/featureProtocolPackagePolicy.test.ts) owns admissible public imports; do not import private `@happier-dev/protocol`, Zod, host internals or a source plugin, and do not handwrite a second JSON Schema/parser. Schema evolution follows [compatibility](compatibility.md#sdk-protocol-evolution).
 
@@ -77,6 +77,54 @@ entry references do not embed that service schema. The canonical Availability
 guard still refuses equal-version declarations with different contract digests.
 
 The source plugin retains its private configuration-token encoding and provider-specific behavior. Triage business behavior stays in `packages/plugins/triage`; shared host code stays source-neutral. Do not use this schema package as a new source service, credential store or corpus persistence owner.
+
+### GitHub security findings (0.3 development source)
+
+GitHub contributes Dependabot and code-scanning findings as two declared kinds
+on the existing `github-forge` source. Both use the existing `errorIssue`
+workflow subject, status facts and source attention; neither is a task that
+Happier can mark complete. Their kind-qualified references distinguish alert,
+issue and pull-request numbers within the same immutable repository identity.
+
+The private source token enables each alert family separately. Retained tokens
+without these settings keep both families disabled. Alert discovery uses the
+existing selected repositories or explicit All selection; it does not broaden
+the scope from a credential's access. Repository alert streams include history,
+follow native cursors beyond issue-search limits, and retain partial coverage
+when one family cannot be read. Exact reads of retained links remain available
+when discovery is disabled. No background alert poller or second source store
+is introduced.
+
+Selected native detail, Locations, immutable-commit code and the current
+Dependabot update PR are demand reads. Code permission is separate from alert
+permission; unavailable code leaves native coordinates intact. Native
+associations enter the existing fix-PR resolver alongside explicit choices and
+Session co-links, without writing a user mark. The source's optional
+`readFixPullRequests` operation supplies that association; the Account read
+Action retains ranking, dismissal, coverage and exact selected-source context.
+The existing exact fix-PR reader also supplies the detail frame's optional
+`useTriageDetailFixPullRequestNavigation` binding. It opens that PR's own Triage
+detail with its exact source instance, including when the PR is outside the
+loaded list, or opens the admitted provider `webUrl`. The source controller
+consumes this binding rather than reading the association again. Missing or
+unavailable associations offer no navigation; changing the Account or selected
+candidate retires the prior callbacks.
+
+An exact `get` may supply source-neutral `dispatchEvidence` through the canonical
+forge-evidence schema. This field is not part of scan observations or snapshots
+and is not persisted in list rows. The composer resolver sends it through the
+single Session input renderer used by the configured handoff, keeping advisory
+and code text inside its escaped data block. This avoids treating the four
+bounded list facts as a complete advisory. Source text never chooses an Agent,
+destination or permission policy.
+
+Native dismiss/reopen Actions use current credential and repository proof,
+preflight and readback. Lost responses settle through a confirming read, never
+automatic replay. Their present-user confirmation exemption retains the
+ordinary automated approval default and explicit Actions policy. Fix consumes
+the shared configured Session handoff; no security-specific launcher exists.
+UI composition and loaded-provider validation are separate program integration
+checks; these source contracts do not establish release availability.
 
 ### Shared source unit selection (0.3 development source)
 
@@ -188,9 +236,11 @@ Task create, edit and transition controls follow the selected source's declared
 roles, configured instance and host execution readiness. An age-stale list or an
 unrelated unavailable source does not disable a ready task's controls. Pending
 or unavailable execution follows the selected source's admitted Action. The
-current live aggregate and personal-source Actions remain daemon-placed and
-require an execution Machine. Account-data ownership does not imply Account
-execution. The source Action retains authorization and confirming-read authority.
+current authored aggregate and personal-source Actions select the shared Account
+runtime described below; their portable loaded-client validation remains pending.
+An external source's admitted operation retains its own execution placement and
+may require a Machine. Account-data ownership alone does not select that
+placement. The source Action retains authorization and confirming-read authority.
 
 Task category is derived by the single public `triageTaskStatusCategoryV1`
 mapper from the existing entry state, including its optional active stage and
@@ -287,14 +337,16 @@ preserve the existing index ordering. Both authenticated transports enforce the
 Account encryption mode. Earlier records without task refinements, including
 bare Session-key links, remain readable.
 
-The live aggregate list, exact detail, task writes and built-in source roles
-remain daemon-placed through the same authored Action map and root `activate`
-entry. Their Account data owner is unchanged; their execution still requires a
-Machine. The portable Account cutover is not active: the live manifest selects
-no Account Action or Account runtime artifact. No-Machine personal Triage
-execution is therefore not an available development-source claim yet. Detail
-retains authoritative Session links when optional Session summary presentation
-is unavailable. Task reordering continues through the existing
+The current authored Action map selects the `triage-account-runtime` Account
+artifact for aggregate reads, exact detail, task writes and built-in source
+roles; `accountRuntime.ts` projects that same map through `activateAccount`.
+Their Account data owner is unchanged. Portable Account Resource support and
+its loaded-client routing are being integrated in development source; package
+and loaded-runtime checks remain pending. This source placement is not a claim
+that no-Machine Triage is already available in an installed build. A source's
+own native operation may still require its admitted Machine. Detail retains
+authoritative Session links when optional Session summary presentation is
+unavailable. Task reordering continues through the existing
 `tasks.internal.reorder` host Account Action and index CAS owner. The 0.3
 development Tasks page reaches that same owner through the shared entity drag
 and drop controls and staged Move (row menu, Alt+M or Shift+F10; Space remains
@@ -306,19 +358,116 @@ Tasks order store.
 Internal task links live only in `todo.<id>.linkedSessions`. The optional
 `linkSession` and `readSessionLinks` source roles let the existing entry Session
 orchestrator and linked-work readers reach that owner through admitted handles.
-External entries retain the existing `session-links` v2 owner. The
+External entries normally use the existing `session-links` v2 owner. A source
+can declare `descriptor.sessionRelations.kindIds` as a nonempty, unique subset
+of its declared kinds. Its paired `linkSession` and `readSessionLinks` roles then
+own only those kinds. Omitting the subset retains legacy ownership of all that
+source's kinds when either relation role is declared. An explicit declaration
+still owns its kinds when executable handles are unavailable; a missing or
+failed role never grants the corpus permission to read or write them. The
 [source-neutral relation dispatcher](../packages/plugins/triage/src/sessions/sourceSessionRelations.ts)
-selects the declared source role, refuses a failed source write without falling
-through, and explicitly removes an existing v2 duplicate only after the source
-commit. Detail/header and Session cockpit consume the same source relationship
-projection; unavailable source reads retain known work with a stale notice.
-The Session-source read reports coverage per configured instance. A missing
-contribution or failed source role leaves healthy sources readable and returns
-`partial` coverage with the unavailable source named; typed source failures and
-safe invocation codes remain in that lane's diagnostic. A source that declares
-neither relationship role uses the external Collection reader. Incomplete reads
-never become a complete empty cockpit. Refresh replaces healthy-source links
-while retaining last-known links only for sources whose read remains incomplete.
+owns this decision for link/unlink, detail, the Session cockpit, configured Fix,
+manual attachments, fix-PR discovery and successor reconciliation. A successful
+exact admitted source write precedes deletion of its old corpus duplicate;
+failed or uncertain writes leave the duplicate intact. Source-owned successor
+moves currently return unsupported without deleting the old relationship.
+Non-owned successors retain the corpus's existing conditional in-place move.
+
+Unscoped Session reads compose disjoint source-role and corpus kind slices.
+One existing Session-indexed corpus selection checks retained coverage even
+when all admitted kinds are source-owned; it never exposes owned-kind fallback.
+Coverage is keyed by source, configured instance and kind, so an unavailable PR
+role does not hide healthy Issue or Alert links from the same source. An
+out-of-scope role row invalidates that slice. Known lanes carry `kindIds`; a
+missing descriptor retains a source-wide diagnostic without asserting kind
+coverage. Prior source-wide replies are read as incomplete rather than guessing
+ownership from their rows. Healthy slices remain readable in a partial result,
+and incomplete coverage never becomes complete empty state. Role-produced links
+retain the admitted instance, its existing configuration revision and an optional
+source locator; consumers do not reconstruct native identity from display text.
+An explicitly complete empty result with no lanes is valid only when both source
+inventories are empty and the exact Session's readable corpus query proves no
+retained relationships. Missing legacy lanes, unknown retained rows, unreadable
+corpus data and unfinished cursors do not establish that absence.
+The Session cockpit and picker consume the shared `session-links-v1` Resource,
+whose read delegates to that same Action. Its observation watches the exact
+selected corpus relationship query, configured-source membership and admitted
+source roles with registered read observers. A snapshot-only source role keeps
+its existing manual-refresh behavior; it gains neither a polling loop nor a
+substitute corpus relationship. Disposing the Resource retires those observers.
+
+The portable Account activation owns one lazy retained-PR upgrade pass, started
+by its first admitted relation read or write. It reads existing source ownership
+and native relationships, verifies an already-native link's exact identity,
+and conditionally retires only the exact retained corpus revision. It invokes no
+relationship write Action or approval from a read. Non-PR rows remain at their
+existing owner. Missing or uncertain native proof retains the original PR row
+with incomplete coverage. Duplicate contraction belongs only to the activation's
+initializer, never ordinary read reconciliation.
+Later reads retain diagnostic coverage and may notice an already-removed corpus
+row, but do not retry CAS or import a missing relationship. Ordinary explicit linking retains
+the source's existing Action authority. Retirement cancels and drains the pass.
+A caller-cancelled initialization is retried only by the next admitted demand,
+using that demand's authority; an overlapping fresh demand waits for the cancelled
+pass to drain first. A successful pass stays memoized, and activation retirement
+never restarts it. Unavailable source authority retains explicit incomplete
+coverage. There is no background repair loop or operator migration command.
+The upgrade acquires one configured/admitted view; its first requested live read
+acquires a fresh view after that asynchronous pass. Subsequent invocations
+acquire one view and do not repeat the corpus census.
+Collection schema migrations remain pure row transforms and do not perform the
+cross-plugin transfer. The inspected 0.2 predecessor has no persisted PR-link
+writer; its existing task `linkedSessions` records remain at their todo owner.
+
+The existing Channels `session-pull-request-binding-v1` Action accepts an
+exclusive URL attach input in development source:
+`{kind:'attach',sessionId,pullRequestUrl}`. The detected PR card passes its
+snapshot URL unchanged. The binding owner shares GitHub's conversation URL
+parser and accepts only a GitHub PR, then requests
+`session.status.get({sessionId,includeAcceptedWorkspace:true})`. Both URL and
+structured attaches require the exact Session's admitted checkout repository to
+match before provider setup or binding writes. Missing/private/ambiguous
+checkout facts refuse attachment. The provider resolves the exact PR before
+the existing binding writer commits the link; this path never creates a PR or
+invokes `openOrReuse`. Loaded runtime validation remains separate from source
+composition checks.
+
+The developing GitHub PR adapter uses that same Action with an explicit exact
+`credentialRef` (`null` means the admitted machine-native GitHub service),
+and `expectedRepositoryId`. Channels checks immutable repository correspondence
+before binding creation and preserves the existing relationship clock and Watch
+on rejoin. The source descriptor claims only GitHub's `pull-request` kind;
+Issues and security findings retain their existing relationship owner.
+Its `readRelations` arm reads canonical connection/binding rows by exact
+credential and optional immutable PR/Session identity, without contacting
+GitHub; native reads additionally require the source caller's host-stamped
+placement. `unlink` revokes the exact retained binding and its scoped triggers
+through the existing binding deletion owner. A successful explicit native link
+is acknowledged by that writer, without a mandatory follow-up read. The retained
+upgrade described above proves existing duplicates only: it does not call this
+link writer or change its normal Action approval policy. There is no timestamp
+import operand or second relationship store.
+
+The same binding Action declares only `list` and `readRelations` read-only and
+observes their selected native Collection membership and connection dependencies.
+The GitHub source forwards its admitted relationship observation through the
+ordinary contributed-Action observer with the same native placement precondition
+as its read, preserving the host callback's retirement capability. Its admitted
+credential lifetime and native link/unlink changes remain observable; metadata
+resync alone does not publish a PR change. Disposal retires both subscriptions.
+Write arms retain their existing approval floor. No polling or snapshot fallback
+replaces an unavailable native observer.
+
+The developing Session PR controls consume that shared status/Watch binding,
+not another GitHub read. A proven open/link success may offer the Account default
+mode (Notify); only an explicit choice configures the exact binding revision.
+Changing the default does not escalate a retained binding. The local-reproduction
+control opens the existing GitHub local form with the Session's admitted source
+checkout and only already-proven workflow/SHA hints. Unmapped or non-CI feedback
+does not fabricate a YAML job id, and opening the form grants no fixing rounds,
+starts no process and does not answer a question. Visual mounting and the complete
+continuation journey remain integration work.
+
 Legacy `/zen` links redirect to Tasks and keep the selected task identity. The
 Zen-specific draft/start/link route is retired; Start/Send uses the ordinary
 entry attachment and Session orchestrator.
@@ -549,6 +698,64 @@ use the same catalog owner.
 
 The client-targeted `happier.triage/actions/sessions/run-configured-v1` Action runs a catalog `actionId` through the same configured action/profile/prompt and Session owners as a mounted press. Its exact input and result declarations are [`configuredActionRunProtocol.ts`](../packages/plugins/triage/src/actions/configuredActionRunProtocol.ts), not a second agent-only workflow. Callers supply exact `entries` (`entryRef` and `sourceInstanceId`) and a declared `destination`; optional settled `drafts` retain the host's canonical launch-input admission.
 
+The unreleased source adds the single-target `{v:1,handoff}` arm, defined by
+[`sessionHandoff.ts`](../packages/triage-protocol/src/v1/sessionHandoff.ts).
+`requestTriageSessionHandoffV1` on `@happier-dev/triage-sources/runtime` validates
+those operands and invokes this same Action once. Hosted CI, release-note
+context, selected entries or alerts, and selected local terminal output retain
+their distinct evidence shapes. Configured Session, Agent/profile and
+compose/send choices remain with the existing catalog and Session owners.
+The helper preserves the standard approval/failure envelope and action-owned
+recovery; an uncertain send is not permission to start again.
+
+Non-Triage surfaces read the same live catalog through
+`readTriageSessionHandoffChoicesV1` on `@happier-dev/triage-sources/runtime`.
+It invokes the existing `actions/read-v1` Action's closed
+`{v:1,projection:'sessionHandoff'}` arm. Each returned row carries its label and
+the four exact handoff selection operands; Session, Agent and delivery remain
+`configured`, not copied preferences. The canonical seeded Fix row is the
+default only while enabled and offered. Otherwise `defaultActionId` is null and
+the person chooses a row; callers must not silently substitute the first one.
+There is no persisted global last-selected Action. An unreadable catalog is
+unavailable, and approval/failure outcomes remain intact. Execution still
+re-reads the configured record and admits the real target before effects.
+
+An existing Session keeps its admitted Agent. A configured profile's preferred
+Agent applies to new-Session authoring; it does not silently switch or reject
+an existing Session. An incompatible explicitly requested profile or Agent
+returns `agentMismatch`. Compose appends ordinary evidence through the existing
+composer transaction and preserves its prior text, attachments, selection and
+focus; an unavailable composer is not a request to send instead.
+
+For an existing PR workspace, the configured owner invokes the read-only
+`entries/verify-existing-review-workspace-v1` Action. It obtains the exact
+Session's admitted checkout through `session.status.get`, then calls the same
+source review-workspace verifier with its `acceptedCheckout` arm. The source
+reauthorizes the current PR and verifies that checkout without preparing,
+moving or creating it. Missing correspondence refuses the handoff. Selected
+local-terminal evidence separately checks the qualified Project operation's
+metadata `sourceWorkspace`; its custody or worker Machine is not proof of
+the source checkout, and no terminal history is fetched for that check.
+
+External evidence uses the core `SessionInputForgeEvidenceV1Schema` and
+`renderSessionInputContextPromptV1({transformedUserText,forgeEvidence})`, exposed
+through SDK `/sessions`. The renderer emits one escaped source/author-labelled
+data block. Host-authored work, target and permission instructions remain
+outside it; provider titles, labels and bodies cannot grant authority. This is
+development-source integration, with composed and loaded-runtime validation
+tracked separately from publication or release availability.
+
+The same SDK surface exposes `readSessionInputForgeEvidenceV1(meta)` for
+transcript presentation. It validates `meta.forgeEvidence` and returns the
+structured evidence or `null` when absent or malformed. Rendered prompt text is
+not a metadata format and must not be parsed to recover the evidence. The
+structured value remains descriptive data, not permission or provenance.
+Channels' direct PR delivery supplies the same validated value for rendering and
+the authored Session input. Selected retained forge evidence also travels as a
+typed annotation on ordinary prepared attachments, projected into message
+metadata before persistence. This does not invent a snapshot for ordinary entry
+references whose fresh context is acquired later by their existing resolver.
+
 An incomplete start returns `recovery` when the existing single/bulk controller
 still holds retry custody. Echo it as `resumeStart` with the same ordered entries,
 source instances, action and destination. Single recovery repeats its retained
@@ -670,11 +877,172 @@ consume canonical provider rollups, never counts inferred from the loaded page;
 missing, partial, unknown, and inapplicable evidence never becomes a passing
 marker. Source-only evidence tabs and header write controls remain source-owned.
 
+The optional exact-PR `readPullRequestStatus` role uses the existing closed
+[`TriagePullRequestStatusResultV1Schema`](../packages/triage-protocol/src/v1/pullRequestStatus.ts).
+Its public successful-arm schema, `TriagePullRequestStatusV1Schema`, is also
+embedded in GitHub's Overview result; the native assembler remains shared with
+the standalone status read and fresh mutation admission. Provider-labelled
+requiredness stays on each check row, and reviewers carry bounded native ids
+rather than display-name or position keys. Draft, native merge state, queue
+requirements/membership, auto-merge, viewer capabilities, base/head and the
+actual observed head revision stay facts on that same status. Missing, partial
+or truncated evidence stays unknown. Conflict freedom, optional failures and
+an empty emitted-check list do not establish readiness.
+
+The same status optionally retains the provider's PR destination in `sourceUrl`
+and each check or job's native destination in `checks.rows[].detailsUrl`. Missing
+or unusable destinations are omitted, never synthesized or truncated into a
+different link. These display destinations add no provider acquisition and
+carry no mutation authority; source navigation uses the host's existing external
+link owner.
+The optional `title` is copied from that same exact native PR read through the
+existing display-text budget; omission means no title was established, not an
+empty title or a repository/number-derived replacement. Current and stale
+Session Resource bindings expose it at `nativeStatus.value.title`.
+
+The development `session-pull-request-status-v1` Resource retains each admitted
+Session binding, Watch policy and latest update independently of native status.
+When its existing unique Source-admitted Session/locator correspondence supplies
+canonical entry identity, the binding also carries optional
+`entry: { entryRef, sourceInstanceId }`. This is a navigation selection, not an
+authorization grant. Missing or ambiguous correspondence omits it; a valid
+Channels binding need not have a Triage entry. No extra lookup or provider read
+is performed, and consumers must not synthesize an entry from a URL or PR number.
+That Account metadata path does not require a Machine. GitHub's native status
+role remains daemon-placed: the current portable Account Action services do not
+provide its Connected Account materialization and admitted HTTP capabilities.
+If the required native execution or credential authority is unavailable, the
+binding remains present with an explicit unavailable native status, not an empty
+linked set. Native success while that Machine is offline is not established.
+Within the same admitted demand, two observations without native head evidence
+can retain equal semantic facts; a changed observed head revision resets that baseline.
+The exact configured SourceInstance is observed through its intrinsic Collection
+row. Replacing or removing its admitted source authority retires the affected
+bytes through the Resource owner. Changing only its display locator or
+configuration timestamp neither retires native authority nor performs another
+native status read; the shared relation projection owns those metadata updates.
+Standalone native acquisition keeps its qualified observation until it settles
+or hands off to an attached watch. Only the successfully admitted, encoded
+response commits a native baseline; an unpublished retired read cannot seed the
+replacement's stale value or successful-check clock.
+
+The public `/v1` helper `reconcileTriagePullRequestStatusV1(previous, next)`
+returns `{ value, checkedAtMs }` for already-admitted successful observations.
+The retained producer supplies a baseline only for the same authorized Account,
+plugin generation, source instance, credential, repository, PR and unchanged observed head revision.
+Equal semantic facts retain their status, nested entities and ordered arrays;
+reordered check/reviewer rows retain their native-id entities. Only the root
+observation clock is excluded from equality: `checkedAtMs` is always
+`next.observedAtMs`, even when `value` retains an older observation carrier.
+The shared Session Resource receiver applies this same reconciler after JSON
+admission, not a presentation-local comparator. It reuses a baseline only for
+the same admitted entry proof, PR identity and observed head within the host's
+Resource lifetime; private authority retirement clears that lifetime's baseline.
+The receiver retains the Resource wrapper's supplied `checkedAtMs`, rather than
+replacing it with the retained value's observation clock.
+Domain timestamps, permission/head changes and incomplete or truncated evidence
+remain semantic. Consumers keep successful freshness separate from semantic
+subscriptions; failure must retain the last successful clock, and no prior
+success means neither a value nor a clock is invented.
+
+In 0.3 development source, a framed source detail can offer its primary write
+through the optional `primaryWrite` member of the existing public
+[`TriageEvidenceDisclosureV1`](../packages/triage-sources/src/ui/evidenceDisclosure.tsx)
+bridge. The source publishes its title, disabled reason, pending state, explicit
+method choices, original declared Action reference and operand builder, readiness
+presentation, named unmet requirements, alternatives and existing Action callback.
+Its optional `nativeStatus` uses the same `SessionPullRequestNativeStatusV1`
+contract as the Session Resource: current/stale carry the admitted status and
+last successful `checkedAtMs`; stale also carries the actual failure. Unavailable
+has no invented status or successful clock. This is a projection of the detail's
+existing read, not another Resource subscription or write-admission snapshot.
+The header forwards that callback and its source-owned choice rather than
+deriving write authority from a label or enabled bit. Triage scopes the offer to the
+selected entry and connection and supplies it to the header composer; header
+rendering remains separate. The source keeps confirmation, head preconditions,
+provider decisions and settled feedback. Missing bridge support leaves the
+source's existing actions panel usable. GitHub's
+[`projectGithubPrimaryWriteV1`](../packages/plugins/scm-github/src/ui/detail/mutations.ts)
+consumes the admitted Overview status and repository capabilities, sharing the
+native requirement classifier with mutation admission. It offers the existing
+Merge/Mark ready Actions and native enqueue/dequeue/auto-merge Actions through
+that same bridge. Those header facts and the offered callback belong
+to the detail mount, not its selected body tab: switching tabs neither withdraws
+the offer nor starts another Overview read. Retiring the detail still cancels its
+reads and prevents a captured callback from writing.
+
+The [native merge owner](../packages/plugins/scm-github/src/triage/mutations/pullRequest.ts)
+reuses the fresh admitted PR/status decision before effects, including for agent,
+MCP and CLI calls. Known unmet requirements refuse ordinary Merge with named
+`requirements_unmet` evidence and zero merge writes. Unknown requirements remain
+unknown in presentation, while an otherwise admitted ordinary Merge lets GitHub
+enforce them. Explicit `withoutWaiting` uses that same Merge Action and requires
+affirmative native viewer eligibility plus an exact acknowledgement of the
+complete currently unmet requirement set. Unknown scope or a changed
+acknowledgement refuses it; draft, conflicts, moved head and method refusal
+remain constraints. An approved review does not establish that review threads
+are resolved. The existing branch-rule read retains thread-resolution enforcement;
+when it is required or unknown, this status cannot establish complete skipped
+scope and explicit bypass is refused rather than inventing thread outcomes.
+Eligibility comes from the already-required native PR read,
+with no dedicated eligibility request. Local intent and acknowledgement are not
+forwarded as provider bypass flags. Ambiguous writes use confirming reads rather
+than blind replay.
+
+The same Merge declaration supplies `confirmation.inputFields` for repository,
+PR number, exact head revision, merge method and `skippedRequirements.[].label`.
+The host's existing confirmation presenter reads these from the exact invocation
+input bound by its current-intent gate. The normal arm has no skipped operand;
+the without-waiting arm names its actual acknowledged requirements. No extra
+provider read or feature-local confirmation is used to populate that review.
+
+The current [Action declarations](../packages/plugins/scm-github/src/manifest.ts)
+make enqueue, dequeue and auto-merge cancellation direct for a host-proved
+present person. Merge, explicit without-waiting Merge and enabling auto-merge
+retain confirmation; enabling may merge immediately. Consequential agent
+invocations retain approval by default under the shared Action policy and its
+explicit settings overrides. These are **0.3 development-source contracts**:
+automated/package and loaded-runtime verification is pending. Final header/phone
+composition remains UI-D-owned, and the shared Session status Resource lifecycle
+and freshness subscriptions remain L05A-owned integration work; neither is
+established by the source presenter or protocol helper alone.
+
+Source detail failure sentences use `describeTriageSourceFailureV1` with the
+source's translation function. It reuses the shared access/contract failure copy and
+allows `plugins.triage.sourceFailure.<code>` for a translated source-specific
+explanation, falling back to the caller's localized sentence when unavailable.
+The optional translator preserves existing two-argument callers. Raw codes and
+provider detail remain in the typed diagnostic result, not the reader's sentence.
+Transient, rate-limit and unknown failures retain the caller's contextual warning
+instead of substituting generic retry advice for a possibly applied write.
+
 Checks, review and merge facts share
 [`TriageStatusRow`](../packages/triage-sources/src/ui/statusRow.tsx) across cockpit,
 story summary and the full source checks list. It owns only presentation; sources
 retain state vocabulary, filtering, reads and operations. Spread tiles use the
 public Metric caption slot instead of a separate caption renderer.
+
+For hosted CI in 0.3 development source, Triage keeps the Checks tab's outer
+list, ordering, rollup and source disclosure. A proven Actions-backed check opens
+the same `@happier-dev/forge-ci/ui` run and job detail used by Project Actions and
+Session CI. The forge plugin establishes repository, head, run, attempt and job
+provenance before dependent reads or effects; a matching name or timestamp is
+insufficient. External checks retain their source output and provider link, and
+an unresolved relation retains summary, Retry and link-out. Shared CI runtime
+owns exact-query foreground demand, logs and failure-summary projection; it
+does not take over native check classification, PR merge decisions, credentials
+or the configured Fix in a session handoff. Public protocol/runtime/UI imports
+follow the CLI-managed authoring path and remain Developer Preview source
+contracts; publication and loaded-runtime validation are separate evidence.
+
+GitHub's native outcome policy remains
+[`readGithubCheckOutcomeV1`](../packages/plugins/scm-github/src/triage/checkOutcome.ts),
+including its readonly failed and neutral conclusion sets. PR summary rollups,
+Checks and hosted CI consume that policy: a failure wins, an unfinished member
+prevents success, and unknown evidence cannot establish success. The provider's
+account request owner supplies shared backoff and simultaneous safe-read sharing;
+Triage keeps its own domain projections and demand rather than retaining settled
+transport promises.
 
 All six host Activity bodies render one chronological stream through
 [`TriageActivityTimeline`](../packages/triage-sources/src/ui/activityTimeline.tsx).
@@ -726,11 +1094,14 @@ The public [author recipe](../apps/docs/content/docs/plugins/ui/index.mdx) cover
 ## List Session facts (0.3 development)
 
 “With an agent” is a cut of the existing Triage list, not a second Session list.
-The mounted list pages the existing Account `session-links` index once per
-window acquisition and keeps only relationships for the window's entries.
-[`readEntrySessionLinks.ts`](../packages/plugins/triage/src/sessions/readEntrySessionLinks.ts)
-owns indexed page acquisition and decoding for the list, detail and fix-link
-resolver; it preserves the derived entry identity and Collection continuation.
+The mounted list submits its demanded entries through one batch of the existing
+relation Action. The composed relation owner admits the configured-source view
+once and reads only those entry relations, preserving each entry's independent
+complete or failed result. It does not acquire entry detail bodies to count
+links. [`readEntrySessionLinks.ts`](../packages/plugins/triage/src/sessions/readEntrySessionLinks.ts)
+remains the corpus page/decoding boundary beneath that owner. Detail pagination
+retains its opaque Collection continuation; complete Session/co-link reads walk
+the selected relation's pages rather than scanning once per kind.
 Distinct linked Session ids go through Plugin UI's shared `useSessionStates`
 read/watch lifecycle. The host's canonical Work bucket `working` supplies
 `agentActive` to the existing list planner. Required attention still takes
@@ -739,12 +1110,12 @@ pins outside the current window.
 
 The join refreshes with mounted window acquisition, manual refresh and return
 activity; Session invalidations re-read through the host. It creates no durable
-projection, per-row acquisition or polling timer. Incomplete or unavailable
+projection or polling timer. Incomplete or unavailable
 activity is shown in the list with an explicit retry. A failed link acquisition
 keeps previously known relationships without claiming that missing entries are
 unlinked; unreachable Session facts are not classified as working. A mount
-without the Account Data client reports unavailable activity rather than
-introducing a broader daemon read Action.
+without the Account Data client can still use the same portable Account Action;
+it does not substitute a broad daemon inventory read.
 
 ## Related
 
