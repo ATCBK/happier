@@ -14,11 +14,11 @@ export type ConnectedAccountPurposeDefaultsIntent =
     | Readonly<{ kind: 'service'; input: ReturnType<(typeof CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1)['connectedServices.accounts.purposeDefault.set']['parse']> }>;
 
 /** One catalog source and acknowledged mutation port for all Agent default surfaces. */
-export function useConnectedAccountPurposeDefaults(serverId?: string) {
+export function useConnectedAccountPurposeDefaults(serverId?: string, options?: Readonly<{ enabled?: boolean }>) {
     const activeScope = useActiveServerAccountScope();
     const execution = useMountedActionExecution(serverId ?? activeScope);
     const scope = execution.binding?.scope ?? null;
-    const catalog = useConnectedAccountCatalog('purposes', scope);
+    const catalog = useConnectedAccountCatalog('purposes', scope, options);
     const legacySettings = useSettingsSelector(settings => ({
         connectedServicesDefaultAuthByAgentIdV1: settings.connectedServicesDefaultAuthByAgentIdV1,
         connectedServicesAdditionalDefaultAuthByAgentIdV1: settings.connectedServicesAdditionalDefaultAuthByAgentIdV1,

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import {
@@ -34,6 +35,7 @@ export function useQualifiedConnectedAccountQuota(
     ref: QualifiedConnectedAccountRef,
     options: Readonly<{ refreshMachineId?: string | null }> = {},
 ): UseQualifiedConnectedAccountQuotaResult {
+    const presented = useLayoutPresentationActive();
     const credentials = useAuth().credentials;
     const activeServer = useActiveServerSnapshot();
     const refreshMachineId = options.refreshMachineId;
@@ -89,8 +91,8 @@ export function useQualifiedConnectedAccountQuota(
     );
     const subscribe = React.useCallback(
         (onChange: () => void) =>
-            subscribeQualifiedQuotaSnapshotEntry(key, onChange),
-        [key],
+            presented ? subscribeQualifiedQuotaSnapshotEntry(key, onChange) : () => {},
+        [key, presented],
     );
     const getEntry = React.useCallback(
         () => getQualifiedQuotaSnapshotEntry(key),
@@ -103,9 +105,9 @@ export function useQualifiedConnectedAccountQuota(
     );
 
     React.useEffect(() => {
-        if (!key || !context) return;
+        if (!presented || !key || !context) return;
         return retainQualifiedQuotaSnapshotPolling(key, context);
-    }, [context, key]);
+    }, [context, key, presented]);
 
     const refresh = React.useCallback(async () => {
         if (!key || !context || entry.supported === false) return;

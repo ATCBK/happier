@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { act } from 'react-test-renderer';
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { computeConnectedServiceQuotaErrorBackoffMs } from '@/sync/domains/connectedServices/connectedServiceQuotaErrorBackoff';
@@ -10,6 +12,39 @@ describe('useConnectedServiceQuotaSnapshots predecessor acquisition lifecycle', 
     const Wrapper = createLegacyQuotaAuthWrapper(() => boundary);
     beforeEach(async () => { await resetConnectedServiceQuotaSnapshotsTestState(); boundary = await createLegacyQuotaTestHarness(); });
     afterEach(async () => { standardCleanup(); await boundary.dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+    it.each([false, true])('parks hidden quota renders and acquisition without disturbing a visible reader=%s, and reopens fresh', async shared => {
+        vi.useFakeTimers();
+        const { useConnectedServiceQuotaSnapshots } = await import('./useConnectedServiceQuotaSnapshots');
+        let visible = true;
+        let renders = 0;
+        const profiles = [{ serviceId: 'anthropic', profileId: 'work' }];
+        const ParkedWrapper = ({ children }: React.PropsWithChildren) => React.createElement(Wrapper, null,
+            React.createElement(PluginSurfaceFocusEligibilityProvider, { active: visible, presentationActive: visible, children }));
+        const hook = await renderHook(() => { renders += 1; return useConnectedServiceQuotaSnapshots(profiles); }, { wrapper: ParkedWrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        const peer = shared ? await renderHook(() => useConnectedServiceQuotaSnapshots(profiles), { wrapper: Wrapper }) : null;
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.plainRead).toHaveBeenCalledTimes(1);
+        visible = false;
+        await hook.rerender();
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        const held = hook.getCurrent();
+        renders = 0;
+        boundary.plainRead.mockImplementation(async () => plainQuotaResponse(makeQuotaSnapshot({ serviceId: 'anthropic', meterId: 'current-window' })));
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect({ reads: boundary.plainRead.mock.calls.length, renders }).toEqual({ reads: shared ? 2 : 1, renders: 0 });
+        expect(hook.getCurrent()).toBe(held);
+        await peer?.unmount();
+        visible = true;
+        await hook.rerender();
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(hook.getCurrent().snapshotsByKey['anthropic/work']?.meters[0]?.meterId).toBe('current-window');
+        expect(boundary.plainRead).toHaveBeenCalledTimes(shared ? 3 : 2);
+        expect(boundary.control).not.toHaveBeenCalled();
+        await hook.unmount();
+    });
 
     it.each(['equivalent', 'duplicate', 'reordered', 'removed sibling'] as const)(
         'keeps pending acquisition stable across a %s input rerender', async change => {

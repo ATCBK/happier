@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useShallow } from 'zustand/react/shallow';
 
 import { getCurrentAuth, useAuth } from '@/auth/context/AuthContext';
@@ -42,6 +43,8 @@ import type {
 import { useCredentialScopedAccountModeResolver, type CredentialScopedAccountMode } from './useCredentialScopedAccountModeResolver';
 
 export type ProviderAccountUsageSnapshotsFetchPolicy = 'poll' | 'cache_only';
+
+const noSubscription = () => () => {};
 
 export type ProviderAccountUsageSnapshotsResult = Readonly<{
     snapshotsByRecordId: Readonly<Record<string, ProviderAccountUsageSnapshotV1 | null>>;
@@ -181,6 +184,7 @@ export function useProviderAccountUsageSnapshots(
     recordIds: ReadonlyArray<string>,
     options: Readonly<{ fetchPolicy?: ProviderAccountUsageSnapshotsFetchPolicy }> = {},
 ): ProviderAccountUsageSnapshotsResult {
+    const presented = useLayoutPresentationActive();
     const auth = useAuth();
     const credentials = auth.credentials;
     const quotasEnabled = useFeatureEnabled('connectedServices.quotas');
@@ -207,7 +211,7 @@ export function useProviderAccountUsageSnapshots(
     });
     const readSelectedEntries = () => selectEntries(getProviderAccountUsageCacheState());
     const cacheByRecordId = React.useSyncExternalStore(
-        subscribeProviderAccountUsageCache,
+        presented ? subscribeProviderAccountUsageCache : noSubscription,
         readSelectedEntries,
         readSelectedEntries,
     );
@@ -221,7 +225,7 @@ export function useProviderAccountUsageSnapshots(
     React.useEffect(() => retainProviderAccountUsageCacheEntries(
         credentialScope,
         normalizedRecordIds,
-        fetchPolicy !== 'cache_only' && quotasEnabled && credentials && activeServer.serverId
+        presented && fetchPolicy !== 'cache_only' && quotasEnabled && credentials && activeServer.serverId
             ? createUsageRowObserver({ credentials, credentialScope, resolveAccountMode,
                 isCurrent: () => {
                     if (activeCredentialScopeRef.current !== credentialScope) return false;
@@ -234,7 +238,7 @@ export function useProviderAccountUsageSnapshots(
                 },
                 serverBasis: { serverId: activeServer.serverId, generation: activeServer.generation } })
             : undefined,
-    ), [credentialScope, normalizedRecordIds, fetchPolicy, quotasEnabled, credentials,
+    ), [credentialScope, normalizedRecordIds, fetchPolicy, quotasEnabled, credentials, presented,
         activeServer.serverId, activeServer.generation, resolveAccountMode]);
 
     return React.useMemo(() => {

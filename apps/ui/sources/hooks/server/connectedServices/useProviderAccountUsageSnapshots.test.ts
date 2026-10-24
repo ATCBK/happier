@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAccountUsageSnapshotV1Schema, buildProviderAccountUsageRecordId } from '@happier-dev/protocol';
-import { createRenderCommitCounter, createRootLayoutFeaturesResponse, flushHookEffects, renderHook, standardCleanup, useRenderCommitCounter } from '@/dev/testkit';
+import { createRenderCommitCounter, createRootLayoutFeaturesResponse, flushHookEffects, renderHook, renderScreen, standardCleanup, useRenderCommitCounter } from '@/dev/testkit';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
@@ -17,6 +17,7 @@ import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev
 import { computeConnectedServiceQuotaErrorBackoffMs } from '@/sync/domains/connectedServices/connectedServiceQuotaErrorBackoff';
 import { createQualifiedQuotaTestHarness, quotaTestProviderUsageSnapshot, quotaTestProviderUsageResponse } from './qualifiedConnectedAccountQuotaTestHarness';
 import { useProviderAccountUsageSnapshots } from './useProviderAccountUsageSnapshots';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 const runtime = vi.hoisted(() => ({ active: true, listeners: new Set<() => void>() }));
 // Visibility is an environment boundary. Auth, Home, mode, features, cache and opening remain real.
@@ -69,6 +70,58 @@ describe('useProviderAccountUsageSnapshots', () => {
     afterEach(async () => {
         standardCleanup(); await boundary.dispose(); resetServerFeaturesClientForTests();
         vi.useRealTimers(); vi.restoreAllMocks();
+    });
+
+    it('withdraws hidden presentation reads and renders without disturbing a visible peer, then reopens fresh', async () => {
+        const snapshot = makeUsageSnapshot();
+        boundary.usageRead.mockImplementation(async () => Response.json(quotaTestProviderUsageResponse(snapshot)));
+        const counter = createRenderCommitCounter();
+        let current!: ReturnType<typeof useProviderAccountUsageSnapshots>;
+        let peerCurrent!: ReturnType<typeof useProviderAccountUsageSnapshots>;
+        function ParkedReader() {
+            useRenderCommitCounter(counter);
+            current = useProviderAccountUsageSnapshots([snapshot.recordId]);
+            return null;
+        }
+        function PeerReader() {
+            peerCurrent = useProviderAccountUsageSnapshots([snapshot.recordId]);
+            return null;
+        }
+        // The app has one Auth owner. Unmounting a separate injected Auth root
+        // would withdraw getCurrentAuth and invalidate the surviving reader artificially.
+        const page = (visible: boolean, peer: boolean) => React.createElement(Wrapper, null,
+            React.createElement(PluginSurfaceFocusEligibilityProvider, { active: visible, presentationActive: visible,
+                children: React.createElement(ParkedReader) }), peer ? React.createElement(PeerReader) : null);
+        const screen = await renderScreen(page(false, false));
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.usageRead).not.toHaveBeenCalled();
+        await screen.update(page(true, false));
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(current.snapshotsByRecordId[snapshot.recordId]).toEqual(snapshot);
+        await screen.update(page(true, true));
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.usageRead).toHaveBeenCalledTimes(1);
+        await screen.update(page(false, true));
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        counter.reset();
+        const held = current;
+        const fresh = { ...snapshot, fetchedAtMs: snapshot.fetchedAtMs + 1 };
+        boundary.usageRead.mockImplementation(async () => Response.json(quotaTestProviderUsageResponse(fresh)));
+        await act(async () => { wake(); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(peerCurrent.snapshotsByRecordId[snapshot.recordId]).toEqual(fresh);
+        expect(counter.read()).toEqual({ renders: 0, commits: 0 });
+        expect(current).toBe(held);
+        expect(boundary.usageRead).toHaveBeenCalledTimes(2);
+        await screen.update(page(false, false));
+        await act(async () => { wake(); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.usageRead).toHaveBeenCalledTimes(2);
+        await screen.update(page(true, false));
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(current.snapshotsByRecordId[snapshot.recordId]).toEqual(fresh);
+        expect(boundary.usageRead).toHaveBeenCalledTimes(3);
+        await screen.unmount();
     });
 
     it('subscribes only to requested records while still delivering changes to those records', async () => {

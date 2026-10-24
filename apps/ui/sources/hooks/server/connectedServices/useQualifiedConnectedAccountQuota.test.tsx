@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { resolveConnectedServiceSettingsErrorMessage } from '@/components/settings/connectedServices/connectedServiceSettingsErrors';
@@ -38,6 +39,39 @@ describe('useQualifiedConnectedAccountQuota', () => {
         __resetQualifiedConnectedAccountQuotaSnapshotStore();
         await boundary?.dispose();
         vi.restoreAllMocks();
+    });
+
+    it.each([false, true])('parks hidden quota demand and renders while preserving a visible reader=%s and fresh reopen', async shared => {
+        let visible = true;
+        let renders = 0;
+        const ParkedWrapper = ({ children }: React.PropsWithChildren) => <Wrapper>
+            <PluginSurfaceFocusEligibilityProvider active={visible} presentationActive={visible}>{children}</PluginSurfaceFocusEligibilityProvider>
+        </Wrapper>;
+        const hook = await renderHook(() => { renders += 1; return useQualifiedConnectedAccountQuota(ref); }, { wrapper: ParkedWrapper });
+        await vi.waitFor(() => expect(hook.getCurrent().snapshot).toEqual(snapshot));
+        const peer = shared ? await renderHook(() => useQualifiedConnectedAccountQuota(ref), { wrapper: Wrapper }) : null;
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        visible = false;
+        await hook.rerender();
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        const reads = boundary.read.mock.calls.length;
+        const held = hook.getCurrent();
+        renders = 0;
+        const fresh = { ...snapshot, fetchedAt: 2 };
+        boundary.read.mockImplementation(async () => Response.json(quotaTestResponse(fresh)));
+        await act(async () => {
+            publishHomeAccountChange(boundary.context().serverBasis.serverId, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1]);
+        });
+        if (peer) await vi.waitFor(() => expect(peer.getCurrent().snapshot).toEqual(fresh));
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect({ reads: boundary.read.mock.calls.length - reads, renders }).toEqual({ reads: shared ? 1 : 0, renders: 0 });
+        expect(hook.getCurrent()).toBe(held);
+        await peer?.unmount();
+        visible = true;
+        await hook.rerender();
+        await vi.waitFor(() => expect(hook.getCurrent().snapshot).toEqual(fresh));
+        expect(boundary.controls).toEqual([]);
+        await hook.unmount();
     });
 
     it('opens the exact server quota and resolved usage record without machine effects', async () => {

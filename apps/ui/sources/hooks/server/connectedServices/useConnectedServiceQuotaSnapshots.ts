@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import { useAuth } from '@/auth/context/AuthContext';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
@@ -156,6 +157,7 @@ export function useConnectedServiceQuotaSnapshots(
     profiles: ReadonlyArray<ConnectedServiceQuotaProfileRefInput>,
     options: Readonly<{ fetchPolicy?: ConnectedServiceQuotaSnapshotsFetchPolicy }> = {},
 ): ConnectedServiceQuotaSnapshotsResult {
+    const presented = useLayoutPresentationActive();
     const auth = useAuth();
     const credentials = auth.credentials;
     const quotasEnabled = useFeatureEnabled('connectedServices.quotas');
@@ -274,7 +276,7 @@ export function useConnectedServiceQuotaSnapshots(
     const [version, bumpVersion] = React.useReducer((value: number) => value + 1, 0);
 
     React.useEffect(() => {
-        if (loadContexts.length === 0) return;
+        if (!presented || loadContexts.length === 0) return;
         const unsubs = loadContexts.map((registration) =>
             registration.kind === 'v4'
                 ? subscribeQualifiedQuotaSnapshotEntry(
@@ -288,10 +290,10 @@ export function useConnectedServiceQuotaSnapshots(
         return () => {
             for (const unsub of unsubs) unsub();
         };
-    }, [loadContexts]);
+    }, [loadContexts, presented]);
 
     React.useEffect(() => {
-        if (fetchPolicy !== 'once') return;
+        if (!presented || fetchPolicy !== 'once') return;
         const releases = loadContexts.map((registration) =>
             registration.kind === 'v4'
                 ? loadQualifiedQuotaSnapshotOnce(registration.key, registration.loadContext)
@@ -299,10 +301,10 @@ export function useConnectedServiceQuotaSnapshots(
         return () => {
             for (const release of releases) release();
         };
-    }, [fetchPolicy, loadContexts]);
+    }, [fetchPolicy, loadContexts, presented]);
 
     React.useEffect(() => {
-        if (fetchPolicy !== 'poll') return;
+        if (!presented || fetchPolicy !== 'poll') return;
         const releases = loadContexts.map((registration) =>
             registration.kind === 'v4'
                 ? retainQualifiedQuotaSnapshotPolling(
@@ -316,7 +318,7 @@ export function useConnectedServiceQuotaSnapshots(
         return () => {
             for (const release of releases) release();
         };
-    }, [fetchPolicy, loadContexts]);
+    }, [fetchPolicy, loadContexts, presented]);
 
     const refresh = React.useCallback(async (keys?: readonly string[]) => {
         const selected = keys ? new Set(keys) : null;
@@ -399,5 +401,5 @@ export function useConnectedServiceQuotaSnapshots(
             refreshableKeys,
             refresh,
         } satisfies ConnectedServiceQuotaSnapshotsResult;
-    }, [loadContexts, normalizedProfiles, quotasEnabled, refresh, version]);
+    }, [loadContexts, normalizedProfiles, presented, quotasEnabled, refresh, version]);
 }
