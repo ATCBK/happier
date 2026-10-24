@@ -1,6 +1,7 @@
 import type { SessionParticipantTarget } from '@/sync/domains/session/participants/participantTargets';
 
 import type { SessionSubagent } from './types';
+import { resolveExecutionRunTitle } from '@/components/sessions/runs/resolveExecutionRunTitle';
 
 export function deriveSessionSubagentRecipients(
     subagents: readonly SessionSubagent[],
@@ -22,11 +23,14 @@ export function deriveSessionSubagentRecipients(
         }
 
         if (!subagent.recipient || !subagent.capabilities.canSend || subagent.status !== 'running') continue;
+        const displayLabel = subagent.kind === 'execution_run' && subagent.runRef?.intent === 'scm_diff_summary'
+            ? resolveExecutionRunTitle(subagent.runRef, 'recipient') : subagent.display.title;
         targets.push({
             key: subagent.id,
-            displayLabel: subagent.display.title,
+            displayLabel,
             ...(subagent.display.accentName ? { accentName: subagent.display.accentName } : {}),
-            recipient: subagent.recipient,
+            recipient: subagent.recipient.kind === 'execution_run' && subagent.runRef?.intent === 'scm_diff_summary'
+                ? { ...subagent.recipient, label: displayLabel } : subagent.recipient,
         });
     }
 
