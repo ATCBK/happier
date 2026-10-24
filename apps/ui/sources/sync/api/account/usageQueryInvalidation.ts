@@ -4,7 +4,7 @@ import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils'
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { isMachineReplaced } from '@happier-dev/protocol/machines/identity/canonicalMachineId';
 import { readMachineName } from '@/utils/sessions/machineDisplayNames';
-import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
+import { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1, readConnectedServicesAccountChangeV1 } from '@happier-dev/protocol/changes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeAccountChange, type HomeAccountChangeEvent } from '@/sync/runtime/orchestration/homeAccountChange';
 import { isRuntimeActive, subscribeToRuntimeActiveChange } from '@/utils/runtime/isRuntimeActive';
@@ -27,6 +27,8 @@ export function getUsageProjectionNextReadAtMs(input: Readonly<{
 export function isUsageProjectionHomeAccountChange(event: HomeAccountChangeEvent): boolean {
     return event.source === 'connected' || event.usageQueryAffects !== false
         && (event.entityIds === undefined || event.entityIds.includes(PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1)
+            || (event.changeKinds === undefined || event.changeKinds.includes('account'))
+                && event.entityIds.some(entityId => readConnectedServicesAccountChangeV1({ kind: 'account', entityId }) !== null)
             || event.changeKinds === undefined && event.entityIds.includes('self'));
 }
 

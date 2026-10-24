@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from "fastify-type-provider-zod";
+import { buildConnectedServicesAccountChangeV1 } from '@happier-dev/protocol/changes';
 
 const { emitUpdate } = vi.hoisted(() => ({
     emitUpdate: vi.fn(),
@@ -50,6 +51,9 @@ const { trackApp, closeTrackedApps } = createAppCloseTracker();
 const openAiCodexWorkIdentity = resolveLegacyServiceAccountTokenIdentityFields({
     serviceId: "openai-codex",
     profileId: "work",
+});
+const openAiCodexChange = buildConnectedServicesAccountChangeV1({
+    pluginId: openAiCodexWorkIdentity.servicePluginId, localId: openAiCodexWorkIdentity.serviceLocalId,
 });
 const openAiCodexMainGroupIdentity = {
     servicePluginId: openAiCodexWorkIdentity.servicePluginId,
@@ -179,11 +183,11 @@ describe("connectRoutes (connected services v3) plaintext credential endpoints (
         expect(tokenUtf8.includes("tok_access")).toBe(false);
 
         const change = await db.accountChange.findUnique({
-            where: { accountId_kind_entityId: { accountId: user.id, kind: "account", entityId: "self" } },
+            where: { accountId_kind_entityId: { accountId: user.id, kind: "account", entityId: openAiCodexChange.entityId } },
             select: { cursor: true, hint: true },
         });
         expect(change).toEqual(expect.objectContaining({ cursor: expect.any(Number) }));
-        expect((change!.hint as any)?.connectedServices).toBe(true);
+        expect(change!.hint).toEqual(openAiCodexChange.hint);
         expect(emitUpdate).toHaveBeenCalledWith(expect.objectContaining({
             userId: user.id,
             recipientFilter: { type: "user-scoped-only" },
@@ -388,11 +392,11 @@ describe("connectRoutes (connected services v3) plaintext credential endpoints (
         expect(del.json()).toEqual({ success: true });
 
         const change = await db.accountChange.findUnique({
-            where: { accountId_kind_entityId: { accountId: user.id, kind: "account", entityId: "self" } },
+            where: { accountId_kind_entityId: { accountId: user.id, kind: "account", entityId: openAiCodexChange.entityId } },
             select: { cursor: true, hint: true },
         });
         expect(change).toEqual(expect.objectContaining({ cursor: expect.any(Number) }));
-        expect((change!.hint as any)?.connectedServices).toBe(true);
+        expect(change!.hint).toEqual(openAiCodexChange.hint);
         expect(emitUpdate).toHaveBeenCalledWith(expect.objectContaining({
             userId: user.id,
             recipientFilter: { type: "user-scoped-only" },

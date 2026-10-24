@@ -2955,6 +2955,7 @@ export async function startDaemon(
         },
         invalidateConnectedAccounts: () => {
           connectedAccountPurposeBindingRuntime.invalidate({
+            ...(notification.connectedServiceRefs ? { services: notification.connectedServiceRefs } : {}),
             ...(notification.quotaRefreshOnly ? { quotaRefreshOnly: true } : {}),
             ...(notification.quotaRefreshRecordIds
               ? { quotaRefreshRecordIds: notification.quotaRefreshRecordIds } : {}),

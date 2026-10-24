@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   sealQualifiedConnectedAccountContentEnvelope,
   type QualifiedConnectedAccountProfileV4,
+  type ConnectedServiceCredentialHealthV1,
 } from '@happier-dev/protocol';
 
 import type { ApiClient } from '@/api/api';
 import type { Credentials } from '@/persistence';
+import { logger } from '@/ui/logger';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createAdmittedPluginRuntimeFixture, retireAdmittedPluginRuntimeRegistry } from '@/plugins/testkit/admittedRuntime';
 
@@ -49,6 +51,7 @@ async function createHarness(input: Readonly<{
   credentialAvailable?: boolean;
   v4Support?: 'advertised' | 'absent' | 'indeterminate';
   omitQualifiedRuntime?: boolean;
+  health?: ConnectedServiceCredentialHealthV1;
 }>) {
   const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-qualified-status-'));
   createdDirectories.push(happyHomeDir);
@@ -91,7 +94,7 @@ async function createHarness(input: Readonly<{
           credentialRevision,
           configurationRevision: null,
           content: credentialContent,
-          metadata: { scopes: [] },
+          metadata: { scopes: [], ...(input.health ? { health: input.health } : {}) },
         };
   });
   const establishedRuntimeOwner =
@@ -191,6 +194,20 @@ async function createHarness(input: Readonly<{
 }
 
 describe('ConnectedServiceRefreshCoordinator qualified status integration', () => {
+  it.each([false, true])('records only payload-free health transition facts at the actual status write (timestamp-only=%s)', async timestampOnly => {
+    const diagnostic = vi.spyOn(logger, 'debug');
+    const harness = await createHarness(timestampOnly ? { health: {
+      v: 1, status: 'connected', reconnectRequired: false, lastRefreshAttemptAt: 1,
+      lastRefreshSuccessAt: 1, lastRuntimeAuthFailureAt: 1,
+    } } : {});
+    await harness.coordinator.tickOnce();
+    expect(harness.mutateCredentialHealth).toHaveBeenCalledOnce();
+    expect(diagnostic.mock.calls.filter(([event]) => event === '[ConnectedServiceRefreshCoordinator] credential health write'))
+      .toEqual([['[ConnectedServiceRefreshCoordinator] credential health write', {
+        path: 'status', serviceKind: 'openai', beforeStatus: timestampOnly ? 'connected' : null, afterStatus: 'connected',
+        substantiveChanged: !timestampOnly,
+      }]]);
+  });
   it('parks healthy non-expiring credentials across unrelated wakes and rechecks a replaced revision', async () => {
     let clock = now;
     let revision = credentialRevision;

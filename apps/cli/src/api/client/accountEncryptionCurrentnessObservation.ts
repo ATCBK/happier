@@ -9,7 +9,7 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { logger } from '@/ui/logger';
 import { DEFAULT_ACCOUNT_CHANGES_PAGE_LIMIT, fetchChanges } from '@/api/changes';
 import { readSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
-import { readProviderAccountUsageRefreshRecordIdV1 } from '@happier-dev/protocol/changes';
+import { readConnectedServicesAccountChangeV1, readProviderAccountUsageRefreshRecordIdV1 } from '@happier-dev/protocol/changes';
 import { parseConnectedAccountCatalogPhysicalKeyV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 
 type Scope = Readonly<{ accountId: string; token: string; serverBaseUrl: string; signal?: AbortSignal }>;
@@ -248,13 +248,22 @@ function createObservation(scope: Scope): SharedObservation {
                             const recordId = readProviderAccountUsageRefreshRecordIdV1(change);
                             return recordId ? [recordId] : [];
                         });
-                        const hasConnectedAccountChange = result.response.changes.some(change => change.kind === 'account'
-                            && (parseConnectedAccountCatalogPhysicalKeyV1(change.entityId) !== null
-                                || change.entityId === 'self' && typeof change.hint === 'object' && change.hint !== null
-                                    && 'connectedServices' in change.hint && change.hint.connectedServices === true));
+                        const serviceChanges = result.response.changes.flatMap(change => {
+                            const scope = readConnectedServicesAccountChangeV1(change);
+                            return scope ? [scope] : [];
+                        });
+                        const hasCatalogChange = result.response.changes.some(change => change.kind === 'account'
+                            && parseConnectedAccountCatalogPhysicalKeyV1(change.entityId) !== null);
+                        const hasConnectedAccountChange = hasCatalogChange || serviceChanges.length > 0;
+                        const services = !hasCatalogChange && serviceChanges.length > 0 && serviceChanges.every(change => change.scope === 'service')
+                            ? serviceChanges.flatMap(change => change.scope === 'service' ? [change.ref] : [])
+                            : undefined;
                         if (quotaRefreshRecordIds.length || hasConnectedAccountChange) {
-                            publishConnectedAccounts(quotaRefreshRecordIds.length ? { quotaRefreshRecordIds,
-                                ...(!hasConnectedAccountChange ? { quotaRefreshOnly: true } : {}) } : {});
+                            publishConnectedAccounts({
+                                ...(quotaRefreshRecordIds.length ? { quotaRefreshRecordIds } : {}),
+                                ...(!hasConnectedAccountChange ? { quotaRefreshOnly: true } : {}),
+                                ...(services ? { services } : {}),
+                            });
                         }
                         followCursor = result.response.nextCursor;
                         followCursorAcknowledged = true;

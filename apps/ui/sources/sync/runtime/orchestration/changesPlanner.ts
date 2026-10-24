@@ -6,6 +6,7 @@ import {
     PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1,
     SessionOrganizationChangeHintSchema,
     TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1,
+    readConnectedServicesAccountChangeV1,
     readSessionUpdatedMessageChangeHintV1,
     type ChangeKind,
 } from '@happier-dev/protocol/changes';
@@ -241,6 +242,7 @@ export function changeRequiresSavedSecretCatalogRefresh(change: Pick<ApiChangeEn
             || Object.keys(change.hint).some((key) => key !== 'settingsVersion'));
     return change.kind === 'savedSecretResource'
         || (change.kind === 'account' && change.entityId === TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1)
+        || readConnectedServicesAccountChangeV1(change) !== null
         || isAccountCurrentnessChange;
 }
 
@@ -564,6 +566,12 @@ export function planSyncActionsFromChanges(
             if (changeRequiresSavedSecretCatalogRefresh(change)) {
                 invalidateSavedSecretResources = true;
             }
+            if (change.entityId !== 'self' && readConnectedServicesAccountChangeV1(change)) {
+                // The Account profile owns Connected Service status and descriptors;
+                // these dedicated rows do not change encrypted Account settings.
+                invalidateProfile = true;
+                continue;
+            }
             if (change.entityId.startsWith('workflow-run:')) {
                 const runId = change.entityId.slice('workflow-run:'.length);
                 if (runId) workflowRunIdsToRefresh.add(runId);
@@ -792,6 +800,7 @@ function plannedChangesAffectEverySessionListQuery(planned: PlannedChangeActions
             change.entityId === TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1
             || change.entityId === HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1
         ) return true;
+        if (readConnectedServicesAccountChangeV1(change)) return true;
         if (change.entityId !== 'self') return false;
 
         // Settings writes identify their exact version. Other `self` changes can

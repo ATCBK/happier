@@ -4,7 +4,8 @@
  */
 
 import axios from 'axios';
-import { readProviderAccountUsageRefreshRecordIdV1 } from '@happier-dev/protocol/changes';
+import { readConnectedServicesAccountChangeV1, readProviderAccountUsageRefreshRecordIdV1 } from '@happier-dev/protocol/changes';
+import type { QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { PluginDomainChangeEntrySchema } from '@happier-dev/protocol/changes/pluginDomain';
 import { ManagedMachinePolicyChangeHintV1Schema } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
 import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
@@ -451,6 +452,8 @@ export type ConnectedServicesProjectionNotification = Readonly<{
     signal: AbortSignal;
     connectedServicesV2: unknown;
     connectedServiceCredentialRevisionsV1: unknown;
+    /** Absent means all services (including startup, reconnect and retained self hints). */
+    connectedServiceRefs?: readonly QualifiedConnectedAccountServiceRef[];
     quotaRefreshRecordIds?: readonly string[];
     quotaRefreshOnly?: boolean;
 }>;
@@ -5262,14 +5265,13 @@ export class ApiMachineClient {
             const highestAccountSettingsVersion = accountSettingsVersions.length > 0
                 ? Math.max(...accountSettingsVersions)
                 : null;
-            const hasConnectedServicesChange = changes.some((change) => {
-                if (change.kind !== 'account' || change.entityId !== 'self') return false;
-                const hint = change.hint;
-                return hint !== null
-                    && typeof hint === 'object'
-                    && !Array.isArray(hint)
-                    && (hint as { connectedServices?: unknown }).connectedServices === true;
+            const connectedServicesChanges = changes.flatMap(change => {
+                const scope = readConnectedServicesAccountChangeV1(change);
+                return scope ? [scope] : [];
             });
+            const hasConnectedServicesChange = connectedServicesChanges.length > 0;
+            const connectedServiceRefs = connectedServicesChanges.some(change => change.scope === 'all') ? undefined
+                : connectedServicesChanges.flatMap(change => change.scope === 'service' ? [change.ref] : []);
             const quotaRefreshRecordIds = [...new Set(changes.flatMap(change => {
                 const recordId = readProviderAccountUsageRefreshRecordIdV1(change);
                 return recordId === null ? [] : [recordId];
@@ -5426,6 +5428,7 @@ export class ApiMachineClient {
                 await this.reconcileConnectedServicesProjection({
                     source: 'changes',
                     executionAuthority,
+                    ...(hasConnectedServicesChange && connectedServiceRefs ? { connectedServiceRefs } : {}),
                     ...(quotaRefreshRecordIds.length > 0 ? { quotaRefreshRecordIds } : {}),
                     quotaRefreshOnly: !hasConnectedServicesChange && !hasConnectedAccountCatalogChange,
                 }, signal);

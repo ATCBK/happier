@@ -3,7 +3,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { applyPlannedChangeActions } from './changesApplier';
 import { planSyncActionsFromChanges, type PlannedChangeActions } from './changesPlanner';
 import type { ApiChangeEntry } from '@/sync/api/types/apiTypes';
-import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
+import { buildConnectedServicesAccountChangeV1, TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
 
 const credentials: AuthCredentials = { token: 't', secret: 's' };
 
@@ -72,6 +72,33 @@ function buildChange(params: {
 }
 
 describe('changesApplier', () => {
+    it('materializes a connected-service page once without Settings reads and preserves the next settings-only refresh', async () => {
+        const reads = { settings: 0, profile: 0, savedSecretResources: 0 };
+        const apply = (changes: ApiChangeEntry[]) => applyPlannedChangeActions({
+            planned: planSyncActionsFromChanges(changes),
+            credentials,
+            isSessionMessagesLoaded: () => false,
+            invalidate: {
+                settings: async () => { reads.settings++; },
+                profile: async () => { reads.profile++; },
+                savedSecretResources: async () => { reads.savedSecretResources++; },
+            },
+            invalidateMessagesForSession: async () => {},
+            invalidateScmStatusForSession: () => {},
+            applyTodoSocketUpdates: async () => {},
+            kvBulkGet: async () => ({ values: [] }),
+        });
+        const changes = Array.from({ length: 27 }, (_, index) => buildChange({
+            cursor: index + 1,
+            ...buildConnectedServicesAccountChangeV1({ pluginId: 'acme.accounts', localId: `service-${index}` }),
+        }));
+        expect(await apply(changes)).toMatchObject({ status: 'complete', safeAdvanceCursor: '27' });
+        expect(reads).toEqual({ settings: 0, profile: 1, savedSecretResources: 1 });
+        expect(await apply([buildChange({ cursor: 28, kind: 'account', hint: { settingsVersion: 9 } })]))
+            .toMatchObject({ status: 'complete', safeAdvanceCursor: '28' });
+        expect(reads).toEqual({ settings: 1, profile: 2, savedSecretResources: 1 });
+    });
+
     it('checkpoints a hydrated session when its history reader deliberately defers newer content', async () => {
         let deferred = false;
         const result = await applyPlannedChangeActions({

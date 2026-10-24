@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -55,6 +55,14 @@ import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/manage
 import { UpdateBodySchema } from '@happier-dev/protocol/updates';
 import { buildProviderAccountUsageRecordId } from '@happier-dev/protocol/connect/accountUsage';
 import type { ChangeEntry } from '@happier-dev/protocol/changes';
+import { createLightSqliteHarness } from '../../../server/sources/testkit/lightSqliteHarness';
+import { db } from '../../../server/sources/storage/db';
+import { inTx } from '../../../server/sources/storage/inTx';
+import { markAccountChanged } from '../../../server/sources/app/changes/markAccountChanged';
+import { recordConnectedServiceAccountProfileChange } from '../../../server/sources/app/api/routes/connect/connectedServicesAccountProfileChange';
+import { mutateQualifiedConnectedServiceCredential, mutateQualifiedConnectedServiceCredentialHealth } from '../../../server/sources/app/api/routes/connect/qualifiedConnectedAccounts/credentialRepository';
+import { createDaemonConnectedAccountPurposeBindingRuntime } from '@/daemon/connectedServices/purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
+import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
 import {
     publishPluginAccountCollectionWatchInvalidation as publishCollectionChange,
     readPluginAccountAvailabilityChangeKey,
@@ -2108,45 +2116,134 @@ describe('ApiMachineClient /v2/changes reconnect', () => {
         expect(writeAccountChangesCursor).toHaveBeenCalledWith('acc-1', 8);
     });
 
-    it('reconciles connected services once for a live connected-services change', async () => {
-        const machine: Machine = {
-            id: 'machine-1',
-            encryptionKey: new Uint8Array(32).fill(7),
-            encryptionVariant: 'legacy',
-            metadata: null,
-            metadataVersion: 0,
-            daemonState: null,
-            daemonStateVersion: 0,
-        };
-        mockAccountGet(async (url: string) => {
-            if (url.includes('/v1/account/profile')) return { status: 200, data: { id: 'acc-1' } };
-            if (url.includes('/v2/changes')) {
-                return {
-                    status: 200,
-                    data: {
-                        changes: [{
-                            cursor: 9,
-                            kind: 'account',
-                            entityId: 'self',
-                            changedAt: 9,
-                            hint: { connectedServices: true },
-                        }],
-                        nextCursor: 9,
-                    },
-                };
-            }
-            throw new Error(`unexpected url: ${url}`);
+    describe('service-proportional inventory reads', () => {
+        let database: Awaited<ReturnType<typeof createLightSqliteHarness>> | undefined;
+        beforeAll(async () => {
+            database = await createLightSqliteHarness({ tempDirPrefix: 'happier-scoped-health-feed-',
+                initAuth: false, initEncrypt: true, initFiles: false });
         });
-        const reconcile = vi.fn(async () => {});
-        const client = new ApiMachineClient('token', machine);
-        client.onConnectedServicesProjection(reconcile);
+        afterAll(async () => { await database?.close(); });
 
-        await (client as any).syncChangesOnConnect({ reason: 'live' });
-
-        expect(reconcile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-            source: 'changes',
-            executionAuthority: 'runtime_recovery',
-        }));
+        it.each(['one', 'two', 'broad', 'legacy'] as const)('reconciles connected services with service-proportional inventory reads (%s)', async mode => {
+            const admitted = await createAdmittedPluginRuntimeFixture();
+            let client: ApiMachineClient | undefined;
+            try {
+                const listAccounts = vi.fn(async (service: { pluginId: string; localId: string }) => ({ service, accounts: [] }));
+                const purposeRuntime = createDaemonConnectedAccountPurposeBindingRuntime({
+                    reloadController: admitted.controller,
+                    coordinatorInventoryIsObserved: () => true,
+                    resolveQualifiedConnectedAccountV4Support: () => 'advertised',
+                    establishedRuntimeOwner: createQualifiedConnectedAccountEstablishedRuntimeOwner({
+                        reloadController: admitted.controller,
+                        credentials: { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32) } },
+                        getAccountEncryptionMode: async () => 'plain',
+                        readCredential: async () => { throw new Error('Inventory must not read credentials'); },
+                        readConfiguration: async () => null,
+                        configuration: { read: async () => null, secrets: {
+                            admit: async () => undefined, has: async () => false, read: async () => null,
+                        } },
+                    }),
+                    qualifiedApi: { listAccounts, listGroups: async () => ({ groups: [] }), readGroup: async () => null },
+                });
+                await purposeRuntime.listCoordinatorAccounts();
+                const services = listAccounts.mock.calls.map(([service]) => service);
+                expect(services).toHaveLength(27);
+                const connectedServiceRefs = mode === 'broad' || mode === 'legacy' ? undefined : services.slice(0, mode === 'one' ? 1 : 2);
+                const account = await db.account.create({ data: { id: `acc-scope-${mode}`, publicKey: null, encryptionMode: 'plain' } });
+                const revisions = [];
+                for (const service of connectedServiceRefs ?? services.slice(0, 1)) {
+                    const ref = { service, accountId: 'scope-test' };
+                    const created = await mutateQualifiedConnectedServiceCredential({ accountId: account.id, ref,
+                        expectedCredentialRevision: null, authenticationModeId: 'api-key',
+                        content: { t: 'plain', v: { token: 'test-credential' } }, metadata: { scopes: [] } });
+                    if (created.status !== 'written') throw new Error('Fixture credential creation did not settle');
+                    revisions.push({ ref, credentialRevision: created.credentialRevision, configurationRevision: created.configurationRevision });
+                    const health = await mutateQualifiedConnectedServiceCredentialHealth({ accountId: account.id, ref,
+                        expectedCredentialRevision: created.credentialRevision, expectedConfigurationRevision: created.configurationRevision,
+                        health: { v: 1, status: 'needs_reauth', reconnectRequired: true } });
+                    expect(health.status).toBe('written');
+                }
+                if (mode === 'broad') await inTx(tx => recordConnectedServiceAccountProfileChange({ tx, accountId: account.id }));
+                if (mode === 'legacy') await inTx(tx => markAccountChanged(tx, { accountId: account.id, kind: 'account',
+                    entityId: 'self', hint: { connectedServices: true } }));
+                let acknowledged = 0;
+                readAccountChangesCursor.mockImplementation(async () => acknowledged);
+                writeAccountChangesCursor.mockImplementation(async (_accountId, cursor) => { acknowledged = cursor; });
+                listAccounts.mockClear();
+                const machine: Machine = {
+                    id: 'machine-1',
+                    encryptionKey: new Uint8Array(32).fill(7),
+                    encryptionVariant: 'legacy',
+                    metadata: null,
+                    metadataVersion: 0,
+                    daemonState: null,
+                    daemonStateVersion: 0,
+                };
+                mockAccountGet(async (url: string) => {
+                    if (url.includes('/v1/account/profile')) return { status: 200, data: { id: account.id } };
+                    if (url.includes('/v2/changes')) {
+                        const changes = await db.accountChange.findMany({ where: { accountId: account.id, cursor: { gt: acknowledged } },
+                            orderBy: { cursor: 'asc' } });
+                        return {
+                            status: 200,
+                            data: {
+                                changes: changes.map(change => ({
+                                    cursor: change.cursor,
+                                    kind: 'account',
+                                    entityId: change.entityId,
+                                    changedAt: change.changedAt.getTime(),
+                                    hint: change.hint,
+                                })),
+                                nextCursor: changes.at(-1)?.cursor ?? acknowledged,
+                            },
+                        };
+                    }
+                    throw new Error(`unexpected url: ${url}`);
+                });
+                const reconcile = vi.fn(async (notification: import('./apiMachine').ConnectedServicesProjectionNotification) => {
+                    purposeRuntime.invalidate({ services: notification.connectedServiceRefs });
+                    await purposeRuntime.listCoordinatorAccounts();
+                });
+                const directMaterial = vi.fn(async () => {});
+                client = new ApiMachineClient('token', machine);
+                client.onConnectedServicesProjection(reconcile);
+                client.onManagedProviderRetainedCurrentnessInvalidation(directMaterial);
+                await (client as unknown as { syncChangesOnConnect(input: { reason: 'live' }): Promise<void> })
+                    .syncChangesOnConnect({ reason: 'live' });
+                expect(listAccounts.mock.calls.map(([service]) => service)).toEqual(connectedServiceRefs ?? services);
+                expect(reconcile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+                    source: 'changes', executionAuthority: 'runtime_recovery',
+                    ...(connectedServiceRefs ? { connectedServiceRefs } : {}),
+                }));
+                expect(directMaterial).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ directMaterialChanged: true }));
+                if (mode === 'two') {
+                    listAccounts.mockClear();
+                    reconcile.mockClear();
+                    const [first] = revisions;
+                    if (!first) throw new Error('Missing service A credential revision');
+                    expect((await mutateQualifiedConnectedServiceCredentialHealth({ accountId: account.id, ref: first.ref,
+                        expectedCredentialRevision: first.credentialRevision, expectedConfigurationRevision: first.configurationRevision,
+                        health: { v: 1, status: 'connected', reconnectRequired: false } })).status).toBe('written');
+                    await (client as unknown as { syncChangesOnConnect(input: { reason: 'live' }): Promise<void> })
+                        .syncChangesOnConnect({ reason: 'live' });
+                    expect(listAccounts.mock.calls.map(([service]) => service)).toEqual([services[0]]);
+                    expect(reconcile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ connectedServiceRefs: [services[0]] }));
+                }
+                listAccounts.mockClear();
+                reconcile.mockClear();
+                directMaterial.mockClear();
+                await inTx(tx => markAccountChanged(tx, { accountId: account.id, kind: 'account', entityId: 'self', hint: { settingsVersion: 2 } }));
+                await (client as unknown as { syncChangesOnConnect(input: { reason: 'live' }): Promise<void> })
+                    .syncChangesOnConnect({ reason: 'live' });
+                await purposeRuntime.listCoordinatorAccounts();
+                expect(listAccounts).not.toHaveBeenCalled();
+                expect(reconcile).not.toHaveBeenCalled();
+                expect(directMaterial).not.toHaveBeenCalled();
+            } finally {
+                try { await client?.shutdown(); }
+                finally { await admitted.dispose(); }
+            }
+        });
     });
 
     it('continues /v2/changes catch-up without timer retry when generation reconciliation awaits another domain event', async () => {

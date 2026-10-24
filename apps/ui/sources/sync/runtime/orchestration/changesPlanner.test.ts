@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
     ChangeEntrySchema,
     ChangeKindSchema,
+    buildConnectedServicesAccountChangeV1,
     PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1,
     TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1,
 } from '@happier-dev/protocol/changes';
@@ -176,6 +177,29 @@ function buildChange(params: {
 }
 
 describe('planSyncActionsFromChanges', () => {
+    it('refreshes connected-service currentness without waking encrypted Settings and retains the next settings-only fast path', () => {
+        const serviceChanges = [
+            buildConnectedServicesAccountChangeV1({ pluginId: 'acme.accounts', localId: 'service-a' }),
+            buildConnectedServicesAccountChangeV1({ pluginId: 'acme.accounts', localId: 'service-b' }),
+            buildConnectedServicesAccountChangeV1(),
+            { kind: 'account' as const, entityId: 'self', hint: { connectedServices: true } },
+        ];
+        for (const [index, change] of serviceChanges.entries()) {
+            const planned = planSyncActionsFromChanges([buildChange({ cursor: index + 1, ...change })]);
+            expect(planned.invalidate.savedSecretResources, change.entityId).toBe(true);
+            expect(planned.invalidate.profile, change.entityId).toBe(true);
+            expect(planned.invalidate.settings, change.entityId).toBe(change.entityId === 'self');
+            expect(plannedChangesAffectSessionListQuery(planned), change.entityId).toBe(true);
+            expect(plannedChangesAffectUsageQuery(planned), change.entityId).toBe(true);
+        }
+        const settings = planSyncActionsFromChanges([buildChange({
+            cursor: 5, kind: 'account', entityId: 'self', hint: { settingsVersion: 8 },
+        })]);
+        expect(settings.invalidate.settings).toBe(true);
+        expect(settings.invalidate.savedSecretResources).toBe(false);
+        expect(plannedChangesAffectSessionListQuery(settings)).toBe(false);
+    });
+
     it('routes private Profile rows and controls only to their demanded catalog wake', () => {
         for (const entityId of [buildProfilePhysicalKey('profile-a'), PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, PROFILE_TRANSFER_ACCOUNT_KV_KEY]) {
             const planned = planSyncActionsFromChanges([buildChange({ cursor: 1, kind: 'account', entityId, hint: { profiles: true } })]);

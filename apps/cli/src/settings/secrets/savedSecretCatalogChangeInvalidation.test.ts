@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildConnectedServicesAccountChangeV1 } from '@happier-dev/protocol/changes';
 
 import { changesRequireSavedSecretCatalogRefresh } from './savedSecretCatalogChangeInvalidation';
 
@@ -9,6 +10,17 @@ describe('changesRequireSavedSecretCatalogRefresh', () => {
     [{ kind: 'account', entityId: 'self', hint: { accountEncryptionTransitionId: 'transition-a' } }],
   ])('refreshes for material or Team/Group authorization changes', (change) => {
     expect(changesRequireSavedSecretCatalogRefresh([change])).toBe(true);
+  });
+
+  it('refreshes for service-scoped, broad, and retained connected-service changes', () => {
+    const service = { pluginId: 'happier.voice.openai', localId: 'openai' };
+    for (const change of [
+      buildConnectedServicesAccountChangeV1(service),
+      buildConnectedServicesAccountChangeV1(),
+      { kind: 'account', entityId: 'self', hint: { connectedServices: true } },
+    ]) {
+      expect(changesRequireSavedSecretCatalogRefresh([change])).toBe(true);
+    }
   });
 
   it('does not turn an unrelated live change into a material refresh', () => {

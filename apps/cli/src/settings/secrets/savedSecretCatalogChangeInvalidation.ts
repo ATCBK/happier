@@ -1,4 +1,7 @@
-import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
+import {
+  readConnectedServicesAccountChangeV1,
+  TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1,
+} from '@happier-dev/protocol/changes';
 
 type SavedSecretRelevantChange = Readonly<{
   kind: string;
@@ -20,6 +23,7 @@ export function changesRequireSavedSecretCatalogRefresh(
   return changes.some((change) => {
     if (change.kind === 'savedSecretResource') return true;
     if (change.kind !== 'account') return false;
+    if (readConnectedServicesAccountChangeV1(change)) return true;
     if (change.entityId === TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1) return true;
     return change.entityId === 'self'
       && (!isRecord(change.hint)

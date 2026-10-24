@@ -474,9 +474,10 @@ describe('qualified first-party spawn credential authority', () => {
     await persistConnectedServiceCredentialHealthForMaterializationFailure(input);
     expect(scalarWrite).not.toHaveBeenCalled();
   });
-  it('persists qualified materialization failure health at its revision without a scalar write', async () => {
+  it.each([false, true])('persists qualified materialization failure health with payload-free attribution (known health=%s)', async knownHealth => {
     const account = { service, accountId: 'device-health' };
     let patch: unknown;
+    const diagnostic = vi.spyOn(logger, 'debug');
     const http = vi.spyOn(axios, 'patch').mockImplementation(async (url, body) => {
       expect(new URL(String(url)).pathname).toBe('/v4/connect/qualified/credential/health');
       patch = body;
@@ -484,11 +485,22 @@ describe('qualified first-party spawn credential authority', () => {
     });
     await persistConnectedServiceCredentialHealthForMaterializationFailure({
       binding: { serviceId: 'openai-codex', profileId: account.accountId },
-      qualifiedCredential: { token: credentials.token, ref: account, expectedCredentialRevision: revision, expectedConfigurationRevision: null },
+      qualifiedCredential: { token: credentials.token, ref: account, expectedCredentialRevision: revision, expectedConfigurationRevision: null,
+        ...(knownHealth ? { previousHealth: { v: 1 as const, status: 'refresh_failed_retryable' as const,
+          reconnectRequired: false, lastRefreshAttemptAt: 1, lastRefreshFailureAt: 1,
+          lastRefreshFailureKind: 'unknown' as const, providerErrorCode: 'disk_failure' } }
+          : { previousStatus: 'connected' as const }) },
       diagnostic: { code: 'disk_failure', providerId: 'codex', serviceId: 'happier.agent.codex/openai-codex', severity: 'blocking', reason: 'disk_failure' },
       now: 10,
     });
     expect(patch).toMatchObject({ ref: account, expectedCredentialRevision: revision, health: { status: 'refresh_failed_retryable', reconnectRequired: false } });
+    expect(diagnostic.mock.calls.filter(([event]) => event === '[ConnectedServiceRefreshCoordinator] credential health write'))
+      .toEqual([['[ConnectedServiceRefreshCoordinator] credential health write', {
+        path: 'materialization-failure', serviceKind: service.localId,
+        beforeStatus: knownHealth ? 'refresh_failed_retryable' : 'connected',
+        afterStatus: 'refresh_failed_retryable', substantiveChanged: knownHealth ? false : null,
+      }]]);
+    diagnostic.mockRestore();
     http.mockRestore();
   });
   it.each([

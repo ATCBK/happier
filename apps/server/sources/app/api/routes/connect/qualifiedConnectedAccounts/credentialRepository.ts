@@ -1271,6 +1271,7 @@ export async function settlePreparedQualifiedConnectedServiceCredentialCreate(
                 await recordConnectedServiceAccountProfileChange({
                     tx,
                     accountId: prepared.params.accountId,
+                    service: prepared.params.ref.service,
                 });
             }
             return result;
@@ -1343,6 +1344,7 @@ export async function mutateQualifiedConnectedServiceCredential(
             await recordConnectedServiceAccountProfileChange({
                 tx,
                 accountId: canonicalParams.accountId,
+                service: canonicalParams.ref.service,
             });
         }
         return result;
@@ -1590,6 +1592,7 @@ export async function mutateQualifiedConnectedAccountConfiguration(
             await recordConnectedServiceAccountProfileChange({
                 tx,
                 accountId: params.accountId,
+                service: canonicalParams.target.ref.service,
             });
         }
         return result;
@@ -2165,6 +2168,7 @@ export async function mutateQualifiedConnectedServiceCredentialHealth(
         await recordConnectedServiceAccountProfileChange({
             tx,
             accountId: canonical.accountId,
+            service: canonical.ref.service,
         });
         return {
             status: "written",
@@ -2793,6 +2797,7 @@ export async function deleteQualifiedConnectedServiceCredential(
             await recordConnectedServiceAccountProfileChange({
                 tx,
                 accountId: params.accountId,
+                service: ref.service,
             });
             return { status: "deleted" };
         }, { transactionClass: "connected-account-credential-delete" });

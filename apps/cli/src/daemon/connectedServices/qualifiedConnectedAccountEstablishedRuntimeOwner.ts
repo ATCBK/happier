@@ -196,6 +196,7 @@ export type QualifiedConnectedAccountEstablishedRuntimeOwner = Readonly<{
 
 export type QualifiedConnectedAccountEstablishedInvocationBasis = Readonly<{
   credentialRevision: string;
+  credentialHealth?: QualifiedConnectedAccountCredentialSnapshotV4['metadata']['health'] | null;
   credentialConfigurationRevision: string | null;
   runtimeConfigurationRevision: string;
   occurrenceId: string;
@@ -1033,6 +1034,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
           result,
           basis: Object.freeze({
             credentialRevision: initial.credential.credentialRevision,
+            credentialHealth: initial.credential.metadata.health ?? null,
             credentialConfigurationRevision:
               initial.credential.configurationRevision,
             runtimeConfigurationRevision,

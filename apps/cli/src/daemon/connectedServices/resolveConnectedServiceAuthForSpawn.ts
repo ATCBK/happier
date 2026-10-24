@@ -934,6 +934,7 @@ async function maybeRecoverGroupAfterSpawnMaterializationFailure(params: Readonl
           ref: profile.ref,
           expectedCredentialRevision: profile.credentialRevision,
           expectedConfigurationRevision: profile.configurationRevision,
+          previousStatus: profile.status,
         },
       });
     }

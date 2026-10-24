@@ -242,7 +242,9 @@ export async function mutateConnectedServiceCredential(
     return await inTx(async (tx) => {
         const result = await mutateConnectedServiceCredentialInTx(tx, params);
         if (result.status === "written") {
-            await recordConnectedServiceAccountProfileChange({ tx, accountId: params.accountId });
+            const identity = resolveLegacyServiceAccountTokenIdentityFields({ serviceId: params.serviceId, profileId: params.profileId });
+            await recordConnectedServiceAccountProfileChange({ tx, accountId: params.accountId,
+                service: { pluginId: identity.servicePluginId, localId: identity.serviceLocalId } });
         }
         return result;
     });

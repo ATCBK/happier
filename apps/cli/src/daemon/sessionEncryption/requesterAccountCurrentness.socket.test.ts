@@ -21,7 +21,7 @@ import { projectAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/proto
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
 import { logger } from '@/ui/logger';
 import { buildSessionFollowChangeHintV1 } from '@happier-dev/protocol/sessions/follow/changes';
-import { buildProviderAccountUsageRefreshChangeV1, type ChangeEntry } from '@happier-dev/protocol/changes';
+import { buildConnectedServicesAccountChangeV1, buildProviderAccountUsageRefreshChangeV1, type ChangeEntry } from '@happier-dev/protocol/changes';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { createCliReviewCommentActionExecutorFromCredentials } from '@/agent/reviews/comments/executor';
 import { ReviewCommentPrepareMutationRequestV1Schema } from '@happier-dev/protocol/reviews/comments/mutation';
@@ -145,7 +145,50 @@ describe('requester Account currentness over the installed socket wiring', () =>
         } finally { releases.forEach(release => release()); await observation.dispose(); await channel.close(); }
     });
 
-    it('delivers exact quota Refresh through the existing Account feed beyond unrelated full pages and retires demand', async () => {
+    it('routes service changes through the requester feed without waking on later settings writes', async () => {
+        const channel = await createRequesterCurrentnessSocketHarness();
+        const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
+            signingKeyFingerprint: null, contentKeyFingerprint: null };
+        const services = [{ pluginId: 'happier.service.openai', localId: 'api-key' },
+            { pluginId: 'happier.service.anthropic', localId: 'oauth' }];
+        let changes: ChangeEntry[] = [];
+        let observedCursor = 0;
+        vi.spyOn(axios, 'get').mockImplementation(async (url: string, config) => {
+            if (url.endsWith('/currentness')) return { status: 200, data: fact };
+            if (!url.endsWith('/v2/changes')) throw new Error(`Unexpected GET ${url}`);
+            observedCursor = config?.params?.after ?? 0;
+            return { status: 200, data: { changes: changes.filter(change => change.cursor > observedCursor),
+                nextCursor: changes.at(-1)?.cursor ?? observedCursor } };
+        });
+        const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: 'bob', token: 'bob-services',
+            serverBaseUrl: 'https://service-feed.example' });
+        const publications: unknown[] = [];
+        let release: (() => void) | undefined;
+        try {
+            await observation.read();
+            release = observation.subscribeConnectedAccounts(event => { publications.push(event); });
+            await channel.pushProfile('bob');
+            changes = services.map((service, index) => ({ ...buildConnectedServicesAccountChangeV1(service), cursor: index + 1, changedAt: 1 }));
+            await channel.hintAccountChange(2);
+            await vi.waitFor(() => expect(publications).toEqual([{ services }]));
+            changes = [{ ...buildConnectedServicesAccountChangeV1(services[0]!), cursor: 3, changedAt: 1 }];
+            await channel.hintAccountChange(3);
+            await vi.waitFor(() => expect(publications).toEqual([{ services }, { services: [services[0]] }]));
+            changes = [{ kind: 'account', entityId: 'self', hint: { settingsVersion: 2 }, cursor: 4, changedAt: 1 }];
+            await channel.hintAccountChange(4);
+            await channel.pushProfile('bob');
+            expect(publications).toHaveLength(2);
+            changes = [{ ...buildConnectedServicesAccountChangeV1(), cursor: 5, changedAt: 1 }];
+            await channel.hintAccountChange(5);
+            await vi.waitFor(() => expect(publications).toEqual([{ services }, { services: [services[0]] }, {}]));
+            changes = [{ kind: 'account', entityId: 'self', hint: { connectedServices: true }, cursor: 6, changedAt: 1 }];
+            await channel.hintAccountChange(6);
+            await vi.waitFor(() => expect(publications).toHaveLength(4));
+            expect(publications[3]).toEqual({});
+        } finally { release?.(); await observation.dispose(); await channel.close(); }
+    });
+
+    it.each([false, true])('delivers exact quota Refresh through the existing Account feed beyond unrelated full pages and retires demand (mixed=%s)', async mixed => {
         const channel = await createRequesterCurrentnessSocketHarness();
         const fact = { mode: 'plain' as const, version: 1, updatedAt: 1,
             signingKeyFingerprint: null, contentKeyFingerprint: null };
@@ -162,7 +205,9 @@ describe('requester Account currentness over the installed socket wiring', () =>
                 ? Array.from({ length: 200 }, (_, index) => ({ cursor: index + 1, kind: 'machine',
                     entityId: `unrelated-${index}`, changedAt: 1 }))
                 : pending && after === 200 ? [{ cursor: 201, changedAt: 1,
-                    ...buildProviderAccountUsageRefreshChangeV1(recordId) }] : [];
+                    ...buildProviderAccountUsageRefreshChangeV1(recordId) },
+                    ...(mixed ? [{ cursor: 202, changedAt: 1, kind: 'account' as const, entityId: 'self',
+                        hint: { connectedServices: true } }] : [])] : [];
             return { status: 200, data: { changes, nextCursor: changes.at(-1)?.cursor ?? after } };
         });
         const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: 'bob', token: 'bob-quota',
@@ -175,7 +220,8 @@ describe('requester Account currentness over the installed socket wiring', () =>
             await vi.waitFor(() => expect(cursors).toEqual([0]));
             pending = true;
             await channel.hintAccountChange();
-            await vi.waitFor(() => expect(publications).toEqual([{ quotaRefreshRecordIds: [recordId] }]));
+            await vi.waitFor(() => expect(publications).toEqual([{ quotaRefreshRecordIds: [recordId],
+                ...(mixed ? {} : { quotaRefreshOnly: true }) }]));
             expect(cursors).toContain(200);
             // A full page is progress, not a reset of every quota deadline.
             release();

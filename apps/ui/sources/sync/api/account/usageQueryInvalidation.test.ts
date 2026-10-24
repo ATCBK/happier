@@ -1,15 +1,40 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { storage } from '@/sync/domains/state/storageStore';
 import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
 import { getUsageProjectionNextReadAtMs, getUsageQueryMachineInvalidationKey, observeUsageProjection, subscribeUsageQueryStateInvalidation } from './usageQueryInvalidation';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import { handleEphemeralSocketUpdate } from '@/sync/engine/socket/socket';
 import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { buildConnectedServicesAccountChangeV1 } from '@happier-dev/protocol/changes';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
-it('reconsiders existing accounts when their Usage capability arrives, but not when only its title changes', () => {
+it('refreshes quota acquisition for connected-service entities and the legacy broad signal', async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    const serverId = 'service-quota-currentness.test';
+    const observation = observeUsageProjection({ serverId, initialReadCompleted: true,
+        busy: () => false, read: async () => { reads++; }, nextReadAtMs: () => Number.POSITIVE_INFINITY });
+    try {
+        await vi.advanceTimersByTimeAsync(0);
+        for (const [index, change] of [
+            buildConnectedServicesAccountChangeV1({ pluginId: 'acme.accounts', localId: 'service-a' }),
+            buildConnectedServicesAccountChangeV1(),
+        ].entries()) {
+            publishHomeAccountChange(serverId, [change.entityId], { changeKinds: ['account'], usageQueryAffects: true });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(reads).toBe(index + 1);
+        }
+        publishHomeAccountChange(serverId, ['self']);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reads).toBe(3);
+        publishHomeAccountChange(serverId, ['self'], { changeKinds: ['account'], usageQueryAffects: true });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reads).toBe(3);
+    } finally { observation.dispose(); vi.useRealTimers(); }
+});
+
+it('reconsiders existing accounts when their Usage capability arrives, but not when only its title changes', async () => {
+    const { storage } = await import('@/sync/domains/state/storageStore');
     const previous = storage.getState();
     const scope = { serverId: 'usage-capability.test', accountId: 'account' };
     const service = { pluginId: 'acme.meter', localId: 'meter' };
@@ -71,6 +96,7 @@ it('keeps a healthy current-server quota reader idle for 120 seconds and ignores
 });
 
 it.each(['usage', 'usage-sources-invalidated'] as const)('still refreshes Usage readers for a scoped %s socket wake', async type => {
+    const { handleEphemeralSocketUpdate } = await import('@/sync/engine/socket/socket');
     let reads = 0;
     const observation = observeUsageProjection({
         serverId: 'usage-scoped-wake.test', initialReadCompleted: true,
@@ -185,7 +211,8 @@ it('keys pool selection by its resolved machine and Session evidence by only its
     expect(getUsageQueryMachineInvalidationKey({ ...machines, a: { ...machines.a!, replacedByMachineId: 'b' } }, nowMs, scope, sessionConsumers)).not.toBe(sessionKey);
 });
 
-it('ignores equivalent Profile and Settings refreshes but invalidates changed quota inputs', () => {
+it('ignores equivalent Profile and Settings refreshes but invalidates changed quota inputs', async () => {
+    const { storage } = await import('@/sync/domains/state/storageStore');
     const previous = storage.getState();
     const scope = { serverId: 'usage-invalidation.test', accountId: 'account-a' };
     storage.setState({ profileScope: scope, settingsScope: scope,
@@ -238,7 +265,8 @@ it('ignores equivalent Profile and Settings refreshes but invalidates changed qu
     }
 });
 
-it('does not reread machine details for unrelated store notifications, but observes presence expiry', () => {
+it('does not reread machine details for unrelated store notifications, but observes presence expiry', async () => {
+    const { storage } = await import('@/sync/domains/state/storageStore');
     let nowMs = 1_900_000_000_000;
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
     const machine = createMachineFixture({ id: 'machine', activeAt: nowMs, updatedAt: nowMs });

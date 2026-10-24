@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { buildConnectedServicesAccountChangeV1 } from '@happier-dev/protocol/changes';
 
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
@@ -898,7 +899,8 @@ describe("qualified Connected Account credential repository", () => {
                     where: { id: account.id }, select: { seq: true },
                 }),
                 change: await db.accountChange.findUniqueOrThrow({
-                    where: { accountId_kind_entityId: { accountId: account.id, kind: "account", entityId: "self" } },
+                    where: { accountId_kind_entityId: { accountId: account.id, kind: "account",
+                        entityId: buildConnectedServicesAccountChangeV1(service).entityId } },
                     select: { cursor: true, hint: true },
                 }),
             });
@@ -930,7 +932,7 @@ describe("qualified Connected Account credential repository", () => {
             const afterChange = await readState();
             expect(afterChange.row.updatedAt.getTime()).toBeGreaterThan(canonical.row.updatedAt.getTime());
             expect(afterChange.change.cursor).toBeGreaterThan(canonical.change.cursor);
-            expect(afterChange.change.hint).toEqual({ connectedServices: true });
+            expect(afterChange.change.hint).toEqual(buildConnectedServicesAccountChangeV1(service).hint);
 
             const timestampedHealth = {
                 ...changedHealth,
@@ -1003,7 +1005,7 @@ describe("qualified Connected Account credential repository", () => {
                 accountId_kind_entityId: {
                     accountId: account.id,
                     kind: "account",
-                    entityId: "self",
+                    entityId: buildConnectedServicesAccountChangeV1(service).entityId,
                 },
             },
             select: { cursor: true, hint: true },
@@ -1041,7 +1043,7 @@ describe("qualified Connected Account credential repository", () => {
                 accountId_kind_entityId: {
                     accountId: account.id,
                     kind: "account",
-                    entityId: "self",
+                    entityId: buildConnectedServicesAccountChangeV1(service).entityId,
                 },
             },
             select: { cursor: true, hint: true },
@@ -1145,7 +1147,7 @@ describe("qualified Connected Account credential repository", () => {
                 accountId_kind_entityId: {
                     accountId: account.id,
                     kind: "account",
-                    entityId: "self",
+                    entityId: buildConnectedServicesAccountChangeV1(service).entityId,
                 },
             },
             select: { cursor: true, hint: true },
@@ -1182,7 +1184,7 @@ describe("qualified Connected Account credential repository", () => {
                 accountId_kind_entityId: {
                     accountId: account.id,
                     kind: "account",
-                    entityId: "self",
+                    entityId: buildConnectedServicesAccountChangeV1(service).entityId,
                 },
             },
             select: { cursor: true, hint: true },

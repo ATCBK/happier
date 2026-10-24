@@ -51,6 +51,21 @@ describe("markAccountChanged", () => {
         eventRouter.clearIo();
     });
 
+    it.each([{ settingsVersion: 7 }, { username: true }])('replaces retained legacy connected service hints on ordinary self writes (%j)', async next => {
+        process.env.HAPPIER_DB_PROVIDER = 'sqlite';
+        let hint: unknown = { connectedServices: true };
+        let seq = 0;
+        const tx = {
+            account: { update: vi.fn(async () => ({ seq: ++seq })) },
+            accountChange: {
+                findUnique: vi.fn(async () => hint === null ? null : { hint }),
+                upsert: vi.fn(async (input: { update: { hint: unknown } }) => { hint = input.update.hint; return {}; }),
+            },
+        };
+        await runMarkAccountChanged(tx, { accountId: 'a1', kind: 'account', entityId: 'self', hint: next });
+        expect(hint).toEqual(next);
+    });
+
     it("resolves publication results after terminal writes and before commit", async () => {
         process.env.HAPPIER_DB_PROVIDER = "sqlite";
         const phases: string[] = [];
