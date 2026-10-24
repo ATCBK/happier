@@ -66,6 +66,11 @@ owner, and leaves the prompt available for an explicit retry. It does not send t
 prompt on the previous model or retry model controls on metadata wakes. The shared
 Claude effective-model observer owns both current-model and Running metadata;
 remote and unified-terminal prompt acknowledgments establish input acceptance only.
+In development source, remote model confirmation reads genuine main-session assistant
+messages before presentation normalization. Startup announcements, historical replay,
+sidechains, provider errors and synthesized presentation messages cannot confirm a
+requested model. Launch effort is paired with the first genuine assistant observation
+only; later model observations do not reapply the old launch effort.
 Claude still owns inbound delivery
 policy: its [non-interactive messaging contract](https://code.claude.com/docs/en/cross-session-messaging#non-interactive-sessions)
 does not expose the terminal approval dialog in `-p` sessions. Happier does not
