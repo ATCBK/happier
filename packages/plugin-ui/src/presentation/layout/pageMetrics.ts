@@ -263,6 +263,16 @@ export function isHappierSectionActionStacked(input: Readonly<{
 }
 
 /**
+ * The width a layout event reports when it describes a visible box, else `null`. A retained pane that is
+ * hidden (`display: none`, an inactive Activity) reports width 0, which says nothing about the layout it will
+ * have when shown: measuring consumers keep their last visible width until a real resize. This is the one
+ * owner of that rule, so a consumer cannot forget it and recompose for a phantom zero.
+ */
+export function readHappierVisibleLayoutWidth(widthPx: number): number | null {
+  return Number.isFinite(widthPx) && widthPx > 0 ? widthPx : null;
+}
+
+/**
  * Whether a measured row or section header is too narrow for its label and a
  * control side by side: narrower than the label's column
  * (`sectionTextMinWidthPx`), the gap, a field at its inline minimum

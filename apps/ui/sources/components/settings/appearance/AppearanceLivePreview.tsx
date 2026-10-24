@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
+import { readHappierVisibleLayoutWidth } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import { StyleSheet } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
@@ -44,8 +45,8 @@ export const AppearanceLivePreview = React.memo(
     const toolDetail = 'title' as const;
     const [scale, setScale] = React.useState<number | null>(null);
     const onViewportLayout = React.useCallback((event: LayoutChangeEvent) => {
-      const width = event.nativeEvent.layout.width;
-      if (width > 0) setScale((current) => (current === width / PREVIEW_WINDOW.width ? current : width / PREVIEW_WINDOW.width));
+      const width = readHappierVisibleLayoutWidth(event.nativeEvent.layout.width);
+      if (width !== null) setScale((current) => (current === width / PREVIEW_WINDOW.width ? current : width / PREVIEW_WINDOW.width));
     }, []);
     const summary = `${t(`settingsAppearance.itemDensityOptions.${density}`)} · ${Math.round((fontScale ?? 1) * 100)}%`;
     return (
