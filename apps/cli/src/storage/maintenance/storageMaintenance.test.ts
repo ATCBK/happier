@@ -112,6 +112,7 @@ describe('one due-time storage maintenance owner with real retained files', () =
     const os = await createLinuxVitalsFixture();
     const mountLine = (id: number, mount: string) => `${id} 0 8:${id} / ${mount} rw - ext4 /dev/fixture${id} rw\n`;
     await os.put('/proc/self/mountinfo', mountLine(1, scratch));
+    await fs.mkdir(join(os.root, scratch), { recursive: true });
     await os.put('/sys/class/power_supply/AC/type', 'Mains\n');
     await os.put('/sys/class/power_supply/AC/online', '1\n');
     let available = 500;
@@ -148,6 +149,7 @@ describe('one due-time storage maintenance owner with real retained files', () =
       await vi.advanceTimersByTimeAsync(2000); await sampled.promise;
     }
     try {
+      expect(binding.readVolumes()).toMatchObject([{ availableBytes: available * 4096 }]);
       const oldLog = await f.writeLog('retained.log', 2);
       const path = join(f.home, 'cache-to-retain'); await fs.mkdir(path); await fs.writeFile(join(path, 'bytes'), 'retained');
       const entry = await (await store.prepare({ path, title: 'Retained', batchId: 'sampler', size,
@@ -177,6 +179,7 @@ describe('one due-time storage maintenance owner with real retained files', () =
       expect(afterCapacity.sizedAt).toBe(initial.sizedAt);
 
       const otherVolume = join(scratch, 'returning-volume'); await fs.mkdir(otherVolume);
+      await fs.mkdir(join(os.root, otherVolume), { recursive: true });
       await os.put('/proc/self/mountinfo', mountLine(1, scratch) + mountLine(2, otherVolume));
       const beforeVolume = f.logPasses;
       await tick(); await maintenance.requestPass();

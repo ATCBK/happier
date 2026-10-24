@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import * as childProcess from 'node:child_process';
 import * as filesystem from 'node:fs/promises';
+import { once } from 'node:events';
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -10,12 +11,17 @@ import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 import { managedAcpInstallId } from '@happier-dev/cli-common/agents';
 import { createStorageService, type StorageOperationActor, type StorageService, type StorageServiceDeps } from './storageService';
 import { createDaemonStorageRoutes, registerDaemonStorageRpcHandlers } from '@/rpc/handlers/storage';
+import { readProcessCensus } from '@/processes/census/processCensus';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { RpcHandlerMap, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 import { createHappierTempDir, getHappierTempRoot, getHappierTempDirOwnerPath } from '@happier-dev/cli-common/tempDirs';
 import { createActivityLog } from '@/daemon/guard/activityLog';
 import { createMachineResourceSummary } from '@/daemon/resources/machineResourceSummary';
 import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
+import { createDaemonStorageVitalsBindings } from '@/daemon/resources/createDaemonStorageVitalsBindings';
+import { createLinuxMachineVitalsReader } from '@/daemon/vitals/readers/linux';
+import { createLinuxVitalsFixture } from '@/daemon/vitals/readers/linux.testkit';
+import { watcherCount } from '@/daemon/lifecycle/parkWatch';
 import { createMinuteHistoryStore } from '@/daemon/vitals/history/minuteHistoryStore';
 import { MachineStoragePolicyV1Schema, STORAGE_CHART_MAX_DRAWABLE_NODES,
     DiskScanStateV1Schema, type DiskScanStateV1, HappierStorageSummaryV1Schema, MachineStorageScanGetResultV1Schema, MachineStoragePileResultV1Schema,
@@ -45,6 +51,9 @@ vi.mock('node:child_process', async importOriginal => {
 });
 
 const execute = promisify(execFile);
+// Native-helper fixtures replace process.execPath to exercise packaged lookup.
+// Child fixture processes still run the actual test host executable.
+const testHostExecutable = process.execPath;
 let disposeNative: (() => Promise<void>) | undefined;
 let scratch: string;
 
@@ -243,6 +252,8 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             hostingProviderRuntimeServices: createHostScmHostingProviderRuntimeServices({ contributes: {}, scmHostingProvidersById: new Map() }) });
         const statusSnapshot = backend.statusSnapshot!;
         let phase = 'raw-fresh';
+        const protectionReads = new Map<string, number>();
+        let heldPaths: string[] = [];
         const inspections = new Map<string, number>();
         const statuses = new Map<string, string[]>(); const fingerprints = new Map<string, string[]>();
         const native = new Map<string, number>();
@@ -258,6 +269,9 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             const child = Reflect.apply(actualChildProcess.spawn, undefined, args) as ReturnType<typeof childProcess.spawn>;
             if (Array.isArray(args[1]) && args[1][0] === 'disk-measure') {
                 native.set(operation, (native.get(operation) ?? 0) + 1);
+                // A holder can appear while native sizing is in flight. The
+                // Account projection must read it after that operation settles.
+                if (operation === 'actor-fresh') child.once('close', () => { heldPaths = [oldLog]; });
             }
             // This exact Git read belongs to the canonical change-fingerprint owner.
             if (Array.isArray(args[1]) && args[1].join(' ') === 'ls-files -z --others --exclude-standard'
@@ -271,7 +285,10 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             deps: () => ({ homeDir: home, scmRegistry: registry,
                 catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(root, 'absent-temp'),
                     readProjects: () => ({ status: 'ready', projects: [{ repositoryRoot: repo }] }),
-                    readInUsePaths: () => ({ reliable: true, paths: [] }),
+                    readInUsePaths: () => {
+                        protectionReads.set(phase, (protectionReads.get(phase) ?? 0) + 1);
+                        return { reliable: true, paths: heldPaths };
+                    },
                     readWorktrees: async () => {
                         const operation = phase;
                         inspections.set(operation, (inspections.get(operation) ?? 0) + 1);
@@ -300,6 +317,8 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             await readPhase('raw-retained', () => service.summary());
             service.invalidate();
             const fresh = await readPhase('actor-fresh', rpcSummary);
+            expect(fresh.suggestionsTop.some(item => item.path === oldLog)).toBe(false);
+            heldPaths = [];
             const refreshed = await readPhase('actor-refresh', () => service.refresh({ actor: {
                 accountId: 'owner', custodianAccountId: 'owner', kind: 'person', assertCurrent: async () => {}, assertCurrentAuthority: async () => {},
             } }));
@@ -314,6 +333,15 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             expect.soft(Object.fromEntries(Object.entries(metrics).map(([key, value]) => [key, value.native])))
                 .toEqual({ 'raw-fresh': 1, 'actor-retained': 0, 'raw-retained': 0, 'actor-fresh': 1, 'actor-refresh': 1 });
             expect.soft(metrics['actor-retained']?.directoryReads).toBe(0);
+            // One raw sizing operation shares one native process observation
+            // across discovery, protection and both recognition passes. Account
+            // projection separately refreshes protection after sizing completes.
+            expect.soft(Object.fromEntries(protectionReads)).toEqual({ 'raw-fresh': 1, 'actor-retained': 1,
+                'actor-fresh': 2, 'actor-refresh': 2 });
+            heldPaths = [oldLog];
+            const held = await readPhase('actor-held', rpcSummary);
+            expect(held.suggestionsTop.some(item => item.path === oldLog)).toBe(false);
+            expect(protectionReads.get('actor-held')).toBe(1);
             expect.soft(statuses.get('raw-fresh')?.sort()).toEqual([repo, worktree].sort());
             expect.soft(statuses.get('actor-fresh')?.sort()).toEqual([repo, worktree].sort());
             expect.soft(fingerprints.get('raw-fresh')?.sort()).toEqual([repo, worktree].sort());
@@ -339,6 +367,125 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
             expect((await service.summary({ actor })).suggestionsTop).toEqual([]);
             expect(reads).toBe(measuredReads);
         } finally { service.dispose(); }
+    });
+
+    it.skipIf(process.platform !== 'linux')('reads native process facts once per changed Storage watch, without a discarded warmup projection', async () => {
+        const home = join(scratch, 'watch-native-facts');
+        const oldLog = join(home, 'logs', 'old.log');
+        await mkdir(join(home, 'logs'), { recursive: true });
+        await writeFile(oldLog, Buffer.alloc(4096, 1));
+        await utimes(oldLog, new Date(1_700_000_000_000), new Date(1_700_000_000_000));
+        const os = await createLinuxVitalsFixture();
+        await os.put('/proc/self/mountinfo', `1 0 8:1 / ${scratch} rw - ext4 /dev/sda rw\n`);
+        // The real reader admits directory-backed mounts, so the redirected
+        // procfs fixture must contain the mount directory it reports.
+        await mkdir(join(os.root, scratch), { recursive: true });
+        let available = 500;
+        let sampledAt = Date.UTC(2026, 9, 24);
+        let nextSample = () => {};
+        const sampler = createMachineVitalsSampler({
+            readers: createLinuxMachineVitalsReader({ root: os.root, homePath: home,
+                statfs: async () => ({ bsize: 4096, blocks: 1000, bfree: available, bavail: available, files: 100, ffree: 50 }) }),
+            historyStore: await createMinuteHistoryStore({ directory: join(home, 'vitals') }),
+            nowMs: () => sampledAt, monotonicMs: () => sampledAt,
+            setTimeoutFn: callback => { nextSample = callback; return {}; }, clearTimeoutFn: () => {},
+            onError: error => { throw error; },
+        });
+        await sampler.start();
+        const releaseDemand = sampler.demand('live');
+        const binding = createDaemonStorageVitalsBindings(sampler);
+        const tick = async () => { sampledAt += 2000; nextSample(); await sampler.start(); };
+        let holder: ReturnType<typeof childProcess.spawn> | undefined;
+        const identity = { serverId: 'home', machineId: 'machine', installationId: 'install', custodianAccountId: 'owner' };
+        const routes = createDaemonStorageRoutes({ target: () => identity, readOwnSessionIds: () => new Set(),
+            deps: () => ({ homeDir: scratch, ...binding, subscribeChanges: binding.subscribeVolumes,
+                catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(home, 'absent-temp'),
+                    readProjects: () => ({ status: 'ready', projects: [] }),
+                    // Keep the process reader and protection logic real. The existing
+                    // pass-through filesystem spy counts actual /proc enumerations.
+                    readInUsePaths: async () => {
+                        const observed = await readProcessCensus({ freshness: 'fresh', fields: ['cwd'] });
+                        if (observed.status !== 'ok') throw new Error('Native process fixture unavailable');
+                        // This fixture owns only its test process; unrelated host
+                        // processes (including shells at /) are not its holders.
+                        return { reliable: true, paths: observed.rows.filter(row => row.pid === process.pid || row.pid === holder?.pid)
+                            .flatMap(row => row.cwd ? [row.cwd] : []) };
+                    } } }) });
+        const handlers: RpcHandlerMap = new Map();
+        registerDaemonStorageRpcHandlers({ registerHandler(method, handler) { handlers.set(method, handler); } }, routes);
+        const context: RpcHandlerContext = { signal: new AbortController().signal,
+            machineAdmission: { ...identity, actorAccountId: 'owner', role: 'manage', encryptionMode: 'plain' },
+            verifyMachineAdmissionCurrent: async () => true };
+        const enumerations = () => vi.mocked(filesystem.readdir).mock.calls.filter(([path]) => path === '/proc').length;
+        const cancellation = new AbortController();
+        let pendingWatch: Promise<unknown> | undefined;
+        let unsubscribeChanges: (() => void) | undefined;
+        try {
+            expect(binding.readVolumes()).toMatchObject([{ availableBytes: available * 4096 }]);
+            const service = await routes.getService(identity);
+            // A live holder can change cwd without a process start/end or a
+            // Storage invalidation. Observe that real OS boundary, not a cached
+            // protection fixture that only changes alongside lifecycle events.
+            const idleCwd = join(scratch, 'watch-native-idle');
+            await mkdir(idleCwd);
+            holder = childProcess.spawn(testHostExecutable, ['-e',
+                "process.on('message', path => { process.chdir(path); process.send('moved'); }); process.send('ready');"],
+            { cwd: idleCwd, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+            await once(holder, 'message');
+            const initial = await service.summary();
+            expect(initial.suggestionsTop).toContainEqual(expect.objectContaining({ path: oldLog }));
+            const before = enumerations();
+            for (let arrival = 0; arrival < 3; arrival++) {
+                const result = await handlers.get(RPC_METHODS.DAEMON_STORAGE_WATCH)!({ machineId: 'machine', sinceRevision: 0 }, context);
+                expect(result).toMatchObject({ changed: true, summary: {
+                    suggestionsTop: expect.arrayContaining([expect.objectContaining({ path: oldLog })]),
+                } });
+            }
+            expect(enumerations() - before).toBe(3);
+            let completions = 0;
+            let publications = 0;
+            unsubscribeChanges = service.subscribe(() => { publications++; });
+            const revision = service.revision();
+            const parked = handlers.get(RPC_METHODS.DAEMON_STORAGE_WATCH)!({ machineId: 'machine', sinceRevision: revision },
+                { ...context, signal: cancellation.signal }).then(result => { completions++; return result; });
+            pendingWatch = parked;
+            await vi.waitFor(() => expect(watcherCount()).toBe(1));
+            const beforeSamples = enumerations();
+            for (let sample = 0; sample < 10; sample++) await tick();
+            expect(sampler.latest()?.sampledAt).toBe(sampledAt);
+            expect(service.revision()).toBe(revision);
+            expect(publications, 'unchanged volume facts must not publish Storage changes').toBe(0);
+            expect(completions, 'ten unchanged Storage observations must leave the watch parked').toBe(0);
+            expect(watcherCount()).toBe(1);
+            expect(enumerations() - beforeSamples, 'unchanged Vitals must not gather Storage protection').toBe(0);
+            available = 400;
+            await tick();
+            expect(await parked).toMatchObject({ changed: true, summary: {
+                volumes: [expect.objectContaining({ freeBytes: available * 4096 })],
+                suggestionsTop: expect.arrayContaining([expect.objectContaining({ path: oldLog })]),
+            } });
+            expect(completions).toBe(1);
+            expect(publications).toBe(1);
+            expect(enumerations() - beforeSamples, 'one real change gets one fresh disclosure observation').toBe(1);
+            const holderRevision = service.revision();
+            const holderMoved = once(holder, 'message');
+            holder.send!(join(home, 'logs'));
+            await holderMoved;
+            expect(service.revision(), 'a live cwd change has no Storage lifecycle edge').toBe(holderRevision);
+            const beforeHolder = enumerations();
+            pendingWatch = handlers.get(RPC_METHODS.DAEMON_STORAGE_WATCH)!({ machineId: 'machine', sinceRevision: holderRevision },
+                { ...context, signal: cancellation.signal });
+            await vi.waitFor(() => expect(watcherCount()).toBe(1));
+            available = 300;
+            await tick();
+            const changedHolder = await pendingWatch;
+            expect(changedHolder).toMatchObject({ changed: true, summary: {
+                volumes: [expect.objectContaining({ freeBytes: available * 4096 })], suggestionsTop: [],
+            } });
+            expect(enumerations() - beforeHolder, 'a capacity edge must not reuse protection across a real holder change').toBe(1);
+        } finally { cancellation.abort(); await pendingWatch?.catch(() => {}); unsubscribeChanges?.();
+            if (holder?.exitCode === null) { const exited = once(holder, 'exit'); holder.kill(); await exited; }
+            routes.dispose(); releaseDemand(); await sampler.stop(); await os.cleanup(); }
     });
 
     it.each(['linux', 'darwin', 'win32'] as const)('serves daemon-qualified %s scan shortcuts through the strict summary consumer', async platform => {

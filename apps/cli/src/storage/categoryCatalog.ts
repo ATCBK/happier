@@ -14,7 +14,7 @@ import { temporary } from './categories/temporary';
 import { recordings } from './categories/recordings';
 import { ownData, trash } from './categories/retainedData';
 import { StorageCategoryAdapterError } from './categories/types';
-import type { StorageCategoryAdapter, StorageCategoryCatalogDeps, StorageCategoryItem, StorageCleanupItem, StorageCategoryContext, StorageCategoryDefinition, StorageCategoryDiscoverySnapshot, StorageProjectFacts, StorageCategoryVerdict } from './categories/types';
+import type { StorageCategoryAdapter, StorageCategoryCatalogDeps, StorageCategoryItem, StorageCleanupItem, StorageCategoryContext, StorageCategoryDefinition, StorageCategoryDiscoverySnapshot, StorageProjectFacts, StorageCategoryVerdict, StoragePathUse } from './categories/types';
 import { bindFilesystemItem, filesystemAdapterForEntry } from './categories/filesystemAdapters';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { HappierStorageCategoryIdV1 } from '@happier-dev/protocol/storage/storageV1';
@@ -53,7 +53,7 @@ export function foldStorageDescendantVerdicts(item: StorageCategoryVerdict, chil
 export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
     const dataRoots = () => [deps.happyHomeDir, deps.activeServerDir, getHappierTempRoot(deps.tempRoot)].filter((path, index, paths) =>
         !paths.slice(0, index).some(previous => canonicalAbsolutePathsEqual(previous, path)));
-    const context = async (paths: readonly string[] = []): Promise<StorageCategoryContext> => {
+    const context = async (paths: readonly string[] = [], suppliedInUse?: StoragePathUse): Promise<StorageCategoryContext> => {
         const now = deps.now?.() ?? Date.now();
         const [allocations, modelPacks, recordings, temporaryFacts, isolationFacts, inUse, projectFacts, worktrees] = await Promise.all([
             timeWebLatencyPhase('storage.catalog.allocations', () => deps.managedSessionDirectories?.listRecords() ?? []),
@@ -61,7 +61,7 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
             timeWebLatencyPhase('storage.catalog.recordings', () => deps.readRecordings?.() ?? []),
             timeWebLatencyPhase('storage.catalog.temporary', () => deps.readTemporaryFacts?.() ?? []),
             timeWebLatencyPhase('storage.catalog.isolation', () => deps.readIsolationFacts?.() ?? []),
-            timeWebLatencyPhase('storage.catalog.in-use', () => deps.readInUsePaths?.() ?? { reliable: false, paths: [] }),
+            timeWebLatencyPhase('storage.catalog.in-use', () => suppliedInUse ?? deps.readInUsePaths?.() ?? { reliable: false, paths: [] }),
             timeWebLatencyPhase('storage.catalog.projects', () => deps.readProjects?.() ?? UNAVAILABLE_PROJECT_FACTS),
             timeWebLatencyPhase('storage.catalog.worktrees', () => deps.readWorktrees?.() ?? []),
         ]);
@@ -131,8 +131,8 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
             const facts = await context();
             return categories.map(category => ({ categoryId: category.id, paths: category.roots(facts) }));
         },
-        async discoverSnapshot(paths: readonly string[] = []): Promise<StorageCategoryDiscoverySnapshot> {
-            return projectSnapshot(await context(paths));
+        async discoverSnapshot(paths: readonly string[] = [], inUse?: StoragePathUse): Promise<StorageCategoryDiscoverySnapshot> {
+            return projectSnapshot(await context(paths, inUse));
         },
         async discover(paths: readonly string[] = [], current?: readonly StorageCategoryItem[]): Promise<readonly StorageCategoryItem[]> {
             if (!current) return (await catalog.discoverSnapshot(paths)).items;

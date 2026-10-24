@@ -23,7 +23,7 @@ import type { MachineStorageScanStartInputV1, MachineStorageScanGetInputV1,
 import { resolveProcessCustodySupportExecutable } from '@/subprocess/supervision/processCustody';
 import { createStorageMaintenance, type StorageMaintenanceDeps } from './maintenance/storageMaintenance';
 import { storagePathContains } from './storagePath';
-import type { SizedStorageCategoryItem } from './categories/types';
+import type { SizedStorageCategoryItem, StoragePathUse } from './categories/types';
 import { logger } from '@/ui/logger';
 import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 import { scmWorktreeMutationActivity } from '@/scm/worktreeMutationActivity';
@@ -65,7 +65,7 @@ export type StorageServiceDeps = Readonly<{
     /** Existing OS/browser owners supply facts; this service performs no environment discovery. */
     readStorageProtectionFacts?: () => StorageEnvironmentProtectionFacts | Promise<StorageEnvironmentProtectionFacts>;
     /** EU7's completed whole-disk index is the only outside-Happier candidate producer. */
-    readCompletedStorageScan?: () => Promise<CompletedStorageSuggestionScan | null>;
+    readCompletedStorageScan?: (inUse?: StoragePathUse) => Promise<CompletedStorageSuggestionScan | null>;
     /** Omitted in the daemon, where the canonical applied-runtime lease supplies SCM. */
     scmRegistry?: ScmBackendRegistry;
 }>;
@@ -110,9 +110,9 @@ export function createStorageService(deps: StorageServiceDeps) {
     const abortError = () => Object.assign(new Error('Storage request cancelled'), { name: 'AbortError' });
     const notify = () => { for (const listener of listeners) listener(); };
     const invalidate = () => { if (disposed) return; dirty = true; catalogSnapshot = undefined; revision += 1; notify(); };
-    function readCatalogSnapshot(): Promise<StorageCategoryDiscoverySnapshot> {
+    function readCatalogSnapshot(inUse?: StoragePathUse): Promise<StorageCategoryDiscoverySnapshot> {
         if (catalogSnapshot) return catalogSnapshot;
-        const snapshot = catalog.discoverSnapshot();
+        const snapshot = catalog.discoverSnapshot([], inUse);
         catalogSnapshot = snapshot;
         void snapshot.catch(() => { if (catalogSnapshot === snapshot) catalogSnapshot = undefined; });
         return snapshot;
@@ -252,18 +252,23 @@ export function createStorageService(deps: StorageServiceDeps) {
 
     async function measure(signal: AbortSignal, measuredRevision: number): Promise<HappierStorageSummaryV1> {
         await timeWebLatencyPhase('storage.summary.prepare', () => operations.prepareRead());
-        const discovery = await timeWebLatencyPhase('storage.summary.catalog', readCatalogSnapshot);
+        // Catalog, protection and recognition describe this same sizing operation.
+        // Discard its process observation on settlement; later actor/effect reads
+        // acquire current protection independently, including after slow sizing.
+        const inUse = await timeWebLatencyPhase('storage.facts.in-use', () => deps.catalog.readInUsePaths?.()
+            ?? { reliable: false, paths: [] });
+        const discovery = await timeWebLatencyPhase('storage.summary.catalog', () => readCatalogSnapshot(inUse));
         const candidates = discovery.items;
         const incompleteCategories = new Set(discovery.incompleteCategoryIds);
         assertActive(signal);
-        const projected = await timeWebLatencyPhase('storage.summary.projection', () => operations.projectCatalogItems(candidates.map(item => ({ ...item, size: emptySize() }))));
+        const projected = await timeWebLatencyPhase('storage.summary.projection', () => operations.projectCatalogItems(candidates.map(item => ({ ...item, size: emptySize() })), inUse));
         const volumeFacts = deps.readVolumes();
         const volumeFor = (path: string) => volumeFacts.filter(volume => canonicalAbsolutePathsEqual(path, volume.mount)
             || isCanonicalAbsolutePathInsideRoot(volume.mount, path, { platform: process.platform }))
             .sort((left, right) => right.mount.length - left.mount.length)[0];
         // The recognizer/protection owners decide eligible sets before native sizing.
         // Missing native facts remove that root from the union rather than granting eligibility.
-        const provisionalSuggestions = await timeWebLatencyPhase('storage.summary.provisional-suggestions', () => operations.summarySuggestions(projected));
+        const provisionalSuggestions = await timeWebLatencyPhase('storage.summary.provisional-suggestions', () => operations.summarySuggestions(projected, inUse));
         const unions = [
             ...catalog.categoryIds.map(categoryId => ({ id: `category:${categoryId}`,
                 paths: projected.filter(item => item.categoryId === categoryId && canGo(item)).map(item => item.path), excludeIncomplete: true })),
@@ -311,7 +316,7 @@ export function createStorageService(deps: StorageServiceDeps) {
         }
         const trash = categories.find(category => category.categoryId === 'trash');
         if (trash) trash.count = trashEntries.length;
-        const suggestionsTop = await timeWebLatencyPhase('storage.summary.suggestions', () => operations.summarySuggestions(nextItems));
+        const suggestionsTop = await timeWebLatencyPhase('storage.summary.suggestions', () => operations.summarySuggestions(nextItems, inUse));
         const environment = await timeWebLatencyPhase('storage.summary.environment', () => deps.readStorageProtectionFacts?.());
         const result = HappierStorageSummaryV1Schema.parse({
             revision: dirty ? measuredRevision : Math.max(measuredRevision, revision), sizedAt: now(),
@@ -390,12 +395,12 @@ export function createStorageService(deps: StorageServiceDeps) {
         } };
         return options.actor ? timeWebLatencyPhase('storage.summary.actor-projection', () => operations.summaryForActor(current, options.actor!, items)) : current;
     }
-    const readCompletedStorageScan: () => Promise<CompletedStorageSuggestionScan | null> = deps.readCompletedStorageScan ?? (async () => {
+    const readCompletedStorageScan: NonNullable<StorageServiceDeps['readCompletedStorageScan']> = deps.readCompletedStorageScan ?? (async inUse => {
         if (readWholeDiskEnabled() !== true) return null;
         const owner = await scans();
         if (!deps.readVolumes().some(volume => owner.index.hasWholeDiskCoverage(volume.id))) return null;
         const [projects, use, protection] = await Promise.all([
-            deps.catalog.readProjects?.(), deps.catalog.readInUsePaths?.(), deps.readStorageProtectionFacts?.(),
+            deps.catalog.readProjects?.(), inUse ?? deps.catalog.readInUsePaths?.(), deps.readStorageProtectionFacts?.(),
         ]);
         const contains = storagePathContains;
         function* candidates() {
