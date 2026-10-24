@@ -12,6 +12,9 @@ export type CodeIntelligenceServerPort = Readonly<{
     /** Supplied by the app Action executor, never a direct UI restart RPC. */
     restart(signal?: AbortSignal): Promise<LanguageIntelligenceRestartResult>;
 }>;
+/** Query details only; document identity and freshness always belong to this holder. */
+export type CodeIntelligenceQueryOptions = Omit<LanguageIntelligenceQueryInput,
+    'rootPath' | 'path' | 'kind' | 'version' | 'generation' | 'text'>;
 type SyncOk = Extract<LanguageIntelligenceSyncResult, { status: 'ok' }>;
 type WatchOk = Extract<LanguageIntelligenceWatchResult, { status: 'ok' }>;
 
@@ -51,7 +54,13 @@ export function createCodeIntelligenceDocument(input: Readonly<{
         lastResult = result;
         if (result.status !== 'ok') return;
         const previousGeneration = acknowledged?.generation ?? null;
-        acknowledged = { text, unsaved, version: result.version ?? version, generation: result.generation };
+        const acceptedVersion = result.version ?? version;
+        // Equal sync acknowledgements do not replace the held query fence.
+        // A genuine revision still replaces it, including edit-then-restore.
+        if (!acknowledged || acknowledged.text !== text || acknowledged.unsaved !== unsaved
+            || acknowledged.version !== acceptedVersion || acknowledged.generation !== result.generation) {
+            acknowledged = { text, unsaved, version: acceptedVersion, generation: result.generation };
+        }
         // Sync names this document's servers; only the root watch can retire
         // other server identities from the existing root delivery fence.
         servers = [...servers.filter(previous => !result.servers.some(next => next.serverId === previous.serverId)), ...result.servers];
@@ -170,7 +179,7 @@ export function createCodeIntelligenceDocument(input: Readonly<{
         getAcknowledged: () => acknowledged,
         synchronize,
         async query(kind: LanguageIntelligenceQueryInput['kind'], position: LanguageIntelligenceQueryInput['position'], callerSignal: AbortSignal,
-            activate = true): Promise<LanguageIntelligenceQueryResult | null> {
+            activate = true, options: CodeIntelligenceQueryOptions = {}): Promise<LanguageIntelligenceQueryResult | null> {
             const cancellation = mergeAbortSignals([callerSignal, watchAbort.signal]);
             const signal = cancellation.signal;
             try {
@@ -179,7 +188,7 @@ export function createCodeIntelligenceDocument(input: Readonly<{
                 if (synced.status !== 'ok') return synced;
                 const held = acknowledged;
                 if (!held) return { status: 'unavailable', reason: 'session_unavailable' };
-                const request: LanguageIntelligenceQueryInput = { rootPath: input.rootPath, path: input.path, kind,
+                const request: LanguageIntelligenceQueryInput = { ...options, rootPath: input.rootPath, path: input.path, kind,
                     version: held.version, generation: held.generation, text: 'held', ...(position ? { position } : {}) };
                 const issuedServers = servers;
                 const result = await input.port.query(request, signal);
@@ -191,10 +200,13 @@ export function createCodeIntelligenceDocument(input: Readonly<{
                     const restored = await enqueue(() => snapshot((acknowledged?.version ?? 0) + 1, input.getText(), input.getUnsaved()));
                     if (!current() || signal.aborted) return null;
                     if (restored.status !== 'ok') return restored;
+                    const retryHeld = acknowledged;
+                    if (!retryHeld) return { status: 'unavailable', reason: 'session_unavailable' };
                     const retryServers = servers;
-                    const retried = await input.port.query({ ...request, version: acknowledged?.version, generation: restored.generation }, signal);
+                    const retried = await input.port.query({ ...request, version: retryHeld.version, generation: restored.generation }, signal);
                     if (!current() || signal.aborted) return null;
-                    if (sessionMoved(retryServers)) return { status: 'error', errorCode: 'stale_query' };
+                    if (acknowledged !== retryHeld || retryHeld.text !== input.getText() || retryHeld.unsaved !== input.getUnsaved()
+                        || sessionMoved(retryServers)) return { status: 'error', errorCode: 'stale_query' };
                     if (retried.status === 'ok') void watch();
                     return retried;
                 }

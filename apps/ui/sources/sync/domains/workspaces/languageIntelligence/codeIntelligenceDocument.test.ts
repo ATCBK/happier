@@ -3,6 +3,85 @@ import type { LanguageIntelligenceSyncResult } from '@happier-dev/protocol/machi
 import { createCodeIntelligenceDocument, type CodeIntelligenceServerPort } from './codeIntelligenceDocument';
 
 describe('language document custody', () => {
+    it('keeps an unchanged query current when another operation resynchronizes an equal acknowledgement', async () => {
+        let finishProject!: (value: import('@happier-dev/protocol/machines/languageIntelligence').LanguageIntelligenceQueryResult) => void;
+        let hoverRequests = 0;
+        const holder = createCodeIntelligenceDocument({ rootPath: '/repo', path: 'a.ts', languageId: 'typescript',
+            getText: () => 'answer()', getUnsaved: () => false, isCurrent: () => true,
+            onSync() {}, onWatch() {}, onUnavailable() {},
+            port: {
+                // The Machine can acknowledge the same admitted document revision
+                // after a sibling operation reacquires its unchanged snapshot.
+                sync: async () => ({ status: 'ok', generation: 'g1', version: 5, servers: [] }),
+                query: async request => {
+                    if (request.kind === 'diagnostics') return new Promise(resolve => { finishProject = resolve; });
+                    if (++hoverRequests === 1) return { status: 'error', errorCode: 'stale_query' };
+                    return { status: 'ok', kind: 'hover', sections: [] };
+                },
+                watch: (_request, signal) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })),
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            const pending = holder.query('diagnostics', undefined, new AbortController().signal, true, { scope: 'project' });
+            await vi.waitFor(() => expect(finishProject).toBeTypeOf('function'));
+            expect(await holder.query('hover', { line: 0, character: 2 }, new AbortController().signal)).toMatchObject({ status: 'ok' });
+            finishProject({ status: 'ok', kind: 'diagnostics', diagnostics: [], hasMore: false, version: 5, generation: 'g1' });
+            expect(await pending).toMatchObject({ status: 'ok', kind: 'diagnostics' });
+        } finally { holder.dispose(); }
+    });
+
+    it('drops an in-flight answer after acknowledged edits even when the original text is restored', async () => {
+        let text = 'answer()';
+        let version = 0;
+        let finishQuery!: (value: import('@happier-dev/protocol/machines/languageIntelligence').LanguageIntelligenceQueryResult) => void;
+        const holder = createCodeIntelligenceDocument({ rootPath: '/repo', path: 'a.ts', languageId: 'typescript',
+            getText: () => text, getUnsaved: () => true, isCurrent: () => true,
+            onSync() {}, onWatch() {}, onUnavailable() {},
+            port: {
+                sync: async () => ({ status: 'ok', generation: 'g1', version: ++version, servers: [] }),
+                query: async () => new Promise(resolve => { finishQuery = resolve; }),
+                watch: (_request, signal) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })),
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            const pending = holder.query('hover', { line: 0, character: 2 }, new AbortController().signal);
+            await vi.waitFor(() => expect(finishQuery).toBeTypeOf('function'));
+            text = 'changed()';
+            await holder.synchronize();
+            text = 'answer()';
+            await holder.synchronize();
+            finishQuery({ status: 'ok', kind: 'hover', sections: [] });
+            expect(await pending).toEqual({ status: 'error', errorCode: 'stale_query' });
+        } finally { holder.dispose(); }
+    });
+
+    it('drops a resynchronized query when the buffer moves again while its retry is in flight', async () => {
+        let text = 'answer()';
+        let finishRetry!: (value: import('@happier-dev/protocol/machines/languageIntelligence').LanguageIntelligenceQueryResult) => void;
+        let requests = 0;
+        const holder = createCodeIntelligenceDocument({ rootPath: '/repo', path: 'a.ts', languageId: 'typescript',
+            getText: () => text, getUnsaved: () => true, isCurrent: () => true, onSync() {}, onWatch() {}, onUnavailable() {},
+            port: {
+                sync: async request => ({ status: 'ok', generation: 'g1',
+                    ...('version' in request.op ? { version: request.op.version } : {}), servers: [] }),
+                query: async () => {
+                    if (++requests === 1) return { status: 'error', errorCode: 'document_out_of_sync' };
+                    return new Promise(resolve => { finishRetry = resolve; });
+                },
+                watch: (_request, signal) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })),
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            const pending = holder.query('hover', { line: 0, character: 2 }, new AbortController().signal);
+            await vi.waitFor(() => expect(requests).toBe(2));
+            text = 'different()';
+            finishRetry({ status: 'ok', kind: 'hover', sections: [] });
+            expect(await pending).toEqual({ status: 'error', errorCode: 'stale_query' });
+        } finally { holder.dispose(); }
+    });
     it.each(['throw', 'unavailable'] as const)('resumes diagnostic delivery after a healthy watch disconnects (%s) and the next query succeeds', async (failure) => {
         let disconnect!: () => void;
         let watches = 0;
