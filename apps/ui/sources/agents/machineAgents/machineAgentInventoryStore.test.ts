@@ -10,6 +10,28 @@ const facts = (agentId: string): MachineAgentInventoryItem => ({ agentId, title:
     install: { available: true, mode: 'managed', sizeBytes: null, guideUrl: null }, dependencies: [] });
 
 describe('machine agent inventory store', () => {
+    it('projects held installed counts and all reported versions without notifying for unrelated arrivals', () => {
+        const store = createMachineAgentInventoryStore();
+        const keys = Array.from({ length: 139 }, (_, i) => `account-a/machine-${i}`);
+        for (const key of keys) store.publish(key, { status: 'ready', items: [facts('claude'), facts('codex')], lastCheckedAt: 1 });
+        const summary = store.createHeldAgentSummary(keys, 'claude');
+        expect(summary.getSnapshot()).toEqual({ machineCount: 139, versions: ['1.0.0'], unknownVersionCount: 0, complete: true });
+        const initial = summary.getSnapshot();
+        const changed = vi.fn();
+        const off = summary.subscribe(changed);
+        for (const key of keys) store.publish(key, { status: 'offline', items: [], lastCheckedAt: 2 });
+        store.publish(keys[0]!, { status: 'ready', items: [facts('claude'), { ...facts('codex'), version: '9' }], lastCheckedAt: 3 });
+        store.publish('account-b/machine-0', { status: 'ready', items: [{ ...facts('claude'), version: 'wrong-account' }], lastCheckedAt: 3 });
+        expect(summary.getSnapshot()).toBe(initial);
+        expect(changed).not.toHaveBeenCalled();
+        store.publish(keys[0]!, { status: 'ready', items: [{ ...facts('claude'), version: '2.1.4' }], lastCheckedAt: 4 });
+        expect(summary.getSnapshot()).toEqual({ machineCount: 139, versions: ['1.0.0', '2.1.4'], unknownVersionCount: 0, complete: true });
+        store.publish(keys[1]!, { status: 'ready', items: [{ ...facts('claude'), version: null }], lastCheckedAt: 5 });
+        expect(summary.getSnapshot()).toEqual({ machineCount: 139, versions: ['1.0.0', '2.1.4'], unknownVersionCount: 1, complete: true });
+        store.publish(keys[0]!, { status: 'ready', items: [{ ...facts('claude'), installed: false, version: null }], lastCheckedAt: 6 });
+        expect(summary.getSnapshot()).toEqual({ machineCount: 138, versions: ['1.0.0'], unknownVersionCount: 1, complete: true });
+        off();
+    });
     it('keeps two ACP definitions separate and retains the unchanged definition identity', () => {
         const store = createMachineAgentInventoryStore();
         const first = { ...facts('custom-acp'), definitionId: 'first', title: 'First' };

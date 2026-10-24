@@ -1,6 +1,8 @@
 import { buildMachineAgentInventoryKey, type MachineAgentInventoryDescriptor, type MachineAgentInventoryItem, type MachineAgentInventoryUnavailable } from '@happier-dev/protocol/capabilities';
 import type { MachineAgent, MachineAgentConnectedService } from './machineAgentTypes';
 import { projectMachineAgent, reconcileMachineAgents, type MachineAgentCredentialSelection } from './machineAgentModel';
+import type { MachinePublishedMetadataV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { readInstalledMachineAgentInventory } from '@/sync/domains/capabilities/reach/installedMachineAgents';
 
 export type MachineAgentsSnapshot = Readonly<{
     status: 'idle' | 'loading' | 'ready' | 'offline' | 'error';
@@ -21,6 +23,13 @@ export type MachineAgentInventoryObservation = Readonly<{
 
 export const EMPTY_MACHINE_AGENTS: MachineAgentsSnapshot = Object.freeze({ status: 'idle', agents: Object.freeze([]), lastCheckedAt: null });
 
+export type HeldMachineAgentSummary = Readonly<{
+    machineCount: number;
+    versions: readonly string[];
+    unknownVersionCount: number;
+    complete: boolean;
+}>;
+
 export function createMachineAgentInventoryStore() {
     const snapshots = new Map<string, MachineAgentsSnapshot>();
     const listeners = new Map<string, Set<() => void>>();
@@ -30,6 +39,73 @@ export function createMachineAgentInventoryStore() {
     const credentialsByScope = new Map<string, NonNullable<MachineAgentInventoryObservation['credentialSelectionsByAgentId']>>();
     return {
         read(key: string): MachineAgentsSnapshot { return snapshots.get(key) ?? EMPTY_MACHINE_AGENTS; },
+        /** A mounted summary observes only held installation/version facts; it never acquires inventory. */
+        createHeldAgentSummary(keys: readonly string[], agentId: string, definitionId?: string,
+            publishedByKey?: ReadonlyMap<string, MachinePublishedMetadataV1['agentInventory']>) {
+            const inventoryKeys = [...new Set(keys)];
+            type Fact = Readonly<{ installed: boolean; version: string | null; complete: boolean }>;
+            const facts = new Map<string, Fact>();
+            const versions = new Map<string, number>();
+            let machineCount = 0;
+            let unknownVersionCount = 0;
+            let unknownMachineCount = 0;
+            let snapshot: HeldMachineAgentSummary = { machineCount: 0, versions: [], unknownVersionCount: 0, complete: false };
+            const listeners = new Set<() => void>();
+            let disposers: Array<() => void> = [];
+            const adjust = (fact: Fact | undefined, delta: number) => {
+                if (fact === undefined) return;
+                if (!fact.complete) unknownMachineCount += delta;
+                if (!fact.installed) return;
+                const version = fact.version;
+                machineCount += delta;
+                if (version === null) unknownVersionCount += delta;
+                else {
+                    const count = (versions.get(version) ?? 0) + delta;
+                    if (count === 0) versions.delete(version);
+                    else versions.set(version, count);
+                }
+            };
+            const update = (key: string) => {
+                const cached = this.read(key);
+                const inventory = readInstalledMachineAgentInventory(publishedByKey?.get(key), cached, definitionId ? [definitionId] : undefined);
+                const agent = cached.agents.find(row => row.agentId === agentId && row.definitionId === definitionId);
+                const installed = inventory.agentIds.includes(agentId) && (definitionId === undefined || agent?.installed === true);
+                const fact = { installed, version: installed && agent?.installed ? agent.version : null, complete: inventory.complete };
+                const previous = facts.get(key);
+                if (previous?.installed === fact.installed && previous.version === fact.version && previous.complete === fact.complete) return false;
+                adjust(previous, -1);
+                facts.set(key, fact);
+                adjust(fact, 1);
+                return true;
+            };
+            const publish = () => {
+                const nextVersions = [...versions.keys()].sort();
+                const complete = inventoryKeys.length > 0 && unknownMachineCount === 0;
+                if (snapshot.machineCount === machineCount && snapshot.unknownVersionCount === unknownVersionCount
+                    && snapshot.complete === complete
+                    && snapshot.versions.length === nextVersions.length && snapshot.versions.every((v, i) => v === nextVersions[i])) return;
+                snapshot = { machineCount, versions: nextVersions, unknownVersionCount, complete };
+                for (const listener of listeners) listener();
+            };
+            const refresh = () => { for (const key of inventoryKeys) update(key); publish(); };
+            refresh();
+            return {
+                getSnapshot: () => { if (listeners.size === 0) refresh(); return snapshot; },
+                subscribe: (listener: () => void) => {
+                    if (listeners.size === 0) {
+                        disposers = inventoryKeys.map(key => this.subscribe(key, () => {
+                            if (update(key)) publish();
+                        }));
+                        refresh();
+                    }
+                    listeners.add(listener);
+                    return () => {
+                        listeners.delete(listener);
+                        if (listeners.size === 0) { for (const off of disposers) off(); disposers = []; }
+                    };
+                },
+            };
+        },
         subscribe(key: string, listener: () => void) {
             const subscribers = listeners.get(key) ?? new Set();
             subscribers.add(listener); listeners.set(key, subscribers);
