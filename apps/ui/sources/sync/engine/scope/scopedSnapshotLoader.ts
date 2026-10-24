@@ -228,7 +228,12 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                                 // Feeding cleanup completion back into its in-flight wake
                                 // flag would make each new cleanup queue another reread.
                                 await inFlight.get(target.key)?.catch(() => {});
-                                if (entry.reloadAfterMaintenance && result.isMaintenanceCurrent()) requestReload(target);
+                                if (entry.reloadAfterMaintenance && result.isMaintenanceCurrent()) {
+                                    // Hand the existing debt to any newer cleanup first. Starting
+                                    // another foreground read here would only join it and create
+                                    // another final-proof completion, perpetuating the same debt.
+                                    if (!requireMaintenanceReload(target)) void loadOnce(target).catch(() => {});
+                                }
                             });
                         }
                     } catch (error) {
@@ -289,13 +294,15 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
         return loadOnce(target);
     }
 
-    function requireMaintenanceReload(target: TTarget): void {
+    function requireMaintenanceReload(target: TTarget): boolean {
         const incumbent = maintenance.get(target.key);
         if (incumbent?.result.isMaintenanceCurrent() === true) {
             // A changed demand can reveal new source/authority after this cleanup
             // started. Ordinary reads joining it do not schedule another pass.
             incumbent.reloadAfterMaintenance = true;
+            return true;
         }
+        return false;
     }
 
     function handleWake(event: HomeAccountChangeEvent): void {

@@ -45,6 +45,108 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
 }));
 
 describe('createScopedSnapshotLoader', () => {
+    it('does not turn completed maintenance into new Account-currentness demand on a settled page', async () => {
+        type Identity = Pick<ReturnType<typeof AccountEncryptionCurrentnessResponseSchema.parse>, 'version' | 'mode' | 'contentKeyFingerprint'>;
+        const target = { key: 'catalog:settled-maintenance', serverId: 'settled-home' };
+        let releaseInitial!: () => void;
+        const initialCleanup = new Promise<void>(resolve => { releaseInitial = resolve; });
+        let releaseSecondReady!: () => void;
+        const secondReady = new Promise<void>(resolve => { releaseSecondReady = resolve; });
+        let releaseFinalProofs!: () => void;
+        const finalProofs = new Promise<void>(resolve => { releaseFinalProofs = resolve; });
+        let joinedInitial = false;
+        let loads = 0;
+        let maximumLoads = 3;
+        let currentnessGets = 0;
+        let version = 1;
+        let mode: 'plain' | 'e2ee' = 'plain';
+        let contentKeyFingerprint: string | null = null;
+        let publication: Identity | null = null;
+        // The HTTP port is the only substituted system boundary. Both initial
+        // and final reads parse an actual currentness response; no witness is cached.
+        const request = async (path: string, init: RequestInit) => {
+            expect(path).toBe('/v1/account/encryption/currentness');
+            expect(init.method).toBe('GET');
+            currentnessGets++;
+            if (loads > maximumLoads) throw new Error('Unrequested currentness GET');
+            return Response.json({ mode, version, settingsVersion: 7, updatedAt: version,
+                signingKeyFingerprint: null, contentKeyFingerprint,
+                recipientEnvelopeReadiness: mode === 'plain' ? { status: 'unavailable', reason: 'plain_account' }
+                    : { status: 'available' } });
+        };
+        const readCurrentness = async () => AccountEncryptionCurrentnessResponseSchema.parse(
+            await (await request('/v1/account/encryption/currentness', { method: 'GET' })).json());
+        const loader = createScopedSnapshotLoader({
+            load: async (_target, context) => context.readWithMaintenance<Identity>({
+                read: async ({ onReady, hasPendingCleanup }) => {
+                    const pass = ++loads;
+                    const initial = await readCurrentness();
+                    const joined = hasPendingCleanup();
+                    if (pass === 2) {
+                        joinedInitial = joined;
+                        await secondReady;
+                    }
+                    const result = { version: initial.version, mode: initial.mode, contentKeyFingerprint: initial.contentKeyFingerprint };
+                    onReady(result, () => true);
+                    if (pass === 1) await initialCleanup;
+                    else await finalProofs;
+                    await readCurrentness();
+                    return result;
+                },
+                publish: result => { publication = result; },
+                getPublication: () => publication,
+            }),
+            shouldLoadOnObserve: () => publication === null,
+            matchesWake: event => event.entityIds === undefined || event.entityIds.includes('self'),
+            invalidateServer: () => {},
+            invalidateTarget: () => {},
+        });
+        const release = loader.observe(target);
+        try {
+            await loader.refresh(target);
+            publishHomeAccountChange(target.serverId, ['self']);
+            await vi.waitFor(() => expect(joinedInitial).toBe(true));
+            releaseInitial();
+            await new Promise<void>(resolve => setImmediate(resolve));
+            releaseSecondReady();
+            await loader.refresh(target);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            // The joined foreground pass is still proving its Account. Do not
+            // start another read that can only join that same unfinished work.
+            expect(loads).toBe(2);
+            releaseFinalProofs();
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(currentnessGets).toBe(6);
+            expect(loads).toBe(3);
+            const settledGets = currentnessGets;
+            vi.useFakeTimers();
+            for (let index = 0; index < 1_000; index++) {
+                publishHomeAccountChange(target.serverId, [`machine-${index}`], { changeKinds: ['machine'] });
+            }
+            await vi.advanceTimersByTimeAsync(300_000);
+            expect(currentnessGets - settledGets).toBe(0);
+            vi.useRealTimers();
+
+            // Mode and subsequent key changes each obtain new entry and final witnesses.
+            for (const key of ['first-content-key', 'replacement-content-key']) {
+                maximumLoads++;
+                version++;
+                mode = 'e2ee';
+                contentKeyFingerprint = key;
+                const beforeChange = currentnessGets;
+                publishHomeAccountChange(target.serverId, ['self']);
+                await loader.refresh(target);
+                await new Promise<void>(resolve => setImmediate(resolve));
+                expect(publication).toEqual({ version, mode, contentKeyFingerprint });
+                expect(currentnessGets - beforeChange).toBe(2);
+            }
+        } finally {
+            vi.useRealTimers();
+            releaseInitial(); releaseSecondReady(); releaseFinalProofs();
+            release();
+            loader.resetForTests();
+        }
+    });
     it.each([false, true])('settles finite Connected Account maintenance after first observation (wake during reread: %s)', async wakeDuringReread => {
         const target = { key: 'connected-account:finite-maintenance', serverId: 'finite-home' };
         let revision = 4;
