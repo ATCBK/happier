@@ -3,9 +3,83 @@ import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { openOrdinaryNewSessionSeed } from '@/components/sessions/new/newSessionSeedNavigation';
+import { buildNewSessionConfigurationDraft, buildNewSessionTempDataFromSessionConfiguration } from '@/components/sessions/authoring/draft/sessionConfigurationSeed';
+import { selectSessionViewShellSessionForRouteState } from '@/components/sessions/shell/sessionViewStableSession';
+import { isSessionContentReadable, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { resolveMachineControlTargetForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
+import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
+import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { captureLazyActionAccountContext, type LazyActionAccountContext } from './actionAccountContext';
+
+type AuthoringOpenArgs = Parameters<NonNullable<ActionExecutorDeps['sessionAuthoringOpen']>>[0];
+
+async function openSourceSessionDraft({ input, context }: AuthoringOpenArgs,
+    capturedAccount?: LazyActionAccountContext): Promise<SessionAuthoringOpenResultV1> {
+    if (!('sourceSession' in input)) return { kind: 'invalid', reason: 'seed_invalid' };
+    const address = input.sourceSession;
+    if (context.serverId && !areServerProfileIdentifiersEquivalent(context.serverId, address.serverId)) {
+        return { kind: 'stale', reason: 'host_retired' };
+    }
+    let account = capturedAccount;
+    try {
+        account ??= await captureLazyActionAccountContext(address.serverId, context.signal);
+        account.assertCurrent();
+        if (!areServerProfileIdentifiersEquivalent(account.serverId, address.serverId)
+            || (context.runtimeAccountId && context.runtimeAccountId !== account.accountId)) {
+            return { kind: 'stale', reason: 'host_retired' };
+        }
+        const sourceAccount = account;
+        const state = getStorage().getState();
+        // Bare ids are not Account provenance. Only borrow a held detail from its owning scope.
+        const held = account.credentialAuthorityKind === 'account'
+            && areServerAccountScopesEqual(state.profileScope, account.accountLifetime.scope)
+            ? selectSessionViewShellSessionForRouteState(state, address.sessionId, address.serverId)
+            : null;
+        const session = held ?? (await runWithServerRequestAuthorityForServerAccountScope({
+            scope: account.accountLifetime.scope, activeRequest: account.request,
+        }, authority => readSessionSnapshotForAuthority({ authority, sessionId: address.sessionId,
+            signal: context.signal, isCurrent: sourceAccount.accountLifetime.isCurrent }))).session;
+        account.assertCurrent();
+        const metadata = readSessionOwnerMetadataView(session);
+        if (session.access?.capabilities.readTranscript !== true
+            || !isSessionContentReadable(readSessionContentAvailability(session)) || !metadata) {
+            return { kind: 'unavailable', reason: 'origin_unavailable' };
+        }
+        const target = resolveMachineControlTargetForSessionFromState({ ...getStorage().getState(),
+            sessions: { [session.id]: session }, sessionListRowsByServerId: {},
+        }, { ...account.accountLifetime.scope, sessionId: session.id });
+        const configuration = buildNewSessionTempDataFromSessionConfiguration({ session,
+            machineId: target?.machineId ?? metadata.machineId ?? null,
+            directoryOverride: target?.basePath ?? metadata.path ?? null });
+        const machineId = configuration.machineId;
+        const directory = configuration.directory;
+        const outcome = await openOrdinaryNewSessionSeed({
+            seed: { placement: machineId
+                ? { kind: 'exactTarget', serverId: account.serverId, machineId, ...(directory ? { directory } : {}) }
+                : { kind: 'currentTarget', ...(directory ? { directory } : {}) } },
+            configurationDraft: buildNewSessionConfigurationDraft(configuration),
+            scope: account.accountLifetime.scope, signal: context.signal, isCurrent: account.accountLifetime.isCurrent,
+        });
+        return outcome.kind === 'opened'
+            ? { kind: 'opened', draftId: outcome.draftId, destination: 'newSession' } : outcome;
+    } catch {
+        if (context.signal?.aborted) return { kind: 'unavailable', reason: 'aborted' };
+        return account && !account.accountLifetime.isCurrent()
+            ? { kind: 'stale', reason: 'host_retired' }
+            : { kind: 'unavailable', reason: 'origin_unavailable' };
+    } finally {
+        if (account && account !== capturedAccount) account.dispose();
+    }
+}
 
 /** Presentation only: the ordinary composer retains sole ownership of edits and explicit Send. */
-export const openSessionAuthoringDraft: NonNullable<ActionExecutorDeps['sessionAuthoringOpen']> = async ({ input, context }): Promise<SessionAuthoringOpenResultV1> => {
+export async function openSessionAuthoringDraft(args: AuthoringOpenArgs,
+    capturedAccount?: LazyActionAccountContext): Promise<SessionAuthoringOpenResultV1> {
+    const { input, context } = args;
+    if ('sourceSession' in input) return openSourceSessionDraft(args, capturedAccount);
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (!lifetime
         || (context.serverId && !areServerProfileIdentifiersEquivalent(context.serverId, lifetime.scope.serverId))
@@ -23,4 +97,4 @@ export const openSessionAuthoringDraft: NonNullable<ActionExecutorDeps['sessionA
     return outcome.kind === 'opened'
         ? { kind: 'opened', draftId: outcome.draftId, destination: 'newSession' }
         : outcome;
-};
+}
