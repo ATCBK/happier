@@ -15,7 +15,8 @@ import {
 } from './discussionComposerDocument';
 import { projectDiscussionMessageReferences } from './discussionTimelineProjection';
 
-function mention(payload: Readonly<{ kind: string; ref: string; label: string }>, start = 0): ComposerStructuredInputMention {
+function mention(payload: Readonly<{ kind: string; ref: string; label: string }>, start = 0):
+    ComposerStructuredInputMention & Readonly<{ ref: string; label: string }> {
     const tokenText = formatInlineReferenceTokenV1(payload);
     return { ...payload, tokenText, start, end: start + tokenText.length };
 }

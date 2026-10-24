@@ -22,6 +22,8 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolvePluginUiClientExecutablePlatform } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import { clearPluginAccountAvailabilityProjection, readPluginAccountAvailability, replacePluginAccountAvailabilityProjection, useActivePluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/projection';
+import * as availabilityProjection from '@/sync/domains/plugins/availability/projection';
+import * as executionOriginSelection from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { PluginAccountAvailabilitySnapshot } from '@/sync/domains/plugins/availability/reader';
 import { dispatchPluginSurfaceAction } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
@@ -420,6 +422,47 @@ it('refuses revoked and foreign scoped grants for a committed cold-client Action
     // so a missing handler or generation refusal cannot satisfy the denials.
     await expect(dispatchWithGrant({ ...producerGrant, status: 'active', grantedScope: requiredScope }))
         .resolves.toMatchObject({ ok: true, result: { items: [{ id: 'match', title: 'needle' }] } });
+});
+
+it('keeps the mounted shell and execution-origin reporters at zero renders during ten settled seconds without changed facts', async () => {
+    vi.useFakeTimers();
+    try {
+        // Forwarding spies count the actual mounted component's unconditional hook
+        // entry, not snapshot reads or a replacement implementation of the owner.
+        const shellRenders = vi.spyOn(availabilityProjection, 'useActivePluginAccountUiProjectionInputs');
+        const reporterRenders = vi.spyOn(executionOriginSelection, 'usePluginMachineExecutionOriginSelection');
+        const { lifetime, registration, machine, peerMachine } = await mountClientExecutableFixture();
+        if (!registration) throw new Error('Missing committed Action');
+        const publishReceipt = () => storage.getState().applyMachines(structuredClone([machine, peerMachine]), false,
+            { sourceServerId: lifetime.scope.serverId });
+        await act(async () => { publishReceipt(); });
+        await flushHookEffects({ cycles: 12 });
+        expect(registration.lifecycle.isCurrent()).toBe(true);
+        expect(shellRenders).toHaveBeenCalled();
+        expect(reporterRenders.mock.calls.some(([input]) => input.includeMachineCandidates === false)).toBe(true);
+        shellRenders.mockClear();
+        reporterRenders.mockClear();
+
+        for (let receipt = 0; receipt < 100; receipt++) {
+            await act(async () => {
+                publishReceipt();
+                await vi.advanceTimersByTimeAsync(100);
+            });
+        }
+        await flushHookEffects();
+        expect.soft(shellRenders).not.toHaveBeenCalled();
+        expect.soft(reporterRenders.mock.calls.filter(([input]) => input.includeMachineCandidates === false)).toHaveLength(0);
+        expect(registration.lifecycle.isCurrent()).toBe(true);
+
+        // Prove that both counters observe genuine source withdrawal and that the
+        // quiet interval did not disconnect a consumer or freeze admission.
+        await act(async () => { availabilityProjection.retirePluginAccountAvailabilityProjection([pluginId]); });
+        await flushHookEffects({ cycles: 12 });
+        expect(shellRenders).toHaveBeenCalled();
+        expect(reporterRenders.mock.calls.some(([input]) => input.includeMachineCandidates === false)).toBe(true);
+        expect(registration.lifecycle.isCurrent()).toBe(false);
+        expect(lifetime.isCurrent()).toBe(true);
+    } finally { vi.useRealTimers(); }
 });
 
 it('retains a pending client Action and its exact admission across equivalent Availability publication while observing fresh inventory', async () => {

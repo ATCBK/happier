@@ -260,6 +260,8 @@ export const SessionRoleValueRow = React.memo(function SessionRoleValueRow(props
     sessionId: string;
     serverId?: string | null;
     testID?: string;
+    /** A row among glyph-led rows (Session Info's Setup) carries the same glyph column. */
+    icon?: React.ReactNode;
 }>) {
     const { sessionId } = props;
     const roleId = useSessionRoleId(sessionId, props.serverId);
@@ -283,6 +285,7 @@ export const SessionRoleValueRow = React.memo(function SessionRoleValueRow(props
                 <Item
                     testID={testID}
                     title={t('roles.rail.title')}
+                    icon={props.icon}
                     detail={value}
                     density="compact"
                     accessibilityLabel={t('sessionWork.role.a11y', { role: value })}

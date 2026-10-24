@@ -130,7 +130,7 @@ export type AppShellPluginUiProjectionPublication = Readonly<{
     publishExecutionOrigin(pluginId: string, lifetime: ActiveServerAccountScopeLifetime | null, origin: PluginMachineExecutionOriginV1 | null,
         selectableOrigins: readonly PluginMachineExecutionOriginV1[], hasStoredTarget?: boolean): void;
     getSnapshot(): AppShellPluginUiProjectionSnapshot;
-    subscribe(listener: () => void): () => void;
+    subscribe(listener: () => void, scope?: 'committed'): () => void;
     dispose(): void;
 }>;
 
@@ -158,8 +158,19 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
     let connectedAccounts = createConnectedAccountDescriptorProjectionPublication();
     let skills = createPluginSkillSourceIdentityPublication();
     const machineMerges = new Map<string, ReturnType<typeof createInstalledPluginUiProjectionPublication>>();
-    const listeners = new Set<() => void>();
-    const notify = () => { for (const listener of listeners) listener(); };
+    const listeners = new Map<() => void, 'committed' | undefined>();
+    const notify = (previous: AppShellPluginUiProjectionSnapshot) => {
+        // Committed readers consume declarations/candidates, not the raw
+        // Machine reports which Browser and Voice still observe through React.
+        const committedChanged = previous.accountLifetime !== snapshot.accountLifetime
+            || previous.activeServerId !== snapshot.activeServerId
+            || previous.pluginUiProjection !== snapshot.pluginUiProjection
+            || previous.candidateFactsByPluginId !== snapshot.candidateFactsByPluginId
+            || previous.projectionUnion.phase !== snapshot.projectionUnion.phase
+            || previous.projectionUnion.interactionEnabled !== snapshot.projectionUnion.interactionEnabled
+            || (previous.accountUiProjection === null) !== (snapshot.accountUiProjection === null);
+        for (const [listener, scope] of listeners) if (scope !== 'committed' || committedChanged) listener();
+    };
 
     function resetDerived() {
         currentnessReports = new Map();
@@ -335,7 +346,7 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
             destinationSurfacePlacements, settingsPages, candidateFactsByPluginId, connectedAccountResolution });
         if ((Object.keys(next) as (keyof AppShellPluginUiProjectionSnapshot)[]).every(key => next[key] === previous[key])) return;
         snapshot = next;
-        notify();
+        notify(previous);
     }
 
     return {
@@ -347,10 +358,11 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
                 resetDerived();
                 retirement = next.accountLifetime?.onRetire(() => {
                     if (sources?.accountLifetime !== next.accountLifetime) return;
+                    const previous = snapshot;
                     sources = null;
                     resetDerived();
                     // Account capture may retire an owner during another React render.
-                    queueMicrotask(notify);
+                    queueMicrotask(() => notify(previous));
                 });
             }
             sources = next;
@@ -390,7 +402,7 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
             publishDerived();
         },
         getSnapshot: () => sources && isCurrent(sources.accountLifetime) ? snapshot : EMPTY_SNAPSHOT,
-        subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        subscribe(listener: () => void, scope?: 'committed') { listeners.set(listener, scope); return () => { listeners.delete(listener); }; },
         dispose() { retirement?.dispose(); retirement = undefined; sources = null; resetDerived(); listeners.clear(); },
     };
 }

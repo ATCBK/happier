@@ -10,6 +10,10 @@ import { ActionApprovalFieldsCard } from './ActionApprovalFieldsCard';
 import { readActionApprovalReview } from './actionApprovalReview';
 import { ApprovalDecisionBar } from './ApprovalDecisionBar';
 
+function isTargetActionRequest(request: ApprovalRequest | TargetActionApprovalRequestV1): request is TargetActionApprovalRequestV1 {
+  return 'kind' in request && request.kind === 'plugin_target_action';
+}
+
 /**
  * Deciding a request in place, outside a Session transcript (a Discussion thread): the same decision
  * owner, the same shared review (admission, declared verb, irreversibility) and the same fields card
@@ -26,7 +30,7 @@ export function useInlineApprovalDecision(
   const decide = useApprovalDecisionHandler(artifact, request, sessionId, serverId);
   const [deciding, setDeciding] = React.useState<'approve' | 'reject' | null>(null);
   // A plugin target-action request has no shared built-in review; it keeps its page.
-  const builtIn = 'kind' in request && request.kind === 'plugin_target_action' ? null : request;
+  const builtIn = isTargetActionRequest(request) ? null : request;
   const review = React.useMemo(() => (builtIn ? readActionApprovalReview(builtIn) : null), [builtIn]);
   const answer = React.useCallback(async (decision: 'approve' | 'reject') => {
     if (deciding !== null) return;

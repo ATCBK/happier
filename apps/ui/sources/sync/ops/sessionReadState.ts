@@ -24,8 +24,10 @@ import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSession
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 export type SessionManualReadState = 'read' | 'unread';
+type ManualReadActionExecute = (actionId: 'session.read_state.set', input: Readonly<{ sessionId: string; state: SessionManualReadState }>) => Promise<ActionExecuteResult>;
 
 export type SessionSetManualReadStateResponse = Readonly<{
     success: boolean;
@@ -40,14 +42,17 @@ async function executeManualReadStateAction(params: Readonly<{
     readState: SessionManualReadState;
     serverId: string;
     signal?: AbortSignal;
+    executeAction?: ManualReadActionExecute;
 }>): Promise<Readonly<{
     ok: true;
     value: ReturnType<typeof SessionReadStateSetResultV1Schema.parse>;
 }> | Readonly<{ ok: false; error: string; viewer?: SessionViewerProjectionV1 }>> {
-    const outcome = await createDefaultActionExecutor().execute('session.read_state.set', {
+    const input = {
         sessionId: params.sessionId,
         state: params.readState,
-    }, {
+    };
+    const outcome = params.executeAction ? await params.executeAction('session.read_state.set', input)
+        : await createDefaultActionExecutor().execute('session.read_state.set', input, {
         surface: 'ui',
         authority: 'present_user',
         actionCaller: { kind: 'host' },
@@ -175,7 +180,7 @@ function applyReadStateToLocalState(params: Readonly<{
 export async function sessionSetManualReadStateWithServerScope(
     sessionId: string,
     readState: SessionManualReadState,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: Readonly<{ serverId?: string | null; executeAction?: ManualReadActionExecute }>,
 ): Promise<SessionSetManualReadStateResponse> {
     const activeServerId = getActiveServerSnapshot().serverId;
     const targetServerId = opts?.serverId ?? resolvePreferredServerIdForSessionId(sessionId) ?? activeServerId;
@@ -203,6 +208,7 @@ export async function sessionSetManualReadStateWithServerScope(
             sessionId,
             readState,
             serverId: targetServerId,
+            executeAction: opts?.executeAction,
         });
         if (!isCurrentAccount()) return { success: false, message: 'session_account_changed' };
         if (!outcome.ok) {

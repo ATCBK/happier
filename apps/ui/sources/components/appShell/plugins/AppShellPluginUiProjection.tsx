@@ -335,7 +335,9 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
         };
         // The publication owner replaces the incumbent binding atomically.
         // Withdrawing it before replacement would notify readers twice.
-        committedProjectionCleanup.current = publishCommittedAppShellPluginUiProjection(read, readCandidates, props.publication?.subscribe);
+        const publication = props.publication;
+        committedProjectionCleanup.current = publishCommittedAppShellPluginUiProjection(read, readCandidates,
+            publication ? listener => publication.subscribe(listener, 'committed') : undefined);
     }, [lifetime, props.publication, standaloneProjection, standalonePhase, standaloneDeclarationReady, standaloneCandidates, standaloneSkills]);
     React.useLayoutEffect(() => () => {
         committedProjectionCleanup.current?.();

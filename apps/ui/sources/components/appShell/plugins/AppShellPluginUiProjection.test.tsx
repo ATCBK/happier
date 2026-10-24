@@ -37,7 +37,8 @@ import {
     type AppShellPluginUiProjectionValue,
 } from './AppShellPluginUiProjection';
 import { EMPTY_PLUGIN_UI_PROJECTION, createPluginUiProjectedActionResolver } from '@/sync/domains/plugins/ui/projection';
-import { readCurrentAppShellPluginUiProjection } from './committedPluginUiProjection';
+import { publishCommittedAppShellPluginUiProjection, readCurrentAppShellPluginUiProjection,
+    subscribeCommittedAppShellPluginUiProjection } from './committedPluginUiProjection';
 import { createAppShellPluginUiProjectionPublication } from './appShellPluginUiProjectionPublication';
 import { selectPluginSurfacePlacementsForBinding } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import { resolveAdmittedPluginSettingsPage } from '@/components/settings/catalog/runtime/pluginSettingsPageCatalog';
@@ -1074,7 +1075,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await screen.unmount();
     });
 
-    it('withdraws the selected same-plugin origin on Account change and ignores late retired reports', () => {
+    it('withdraws the selected same-plugin origin on Account change and ignores late retired reports', async () => {
         installActiveAccountScope('origin-account-a');
         const accountA = captureActiveServerAccountScopeLifetime();
         if (!accountA) throw new Error('Account fixture must establish a lifetime');
@@ -1095,16 +1096,26 @@ describe('AppShellPluginUiProjectionProvider', () => {
                 phase: 'current', interactionEnabled: true, machineId: machines[index]!, serverId: sources.activeServerId,
                 platform: 'web', accountLifetime: lifetime }));
         const declaration = () => owner.getSnapshot().pluginUiProjection?.translationsByPluginId[pluginId];
+        let committedNotifications = 0;
+        let detach = () => {};
+        let stop = () => {};
         try {
             owner.publishSources({ ...sources, accountLifetime: accountA });
             publishMachines(accountA);
             owner.publishExecutionOrigin(pluginId, accountA, origins[0]!, origins, true);
             expect(readPluginUiContributionOrigin(declaration())?.machineId).toBe(machines[0]);
+            detach = publishCommittedAppShellPluginUiProjection(() => owner.getSnapshot().pluginUiProjection,
+                id => owner.getSnapshot().candidateFactsByPluginId.get(id) ?? null,
+                listener => owner.subscribe(listener, 'committed'));
+            stop = subscribeCommittedAppShellPluginUiProjection(() => { committedNotifications++; });
             installActiveAccountScope('origin-account-b');
             const accountB = captureActiveServerAccountScopeLifetime();
             if (!accountB) throw new Error('Replacement Account must establish a lifetime');
             expect(accountA.isCurrent()).toBe(false);
             expect(owner.getSnapshot().pluginUiProjection).toBeNull();
+            expect(readCurrentAppShellPluginUiProjection()).toBeNull();
+            await flushHookEffects();
+            expect(committedNotifications).toBeGreaterThan(0);
             owner.publishSources({ ...sources, accountLifetime: accountB });
             publishMachines(accountB);
             owner.publishExecutionOrigin(pluginId, accountB, null, origins);
@@ -1116,7 +1127,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
             expect(readPluginUiContributionOrigin(declaration())?.machineId).toBe(machines[1]);
             owner.publishExecutionOrigin(pluginId, accountB, null, origins);
             expect(declaration()).toMatchObject({ hostCompatibility: 'conflict' });
-        } finally { owner.dispose(); }
+        } finally { stop(); detach(); owner.dispose(); }
     });
 
     it('withholds same-server currentness reports from the retired Account', () => {

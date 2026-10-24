@@ -5,6 +5,7 @@ import type { TextProps } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { installCodeViewCommonModuleMocks } from './codeViewTestHelpers';
+import type { CodeLinePressEvent } from './CodeLineRow';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -148,8 +149,11 @@ describe('CodeLinesView (web)', () => {
             expect([...rowTextCommits.keys()].filter(id => folded.some(line => line.id === id))).toEqual([ids[1]]);
             // The retained handler must select through the newly revealed lines.
             const press = before.get(ids[0])!.onPressLine;
+            if (!press) throw new Error('A code row must expose its line press handler');
             press(allLines[1]);
-            press(allLines[501], { shiftKey: true, nativeEvent: { type: 'click' } });
+            // A web shift-click: the row's range selection reads only these fields of the press event.
+            const shiftClick = { shiftKey: true, nativeEvent: { type: 'click' } } as unknown as CodeLinePressEvent;
+            press(allLines[501], shiftClick);
             expect(onPressLineRange).toHaveBeenCalledWith(allLines.slice(1, 502));
         } finally {
             await screen.unmount(); rowTextCommits.clear(); rowTextRenders.clear(); disconnect();

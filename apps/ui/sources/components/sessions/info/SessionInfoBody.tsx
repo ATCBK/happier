@@ -896,7 +896,6 @@ function SessionInfoContent({
                 scope,
                 sessionId: session.id,
                 tags: [...tags],
-                executeAction: sessionActions.execute,
               });
             },
           },

@@ -761,7 +761,6 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                                 accessibilityRole="button"
                                 accessibilityLabel={text || t('session.pendingMessages.title')}
                                 style={({ pressed }) => ([
-                                    !isHostFollowInput ? userMessageBubbleContentPadding(theme) : null,
                                     !isHostFollowInput ? styles.userMessageBubbleBody : null,
                                     isCollapsible ? styles.userMessageBubbleBodyAboveToggle : null,
                                     { opacity: pressed ? motionTokens.press.opacitySubtle : 1 },
@@ -1130,7 +1129,6 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             accessibilityRole="button"
                             accessibilityLabel={text || t('session.pendingMessages.discarded.label')}
                             style={({ pressed }) => ([
-                                !isHostFollowInput ? userMessageBubbleContentPadding(theme) : null,
                                 !isHostFollowInput ? styles.userMessageBubbleBody : null,
                                 { opacity: pressed ? motionTokens.press.opacity : 1 },
                             ])}
@@ -1597,8 +1595,10 @@ const styles = StyleSheet.create((theme) => ({
     hostDiscardedLabel: {
         marginLeft: QUEUE_GUTTER_PX,
     },
-    // The message is a web <button>: its text reads from the bubble's leading edge, like the committed prompt.
+    // The message is a web <button> that fills the bubble: it carries the bubble's content padding, and its
+    // text reads from the bubble's leading edge, like the committed prompt.
     userMessageBubbleBody: {
+        ...userMessageBubbleContentPadding(theme),
         textAlign: 'left',
     },
     userMessageBubbleBodyAboveToggle: {

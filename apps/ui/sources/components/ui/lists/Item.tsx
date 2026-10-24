@@ -64,6 +64,7 @@ import {
     resolveHappierPageRowFieldMaxWidth,
     HappierDivider,
     happierPageRowDividerInset,
+    happierPageRowDividerWidth,
     isHappierPageRowNarrow,
     resolveHappierPageRowDetailLayout,
     isHappierPageRowAccessoryStacked,
@@ -585,9 +586,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flexDirection: 'column',
         alignItems: 'stretch',
         gap: theme.space.s10,
-    },
-    pageDivider: {
-        height: StyleSheet.hairlineWidth,
     },
     accessoryMeasure: {
         flexDirection: 'row',
@@ -1315,8 +1313,8 @@ export const Item = React.memo<ItemProps>((props) => {
             color={flatDividerColor ?? theme.colors.border.default}
             style={[
                 styles.divider,
-                flatDividerColor !== null ? styles.pageDivider : null,
-                flatDividerInset ?? {
+                // One portable literal, as the public list row composes it: the page hairline and its inset.
+                flatDividerInset !== null ? { height: happierPageRowDividerWidth(), ...flatDividerInset } : {
                     marginLeft: (isAndroid || isWeb)
                         ? 0
                         : (dividerInset + (icon || leftElement ? (16 + (iconBoxSize ?? resolvedIconBoxSize) + resolvedIconMarginRight) : 16))
