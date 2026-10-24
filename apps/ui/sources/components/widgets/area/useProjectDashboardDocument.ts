@@ -3,7 +3,7 @@ import { readWidgetSurfaceArtifactV1, type WidgetSurfaceRefV1, type WidgetAreaLa
 import { ArtifactCallerAccessV1Schema, type ArtifactCallerAccessV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { useActiveServerAccountScopeLifetime, useArtifact } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { subscribeHomeAccountChange, subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { isArtifactOnlyHomeAccountChange, subscribeHomeAccountChange, subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
 
@@ -26,8 +26,11 @@ export function useProjectDashboardDocument(reference: Readonly<{ artifactId: st
         if (!reference || !lifetime?.isCurrent()) return;
         const refresh = () => setWake(previous => previous + 1);
         const accountChange = subscribeHomeAccountChange(event => {
-            if (areServerProfileIdentifiersEquivalent(event.serverId, serverId)
-                && (!event.changeKinds || event.changeKinds.includes('artifact'))) refresh();
+            if (!areServerProfileIdentifiersEquivalent(event.serverId, serverId)
+                || (event.changeKinds && !event.changeKinds.includes('artifact'))) return;
+            if (isArtifactOnlyHomeAccountChange(event) && event.entityIds !== undefined
+                && !event.entityIds.includes(reference.artifactId)) return;
+            refresh();
         });
         const credentialChange = subscribeHomeCredentialChange(event => {
             if (areServerProfileIdentifiersEquivalent(event.serverId, serverId)) {
@@ -45,7 +48,7 @@ export function useProjectDashboardDocument(reference: Readonly<{ artifactId: st
                 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
                 const account = await captureLazyActionAccountContext(serverId, controller.signal);
                 try {
-                    const row = await account.homeHubArtifactTransport.read(reference.artifactId, { signal: controller.signal });
+                    const row = await account.readArtifactContent(reference.artifactId, { signal: controller.signal });
                     const layout = row ? readWidgetSurfaceArtifactV1(row) : null;
                     if (!layout || layout.surface.owner.kind !== 'project' || row?.ownerAccountId !== layout.surface.accountId
                         || !areServerProfileIdentifiersEquivalent(layout.surface.serverId, account.serverId)) throw new Error('widget_area_owner_mismatch');
