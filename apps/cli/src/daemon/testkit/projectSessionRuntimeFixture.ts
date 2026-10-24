@@ -80,5 +80,5 @@ export async function createProjectSessionRuntimeFixture(options: Readonly<{
   return { directory, get bootstrap() {
     if (!currentBootstrap) throw new Error('Session admission unavailable');
     return currentBootstrap.admitted;
-  }, createBootstrap, installation, isHomeCurrent: () => current, retire: () => { current = false; } };
+  }, createBootstrap, installation, channel, isHomeCurrent: () => current, retire: () => { current = false; } };
 }

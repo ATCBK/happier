@@ -20,6 +20,8 @@ import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/ma
 import { setActionApprovalOverride } from '@happier-dev/protocol/actions/actionSettings';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER } from '@happier-dev/protocol/actions/externalActionApi';
+import { ProjectAccountRowReadRequestV1Schema, ProjectAccountRowReadResponseV1Schema,
+  ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
 /** Installed Project/Account/Trust and native IO composition for cold launch seam tests. */
 export async function createInstalledProjectAgentLaunchFixture(options: Readonly<{
@@ -84,17 +86,24 @@ export async function createInstalledProjectAgentLaunchFixture(options: Readonly
       trust = ProjectTrustMutationRequestV1Schema.parse(body).content;
       return { status: 200, data: { status: 'updated', revision: 1, cursor: 1 } };
     }
-    if (String(url).endsWith('/project-rows/list')) {
+    if (String(url).endsWith('/project-rows/list') || String(url).endsWith('/project-rows/read')) {
       // Account topology is read with the admitted requester's bearer. A signed
       // execution root alone does not authorize this Account-private endpoint.
       if (requestOptions?.headers?.Authorization !== `Bearer ${f.bootstrap.credentials.token}`
         && (!accountActionCredentials || requestOptions?.headers?.Authorization !== `Bearer ${accountActionCredentials.token}`)) {
         return { status: 403, data: { error: 'forbidden' } };
       }
-      const key = { kind: 'workspace-ref', serverId: 'session-home', id: 'workspace' };
-      return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 1,
+      const key = { kind: 'workspace-ref', serverId: 'session-home', id: 'workspace' } as const;
+      const row = { key, revision: 1,
         content: { t: 'plain', v: { key, value: { id: 'workspace', serverId: 'session-home', machineId: 'machine',
-          rootPath: cwd, projectKey: 'project', createdAtMs: 1 } } } }] } };
+          rootPath: cwd, projectKey: 'project', createdAtMs: 1 } } } };
+      if (String(url).endsWith('/project-rows/read')) {
+        const request = ProjectAccountRowReadRequestV1Schema.parse(body);
+        return { status: 200, data: ProjectAccountRowReadResponseV1Schema.parse(
+          request.key.kind === key.kind && request.key.serverId === key.serverId && request.key.id === key.id
+            ? { status: 'present', row } : { status: 'absent' }) };
+      }
+      return { status: 200, data: ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [row] }) };
     }
     throw new Error(`Unexpected Home write: ${new URL(String(url)).pathname}`);
   });
