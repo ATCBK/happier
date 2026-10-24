@@ -170,17 +170,16 @@ export async function installOwnMachineApprovalReplayBoundary(input: Readonly<{
     runtimeActionExecute?: import('@happier-dev/protocol/actions/executor/types').RuntimeActionExecute;
     machineFilesystemEffects?: MachineFilesystemEffects;
 }>) {
-    const [{ ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema },
-        { MACHINE_PLAIN_DATA_KEY_MARKER }, { getActionSpec }] = await Promise.all([
+    const [{ ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema },
+        { createPlainMachineRowFixture }, { getActionSpec }] = await Promise.all([
         import('@happier-dev/protocol/actions/externalActionApi'),
-        import('@happier-dev/protocol/machines/machineStoredContent'),
+        import('../fixtures/machineFixtures'),
         import('@happier-dev/protocol/actions/actionSpecs'),
     ]);
-    const machine = ExternalActionMachineBootstrapV1Schema.parse({ id: input.machineId, kind: 'persistent', active: true,
-        revokedAt: null, replacedByMachineId: null, installationId: `${input.machineId}-installation`,
-        dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
-        access: { custodian: { accountId: input.accountId, displayName: input.accountId }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-    });
+    const machine = {
+        ...createPlainMachineRowFixture({ id: input.machineId, accountId: input.accountId }),
+        installationId: `${input.machineId}-installation`,
+    };
     input.harness.answer(input.serverId, '/v1/machines', { body: [machine] });
     input.harness.answer(input.serverId, `GET /v1/machines/${input.machineId}`, { body: { machine } });
     input.harness.answer(input.serverId, '/v1/actions/approval.request.decide', { select: async (body, request) => {

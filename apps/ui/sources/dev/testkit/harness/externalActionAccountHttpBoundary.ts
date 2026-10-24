@@ -57,6 +57,9 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
         async handle(url: URL, init?: RequestInit): Promise<Response | null> {
             if (url.origin !== new URL(params.serverUrl).origin) return null;
             if (url.pathname === '/v1/machines') return Response.json([machine]);
+            if (url.pathname === `/v1/machines/${encodeURIComponent(machine.id)}` && (init?.method ?? 'GET') === 'GET') {
+                return Response.json({ machine });
+            }
             if (url.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
                 id => id === machine.id ? machine : null);
             const mintPath = bindExternalActionExecutionAuthorizationHttpPathV1(params.actionId);

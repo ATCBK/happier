@@ -1,5 +1,4 @@
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 import { AutomationDefinitionListResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
@@ -25,6 +24,8 @@ import { FeedResponseSchema } from '@/sync/domains/social/feedTypes';
 import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 import { createEmptyAccountBootstrapHttpResponse } from './accountBootstrapHttpBoundary';
 import { createArtifactListHttpResponse, createArtifactReadBatchHttpResponse } from '../harness/artifactStoreBoundary';
+import { deriveArtifactKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
+import { createPlainMachineReadHttpResponseFixture } from './machineFixtures';
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 function record(value: unknown): Record<string, unknown> {
@@ -97,14 +98,16 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
             return json(AccountSettingsV2UpdateResponseSchema.parse({ success: true, version: settings.version }));
         }
         if (target.pathname === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture({ updatedAt: 0 }));
-        if (target.pathname.startsWith('/v1/machines/')) return json({ machine: {
-            id: decodeURIComponent(target.pathname.slice('/v1/machines/'.length)), dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        } });
+        const machineRead = createPlainMachineReadHttpResponseFixture(target.pathname, init, requestAccountId);
+        if (machineRead) return machineRead;
         if (target.pathname === '/v1/artifacts') {
             // Sync's header census reads the fixture's current storage snapshot.
-            // Workflow selection now reads kind-filtered headers before opening
-            // only its selected bodies (7c4980006c).
-            if (target.searchParams.get('includeBody') !== 'true' && target.searchParams.get('kind') !== 'other') {
+            // 90558ca59e selects exact indexed kinds before opening bodies;
+            // only Workflow membership reads consume the scripted Workflow page.
+            const kinds: unknown = JSON.parse(target.searchParams.get('kinds') ?? '[]');
+            const selectsWorkflows = target.searchParams.get('kind') === 'other'
+                || (Array.isArray(kinds) && kinds.includes('workflow-definition.v1'));
+            if (target.searchParams.get('includeBody') !== 'true' && !selectsWorkflows) {
                 return createArtifactListHttpResponse(target, artifacts);
             }
             const page = WorkflowDefinitionListResultV1Schema.parse(await reply('workflow.definition.list', {}));
@@ -118,7 +121,8 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
                     (_, ordinal) => ({ ...seed.blocks[0]!, id: `fixture-step-${ordinal}` }),
                 ) });
                 return {
-                    kind: 'other', id: item.definitionId, ownerAccountId: item.ownerAccountId ?? requestAccountId, access: item.access ?? 'owner', encryptionMode: 'plain', publicAudience: 'none',
+                    ...deriveArtifactKindV1({ kind: item.kind }),
+                    id: item.definitionId, ownerAccountId: item.ownerAccountId ?? requestAccountId, access: item.access ?? 'owner', encryptionMode: 'plain', publicAudience: 'none',
                     dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
                     header: encodePlainArtifactStoredContent('contentUnavailableReason' in item && item.contentUnavailableReason === 'invalid_header'
                         ? { kind: item.kind } : { kind: item.kind, definitionId: item.definitionId,
@@ -161,6 +165,7 @@ export function createWorkflowActionHttpTransport(params: Readonly<{
             if (response.ok !== true) return json({ error: 'Artifact not found' }, 404);
             const saved = WorkflowDefinitionGetResultV1Schema.parse(response.result);
             const directArtifact = {
+                ...deriveArtifactKindV1({ kind: 'workflow-definition.v1' }),
                 id, ownerAccountId: requestAccountId, access: saved.access, encryptionMode: 'plain', publicAudience: 'none',
                 dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
                 header: encodePlainArtifactStoredContent({ kind: 'workflow-definition.v1', definitionId: id,
