@@ -25,10 +25,13 @@ function importedSpecifiers(source: string): string[] {
 }
 
 /** Only these exact neutral bindings may cross an admitted presentation leaf. */
-function importsOnlyNeutralPresentationContract(source: string, contract: 'field' | 'picker' | 'boardPreview' | 'dropPreview' | 'markdownReview' = 'field'): boolean {
-  const specifier = contract === 'dropPreview' ? '@happier-dev/plugin-sdk'
+function importsOnlyNeutralPresentationContract(source: string, contract: 'field' | 'picker' | 'boardPreview' | 'dropPreview' | 'markdownReview' | 'conditionModel' | 'conditionEditor' | 'conditionJson' = 'field'): boolean {
+  if ((contract === 'conditionModel' || contract === 'conditionEditor')
+    && !importsOnlyNeutralPresentationContract(source, 'conditionJson')) return false;
+  const specifier = contract === 'dropPreview' || contract === 'conditionJson' ? '@happier-dev/plugin-sdk'
     : contract === 'markdownReview' ? '@happier-dev/plugin-sdk/reviews'
-      : contract === 'boardPreview' ? '@happier-dev/plugin-sdk/ui' : '@happier-dev/plugin-sdk/actions';
+      : contract === 'boardPreview' || contract === 'conditionModel' || contract === 'conditionEditor'
+        ? '@happier-dev/plugin-sdk/ui' : '@happier-dev/plugin-sdk/actions';
   const syntax = ts.createSourceFile('actionInputFields.ts', source, ts.ScriptTarget.Latest, true);
   const imports = syntax.statements.filter((statement): statement is ts.ImportDeclaration =>
     ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)
@@ -49,6 +52,10 @@ function importsOnlyNeutralPresentationContract(source: string, contract: 'field
     ? { InputFieldHint: true, readInputPath: false, writeInputPath: false }
     : contract === 'picker'
       ? { actionInputOptionValueKey: false, readActionInputOptionValue: false }
+      : contract === 'conditionJson' ? { JsonValue: true }
+      : contract === 'conditionModel' ? { EntityFilterEvaluatorV1: true,
+        EntityFilterFieldKindV1: true, EntityFilterRegistryV1: true, EntityFilterConditionOperatorV1: true }
+        : contract === 'conditionEditor' ? { EntityListFilterResultV1: true, EntityFilterConditionOperatorV1: true }
       : contract === 'boardPreview' ? { WorkBoardPreviewLayoutV1: true }
         : contract === 'markdownReview' ? { ReviewFinding: true } : { EntityDropPreviewV1: true };
   return bindings.length === Object.keys(allowedBindings).length
@@ -118,6 +125,10 @@ describe('author package boundary', () => {
         && importsOnlyNeutralPresentationContract(source, 'dropPreview');
       const isCanonicalMarkdownReviewContract = /presentation[\\/]content[\\/]Markdown\.tsx$/u.test(filePath)
         && importsOnlyNeutralPresentationContract(source, 'markdownReview');
+      const isCanonicalConditionContract = /presentation[\\/]collection[\\/]conditionModel\.ts$/u.test(filePath)
+        && importsOnlyNeutralPresentationContract(source, 'conditionModel')
+        || /presentation[\\/]collection[\\/]CollectionConditionEditor\.tsx$/u.test(filePath)
+        && importsOnlyNeutralPresentationContract(source, 'conditionEditor');
       return importedSpecifiers(source)
         .filter((specifier) => !allowedPresentationSpecifier(specifier))
         .filter((specifier) => !(isTypeOnlyEnvironmentContract && specifier === '@happier-dev/plugin-sdk/ui'))
@@ -129,6 +140,7 @@ describe('author package boundary', () => {
         .filter((specifier) => !(isCanonicalBoardPreviewContract && specifier === '@happier-dev/plugin-sdk/ui'))
         .filter((specifier) => !(isCanonicalDropPreviewContract && specifier === '@happier-dev/plugin-sdk'))
         .filter((specifier) => !(isCanonicalMarkdownReviewContract && specifier === '@happier-dev/plugin-sdk/reviews'))
+        .filter((specifier) => !(isCanonicalConditionContract && (specifier === '@happier-dev/plugin-sdk/ui' || specifier === '@happier-dev/plugin-sdk')))
         .map((specifier) => `${relative(sourceRoot, filePath)} → ${specifier}`);
     });
 
@@ -188,6 +200,19 @@ describe('author package boundary', () => {
       "require('@happier-dev/plugin-sdk/ui');",
     ]) {
       expect(importsOnlyNeutralPresentationContract(`${source}\n${extra}`, 'boardPreview')).toBe(false);
+    }
+  });
+
+  it('admits only the erased condition registry/model types, never SDK runtime or transport', () => {
+    const json = "\nimport type { JsonValue } from '@happier-dev/plugin-sdk';";
+    const model = "import type { EntityFilterEvaluatorV1, EntityFilterFieldKindV1, EntityFilterRegistryV1, EntityFilterConditionOperatorV1 } from '@happier-dev/plugin-sdk/ui';" + json;
+    const editor = "import type { EntityListFilterResultV1, EntityFilterConditionOperatorV1 } from '@happier-dev/plugin-sdk/ui';" + json;
+    for (const [source, contract] of [[model, 'conditionModel'], [editor, 'conditionEditor']] as const) {
+      expect(importsOnlyNeutralPresentationContract(source, contract)).toBe(true);
+      expect(importsOnlyNeutralPresentationContract(source.replace('import type', 'import'), contract)).toBe(false);
+      expect(importsOnlyNeutralPresentationContract(source.replace(' }', ', PluginUiHostApi }'), contract)).toBe(false);
+      expect(importsOnlyNeutralPresentationContract(source + "\nimport('@happier-dev/plugin-sdk/ui');", contract)).toBe(false);
+      expect(importsOnlyNeutralPresentationContract(source + "\nimport('@happier-dev/plugin-sdk');", contract)).toBe(false);
     }
   });
 

@@ -1,3 +1,4 @@
+export * from './ui/collectionFilters.js';
 import { PLUGIN_UI_ICON_TOKENS_V1 as canonicalPluginUiIconTokensV1 } from '@happier-dev/protocol/plugins/contributions/ui/tokens';
 import { projectProtocolValue } from './protocol/projectProtocolValue.js';
 import { PluginRightSidebarCountV1Schema as canonicalPluginRightSidebarCountV1Schema } from '@happier-dev/protocol/plugins/contributions/ui/v2';

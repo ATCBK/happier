@@ -1,3 +1,4 @@
+export * from './collectionFilters.js';
 export { ARTIFACT_HTML_CONTENT_CSP_V1 } from './hostedWeb.js';
 export { ARTIFACT_HTML_SANDBOX_V1 } from './hostedWeb.js';
 export type { ArtifactHtmlBundleV1 } from './hostedWeb.js';

@@ -20,6 +20,17 @@ export {
   type CollectionSavedViewsControlProps,
 } from './CollectionSavedViews.js';
 export * from './CollectionFilter.js';
+export { CollectionConditionEditor, type CollectionConditionEditorProps } from './CollectionConditionEditor.js';
+export {
+  HAPPIER_COLLECTION_CONDITION_EDITOR_METRICS,
+  HappierCollectionConditionEditor,
+  type HappierCollectionConditionEditorHost,
+  type HappierCollectionConditionEditorLabels,
+  type HappierCollectionConditionEditorProps,
+  type HappierCollectionConditionIcon,
+  type HappierCollectionConditionTextRole,
+  type HappierCollectionConditionValuePicker,
+} from '../presentation/collection/CollectionConditionEditor.js';
 export { CollectionToolbar, type CollectionToolbarFreshness, type CollectionToolbarProps } from './CollectionToolbar.js';
 export type { CollectionVirtualizer, CollectionVirtualizerHandle, CollectionVirtualizerRequest } from '../presentation/collection/collectionVirtualizer.js';
 export * from './Content.js';

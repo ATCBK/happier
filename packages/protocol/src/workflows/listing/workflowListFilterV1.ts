@@ -4,6 +4,7 @@ import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { compileEntityListFilterV1, createEntityListFilterStoredReadSchemaV1, ExtensionSelectionV1Schema, matchEntityFilterKnownV1 } from '../../collections/filter/entityListFilterV1.js';
 import { defineEntityFilterFieldV1, defineEntityFilterUnknownFieldsV1, type EntityFilterEvaluatorV1 } from '../../collections/filter/fieldRegistryV1.js';
 import { createPluginListFilterFieldRegistryV1, type AdmittedPluginListFilterFieldV1, type PluginListFilterFactsV1 } from '../../collections/filter/pluginListFilterFieldV1.js';
+import { createEntityFilterConditionCodecV1 } from '../../collections/filter/fieldConditionsV1.js';
 
 export const WorkflowListFilterViewV1Schema = lazyZodSchema(() => z.enum(['all', 'triggered', 'running']));
 export const WorkflowListFilterV1Schema = lazyZodSchema(() => z.strictObject({
@@ -22,6 +23,14 @@ const view = defineEntityFilterFieldV1<WorkflowListFilterV1, WorkflowListFilterF
     readSelection: filter => filter.view === 'all' ? undefined : filter.view,
     replaceSelection: (filter, selection) => ({ ...filter, view: selection ?? 'all' }),
     match: (selection, facts) => matchEntityFilterKnownV1(facts[selection]),
+    conditions: createEntityFilterConditionCodecV1({ encoding: 'value',
+        parseValue: value => {
+            const parsed = WorkflowListFilterViewV1Schema.parse(value);
+            if (parsed === 'all') throw new TypeError('Remove the view condition to show all Workflows');
+            return parsed;
+        },
+        valueOptions: () => Object.values(WorkflowListFilterViewV1Schema._zod.def.entries).filter(value => value !== 'all'),
+    }),
 });
 export function createWorkflowListFilterRegistryV1(fields: readonly AdmittedPluginListFilterFieldV1[] = []) {
     return [view, defineEntityFilterUnknownFieldsV1<WorkflowListFilterV1, WorkflowListFilterFactsV1>(['view', 'extensions']),

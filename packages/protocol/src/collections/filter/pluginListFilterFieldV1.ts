@@ -6,6 +6,7 @@ import { PluginContributionReferenceV2Schema, PluginLocalizedStringV2Schema } fr
 import { PluginUiIconTokenV1Schema } from '../../plugins/contributions/ui/tokens.js';
 import { ExtensionSelectionV1Schema, matchEntityFilterExtensionV1, type EntityFilterFactValueV1, type ExtensionSelectionV1 } from './entityListFilterV1.js';
 import { defineEntityFilterFieldV1, type EntityFilterRegistryV1 } from './fieldRegistryV1.js';
+import { createEntityFilterConditionCodecV1 } from './fieldConditionsV1.js';
 
 /** V1 constituent of ui.listExtensions; declaration and values contain no executable matcher. */
 export const PluginListFilterFieldV1Schema = lazyZodSchema(() => z.strictObject({
@@ -84,6 +85,23 @@ export function createPluginListFilterFieldRegistryV1<Filter extends PluginListF
             return { ...filter, extensions };
         },
         match: (selection, facts) => selection === null ? 'unavailable' : matchEntityFilterExtensionV1(selection, facts.extensions?.[field.id]),
+        conditions: createEntityFilterConditionCodecV1({
+            encoding: field.declaration.value.kind === 'boolean' ? 'value' : field.declaration.value.kind,
+            valueFromSelection(selection) {
+                if (!selection || selection.kind !== field.declaration.value.kind) throw new TypeError('Unavailable plugin condition');
+                return selection.kind === 'time' ? selection.selection : selection.kind === 'boolean' ? selection.value : selection;
+            },
+            parseValue(value) {
+                const kind = field.declaration.value.kind;
+                const candidate = kind === 'set' && value && typeof value === 'object' && !Array.isArray(value)
+                    ? { ...value, kind } : kind === 'boolean' ? { kind, value } : { kind, selection: value };
+                const parsed = ExtensionSelectionV1Schema.parse(candidate);
+                if (parsed.kind !== kind) throw new TypeError('Mismatched plugin condition');
+                return parsed;
+            },
+            valueOptions: () => field.declaration.value.kind === 'set' ? field.declaration.value.options?.map(option => option.value) ?? []
+                : field.declaration.value.kind === 'boolean' ? [true, false] : [],
+        }),
     }));
     return [...registry, defineEntityFilterFieldV1<Filter, Facts, true>({
         id: 'unavailableExtensions', kind: 'domain', evaluators: [],

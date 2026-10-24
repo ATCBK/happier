@@ -1,3 +1,8 @@
+import type { JsonValue } from '../../json/strictJsonValue.js';
+import type { EntityFilterConditionCodecV1, EntityFilterConditionOperatorV1, EntityFilterConditionV1 } from './fieldConditionsV1.js';
+export { createEntityFilterConditionCodecV1, type EntityFilterConditionCodecV1,
+    type EntityFilterConditionOperatorV1, type EntityFilterConditionV1 } from './fieldConditionsV1.js';
+
 export type EntityFilterMatchV1 = 'match' | 'miss' | 'unavailable';
 export type EntityFilterEvaluatorV1 = 'list' | 'daemonRule';
 export type EntityFilterFieldKindV1 = 'set' | 'boolean' | 'time' | 'domain';
@@ -9,6 +14,7 @@ export type EntityFilterFieldV1<Filter, Facts, Selection> = Readonly<{
     readSelection(filter: Filter): Selection | undefined;
     replaceSelection(filter: Filter, selection: Selection | undefined): Filter;
     match(selection: Selection, facts: Facts): EntityFilterMatchV1;
+    conditions?: EntityFilterConditionCodecV1<Selection>;
     /** Known-inapplicable entity kinds miss rather than masquerading as locked facts. */
     appliesTo?(facts: Facts): boolean;
 }>;
@@ -19,6 +25,15 @@ export type CompilableEntityFilterFieldV1<Filter, Facts> = Readonly<{
     kind: EntityFilterFieldKindV1;
     evaluators: readonly EntityFilterEvaluatorV1[];
     isActive(filter: Filter): boolean;
+    clearSelection?(filter: Filter): Filter;
+    conditions?: Readonly<{
+        operators: readonly EntityFilterConditionOperatorV1[];
+        valueOptions: readonly JsonValue[];
+        valueGroups?: EntityFilterConditionCodecV1<unknown>['valueGroups'];
+        project(filter: Filter): readonly EntityFilterConditionV1[];
+        replace(filter: Filter, condition: EntityFilterConditionV1): Filter;
+        remove(filter: Filter, operator: EntityFilterConditionOperatorV1): Filter;
+    }>;
     appliesTo?(facts: Facts): boolean;
     compile(filter: Filter, evaluator: EntityFilterEvaluatorV1): ((facts: Facts) => EntityFilterMatchV1) | undefined;
 }>;
@@ -26,10 +41,27 @@ export type EntityFilterRegistryV1<Filter, Facts> = readonly CompilableEntityFil
 
 export function defineEntityFilterFieldV1<Filter, Facts, Selection>(
     field: EntityFilterFieldV1<Filter, Facts, Selection>,
-): EntityFilterFieldV1<Filter, Facts, Selection> & CompilableEntityFilterFieldV1<Filter, Facts> {
+): Omit<EntityFilterFieldV1<Filter, Facts, Selection>, 'conditions'> & CompilableEntityFilterFieldV1<Filter, Facts> {
+    const { conditions, ...semanticField } = field;
     return {
-        ...field,
+        ...semanticField,
+        ...(conditions ? { conditions: {
+            operators: conditions.operators,
+            get valueOptions() { return conditions.valueOptions; },
+            get valueGroups() { return conditions.valueGroups; },
+            project(filter: Filter) {
+                const selection = field.readSelection(filter);
+                return selection === undefined ? [] : conditions.project(selection);
+            },
+            replace: (filter: Filter, condition: EntityFilterConditionV1) => field.replaceSelection(filter,
+                conditions.replace(field.readSelection(filter), condition)),
+            remove(filter: Filter, operator: EntityFilterConditionOperatorV1) {
+                const selection = field.readSelection(filter);
+                return selection === undefined ? filter : field.replaceSelection(filter, conditions.remove(selection, operator));
+            },
+        } } : {}),
         isActive: filter => field.readSelection(filter) !== undefined,
+        clearSelection: filter => field.replaceSelection(filter, undefined),
         compile(filter, evaluator) {
             const selection = field.readSelection(filter);
             if (selection === undefined) return undefined;
