@@ -50,7 +50,7 @@ export function readPromptArtifactTitle(artifact: ArtifactLike, untitledTitle: s
 }
 
 /**
- * Prompts or skills, grouped by folder (folders by name, then the items outside any folder). With no
+ * Prompts or skills, grouped by stable folder identity, then the items outside any folder. With no
  * item in a folder the list stays ungrouped rather than showing a heading that says nothing.
  */
 export function buildPromptLibraryCollection(params: Readonly<{
@@ -75,7 +75,7 @@ export function buildPromptLibraryCollection(params: Readonly<{
 
 /**
  * The library's one folder-grouping rule, for every collection that files items in the personal folder
- * tree (prompts, skills): folders by name, then the items outside any folder, each group keeping the
+ * tree (prompts, skills): stable folder identity, then the items outside any folder, each group keeping the
  * caller's row order. With no item in a folder it is one untitled group, never a heading that says
  * nothing; with no rows, no group.
  */
@@ -91,7 +91,8 @@ export function groupRowsByFolder<R>(entries: readonly Readonly<{
         group.rows.push(entry.row); groups.set(id, group);
     }
     const folders = [...groups.values()].filter(group => group.id !== null)
-        .sort((left, right) => (left.title ?? '').localeCompare(right.title ?? '', undefined, { sensitivity: 'base' }));
+        // Names can be withdrawn independently of membership; labels never reorder sections.
+        .sort((left, right) => (left.id ?? '').localeCompare(right.id ?? ''));
     const outside = groups.get(null);
     return outside ? [...folders, outside] : folders;
 }
