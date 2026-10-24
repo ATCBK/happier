@@ -22,6 +22,7 @@ export { MachineProvisionerOptionsResultV1Schema } from '../machineProvisioners.
 export type { MachineProvisionerPowerResultV1 } from '../machineProvisioners.js';
 export { MachineProvisionerPowerResultV1Schema } from '../machineProvisioners.js';
 export type { MachineProvisionerPriceV1 } from '../machineProvisioners.js';
+export type { MachineProvisionerProcessConfigV1 } from '../machineProvisioners.js';
 export { MachineProvisionerPutFileResultV1Schema } from '../machineProvisioners.js';
 export type { MachineProvisionerRebuildResultV1 } from '../machineProvisioners.js';
 export { MachineProvisionerRebuildResultV1Schema } from '../machineProvisioners.js';

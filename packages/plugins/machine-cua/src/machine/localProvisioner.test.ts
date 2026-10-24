@@ -290,51 +290,58 @@ describe('consumed Cua local provisioner roles', () => {
         await expect(h.provider.bootstrap(resource)).resolves.not.toHaveProperty('guestHome');
         const gvisor = harness(false, 'gvisor');
         await expect(gvisor.provider.bootstrap({ ...resource, runtimeId: 'gvisor' }))
-            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unqualified' });
+            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unavailable' });
     });
     it('waits for the finite runc start carrier to confirm a detached daemon before settling', async () => {
         const requests: Array<{ request: PluginExecSpawnRequest; options: unknown }> = [];
         const native = harness(false, 'runc');
+        const detachedCommand = "'sh' '-c' 'exec env '\\''/home/cua/.happier/cli/current/happier'\\'' '\\''daemon'\\'' '\\''start'\\'' '\\''--json'\\'''";
         let completeCarrier: ((value: PluginProcessResult) => void) | undefined;
         const carrier = new Promise<PluginProcessResult>((resolve) => { completeCarrier = resolve; });
         const run: ExecService['run'] = async (request, options) => {
             requests.push({ request, options });
-            if (request.args?.at(-1)?.includes("'daemon' 'start' '--json'")) return carrier;
+            if (request.args?.at(-1) === detachedCommand) return carrier;
             return native.run(request);
         };
         const runc = { ...resource, runtimeId: 'runc' as const };
-        const processConfig = { environment: { HOME: '/home/cua', HAPPIER_HOME_DIR: '/home/cua/.happier' } };
-        const argv = ['sh', '-c', "exec env '/home/cua/.happier/cli/current/happier' 'daemon' 'start-sync'"];
+        // Cua selects the typed detached alternative and never parses the
+        // host-owned foreground invocation, whose quoting/order may evolve.
+        const argv = ['sh', '-c', 'host-owned foreground invocation'];
+        const detachedArgv = ['sh', '-c', "exec env '/home/cua/.happier/cli/current/happier' 'daemon' 'start' '--json'"];
+        const processConfig = { environment: { HOME: '/home/cua', HAPPIER_HOME_DIR: '/home/cua/.happier' },
+            detachedDaemonStartArgv: detachedArgv };
         const first = await activated(true, run, new AbortController().signal, '0.5.0', undefined, 'runc');
         let settled = false;
         const configured = first.action('sandbox-exec')({ resource: runc, argv, processConfig }, first.context)
             .then((value) => { settled = true; return value; });
-        await vi.waitFor(() => expect(requests.some(({ request }) => request.args?.at(-1)?.includes("'daemon' 'start' '--json'"))).toBe(true));
+        await vi.waitFor(() => expect(requests.some(({ request }) => request.args?.at(-1) === detachedCommand)).toBe(true));
         expect(settled).toBe(false);
         completeCarrier?.(result({ ok: true, status: 'started', relay: 'https://example.test', relayId: 'example' }));
         await expect(configured).resolves.toEqual({ kind: 'process-configured' });
-        const detachedCommand = "exec env '/home/cua/.happier/cli/current/happier' 'daemon' 'start' '--json'";
         expect(requests.find(({ request }) => request.args?.at(-1) === detachedCommand)).toMatchObject({
             request: { args: ['--embedded', 'sandbox', 'shell', 'local:owned', detachedCommand], env: { HOME: expect.any(String) } },
             options: { signal: first.context.signal, outputDelivery: 'invocation' },
         });
+        expect(requests.some(({ request }) => request.args?.at(-1)?.includes('host-owned foreground invocation'))).toBe(false);
 
-        const notReady = await activated(true, async (request) => request.args?.at(-1)?.includes("'daemon' 'start' '--json'")
+        const notReady = await activated(true, async (request) => request.args?.at(-1) === detachedCommand
             ? result({ ok: true, status: 'starting' }) : native.run(request), new AbortController().signal, '0.5.0', undefined, 'runc');
         await expect(notReady.action('sandbox-exec')({ resource: runc, argv, processConfig }, notReady.context))
             .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unavailable' });
     });
     it('refuses a foreground hold whose home is not the home the guest shell actually runs in', async () => {
         const h = await activated(true, undefined, new AbortController().signal, '0.5.0', undefined, 'runc');
-        const processConfig = { environment: { HOME: '/root', HAPPIER_HOME_DIR: '/root/.happier' } };
+        const processConfig = { environment: { HOME: '/root', HAPPIER_HOME_DIR: '/root/.happier' },
+            detachedDaemonStartArgv: ['true'] };
         await expect(h.action('sandbox-exec')({ resource: { ...resource, runtimeId: 'runc' }, argv: ['true'], processConfig }, h.context))
-            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unqualified' });
+            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unavailable' });
     });
-    it('returns a typed unavailable reason when an unqualified guest asks for a foreground hold', async () => {
+    it('returns the existing unavailable reason when a runtime cannot own detached daemon startup', async () => {
         const h = await activated(true, undefined, new AbortController().signal, '0.5.0', undefined, 'gvisor');
-        const processConfig = { environment: { HOME: '/home/cua', HAPPIER_HOME_DIR: '/home/cua/.happier' } };
+        const processConfig = { environment: { HOME: '/home/cua', HAPPIER_HOME_DIR: '/home/cua/.happier' },
+            detachedDaemonStartArgv: ['true'] };
         await expect(h.action('sandbox-exec')({ resource: { ...resource, runtimeId: 'gvisor' }, argv: ['true'], processConfig }, h.context))
-            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unqualified' });
+            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unavailable' });
     });
     it('qualifies the installed cua CLI against the oldest release that has every flag called, failing at check and before any native effect', async () => {
         // 0.3.0 is the first release containing the pinned vendor commit (trycua/cua@2bce4442) all flags were read from.

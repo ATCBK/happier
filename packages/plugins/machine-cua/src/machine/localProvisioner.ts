@@ -1,7 +1,8 @@
 import { PluginError } from '@happier-dev/plugin-sdk';
 import type { ManagedServices } from '@happier-dev/plugin-sdk/managed-services';
 import type { MachineProvisionerAcquireResultV1, MachineProvisionerObservationV1, MachineProvisionerOptionsResultV1,
-    MachineProvisionerPowerResultV1, MachineProvisionerNativeIntentV1 } from '@happier-dev/plugin-sdk/machine-provisioners';
+    MachineProvisionerPowerResultV1, MachineProvisionerNativeIntentV1,
+    MachineProvisionerProcessConfigV1 } from '@happier-dev/plugin-sdk/machine-provisioners';
 import { createCuaLocalSandbox } from './localSandbox.js';
 import { createCuaLocalSpace } from './localSpace.js';
 import { createCuaNativeFacts } from './nativeFacts.js';
@@ -95,8 +96,8 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
         async bootstrap(input: unknown) {
             const value = await running(input);
             if (value.runtimeId === 'gvisor') {
-                throw new PluginError({ code: 'cua_guest_daemon_hold_unqualified',
-                    message: 'This Cua runtime does not provide a qualified foreground guest daemon hold.' });
+                throw new PluginError({ code: 'cua_guest_daemon_hold_unavailable',
+                    message: 'This Cua runtime cannot own detached guest daemon startup.' });
             }
             if (value.runtimeId !== 'runc') return { kind: 'native' as const, transport: { contributionRef, schemaVersion: 1 } };
             const homeDir = await guestShellHome(value.sandboxId);
@@ -132,17 +133,17 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
             return this.destroy(value);
         },
         async exec(input: unknown, argv: readonly string[], inputBytes?: Uint8Array, timeoutMs?: number | null,
-            processConfig?: Readonly<{ environment: Readonly<Record<string, string>> }>, managedServices?: ManagedServices) {
+            processConfig?: MachineProvisionerProcessConfigV1, managedServices?: ManagedServices) {
             const value = await running(input);
             if (processConfig) {
                 const homeDir = inputBytes === undefined && value.runtimeId === 'runc' && managedServices !== undefined
                     ? await guestShellHome(value.sandboxId) : undefined;
                 if (homeDir === undefined || managedServices === undefined || processConfig.environment.HOME !== homeDir
                     || processConfig.environment.HAPPIER_HOME_DIR !== `${homeDir}/.happier`) {
-                    throw new PluginError({ code: 'cua_guest_daemon_hold_unqualified',
-                        message: 'This Cua runtime does not provide a qualified foreground guest daemon hold.' });
+                    throw new PluginError({ code: 'cua_guest_daemon_hold_unavailable',
+                        message: 'This Cua runtime cannot own detached guest daemon startup.' });
                 }
-                await native.configureGuestProcess(value.sandboxId, argv, signal);
+                await native.configureGuestProcess(value.sandboxId, processConfig.detachedDaemonStartArgv, signal);
                 return { kind: 'process-configured' as const };
             }
             return native.execGuest(value.sandboxId, argv, inputBytes, signal, timeoutMs);

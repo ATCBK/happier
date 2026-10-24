@@ -27,15 +27,6 @@ function completed(result: Awaited<ReturnType<ExecService['run']>>) {
     return result.termination.observed.kind === 'exit' && result.termination.observed.exitCode === 0
         && result.termination.requestedBy.kind === 'none';
 }
-function detachedDaemonStartCommand(argv: readonly string[]) {
-    const foregroundSuffix = `${quote('daemon')} ${quote('start-sync')}`;
-    if (argv.length !== 3 || argv[0] !== 'sh' || argv[1] !== '-c'
-        || !argv[2].startsWith('exec env ') || !argv[2].endsWith(foregroundSuffix)) {
-        throw new PluginError({ code: 'cua_guest_daemon_hold_unqualified',
-            message: 'Cua received an unqualified guest daemon start carrier.' });
-    }
-    return `${argv[2].slice(0, -foregroundSuffix.length)}${quote('daemon')} ${quote('start')} ${quote('--json')}`;
-}
 function confirmedDaemonStart(result: Awaited<ReturnType<ExecService['run']>>) {
     if (!completed(result) || result.stdoutTruncated) return false;
     try {
@@ -151,10 +142,10 @@ export function createCuaNativeClient(options: {
     }
     return {
         putGuestFile,
-        async configureGuestProcess(sandboxId: string, argv: readonly string[], signal?: AbortSignal) {
+        async configureGuestProcess(sandboxId: string, detachedArgv: readonly string[], signal?: AbortSignal) {
             qualifiedSandboxId(sandboxId);
-            if (!argv.length || argv.some((arg) => arg.includes('\0'))) throw new Error('cua_invalid_guest_argv');
-            const command = detachedDaemonStartCommand(argv);
+            if (!detachedArgv.length || detachedArgv.some((arg) => arg.includes('\0'))) throw new Error('cua_invalid_guest_argv');
+            const command = detachedArgv.map(quote).join(' ');
             try {
                 // The finite guest command delegates detachment to Happier's
                 // canonical daemon-start owner and does not return until that
