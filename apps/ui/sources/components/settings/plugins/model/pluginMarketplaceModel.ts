@@ -527,6 +527,20 @@ export function readPluginChangeKind(
     return readNonEmptyString(value.change.kind);
 }
 
+/**
+ * The daemon's safe, value-redacted reason for a refused change (plugin,
+ * contribution and field identity), when the change owner supplied one.
+ */
+export function readPluginChangeFailureReason(
+    value: unknown,
+    action: PluginMarketplaceActionRequest['method'],
+    expectedPluginId: string,
+): string | null {
+    if (readPluginChangeKind(value, action, expectedPluginId) !== 'failed'
+        || !isRecord(value) || !isRecord(value.change)) return null;
+    return readNonEmptyString(value.change.message);
+}
+
 /** Projects the installed owner's Action result into the existing UI mutation reader. */
 export function projectPluginInstallActionResult(value: unknown, action: 'install' | 'update', pluginId: string) {
     const change = isRecord(value) && isRecord(value.change)

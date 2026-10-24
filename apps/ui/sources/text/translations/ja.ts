@@ -17779,6 +17779,8 @@ settingsSession: {
     marketplaceInstallReviewBody: ({ identity, verification, executableRealms, contributions, uiArtifacts, requiredAccess, optionalAccess, compatibility }: { identity: string; verification: string; executableRealms: string; contributions: string; uiArtifacts: string; requiredAccess: string; optionalAccess: string; compatibility: string }) => `識別情報:\n${identity}\n\n検証シグナル:\n${verification}\n\n実行可能コード: ${executableRealms}\nコントリビューション: ${contributions}\nUI アーティファクト: ${uiArtifacts}\n\n信頼されたデーモンおよび React Native コードは、アプリまたはプロセスの権限で実行され、ファイル、ネットワーク、環境、プロセスを直接使用できます。以下のホストアクセスは Happier が仲介するサービスを示すものであり、実行可能なプラグインコードのサンドボックスではありません。\n\n必須の開示と協調サービス:\n${requiredAccess}\n\n任意のホスト所有リソース（既定ではオフ）:\n${optionalAccess}\n\n互換性と更新:\n${compatibility}`,
     marketplaceInstallDecisionFailed: ({ outcome }: { outcome: string }) => `プラグインはインストールされませんでした（${outcome}）。`,
     marketplaceChangeDecisionFailed: ({ action, outcome }: { action: string; outcome: string }) => `${action}に失敗しました（${outcome}）。`,
+    marketplaceInstallRefused: ({ reason }: { reason: string }) => `プラグインはインストールされませんでした。\n\n${reason}`,
+    marketplaceChangeRefused: ({ action, reason }: { action: string; reason: string }) => `${action}に失敗しました。\n\n${reason}`,
     pluginChangeConfirmBody: ({ action, name, machine, server }: { action: string; name: string; machine: string; server: string }) => `${server} の ${machine} 上の ${name} に対する「${action}」を確認してください。`,
     pluginChangeConfirmTarget: ({ machine, server }: { machine: string; server: string }) => `対象は ${server} の ${machine} です。`,
     forgetTrust: "信頼を解除",

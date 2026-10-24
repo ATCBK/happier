@@ -21536,6 +21536,10 @@ const enSettingsPlugins = {
     action: string;
     outcome: string;
   }) => `${action} failed (${outcome}).`,
+  marketplaceInstallRefused: ({ reason }: { reason: string }) =>
+    `The plugin was not installed.\n\n${reason}`,
+  marketplaceChangeRefused: ({ action, reason }: { action: string; reason: string }) =>
+    `${action} failed.\n\n${reason}`,
   pluginChangeConfirmBody: ({
     action,
     name,

@@ -17476,6 +17476,8 @@ settingsSession: {
     marketplaceInstallReviewBody: ({ identity, verification, executableRealms, contributions, uiArtifacts, requiredAccess, optionalAccess, compatibility }: { identity: string; verification: string; executableRealms: string; contributions: string; uiArtifacts: string; requiredAccess: string; optionalAccess: string; compatibility: string }) => `身份：\n${identity}\n\n验证信号：\n${verification}\n\n可执行代码：${executableRealms}\n贡献：${contributions}\n界面构件：${uiArtifacts}\n\n受信任的守护程序和 React Native 代码会以应用或进程的权限运行，并可直接使用文件、网络、环境和进程。下面列出的主机访问权限描述由 Happier 中介的服务；它不是可执行插件代码的沙箱。\n\n必需的披露和协作服务：\n${requiredAccess}\n\n可选的主机资源（默认关闭）：\n${optionalAccess}\n\n兼容性和更新：\n${compatibility}`,
     marketplaceInstallDecisionFailed: ({ outcome }: { outcome: string }) => `插件未安装（${outcome}）。`,
     marketplaceChangeDecisionFailed: ({ action, outcome }: { action: string; outcome: string }) => `${action}失败（${outcome}）。`,
+    marketplaceInstallRefused: ({ reason }: { reason: string }) => `插件未安装。\n\n${reason}`,
+    marketplaceChangeRefused: ({ action, reason }: { action: string; reason: string }) => `${action}失败。\n\n${reason}`,
     pluginChangeConfirmBody: ({ action, name, machine, server }: { action: string; name: string; machine: string; server: string }) => `确认在 ${server} 的 ${machine} 上对 ${name} 执行“${action}”。`,
     pluginChangeConfirmTarget: ({ machine, server }: { machine: string; server: string }) => `此操作作用于 ${server} 的 ${machine}。`,
     forgetTrust: "忘记信任",

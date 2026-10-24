@@ -9,7 +9,7 @@ import type { CapabilitiesInvokeRequest } from '@/sync/api/capabilities/capabili
 import type { IModal } from '@/modal';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createManagedResourceDependencyFixture } from '@/dev/testkit/fixtures/managedResourceDependencyFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -29,10 +29,13 @@ vi.mock('socket.io-client', async importOriginal =>
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: boundary.rpc,
 }));
-installApprovalCommonModuleMocks({ modal: async () =>
-    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ spies: {
-        confirm: boundary.confirm, alert: boundary.alert,
-    } }).module,
+installApprovalCommonModuleMocks({
+    // Keep translation parameters visible so the test can see which reason reached the user.
+    text: async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock(),
+    modal: async () =>
+        (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ spies: {
+            confirm: boundary.confirm, alert: boundary.alert,
+        } }).module,
 });
 installDisconnectedServerSocketBoundary();
 beforeAll(loadSyncSingletonForTests);
@@ -130,6 +133,8 @@ async function renderRemovalOwner(
             }
             if (path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/machines') return Response.json([machineCensus]);
+            if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                id => id === machineCensus.id ? machineCensus : null);
             if (path.startsWith('/v1/actions/')) {
                 const actionId = path.slice('/v1/actions/'.length);
                 const envelope = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
@@ -378,6 +383,21 @@ describe('local plugin removal at the actual settings hook and machine RPC bound
         expect(requests).toEqual([]);
         expect(boundary.confirm).not.toHaveBeenCalled();
         expect(hook.getCurrent().routineOperationSettlement?.message).not.toBe('common.done');
+    });
+
+    it('tells the author which plugin field a refused change names, and keeps the generic outcome when the daemon gave no reason', async () => {
+        const reason = 'Plugin example.compute Settings group "general" field "enabled" declares a default that is not a boolean.';
+        const refused = await renderRemovalOwner('disable', [{ kind: 'failed', code: 'PLUGIN_SETTINGS_DEFAULT_INVALID', message: reason }]);
+        await act(async () => { refused.hook.getCurrent().runCatalogAction({ method: 'disable', pluginId: 'example.compute' }); });
+        await vi.waitFor(() => expect(refused.hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
+        expect(boundary.alert).toHaveBeenCalledWith('common.error', expect.stringContaining(reason));
+        expect(refused.hook.getCurrent().routineOperationSettlement?.message).not.toBe('common.done');
+        await refused.hook.unmount();
+
+        const generic = await renderRemovalOwner('disable', [{ kind: 'failed', code: 'plugin_change_failed' }]);
+        await act(async () => { generic.hook.getCurrent().runCatalogAction({ method: 'disable', pluginId: 'example.compute' }); });
+        await vi.waitFor(() => expect(generic.hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
+        expect(boundary.alert).toHaveBeenCalledWith('common.error', expect.stringContaining('settingsPlugins.marketplaceChangeDecisionFailed'));
     });
 
     it('reconciles an actual unknown disable from the original daemon readback and preserves disabled inventory', async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { MarketplaceRegistryProfileRequiredResultV1Schema } from '@happier-dev/protocol/marketplace';
-import { projectPluginInstallActionResult, readPluginChangeKind, readPluginRegistryProfileRequirement } from './pluginMarketplaceModel';
+import { projectPluginInstallActionResult, readPluginChangeFailureReason, readPluginChangeKind, readPluginRegistryProfileRequirement } from './pluginMarketplaceModel';
 
 describe('plugin install Action result adaptation', () => {
     it('keeps the requested update identity and the daemon committed result', () => {
@@ -34,5 +34,21 @@ describe('plugin install Action result adaptation', () => {
         expect(readPluginRegistryProfileRequirement(result, 'install', 'acme.plugin')).toEqual({
             registryOrigin: 'https://registry.example', packageName: '@acme/plugin', registryProfileId: null,
         });
+    });
+
+    it('reads the daemon\'s safe failure message for the exact requested plugin and nothing else', () => {
+        const outputSchema = getActionSpec('plugins.install').outputSchema;
+        if (!outputSchema) throw new Error('Expected the plugin install Action output schema');
+        const message = 'Plugin acme.plugin Settings group "general" field "enabled" has an invalid default.';
+        const emitted = outputSchema.parse({ ok: false, kind: 'plugins_install', outcome: 'failed',
+            change: { kind: 'failed', code: 'PLUGIN_SETTINGS_DEFAULT_INVALID', message } });
+        const result = projectPluginInstallActionResult(emitted, 'install', 'acme.plugin');
+        expect(readPluginChangeFailureReason(result, 'install', 'acme.plugin')).toBe(message);
+        expect(readPluginChangeFailureReason(result, 'install', 'other.plugin')).toBeNull();
+        const generic = projectPluginInstallActionResult(outputSchema.parse({ ok: false, kind: 'plugins_install', outcome: 'failed' }), 'install', 'acme.plugin');
+        expect(readPluginChangeFailureReason(generic, 'install', 'acme.plugin')).toBeNull();
+        const blank = projectPluginInstallActionResult(outputSchema.parse({ ok: false, kind: 'plugins_install', outcome: 'failed',
+            change: { kind: 'failed', code: 'x', message: '   ' } }), 'install', 'acme.plugin');
+        expect(readPluginChangeFailureReason(blank, 'install', 'acme.plugin')).toBeNull();
     });
 });

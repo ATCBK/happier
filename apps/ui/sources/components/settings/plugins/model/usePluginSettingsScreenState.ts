@@ -65,6 +65,7 @@ import {
     readInstalledPlugins,
     projectAccountInstalledPlugins,
     isPluginMutationVisibleAfterRefresh,
+    readPluginChangeFailureReason,
     readPluginChangeKind,
     projectPluginInstallActionResult,
     readPluginManagedResourceRemovalReview,
@@ -806,15 +807,17 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                     || params.method === 'forgetTrust'
                     ? params.method
                     : null;
-                const showMutationFailure = (outcome: string) => {
+                const showMutationFailure = (outcome: string, reason: string | null) => {
+                    const action = resolvePluginChangeActionLabel(params.method);
                     Modal.alert(
                         t('common.error'),
-                        params.method === 'install'
-                            ? t('settingsPlugins.marketplaceInstallDecisionFailed', { outcome })
-                            : t('settingsPlugins.marketplaceChangeDecisionFailed', {
-                                action: resolvePluginChangeActionLabel(params.method),
-                                outcome,
-                            }),
+                        reason
+                            ? params.method === 'install'
+                                ? t('settingsPlugins.marketplaceInstallRefused', { reason })
+                                : t('settingsPlugins.marketplaceChangeRefused', { action, reason })
+                            : params.method === 'install'
+                                ? t('settingsPlugins.marketplaceInstallDecisionFailed', { outcome })
+                                : t('settingsPlugins.marketplaceChangeDecisionFailed', { action, outcome }),
                     );
                 };
                 const isMutationOutcomeUnknown = (code: string | undefined) => code === 'outcomeUnknown' || code === 'outcome_uncertain';
@@ -978,7 +981,10 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                     if (changeKind === 'outcomeUnknown') {
                         await reconcileAmbiguousMutation(exactInstallEntry?.version ?? null);
                     } else {
-                        showMutationFailure(changeKind ?? 'invalid-response');
+                        showMutationFailure(
+                            changeKind ?? 'invalid-response',
+                            readPluginChangeFailureReason(response.response.result, params.method, params.pluginId),
+                        );
                         if (changeKind === 'dataRemovalPartial') {
                             machineCapabilities.refresh({ bypassCache: true });
                             refreshPluginTruth();

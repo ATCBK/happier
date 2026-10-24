@@ -13516,6 +13516,8 @@ settingsSession: {
     marketplaceInstallReviewBody: ({ identity, verification, executableRealms, contributions, uiArtifacts, requiredAccess, optionalAccess, compatibility }: { identity: string; verification: string; executableRealms: string; contributions: string; uiArtifacts: string; requiredAccess: string; optionalAccess: string; compatibility: string }) => `身分：\n${identity}\n\n驗證訊號：\n${verification}\n\n可執行程式碼：${executableRealms}\n貢獻：${contributions}\n介面成品：${uiArtifacts}\n\n受信任的守護程式與 React Native 程式碼會以應用程式或程序的權限執行，並可直接使用檔案、網路、環境與程序。下列主機存取權限描述由 Happier 中介的服務；它不是可執行外掛程式碼的沙箱。\n\n必要的揭露與協作服務：\n${requiredAccess}\n\n選用的主機資源（預設關閉）：\n${optionalAccess}\n\n相容性與更新：\n${compatibility}`,
     marketplaceInstallDecisionFailed: ({ outcome }: { outcome: string }) => `未安裝外掛程式（${outcome}）。`,
     marketplaceChangeDecisionFailed: ({ action, outcome }: { action: string; outcome: string }) => `${action}失敗（${outcome}）。`,
+    marketplaceInstallRefused: ({ reason }: { reason: string }) => `未安裝外掛程式。\n\n${reason}`,
+    marketplaceChangeRefused: ({ action, reason }: { action: string; reason: string }) => `${action}失敗。\n\n${reason}`,
     pluginChangeConfirmBody: ({ action, name, machine, server }: { action: string; name: string; machine: string; server: string }) => `確認在 ${server} 的 ${machine} 上對 ${name} 執行「${action}」。`,
     pluginChangeConfirmTarget: ({ machine, server }: { machine: string; server: string }) => `此操作作用於 ${server} 的 ${machine}。`,
     forgetTrust: "忘記信任",
