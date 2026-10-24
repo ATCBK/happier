@@ -516,6 +516,7 @@ import {
     createArtifactWithHeaderViaApi,
     fetchAndApplyArtifactsList,
     fetchAndApplyArtifactBodies,
+    fetchAndApplyArtifactChanges,
     fetchArtifactWithBodyFromApi,
     fetchArtifactBinaryFromApi,
     fetchArtifactHtmlPreviewFromApi,
@@ -8748,6 +8749,17 @@ class Sync {
         return this.withArtifactReadAuthority(undefined, params => fetchArtifactWithBodyFromApi({ ...params, artifactId, fresh: options?.fresh }));
     }
 
+    private refreshArtifactsByIds(artifactIds: readonly string[]): Promise<void> {
+        const exactIds = Array.from(new Set(artifactIds.map(id => id.trim()).filter(Boolean))).sort();
+        if (exactIds.length === 0) return Promise.resolve();
+        return this.withArtifactReadAuthority(undefined, params => fetchAndApplyArtifactChanges({
+            ...params,
+            artifactIds: exactIds,
+            applyArtifacts: storage.getState().applyArtifacts,
+            deleteArtifact: storage.getState().deleteArtifact,
+        }));
+    }
+
     /** A mounted transcript demands bodies only for its own linked approval headers. */
     public hydrateSessionApprovalArtifacts(serverId: string, artifactIds: readonly string[]): Promise<void> {
         const lifetime = captureActiveServerAccountScopeLifetime();
@@ -12441,7 +12453,7 @@ class Sync {
                                 }
                                 await invalidateMachinePoolProjection(plannedServerId, { forceFeatures: true });
                             },
-                            artifacts: () => this.artifactsSync.invalidateAndAwait(),
+                            artifacts: artifactIds => this.refreshArtifactsByIds(artifactIds),
                             friends: () => this.friendsSync.invalidateAndAwait(),
                             friendRequests: () => this.friendRequestsSync.invalidateAndAwait(),
                             feed: () => this.feedSync.invalidateAndAwait(),

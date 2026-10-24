@@ -944,6 +944,40 @@ export async function fetchAndApplyArtifactBodies(params: Readonly<{
     return details.map(detail => detail.status === 'rejected' ? detail : { status: 'fulfilled', value: undefined });
 }
 
+/** Materialize one durable Account-change page without rereading the Account inventory. */
+export async function fetchAndApplyArtifactChanges(params: Readonly<{
+    credentials: AuthCredentials;
+    artifactIds: readonly string[];
+    request?: ArtifactApiOptions['request'];
+    readTransport?: ArtifactApiOptions['readTransport'];
+    signal?: AbortSignal;
+    encryption: Encryption | null;
+    artifactDataKeys: ArtifactDataKeyCache;
+    applyArtifacts: (artifacts: DecryptedArtifact[]) => void;
+    deleteArtifact: (artifactId: string) => void;
+    shouldContinue?: () => boolean;
+}>): Promise<void> {
+    const shouldContinue = params.shouldContinue ?? (() => !params.signal?.aborted);
+    if (params.artifactIds.length === 0 || !shouldContinue()) return;
+    const details = await fetchArtifactsWithBodiesFromApi(params);
+    if (!shouldContinue()) return;
+    const rejected = details.find((detail): detail is PromiseRejectedResult => detail.status === 'rejected');
+    if (rejected) throw rejected.reason;
+    const artifacts: DecryptedArtifact[] = [];
+    const missingIds: string[] = [];
+    for (const [index, detail] of details.entries()) {
+        if (detail.status !== 'fulfilled') continue;
+        if (detail.value) artifacts.push(detail.value);
+        else missingIds.push(params.artifactIds[index]!);
+    }
+    if (!shouldContinue()) return;
+    if (artifacts.length > 0) params.applyArtifacts(artifacts);
+    for (const artifactId of missingIds) {
+        params.artifactDataKeys.delete(artifactId);
+        params.deleteArtifact(artifactId);
+    }
+}
+
 /** Exact reads share transport; each borrower opens with its own keys and keeps per-id refusals. */
 export async function fetchArtifactsWithBodiesFromApi(params: Readonly<{
     credentials: AuthCredentials;

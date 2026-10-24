@@ -13,7 +13,7 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import { useOpenApprovalArtifactsForSession } from '@/sync/domains/state/storage';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createArtifactsDomain, type ArtifactsDomain } from '@/sync/store/domains/artifacts';
-import { fetchAndApplyArtifactBodies, fetchAndApplyArtifactsList, handleNewArtifactSocketUpdate, type ArtifactDataKeyCache } from './syncArtifacts';
+import { fetchAndApplyArtifactBodies, fetchAndApplyArtifactChanges, fetchAndApplyArtifactsList, handleNewArtifactSocketUpdate, type ArtifactDataKeyCache } from './syncArtifacts';
 
 afterEach(() => { standardCleanup(); vi.useRealTimers(); });
 
@@ -41,6 +41,27 @@ function createHarness() {
 }
 
 describe('Artifact body hydration publications', () => {
+    it('applies and deletes exact Account-change rows through one batched read', async () => {
+        const { store, artifacts, params } = createHarness();
+        store.getState().applyArtifacts([artifacts[1]!]);
+        const request = vi.fn(async (_path: string, init?: RequestInit) => {
+            const { artifactIds } = ArtifactReadBatchInputV1Schema.parse(JSON.parse(String(init?.body)));
+            expect(artifactIds).toEqual([artifacts[0]!.id, artifacts[1]!.id]);
+            return Response.json({ items: [
+                { artifactId: artifactIds[0], ok: true, artifact: artifacts[0], recipientCensus: null },
+                { artifactId: artifactIds[1], ok: false, error: 'artifact_not_found', retryable: false, status: 404 },
+            ] });
+        });
+
+        await fetchAndApplyArtifactChanges({ ...params, request,
+            artifactIds: [artifacts[0]!.id, artifacts[1]!.id],
+            deleteArtifact: store.getState().deleteArtifact });
+
+        expect(request).toHaveBeenCalledOnce();
+        expect(store.getState().artifacts[artifacts[0]!.id]).toMatchObject({ body: 'Receipt body 0' });
+        expect(store.getState().artifacts[artifacts[1]!.id]).toBeUndefined();
+    });
+
     it.each(['plain', 'e2ee'] as const)('admits a socket approval once through unchanged list/body revalidation (%s)', async mode => {
         const store = getStorage();
         const previous = store.getState();
