@@ -70,6 +70,8 @@ export function derivePendingMessagesRuntimePresentation(
     pendingMessages: ReadonlyArray<PendingMessage> = [],
 ) {
     return projectUiSessionRuntimeAwareness({
+        id: session?.id,
+        serverId: session?.serverId,
         active: session?.active,
         activeAt: session?.activeAt,
         presence: session?.presence,
