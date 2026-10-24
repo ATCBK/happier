@@ -369,7 +369,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         inheritedSelection: options.inheritedDraftTeamCredentialModel,
         onSelectionChange: () => setError(null),
     });
-    const machine = useExecutionRunMachineName(session?.metadata ?? (props.workspace ? { machineId: props.workspace.machineId } : null));
+    const machine = useExecutionRunMachineName(session, serverId, props.workspace?.machineId);
     const childChoice = useExecutionRunChildChoice();
     const runIdRef = React.useRef<string | null>(null);
     const notifiedRunIdRef = React.useRef<string | null>(null);

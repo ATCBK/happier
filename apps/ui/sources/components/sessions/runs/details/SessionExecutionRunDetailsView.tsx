@@ -663,7 +663,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         setStopError(null);
         void load();
     }, [load]);
-    const machine = useExecutionRunMachineName(session?.metadata ?? (props.workspace ? { machineId: props.workspace.machineId } : null));
+    const machine = useExecutionRunMachineName(session, pendingScopeServerId, props.workspace?.machineId);
     const sessionMachine = useSessionMachineTarget(props.sessionId, explicitServerId);
     const modelRun = state.status === 'loaded' && loadedRunAddressRef.current === runAddressKey ? state.run : null;
     const nativeModelId = modelRun?.resolvedSelection?.modelSelection?.providerConnectionId || modelRun?.resolvedSelection?.teamCredentialModel
