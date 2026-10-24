@@ -174,7 +174,7 @@ export default defineConfig({
     // Published TSX icon leaves omit React imports and use the same automatic runtime as Expo.
     esbuild: { jsx: 'automatic' },
     define: {
-        __DEV__: true,
+        __DEV__: process.env.HAPPIER_UI_TEST_DEV_BUILD !== '0',
     },
     optimizeDeps: {
             // Workspace packages (like `@happier-dev/protocol`) can change frequently during development.
