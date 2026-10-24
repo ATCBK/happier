@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { RpcAdmissionPredicate, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
-import type { ActivityLog } from '@/daemon/guard/activityLog';
+import type { ActivityLog, ActivityLogListInput } from '@/daemon/guard/activityLog';
+import { parkWatch } from '@/daemon/lifecycle/parkWatch';
 import type { createGuardWatch, GuardViewRequester } from '@/daemon/guard/view/guardWatch';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ActionExecuteResult, ActionExecutorDeps } from '@happier-dev/protocol/actions';
@@ -13,7 +14,9 @@ import { MachineGuardKeepRunningInputV1Schema, MachineGuardKeepRunningResultV1Sc
   type MachineGuardSessionCeilingSetResultV1 } from '@happier-dev/protocol/actions/specs/machineGuard';
 import { MachineGuardActivityListInputV1Schema, MachineGuardActivityUndoInputV1Schema } from '@happier-dev/protocol/actions/specs/machineGuardActivity';
 import { isMachineGuardRestorationWayBackV1 } from '@happier-dev/protocol/machines/guard/activityV1';
-import { MachineGuardGetInputV1Schema, MachineGuardViewV1Schema, MachineGuardWatchInputV1Schema, MachineGuardWatchResultV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
+import { MachineGuardGetInputV1Schema, MachineGuardViewV1Schema, MachineGuardWatchInputV1Schema, MachineGuardWatchResultV1Schema,
+  MachineGuardActivityWatchInputV1Schema, MachineGuardActivityWatchResultV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
 import { doesMachineRpcTargetMatchAdmission } from '@/api/machine/machineRpcAuthorization';
@@ -85,13 +88,28 @@ export function registerDaemonMachineGuardRpcHandlers(rpc: RpcHandlerRegistrar, 
     try { return MachineGuardWatchResultV1Schema.parse(await options.guard.watch({ ...request, serverId: admitted.target.serverId }, admitted.requester, context?.signal)); }
     finally { await admitted.assertCurrent(); }
   });
+  const readActivity = (request: Pick<ActivityLogListInput, 'range' | 'filter'>, requester: GuardViewRequester) => options.activity.list({
+    range: request.range, ...(request.filter ? { filter: request.filter } : {}),
+    ...(!requester.isCustodian ? { requester: { serverId: requester.serverId, accountId: requester.accountId,
+      machineId: requester.machineId, installationId: requester.installationId } } : {}),
+  });
   rpc.registerHandler(RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST, async (raw: unknown, context?: RpcHandlerContext) => {
     const request = MachineGuardActivityListInputV1Schema.parse(raw);
     const admitted = bindAdmission(request, context, false);
     try {
-      return await options.activity.list({ range: request.range, ...(request.filter ? { filter: request.filter } : {}),
-        ...(!admitted.requester.isCustodian ? { requester: { serverId: admitted.target.serverId, accountId: admitted.requester.accountId,
-          machineId: admitted.target.machineId, installationId: admitted.target.installationId } } : {}) });
+      return await readActivity(request, admitted.requester);
+    } finally { await admitted.assertCurrent(); }
+  });
+  rpc.registerHandler(RPC_METHODS.DAEMON_GUARD_ACTIVITY_WATCH, async (raw: unknown, context?: RpcHandlerContext) => {
+    const request = MachineGuardActivityWatchInputV1Schema.parse(raw);
+    const admitted = bindAdmission(request, context, false);
+    try {
+      const answer = await parkWatch({ windowMs: MACHINE_WATCH_WINDOW_MS, signal: context?.signal,
+        isNewer: () => request.since !== options.activity.revision(),
+        subscribe: options.activity.subscribe, read: options.activity.revision });
+      return MachineGuardActivityWatchResultV1Schema.parse(answer.changed ? {
+        changed: true, since: answer.snapshot, list: await readActivity(request, admitted.requester),
+      } : { changed: false });
     } finally { await admitted.assertCurrent(); }
   });
   rpc.registerHandler(RPC_METHODS.MACHINES_GUARD_IDLE_STOP_KEEP_RUNNING, async (raw: unknown, context?: RpcHandlerContext) => {

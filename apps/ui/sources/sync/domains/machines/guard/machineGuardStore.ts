@@ -8,7 +8,7 @@ import type { MachineGuardActivityQuery, MachineGuardClients } from './machineGu
 
 /**
  * One shared Guard view per machine (read, then one parked watch while anything shows it) and one
- * Activity list per machine and query. The view is the daemon's; this store only keeps the last
+ * independently watched Activity list per machine and query. The view is the daemon's; this store only keeps the last
  * good answer for the app session, so an offline or failing machine still shows what it last said.
  */
 
@@ -18,7 +18,7 @@ export type MachineGuardViewState = Readonly<{ status: MachineGuardStatus; view:
     pending: boolean;
     /** Client receive time of the last good view; failures cannot renew its freshness. */
     receivedAtMs: number | null }>;
-export type MachineGuardActivityState = Readonly<{ status: MachineGuardStatus; list: MachineGuardActivityListV1 | null }>;
+export type MachineGuardActivityState = Readonly<{ status: MachineGuardStatus; list: MachineGuardActivityListV1 | null; since?: number }>;
 export type MachineGuardActivityKey = MachineDaemonReadKey & MachineGuardActivityQuery;
 
 const EMPTY_VIEW: MachineGuardViewState = { status: 'loading', pending: false, view: null, since: undefined, receivedAtMs: null };
@@ -34,6 +34,7 @@ const normalize = <T extends MachineDaemonReadKey>(input: T): T => ({ ...input, 
 const failed = (reason: 'older_happier' | 'request_failed' | 'invalid_response'): MachineGuardStatus => reason === 'older_happier' ? 'not_reported' : 'error';
 
 type ViewUpdate = Readonly<{ kind: 'view'; view: MachineGuardViewV1; since: number | undefined; receivedAtMs: number }> | Readonly<{ kind: 'status'; status: MachineGuardStatus }>;
+type ActivityUpdate = Readonly<{ list: MachineGuardActivityListV1; since: number }>;
 
 export function createMachineGuardStore(clients: MachineGuardClients) {
     const activityDemands = new Map<string, { key: MachineGuardActivityKey; count: number }>();
@@ -59,10 +60,6 @@ export function createMachineGuardStore(clients: MachineGuardClients) {
         },
         failRefresh: state => ({ ...applyView(state, { kind: 'status', status: 'error' }), pending: false }),
         applySnapshot: applyView,
-        onWatchSnapshot: (input, update) => {
-            // The watch cursor covers journal changes outside the view's Today projection too.
-            if (update.kind === 'view') refreshActivity(input);
-        },
         watch: async ({ input, state, watchClient, signal, nowMs }) => {
             const answer = await watchClient({ ...input, since: state.since, signal });
             if (signal?.aborted) return { status: 'unavailable' };
@@ -74,19 +71,28 @@ export function createMachineGuardStore(clients: MachineGuardClients) {
             return { status: 'changed', snapshot: { kind: 'view', view: answer.value.view, since: answer.value.since, receivedAtMs: nowMs() } };
         },
     });
-    const activities: SharedSubscriptionStore<MachineGuardActivityKey, MachineGuardActivityState, MachineGuardActivityListV1, MachineGuardClients['activityClient']>
-        = createSharedSubscriptionStore<MachineGuardActivityKey, MachineGuardActivityState, MachineGuardActivityListV1, MachineGuardClients['activityClient']>({
+    const activities: SharedSubscriptionStore<MachineGuardActivityKey, MachineGuardActivityState, ActivityUpdate, MachineGuardClients['activityClient'], MachineGuardClients['activityWatchClient']>
+        = createSharedSubscriptionStore<MachineGuardActivityKey, MachineGuardActivityState, ActivityUpdate, MachineGuardClients['activityClient'], MachineGuardClients['activityWatchClient']>({
         emptyState: EMPTY_ACTIVITY, createState: () => EMPTY_ACTIVITY, normalizeInput: normalize, storeKey: activityKey,
-        defaultSnapshotClient: clients.activityClient, retainState: true,
+        defaultSnapshotClient: clients.activityClient, defaultWatchClient: clients.activityWatchClient, retainState: true,
+        watchAfterRefresh: true, shouldWatch: state => state.status === 'ready',
         beginRefresh: state => ({ ...state, status: 'loading' }),
         refresh: async ({ input, state, snapshotClient, signal }): Promise<MachineGuardActivityState> => {
             const answer = await snapshotClient({ ...input, signal });
             if (signal?.aborted) return state;
             const current: MachineGuardActivityState = activities.getState(input);
-            return answer.ok ? { status: 'ready', list: answer.value } : { ...current, status: failed(answer.reason) };
+            return answer.ok ? { ...current, status: 'ready', list: answer.value } : { ...current, status: failed(answer.reason) };
         },
         failRefresh: state => ({ ...state, status: 'error' }),
-        applySnapshot: (_state, list) => ({ status: 'ready', list }),
+        applySnapshot: (_state, update) => ({ status: 'ready', list: update.list, since: update.since }),
+        watch: async ({ input, state, watchClient, signal }) => {
+            const answer = await watchClient({ ...input, since: state.since, signal });
+            if (signal?.aborted) return { status: 'unavailable' };
+            if (!answer.ok) return { status: 'unavailable' };
+            if (!answer.value.changed) return { status: 'idle' };
+            return { status: 'changed', snapshot: { list: answer.value.list, since: answer.value.since } };
+        },
+        failWatch: state => ({ ...state, status: 'error' }),
     });
     return {
         getView: (input: MachineDaemonReadKey) => views.getState(normalize(input)),
@@ -101,14 +107,12 @@ export function createMachineGuardStore(clients: MachineGuardClients) {
             const demand = activityDemands.get(id) ?? { key, count: 0 };
             demand.count += 1;
             activityDemands.set(id, demand);
-            const releaseView = views.subscribe(key, () => {});
             const release = activities.subscribe(key, () => {});
             let released = false;
             return () => {
                 if (released) return;
                 released = true;
                 release();
-                releaseView();
                 demand.count -= 1;
                 if (demand.count === 0 && activityDemands.get(id) === demand) activityDemands.delete(id);
             };
@@ -124,4 +128,5 @@ export const machineGuardStore = createMachineGuardStore({
     viewClient: async input => (await import('./machineGuardRpc')).fetchMachineGuardViewViaAction(input),
     watchClient: async input => (await import('./machineGuardRpc')).watchMachineGuardViaMachineRpc(input),
     activityClient: async input => (await import('./machineGuardRpc')).fetchMachineGuardActivityViaAction(input),
+    activityWatchClient: async input => (await import('./machineGuardRpc')).watchMachineGuardActivityViaMachineRpc(input),
 });

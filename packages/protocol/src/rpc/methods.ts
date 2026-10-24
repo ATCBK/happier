@@ -168,6 +168,7 @@ export const RPC_METHODS = {
   MACHINES_GUARD_IDLE_STOP_KEEP_RUNNING: 'machines.guard.idleStop.keepRunning',
   MACHINES_GUARD_SESSION_CEILING_SET: 'machines.guard.sessionCeiling.set',
   DAEMON_GUARD_WATCH: 'daemon.guard.watch',
+  DAEMON_GUARD_ACTIVITY_WATCH: 'daemon.guard.activity.watch',
   MACHINES_VITALS_HISTORY_GET: 'machines.vitals.history.get',
   DAEMON_VITALS_WATCH: 'daemon.vitals.watch',
   MACHINES_PROCESSES_LIST: 'machines.processes.list',

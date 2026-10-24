@@ -3,7 +3,8 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { MachineGuardPolicyV1Schema } from './guardPolicyV1.js';
 import { MachineGuardStateV1Schema } from './guardStateV1.js';
 import { GuardKeepReasonV1Schema, MachineGuardLadderV1Schema } from './guardViewV1.js';
-import { MachineGuardActivityRowV1Schema } from './activityV1.js';
+import { MachineGuardActivityRowV1Schema, MachineGuardActivityListV1Schema,
+  MachineGuardActivityRangeV1Schema, MachineGuardActivityFilterV1Schema } from './activityV1.js';
 
 const count = () => z.number().check(z.int(), z.nonnegative());
 const bytes = () => z.number().check(z.nonnegative());
@@ -38,3 +39,14 @@ export const MachineGuardWatchResultV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ changed: z.literal(false) }),
 ]));
 export type MachineGuardWatchResultV1 = z.infer<typeof MachineGuardWatchResultV1Schema>;
+
+/** Activity V1 observation is independent of the Guard planner/census watch. All envelopes are closed. */
+export const MachineGuardActivityWatchInputV1Schema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1)), serverId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  range: MachineGuardActivityRangeV1Schema, filter: z.optional(MachineGuardActivityFilterV1Schema), since: z.optional(count()),
+}));
+export const MachineGuardActivityWatchResultV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ changed: z.literal(true), list: MachineGuardActivityListV1Schema, since: count() }),
+  z.strictObject({ changed: z.literal(false) }),
+]));
+export type MachineGuardActivityWatchResultV1 = z.infer<typeof MachineGuardActivityWatchResultV1Schema>;

@@ -68,7 +68,7 @@ async function mount(options: Readonly<{ params?: React.ComponentProps<typeof Gu
     transport.rpc.mockImplementation(async ({ method, payload }: { method: string; payload: Record<string, unknown> }) => {
         const answer = options.rpc?.(method, payload);
         if (answer !== undefined) return answer;
-        if (method === RPC_METHODS.DAEMON_GUARD_WATCH) return new Promise(() => {});
+        if (method === RPC_METHODS.DAEMON_GUARD_WATCH || method === RPC_METHODS.DAEMON_GUARD_ACTIVITY_WATCH) return new Promise(() => {});
         if (method === RPC_METHODS.MACHINES_GUARD_GET) return guardAnswer.current;
         if (method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) return { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: Date.now() };
         throw new Error(`unexpected ${method}`);

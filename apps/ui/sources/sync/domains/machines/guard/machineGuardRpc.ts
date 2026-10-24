@@ -1,11 +1,12 @@
 import {
     MachineGuardViewV1Schema, MachineGuardWatchInputV1Schema, MachineGuardWatchResultV1Schema,
+    MachineGuardActivityWatchInputV1Schema, MachineGuardActivityWatchResultV1Schema,
+    type MachineGuardActivityWatchResultV1,
     type MachineGuardViewV1, type MachineGuardWatchResultV1,
 } from '@happier-dev/protocol/machines/guard/guardRpcV1';
 import { MachineGuardActivityListV1Schema, type MachineGuardActivityListV1 } from '@happier-dev/protocol/machines/guard/activityV1';
 import type { MachineGuardActionId } from '@happier-dev/protocol/machines/guard/actionIdsV1';
 import { MachineGuardKeepRunningResultV1Schema } from '@happier-dev/protocol/actions/specs/machineGuard';
-import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { createRpcCallError, readRpcErrorCode, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -18,7 +19,7 @@ import { isMachineDaemonRpcUnsupportedError } from '../machineDaemonRpcErrors';
 /**
  * The Guard's reads and its two person-facing writes, through the published Actions (lane 50a's stable
  * contract): `machines.guard.get` and the Activity list/Undo/Keep running go through the front door so
- * approval and audit stay the Actions'; the parked `daemon.guard.watch` is the read transport.
+ * approval and audit stay the Actions'; the parked Guard and Activity watches are independent read transports.
  */
 
 export type MachineGuardReadInput = MachineDaemonReadKey & Readonly<{ signal?: AbortSignal }>;
@@ -30,6 +31,7 @@ export type MachineGuardClients = Readonly<{
     viewClient: (input: MachineGuardReadInput) => Promise<MachineGuardResult<MachineGuardViewV1>>;
     watchClient: (input: MachineGuardReadInput & Readonly<{ since?: number }>) => Promise<MachineGuardResult<MachineGuardWatchResultV1>>;
     activityClient: (input: MachineGuardReadInput & MachineGuardActivityQuery) => Promise<MachineGuardResult<MachineGuardActivityListV1>>;
+    activityWatchClient: (input: MachineGuardReadInput & MachineGuardActivityQuery & Readonly<{ since?: number }>) => Promise<MachineGuardResult<MachineGuardActivityWatchResultV1>>;
 }>;
 
 async function result<T>(input: Readonly<{ signal?: AbortSignal }>, request: () => Promise<unknown>,
@@ -69,13 +71,22 @@ export function watchMachineGuardViaMachineRpc(input: MachineGuardReadInput & Re
         ...(input.serverId ? { serverId: input.serverId } : {}), ...(input.since === undefined ? {} : { since: input.since }) });
     return result(input, () => machineRpcWithServerScope({ machineId: input.machineId, serverId: input.serverId,
         ...(input.expectedAccountId ? { accountId: input.expectedAccountId } : {}), method: RPC_METHODS.DAEMON_GUARD_WATCH,
-        payload, ...(input.signal ? { signal: input.signal } : {}), timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000 }),
+        payload, ...(input.signal ? { signal: input.signal } : {}) }),
     raw => MachineGuardWatchResultV1Schema.safeParse(raw));
 }
 
 export function fetchMachineGuardActivityViaAction(input: MachineGuardReadInput & MachineGuardActivityQuery): Promise<MachineGuardResult<MachineGuardActivityListV1>> {
     return result(input, () => execute(input, 'machines.guard.activity.list', { range: input.range, filter: input.filter }),
         raw => MachineGuardActivityListV1Schema.safeParse(raw));
+}
+
+export function watchMachineGuardActivityViaMachineRpc(input: MachineGuardReadInput & MachineGuardActivityQuery & Readonly<{ since?: number }>): Promise<MachineGuardResult<MachineGuardActivityWatchResultV1>> {
+    const payload = MachineGuardActivityWatchInputV1Schema.parse({ machineId: input.machineId, range: input.range, filter: input.filter,
+        ...(input.serverId ? { serverId: input.serverId } : {}), ...(input.since === undefined ? {} : { since: input.since }) });
+    return result(input, () => machineRpcWithServerScope({ machineId: input.machineId, serverId: input.serverId,
+        ...(input.expectedAccountId ? { accountId: input.expectedAccountId } : {}), method: RPC_METHODS.DAEMON_GUARD_ACTIVITY_WATCH,
+        payload, ...(input.signal ? { signal: input.signal } : {}) }),
+    raw => MachineGuardActivityWatchResultV1Schema.safeParse(raw));
 }
 
 /** Undo runs the captured original Action on the machine; its own result (or approval) comes back as is. */

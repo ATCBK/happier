@@ -272,6 +272,7 @@ const DIRECT_EPHEMERAL_POLICIES = Object.freeze([
   directEphemeral(RPC_METHODS.MACHINES_GUARD_GET, 'Machine-local requester-filtered guard view.'),
   directEphemeral(RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST, 'Machine-local requester-filtered Activity receipts.'),
   directEphemeral(RPC_METHODS.DAEMON_GUARD_WATCH, 'Machine-local parked guard view with current Use admission.'),
+  directEphemeral(RPC_METHODS.DAEMON_GUARD_ACTIVITY_WATCH, 'Machine-local requester-filtered Activity watch; parks on durable appends without Guard demand.'),
   { ...actionSpecServerRequired(RPC_METHODS.MACHINES_GUARD_ACTIVITY_UNDO, 'destructive_or_recovery_mutation', 'Restoration re-enters the original Action and its approval.', 'machines.guard.activity.undo'), sharedMachineAccess: 'custodian_only' },
   { ...directEphemeral(RPC_METHODS.MACHINES_GUARD_IDLE_STOP_KEEP_RUNNING, 'Custodian cancels a current memory warning without editing policy.'), sharedMachineAccess: 'custodian_only' },
   { ...actionSpecServerRequired(RPC_METHODS.MACHINES_GUARD_SESSION_CEILING_SET, 'destructive_or_recovery_mutation', 'Custodian writes the Session owner’s ceiling override and applies its live native scope.', 'machines.guard.sessionCeiling.set'), sharedMachineAccess: 'custodian_only' },

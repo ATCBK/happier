@@ -26,7 +26,7 @@ installHomeGovernanceBoundaries(home);
 // Scoped HTTP transports must bind after their genuine Home boundaries are installed.
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { machineGuardStore } = await import('./machineGuardStore');
-const { useMachineGuardView } = await import('./useMachineGuardView');
+const { useMachineGuardView, useMachineGuardActivity } = await import('./useMachineGuardView');
 const guardRpc = await import('./machineGuardRpc');
 const before = storage.getState();
 beforeEach(async () => { await home.reset(); });
@@ -48,6 +48,36 @@ it('decodes the registered Guard Action answer without admitting an unknown resu
     expect(await guardRpc.fetchMachineGuardViewViaAction(input)).toEqual({ ok: false, reason: 'invalid_response' });
 });
 
+it('streams Activity receipts through the consumed hook without acquiring a Guard view', async () => {
+    const serverId = await home.addHome({ name: 'Activity only', serverUrl: 'https://activity-only.test',
+        serverIdentityId: 'srv_activity_only', accountId: 'owner', currentAccount: true });
+    home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
+    storage.setState({ machines: {}, machineListByServerId: { [serverId]: [createMachineFixture({
+        id: 'machine', activeAt: Date.now(), storageMode: 'plain', isShared: false,
+        metadata: { host: 'Activity machine', platform: 'linux', happyCliVersion: '0.3.0', happyHomeDir: '/home/test/.happier', homeDir: '/home/test' },
+        access: { role: 'manage', custodian: { accountId: 'owner', displayName: 'Owner' }, resourceMode: 'plain', accessState: 'ready' },
+    })] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+    const replies: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const list = { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 1000 };
+    network.rpc.mockImplementation(async ({ method }: { method: string }) => {
+        if (method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST) return list;
+        if (method === RPC_METHODS.DAEMON_GUARD_ACTIVITY_WATCH) {
+            const reply = createDeferred<unknown>(); replies.push(reply); return reply.promise;
+        }
+        throw new Error(`unexpected ${method}`);
+    });
+    const hook = await renderHook(() => useMachineGuardActivity({ serverId, machineId: 'machine', range: '7d', filter: 'all' }));
+    await act(async () => { await vi.waitFor(() => expect(replies).toHaveLength(1)); });
+    const entries = [{ v: 1, id: 'append', at: 2000, kind: 'housekeeping', rule: 'housekeeping', outcome: 'done', attribution: { kind: 'unknown' } }];
+    await act(async () => { replies[0]!.resolve({ changed: true, since: 2, list: { entries,
+        counts: { stopped: 0, cleanedUp: 1, needsLook: 0, others: 0 }, asOf: 2000 } }); });
+    await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().list?.entries).toEqual(entries)); });
+    expect(network.rpc.mock.calls.map(([request]) => request.method)).toEqual([
+        RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST, RPC_METHODS.DAEMON_GUARD_ACTIVITY_WATCH, RPC_METHODS.DAEMON_GUARD_ACTIVITY_WATCH,
+    ]);
+    await hook.unmount();
+});
+
 it('distinguishes unavailable transport from missing Guard operations across reads, watches and Keep running', async () => {
     const serverId = await home.addHome({ name: 'Guard predecessor', serverUrl: 'https://guard-predecessor.test',
         serverIdentityId: 'srv_guard_predecessor', accountId: 'owner', currentAccount: true });
@@ -59,6 +89,8 @@ it('distinguishes unavailable transport from missing Guard operations across rea
         expect(await guardRpc.fetchMachineGuardActivityViaAction({ ...input, range: 'today', filter: 'all' }))
             .toEqual({ ok: false, reason });
         expect(await guardRpc.watchMachineGuardViaMachineRpc(input)).toEqual({ ok: false, reason });
+        expect(await guardRpc.watchMachineGuardActivityViaMachineRpc({ ...input, range: '7d', filter: 'all' }))
+            .toEqual({ ok: false, reason });
         expect(await guardRpc.keepMachineGuardWorkRunningViaAction({ ...input, terminalKey: 'terminal' }))
             .toEqual({ ok: false, reason });
     }

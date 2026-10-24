@@ -3,13 +3,36 @@ import { createDeferred } from '@/dev/testkit';
 import { createMachineGuardViewFixture } from './guardViewFixtures';
 import { createMachineGuardStore } from './machineGuardStore';
 import type { MachineGuardClients, MachineGuardResult } from './machineGuardRpc';
-import type { MachineGuardWatchResultV1 } from '@happier-dev/protocol/machines/guard/guardRpcV1';
+import type { MachineGuardWatchResultV1, MachineGuardActivityWatchResultV1 } from '@happier-dev/protocol/machines/guard/guardRpcV1';
 
 async function settle() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
+const idleActivityWatch: MachineGuardClients['activityWatchClient'] = async () => new Promise(() => {});
 
 describe('Guard last-good freshness', () => {
+    it('keeps Activity-only demand fresh without any Guard read or watch', async () => {
+        const viewClient = vi.fn(async () => ({ ok: true as const, value: createMachineGuardViewFixture() }));
+        const watchClient = vi.fn(async () => new Promise<MachineGuardResult<MachineGuardWatchResultV1>>(() => {}));
+        const reply = createDeferred<MachineGuardResult<MachineGuardActivityWatchResultV1>>();
+        const activityWatchClient = vi.fn<MachineGuardClients['activityWatchClient']>().mockImplementationOnce(() => reply.promise)
+            .mockImplementation(() => new Promise(() => {}));
+        const list = { entries: [] as [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 1234 };
+        const store = createMachineGuardStore({ viewClient, watchClient, activityWatchClient,
+            activityClient: async () => ({ ok: true as const, value: list }) });
+        const key = { machineId: 'machine', range: '7d' as const, filter: 'all' as const };
+        const release = store.demandActivity(key);
+        try {
+            await settle();
+            expect(viewClient).not.toHaveBeenCalled();
+            expect(watchClient).not.toHaveBeenCalled();
+            expect(activityWatchClient).toHaveBeenCalledTimes(1);
+            reply.resolve({ ok: true, value: { changed: true, since: 1, list: { ...list, asOf: 2000 } } });
+            await settle();
+            expect(store.getActivity(key).list?.asOf).toBe(2000);
+        } finally { release(); store.reset(); }
+    });
+
     it('refreshes demanded ranges and filters when an earlier-day Undo leaves Today unchanged', async () => {
-        const watches: Array<ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>>> = [];
+        const watches: Array<{ input: Parameters<MachineGuardClients['activityWatchClient']>[0]; reply: ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardActivityWatchResultV1>>> }> = [];
         const yesterday = Date.UTC(2026, 9, 19, 12);
         let asOf = Date.UTC(2026, 9, 20, 12);
         let entries: ReturnType<typeof createMachineGuardViewFixture>['recentActivity'] = [{
@@ -19,9 +42,10 @@ describe('Guard last-good freshness', () => {
         }];
         const store = createMachineGuardStore({
             viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
-            watchClient: () => {
-                const reply = createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>();
-                watches.push(reply); return reply.promise;
+            watchClient: async () => new Promise(() => {}),
+            activityWatchClient: input => {
+                const reply = createDeferred<MachineGuardResult<MachineGuardActivityWatchResultV1>>();
+                watches.push({ input, reply }); return reply.promise;
             },
             activityClient: async () => ({ ok: true, value: {
                 entries, counts: { stopped: entries.length, cleanedUp: 0, needsLook: 0, others: 0 }, asOf,
@@ -35,37 +59,40 @@ describe('Guard last-good freshness', () => {
         try {
             await settle();
             expect(store.getActivity(key).list?.entries[0]?.wayBack).toHaveLength(1);
-            expect(watches).toHaveLength(1);
+            expect(watches).toHaveLength(2);
             asOf += 1;
             entries = entries.map(({ wayBack: _wayBack, ...entry }) => ({ ...entry, undoneAt: asOf }));
-            watches[0]!.resolve({ ok: true, value: { changed: true, since: 2, view: createMachineGuardViewFixture() } });
+            for (const watch of [...watches]) watch.reply.resolve({ ok: true, value: { changed: true, since: 2,
+                list: { entries, counts: { stopped: entries.length, cleanedUp: 0, needsLook: 0, others: 0 }, asOf } } });
             await settle();
             expect(store.getActivity(key).list?.entries).toEqual(entries);
             expect(store.getActivity(filtered).list?.entries).toEqual(entries);
             release(); releaseFiltered();
             const retained = store.getActivity(key).list;
             asOf += 1;
-            watches.at(-1)!.resolve({ ok: true, value: { changed: true, since: 3, view: createMachineGuardViewFixture() } });
+            watches.at(-1)!.reply.resolve({ ok: true, value: { changed: true, since: 3,
+                list: { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf } } });
             await settle();
             expect(store.getActivity(key).list).toBe(retained);
             expect(store.getActivity(filtered).list?.asOf).toBe(asOf - 1);
         } finally { release(); releaseFiltered(); releaseView(); store.reset(); }
     });
 
-    it('keeps standalone Activity ranges live through one shared Guard watch until the final release', async () => {
-        const watches: Array<{ signal?: AbortSignal; reply: ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>> }> = [];
+    it('shares one Activity query watch until the final release and preserves its cursor', async () => {
+        const watches: Array<{ signal?: AbortSignal; since?: number; reply: ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardActivityWatchResultV1>>> }> = [];
         let entries: ReturnType<typeof createMachineGuardViewFixture>['recentActivity'] = [];
         const store = createMachineGuardStore({
             viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
-            watchClient: input => {
-                const reply = createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>();
-                watches.push({ signal: input.signal, reply });
+            watchClient: async () => new Promise(() => {}),
+            activityWatchClient: input => {
+                const reply = createDeferred<MachineGuardResult<MachineGuardActivityWatchResultV1>>();
+                watches.push({ signal: input.signal, since: input.since, reply });
                 return reply.promise;
             },
             activityClient: async () => ({ ok: true, value: { entries, counts: { stopped: entries.length, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 2000 } }),
         });
         const firstKey = { machineId: 'machine', serverId: null, expectedAccountId: null, range: '7d' as const, filter: 'all' as const };
-        const secondKey = { ...firstKey, range: '30d' as const };
+        const secondKey = { ...firstKey };
         const first = store.demandActivity(firstKey);
         const second = store.demandActivity(secondKey);
         try {
@@ -74,12 +101,13 @@ describe('Guard last-good freshness', () => {
             const append = async (id: string) => {
                 entries = [{ v: 1, id, at: 2000, kind: 'closed_browser', rule: 'memory_guard', outcome: 'done', attribution: { kind: 'unknown' } }, ...entries];
                 watches.at(-1)!.reply.resolve({ ok: true, value: { changed: true, since: entries.length,
-                    view: createMachineGuardViewFixture({ recentActivity: entries }) } });
+                    list: { entries, counts: { stopped: entries.length, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 2000 } } });
                 await settle();
             };
             await append('first');
             expect(store.getActivity(firstKey).list?.entries).toEqual(entries);
             expect(store.getActivity(secondKey).list?.entries).toEqual(entries);
+            expect(watches.at(-1)!.since).toBe(1);
             first(); first();
             expect(watches.at(-1)!.signal?.aborted).toBe(false);
             await append('second');
@@ -89,7 +117,7 @@ describe('Guard last-good freshness', () => {
         } finally { first(); second(); store.reset(); }
     });
 
-    it('rearms a changed Guard watch before notifying the view or invalidating Activity', async () => {
+    it('rearms a changed Guard watch without invalidating the independent Activity query', async () => {
         const watches: Array<ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>>> = [];
         const order: string[] = [];
         let changed = false;
@@ -104,6 +132,7 @@ describe('Guard last-good freshness', () => {
                 if (changed) order.push('activity');
                 return { ok: true, value: { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 1 } };
             },
+            activityWatchClient: idleActivityWatch,
         });
         const key = { machineId: 'machine', serverId: null, expectedAccountId: null, range: '7d' as const, filter: 'all' as const };
         const unobserve = store.observeView(key, () => { if (changed) order.push('view'); });
@@ -115,7 +144,7 @@ describe('Guard last-good freshness', () => {
                 recentActivity: [{ v: 1, id: 'append', at: 1, kind: 'closed_browser', rule: 'memory_guard', outcome: 'done', attribution: { kind: 'unknown' } }],
             }) } });
             await settle();
-            expect(order).toEqual(['watch', 'activity', 'view']);
+            expect(order).toEqual(['watch', 'view']);
             expect(store.getView(key).since).toBe(2);
         } finally { releaseActivity(); releaseView(); unobserve(); store.reset(); }
     });
@@ -125,6 +154,7 @@ describe('Guard last-good freshness', () => {
         const store = createMachineGuardStore({
             viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
             watchClient: async () => new Promise(() => {}),
+            activityWatchClient: idleActivityWatch,
             activityClient: async () => ({ ok: true, value: { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf } }),
         });
         const key = { machineId: 'machine', serverId: 'home', expectedAccountId: 'owner', range: '7d' as const, filter: 'all' as const };
@@ -143,6 +173,7 @@ describe('Guard last-good freshness', () => {
         const store = createMachineGuardStore({
             viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
             watchClient: async () => new Promise(() => {}),
+            activityWatchClient: idleActivityWatch,
             activityClient: async () => ++reads === 1
                 ? { ok: true, value: { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 1234 } }
                 : reply.promise,
@@ -174,6 +205,7 @@ describe('Guard last-good freshness', () => {
                 watches.push(reply); return reply.promise;
             },
             activityClient: async () => ({ ok: false, reason: 'request_failed' }),
+            activityWatchClient: idleActivityWatch,
         });
         const key = { machineId: 'machine', serverId: 'home', expectedAccountId: 'owner' };
         const release = store.demandView(key);
@@ -207,6 +239,7 @@ describe('Guard last-good freshness', () => {
                 return response.promise;
             },
             activityClient: async () => ({ ok: false, reason: 'request_failed' }),
+            activityWatchClient: idleActivityWatch,
         };
         const store = createMachineGuardStore(clients);
         let release = () => {};
