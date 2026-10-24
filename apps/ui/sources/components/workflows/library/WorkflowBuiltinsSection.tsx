@@ -22,8 +22,10 @@ import { useWorkflowAccountLifetime } from '../workflowAccountScope';
  * destination row (lab `nav-N1`): mark, name, what it does, its size as the value, and the chevron. Run now and
  * Choose a session… live on the built-in's own page, so the section carries no action per row.
  */
-export function WorkflowBuiltinsSection(): React.ReactElement {
-    const entries = getBuiltinWorkflowCatalogV1();
+export function WorkflowBuiltinsSection(props: Readonly<{ isVisible?: (id: string) => boolean }> = {}): React.ReactElement | null {
+    // On the library home the built-ins narrow with the Workflow space and search (R8-7); none left, no section.
+    const entries = getBuiltinWorkflowCatalogV1().filter((entry) => props.isVisible?.(entry.id) ?? true);
+    if (entries.length === 0) return null;
     return <ItemGroup title={t('workflows.page.blocks.builtin')} description={t('workflows.examples.builtInDescription')}>
         {entries.map((entry) => <BuiltinRow key={entry.id} entry={entry} />)}
     </ItemGroup>;
