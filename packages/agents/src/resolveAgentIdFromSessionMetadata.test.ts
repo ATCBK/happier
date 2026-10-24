@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   resolveAgentIdFromSessionMetadata,
+  resolveAgentExecutionTargetFromSessionMetadata,
   resolveSessionMetadataAgentIdentity,
 } from './resolveAgentIdFromSessionMetadata.js';
+import { readNonAuthoritativeLinkedExternalSessionV1FromMetadata } from '@happier-dev/protocol/sessions/external/linked-metadata';
 
 function runtimeDescriptor(agentId: string) {
   return { v: 1, agentId, agent: {} };
@@ -77,6 +79,23 @@ describe('resolveSessionMetadataAgentIdentity', () => {
 });
 
 describe('resolveAgentIdFromSessionMetadata', () => {
+  it('reuses a caller-admitted linked identity without reopening raw metadata and keeps null distinct from absent', () => {
+    const raw = { v: 1, agentId: 'codex', machineId: 'machine-1', remoteSessionId: 'remote-1',
+      source: { kind: 'codexHome', home: 'user' } };
+    const admitted = readNonAuthoritativeLinkedExternalSessionV1FromMetadata({ externalSessionV1: raw });
+    expect(admitted).not.toBeNull();
+    let reads = 0;
+    const metadata = { flavor: 'claude', get externalSessionV1() { reads += 1; return raw; } };
+    expect(resolveAgentIdFromSessionMetadata(metadata, admitted)).toBe('codex');
+    expect(reads).toBe(0);
+    expect(resolveAgentExecutionTargetFromSessionMetadata(metadata, undefined, admitted)?.identity)
+      .toEqual({ pluginId: 'happier.agent.codex', localId: 'codex' });
+    expect(reads).toBe(0);
+    expect(resolveAgentIdFromSessionMetadata(metadata)).toBe('codex');
+    expect(reads).toBeGreaterThan(0);
+    expect(resolveAgentIdFromSessionMetadata({ flavor: 'claude', externalSessionV1: 'invalid' }, null)).toBe('claude');
+    expect(resolveAgentIdFromSessionMetadata({ runtimeDescriptorV1: runtimeDescriptor('claude') }, admitted)).toBe('claude');
+  });
   it('does not silently pick the first catalog Agent when two flat resume keys are present', () => {
     expect(resolveAgentIdFromSessionMetadata({
       claudeSessionId: 'claude-1',

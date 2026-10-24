@@ -1,4 +1,4 @@
-import { readNonAuthoritativeLinkedExternalSessionV1FromMetadata } from '@happier-dev/protocol/sessions/external/linked-metadata';
+import { readNonAuthoritativeLinkedExternalSessionV1FromMetadata, type LinkedExternalSessionV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
 import type { ExternalSessionAgentId } from '@happier-dev/protocol';
 import type { BundledAgentId } from './types.js';
@@ -47,6 +47,8 @@ function normalizeResolvedAgentId(value: unknown): SessionMetadataAgentId | null
 
 export function resolveDeclaredAgentIdFromSessionMetadata(
   metadata: unknown,
+  /** Reuse Protocol-admitted evidence: undefined reads metadata; null proves no readable link. */
+  admittedLinkedSession?: LinkedExternalSessionV1 | null,
 ): SessionMetadataAgentId | null {
   const record = asRecord(metadata);
   if (!record) return null;
@@ -58,7 +60,7 @@ export function resolveDeclaredAgentIdFromSessionMetadata(
   }
 
   const linkedAgentId = normalizeResolvedAgentId(
-    readNonAuthoritativeLinkedExternalSessionV1FromMetadata(record)?.agentId,
+    (admittedLinkedSession === undefined ? readNonAuthoritativeLinkedExternalSessionV1FromMetadata(record) : admittedLinkedSession)?.agentId,
   );
   if (linkedAgentId) {
     return linkedAgentId;
@@ -105,7 +107,7 @@ function readVendorResumeKeyAgentIds(record: Record<string, unknown>): readonly 
   return agentIds;
 }
 
-export function resolveSessionMetadataAgentIdentity(metadata: unknown): SessionMetadataAgentIdentityV1 {
+export function resolveSessionMetadataAgentIdentity(metadata: unknown, admittedLinkedSession?: LinkedExternalSessionV1 | null): SessionMetadataAgentIdentityV1 {
   const record = asRecord(metadata);
   if (!record) {
     return { agentId: null, basis: 'none', vendorResumeKeyAgentIds: [], ambiguousVendorResumeKeys: false };
@@ -113,7 +115,7 @@ export function resolveSessionMetadataAgentIdentity(metadata: unknown): SessionM
 
   const vendorResumeKeyAgentIds = readVendorResumeKeyAgentIds(record);
 
-  const declaredAgentId = resolveDeclaredAgentIdFromSessionMetadata(record);
+  const declaredAgentId = resolveDeclaredAgentIdFromSessionMetadata(record, admittedLinkedSession);
   if (declaredAgentId) {
     return {
       agentId: declaredAgentId,
@@ -159,26 +161,29 @@ export function resolveSessionMetadataAgentIdentity(metadata: unknown): SessionM
  */
 export function resolveAgentIdFromSessionMetadata(
   metadata: unknown,
+  admittedLinkedSession?: LinkedExternalSessionV1 | null,
 ): SessionMetadataAgentId | null {
-  return resolveSessionMetadataAgentIdentity(metadata).agentId;
+  return resolveSessionMetadataAgentIdentity(metadata, admittedLinkedSession).agentId;
 }
 
 /** Shared qualified target projection for already-opened Session metadata. */
 export function resolveAgentExecutionTargetFromSessionMetadata(
   metadata: unknown,
   resolvedAgentId?: string | null,
+  admittedLinkedSession?: LinkedExternalSessionV1 | null,
 ): AgentExecutionTargetV1 | null {
   const record = asRecord(metadata);
   if (!record) return null;
   const rawAgent = typeof record.agent === 'string' ? record.agent.trim() : null;
   const agentId = resolvedAgentId === undefined
-    ? resolveAgentIdFromSessionMetadata(record) ?? (isBundledAgentId(rawAgent) ? rawAgent : null)
+    ? resolveAgentIdFromSessionMetadata(record, admittedLinkedSession) ?? (isBundledAgentId(rawAgent) ? rawAgent : null)
     : resolvedAgentId;
   const correspondence = SessionCreationCorrespondenceV1ReadSchema.safeParse(record.sessionCreationCorrespondenceV1);
-  const linked = resolveLinkedExternalSessionMetadataV1(record, 'stored');
+  const linked = admittedLinkedSession === undefined ? resolveLinkedExternalSessionMetadataV1(record, 'stored') : null;
+  const linkedSession = admittedLinkedSession === undefined ? linked?.ok ? linked.linkedSession : null : admittedLinkedSession;
   const bundledIdentity = agentId && isBundledAgentId(agentId) ? BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[agentId] : null;
   const candidate = correspondence.success ? correspondence.data.recipe.agentTarget
-    : linked.ok && linked.linkedSession.qualifiedIdentity ? { kind: 'agent' as const, identity: linked.linkedSession.qualifiedIdentity.agent }
+    : linkedSession?.qualifiedIdentity ? { kind: 'agent' as const, identity: linkedSession.qualifiedIdentity.agent }
       : bundledIdentity ? { kind: 'agent' as const, identity: bundledIdentity } : null;
   const parsed = AgentExecutionTargetV1Schema.safeParse(candidate);
   if (!parsed.success) return null;
