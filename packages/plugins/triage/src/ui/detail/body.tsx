@@ -83,17 +83,13 @@ function SourceDetailInstance(props: Readonly<{
   if (props.panel !== null && props.panel !== lastPanel) setLastPanel(props.panel);
   const panel = props.panel ?? lastPanel;
   const overview = panel === 'overview';
+  // The source detail surface is declared `content`: the frame owns its bounds and its scrolling, so every tab
+  // scrolls here. A source panel's own list grows to its content inside it rather than scrolling itself.
   return (
-    <ScrollArea
-      style={FILL_STYLE}
-      scrollEnabled={overview}
-      contentContainerStyle={overview ? undefined : FILL_STYLE}
-    >
-      <Stack gap={overview ? 'large' : 'medium'} style={overview ? undefined : FILL_STYLE}>
+    <ScrollArea style={FILL_STYLE}>
+      <Stack gap={overview ? 'large' : 'medium'}>
         {overview ? props.overviewLead : null}
-        <Stack style={overview ? undefined : FILL_STYLE}>
-          <TriageDetailPanelMount mount={props.mount} panel={panel} fallback={props.fallback} />
-        </Stack>
+        <TriageDetailPanelMount mount={props.mount} panel={panel} fallback={props.fallback} />
         {overview ? props.overviewTail : panel === 'activity' ? props.activityTail : null}
       </Stack>
     </ScrollArea>
