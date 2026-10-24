@@ -11,7 +11,7 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { useEntityDragDropRuntime } from '../entityDragDropHooks';
 import type { EntityDragDropRuntime } from '../entityDragDropTypes';
 import { PopoverScrollSourceProvider } from '@/components/ui/popover/PopoverScrollSource';
-import { EntityFlatReorderList, EntityFlatReorderRow, settleEntityReorderWrite, type EntityFlatReorderBinding } from './EntityFlatReorder';
+import { EntityFlatReorderList, EntityFlatReorderRow, entityReorderPreview, settleEntityReorderWrite, type EntityFlatReorderBinding } from './EntityFlatReorder';
 import { EntityDragGripTrigger, EntityStagedMoveDock, StagedMoveDockSlotContext, type StagedMoveDockSlot } from './EntityReleasePreview';
 import { TreeDropIndicatorLine } from './TreeDropIndicatorLine';
 
@@ -643,6 +643,16 @@ describe('shared flat reorder UI binding', () => {
             orders.add(JSON.stringify(resolveAnchoredListMoveV1(['a', 'b', 'c'], 'a', write.position)));
         }
         expect(orders.size).toBe(2);
+    });
+
+    it('names a place in a horizontal list by reading order, and in a vertical list by above and below', () => {
+        const items = [{ id: 'a', title: 'Design reviews' }, { id: 'b', title: 'Launch' }];
+        expect(entityReorderPreview({ anchorId: 'b', placement: 'before' }, items, 'horizontal').verb)
+            .toMatch(/^entityDragDrop\.preview\.moveBefore\(/);
+        expect(entityReorderPreview({ anchorId: 'b', placement: 'after' }, items, 'horizontal').verb)
+            .toMatch(/^entityDragDrop\.preview\.moveAfter\(/);
+        expect(entityReorderPreview({ anchorId: 'b', placement: 'before' }, items).verb).toMatch(/^entityDragDrop\.preview\.moveAbove\(/);
+        expect(entityReorderPreview({ anchorId: 'b', placement: 'after' }, items, 'vertical').verb).toMatch(/^entityDragDrop\.preview\.moveBelow\(/);
     });
 
     it('revalidates added membership and removed sources at release', async () => {

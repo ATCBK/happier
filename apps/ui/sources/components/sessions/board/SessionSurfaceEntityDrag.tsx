@@ -33,7 +33,7 @@ export type SessionSurfaceEntityBinding = Readonly<{
     renderMark?: (size: number) => React.ReactNode;
     admitWidgetMovement?: (effect: import('@happier-dev/protocol/plugins/ui').EntityDropEffectV1) => import('@happier-dev/protocol/plugins/ui').EntityDropAdmissionV1;
     widgetMovement?: WidgetEntityMovementPort;
-    target?: Omit<EntityDropTarget, 'id' | 'scope' | 'getBounds' | 'isCurrent'>;
+    target?: Omit<EntityDropTarget, 'id' | 'scope' | 'scopeMode' | 'getBounds' | 'isCurrent'>;
     /** Content-coordinate owner supplies current native bounds after scroll/resize. */
     getNativeBounds?: () => WindowBounds | null;
     getCompanionTarget?: () => Readonly<{ itemKey: string; items: readonly SessionCompanionPresentationItemRefV1[] }>;
@@ -99,8 +99,8 @@ export function useSessionSurfaceEntityDrag(binding: SessionSurfaceEntityBinding
                     : admission;
             },
             get getDestinationKey() { return latest.current?.target?.getDestinationKey; },
-            execute: effect => effect.actionId === 'widgets.item.move' ? (latest.current?.widgetMovement?.execute ?? executeWidgetEntityMovement)(effect, scope)
-                : latest.current?.target?.execute(effect) ?? Promise.resolve({ status: 'refused', reason: { code: 'target-gone', message: t('entityDragDrop.reasons.gone') } }),
+            execute: (effect, context) => effect.actionId === 'widgets.item.move' ? (latest.current?.widgetMovement?.execute ?? executeWidgetEntityMovement)(effect, scope)
+                : latest.current?.target?.execute(effect, context) ?? Promise.resolve({ status: 'refused', reason: { code: 'target-gone', message: t('entityDragDrop.reasons.gone') } }),
             autoscroll: pointer => latest.current?.target?.autoscroll?.(pointer),
             containsPointer: pointer => latest.current?.target?.containsPointer?.(pointer) !== false,
         }) : null;

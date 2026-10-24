@@ -105,9 +105,11 @@ export function createEntityDragDropRuntime(options: Readonly<{
         try { return targets.get(target.id) === target && target.isCurrent?.() !== false; } catch { return false; }
     };
     const accepts = (target: EntityDropTarget, item: EntityDragItemV1) => target.acceptedKinds.includes(entityDragKindV1(item));
+    const matchesScope = (target: EntityDropTarget, item: EntityDragItemV1) => target.scopeMode === 'source'
+        || entityDragScopesEqualV1(item.scope, target.scope);
     const resolve = (active: Carry, target: EntityDropTarget): EntityDropAdmissionV1 => {
         if (!targetCurrent(target)) return refused('target-retired');
-        if (!entityDragScopesEqualV1(active.item.scope, target.scope)) return refused('scope-mismatch');
+        if (!matchesScope(target, active.item)) return refused('scope-mismatch');
         if (!accepts(target, active.item)) return refused('kind-not-accepted');
         try {
             return target.resolve({
@@ -192,7 +194,7 @@ export function createEntityDragDropRuntime(options: Readonly<{
     };
     const matchingMeasurementTargets = (active: Carry) => active.input === 'pointer' ? [...targets.values()].filter(target =>
         targetCurrent(target) && accepts(target, active.item)
-        && entityDragScopesEqualV1(active.item.scope, target.scope) && target.measureBounds) : [];
+        && matchesScope(target, active.item) && target.measureBounds) : [];
     const refreshMeasurements = async () => {
         const active = carry;
         if (!active || active.input !== 'pointer' || active.dispatched || active.releasePromise) return;
@@ -267,7 +269,10 @@ export function createEntityDragDropRuntime(options: Readonly<{
         publish({ ...snapshot, phase: 'pending' });
         let outcome: EntityDropOutcomeV1;
         try {
-            const parsed = EntityDropOutcomeV1Schema.safeParse(await target.execute(admission.effect));
+            const parsed = EntityDropOutcomeV1Schema.safeParse(await target.execute(admission.effect, {
+                item: active.item, pointer: active.input === 'pointer' ? pointer : null,
+                destination: active.destination, input: active.input,
+            }));
             outcome = parsed.success ? parsed.data : { status: 'unknown', reason: reason('invalid-effect-outcome') };
         } catch {
             outcome = { status: 'unknown', reason: reason('effect-outcome-unknown') };
@@ -357,7 +362,7 @@ export function createEntityDragDropRuntime(options: Readonly<{
             const active: Carry = { source, item, input: 'chooser', selected: null, destination: null, dispatched: false };
             return [...targets.values()].filter(target => targetCurrent(target) && accepts(target, item))
                 .flatMap((target): EntityDropDestination[] => {
-                    if (!target.listDestinations || !entityDragScopesEqualV1(item.scope, target.scope)) {
+                    if (!target.listDestinations || !matchesScope(target, item)) {
                         return [{ targetId: target.id, admission: resolve(active, target) }];
                     }
                     return target.listDestinations(item).map(destination => ({

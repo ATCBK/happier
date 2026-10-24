@@ -33,9 +33,12 @@ export type EntityDropSemanticDestination = Readonly<{
     label: string;
     group?: string;
 }>;
-export type EntityDropTarget = Readonly<{
+/** Host collections may resolve each place in the admitted source scope; real targets stay exact. */
+type EntityDropTargetScope =
+    | Readonly<{ scope: EntityDragScopeV1; scopeMode?: 'target' }>
+    | Readonly<{ scopeMode: 'source'; scope?: never }>;
+export type EntityDropTarget = EntityDropTargetScope & Readonly<{
     id: string;
-    scope: EntityDragScopeV1;
     acceptedKinds: readonly EntityDragKindV1[];
     /** Owns these accepted kinds throughout its measured region, including over child targets. */
     captureKinds?: readonly EntityDragKindV1[];
@@ -53,7 +56,7 @@ export type EntityDropTarget = Readonly<{
     resolve: (context: EntityDropResolveContext) => EntityDropAdmissionV1;
     /** Local identity of an admitted discrete place. Null keeps continuous movement quiet inside this target. */
     getDestinationKey?: (context: EntityDropResolveContext, admission: Extract<EntityDropAdmissionV1, { status: 'allowed' }>) => string | null;
-    execute: (effect: EntityDropEffectV1) => Promise<EntityDropOutcomeV1>;
+    execute: (effect: EntityDropEffectV1, context: EntityDropResolveContext) => Promise<EntityDropOutcomeV1>;
     /** Supplied by the existing scroll owner, with its own metrics and speed policy. */
     autoscroll?: (pointer: WindowPointer) => void;
 }>;

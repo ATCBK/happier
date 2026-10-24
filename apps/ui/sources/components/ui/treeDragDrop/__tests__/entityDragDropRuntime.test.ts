@@ -25,6 +25,35 @@ function fixture() {
 }
 
 describe('mounted entity drag owner', () => {
+    it('uses a source-scoped collection without widening real mounted target scopes', async () => {
+        const runtime = createEntityDragDropRuntime();
+        const sourceScope = { serverId: 'home-b', accountId: 'account-b' };
+        const item: EntityDragItemV1 = { kind: 'session', scope: sourceScope,
+            address: { serverId: sourceScope.serverId, sessionId: 'child' } };
+        runtime.registerSource({ id: 'source', scope: sourceScope, getItem: () => item, isCurrent: () => true });
+        const executedScopes: unknown[] = [];
+        runtime.registerTarget({ id: 'collection', scopeMode: 'source', acceptedKinds: ['session'],
+            getBounds: () => ({ x: 0, y: 0, width: 100, height: 100 }),
+            listDestinations: () => [{ label: 'Own Section', destination: { sectionId: 'own' } }],
+            resolve: () => allowed,
+            execute: async (_effect, context) => { executedScopes.push(context.item.scope); return { status: 'applied' }; } });
+        runtime.registerTarget({ id: 'foreign', scope, parentId: 'collection', acceptedKinds: ['session'],
+            getBounds: () => ({ x: 0, y: 0, width: 20, height: 20 }), resolve: () => allowed,
+            execute: async () => { throw new Error('A foreign target cannot execute'); } });
+        expect(runtime.getDestinations('source')).toEqual(expect.arrayContaining([
+            expect.objectContaining({ targetId: 'collection', destination: { sectionId: 'own' }, admission: allowed }),
+            expect.objectContaining({ targetId: 'foreign', admission: expect.objectContaining({ status: 'refused', reason: expect.objectContaining({ code: 'scope-mismatch' }) }) }),
+        ]));
+        const foreign = runtime.begin('source')!;
+        foreign.move({ x: 10, y: 10 });
+        expect(await foreign.release()).toMatchObject({ status: 'refused', reason: { code: 'scope-mismatch' } });
+        expect(executedScopes).toEqual([]);
+        const own = runtime.begin('source')!;
+        own.move({ x: 50, y: 50 });
+        expect(await own.release()).toEqual({ status: 'applied' });
+        expect(executedScopes).toEqual([sourceScope]);
+    });
+
     it('measures the release pointer before the final resolver and dispatches only the innermost target', async () => {
         const f = fixture();
         let measured: WindowPointer | null = null;

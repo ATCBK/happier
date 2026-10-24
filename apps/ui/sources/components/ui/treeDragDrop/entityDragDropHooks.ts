@@ -57,7 +57,8 @@ export function useEntityDropTarget(runtime: EntityDragDropRuntime, target: Enti
     const current = useRef(target);
     current.current = target;
     useEffect(() => runtime.registerTarget({
-        id: target.id, scope: target.scope,
+        id: target.id,
+        ...(target.scopeMode === 'source' ? { scopeMode: 'source' as const } : { scope: target.scope, scopeMode: target.scopeMode }),
         get acceptedKinds() { return current.current.acceptedKinds; },
         get captureKinds() { return current.current.captureKinds; },
         get parentId() { return current.current.parentId; },
@@ -67,12 +68,13 @@ export function useEntityDropTarget(runtime: EntityDragDropRuntime, target: Enti
         get measureBounds() { return current.current.measureBounds; },
         containsPointer: pointer => current.current.containsPointer?.(pointer) !== false,
         isCurrent: () => current.current.id === target.id
-            && current.current.scope.serverId === target.scope.serverId
-            && current.current.scope.accountId === target.scope.accountId
+            && current.current.scopeMode === target.scopeMode
+            && current.current.scope?.serverId === target.scope?.serverId
+            && current.current.scope?.accountId === target.scope?.accountId
             && current.current.isCurrent?.() !== false,
         resolve: context => current.current.resolve(context),
         get getDestinationKey() { return current.current.getDestinationKey; },
-        execute: effect => current.current.execute(effect),
+        execute: (effect, context) => current.current.execute(effect, context),
         autoscroll: pointer => current.current.autoscroll?.(pointer),
-    }), [runtime, target.id, target.scope.serverId, target.scope.accountId]);
+    }), [runtime, target.id, target.scopeMode, target.scope?.serverId, target.scope?.accountId]);
 }

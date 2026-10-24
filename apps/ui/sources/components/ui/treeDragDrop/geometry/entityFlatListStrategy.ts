@@ -1,9 +1,18 @@
 import type { AnchoredListPositionV1 } from '@happier-dev/protocol';
 import type { WindowBounds, WindowPointer } from '../treeDragDropTypes';
 
-/** The measured flat-row strategy; layout/custody decisions remain with the domain owner. */
-export function resolveEntityFlatRowPosition(id: string, bounds: WindowBounds, pointer: WindowPointer): AnchoredListPositionV1 {
-    return { anchorId: id, placement: pointer.y < bounds.y + bounds.height / 2 ? 'before' : 'after' };
+/** How a flat list lays its items out: a column of rows, or a row of tabs (the spaces strip). */
+export type EntityFlatAxis = 'vertical' | 'horizontal';
+
+/**
+ * The measured flat-row strategy; layout/custody decisions remain with the domain owner. A row splits at its
+ * vertical middle; a tab in a row splits at its horizontal middle, mirrored right to left.
+ */
+export function resolveEntityFlatRowPosition(id: string, bounds: WindowBounds, pointer: WindowPointer,
+    axis: EntityFlatAxis = 'vertical', rtl = false): AnchoredListPositionV1 {
+    const leading = axis === 'vertical' ? pointer.y < bounds.y + bounds.height / 2
+        : (pointer.x < bounds.x + bounds.width / 2) !== rtl;
+    return { anchorId: id, placement: leading ? 'before' : 'after' };
 }
 
 /** Index is presentation-only. The staged destination and final mutation always use an anchor. */

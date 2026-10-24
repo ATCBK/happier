@@ -20,7 +20,7 @@ import { useTreeDropRegistry } from '../registry/useTreeDropRegistry';
 import { measureWindowBounds, readWindowBounds } from '../registry/measureWindowBounds';
 import type { WindowBounds, WindowPointer } from '../treeDragDropTypes';
 import { useTreeDropAutoscroll } from '../autoscroll/useTreeDropAutoscroll';
-import { entityFlatPositionAtIndex, resolveEntityFlatRowPosition } from '../geometry/entityFlatListStrategy';
+import { entityFlatPositionAtIndex, resolveEntityFlatRowPosition, type EntityFlatAxis } from '../geometry/entityFlatListStrategy';
 import { ENTITY_STAGED_MOVE_DOCK_PLACEMENT, EntityDragGripTrigger, EntityStagedMoveDock, StagedMoveDockSlotContext, useEntityStagedMoveHints, type EntityDragGripKeyEvent } from './EntityReleasePreview';
 import { EntityDropSettledFeedback } from './EntityDropSettledFeedback';
 import { EntityDragGripChooser } from './EntityDragGripChooser';
@@ -91,9 +91,14 @@ export function entityReorderRefused(code: string): EntityDropAdmissionV1 {
     return { status: 'refused', reason: { code, message: t(ENTITY_DROP_UNCHANGED_CODES.has(code) ? 'entityDragDrop.reasons.noChange' : 'entityDragDrop.reasons.gone') } };
 }
 
-export function entityReorderPreview(position: AnchoredListPositionV1, items: EntityFlatReorderBinding['items']): import('@happier-dev/protocol/plugins/ui').EntityDropPreviewV1 {
+/** A place in the list's own reading direction: above/below in a column, before/after along a row (a strip). */
+export function entityReorderPreview(position: AnchoredListPositionV1, items: EntityFlatReorderBinding['items'], axis: EntityFlatAxis = 'vertical'): import('@happier-dev/protocol/plugins/ui').EntityDropPreviewV1 {
     const target = items.find(item => item.id === position.anchorId)?.title ?? t('entityDragDrop.organize.title');
-    return { glyph: position.placement === 'before' ? 'above' : 'below', verb: t(position.placement === 'before' ? 'entityDragDrop.preview.moveAbove' : 'entityDragDrop.preview.moveBelow', { target }), target };
+    const before = position.placement === 'before';
+    if (axis === 'horizontal') {
+        return { glyph: 'move', verb: t(before ? 'entityDragDrop.preview.moveBefore' : 'entityDragDrop.preview.moveAfter', { target }), target };
+    }
+    return { glyph: before ? 'above' : 'below', verb: t(before ? 'entityDragDrop.preview.moveAbove' : 'entityDragDrop.preview.moveBelow', { target }), target };
 }
 
 type FlatContext = Readonly<{
@@ -102,6 +107,7 @@ type FlatContext = Readonly<{
     binding: EntityFlatReorderBinding;
     organizing: boolean;
     pointerInteraction: boolean;
+    axis: EntityFlatAxis;
     registry: ReturnType<typeof useTreeDropRegistry>;
     getBounds(): WindowBounds | null;
     measure(): Promise<void>;
@@ -132,6 +138,8 @@ export function EntityFlatReorderList(props: Readonly<{
     children: React.ReactNode;
     testID: string;
     initialOrganizing?: boolean;
+    /** `horizontal`: the items sit in a row (the spaces strip); places split at each item's horizontal middle. */
+    axis?: EntityFlatAxis;
     scrollRef?: React.RefObject<ScrollView | null>;
     scrollOffsetY?: number | null;
     viewportHeightPx?: number | null;
@@ -247,7 +255,8 @@ export function EntityFlatReorderList(props: Readonly<{
         if (!acknowledged || acknowledged.join('\u0000') === orderKey) setLanded(null);
     }, [landed, orderKey, props.binding]);
     const landedItemId = landed?.itemId ?? null;
-    const context = React.useMemo(() => ({ id, runtime, binding: props.binding, organizing, pointerInteraction, registry, getBounds, measure, autoscroll, admittedMoves, landedItemId }), [id, runtime, props.binding, organizing, pointerInteraction, registry, getBounds, measure, autoscroll, admittedMoves, landedItemId]);
+    const axis = props.axis ?? 'vertical';
+    const context = React.useMemo(() => ({ id, runtime, binding: props.binding, organizing, pointerInteraction, axis, registry, getBounds, measure, autoscroll, admittedMoves, landedItemId }), [id, runtime, props.binding, organizing, pointerInteraction, axis, registry, getBounds, measure, autoscroll, admittedMoves, landedItemId]);
     const children = React.useMemo(
         () => projectFlatChildren(props.children, props.binding.items.map(item => item.id), landed),
         [props.children, props.binding.items, landed],
@@ -256,7 +265,7 @@ export function EntityFlatReorderList(props: Readonly<{
     // pointers already have the grip on every row (lab K1h; a control with an empty target set is hidden).
     const canOrganize = !pointerInteraction && props.binding.scope !== null && props.binding.items.length > 1;
     return <FlatContext.Provider value={context}>
-        <View ref={node} testID={props.testID} onLayout={() => { void measure(); }}>
+        <View ref={node} testID={props.testID} style={axis === 'horizontal' ? HORIZONTAL_LIST_STYLE : undefined} onLayout={() => { void measure(); }}>
             {children}
             <FlatFeedback context={context} testID={props.testID} />
         </View>
@@ -328,14 +337,14 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
         // Each place is listed once: a gap between two rows is "before" the lower one; only the end is "after" a row.
         listDestinations: () => (latest.current.binding.items.at(-1)?.id === id ? ['before', 'after'] as const : ['before'] as const).map(placement => {
             const position = { anchorId: id, placement };
-            return { destination: position, label: entityReorderPreview(position, latest.current.binding.items).verb };
+            return { destination: position, label: entityReorderPreview(position, latest.current.binding.items, latest.current.axis).verb };
         }),
         resolve: ({ item, pointer, destination }) => {
             const source = latest.current.binding.getSourceId(item);
             if (!source || !entityDragScopesEqualV1(item.scope, scope)) return entityReorderRefused('reorder_scope_mismatch');
             const bounds = getBounds();
             const parsed = AnchoredListPositionV1Schema.safeParse(destination);
-            const position = pointer && bounds ? resolveEntityFlatRowPosition(id, bounds, pointer) : parsed.success ? parsed.data : null;
+            const position = pointer && bounds ? resolveEntityFlatRowPosition(id, bounds, pointer, latest.current.axis, I18nManager.isRTL) : parsed.success ? parsed.data : null;
             if (!position) return entityReorderRefused('reorder_target_gone');
             const admission = latest.current.binding.resolve(source, position);
             if (admission.status === 'allowed') {
@@ -454,7 +463,7 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
             if (row && list) registry.registerRow({ id, containerId: context.id, parentId: null, depth: 0, kind: 'leaf', bounds: { x: row.x - list.x, y: row.y - list.y, width: row.width, height: row.height } });
         });
     }} style={{ opacity: waiting ? PENDING_SOURCE_OPACITY : active.phase === 'carrying' ? HAPPIER_CARRIED_SOURCE_OPACITY : 1 }}>
-        {contents}<FlatRowIndicator runtime={runtime} targetId={targetId} admittedMoves={context.admittedMoves} />
+        {contents}<FlatRowIndicator runtime={runtime} targetId={targetId} admittedMoves={context.admittedMoves} axis={context.axis} />
     </View>;
     // Lab ST4: a move its owner refused late stays under this row in words.
     return <EntityDropSettledFeedback runtime={runtime} match={settledMatch}>
@@ -462,10 +471,12 @@ function MountedFlatRow(props: React.ComponentProps<typeof EntityFlatReorderRow>
     </EntityDropSettledFeedback>;
 }
 
+const HORIZONTAL_LIST_STYLE = { flexDirection: 'row', alignItems: 'center' } as const;
+
 /** A write on its way: the row sits at its new place, half-dimmed (a carried source is dimmer). */
 const PENDING_SOURCE_OPACITY = 1 - (1 - HAPPIER_CARRIED_SOURCE_OPACITY) / 2;
 
-function FlatRowIndicator(props: Readonly<{ runtime: EntityDragDropRuntime; targetId: string; admittedMoves: FlatContext['admittedMoves'] }>) {
+function FlatRowIndicator(props: Readonly<{ runtime: EntityDragDropRuntime; targetId: string; admittedMoves: FlatContext['admittedMoves']; axis: EntityFlatAxis }>) {
     const edge = React.useSyncExternalStore(props.runtime.subscribe, () => {
         const snapshot = props.runtime.getSnapshot();
         // The insertion line belongs to the carry; once released the row itself shows where it landed.
@@ -475,7 +486,12 @@ function FlatRowIndicator(props: Readonly<{ runtime: EntityDragDropRuntime; targ
         // leaf never subscribes to pointer frames.
         return props.admittedMoves.get(snapshot.admission.effect)?.position.placement ?? null;
     }, () => null);
-    return edge ? <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, ...(edge === 'before' ? { top: 0 } : { bottom: 0 }) }}><TreeDropIndicatorLine visual={{ kind: 'line', targetId: props.targetId, depth: 0, edge: edge === 'before' ? 'top' : 'bottom' }} indentPx={0} /></View> : null;
+    if (!edge) return null;
+    const visual = { kind: 'line', targetId: props.targetId, depth: 0, edge: edge === 'before' ? 'top' : 'bottom' } as const;
+    // Between tabs in a row the mark stands upright at the leading or trailing edge (start/end follow RTL).
+    return props.axis === 'horizontal'
+        ? <View pointerEvents="none" style={{ position: 'absolute', top: 0, bottom: 0, ...(edge === 'before' ? { start: 0 } : { end: 0 }) }}><TreeDropIndicatorLine visual={visual} indentPx={0} orientation="vertical" /></View>
+        : <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, ...(edge === 'before' ? { top: 0 } : { bottom: 0 }) }}><TreeDropIndicatorLine visual={visual} indentPx={0} /></View>;
 }
 
 /**
