@@ -3,6 +3,8 @@
  * Session-media wire admission, favicons/logos, LLM ingestion and the isolated
  * public-share viewer have distinct trust/transport contracts and keep theirs.
  */
+import { isHappierAlphaCapableImageMimeType } from '@happier-dev/plugin-ui/presentation';
+
 export type FileViewerKind = 'code' | 'markdown' | 'image' | 'svg' | 'pdf' | 'video' | 'audio' | 'binary';
 export type FileViewerClass = Readonly<{
     kind: FileViewerKind;
@@ -14,14 +16,14 @@ export type FileViewerClass = Readonly<{
 
 type FileKindRow = Readonly<{ extensions: readonly string[]; mimeType: string; kind: FileViewerKind; labelKey?: string; alphaCapable?: boolean }>;
 const FILE_KINDS: readonly FileKindRow[] = [
-    { extensions: ['png'], mimeType: 'image/png', kind: 'image', labelKey: 'files.kind.png', alphaCapable: true },
+    { extensions: ['png'], mimeType: 'image/png', kind: 'image', labelKey: 'files.kind.png' },
     { extensions: ['jpg', 'jpeg'], mimeType: 'image/jpeg', kind: 'image', labelKey: 'files.kind.jpeg' },
-    { extensions: ['gif'], mimeType: 'image/gif', kind: 'image', labelKey: 'files.kind.gif', alphaCapable: true },
-    { extensions: ['webp'], mimeType: 'image/webp', kind: 'image', labelKey: 'files.kind.webp', alphaCapable: true },
+    { extensions: ['gif'], mimeType: 'image/gif', kind: 'image', labelKey: 'files.kind.gif' },
+    { extensions: ['webp'], mimeType: 'image/webp', kind: 'image', labelKey: 'files.kind.webp' },
     { extensions: ['bmp'], mimeType: 'image/bmp', kind: 'image', labelKey: 'files.kind.bmp' },
-    { extensions: ['ico'], mimeType: 'image/x-icon', kind: 'image', labelKey: 'files.kind.ico', alphaCapable: true },
-    { extensions: ['avif'], mimeType: 'image/avif', kind: 'image', labelKey: 'files.kind.avif', alphaCapable: true },
-    { extensions: ['svg'], mimeType: 'image/svg+xml', kind: 'svg', alphaCapable: true },
+    { extensions: ['ico'], mimeType: 'image/x-icon', kind: 'image', labelKey: 'files.kind.ico' },
+    { extensions: ['avif'], mimeType: 'image/avif', kind: 'image', labelKey: 'files.kind.avif' },
+    { extensions: ['svg'], mimeType: 'image/svg+xml', kind: 'svg' },
     { extensions: ['md', 'markdown', 'mdx'], mimeType: 'text/markdown', kind: 'markdown' },
     { extensions: ['pdf'], mimeType: 'application/pdf', kind: 'pdf' },
     { extensions: ['mp4'], mimeType: 'video/mp4', kind: 'video', labelKey: 'files.kind.mp4' },
@@ -122,7 +124,7 @@ export function resolveFileViewerKind(input: Readonly<{
         kind,
         mimeType,
         previewable: kind === 'image' || kind === 'svg' || kind === 'pdf' || kind === 'video' || kind === 'audio',
-        alphaCapable: (kind === 'image' || kind === 'svg') && row?.alphaCapable === true,
+        alphaCapable: (kind === 'image' || kind === 'svg') && isHappierAlphaCapableImageMimeType(row?.mimeType),
         labelKey: row?.labelKey ?? `files.kind.${kind}`,
     };
 }
