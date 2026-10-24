@@ -796,12 +796,13 @@ describe('plugins command daemon mutations', () => {
     },
   );
 
-  it('renders the specific daemon failure message instead of collapsing it to a generic rejection', async () => {
-    const message =
-      'Storage-pressure quarantine eviction cleanup remains pending: reconciliation: generationCleanup unavailable';
+  it.each([
+    { code: 'plugin_install_failed', message: 'Storage-pressure quarantine eviction cleanup remains pending: reconciliation: generationCleanup unavailable' },
+    { code: 'PLUGIN_SETTINGS_DEFAULT_INVALID', message: "Plugin 'acme.sample' Settings 'preferences' field 'enabled': PLUGIN_SETTINGS_DEFAULT_INVALID" },
+  ])('renders the specific daemon failure in public JSON ($code)', async ({ code, message }) => {
     daemon.requestChange.mockResolvedValue({
       kind: 'failed',
-      code: 'plugin_install_failed',
+      code,
       message,
     });
     const output = captureStdoutJsonOutput();
@@ -815,7 +816,7 @@ describe('plugins command daemon mutations', () => {
         error: {
           code: 'failed',
           message,
-          causeCode: 'plugin_install_failed',
+          causeCode: code,
           causeMessage: message,
         },
       });
