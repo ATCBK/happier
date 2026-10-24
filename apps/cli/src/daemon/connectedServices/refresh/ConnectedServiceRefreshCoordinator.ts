@@ -2625,7 +2625,7 @@ export class ConnectedServiceRefreshCoordinator {
     // Result settlement still owns refresh effects and replacement revisions.
     if (input.healthWritePath === 'status'
       && input.settledCredentialRevision === undefined
-      && isDeepStrictEqual(credentialHealthStatusFacts(input.basis.credentialHealth), input.health)) return;
+      && isDeepStrictEqual(credentialHealthStatusFacts(input.basis.credentialHealth ?? null), input.health)) return;
     recordCredentialHealthWrite({ path: input.healthWritePath ?? 'result', serviceKind: input.account.service.localId,
       before: input.basis.credentialHealth, after: input.health });
     const mutation = await runtime.mutateCredentialHealth({
