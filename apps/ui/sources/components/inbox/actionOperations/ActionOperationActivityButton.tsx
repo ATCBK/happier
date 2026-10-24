@@ -5,7 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { usePressFeedback } from '@/components/ui/interactions/usePressFeedback';
-import { TabBadge } from '@/components/ui/navigation/tabBadge/TabBadge';
+import { AppRailBadge } from '@/components/navigation/shell/appRail/AppRailBadge';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
 import { t } from '@/text';
@@ -120,10 +120,13 @@ const ActionOperationActivityButtonChrome = React.memo(function ActionOperationA
             >
                 <Animated.View style={[styles.glyph, feedback.animatedStyle]}>
                     <Icon name="pulse" size={props.iconSize ?? ICON_SIZE.md} color={tintColor} />
+                    {/* A glyph on the chrome canvas takes the rail's badge: a neutral count, or an attention dot. */}
                     {props.activeCount > 0 ? (
-                        <TabBadge testID="action-operation-activity-count" variant="count" value={props.activeCount} tone="neutral" />
+                        <AppRailBadge testID="action-operation-activity-count" glyphSizePx={props.iconSize ?? ICON_SIZE.md}
+                            signal={{ kind: 'count', value: props.activeCount, tone: 'neutral' }} />
                     ) : (
-                        <TabBadge testID="action-operation-activity-attention-dot" variant="dot" />
+                        <AppRailBadge testID="action-operation-activity-attention-dot" glyphSizePx={props.iconSize ?? ICON_SIZE.md}
+                            signal={{ kind: 'dot', tone: 'attention' }} />
                     )}
                 </Animated.View>
             </Pressable>
